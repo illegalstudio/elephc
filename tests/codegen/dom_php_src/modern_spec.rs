@@ -5515,7 +5515,6 @@ echo $dom->saveXml(), "\n";
 
 /// php-src `ext/dom/tests/modern/spec/serialize_xml_attribute.phpt`: Serialize XML attribute
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_serialize_xml_attribute() {
     if skip_without_xml_native("test_serialize_xml_attribute") {
         return;

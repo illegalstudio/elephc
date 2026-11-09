@@ -51,7 +51,6 @@ string(12) "my new value"
 
 /// php-src `ext/dom/tests/manually_call_constructor/cdatasection.phpt`: Manually call __construct() - CDATA section variation
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMCdataSection"#]
 fn test_cdatasection() {
     if skip_without_xml_native("test_cdatasection") {
         return;
@@ -86,7 +85,6 @@ string(12) "my new value"
 
 /// php-src `ext/dom/tests/manually_call_constructor/comment.phpt`: Manually call __construct() - comment variation
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMComment::__construct' expects 0 arguments, got 1"#]
 fn test_comment() {
     if skip_without_xml_native("test_comment") {
         return;
@@ -123,7 +121,6 @@ string(12) "my new value"
 
 /// php-src `ext/dom/tests/manually_call_constructor/document.phpt`: Manually call __construct() - document variation
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_document() {
     if skip_without_xml_native("test_document") {
         return;
@@ -141,7 +138,6 @@ echo $doc->saveXML();
 
 /// php-src `ext/dom/tests/manually_call_constructor/documentfragment.phpt`: Manually call __construct() - document fragment variation
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMDocumentFragment"#]
 fn test_documentfragment() {
     if skip_without_xml_native("test_documentfragment") {
         return;
@@ -176,7 +172,6 @@ string(0) ""
 
 /// php-src `ext/dom/tests/manually_call_constructor/element.phpt`: Manually call __construct() - element variation
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMElement::__construct' expects 0 arguments, got 2"#]
 fn test_element() {
     if skip_without_xml_native("test_element") {
         return;
@@ -250,7 +245,6 @@ string(0) ""
 
 /// php-src `ext/dom/tests/manually_call_constructor/processinginstruction.phpt`: Manually call __construct() - processing instruction variation
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_processinginstruction() {
     if skip_without_xml_native("test_processinginstruction") {
         return;
@@ -287,7 +281,6 @@ string(6) "value2"
 
 /// php-src `ext/dom/tests/manually_call_constructor/text.phpt`: Manually call __construct() - text variation
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMText::__construct' expects 0 arguments, got 1"#]
 fn test_text() {
     if skip_without_xml_native("test_text") {
         return;

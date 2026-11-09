@@ -696,7 +696,6 @@ bool(true)"#);
 
 /// php-src `ext/dom/tests/bug35673.phpt`: Bug #35673 (formatOutput does not work with saveHTML).
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::formatOutput"#]
 fn test_bug35673() {
     if skip_without_xml_native("test_bug35673") {
         return;
@@ -778,7 +777,6 @@ print $dom2->saveXML();
 
 /// php-src `ext/dom/tests/bug37456.phpt`: Bug #37456 (DOMElement->setAttribute() loops forever)
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::resolveExternals"#]
 fn test_bug37456() {
     if skip_without_xml_native("test_bug37456") {
         return;
@@ -816,7 +814,6 @@ OK"#);
 
 /// php-src `ext/dom/tests/bug38474.phpt`: Bug #38474 (getAttribute select attribute by order, even when prefixed) (OK to fail with libxml2 < 2.6.2x)
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::firstChild"#]
 fn test_bug38474() {
     if skip_without_xml_native("test_bug38474") {
         return;
@@ -885,7 +882,6 @@ print $root->lookupNamespaceURI(NULL);
 
 /// php-src `ext/dom/tests/bug38949.phpt`: Bug #38949 (Cannot get xmlns value attribute)
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_bug38949() {
     if skip_without_xml_native("test_bug38949") {
         return;
@@ -1813,7 +1809,6 @@ object(DOMXPath)#4 (2) {
 
 /// php-src `ext/dom/tests/bug61858.phpt`: Bug #61858 DOMAttr debug info generates E_WARNING
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMNode::getAttributeNode"#]
 fn test_bug61858() {
     if skip_without_xml_native("test_bug61858") {
         return;
@@ -1839,7 +1834,6 @@ DOMAttr Object
 
 /// php-src `ext/dom/tests/bug65196.phpt`: bug #65196 (Passing DOMDocumentFragment to DOMDocument::saveHTML() Produces invalid Markup)
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createDocumentFragment"#]
 fn test_bug65196() {
     if skip_without_xml_native("test_bug65196") {
         return;
@@ -1864,7 +1858,6 @@ string(46) "<div><span></span></div><div></div><div></div>""#);
 
 /// php-src `ext/dom/tests/bug66502.phpt`: Bug #66502 (DOM document dangling reference)
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMElement::__construct' expects 0 arguments, got 1"#]
 fn test_bug66502() {
     if skip_without_xml_native("test_bug66502") {
         return;
@@ -2250,7 +2243,6 @@ echo 'DONE', PHP_EOL;
 
 /// php-src `ext/dom/tests/bug69679.phpt`: Bug #69679 (DOMDocument::loadHTML refuses to accept NULL bytes)
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::saveHTML"#]
 fn test_bug69679() {
     if skip_without_xml_native("test_bug69679") {
         return;
@@ -2470,7 +2462,6 @@ object(DOMText)#%d (23) {
 
 /// php-src `ext/dom/tests/bug70001.phpt`: Bug #70001 (Assigning to DOMNode::textContent does additional entity encoding)
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMText::__construct' expects 0 arguments, got 1"#]
 fn test_bug70001() {
     if skip_without_xml_native("test_bug70001") {
         return;
@@ -2672,7 +2663,6 @@ echo 'okey
 
 /// php-src `ext/dom/tests/bug76285.phpt`: Bug #76285 DOMDocument::formatOutput attribute sometimes ignored
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::formatOutput"#]
 fn test_bug76285() {
     if skip_without_xml_native("test_bug76285") {
         return;
@@ -2757,7 +2747,6 @@ string(11) "my new text""#);
 
 /// php-src `ext/dom/tests/bug78025.phpt`: Bug #78025 (segfault when accessing properties of DOMDocumentType)
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::doctype"#]
 fn test_bug78025() {
     if skip_without_xml_native("test_bug78025") {
         return;
@@ -2980,7 +2969,6 @@ bool(true)"#);
 
 /// php-src `ext/dom/tests/bug80268_2.phpt`: Bug #80268 (loadHTML() truncates at NUL bytes)
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::saveHTML"#]
 fn test_bug80268_2() {
     if skip_without_xml_native("test_bug80268_2") {
         return;
@@ -3523,7 +3511,6 @@ echo "22 ", $doc->saveXML($doc->documentElement).PHP_EOL;
 
 /// php-src `ext/dom/tests/bug80602_3.phpt`: Bug #80602 (Segfault when using DOMChildNode::before()) - use-after-free variation
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_bug80602_3() {
     if skip_without_xml_native("test_bug80602_3") {
         return;

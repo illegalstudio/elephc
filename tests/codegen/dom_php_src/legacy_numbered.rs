@@ -478,7 +478,6 @@ html files with undeclared entities&nbsp;
 
 /// php-src `ext/dom/tests/dom006.phpt`: Test 6: Extends Test
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: books::createTextNode"#]
 fn test_dom006() {
     if skip_without_xml_native("test_dom006") {
         return;

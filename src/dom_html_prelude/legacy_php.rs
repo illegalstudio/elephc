@@ -21,6 +21,7 @@ pub(super) const SRC: &str = r##"<?php
 
 extern "elephc_xml" {
     function elephc_xml_dom_document_new(string $version, string $encoding): int;
+    function elephc_xml_dom_orphan_document(): int;
     function elephc_xml_dom_load(int $document, string $data, int $length, int $options): int;
     function elephc_xml_dom_load_file(int $document, string $filename, int $options): int;
     function elephc_xml_dom_load_html(int $document, string $data, int $length, string $filename, int $options): int;
@@ -192,7 +193,7 @@ final class __ElephcDOM {
     }
 
     public static function document(): int {
-        return elephc_xml_dom_document_new("1.0", "");
+        return elephc_xml_dom_orphan_document();
     }
 
     public static function argument(mixed $value, string $function, int $position, string $name, bool $nullable): int {

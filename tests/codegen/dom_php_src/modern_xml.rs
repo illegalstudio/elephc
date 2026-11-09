@@ -1747,7 +1747,6 @@ var_dump($test[0]->nodeName);
 
 /// php-src `ext/dom/tests/modern/xml/serialize_LIBXML_NOXMLDECL.phpt`: Serialize modern document with LIBXML_NOXMLDECL
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_serialize_libxml_noxmldecl() {
     if skip_without_xml_native("test_serialize_libxml_noxmldecl") {
         return;

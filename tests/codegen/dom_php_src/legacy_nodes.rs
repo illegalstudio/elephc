@@ -659,7 +659,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMAttr_name_basic_001.phpt`: DOMAttr read $name property.
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMAttr"#]
 fn test_domattr_name_basic_001() {
     if skip_without_xml_native("test_domattr_name_basic_001") {
         return;
@@ -740,7 +739,6 @@ fn test_domcdatasection_construct_error_001() {
 
 /// php-src `ext/dom/tests/DOMCharacterData_appendData_basic.phpt`: DOMCharacterData::appendData basic functionality test
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createCDATASection"#]
 fn test_domcharacter_data_append_data_basic() {
     if skip_without_xml_native("test_domcharacter_data_append_data_basic") {
         return;
@@ -805,7 +803,6 @@ print $document->saveXML()."\n";
 
 /// php-src `ext/dom/tests/DOMCharacterData_data_error_002.phpt`: Invalid State Error when getting data on DOMCharacterData out of content.
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMCharacterData::data"#]
 fn test_domcharacter_data_data_error_002() {
     if skip_without_xml_native("test_domcharacter_data_data_error_002") {
         return;
@@ -866,7 +863,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMCharacterData_length_error_001.phpt`: Invalid State Error when getting length on DOMCharacterData out of content.
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMCharacterData::length"#]
 fn test_domcharacter_data_length_error_001() {
     if skip_without_xml_native("test_domcharacter_data_length_error_001") {
         return;
@@ -923,7 +919,6 @@ print $cdata->substringData(1, 6);
 
 /// php-src `ext/dom/tests/DOMChildNode_methods_without_parent.phpt`: DOMChildNode methods without a parent
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_domchild_node_methods_without_parent() {
     if skip_without_xml_native("test_domchild_node_methods_without_parent") {
         return;
@@ -970,7 +965,6 @@ foreach (['before', 'after', 'replaceWith'] as $method) {
 
 /// php-src `ext/dom/tests/DOMComment_appendData_basic.phpt`: Test adding data to a DOMComment
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createComment"#]
 fn test_domcomment_append_data_basic() {
     if skip_without_xml_native("test_domcomment_append_data_basic") {
         return;
@@ -991,7 +985,6 @@ echo $dom->saveXML();
 
 /// php-src `ext/dom/tests/DOMComment_appendData_basic_Sullivan.phpt`: DOMComment::appendData basic functionality test
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createComment"#]
 fn test_domcomment_append_data_basic_sullivan() {
     if skip_without_xml_native("test_domcomment_append_data_basic_sullivan") {
         return;
@@ -1028,7 +1021,6 @@ Comment Content: data><&"
 
 /// php-src `ext/dom/tests/DOMComment_construct_basic_001.phpt`: DOMComment::__construct() with constructor called twice.
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMElement::__construct' expects 0 arguments, got 1"#]
 fn test_domcomment_construct_basic_001() {
     if skip_without_xml_native("test_domcomment_construct_basic_001") {
         return;
@@ -1417,7 +1409,6 @@ array(0) {
 
 /// php-src `ext/dom/tests/DOMElement_getElementsByTagName_without_document.phpt`: Node list cache should not break on DOMElement::getElementsByTagName() without document
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMElement::__construct' expects 0 arguments, got 1"#]
 fn test_domelement_get_elements_by_tag_name_without_document() {
     if skip_without_xml_native("test_domelement_get_elements_by_tag_name_without_document") {
         return;
@@ -2536,7 +2527,6 @@ echo $doc->saveHTML();
 
 /// php-src `ext/dom/tests/DOMImplementation_hasFeature_basic.phpt`: DOMImplementation::hasFeature()
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMImplementation"#]
 fn test_domimplementation_has_feature_basic() {
     if skip_without_xml_native("test_domimplementation_has_feature_basic") {
         return;
@@ -2552,7 +2542,6 @@ bool(true)"#);
 
 /// php-src `ext/dom/tests/DOMNamedNodeMap_count.phpt`: Test count nodes in DOMNamedNodeMap
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMElement::attributes"#]
 fn test_domnamed_node_map_count() {
     if skip_without_xml_native("test_domnamed_node_map_count") {
         return;
@@ -2813,7 +2802,6 @@ echo $doc->C14N(true, false, $xpath, $prefixes);
 
 /// php-src `ext/dom/tests/DOMNode_DOMNameSpaceNode_isConnected.phpt`: DOMNode::isConnected and DOMNameSpaceNode::isConnected
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMElement::isConnected"#]
 fn test_domnode_domname_space_node_is_connected() {
     if skip_without_xml_native("test_domnode_domname_space_node_is_connected") {
         return;
@@ -2875,7 +2863,6 @@ bool(true)"#);
 
 /// php-src `ext/dom/tests/DOMNode_DOMNameSpaceNode_parentElement.phpt`: DOMNode::parentElement and DOMNameSpaceNode::parentElement
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::doctype"#]
 fn test_domnode_domname_space_node_parent_element() {
     if skip_without_xml_native("test_domnode_domname_space_node_parent_element") {
         return;
@@ -3227,7 +3214,6 @@ bool(true)"#);
 
 /// php-src `ext/dom/tests/DOMNode_hasChildNodes.phpt`: Tests DOMNode::hasChildNodes()
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_domnode_has_child_nodes() {
     if skip_without_xml_native("test_domnode_has_child_nodes") {
         return;
@@ -3276,7 +3262,6 @@ bool(true)"#);
 
 /// php-src `ext/dom/tests/DOMNode_hasChildNodes_basic.phpt`: Test whether a node has child nodes: hasChildNodes()
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createTextNode"#]
 fn test_domnode_has_child_nodes_basic() {
     if skip_without_xml_native("test_domnode_has_child_nodes_basic") {
         return;
@@ -3320,7 +3305,6 @@ Text has child nodes: bool(false)"#);
 
 /// php-src `ext/dom/tests/DOMNode_insertBefore.phpt`: Tests DOMNode::insertBefore()
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_domnode_insert_before() {
     if skip_without_xml_native("test_domnode_insert_before") {
         return;
@@ -3354,7 +3338,6 @@ Add new node A before B
 
 /// php-src `ext/dom/tests/DOMNode_insertBefore_error1.phpt`: DOMNode::insertBefore() should fail if node belongs to another document
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMElement::insertBefore"#]
 fn test_domnode_insert_before_error1() {
     if skip_without_xml_native("test_domnode_insert_before_error1") {
         return;
@@ -4147,7 +4130,6 @@ Course: two:DOMElement
 
 /// php-src `ext/dom/tests/DOMNode_removeChild_error1.phpt`: removeChild() where the node is not a child
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_domnode_remove_child_error1() {
     if skip_without_xml_native("test_domnode_remove_child_error1") {
         return;
@@ -4171,7 +4153,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMNode_replaceChild_basic.phpt`: Replacing a child node
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMNode::firstChild"#]
 fn test_domnode_replace_child_basic() {
     if skip_without_xml_native("test_domnode_replace_child_basic") {
         return;
@@ -4215,7 +4196,6 @@ Children are inserted in order:
 
 /// php-src `ext/dom/tests/DOMNode_replaceChild_error1.phpt`: replaceChild() where the old node is not a child
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMElement::replaceChild"#]
 fn test_domnode_replace_child_error1() {
     if skip_without_xml_native("test_domnode_replace_child_error1") {
         return;
@@ -4240,7 +4220,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMNode_replaceChild_error2.phpt`: replaceChild() where the new node is a grandparent of the old node
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMElement::replaceChild"#]
 fn test_domnode_replace_child_error2() {
     if skip_without_xml_native("test_domnode_replace_child_error2") {
         return;
@@ -4440,7 +4419,6 @@ Invalid State Error"#);
 
 /// php-src `ext/dom/tests/DOMText_appendData_basic.phpt`: DOMText::appendData basic functionality test
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createTextNode"#]
 fn test_domtext_append_data_basic() {
     if skip_without_xml_native("test_domtext_append_data_basic") {
         return;

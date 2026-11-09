@@ -542,7 +542,6 @@ NULL"#);
 
 /// php-src `ext/dom/tests/dom_comment_basic.phpt`: DOM Comment : Basic Functionality
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_dom_comment_basic() {
     if skip_without_xml_native("test_dom_comment_basic") {
         return;
@@ -585,7 +584,6 @@ string(1) "
 
 /// php-src `ext/dom/tests/dom_comment_variation.phpt`: DOM Comment : Variation
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_dom_comment_variation() {
     if skip_without_xml_native("test_dom_comment_variation") {
         return;
@@ -1786,7 +1784,6 @@ object(Dom\NodeList)#1 (1) {
 
 /// php-src `ext/dom/tests/fragments_multiple_nodes_DOMParentNode.phpt`: Handling fragments of multiple nodes for DOMParentNode
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createDocumentFragment"#]
 fn test_fragments_multiple_nodes_domparent_node() {
     if skip_without_xml_native("test_fragments_multiple_nodes_domparent_node") {
         return;
@@ -1827,7 +1824,6 @@ echo $dom->saveXML();
 
 /// php-src `ext/dom/tests/getElementsByTagName_liveness_deallocated_document.phpt`: getElementsByTagName() liveness with deallocated document
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_get_elements_by_tag_name_liveness_deallocated_document() {
     if skip_without_xml_native("test_get_elements_by_tag_name_liveness_deallocated_document") {
         return;
@@ -2392,7 +2388,6 @@ echo $dom->saveXML();
 
 /// php-src `ext/dom/tests/replaceWith_non_viable_next_sibling.phpt`: replaceWith() with a non-viable next sibling
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_replace_with_non_viable_next_sibling() {
     if skip_without_xml_native("test_replace_with_non_viable_next_sibling") {
         return;

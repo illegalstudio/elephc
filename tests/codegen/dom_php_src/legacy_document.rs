@@ -100,7 +100,6 @@ has child nodes"#);
 
 /// php-src `ext/dom/tests/DOMDocumentFragment_construct_basic_001.phpt`: DOMDocumentFragment::__construct().
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMDocumentFragment"#]
 fn test_domdocument_fragment_construct_basic_001() {
     if skip_without_xml_native("test_domdocument_fragment_construct_basic_001") {
         return;
@@ -179,7 +178,6 @@ notation: gif"#);
 
 /// php-src `ext/dom/tests/DOMDocumentType_entities_error_001.phpt`: DOMDocumentType::entities with invalid state.
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMDocumentType"#]
 fn test_domdocument_type_entities_error_001() {
     if skip_without_xml_native("test_domdocument_type_entities_error_001") {
         return;
@@ -197,7 +195,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMDocumentType_internalSubset_error_001.phpt`: DOMDocumentType::internalSubset with invalid state.
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMDocumentType"#]
 fn test_domdocument_type_internal_subset_error_001() {
     if skip_without_xml_native("test_domdocument_type_internal_subset_error_001") {
         return;
@@ -215,7 +212,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMDocumentType_name_error_001.phpt`: DOMDocumentType::name with invalid state.
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMDocumentType"#]
 fn test_domdocument_type_name_error_001() {
     if skip_without_xml_native("test_domdocument_type_name_error_001") {
         return;
@@ -233,7 +229,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMDocumentType_notations_error_001.phpt`: DOMDocumentType::notations with invalid state.
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMDocumentType"#]
 fn test_domdocument_type_notations_error_001() {
     if skip_without_xml_native("test_domdocument_type_notations_error_001") {
         return;
@@ -251,7 +246,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMDocumentType_publicId_basic_001.phpt`: DOMDocumentType::publicId with empty value.
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::doctype"#]
 fn test_domdocument_type_public_id_basic_001() {
     if skip_without_xml_native("test_domdocument_type_public_id_basic_001") {
         return;
@@ -270,7 +264,6 @@ var_dump($doctype->publicId);
 
 /// php-src `ext/dom/tests/DOMDocumentType_publicId_error_001.phpt`: DOMDocumentType::publicId with invalid state.
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMDocumentType"#]
 fn test_domdocument_type_public_id_error_001() {
     if skip_without_xml_native("test_domdocument_type_public_id_error_001") {
         return;
@@ -288,7 +281,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMDocumentType_systemId_basic_001.phpt`: DOMDocumentType::systemId with empty value.
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::doctype"#]
 fn test_domdocument_type_system_id_basic_001() {
     if skip_without_xml_native("test_domdocument_type_system_id_basic_001") {
         return;
@@ -307,7 +299,6 @@ var_dump($doctype->systemId);
 
 /// php-src `ext/dom/tests/DOMDocumentType_systemId_error_001.phpt`: DOMDocumentType::systemId with invalid state.
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMDocumentType"#]
 fn test_domdocument_type_system_id_error_001() {
     if skip_without_xml_native("test_domdocument_type_system_id_error_001") {
         return;
@@ -561,7 +552,6 @@ Done"#);
 
 /// php-src `ext/dom/tests/DOMDocument_createAttribute_basic.phpt`: DomDocument::createAttribute() - basic test for DomDocument::createAttribute()
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createAttribute"#]
 fn test_domdocument_create_attribute_basic() {
     if skip_without_xml_native("test_domdocument_create_attribute_basic") {
         return;
@@ -616,7 +606,6 @@ catch(Exception $e) {
 
 /// php-src `ext/dom/tests/DOMDocument_createAttribute_error1.phpt`: DomDocument::createAttribute() - error test for DomDocument::createAttribute()
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createAttribute"#]
 fn test_domdocument_create_attribute_error1() {
     if skip_without_xml_native("test_domdocument_create_attribute_error1") {
         return;
@@ -644,7 +633,6 @@ catch (DOMException $e) {
 
 /// php-src `ext/dom/tests/DOMDocument_createAttribute_variation.phpt`: Test DOMDocument::createAttribute() for expected return value
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createAttribute"#]
 fn test_domdocument_create_attribute_variation() {
     if skip_without_xml_native("test_domdocument_create_attribute_variation") {
         return;
@@ -699,7 +687,6 @@ Invalid Character Error"#);
 
 /// php-src `ext/dom/tests/DOMDocument_createProcessingInstruction_basic.phpt`: DomDocument::createProcessingInstruction() - basic test for DomDocument::createProcessingInstruction()
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createProcessingInstruction"#]
 fn test_domdocument_create_processing_instruction_basic() {
     if skip_without_xml_native("test_domdocument_create_processing_instruction_basic") {
         return;
@@ -728,7 +715,6 @@ echo $doc->saveXML();
 
 /// php-src `ext/dom/tests/DOMDocument_createProcessingInstruction_error.phpt`: DomDocument::createProcessingInstruction() - error test for DomDocument::createProcessingInstruction()
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createProcessingInstruction"#]
 fn test_domdocument_create_processing_instruction_error() {
     if skip_without_xml_native("test_domdocument_create_processing_instruction_error") {
         return;
@@ -985,7 +971,6 @@ print "\n";
 
 /// php-src `ext/dom/tests/DOMDocument_getElementsByTagName_liveness_simplexml.phpt`: DOMDocument::getElementsByTagName() liveness with simplexml_import_dom
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_domdocument_get_elements_by_tag_name_liveness_simplexml() {
     if skip_without_xml_native("test_domdocument_get_elements_by_tag_name_liveness_simplexml") {
         return;
@@ -1016,7 +1001,6 @@ after import
 
 /// php-src `ext/dom/tests/DOMDocument_getElementsByTagName_liveness_tree_walk.phpt`: DOMDocument::getElementsByTagName() liveness tree walk
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMNode::remove"#]
 fn test_domdocument_get_elements_by_tag_name_liveness_tree_walk() {
     if skip_without_xml_native("test_domdocument_get_elements_by_tag_name_liveness_tree_walk") {
         return;
@@ -1200,7 +1184,6 @@ string(28) "xinclude: book.xml not found"
 
 /// php-src `ext/dom/tests/DOMDocument_implementationRead_basic.phpt`: DOMDocument::DOMImplementation - basic test for DomDocument::DOMImplementation
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::implementation"#]
 fn test_domdocument_implementation_read_basic() {
     if skip_without_xml_native("test_domdocument_implementation_read_basic") {
         return;
@@ -1294,7 +1277,6 @@ string(14) "http://php.net"
 
 /// php-src `ext/dom/tests/DOMDocument_item_cache_invalidation.phpt`: DOMDocument node list item cache invalidation
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMNode::remove"#]
 fn test_domdocument_item_cache_invalidation() {
     if skip_without_xml_native("test_domdocument_item_cache_invalidation") {
         return;
@@ -1366,7 +1348,6 @@ Stack trace:
 
 /// php-src `ext/dom/tests/DOMDocument_json_encode.phpt`: JSON encoding a DOMDocument
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_domdocument_json_encode() {
     if skip_without_xml_native("test_domdocument_json_encode") {
         return;
@@ -1380,7 +1361,6 @@ echo json_encode($doc);
 
 /// php-src `ext/dom/tests/DOMDocument_length_cache_invalidation.phpt`: DOMDocument node list length cache invalidation
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMNode::remove"#]
 fn test_domdocument_length_cache_invalidation() {
     if skip_without_xml_native("test_domdocument_length_cache_invalidation") {
         return;
@@ -1463,7 +1443,6 @@ Should execute once"#);
 
 /// php-src `ext/dom/tests/DOMDocument_loadHTML_basic.phpt`: DOMDocument::loadHTML
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::saveHTML"#]
 fn test_domdocument_load_html_basic() {
     if skip_without_xml_native("test_domdocument_load_html_basic") {
         return;
@@ -1479,7 +1458,6 @@ echo $doc->saveHTML();
 
 /// php-src `ext/dom/tests/DOMDocument_loadHTML_error2.phpt`: DOMDocument::loadHTML() should fail if empty string provided as input
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_domdocument_load_html_error2() {
     if skip_without_xml_native("test_domdocument_load_html_error2") {
         return;
@@ -2274,7 +2252,6 @@ echo $doc->saveXML();
 
 /// php-src `ext/dom/tests/DOMDocument_preserveWhiteSpace_basic.phpt`: DOMDocument::$preserveWhiteSpace - test ability to read and write property
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::preserveWhiteSpace"#]
 fn test_domdocument_preserve_white_space_basic() {
     if skip_without_xml_native("test_domdocument_preserve_white_space_basic") {
         return;
@@ -2336,7 +2313,6 @@ Load document with preserveWhiteSpace off
 
 /// php-src `ext/dom/tests/DOMDocument_recover_write.phpt`: DOMDocument::$recover write
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::recover"#]
 fn test_domdocument_recover_write() {
     if skip_without_xml_native("test_domdocument_recover_write") {
         return;
@@ -2548,7 +2524,6 @@ bool(false)"#);
 
 /// php-src `ext/dom/tests/DOMDocument_resolveExternals_basic.phpt`: Tests DOMDocument::resoleExternals get and set
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::resolveExternals"#]
 fn test_domdocument_resolve_externals_basic() {
     if skip_without_xml_native("test_domdocument_resolve_externals_basic") {
         return;
@@ -2727,7 +2702,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMDocument_saveHTML_basic.phpt`: DOMDocument::saveHTML() should dump the internal document into a string using HTML formatting
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createTextNode"#]
 fn test_domdocument_save_html_basic() {
     if skip_without_xml_native("test_domdocument_save_html_basic") {
         return;
@@ -2793,7 +2767,6 @@ try {
 
 /// php-src `ext/dom/tests/DOMDocument_saveHTML_variant1.phpt`: DOMDocument::saveHTML() optional parameters
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createTextNode"#]
 fn test_domdocument_save_html_variant1() {
     if skip_without_xml_native("test_domdocument_save_html_variant1") {
         return;
@@ -2818,7 +2791,6 @@ echo $doc->saveHTML($title), "\n";
 
 /// php-src `ext/dom/tests/DOMDocument_saveHTML_variant2.phpt`: DOMDocument::saveHTML() vs DOMDocument::saveXML()
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::saveHtml"#]
 fn test_domdocument_save_html_variant2() {
     if skip_without_xml_native("test_domdocument_save_html_variant2") {
         return;
@@ -3329,7 +3301,6 @@ Done"#);
 
 /// php-src `ext/dom/tests/DOMDocument_strictErrorChecking_basic.phpt`: DomDocument::$strictErrorChecking - basic test
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::strictErrorChecking"#]
 fn test_domdocument_strict_error_checking_basic() {
     if skip_without_xml_native("test_domdocument_strict_error_checking_basic") {
         return;

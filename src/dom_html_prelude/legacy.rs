@@ -25,6 +25,13 @@ fn decl_extern_elephc_xml_dom_document_new() -> Stmt {
         .build()
 }
 
+/// `elephc_xml_dom_orphan_document` — transcribed from the PHP form.
+fn decl_extern_elephc_xml_dom_orphan_document() -> Stmt {
+    extern_fn("elephc_xml_dom_orphan_document", "elephc_xml")
+        .returns(CType::Int)
+        .build()
+}
+
 /// `elephc_xml_dom_load` — transcribed from the PHP form.
 fn decl_extern_elephc_xml_dom_load() -> Stmt {
     extern_fn("elephc_xml_dom_load", "elephc_xml")
@@ -533,7 +540,7 @@ fn decl_class_elephcdom() -> Stmt {
                 .static_()
                 .returns(TypeExpr::Int)
                 .body(vec![
-                    s_return(e_call("elephc_xml_dom_document_new", vec![e_str("1.0"), e_str("")])),
+                    s_return(e_call("elephc_xml_dom_orphan_document", vec![])),
                 ]),
         )
         .method(
@@ -2435,6 +2442,7 @@ pub(crate) fn declarations() -> Program {
     internal_declarations(|| {
         vec![
             decl_extern_elephc_xml_dom_document_new(),
+            decl_extern_elephc_xml_dom_orphan_document(),
             decl_extern_elephc_xml_dom_load(),
             decl_extern_elephc_xml_dom_load_file(),
             decl_extern_elephc_xml_dom_load_html(),

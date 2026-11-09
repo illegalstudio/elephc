@@ -66,6 +66,10 @@ pub(crate) mod error {
 pub(crate) struct DomDocument {
     raw: Node,
     detached: RefCell<HashSet<Node>>,
+    /// A holder for nodes built without a document (`new DOMElement('x')`): php-src gives such
+    /// nodes no document at all, so they report a null `ownerDocument` and are adopted by the
+    /// first document they are inserted into instead of raising `Wrong Document Error`.
+    orphan: bool,
 }
 
 impl Drop for DomDocument {
@@ -90,7 +94,12 @@ impl Drop for DomDocument {
 impl DomDocument {
     /// Adopts a parsed or freshly created document.
     fn new(raw: Node) -> Rc<Self> {
-        Rc::new(Self { raw, detached: RefCell::new(HashSet::new()) })
+        Rc::new(Self { raw, detached: RefCell::new(HashSet::new()), orphan: false })
+    }
+
+    /// Whether this document only holds nodes php-src would leave without a document.
+    pub(crate) fn is_orphan(&self) -> bool {
+        self.orphan
     }
 
     /// Records a parentless subtree this document must free unless it is linked back in.
@@ -168,6 +177,48 @@ pub(crate) fn new_document(version: &[u8], encoding: &[u8]) -> i64 {
         unsafe { crate::simplexml::set_document_encoding(raw, encoding.as_ptr()) };
     }
     handle_for(&DomDocument::new(raw), raw)
+}
+
+/// Creates the holder document of one node built without a document (see
+/// `DomDocument::orphan`) and returns its handle.
+pub(crate) fn new_orphan_holder() -> i64 {
+    crate::ffi::init_library();
+    let version = cstring(b"1.0");
+    let raw = unsafe { ffi::new_doc(version.as_ptr()) };
+    if raw.is_null() {
+        return 0;
+    }
+    let holder = Rc::new(DomDocument { raw, detached: RefCell::new(HashSet::new()), orphan: true });
+    handle_for(&holder, raw)
+}
+
+/// Moves a subtree built without a document into `target` (php-src sets the document of a
+/// doc-less node on insertion): libxml2 re-homes the nodes, and every handle inside the
+/// subtree now belongs to `target`.
+fn adopt_orphan(child: &Entry, target: &Rc<DomDocument>) {
+    unsafe {
+        if !ffi::parent(child.node).is_null() {
+            ffi::unlink(child.node);
+        }
+        child.doc.relink(child.node);
+        ffi::set_tree_doc(child.node, target.raw);
+    }
+    let inside = |mut node: Node| {
+        while !node.is_null() {
+            if node == child.node {
+                return true;
+            }
+            node = unsafe { ffi::parent(node) };
+        }
+        false
+    };
+    REGISTRY.with(|registry| {
+        for entry in registry.borrow_mut().entries.values_mut() {
+            if Rc::ptr_eq(&entry.doc, &child.doc) && inside(entry.node) {
+                entry.doc = target.clone();
+            }
+        }
+    });
 }
 
 /// Parses `data` into the document behind `handle`; false (and warnings) on failure.
@@ -377,7 +428,7 @@ fn check_insertion(parent: &Entry, child: &Entry) -> Result<(), i64> {
     }
     let parent_doc = unsafe { ffi::node_document(parent.node) };
     let child_doc = unsafe { ffi::node_document(child.node) };
-    if child_doc != parent_doc && !child_doc.is_null() {
+    if child_doc != parent_doc && !child_doc.is_null() && !child.doc.is_orphan() {
         return Err(error::WRONG_DOCUMENT);
     }
     let child_kind = node_type(child.node);
@@ -418,6 +469,15 @@ pub(crate) fn insert(parent: &Entry, child: &Entry, reference: Option<&Entry>) -
             return Err(error::NOT_FOUND);
         }
     }
+    // A node built without a document joins the parent's document on insertion.
+    let adopted;
+    let child = if child.doc.is_orphan() && !Rc::ptr_eq(&child.doc, &parent.doc) {
+        adopt_orphan(child, &parent.doc);
+        adopted = Entry { doc: parent.doc.clone(), node: child.node };
+        &adopted
+    } else {
+        child
+    };
     let child_kind = node_type(child.node);
     if child_kind == kind::FRAGMENT {
         return Ok(insert_fragment(parent, child, reference.map(|reference| reference.node)));

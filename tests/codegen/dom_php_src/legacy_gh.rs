@@ -14,7 +14,6 @@ use super::*;
 
 /// php-src `ext/dom/tests/gh10234.phpt`: GH-10234 (Setting DOMAttr::textContent results in an empty attribute value.)
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::saveHTML"#]
 fn test_gh10234() {
     if skip_without_xml_native("test_gh10234") {
         return;
@@ -509,7 +508,6 @@ test(function($dom, $div, $i) {
 
 /// php-src `ext/dom/tests/gh11682.phpt`: Fix GH-11682 (Consecutive calls to DOMNode::before and DOMNode::remove unlink wrong nodes)
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMNode::before"#]
 fn test_gh11682() {
     if skip_without_xml_native("test_gh11682") {
         return;
@@ -1507,7 +1505,6 @@ string(4) "keep"
 
 /// php-src `ext/dom/tests/gh15137.phpt`: GH-15137: Unexpected null pointer in Zend/zend_smart_str.h
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMText::wholeText"#]
 fn test_gh15137() {
     if skip_without_xml_native("test_gh15137") {
         return;
@@ -1600,7 +1597,6 @@ var_dump($element);
 
 /// php-src `ext/dom/tests/gh15551.phpt`: GH-15551 (Segmentation fault (access null pointer) in ext/dom/xml_common.h)
 #[test]
-#[ignore = r#"DOM port pending: Undefined class: DOMDocumentFragment"#]
 fn test_gh15551() {
     if skip_without_xml_native("test_gh15551") {
         return;
@@ -1770,7 +1766,6 @@ var_dump($element->getAttributeNames());
 
 /// php-src `ext/dom/tests/gh16150.phpt`: GH-16150 (Use after free in php_dom.c)
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMElement::__construct' expects 0 arguments, got 1"#]
 fn test_gh16150() {
     if skip_without_xml_native("test_gh16150") {
         return;
@@ -2213,7 +2208,6 @@ var_dump(dom_import_simplexml($attr)->textContent);
 
 /// php-src `ext/dom/tests/gh16533.phpt`: GH-16533 (Segfault when adding attribute to parent that is not an element)
 #[test]
-#[ignore = r#"DOM port pending: Undefined method: DOMDocument::createAttribute"#]
 fn test_gh16533() {
     if skip_without_xml_native("test_gh16533") {
         return;
@@ -2236,7 +2230,6 @@ echo $doc->saveXML();
 
 /// php-src `ext/dom/tests/gh16535.phpt`: GH-16535 (UAF when using document as a child)
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_gh16535() {
     if skip_without_xml_native("test_gh16535") {
         return;
@@ -2344,7 +2337,6 @@ echo $v9->saveXML();
 
 /// php-src `ext/dom/tests/gh16777_1.phpt`: GH-16777 (Calling the constructor again on a DOM object after it is in a document causes UAF)
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMText::__construct' expects 0 arguments, got 1"#]
 fn test_gh16777_1() {
     if skip_without_xml_native("test_gh16777_1") {
         return;
@@ -2371,7 +2363,6 @@ Wrong Document Error"#);
 
 /// php-src `ext/dom/tests/gh16777_2.phpt`: GH-16777 (Calling the constructor again on a DOM object after it is in a document causes UAF)
 #[test]
-#[ignore = r#"DOM port pending: Constructor 'DOMElement::__construct' expects 0 arguments, got 1"#]
 fn test_gh16777_2() {
     if skip_without_xml_native("test_gh16777_2") {
         return;
@@ -2401,7 +2392,6 @@ bool(true)"#);
 
 /// php-src `ext/dom/tests/gh16906.phpt`: GH-16906 (Reloading document can cause UAF in iterator)
 #[test]
-#[ignore = r#"DOM port pending: output differs from php-src"#]
 fn test_gh16906() {
     if skip_without_xml_native("test_gh16906") {
         return;
@@ -2563,7 +2553,6 @@ NULL
 
 /// php-src `ext/dom/tests/gh17500.phpt`: GH-17500 (Segfault with requesting nodeName on nameless doctype)
 #[test]
-#[ignore = r#"DOM port pending: Undefined property: DOMDocument::doctype"#]
 fn test_gh17500() {
     if skip_without_xml_native("test_gh17500") {
         return;
@@ -2666,7 +2655,6 @@ Stack trace:
 
 /// php-src `ext/dom/tests/gh18304.phpt`: GH-18304 (Changing the properties of a DateInterval through dynamic properties triggers a SegFault)
 #[test]
-#[ignore = r#"DOM port pending: unsupported EIR backend feature: dynamic_prop_set assigning PHP type Mixed to DOMText::$textContent with PHP type Void (function main, instruc"#]
 fn test_gh18304() {
     if skip_without_xml_native("test_gh18304") {
         return;

@@ -116,6 +116,8 @@ extern "C" {
     pub(crate) fn get_prop(node: Node, name: *const c_char) -> *mut c_char;
     #[link_name = "xmlHasProp"]
     pub(crate) fn has_prop(node: Node, name: *const c_char) -> Node;
+    #[link_name = "xmlSetTreeDoc"]
+    pub(crate) fn set_tree_doc(tree: Node, doc: Node) -> c_int;
     #[link_name = "xmlNewNs"]
     pub(crate) fn new_ns(node: Node, href: *const c_char, prefix: *const c_char) -> Node;
     #[link_name = "xmlHasNsProp"]

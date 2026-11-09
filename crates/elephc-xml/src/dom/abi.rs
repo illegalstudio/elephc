@@ -57,6 +57,12 @@ pub unsafe extern "C" fn elephc_xml_dom_document_new(version: *const c_char, enc
     guard(|| new_document(&arg(version), &arg(encoding)))
 }
 
+/// The holder document of a node constructed without one (`new DOMElement('x')`).
+#[no_mangle]
+pub extern "C" fn elephc_xml_dom_orphan_document() -> i64 {
+    guard(new_orphan_holder)
+}
+
 /// `DOMDocument::loadXML()`: 1 when the document was replaced, 0 on failure.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_xml_dom_load(handle: i64, data: *const c_char, length: i64, options: i64) -> i64 {
@@ -156,6 +162,8 @@ pub extern "C" fn elephc_xml_dom_node(handle: i64, relation: i64) -> i64 {
                 4 => if node_type(entry.node) == kind::ATTRIBUTE { std::ptr::null_mut() } else { ffi::next(entry.node) },
                 5 => match node_type(entry.node) {
                     kind::DOCUMENT | kind::HTML_DOCUMENT => std::ptr::null_mut(),
+                    // A node built without a document has none in php-src.
+                    _ if entry.doc.is_orphan() => std::ptr::null_mut(),
                     _ => owner_document(entry.node),
                 },
                 6 => ffi::root(document_raw(&entry)),
