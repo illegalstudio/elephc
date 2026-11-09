@@ -64,6 +64,10 @@ object = { version = "0.37", default-features = false, features = ["write_std", 
 # rustc itself uses for exactly this workload: short, non-adversarial, internal keys. Already in
 # the lock as a transitive dependency, so this pins no new version. See `crate::fast_hash`.
 rustc-hash = "1.1"
+# XXH3 names each content-shared body from its text (`Emitter::emit_content_shared`): a quality
+# 64-bit hash, since two bodies with one name would share one implementation, and far faster than
+# the SipHash it replaced. Already in the lock as a transitive dependency.
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 # Grows the stack on demand inside the recursive-descent parser so deeply
 # nested expressions never overflow small (2 MiB test-thread) stacks.
 stacker = "0.1"

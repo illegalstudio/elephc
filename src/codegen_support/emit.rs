@@ -643,18 +643,15 @@ impl Emitter {
         self.rollback_to(start);
         self.current_text_section = section_before;
         let positions = label_token_positions(&body, label);
-        // Hashed piece by piece: the same bytes as hashing the replaced `String`, whose `Hash`
-        // is its bytes then 0xff, so the shared names are unchanged.
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        // Hashed piece by piece, the label blanked to `@`, with XXH3: SipHash over every repeat
+        // of ~80 000 invoker bodies was 1.9% of a Symfony demo build's samples. The name is what
+        // makes two bodies one, so the hash must be a quality 64-bit one, and the length is part
+        // of the name too.
+        let mut hasher = xxhash_rust::xxh3::Xxh3::new();
         for_each_label_piece(&body, label.len(), &positions, "@", |piece| {
-            std::hash::Hasher::write(&mut hasher, piece.as_bytes())
+            hasher.update(piece.as_bytes())
         });
-        std::hash::Hasher::write_u8(&mut hasher, 0xff);
-        let shared = format!(
-            "_eir_cbody_{:016x}_{:x}",
-            std::hash::Hasher::finish(&hasher),
-            body.len()
-        );
+        let shared = format!("_eir_cbody_{:016x}_{:x}", hasher.digest(), body.len());
         self.label_global(label);
         entry(self);
         match self.target.arch {
@@ -1043,15 +1040,11 @@ mod tests {
         let body = "_f_7:\n    b _f_7_end\n    bl _f_71\n    bl _f_7_3\n_f_7_end:\n    ret _f_7";
         let replaced = replace_label_tokens(body, "_f_7", "@");
         assert_eq!(replaced, "@:\n    b @_end\n    bl _f_71\n    bl _f_7_3\n@_end:\n    ret @");
-        let mut whole = std::collections::hash_map::DefaultHasher::new();
-        std::hash::Hash::hash(&replaced, &mut whole);
-        let mut pieces = std::collections::hash_map::DefaultHasher::new();
+        let whole = xxhash_rust::xxh3::xxh3_64(replaced.as_bytes());
+        let mut pieces = xxhash_rust::xxh3::Xxh3::new();
         let positions = label_token_positions(body, "_f_7");
-        for_each_label_piece(body, 4, &positions, "@", |piece| {
-            std::hash::Hasher::write(&mut pieces, piece.as_bytes())
-        });
-        std::hash::Hasher::write_u8(&mut pieces, 0xff);
-        assert_eq!(std::hash::Hasher::finish(&whole), std::hash::Hasher::finish(&pieces));
+        for_each_label_piece(body, 4, &positions, "@", |piece| pieces.update(piece.as_bytes()));
+        assert_eq!(whole, pieces.digest());
     }
 
     /// Verifies comment prefix is platform aware.
