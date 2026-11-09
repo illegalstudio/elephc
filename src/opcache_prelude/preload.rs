@@ -407,15 +407,13 @@ pub fn preload_statistics(
 /// finding out why is the actual work. Until then a divergence on a rare shape is the right
 /// trade against a link failure on the common one. Pinned by
 /// `a_preload_global_reaches_the_cli_entry_script_as_a_known_divergence`.
-///
-/// Returns the program and the preload path it now requires, if any.
 pub fn inject_preload_require(
     program: Program,
     php_version: PhpVersion,
     web: bool,
     overrides: &[(String, String)],
     filename: &str,
-) -> (Program, Option<String>) {
+) -> Program {
     // The manifest is not consulted: only `in_manifest` depends on it, and that flag exists for a
     // warning this injection makes unreachable. Passing an empty one keeps the resolution, the
     // cache gate and the unresolvable arm exactly as `preload_verdict` documents them.
@@ -428,7 +426,7 @@ pub fn inject_preload_require(
         std::process::exit(1);
     }
     let PreloadVerdict::Preloading { resolved, .. } = verdict else {
-        return (program, None);
+        return program;
     };
     // Preloading the ENTRY file is a no-op, not a self-include. Reference PHP compiles the file
     // once during the preload pass and the request then finds its declarations already in the
@@ -437,19 +435,19 @@ pub fn inject_preload_require(
     // (`Duplicate function declaration: …`). The statistics still report it, through the manifest
     // it is the first member of.
     if canonical_entry_path(filename).is_some_and(|entry| entry == resolved) {
-        return (program, None);
+        return program;
     }
     // `once` and `required` both set: reference preloads a file exactly once and a preload path
     // that stops resolving is fatal, which is `require_once`, not `include`.
     let mut with_preload = Vec::with_capacity(program.len() + 1);
     with_preload.push(Stmt::new(
         StmtKind::Include {
-            path: Expr::new(ExprKind::StringLiteral(resolved.clone()), Span::new(0, 0)),
+            path: Expr::new(ExprKind::StringLiteral(resolved), Span::new(0, 0)),
             once: true,
             required: true,
         },
         Span::new(0, 0),
     ));
     with_preload.extend(program);
-    (with_preload, Some(resolved))
+    with_preload
 }

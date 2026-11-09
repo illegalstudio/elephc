@@ -282,8 +282,8 @@ fn default_build_links_the_interpreter_for_the_projects_computed_include_only() 
     assert!(!links_interpreter(&dir), "a folded dirname() path keeps the build closed");
 }
 
-/// What `opcache.preload` brings in is the framework's generated code, not the project's: Symfony's
-/// dumped container loads its factories with `require $this->containerDir.'/'.$file`, which the
+/// The files beside the `opcache.preload` script are the framework's generated code, not the
+/// project's: Symfony's dumped container loads its factories with `require $this->containerDir.'/'.$file`, which the
 /// closed world answers from the units it compiled for the preload. Counted as the project's own
 /// computed include, it linked the interpreter into every Symfony build.
 #[test]
@@ -297,8 +297,8 @@ fn default_build_stays_closed_for_a_computed_include_the_preload_brings_in() {
     .unwrap();
     fs::write(dir.join("cache/factory.php"), "<?php\nreturn 'factory';\n").unwrap();
     fs::write(
-        dir.join("preload.php"),
-        "<?php\nrequire __DIR__ . '/cache/Container.php';\nopcache_compile_file(__DIR__ . '/cache/factory.php');\n",
+        dir.join("cache/preload.php"),
+        "<?php\nrequire __DIR__ . '/Container.php';\nopcache_compile_file(__DIR__ . '/factory.php');\n",
     )
     .unwrap();
     fs::write(
@@ -306,7 +306,7 @@ fn default_build_stays_closed_for_a_computed_include_the_preload_brings_in() {
         "<?php\n$c = new Container();\necho $c->load($argc > 5 ? 'none.php' : 'factory.php'), \"\\n\";\n",
     )
     .unwrap();
-    let preload = format!("opcache.preload={}", dir.join("preload.php").display());
+    let preload = format!("opcache.preload={}", dir.join("cache/preload.php").display());
     let output = compile(&dir, &["--ini", "opcache.enable_cli=1", "--ini", &preload]);
     assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
     assert!(!text(&output.stderr).contains("note: the interpreter"), "{}", text(&output.stderr));

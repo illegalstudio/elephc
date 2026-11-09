@@ -290,7 +290,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // or declares an autoloadable class is seen by both, and before `resolve` so its transitive
     // requires join the OPcache script manifest. An unresolvable path is refused in here, at the
     // compile-time position closest to reference's startup fatal.
-    let (parsed, preload_path) = opcache_prelude::inject_preload_require(
+    let parsed = opcache_prelude::inject_preload_require(
         parsed,
         php_version,
         web,
@@ -351,11 +351,19 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // The entry program (with what it includes statically) evaluates a computed string or includes
     // a computed path: it needs the interpreter, decided before anything is compiled for a
     // closed world.
+    // Every `opcache.preload` directory: its files are the framework's generated code, which the
+    // build compiles as the preload's closure, not the project's own (see `closed_world`).
+    let preload_dirs: Vec<std::path::PathBuf> = ini_overrides
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case("opcache.preload"))
+        .filter_map(|(_, directive)| crate::opcache_preload_sources::resolve_preload_path(directive, parent))
+        .filter_map(|path| crate::source::canonical(&path).ok()?.parent().map(Path::to_path_buf))
+        .collect();
     if closed_world_mode == crate::closed_world::Mode::Auto {
-        let early = crate::closed_world::project_computed_eval(&ast, preload_path.as_deref())
+        let early = crate::closed_world::project_computed_eval(&ast, &preload_dirs)
             .map(|site| format!("eval() of a computed string at {site}"))
             .or_else(|| {
-                crate::closed_world::project_computed_include(&ast, preload_path.as_deref())
+                crate::closed_world::project_computed_include(&ast, &preload_dirs)
                     .map(|site| format!("include of a computed path at {site}"))
             });
         if let Some(reason) = early {
@@ -2414,10 +2422,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         // A class the autoloader brought in from the project itself can evaluate a computed
         // string too; the entry's own were caught before anything was compiled.
         if closed_world_mode == crate::closed_world::Mode::Auto {
-            if let Some(site) = crate::closed_world::project_computed_eval(&ast, preload_path.as_deref()) {
+            if let Some(site) = crate::closed_world::project_computed_eval(&ast, &preload_dirs) {
                 reasons.push(format!("eval() of a computed string in the project's code at {site}"));
             }
-            if let Some(site) = crate::closed_world::project_computed_include(&ast, preload_path.as_deref()) {
+            if let Some(site) = crate::closed_world::project_computed_include(&ast, &preload_dirs) {
                 reasons.push(format!("include of a computed path in the project's code at {site}"));
             }
         }
