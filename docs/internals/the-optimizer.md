@@ -695,8 +695,11 @@ integer literals is a proven packed `array<int>` source too, and the lowered
 source temporary is released after the map call. Direct `range()` calls with
 integer-literal arguments, `array_slice()` calls that keep PHP's default key
 renumbering, and `array_values()` over a proven packed source are proven
-recursively; `array_slice(..., preserve_keys: true)` stays generic because the
-result may be a hash. For a variable source, the packed
+recursively. `array_slice(..., preserve_keys: true)` is accepted when the literal
+offset is `0`, because the preserved keys are still `0..n-1`; a later offset stays
+generic because the result is a hash. A parameter, global, `static` local or
+reference alias stays generic even at offset 0: its key-preserving slice can load a
+boxed hash. For a variable source, the packed
 `array<int>` proof runs in the lowering context at the actual call site, where the
 flow-sensitive local type is known; function-local assignments from `range()` or
 array literals therefore fuse like main-level ones, and a failed proof falls back

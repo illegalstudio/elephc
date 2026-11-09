@@ -540,12 +540,20 @@ fn stored_map_shape(
     Some(())
 }
 
-/// Returns whether an `array_slice()` fourth argument keeps the packed-list layout.
+/// Returns whether an `array_slice()` keeps the packed-list layout of its source.
 ///
-/// PHP renumbers keys by default; `preserve_keys: true` can turn a slice that no longer
-/// starts at key 0 into a hash, which the stored-map kernels cannot read as packed slots.
-pub(crate) fn slice_preserves_packed_layout(arg: Option<&Expr>) -> bool {
-    arg.is_none_or(|arg| matches!(arg.kind, ExprKind::BoolLiteral(false)))
+/// PHP renumbers keys by default. `preserve_keys: true` also keeps a packed list when the
+/// slice starts at key 0, because the preserved keys are still `0..n-1`. A later offset
+/// preserves a non-zero starting key, which the packed kernels cannot read as a list.
+pub(crate) fn slice_preserves_packed_layout(
+    offset: Option<&Expr>,
+    preserve_keys: Option<&Expr>,
+) -> bool {
+    match preserve_keys.map(|arg| &arg.kind) {
+        None | Some(ExprKind::BoolLiteral(false)) => true,
+        Some(ExprKind::BoolLiteral(true)) => offset.is_some_and(|arg| literal_i64(arg) == Some(0)),
+        _ => false,
+    }
 }
 
 /// Returns whether the expression is a side-effect-free source shape the stored-map marker
@@ -577,7 +585,7 @@ pub(crate) fn is_packed_int_source_candidate(
                 }
                 "array_slice" => {
                     (2..=4).contains(&args.len())
-                        && slice_preserves_packed_layout(args.get(3))
+                        && slice_preserves_packed_layout(args.get(1), args.get(3))
                         && is_packed_int_source_candidate(&args[0], functions)
                 }
                 "array_values" => {

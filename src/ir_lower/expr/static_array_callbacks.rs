@@ -698,10 +698,15 @@ fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> boo
                         && args.iter().all(|arg| integer_literal(arg).is_some())
                 }
                 "array_slice" => {
+                    let preserve_keys = args
+                        .get(3)
+                        .is_some_and(|arg| matches!(arg.kind, ExprKind::BoolLiteral(true)));
                     (2..=4).contains(&args.len())
                         && crate::ir_lower::stmt::stored_numeric_map::slice_preserves_packed_layout(
+                            args.get(1),
                             args.get(3),
                         )
+                        && (!preserve_keys || packed_source_is_plain(ctx, &args[0]))
                         && lowering_packed_int_source(ctx, &args[0])
                 }
                 "array_values" => args.len() == 1 && lowering_packed_int_source(ctx, &args[0]),
@@ -710,6 +715,25 @@ fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> boo
         }
         _ => false,
     }
+}
+
+/// Returns whether a variable source is a plain local whose EIR value is not boxed or aliased.
+///
+/// A parameter, global, `static` local or reference alias can load through boxed storage even when
+/// its checked type is a concrete indexed array. The key-preserving slice of such a binding lowers
+/// to a hash, so the stored-map proof must fail before any emission rather than assume packed slots.
+fn packed_source_is_plain(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    let ExprKind::Variable(name) = &expr.kind else {
+        return true;
+    };
+    !ctx.is_ref_bound_local(name)
+        && !ctx.local_uses_global_storage(name)
+        && !ctx
+            .builder
+            .function()
+            .params
+            .iter()
+            .any(|param| param.name.as_str() == name.as_str())
 }
 
 pub(super) fn lower_stored_numeric_map(
