@@ -1184,6 +1184,30 @@ echo implode(",", $mapped), "|", implode(",", $nested), "\n";
     assert!(!main.contains("runtime.array_map "), "{main}");
 }
 
+/// `array_values()` over a packed list aliases the same indexed layout, so it remains a
+/// direct source for the stored-map kernels.
+#[test]
+fn test_stored_numeric_map_array_values_source() {
+    let source = r#"<?php
+$values = range(1, 10);
+$a = array_map(fn($v) => $v + 1, array_values($values));
+$b = array_map(fn($v) => $v * 1.5, array_values(array_slice($values, 2, 3)));
+$c = array_map(fn($v) => $v / 2.0, array_values([1, 2, 3, 4]));
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "
+";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "2,3,4,5,6,7,8,9,10,11|4.5,6,7.5|0.5,1,1.5,2
+"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_numeric").count(), 1, "{main}");
+    assert_eq!(main.matches("runtime.array_map_float_scale").count(), 1, "{main}");
+    assert_eq!(main.matches("runtime.array_map_float_div").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
 /// Unproven direct sources keep the generic map and are evaluated exactly once.
 #[test]
 fn test_stored_numeric_map_direct_sources_fall_back() {
@@ -1219,13 +1243,14 @@ $a = array_map(fn($v) => $v + 1.5, range(1, 5));
 $b = array_map(fn($v) => $v * 1.5, array_slice($values, 2, 3));
 $c = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 1, 4));
 $d = array_map(fn($v) => $v + 1, array_slice([1, 2, 3, 4], 1));
-echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "\n";
+$e = array_map(fn($v) => $v + 1, array_values(array_slice($values, 2, 3)));
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|", implode(",", $e), "\n";
 "#,
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(
         out.stdout,
-        "2.5,3.5,4.5,5.5,6.5|4.5,6,7.5|1,1.5,2,2.5|3,4,5\n"
+        "2.5,3.5,4.5,5.5,6.5|4.5,6,7.5|1,1.5,2,2.5|3,4,5|4,5,6\n"
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -1258,7 +1283,8 @@ fn test_stored_numeric_map_direct_sources_emit_all_supported_targets() {
 function directSources(int $seed): float {
     $a = array_map(fn($v) => $v + 1.5, range(1, 10));
     $b = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 2, 3));
-    return array_sum($a) + array_sum($b) + $seed;
+    $c = array_map(fn($v) => $v + 1, array_values(range(1, 5)));
+    return array_sum($a) + array_sum($b) + array_sum($c) + $seed;
 }
 "#;
     for target in [
@@ -1271,6 +1297,7 @@ function directSources(int $seed): float {
         let assembly = emit_target_assembly(source, target);
         assert!(assembly.contains("__rt_array_map_float_affine"), "{target}");
         assert!(assembly.contains("__rt_array_map_float_div"), "{target}");
+        assert!(assembly.contains("__rt_array_map_numeric"), "{target}");
         assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
     }
 }

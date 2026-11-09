@@ -693,9 +693,10 @@ at the first inexact element or `PHP_INT_MIN / -1`. Zero divisors keep the gener
 map so `DivisionByZeroError` is preserved. A non-empty array literal whose items are all
 integer literals is a proven packed `array<int>` source too, and the lowered
 source temporary is released after the map call. Direct `range()` calls with
-integer-literal arguments and `array_slice()` calls that keep PHP's default key
-renumbering are proven recursively; `array_slice(..., preserve_keys: true)` stays
-generic because the result may be a hash. For a variable source, the packed
+integer-literal arguments, `array_slice()` calls that keep PHP's default key
+renumbering, and `array_values()` over a proven packed source are proven
+recursively; `array_slice(..., preserve_keys: true)` stays generic because the
+result may be a hash. For a variable source, the packed
 `array<int>` proof runs in the lowering context at the actual call site, where the
 flow-sensitive local type is known; function-local assignments from `range()` or
 array literals therefore fuse like main-level ones, and a failed proof falls back

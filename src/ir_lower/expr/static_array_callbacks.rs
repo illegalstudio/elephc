@@ -668,8 +668,9 @@ pub(super) fn lower_count_explode(
 /// Conservative proof that a stored-map source lowers to a packed `array<int>`.
 ///
 /// Variables use the lowering context's flow-sensitive type. Array literals, `range()` with
-/// integer-literal arguments, and key-renumbering `array_slice()` over another proven source
-/// are proven structurally. The marker accepts the same shapes; when this proof fails before
+/// integer-literal arguments, key-renumbering `array_slice()` over another proven source, and
+/// `array_values()` over one of those are proven structurally. The marker accepts the same
+/// shapes; when this proof fails before
 /// any emission, the dispatcher falls back to the ordinary `array_map()` lowering.
 fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
     match &expr.kind {
@@ -703,6 +704,7 @@ fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> boo
                         )
                         && lowering_packed_int_source(ctx, &args[0])
                 }
+                "array_values" => args.len() == 1 && lowering_packed_int_source(ctx, &args[0]),
                 _ => false,
             }
         }

@@ -14,9 +14,9 @@
 //! - A variable source's packed `array<int>` proof is deferred to lowering, where the
 //!   flow-sensitive local type is known (so function-local assignments fuse too). A failed
 //!   proof falls back to the ordinary `array_map()` lowering.
-//! - Non-empty all-int array literals, `range()` calls with integer-literal arguments, and
-//!   key-renumbering `array_slice()` calls over another packed-int source are proven
-//!   structurally (recursively for slices).
+//! - Non-empty all-int array literals, `range()` calls with integer-literal arguments,
+//!   key-renumbering `array_slice()` calls, and `array_values()` calls over another
+//!   packed-int source are proven structurally (recursively for slices and values).
 //! - A candidate is marked only when every use of its destination local and value aliases
 //!   is one of: indexed reads, value-`foreach`, read-only aliasing, or a whitelisted
 //!   storage-neutral builtin. Any element write, direct or through an alias, keeps the
@@ -579,6 +579,9 @@ pub(crate) fn is_packed_int_source_candidate(
                     (2..=4).contains(&args.len())
                         && slice_preserves_packed_layout(args.get(3))
                         && is_packed_int_source_candidate(&args[0], functions)
+                }
+                "array_values" => {
+                    args.len() == 1 && is_packed_int_source_candidate(&args[0], functions)
                 }
                 _ => false,
             }
