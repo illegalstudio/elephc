@@ -4815,7 +4815,8 @@ fn build_iterator_class() -> Stmt {
             BinOp::And,
             e_binop(e_this_prop("__elephc_index"), BinOp::Lt, e_call("count", vec![e_this_prop("__elephc_keys")])),
         ))]))
-        .method(handle_destructor_method())
+        // The array-backed iterator owns no bridge handle; a destructor would turn the
+        // deliberate self-cycle into an eager drop and change gc_collect_cycles().
         .build()
 }
 
