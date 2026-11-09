@@ -122,37 +122,56 @@ fn try_expand_value_include(
 /// (`autoload.php`, `ComposerAutoloaderInit…::getLoader()`) was interpreted on every Symfony
 /// request: about 11% of `/`.
 ///
-/// When nothing the statement evaluates before the include can have an effect, running the
-/// include first as `$tmp = require X;` and then the statement with `$tmp` in its place is the
-/// same program, and the assignment form is the one `try_expand_value_include` compiles. What
-/// may be passed on the way to the include is therefore limited to literals, and the walk never
-/// enters an operand that might not be evaluated (the right side of `&&`, `||`, `??`), nor a
-/// loop condition, nor an `elseif`, which only run conditionally or repeatedly.
+/// Running the include first as `$tmp = require X;` and then the statement with `$tmp` in its
+/// place is the same program when what the statement evaluates before the include runs first
+/// too: the assignment form is the one `try_expand_value_include` compiles. An operand left of
+/// the include that always runs is moved into a temporary of its own ahead of it, in order
+/// (`strtoupper('x') . include X` becomes `$t0 = strtoupper('x'); $t1 = include X;`). A bare
+/// variable stays where it is: php reads one only when the operator executes, after the
+/// include, which may have assigned it. The walk never enters an operand that might not be
+/// evaluated (the right side of `&&`, `||`, `??`), nor a loop condition, nor an `elseif`, which
+/// only run conditionally or repeatedly.
+///
+/// Without this, a closed world, whose binary has no interpreter, answered the include with
+/// php's "Failed to open stream" warning for a file that exists.
 fn hoist_leading_value_include(stmt: &Stmt) -> Option<Vec<Stmt>> {
     let mut rewritten = stmt.clone();
-    let tmp = format!(
-        "__elephc_inc_hoist_{}",
-        HOISTED_INCLUDE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
+    let tmp = next_hoist_temporary();
+    let mut operands = Vec::new();
     let include = match &mut rewritten.kind {
-        StmtKind::If { condition, .. } => take_leading_include(condition, &tmp)?,
-        StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) => take_leading_include(expr, &tmp)?,
+        StmtKind::If { condition, .. } => take_leading_include(condition, &tmp, &mut operands)?,
+        StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) => {
+            take_leading_include(expr, &tmp, &mut operands)?
+        }
         // A direct `$x = require X;` / `return require X;` is already compiled as it stands.
         StmtKind::Assign { value, .. } | StmtKind::Return(Some(value))
             if !matches!(value.kind, ExprKind::IncludeValue { .. }) =>
         {
-            take_leading_include(value, &tmp)?
+            take_leading_include(value, &tmp, &mut operands)?
         }
         _ => return None,
     };
-    let hoisted = Stmt::new(
+    let mut split: Vec<Stmt> = operands
+        .into_iter()
+        .map(|(name, value)| Stmt::new(StmtKind::Assign { name, value }, stmt.span))
+        .collect();
+    split.push(Stmt::new(
         StmtKind::Assign {
             name: tmp,
             value: include,
         },
         stmt.span,
-    );
-    Some(vec![hoisted, rewritten])
+    ));
+    split.push(rewritten);
+    Some(split)
+}
+
+/// A fresh temporary for `hoist_leading_value_include`.
+fn next_hoist_temporary() -> String {
+    format!(
+        "__elephc_inc_hoist_{}",
+        HOISTED_INCLUDE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
 }
 
 /// Rewrites the statement `require COND ? 'a.php' : 'b.php';` into
@@ -198,29 +217,40 @@ fn include_branch_is_static(expr: &Expr) -> bool {
 static HOISTED_INCLUDE_COUNTER: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
-/// Replaces the include `expr` evaluates first with `$tmp` and returns it, or leaves `expr`
-/// untouched when an effect could precede the include (see `hoist_leading_value_include`).
-fn take_leading_include(expr: &mut Expr, tmp: &str) -> Option<Expr> {
+/// Replaces the include `expr` evaluates first with `$tmp` and returns it, appending to
+/// `operands` each operand that runs before it, replaced by a temporary of its own; leaves `expr`
+/// untouched when the include might not run (see `hoist_leading_value_include`).
+fn take_leading_include(
+    expr: &mut Expr,
+    tmp: &str,
+    operands: &mut Vec<(String, Expr)>,
+) -> Option<Expr> {
     match &mut expr.kind {
         ExprKind::IncludeValue { path, .. } if !is_runtime_dynamic_include_path(path) => {
             let variable = Expr::new(ExprKind::Variable(tmp.to_string()), expr.span);
             Some(std::mem::replace(expr, variable))
         }
         ExprKind::BinaryOp { left, op, right } => {
-            if let Some(include) = take_leading_include(left, tmp) {
+            if let Some(include) = take_leading_include(left, tmp, operands) {
                 return Some(include);
             }
-            let right_always_runs = !matches!(op, BinOp::And | BinOp::Or | BinOp::NullCoalesce);
-            if right_always_runs && is_effect_free_literal(left) {
-                take_leading_include(right, tmp)
-            } else {
-                None
+            if matches!(op, BinOp::And | BinOp::Or | BinOp::NullCoalesce) {
+                return None;
             }
+            let mut inner = Vec::new();
+            let include = take_leading_include(right, tmp, &mut inner)?;
+            if !is_effect_free_literal(left) && !matches!(left.kind, ExprKind::Variable(_)) {
+                let name = next_hoist_temporary();
+                let variable = Expr::new(ExprKind::Variable(name.clone()), left.span);
+                operands.push((name, std::mem::replace(&mut **left, variable)));
+            }
+            operands.extend(inner);
+            Some(include)
         }
         ExprKind::Not(inner)
         | ExprKind::Negate(inner)
         | ExprKind::BitNot(inner)
-        | ExprKind::Cast { expr: inner, .. } => take_leading_include(inner, tmp),
+        | ExprKind::Cast { expr: inner, .. } => take_leading_include(inner, tmp, operands),
         _ => None,
     }
 }

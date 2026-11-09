@@ -641,12 +641,15 @@ echo run($class, $n, ''), '|', run($class, $n, 'empty.php');",
 ///
 /// Composer's `autoload_runtime.php` opens with `if (true === (require_once __DIR__.'/autoload.php')
 /// || …)`; left as a runtime include, the whole Composer bootstrap ran in the interpreter on every
-/// Symfony request. Includes that something with an effect precedes, or that sit where they may
-/// not run (the right of `||`), keep their runtime form. Expected output is php 8.5's.
+/// Symfony request. An include that an operand with an effect precedes is compiled too, the
+/// operand moved ahead of it: a closed-world binary, which has no interpreter, answered
+/// `strtoupper(…) . include …` with php's "Failed to open stream" warning. php reads a bare variable
+/// operand only after the include (`$a` shows what the file assigned), an array element before it.
+/// Includes that sit where they may not run (the right of `||`) keep their runtime form. Expected
+/// output is php 8.5's.
 ///
 /// The output alone cannot tell a compiled include from an interpreted one (both are correct), so
-/// the binary also runs with `ELEPHC_EVAL_TRACE=1`: `lib.php` must never reach the interpreter,
-/// and the one include an effect precedes (`strtoupper(…) . include …`) must.
+/// the binary also runs with `ELEPHC_EVAL_TRACE=1`: no included file may reach the interpreter.
 #[test]
 fn test_include_evaluated_first_in_an_expression_is_compiled_with_php_values() {
     let files: &[(&str, &str)] = &[
@@ -669,11 +672,17 @@ if (!(include __DIR__ . '/side.php')) {
 if ($argc > 0 || (require __DIR__ . '/side.php')) {
     echo "short-circuit|";
 }
-echo strtoupper("x") . (include __DIR__ . '/side.php');
+echo strtoupper("x") . (include __DIR__ . '/side.php'), "|";
+$a = "old";
+$b = ["k" => "old"];
+echo $a . (include __DIR__ . '/write.php'), "|";
+echo $b["k"] . strtolower("Y") . (include __DIR__ . '/dim.php'), "|", $b["k"];
 "#,
             ),
             ("lib.php", "<?php echo '[lib]'; $fromLib = 'set-by-lib'; return 5;"),
             ("side.php", "<?php echo '[side]'; return 'S';"),
+            ("write.php", "<?php $a = 'new'; return '!';"),
+            ("dim.php", "<?php $b['k'] = 'set'; return '!';"),
     ];
     let dir = make_cli_test_dir("elephc_hoisted_include");
     for (path, content) in files {
@@ -690,7 +699,7 @@ echo strtoupper("x") . (include __DIR__ . '/side.php');
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
-        "[lib]first:ran|set-by-lib|second:skipped|[side]aS|[side]short-circuit|[side]XS"
+        "[lib]first:ran|set-by-lib|second:skipped|[side]aS|[side]short-circuit|[side]XS|new!|oldy!|set"
     );
     let trace = String::from_utf8_lossy(&run.stderr);
     let interpreted = |file: &str| {
@@ -700,7 +709,9 @@ echo strtoupper("x") . (include __DIR__ . '/side.php');
             .count()
     };
     assert_eq!(interpreted("lib.php"), 0, "lib.php reached the interpreter:\n{trace}");
-    assert!(interpreted("side.php") > 0, "the effect-preceded include was compiled:\n{trace}");
+    assert_eq!(interpreted("side.php"), 0, "side.php reached the interpreter:\n{trace}");
+    assert_eq!(interpreted("write.php"), 0, "write.php reached the interpreter:\n{trace}");
+    assert_eq!(interpreted("dim.php"), 0, "dim.php reached the interpreter:\n{trace}");
 }
 
 /// A `require` whose path folds to a stream-wrapper URL (`phar://…`) stays a RUNTIME include:
