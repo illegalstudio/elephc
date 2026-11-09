@@ -273,6 +273,29 @@ relative-to = "target"
 path = "debug/libelephc_magician_curl.a"
 relative-to = "target"
 
+# These two existing heavy fixtures crossed 180s/360s on a loaded macOS shard after
+# the Intl corpus widened the binary. Reserve the nextest pool and give them the
+# all-targets budget so a slow runner does not turn a real test into a timeout.
+[[profile.default.overrides]]
+filter = 'test(=codegen::oop::nested_default_grok_scope::test_nested_default_grok_fourth_review_free_without_ir_opt)'
+threads-required = "num-test-threads"
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::oop::nested_default_grok_scope::test_nested_default_grok_fourth_review_free_without_ir_opt)'
+threads-required = "num-test-threads"
+slow-timeout = { period = "300s", terminate-after = 1 }
+
+[[profile.default.overrides]]
+filter = 'test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_bundle)'
+threads-required = "num-test-threads"
+slow-timeout = { period = "600s", terminate-after = 1 }
+
+[[profile.ci.overrides]]
+filter = 'test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_bundle)'
+threads-required = "num-test-threads"
+slow-timeout = { period = "600s", terminate-after = 1 }
+
 # The Intl `badargs` fixture enumerates every extension function through
 # `get_extension_funcs("intl")`; the literal-foreach unroller lowers the whole 187-function
 # surface into one program. It passed at ~150s on a loaded Linux shard and crossed the
