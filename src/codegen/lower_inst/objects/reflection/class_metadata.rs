@@ -51,7 +51,16 @@ pub(super) fn reflection_enum_metadata(
         return Ok(empty_reflection_metadata());
     };
     let reflected_enum = const_string_or_class_operand(ctx, enum_operand, "ReflectionEnum")?;
-    let mut metadata = reflection_class_metadata_for_name(ctx, &reflected_enum)?;
+    reflection_enum_class_metadata_for_name(ctx, &reflected_enum)
+}
+
+/// Resolves complete `ReflectionEnum` metadata for a known enum name: the class metadata,
+/// members included, plus the backing type `isBacked()` and `getBackingType()` read.
+pub(super) fn reflection_enum_class_metadata_for_name(
+    ctx: &FunctionContext<'_>,
+    reflected_enum: &str,
+) -> Result<ReflectionOwnerMetadata> {
+    let mut metadata = reflection_class_metadata_for_name(ctx, reflected_enum)?;
     let Some(enum_name) = metadata.reflected_name.as_deref() else {
         return Ok(empty_reflection_metadata());
     };
@@ -302,18 +311,10 @@ pub(super) fn reflection_enum_metadata_for_name(
     ctx: &FunctionContext<'_>,
     reflected_enum: &str,
 ) -> Result<ReflectionOwnerMetadata> {
-    let mut metadata = reflection_class_metadata_for_name(ctx, reflected_enum)?;
-    let Some(enum_name) = metadata.reflected_name.as_deref() else {
-        return Ok(empty_reflection_metadata());
-    };
-    let Some(enum_info) = ctx.module.enum_infos.get(enum_name) else {
-        return Ok(empty_reflection_metadata());
-    };
-    metadata.type_metadata = enum_info
-        .backing_type
-        .as_ref()
-        .and_then(reflection_named_type_metadata)
-        .map(ReflectionParameterTypeMetadata::Named);
+    let mut metadata = reflection_enum_class_metadata_for_name(ctx, reflected_enum)?;
+    if metadata.reflected_name.is_none() {
+        return Ok(metadata);
+    }
     metadata.method_names.clear();
     metadata.property_names.clear();
     metadata.constant_names.clear();
