@@ -261,10 +261,14 @@ fn intl_family_and_helper(name: &str, result: &PhpType) -> (&'static str, &'stat
     if name == "normalizer_get_raw_decomposition" {
         return ("normalizer", "__elephc_intl_normalizer_raw", PhpType::Mixed);
     }
-    if matches!(name, "normalizer_normalize" | "normalizer_is_normalized") {
+    if name == "normalizer_normalize" {
         // The checked helper rejects unpublished forms with PHP's ValueError before the
         // bridge can silently fall back to NFC.
         return ("normalizer", "__elephc_intl_normalizer_checked", result.clone());
+    }
+    if name == "normalizer_is_normalized" {
+        // The bool entry point needs a typed-bool helper; its result is not a boxed cell.
+        return ("normalizer", "__elephc_intl_normalizer_checked_bool", result.clone());
     }
     let helper = match result.codegen_repr() {
         PhpType::Str => "__elephc_intl_invoke_string",
@@ -296,6 +300,7 @@ mod tests {
             "normalizer_get_raw_decomposition",
             "intlcal_get_now",
             "normalizer_normalize",
+            "normalizer_is_normalized",
         ] {
             let (_, helper, _) = intl_family_and_helper(builtin, &PhpType::Mixed);
             assert!(

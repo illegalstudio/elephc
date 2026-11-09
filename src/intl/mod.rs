@@ -276,6 +276,7 @@ const INTL_HELPERS: &[&str] = &[
     "__elephc_intl_msgfmt_parse_message",
     "__elephc_intl_normalizer_raw",
     "__elephc_intl_normalizer_checked",
+    "__elephc_intl_normalizer_checked_bool",
 ];
 
 /// Returns every synthetic Intl function that must survive declaration pruning.
@@ -1451,6 +1452,35 @@ fn helper_functions() -> Vec<Stmt> {
                         e_var("family"), e_var("method"), e_var("args"),
                     ]),
                     e_concat(e_var("method"), e_str("()")),
+                ])),
+            ])
+            .build(),
+    );
+    helpers.push(
+        function("__elephc_intl_normalizer_checked_bool")
+            .param("family", TypeExpr::Str)
+            .param("method", TypeExpr::Str)
+            .param("args", t_mixed())
+            .returns(TypeExpr::Bool)
+            .body(vec![
+                s_assign("form", e_ternary(
+                    call_isset(e_index(e_var("args"), e_int(1))),
+                    e_cast(CastType::Int, e_index(e_var("args"), e_int(1))),
+                    e_int(16),
+                )),
+                s_if(
+                    crate::synthetic_class::e_not(normalizer_form_membership()),
+                    vec![s_throw(e_new("ValueError", vec![e_concat_all(vec![
+                        e_var("method"),
+                        e_str("(): Argument #2 ($form) must be a a valid normalization form"),
+                    ])]))],
+                    vec![],
+                    None,
+                ),
+                // Keep the typed boolean helper: converting a boxed Mixed result back to
+                // bool is not equivalent to decoding the payload as a bool here.
+                s_return(e_call("__elephc_intl_invoke_bool", vec![
+                    e_var("family"), e_var("method"), e_var("args"),
                 ])),
             ])
             .build(),

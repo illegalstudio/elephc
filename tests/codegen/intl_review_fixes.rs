@@ -348,13 +348,18 @@ try {
     echo $error->getMessage(), "\n";
 }
 var_dump(Normalizer::getRawDecomposition("a", 99));
+var_dump(Normalizer::isNormalized("ABC"));
+var_dump(normalizer_is_normalized("ABC"));
+var_dump(Normalizer::isNormalized("A\xCC\x8A"));
+var_dump(normalizer_is_normalized("A\xCC\x8A"));
 "#,
     );
     assert_eq!(
         out,
         "Normalizer::normalize(): Argument #2 ($form) must be a a valid normalization form\n\
          normalizer_normalize(): Argument #2 ($form) must be a a valid normalization form\n\
-         string(0) \"\"\n"
+         string(0) \"\"\n\
+         bool(true)\nbool(true)\nbool(false)\nbool(false)\n"
     );
 }
 
