@@ -279,8 +279,15 @@ installation, so it does not race publication of the same cache key; the
 currently selected fingerprint is retained. Source archives remain
 content-addressed and reusable.
 
-Downloads use HTTPS and are bounded and hashed before publication. Sources are
-gzip- or xz-compressed tarballs; the container format is fixed by the catalog
+Downloads use HTTPS and are bounded and hashed before publication. After four
+failed attempts ending in HTTP 502, 503, or 504, a catalogued GitHub release
+source can be fetched through GitHub's release asset API. Elephc resolves the
+exact tag and filename, then verifies the same catalog size and SHA-256. This
+fallback uses no GitHub token and makes at most two API calls; API
+errors, including rate limits, fail the install so it can be retried later.
+Offline installs never contact either endpoint.
+
+Sources are gzip- or xz-compressed tarballs; the container format is fixed by the catalog
 URL, and xz sources (libxml2) are inflated by a pure-Rust decoder under the
 same expanded-size bound before their tar entries are checked. Extraction
 rejects path escapes, links, device entries, and oversized archives. Builds and

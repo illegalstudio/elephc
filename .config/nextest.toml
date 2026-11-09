@@ -57,6 +57,14 @@ platform = 'cfg(target_arch = "x86_64")'
 filter = 'test(/^ir_lower::tests::instance_dimension_incdec::instance_dimension_incdec_values::/) or test(/^ir_lower::tests::property_element_unset::property_element_unset_known_name_bounds_slot_dispatch::/)'
 threads-required = "num-test-threads"
 
+# This five-target computed-property probe passed in 140-146s but reached 180s
+# while sharing x86_64 workers. Reserve the pool for both unit-test binaries,
+# preserving the complete target matrix and the existing three-minute deadline.
+[[profile.ci.overrides]]
+platform = 'cfg(target_arch = "x86_64")'
+filter = 'test(=ir_lower::tests::computed_property_update_owners::computed_property_update_storage_on_every_target)'
+threads-required = "num-test-threads"
+
 # These five-target native reference probes pass in 125-154s but reached their
 # 180s deadline while sharing x86_64 workers; repeated attempts then exhausted
 # the 30-minute shard. Reserve the pool, preserving every target and deadline.
