@@ -108,6 +108,11 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
             emit_ordinary_global_reset(emitter, &ir_global_symbol(name), &mut labels);
         }
     }
+    // Runtime-created `$GLOBALS[$name]` entries are process-global storage. Drain them at the
+    // request boundary so a name/value created by one request is not visible to the next.
+    if crate::codegen::global_lookup::module_uses_dynamic_globals(module) {
+        abi::emit_call_label(emitter, "__rt_dynamic_globals_cleanup");
+    }
     // Request superglobals ($_SERVER/$_GET/$_POST) live in `_eir_global_*` symbol
     // storage and are reassigned by the web prelude every request. Reset them here
     // so stale request arrays are gone before the next prelude builds replacements.

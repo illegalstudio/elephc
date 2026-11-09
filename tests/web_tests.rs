@@ -2280,6 +2280,27 @@ fn web_cookie_parsed() {
 }
 
 /// Verifies $_REQUEST (A4): merges $_GET then $_POST (POST overrides on collision).
+/// A runtime-created `$GLOBALS[$name]` entry is drained at the request boundary, so
+/// the next request on the same worker starts with a fresh global table.
+#[test]
+fn web_dynamic_global_is_not_visible_in_the_next_request() {
+    let dir = make_test_dir("elephc_web_dynamic_global_reset");
+    let bin = compile_web(
+        &dir,
+        r#"<?php
+$name = str_repeat("a", $argc);
+$seen = isset($GLOBALS[$name]) ? "stale" : "fresh";
+$GLOBALS[$name] = "value";
+echo $seen;
+"#,
+        "main",
+    );
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&bin, &addr, "1");
+    assert!(http_get(&addr, "/one").ends_with("fresh"));
+    assert!(http_get(&addr, "/two").ends_with("fresh"));
+}
+
 #[test]
 fn web_request_superglobal_merges_get_post() {
     let dir = make_test_dir("web_request_merge");

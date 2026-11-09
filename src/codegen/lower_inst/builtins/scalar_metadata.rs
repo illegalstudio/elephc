@@ -539,9 +539,13 @@ pub(crate) fn lower_get_debug_type(ctx: &mut FunctionContext<'_>, inst: &Instruc
         _ => {}
     }
     match &ty {
-        PhpType::Object(_) => {
-            ctx.load_value_to_result(value)?;
-            super::types::emit_dynamic_object_class_name(ctx, "get_class");
+        PhpType::Object(name) => {
+            if let Some(debug_name) = static_anonymous_debug_name(ctx, name) {
+                emit_type_name_result(ctx, debug_name.as_bytes());
+            } else {
+                ctx.load_value_to_result(value)?;
+                super::types::emit_dynamic_object_class_name(ctx, "get_class");
+            }
         }
         PhpType::Callable => emit_type_name_result(ctx, b"Closure"),
         PhpType::Resource(kind) => {
@@ -558,6 +562,22 @@ pub(crate) fn lower_get_debug_type(ctx: &mut FunctionContext<'_>, inst: &Instruc
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns PHP's debug name for a statically known anonymous class, or `None` for a named class.
+fn static_anonymous_debug_name(ctx: &FunctionContext<'_>, name: &str) -> Option<String> {
+    if !crate::parser::is_anonymous_class_name(name) {
+        return None;
+    }
+    let class_name = name.trim_start_matches('\\');
+    let info = ctx.module.class_infos.get(class_name)?;
+    if let Some(parent) = info.parent.as_deref() {
+        return Some(format!("{}@anonymous", parent.trim_start_matches('\\')));
+    }
+    if let Some(interface) = info.declared_interfaces.first() {
+        return Some(format!("{}@anonymous", interface.trim_start_matches('\\')));
+    }
+    Some("class@anonymous".to_string())
 }
 
 /// Returns PHP's `get_debug_type()` spelling for concrete statically known types.
@@ -688,7 +708,7 @@ fn emit_mixed_debug_type(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resul
             ctx.emitter.instruction("mov rax, rdi");                            // expose the unboxed object pointer to the class-name lookup
         }
     }
-    super::types::emit_dynamic_object_class_name(ctx, "get_class");
+    super::types::emit_dynamic_object_debug_name(ctx);
     abi::emit_jump(ctx.emitter, &done);
 
     ctx.emitter.label(&closure_case);

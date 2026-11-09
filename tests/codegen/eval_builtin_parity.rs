@@ -113,12 +113,20 @@ fn test_eval_get_debug_type_parity() {
 $code = $argc > 0 ? '
 class EvalDebugParityBag { public function run(): void {} }
 enum EvalDebugParityKind { case One; }
+interface EvalDebugParityTag {}
+class EvalDebugParityBase {}
+$anonPlain = new class {};
+$anonExtends = new class extends Exception {};
+$anonImplements = new class implements EvalDebugParityTag {};
+$anonBase = new class extends EvalDebugParityBase {};
 $f = fopen("php://temp", "r+");
 echo get_debug_type(1), "|", get_debug_type(1.5), "|", get_debug_type("s"), "|";
 echo get_debug_type(true), "|", get_debug_type(null), "|", get_debug_type([1]), "|";
 echo get_debug_type(new EvalDebugParityBag()), "|", get_debug_type(EvalDebugParityKind::One), "|";
 echo get_debug_type(function () {}), "|", get_debug_type($f), "|";
 echo get_debug_type("strlen"), "|", get_debug_type([new EvalDebugParityBag(), "run"]), "|";
+echo get_debug_type($anonPlain), "|", get_debug_type($anonExtends), "|";
+echo get_debug_type($anonImplements), "|", get_debug_type($anonBase), "|";
 fclose($f);
 echo get_debug_type($f), "|", gettype($f), "|", call_user_func("get_debug_type", 42);
 ' : '';
@@ -127,7 +135,7 @@ eval($code);
     );
     assert_eq!(
         out,
-        "int|float|string|bool|null|array|EvalDebugParityBag|EvalDebugParityKind|Closure|resource (stream)|string|array|resource (closed)|resource (closed)|int"
+        "int|float|string|bool|null|array|EvalDebugParityBag|EvalDebugParityKind|Closure|resource (stream)|string|array|class@anonymous|Exception@anonymous|EvalDebugParityTag@anonymous|EvalDebugParityBase@anonymous|resource (closed)|resource (closed)|int"
     );
 }
 

@@ -39,6 +39,31 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the stream descriptor
 
+    // -- a synthetic user-wrapper fd is not an OS descriptor: do not lseek/fcntl
+    //    it or index the per-fd EOF table. PHP reports the generic user-space
+    //    metadata for these streams.
+    emitter.instruction("mov w9, #0x4000");                                     // high half of USER_WRAPPER_FD_BASE
+    emitter.instruction("lsl w9, w9, #16");                                     // form the synthetic fd bit 0x40000000
+    emitter.instruction("tst x0, x9");                                          // is this a user-wrapper descriptor?
+    emitter.instruction("b.eq __rt_sgmd_os_fd");                                // ordinary OS fd: probe it normally
+    emitter.instruction("mov x9, #1");                                          // user-space streams report seekable
+    emitter.instruction("str x9, [sp, #16]");                                   // save the seekable flag
+    emitter.instruction("str x9, [sp, #24]");                                   // user-space streams report blocked
+    emitter.instruction("str xzr, [sp, #32]");                                  // no native EOF marker is available
+    abi::emit_symbol_address(emitter, "x9", "_meta_mode_r");                    // load the generic "r" mode
+    emitter.instruction("str x9, [sp, #40]");                                   // save the mode pointer
+    emitter.instruction("mov x9, #1");                                          // length of "r"
+    emitter.instruction("str x9, [sp, #48]");                                   // save the mode length
+    abi::emit_symbol_address(emitter, "x9", "_meta_stype_user_space");          // load "user-space"
+    emitter.instruction("str x9, [sp, #56]");                                   // save the stream_type pointer
+    emitter.instruction("mov x9, #10");                                         // length of "user-space"
+    emitter.instruction("str x9, [sp, #64]");                                   // save the stream_type length
+    emitter.instruction("mov x9, #1");                                          // user-space metadata flag
+    emitter.instruction("str x9, [sp, #72]");                                   // save the wrapper-type selector
+    emitter.instruction("b __rt_sgmd_after_fd_probe");                          // skip the native fd probes
+    emitter.label("__rt_sgmd_os_fd");
+    emitter.instruction("str xzr, [sp, #72]");                                  // native streams use "plainfile"
+
     // -- seekability: lseek(fd, 0, SEEK_CUR) --
     emitter.instruction("mov x1, #0");                                          // offset 0
     emitter.instruction("mov x2, #1");                                          // SEEK_CUR
@@ -103,6 +128,8 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("cset x10, ne");                                        // eof = 1 when the flag byte is set
     emitter.instruction("str x10, [sp, #32]");                                  // save the eof flag
 
+    emitter.label("__rt_sgmd_after_fd_probe");
+
     // -- create the metadata hash (capacity 16, value type = mixed) --
     emitter.instruction("mov x0, #16");                                         // initial capacity
     emitter.instruction("mov x1, #7");                                          // value type = mixed
@@ -114,7 +141,13 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emit_set_bool_slot(emitter, "_meta_key_eof", 3, 32);
     emit_set_int_const(emitter, "_meta_key_unread_bytes", 12);
     emit_set_str_slots(emitter, "_meta_key_stream_type", 11, 56, 64);
+    emitter.instruction("ldr x9, [sp, #72]");                                   // is this a user-space wrapper?
+    emitter.instruction("cbz x9, __rt_sgmd_wrapper_plain");                     // no: report "plainfile"
+    emit_set_str_const(emitter, "_meta_key_wrapper_type", 12, "_meta_stype_user_space", 10);
+    emitter.instruction("b __rt_sgmd_wrapper_done");                            // user-space wrapper type recorded
+    emitter.label("__rt_sgmd_wrapper_plain");
     emit_set_str_const(emitter, "_meta_key_wrapper_type", 12, "_meta_wrapper_plainfile", 9);
+    emitter.label("__rt_sgmd_wrapper_done");
     emit_set_str_slots(emitter, "_meta_key_mode", 4, 40, 48);
     emit_set_bool_slot(emitter, "_meta_key_seekable", 8, 16);
     emit_set_str_const(emitter, "_meta_key_uri", 3, "_meta_wrapper_plainfile", 0);
@@ -192,6 +225,25 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 80");                                         // reserve the metadata spill slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the stream descriptor
 
+    // -- a synthetic user-wrapper fd is not an OS descriptor: do not lseek/fcntl
+    //    it or index the per-fd EOF table. PHP reports the generic user-space
+    //    metadata for these streams.
+    emitter.instruction("test rdi, 0x40000000");                                // is this a user-wrapper descriptor?
+    emitter.instruction("jz __rt_sgmd_os_fd_x86");                              // ordinary OS fd: probe it normally
+    emitter.instruction("mov QWORD PTR [rbp - 24], 1");                         // user-space streams report seekable
+    emitter.instruction("mov QWORD PTR [rbp - 32], 1");                         // user-space streams report blocked
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // no native EOF marker is available
+    abi::emit_symbol_address(emitter, "r10", "_meta_mode_r");                   // address of the generic "r" mode
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the mode pointer
+    emitter.instruction("mov QWORD PTR [rbp - 56], 1");                         // save the mode length
+    abi::emit_symbol_address(emitter, "r10", "_meta_stype_user_space");         // address of "user-space"
+    emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the stream_type pointer
+    emitter.instruction("mov QWORD PTR [rbp - 72], 10");                        // save the stream_type length
+    emitter.instruction("mov QWORD PTR [rbp - 80], 1");                         // user-space metadata flag
+    emitter.instruction("jmp __rt_sgmd_after_fd_probe_x86");                    // skip the native fd probes
+    emitter.label("__rt_sgmd_os_fd_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 80], 0");                         // native streams use "plainfile"
+
     // -- seekability: lseek(fd, 0, SEEK_CUR) --
     emitter.instruction("xor esi, esi");                                        // offset 0
     emitter.instruction("mov edx, 1");                                          // SEEK_CUR
@@ -254,6 +306,8 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx r11, r11b");                                     // widen the eof flag to a full word
     emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the eof flag
 
+    emitter.label("__rt_sgmd_after_fd_probe_x86");
+
     // -- create the metadata hash (capacity 16, value type = mixed) --
     emitter.instruction("mov rdi, 16");                                         // initial capacity
     emitter.instruction("mov rsi, 7");                                          // value type = mixed
@@ -265,7 +319,14 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emit_set_bool_slot_x86(emitter, "_meta_key_eof", 3, 40);
     emit_set_int_const_x86(emitter, "_meta_key_unread_bytes", 12);
     emit_set_str_slots_x86(emitter, "_meta_key_stream_type", 11, 64, 72);
+    emitter.instruction("mov r10, QWORD PTR [rbp - 80]");                       // is this a user-space wrapper?
+    emitter.instruction("test r10, r10");                                       // zero selects the native wrapper type
+    emitter.instruction("jz __rt_sgmd_wrapper_plain_x86");                      // no: report "plainfile"
+    emit_set_str_const_x86(emitter, "_meta_key_wrapper_type", 12, "_meta_stype_user_space", 10);
+    emitter.instruction("jmp __rt_sgmd_wrapper_done_x86");                      // user-space wrapper type recorded
+    emitter.label("__rt_sgmd_wrapper_plain_x86");
     emit_set_str_const_x86(emitter, "_meta_key_wrapper_type", 12, "_meta_wrapper_plainfile", 9);
+    emitter.label("__rt_sgmd_wrapper_done_x86");
     emit_set_str_slots_x86(emitter, "_meta_key_mode", 4, 48, 56);
     emit_set_bool_slot_x86(emitter, "_meta_key_seekable", 8, 24);
     emit_set_str_const_x86(emitter, "_meta_key_uri", 3, "_meta_wrapper_plainfile", 0);

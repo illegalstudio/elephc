@@ -64,3 +64,30 @@ echo gettype($stream), "|", get_resource_type($stream);
         "resource (stream)|resource (stream-context)|resource (stream filter)|resource (closed)|resource (closed)|Unknown"
     );
 }
+
+/// Anonymous classes use PHP's parent/interface spelling in both the static and the
+/// boxed Mixed object paths.
+#[test]
+fn test_get_debug_type_anonymous_classes() {
+    let out = compile_and_run(
+        r#"<?php
+interface DebugAnonTag {}
+class DebugAnonBase {}
+$plain = new class {};
+$extended = new class extends Exception {};
+$implemented = new class implements DebugAnonTag {};
+$based = new class extends DebugAnonBase {};
+echo get_debug_type($plain), "|", get_debug_type($extended), "|";
+echo get_debug_type($implemented), "|", get_debug_type($based), "\n";
+function debugType(mixed $value): string { return get_debug_type($value); }
+foreach ([$plain, $extended, $implemented, $based] as $value) {
+    echo debugType($value), "|";
+}
+echo "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "class@anonymous|Exception@anonymous|DebugAnonTag@anonymous|DebugAnonBase@anonymous\nclass@anonymous|Exception@anonymous|DebugAnonTag@anonymous|DebugAnonBase@anonymous|\n"
+    );
+}

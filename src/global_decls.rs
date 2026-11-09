@@ -178,9 +178,15 @@ fn collect_in_stmt(stmt: &Stmt, names: &mut HashSet<String>) {
         | StmtKind::ExprStmt(expr)
         | StmtKind::Return(Some(expr))
         | StmtKind::Include { path: expr, .. } => collect_in_expr(expr, names),
-        StmtKind::Assign { value, .. }
-        | StmtKind::TypedAssign { value, .. }
-        | StmtKind::ConstDecl { value, .. }
+        StmtKind::Assign { name, value } | StmtKind::TypedAssign { name, value, .. } => {
+            // Seeded CLI superglobals are stored in program-global storage even when the
+            // source never spells them; the bare `$GLOBALS` table must include them.
+            if crate::superglobals::is_superglobal(name) {
+                names.insert(name.clone());
+            }
+            collect_in_expr(value, names);
+        }
+        StmtKind::ConstDecl { value, .. }
         | StmtKind::ListUnpack { value, .. }
         | StmtKind::ArrayPush { value, .. }
         | StmtKind::StaticPropertyAssign { value, .. }

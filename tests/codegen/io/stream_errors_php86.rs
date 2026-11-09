@@ -472,7 +472,7 @@ $GLOBALS['c'] = [3, 4];
 function show(): void {
     echo count($GLOBALS), "\n";
     foreach ($GLOBALS as $name => $value) {
-        if ($name === "argc" || $name === "argv") {
+        if (in_array($name, ["argc", "argv", "_GET", "_POST", "_COOKIE", "_FILES", "_SERVER"], true)) {
             continue;
         }
         echo $name, "=", is_array($value) ? implode(",", $value) : $value, "\n";
@@ -481,7 +481,7 @@ function show(): void {
 show();
 "#,
     );
-    assert_eq!(out, "5\na=1\nb=two\nc=3,4\n");
+    assert_eq!(out, "10\na=1\nb=two\nc=3,4\n");
 }
 
 /// A computed `$GLOBALS` key can create a global whose name exists only at run time. The

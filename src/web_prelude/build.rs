@@ -1077,7 +1077,7 @@ fn decl_stmt_bootstrap_24() -> Stmt {
             s_if(
                 e_binop(e_var("__elephc_body_len"), BinOp::Gt, e_int(0)),
                 vec![
-                    s_assign("__elephc_body", e_call("__elephc_ptr_read_string", vec![e_call("elephc_web_body_ptr", vec![]), e_var("__elephc_body_len")])),
+                    s_assign("__elephc_body", e_call("__elephc_ptr_read_string", vec![e_call("elephc_web_body_ptr", vec![]), e_cast(CastType::Int, e_var("__elephc_body_len"))])),
                 ],
                 vec![],
                 None,
@@ -1137,7 +1137,7 @@ fn decl_stmt_bootstrap_26() -> Stmt {
                 s_if(
                     e_binop(e_var("__elephc_mpv_len"), BinOp::Gt, e_int(0)),
                     vec![
-                        s_assign("__elephc_mpv", e_call("__elephc_ptr_read_string", vec![e_call("elephc_web_multipart_value_ptr", vec![e_var("__elephc_mpi")]), e_var("__elephc_mpv_len")])),
+                        s_assign("__elephc_mpv", e_call("__elephc_ptr_read_string", vec![e_call("elephc_web_multipart_value_ptr", vec![e_var("__elephc_mpi")]), e_cast(CastType::Int, e_var("__elephc_mpv_len"))])),
                     ],
                     vec![],
                     None,

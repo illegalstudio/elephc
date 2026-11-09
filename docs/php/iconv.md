@@ -50,6 +50,10 @@ On musl, the platform `iconv` is deliberately minimal and may ignore `//TRANSLIT
 or `//IGNORE`; elephc follows whatever the linked libc provides, exactly as PHP
 does. The option-restoration tests therefore run on glibc and Apple targets.
 
+Per-descriptor stream-filter state is tracked for descriptors `0..1023`
+(`FD_SETSIZE`). An iconv write filter on a descriptor outside that range closes
+its converter and is not attached, rather than indexing past the runtime table.
+
 ## Character-oriented strings
 
 `strlen()` and friends count bytes. These four functions count characters in the

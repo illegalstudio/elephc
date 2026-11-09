@@ -172,10 +172,17 @@ fn emit_iconv_transform_with_runtime_bits(
             ctx.emitter.label(&write_label);
             emit_iconv_write_transform_for_current_fd(ctx, from_sym, to_sym, 0);
             if ctx.emitter.target.platform == crate::codegen_support::platform::Platform::MacOS {
+                let option_skip = ctx.next_label("iconv_dyn_option_skip");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x11", fd_slot);
+                ctx.emitter.instruction("cmp x11, #1024");                      // is the descriptor inside the option table?
+                ctx.emitter.instruction(&format!("b.hs {option_skip}"));        // out of range: leave the table untouched
+                abi::emit_symbol_address(ctx.emitter, "x9", "_iconv_handles");
+                ctx.emitter.instruction("ldr x10, [x9, x11, lsl #3]");          // did the attach actually install a converter?
+                ctx.emitter.instruction(&format!("cbz x10, {option_skip}"));    // no converter: do not record options
                 abi::emit_symbol_address(ctx.emitter, "x9", "_iconv_write_options");
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", bits_slot);
-                abi::emit_load_temporary_stack_slot(ctx.emitter, "x11", fd_slot);
                 ctx.emitter.instruction("strb w10, [x9, x11]");                 // record the run-time option bits
+                ctx.emitter.label(&option_skip);
             }
             ctx.emitter.label(&after_label);
         }
@@ -191,10 +198,18 @@ fn emit_iconv_transform_with_runtime_bits(
             ctx.emitter.label(&write_label);
             emit_iconv_write_transform_for_current_fd(ctx, from_sym, to_sym, 0);
             if ctx.emitter.target.platform == crate::codegen_support::platform::Platform::MacOS {
+                let option_skip = ctx.next_label("iconv_dyn_option_skip");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", fd_slot);
+                ctx.emitter.instruction("cmp r11, 1024");                       // is the descriptor inside the option table?
+                ctx.emitter.instruction(&format!("jae {option_skip}"));         // out of range: leave the table untouched
+                abi::emit_symbol_address(ctx.emitter, "r9", "_iconv_handles");
+                ctx.emitter.instruction("mov r10, QWORD PTR [r9 + r11*8]");     // did the attach actually install a converter?
+                ctx.emitter.instruction("test r10, r10");                       // no converter => do not record options
+                ctx.emitter.instruction(&format!("jz {option_skip}"));          // skip the option write
                 abi::emit_symbol_address(ctx.emitter, "r9", "_iconv_write_options");
                 abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", bits_slot);
-                abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", fd_slot);
                 ctx.emitter.instruction("mov BYTE PTR [r9 + r11], r10b");       // record the run-time option bits
+                ctx.emitter.label(&option_skip);
             }
             ctx.emitter.label(&after_label);
         }
@@ -557,6 +572,7 @@ pub(super) fn emit_iconv_write_transform_for_current_fd(
         ctx.next_label("iconv_w_after_write"),
         ctx.next_label("iconv_w_done"),
         ctx.next_label("iconv_w_skip_store"),
+        ctx.next_label("iconv_w_store_handle"),
     ];
     let mut labels = labels.into_iter();
     crate::codegen::stream_filters::iconv_write::emit_iconv_write_attach_with_labels(

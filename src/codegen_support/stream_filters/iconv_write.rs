@@ -151,6 +151,7 @@ fn emit_arm64<F>(
     let after_write = next_label("iconv_w_after_write");
     let done_label = next_label("iconv_w_done");
     let skip_store = next_label("iconv_w_skip_store");
+    let store_handle = next_label("iconv_w_store_handle");
 
     emitter.instruction(&format!("b {}", skip_label));                          // skip over the inline iconv helper routines
 
@@ -239,6 +240,11 @@ fn emit_arm64<F>(
     emitter.instruction("cmn x0, #1");                                          // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("b.eq {}", skip_store));                       // iconv_open failed → attach no filter
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the file descriptor
+    emitter.instruction("cmp x1, #1024");                                       // is the descriptor inside the per-fd table range?
+    emitter.instruction(&format!("b.lo {}", store_handle));                     // yes: record the iconv_t
+    emitter.bl_c("iconv_close"); // descriptor out of range: release the just-opened iconv_t
+    emitter.instruction(&format!("b {}", skip_store));                          // attach no filter for this descriptor
+    emitter.label(&store_handle);
     abi::emit_symbol_address(emitter, "x9", "_iconv_handles");
     emitter.instruction("str x0, [x9, x1, lsl #3]");                            // store the iconv_t for this descriptor
     if emitter.target.platform == Platform::MacOS {
@@ -282,6 +288,7 @@ fn emit_x86_64<F>(
     let after_write = next_label("iconv_w_after_write");
     let done_label = next_label("iconv_w_done");
     let skip_store = next_label("iconv_w_skip_store");
+    let store_handle = next_label("iconv_w_store_handle");
 
     emitter.instruction(&format!("jmp {}", skip_label));                        // skip over the inline iconv helper routines
 
@@ -369,6 +376,12 @@ fn emit_x86_64<F>(
     emitter.instruction("cmp rax, -1");                                         // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("je {}", skip_store));                         // iconv_open failed → attach no filter
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
+    emitter.instruction("cmp rdi, 1024");                                       // is the descriptor inside the per-fd table range?
+    emitter.instruction(&format!("jb {}", store_handle));                       // yes: record the iconv_t
+    emitter.instruction("mov rdi, rax");                                        // descriptor out of range: pass the iconv_t
+    emitter.instruction("call iconv_close");                                    // release the just-opened converter
+    emitter.instruction(&format!("jmp {}", skip_store));                        // attach no filter for this descriptor
+    emitter.label(&store_handle);
     abi::emit_symbol_address(emitter, "r9", "_iconv_handles"); // iconv handle table base
     emitter.instruction("mov QWORD PTR [r9 + rdi*8], rax");                     // store the iconv_t for this descriptor
     abi::emit_symbol_address(emitter, "r9", "_stream_write_filters"); // write-filter table base
@@ -437,6 +450,24 @@ mod tests {
             let restore = asm.find("bl _iconvctl").expect("restore call");
             let convert = asm.find("bl _iconv\n").expect("conversion call");
             assert!(restore < convert, "{target:?} must restore before converting: {asm}");
+        }
+    }
+
+    /// Per-fd iconv state is bounded by `FD_SETSIZE`; an out-of-range descriptor closes the
+    /// just-opened converter and attaches no filter instead of indexing past the table.
+    #[test]
+    fn descriptor_state_is_bounded_to_fd_setsize() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = assembly_for(target, 0);
+            let bound = if target.arch == Arch::X86_64 { "cmp rdi, 1024" } else { "cmp x1, #1024" };
+            assert!(asm.contains(bound), "{target:?}: {asm}");
+            assert!(asm.contains("iconv_close"), "{target:?} must close an out-of-range converter");
         }
     }
 

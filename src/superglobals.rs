@@ -82,6 +82,12 @@ pub fn is_superglobal(name: &str) -> bool {
 pub const CLI_POPULATED_SUPERGLOBALS: &[&str] =
     &["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST"];
 
+/// The CLI superglobals PHP's own `$GLOBALS` array contains even when the source
+/// never spells them. `_ENV` and `_REQUEST` are lazy: they appear only after a
+/// source-level mention, which the seeding pass already covers.
+pub const CLI_GLOBALS_ALWAYS_PRESENT: &[&str] =
+    &["_GET", "_POST", "_COOKIE", "_FILES", "_SERVER"];
+
 /// The shared type of every request superglobal: a string-keyed associative
 /// array of heterogeneous (Mixed) values.
 pub fn superglobal_type() -> PhpType {
@@ -134,8 +140,12 @@ pub fn seed_cli_populated_superglobals(
         return program;
     }
     let spelled = crate::prelude_prune::usage::collect(&program).variables;
+    let reads_globals_snapshot = spelled.contains("GLOBALS");
     let mut seeds: Vec<Stmt> = Vec::new();
-    for name in CLI_POPULATED_SUPERGLOBALS.iter().filter(|name| spelled.contains(**name)) {
+    for name in CLI_POPULATED_SUPERGLOBALS
+        .iter()
+        .filter(|name| spelled.contains(**name) || (reads_globals_snapshot && CLI_GLOBALS_ALWAYS_PRESENT.contains(name)))
+    {
         seeds.extend(seed_for(name));
     }
     if seeds.is_empty() {
@@ -242,6 +252,22 @@ mod tests {
         assert_eq!(
             seeded_names(source),
             vec!["_ENV".to_string(), "_REQUEST".to_string()],
+        );
+    }
+
+    /// A bare `$GLOBALS` read materializes PHP's always-present CLI superglobals in
+    /// the snapshot, even though the source never spells them by name.
+    #[test]
+    fn a_bare_globals_snapshot_seeds_the_always_present_superglobals() {
+        assert_eq!(
+            seeded_names("<?php echo count($GLOBALS);"),
+            vec![
+                "_SERVER".to_string(),
+                "_GET".to_string(),
+                "_POST".to_string(),
+                "_COOKIE".to_string(),
+                "_FILES".to_string(),
+            ],
         );
     }
 

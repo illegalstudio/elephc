@@ -1290,6 +1290,25 @@ fclose($f);
     assert_eq!(out, "attached|hllo");
 }
 
+/// A convert.iconv write filter on a descriptor above the old 256-entry table range
+/// (fd ~300 after opening filler files) stores and releases its per-fd state safely.
+#[test]
+fn test_stream_filter_iconv_uses_high_descriptor_slots() {
+    let out = compile_and_run(
+        r#"<?php
+$files = [];
+for ($i = 0; $i < 300; $i++) { $files[] = fopen("/dev/null", "r"); }
+$f = fopen("php://temp", "r+");
+stream_filter_append($f, "convert.iconv.UTF-8/UTF-16LE", STREAM_FILTER_WRITE);
+fwrite($f, "Hi");
+rewind($f);
+echo bin2hex(stream_get_contents($f));
+foreach ($files as $handle) { fclose($handle); }
+"#,
+    );
+    assert_eq!(out, "48006900");
+}
+
 /// Verifies compiled PHP output for stream filter base64 encode pads correctly.
 #[test]
 fn test_stream_filter_base64_encode_pads_correctly() {
@@ -7353,6 +7372,31 @@ fclose($f);
 "#,
     );
     assert_eq!(out, "eof:consistent");
+}
+
+/// A user-wrapper stream reports PHP's generic user-space metadata instead of being
+/// probed as a native descriptor (the synthetic fd used to index the EOF table and crash).
+#[test]
+fn test_stream_get_meta_data_user_wrapper_reports_user_space() {
+    let out = compile_and_run(
+        r#"<?php
+class MetaWrapper {
+    public $context;
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { return true; }
+    public function stream_read(int $count): string { return ""; }
+    public function stream_eof(): bool { return true; }
+}
+stream_wrapper_register("metawrap", "MetaWrapper");
+$s = fopen("metawrap://example", "r");
+$m = stream_get_meta_data($s);
+echo $m["stream_type"], "|", $m["wrapper_type"], "|";
+echo $m["eof"] ? "eof" : "open", "|";
+echo $m["blocked"] ? "blocked" : "nonblocked", "|";
+echo $m["unread_bytes"], "|";
+echo $m["seekable"] ? "seek" : "noseek";
+"#,
+    );
+    assert_eq!(out, "user-space|user-space|open|blocked|0|seek");
 }
 
 /// Verifies compiled PHP output for readdir loop collects results into array.

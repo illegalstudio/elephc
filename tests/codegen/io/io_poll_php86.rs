@@ -86,6 +86,33 @@ try {
     );
 }
 
+/// A user-wrapper stream resolves through stream_cast for both the metadata probe and
+/// the readiness wait, so Io\Poll observes the wrapped socket instead of crashing.
+#[test]
+fn test_io_poll_user_wrapper_watcher_php86() {
+    let out = run86(
+        r#"<?php
+[$r, $w] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$GLOBALS["io_poll_wrapper_sock"] = $r;
+class IoPollWrapper {
+    public $context;
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { return true; }
+    public function stream_cast(int $kind): mixed { return $GLOBALS["io_poll_wrapper_sock"]; }
+    public function stream_read(int $count): string { return fread($GLOBALS["io_poll_wrapper_sock"], $count); }
+    public function stream_eof(): bool { return feof($GLOBALS["io_poll_wrapper_sock"]); }
+}
+stream_wrapper_register("iopollwrap", "IoPollWrapper");
+$s = fopen("iopollwrap://x", "r");
+fwrite($w, "hi");
+$context = new Io\Poll\Context(Io\Poll\Backend::Poll);
+$context->add(new StreamPollHandle($s), [Io\Poll\Event::Read], "wrapped");
+$events = $context->wait(Time\Duration::fromMicroseconds(100000));
+echo count($events), ":", $events[0]->hasTriggered(Io\Poll\Event::Read) ? "R" : "-", ":", fread($s, 2);
+"#,
+    );
+    assert_eq!(out, "1:R:hi");
+}
+
 /// An error-only watcher on readable data does not return early: the descriptor is
 /// level-ready, but no watched event fired, so `wait()` must block out the timeout.
 #[test]
