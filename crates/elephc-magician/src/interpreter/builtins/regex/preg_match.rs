@@ -68,7 +68,11 @@ pub(in crate::interpreter) fn eval_preg_match_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let regex = eval_preg_regex(pattern, values)?;
     let subject = values.string_bytes(subject)?;
-    values.int(i64::from(regex.is_match(&subject)))
+    let matched = regex.is_match(&subject);
+    if eval_preg_failed() {
+        return values.bool_value(false);
+    }
+    values.int(i64::from(matched))
 }
 
 /// Returns the match flag plus PHP `$matches` capture array for one regex search.
@@ -96,7 +100,8 @@ pub(in crate::interpreter) fn eval_preg_match_capture_result(
     }
     let matches =
         eval_preg_capture_array(&subject, None, offset_capture, unmatched_as_null, values)?;
-    let matched = values.int(0)?;
+    // A match error (malformed UTF-8, exhausted limits) is PHP `false` with `[]`.
+    let matched = if eval_preg_failed() { values.bool_value(false)? } else { values.int(0)? };
     Ok((matched, matches))
 }
 

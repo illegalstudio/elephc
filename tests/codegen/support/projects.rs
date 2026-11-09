@@ -356,6 +356,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::core_prelude::inject_if_used(resolved, false, false, &mut prelude_inventory);
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::pcre_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::tidy_prelude::inject_if_used(
         resolved,

@@ -14,6 +14,7 @@
 //! - Every `preg_replace_callback()` callback uses the descriptor ABI adapter, including
 //!   literal names whose PHP array parameter has boxed storage.
 //! - `preg_split()` forces boxed Mixed element slots so dynamic flags cannot mismatch layout.
+//! - Every call clears and then updates the `preg_last_error()` state (`regex_errors`).
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, callable_descriptor};
@@ -31,6 +32,7 @@ const PREG_MATCH_ALL_SUPPORTED_FLAGS: i64 = 1 | 2 | 256 | 512;
 /// Lowers `preg_match(pattern, subject)` through the shared regex runtime helper.
 pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count_between(inst, "preg_match", 2, 3)?;
+    super::regex_errors::emit_clear_error(ctx);
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
     let matches_slot = inst
@@ -56,6 +58,7 @@ pub(crate) fn lower_preg_match_all(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count_between(inst, "preg_match_all", 2, 4)?;
+    super::regex_errors::emit_clear_error(ctx);
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
     let matches_slot = inst
@@ -167,6 +170,7 @@ fn lower_preg_match_all_count(ctx: &mut FunctionContext<'_>) {
 /// Lowers `preg_replace(pattern, replacement, subject)` through the regex replacement helper.
 pub(crate) fn lower_preg_replace(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "preg_replace", 3)?;
+    super::regex_errors::emit_clear_error(ctx);
     let pattern = super::expect_operand(inst, 0)?;
     let replacement = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
@@ -183,6 +187,7 @@ pub(crate) fn lower_preg_replace(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_preg_replace");
+    super::regex_errors::finish_replacement_result(ctx);
     super::store_if_result(ctx, inst)
 }
 
@@ -192,6 +197,7 @@ pub(crate) fn lower_preg_replace_callback(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "preg_replace_callback", 3)?;
+    super::regex_errors::emit_clear_error(ctx);
     let pattern = super::expect_operand(inst, 0)?;
     let callback = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
@@ -234,6 +240,7 @@ pub(crate) fn lower_preg_replace_callback(
         abi::emit_pop_call_operand_owner(ctx.emitter);
     }
     callback_target.release_env(ctx, env_bytes);
+    super::regex_errors::finish_replacement_result(ctx);
     super::store_if_result(ctx, inst)
 }
 
@@ -509,6 +516,7 @@ fn preg_matches_type() -> PhpType {
 /// Lowers `preg_split(pattern, subject, limit?, flags?)` through the regex split helper.
 pub(crate) fn lower_preg_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count_between(inst, "preg_split", 2, 4)?;
+    super::regex_errors::emit_clear_error(ctx);
     let pattern = super::expect_operand(inst, 0)?;
     let subject = super::expect_operand(inst, 1)?;
     let limit = inst.operands.get(2).copied();
@@ -627,81 +635,102 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
 /// Boxes the count returned by `preg_match`/`preg_match_all` as PHP `int|false`.
 ///
 /// The runtime returns `-1` when compilation or flag validation fails, and when
-/// `preg_match()` sees the removed `/e` modifier. Every real count is non-negative.
+/// `preg_match()` sees the removed `/e` modifier; that records `PREG_INTERNAL_ERROR`.
+/// A recorded match error (backtrack limit, malformed UTF-8) also yields `false`.
 /// The EIR result is a union, so its representation is a Mixed cell and the raw
 /// count must be boxed before storage.
 fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let invalid_label = ctx.next_label("preg_count_invalid");
     let false_label = ctx.next_label("preg_count_false");
     let done_label = ctx.next_label("preg_count_done");
+    let count_label = ctx.next_label("preg_count_valid");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmn x0, #1");                              // compare the count against the failure sentinel
-            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // -1 boxes PHP false
-            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false arm
-            ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
-            ctx.emitter.instruction("mov x1, #0");                              // bool(false) payload
-            ctx.emitter.instruction("mov x2, #0");                              // bool has no high payload word
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.label(&done_label);
+            ctx.emitter.instruction(&format!("b.ne {}", count_label));          // a real count still needs the match-error check
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, -1");                             // compare the count against the failure sentinel
-            ctx.emitter.instruction(&format!("je {}", false_label));            // -1 boxes PHP false
+            ctx.emitter.instruction(&format!("jne {}", count_label));           // a real count still needs the match-error check
+        }
+    }
+    abi::emit_jump(ctx.emitter, &invalid_label);
+    ctx.emitter.label(&count_label);
+    super::regex_errors::emit_branch_if_error(ctx, &false_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false arm
+        }
+        Arch::X86_64 => {
             crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false arm
-            ctx.emitter.label(&false_label);
+        }
+    }
+    ctx.emitter.label(&invalid_label);
+    super::regex_errors::emit_record_internal_error(ctx);
+    ctx.emitter.label(&false_label);
+    emit_box_false(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Boxes PHP `false` as the call's Mixed result.
+fn emit_box_false(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
+            ctx.emitter.instruction("mov x1, #0");                              // bool(false) payload
+            ctx.emitter.instruction("mov x2, #0");                              // bool has no high payload word
+        }
+        Arch::X86_64 => {
             ctx.emitter.instruction("mov rax, 3");                              // runtime tag 3 = boolean
             ctx.emitter.instruction("xor edi, edi");                            // bool(false) payload
             ctx.emitter.instruction("xor esi, esi");                            // bool has no high payload word
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.label(&done_label);
         }
     }
-    Ok(())
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
 }
 
 /// Boxes the `preg_split` array result as PHP `array|false`.
 ///
-/// The runtime returns `-1` when compilation or flag validation fails; a real
-/// array pointer is boxed through the dynamic container path so its indexed or
-/// hash storage keeps the matching Mixed tag.
+/// The runtime returns `-1` when compilation or flag validation fails, which records
+/// `PREG_INTERNAL_ERROR`; a recorded match error releases the pieces and also yields
+/// `false`. A real array pointer is boxed through the dynamic container path so its
+/// indexed or hash storage keeps the matching Mixed tag.
 fn box_split_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
+    let invalid_label = ctx.next_label("preg_split_invalid");
+    let error_label = ctx.next_label("preg_split_match_error");
     let false_label = ctx.next_label("preg_split_false");
     let done_label = ctx.next_label("preg_split_done");
+    let array_label = ctx.next_label("preg_split_array");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmn x0, #1");                              // compare the array pointer against the failure sentinel
-            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // -1 boxes PHP false
-            crate::codegen::emit_box_current_owned_value_as_mixed(
-                ctx.emitter,
-                &PhpType::Array(Box::new(PhpType::Mixed)),
-            );
-            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false arm
-            ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean
-            ctx.emitter.instruction("mov x1, #0");                              // bool(false) payload
-            ctx.emitter.instruction("mov x2, #0");                              // bool has no high payload word
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.label(&done_label);
+            ctx.emitter.instruction(&format!("b.ne {}", array_label));          // a real array still needs the match-error check
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("cmp rax, -1");                             // compare the array pointer against the failure sentinel
-            ctx.emitter.instruction(&format!("je {}", false_label));            // -1 boxes PHP false
-            crate::codegen::emit_box_current_owned_value_as_mixed(
-                ctx.emitter,
-                &PhpType::Array(Box::new(PhpType::Mixed)),
-            );
-            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false arm
-            ctx.emitter.label(&false_label);
-            ctx.emitter.instruction("mov rax, 3");                              // runtime tag 3 = boolean
-            ctx.emitter.instruction("xor edi, edi");                            // bool(false) payload
-            ctx.emitter.instruction("xor esi, esi");                            // bool has no high payload word
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            ctx.emitter.label(&done_label);
+            ctx.emitter.instruction(&format!("jne {}", array_label));           // a real array still needs the match-error check
         }
     }
+    abi::emit_jump(ctx.emitter, &invalid_label);
+    ctx.emitter.label(&array_label);
+    super::regex_errors::emit_branch_if_error(ctx, &error_label);
+    crate::codegen::emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::Array(Box::new(PhpType::Mixed)),
+    );
+    abi::emit_jump(ctx.emitter, &done_label);
+    // -- a match error drops the partial pieces and returns false --
+    ctx.emitter.label(&error_label);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_jump(ctx.emitter, &false_label);
+    ctx.emitter.label(&invalid_label);
+    super::regex_errors::emit_record_internal_error(ctx);
+    ctx.emitter.label(&false_label);
+    emit_box_false(ctx);
+    ctx.emitter.label(&done_label);
     Ok(())
 }
 

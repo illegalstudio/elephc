@@ -183,7 +183,8 @@ mod tests {
         // +7: the complete `ctype_*` surface (cntrl/graph/lower/print/punct/upper/xdigit).
         // +2: the PHP-visible setlocale/nl_langinfo contracts declared by the locale prelude.
         // +3: the internal libc setlocale and nl_langinfo helpers it calls.
-        assert_eq!(contracts().len(), 1315 + curl_surface);
+        // +3: `preg_grep`, `preg_last_error`, and `preg_last_error_msg`.
+        assert_eq!(contracts().len(), 1318 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
