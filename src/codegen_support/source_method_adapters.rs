@@ -14,7 +14,7 @@
 //! - Shorter variadic implementations use EIR and shared argument planning, not assembly packing.
 //! - Equally variadic typed-to-Mixed promotion uses EIR unpacking rather than raw-word forwarding.
 
-use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
+use crate::fast_hash::FastSet as HashSet;
 
 use crate::codegen_support::emit::Emitter;
 use crate::names::{join_php_symbol, method_symbol, static_method_symbol};

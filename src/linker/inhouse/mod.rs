@@ -255,7 +255,8 @@ fn padding(offset: u64, log2: u64) -> u64 {
     (align - offset % align) % align
 }
 
-/// First pass: places every line and records labels and symbol attributes.
+/// First pass over one listing: places every line and records labels and symbol attributes.
+#[cfg(test)]
 fn layout(text: &str) -> Result<Layout<'_>> {
     layout_parts(&[text], Names::IDENTITY)
 }
