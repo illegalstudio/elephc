@@ -15,9 +15,9 @@
 //!   flow-sensitive local type is known (so function-local assignments fuse too). A failed
 //!   proof falls back to the ordinary `array_map()` lowering.
 //! - Non-empty all-int array literals, `range()` calls with integer-literal arguments,
-//!   key-renumbering `array_slice()` calls, `array_values()`, and default
-//!   `array_reverse()` calls over another packed-int source are proven structurally
-//!   (recursively through slices, values and reversals).
+//!   key-renumbering `array_slice()` calls, `array_values()`, default
+//!   `array_reverse()` calls, and `array_fill(0, $n, <int literal>)` are proven
+//!   structurally (recursively through slices, values, reversals and fills).
 //! - A candidate is marked only when every use of its destination local and value aliases
 //!   is one of: indexed reads, value-`foreach`, read-only aliasing, or a whitelisted
 //!   storage-neutral builtin. Any element write, direct or through an alias, keeps the
@@ -604,6 +604,11 @@ pub(crate) fn is_packed_int_source_candidate(
                     (1..=2).contains(&args.len())
                         && reverse_preserves_packed_layout(args.get(1))
                         && is_packed_int_source_candidate(&args[0], functions)
+                }
+                "array_fill" => {
+                    args.len() == 3
+                        && matches!(args[0].kind, ExprKind::IntLiteral(0))
+                        && literal_i64(&args[2]).is_some()
                 }
                 _ => false,
             }

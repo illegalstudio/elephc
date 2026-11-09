@@ -1234,6 +1234,29 @@ echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implod
     assert_eq!(main.matches("runtime.array_map ").count(), 1, "{main}");
 }
 
+/// `array_fill(0, $count, <int literal>)` produces a packed `array<int>` even when the
+/// count is a runtime value; a non-zero start or float fill stays generic.
+#[test]
+fn test_stored_numeric_map_array_fill_source() {
+    let source = r#"<?php
+$n = $argc + 2;
+$a = array_map(fn($v) => $v + 1, array_fill(0, 5, 7));
+$b = array_map(fn($v) => $v * 1.5, array_fill(0, $n, 2));
+$e = array_map(fn($v) => $v * 2, array_reverse(array_fill(0, 3, 7)));
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $e), "
+";
+"#;
+    assert_eq!(
+        compile_and_run(source),
+        "8,8,8,8,8|3,3,3|14,14,14
+"
+    );
+    let main = emit_main_ir(source, true);
+    assert_eq!(main.matches("runtime.array_map_numeric").count(), 2, "{main}");
+    assert_eq!(main.matches("runtime.array_map_float_scale").count(), 1, "{main}");
+    assert!(!main.contains("runtime.array_map "), "{main}");
+}
+
 /// `array_slice(..., 0, ..., true)` preserves the 0..n-1 keys of a packed list, so it
 /// remains a direct packed source; a later offset still falls back to the generic map.
 #[test]
@@ -1318,13 +1341,14 @@ $d = array_map(fn($v) => $v + 1, array_slice([1, 2, 3, 4], 1));
 $e = array_map(fn($v) => $v + 1, array_values(array_slice($values, 2, 3)));
 $f = array_map(fn($v) => $v + 1, array_slice($values, 0, 4, true));
 $g = array_map(fn($v) => $v + 1, array_reverse(array_slice($values, 2, 3)));
-echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|", implode(",", $e), "|", implode(",", $f), "|", implode(",", $g), "\n";
+$h = array_map(fn($v) => $v + 1, array_fill(0, 3, 7));
+echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|", implode(",", $e), "|", implode(",", $f), "|", implode(",", $g), "|", implode(",", $h), "\n";
 "#,
     );
     assert!(out.success, "program crashed: {}", out.stderr);
     assert_eq!(
         out.stdout,
-        "2.5,3.5,4.5,5.5,6.5|4.5,6,7.5|1,1.5,2,2.5|3,4,5|4,5,6|2,3,4,5|6,5,4\n"
+        "2.5,3.5,4.5,5.5,6.5|4.5,6,7.5|1,1.5,2,2.5|3,4,5|4,5,6|2,3,4,5|6,5,4|8,8,8\n"
     );
     assert!(
         out.stderr.contains("HEAP DEBUG: leak summary: clean"),
@@ -1343,12 +1367,13 @@ for ($i = 0; $i < 3; $i++) {
     $b = array_map(fn($v) => $v / 2.0, array_slice(range(1, 10), 2, 3));
     $c = array_map(fn($v) => $v + 1, array_slice(range(1, 10), 0, 4, true));
     $d = array_map(fn($v) => $v + 1, array_reverse(range(1, 5)));
-    $sum += array_sum($a) + array_sum($b) + array_sum($c) + array_sum($d);
+    $e = array_map(fn($v) => $v + 1, array_fill(0, 3, 7));
+    $sum += array_sum($a) + array_sum($b) + array_sum($c) + array_sum($d) + array_sum($e);
 }
 echo $sum, "\n";
 "#;
-    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "330\n");
-    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "330\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "402\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "402\n");
 }
 
 /// Every supported target emits the fused kernels for direct range/slice sources.
@@ -1362,7 +1387,8 @@ function directSources(int $seed): float {
     $c = array_map(fn($v) => $v + 1, array_values(range(1, 5)));
     $d = array_map(fn($v) => $v * 1.5, array_slice(range(1, 10), 0, 4, true));
     $e = array_map(fn($v) => $v * $v, array_reverse(range(1, 5)));
-    return array_sum($a) + array_sum($b) + array_sum($c) + array_sum($d) + array_sum($e) + $seed;
+    $f = array_map(fn($v) => $v / 2, array_fill(0, 3, 8));
+    return array_sum($a) + array_sum($b) + array_sum($c) + array_sum($d) + array_sum($e) + array_sum($f) + $seed;
 }
 "#;
     for target in [
@@ -1377,6 +1403,7 @@ function directSources(int $seed): float {
         assert!(assembly.contains("__rt_array_map_float_div"), "{target}");
         assert!(assembly.contains("__rt_array_map_numeric"), "{target}");
         assert!(assembly.contains("__rt_array_map_square"), "{target}");
+        assert!(assembly.contains("__rt_array_map_int_div"), "{target}");
         assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
     }
 }

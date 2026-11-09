@@ -694,8 +694,9 @@ map so `DivisionByZeroError` is preserved. A non-empty array literal whose items
 integer literals is a proven packed `array<int>` source too, and the lowered
 source temporary is released after the map call. Direct `range()` calls with
 integer-literal arguments, `array_slice()` calls that keep PHP's default key
-renumbering, `array_values()`, and default `array_reverse()` (key-renumbering
-`preserve_keys: false`) over a proven packed source are proven recursively.
+renumbering, `array_values()`, default `array_reverse()` (key-renumbering
+`preserve_keys: false`), and `array_fill(0, $n, <int literal>)` over a proven packed
+source are proven recursively.
 `array_slice(..., preserve_keys: true)` is accepted when the literal offset is `0`,
 because the preserved keys are still `0..n-1`; a later offset stays generic because
 the result is a hash, and `array_reverse(..., true)` stays generic for the same
