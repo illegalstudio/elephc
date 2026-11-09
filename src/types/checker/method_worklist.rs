@@ -135,6 +135,9 @@ impl MethodWorklist {
         after: &ClassTable,
     ) {
         self.kept_any = false;
+        if std::env::var_os("ELEPHC_TYPECHECK_TIMES").is_some() {
+            trace_full_walk_reason(before, after);
+        }
         self.moved = moved_names(before, after).filter(|names| !names.iter().any(|name| is_implicit(name))).map(|names| {
             let mut hashes: HashSet<u64> = names.iter().map(|name| token_hash(name)).collect();
             if !hashes.is_empty() {
@@ -175,6 +178,52 @@ impl MethodWorklist {
 
 fn is_implicit(name: &str) -> bool {
     IMPLICIT_MEMBERS.contains(&name)
+}
+
+/// `ELEPHC_TYPECHECK_TIMES`: says why the next pass walks every body, or which names moved.
+fn trace_full_walk_reason(before: &ClassTable, after: &ClassTable) {
+    if before.len() != after.len() {
+        eprintln!("[elephc-worklist] full walk: class count {} -> {}", before.len(), after.len());
+        return;
+    }
+    match moved_names(before, after) {
+        Some(names) => {
+            let mut implicit: Vec<&String> = names.iter().filter(|name| is_implicit(name)).collect();
+            implicit.sort();
+            eprintln!(
+                "[elephc-worklist] moved {} names; implicit {:?}",
+                names.len(),
+                implicit
+            );
+        }
+        None => {
+            for (class_name, after_class) in after {
+                let Some(before_class) = before.get(class_name) else {
+                    eprintln!("[elephc-worklist] full walk: new class {class_name}");
+                    return;
+                };
+                if before_class.properties.len() != after_class.properties.len() {
+                    eprintln!("[elephc-worklist] full walk: {class_name} property count changed");
+                    return;
+                }
+                let mut rest = before_class.clone();
+                rest.methods = after_class.methods.clone();
+                rest.static_methods = after_class.static_methods.clone();
+                rest.properties = after_class.properties.clone();
+                if rest != *after_class {
+                    let (old, new) = (format!("{rest:#?}"), format!("{after_class:#?}"));
+                    let line = old
+                        .lines()
+                        .zip(new.lines())
+                        .find(|(old, new)| old != new)
+                        .map(|(old, new)| format!("{} => {}", old.trim(), new.trim()))
+                        .unwrap_or_default();
+                    eprintln!("[elephc-worklist] full walk: {class_name} field changed: {line}");
+                    return;
+                }
+            }
+        }
+    }
 }
 
 /// The lowercased member names that differ between two tables, or `None` when a change cannot be

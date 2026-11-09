@@ -638,6 +638,9 @@ impl Checker {
             if self.recursive_mixed_methods.len() == recursive_mixed_before {
                 worklist.prepare_next_pass(&classes_before_pass, &self.classes);
             } else {
+                if trace {
+                    eprintln!("[elephc-worklist] full walk: recursive mixed methods grew");
+                }
                 worklist.check_everything();
             }
             // The clone the stabilization check already made, reused rather than repeated.
