@@ -7,15 +7,18 @@
 //! - The internal `__elephc_poll_revents()` prelude helper used by `Io\Poll`.
 //!
 //! Key details:
-//! - `events` is zero: the probe only wants `POLLERR`/`POLLHUP`/`POLLNVAL`, which `poll`
-//!   reports regardless of the requested event mask. Ordinary readiness still comes from
-//!   `stream_select()`.
+//! - `events` requests `POLLIN` (plus `POLLRDHUP` on Linux), because macOS reports
+//!   `POLLHUP` only when an event is requested and Linux needs `POLLRDHUP` for a TCP
+//!   half-close. Ordinary readiness still comes from `stream_select()`.
 //! - `poll()` never blocks here because the timeout is zero, so the helper is safe on the
 //!   event-loop path.
 //! - Both targets keep the 8-byte `struct pollfd { int fd; short events; short revents; }`
 //!   on their own aligned frame.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{
+    emit::Emitter,
+    platform::{Arch, Platform},
+};
 
 /// Emits `__rt_stream_poll_revents`.
 ///
@@ -41,8 +44,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve the caller frame and continuation across poll()
     emitter.instruction("add x29, sp, #16");                                    // establish the helper frame pointer
     emitter.instruction("str w0, [sp, #0]");                                    // pollfd.fd = the stream descriptor
-    emitter.instruction("mov w9, #1");                                          // POLLIN also makes macOS report POLLHUP on a closed peer
-    emitter.instruction("strh w9, [sp, #4]");                                   // pollfd.events = POLLIN
+    let events = if emitter.target.platform == Platform::Linux { 0x2001 } else { 0x1 };
+    emitter.instruction(&format!("mov w9, #{}", events));                       // POLLIN (+ POLLRDHUP on Linux) also reports HUP
+    emitter.instruction("strh w9, [sp, #4]");                                   // pollfd.events = POLLIN/POLLRDHUP
     emitter.instruction("strh wzr, [sp, #6]");                                  // pollfd.revents = 0
     emitter.instruction("mov x0, sp");                                          // pollfds pointer
     emitter.instruction("mov x1, #1");                                          // one descriptor
@@ -63,7 +67,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 16");                                         // reserve one aligned pollfd slot
     emitter.instruction("mov DWORD PTR [rbp - 8], edi");                        // pollfd.fd = the stream descriptor
-    emitter.instruction("mov WORD PTR [rbp - 4], 1");                           // POLLIN also makes macOS report POLLHUP on a closed peer
+    let events = if emitter.target.platform == Platform::Linux { 0x2001 } else { 0x1 };
+    emitter.instruction(&format!("mov WORD PTR [rbp - 4], {}", events));        // POLLIN (+ POLLRDHUP on Linux) also reports HUP
     emitter.instruction("mov WORD PTR [rbp - 2], 0");                           // pollfd.revents = 0
     emitter.instruction("lea rdi, [rbp - 8]");                                  // pollfds pointer
     emitter.instruction("mov esi, 1");                                          // one descriptor

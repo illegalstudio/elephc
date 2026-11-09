@@ -113,3 +113,46 @@ echo $base ** 3;
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A literal `unset($GLOBALS['x'])` must invalidate a propagated top-level fact:
+/// the global slot is empty afterward, so `$x ?? "gone"` is `"gone"`, not the
+/// stale constant.
+#[test]
+fn test_unset_globals_literal_invalidates_propagated_global() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 5;
+unset($GLOBALS["x"]);
+echo $x ?? "gone";
+"#,
+    );
+    assert_eq!(out, "gone");
+}
+
+/// A computed `$GLOBALS` key can name any global, so its unset invalidates every
+/// propagated top-level fact.
+#[test]
+fn test_unset_globals_computed_invalidates_propagated_global() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 5;
+$name = "x";
+unset($GLOBALS[$name]);
+echo $x ?? "gone";
+"#,
+    );
+    assert_eq!(out, "gone");
+}
+
+/// A `$GLOBALS['x'] = ...` assignment expression invalidates the propagated top-level fact.
+#[test]
+fn test_globals_assignment_expression_invalidates_propagated_global() {
+    let out = compile_and_run(
+        r#"<?php
+$x = 5;
+$assigned = ($GLOBALS["x"] = 6);
+echo $x, ":", $assigned;
+"#,
+    );
+    assert_eq!(out, "6:6");
+}

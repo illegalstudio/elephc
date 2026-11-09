@@ -312,6 +312,32 @@ pub(crate) fn lower_elephc_poll_revents(
     super::super::ensure_arg_count(inst, "__elephc_poll_revents", 1)?;
     let stream = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, stream, "__elephc_poll_revents")?;
+    // Resolve a synthetic user-wrapper descriptor exactly like stream_select does before the
+    // poll(2) probe; polling the synthetic id would report POLLNVAL and drop the event.
+    let real_fd = ctx.next_label("poll_revents_real_fd");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("tst x0, #0x40000000");                     // is this a synthetic user-wrapper descriptor?
+            ctx.emitter.instruction(&format!("b.eq {real_fd}"));                // ordinary OS fd: probe it directly
+            ctx.emitter.instruction("mov x1, #3");                              // STREAM_CAST_FOR_SELECT
+            ctx.emitter.instruction("mov x2, #0");                              // the probe must not record a duplicate cast failure
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_stream_cast");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, 0x40000000");                    // is this a synthetic user-wrapper descriptor?
+            ctx.emitter.instruction(&format!("jz {real_fd}"));                  // ordinary OS fd: probe it directly
+            ctx.emitter.instruction("mov rdi, rax");                            // synthetic fd -> stream_cast argument
+            ctx.emitter.instruction("mov esi, 3");                              // STREAM_CAST_FOR_SELECT
+            ctx.emitter.instruction("xor edx, edx");                            // the probe must not record a duplicate cast failure
+            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_stream_cast");
+        }
+    }
+    ctx.emitter.label(&real_fd);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        // The probe follows the System V convention and reads its descriptor from rdi; the
+        // cast helper left the real descriptor in rax.
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the resolved descriptor to poll(2)
+    }
     abi::emit_call_label(ctx.emitter, "__rt_stream_poll_revents");
     store_if_result(ctx, inst)
 }

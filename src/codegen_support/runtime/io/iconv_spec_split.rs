@@ -20,7 +20,7 @@
 //! - A name with no `/` after the prefix is not a filter: PHP answers `false` for
 //!   `convert.iconv.` and `convert.iconv.UTF-8`. An empty half is valid.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Bytes reserved for each half of the spec, NUL included.
 ///
@@ -130,14 +130,14 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x17, x13, #10");                                   // end index of //TRANSLIT
     emitter.instruction("cmp x17, x15");                                        // does //TRANSLIT fit?
     emitter.instruction("b.hi __rt_icss_options_ignore");                       // no: try the shorter //IGNORE
-    emit_suffix_compare_arm64(emitter, TRANSLIT, 2, 1, "__rt_icss_options_ignore");
+    emit_suffix_compare_arm64(emitter, TRANSLIT, 2, "__rt_icss_options_ignore");
     emitter.instruction("orr x16, x16, #1");                                    // record this descriptor's //TRANSLIT
     emitter.instruction("b __rt_icss_options_next");                            // continue scanning after the suffix
     emitter.label("__rt_icss_options_ignore");
     emitter.instruction("add x17, x13, #8");                                    // end index of //IGNORE
     emitter.instruction("cmp x17, x15");                                        // does //IGNORE fit?
     emitter.instruction("b.hi __rt_icss_options_next");                         // no: keep scanning
-    emit_suffix_compare_arm64(emitter, IGNORE, 2, 2, "__rt_icss_options_next");
+    emit_suffix_compare_arm64(emitter, IGNORE, 2, "__rt_icss_options_next");
     emitter.instruction("orr x16, x16, #2");                                    // record this descriptor's //IGNORE
     emitter.label("__rt_icss_options_next");
     emitter.instruction("add x13, x13, #1");                                    // advance to the next candidate
@@ -154,13 +154,12 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
 /// Emits the case-insensitive comparison of one lowercase suffix on AArch64.
 ///
-/// `offset` is the byte after `//`, `bit` selects the caller's success label. The comparison
-/// branches to `mismatch` on the first differing byte.
+/// `offset` is the byte after `//`. The comparison branches to `mismatch` on the first
+/// differing byte.
 fn emit_suffix_compare_arm64(
     emitter: &mut Emitter,
     suffix: &[u8],
     offset: usize,
-    _bit: u8,
     mismatch: &str,
 ) {
     for (index, expected) in suffix.iter().enumerate() {
@@ -287,10 +286,4 @@ fn emit_suffix_compare_x86(emitter: &mut Emitter, suffix: &[u8], offset: usize, 
         emitter.instruction(&format!("cmp r10d, {}", expected));                // does it match the suffix?
         emitter.instruction(&format!("jne {}", mismatch));                      // a different suffix
     }
-}
-
-/// Keeps the ABI import used on targets that only need the register helpers.
-#[allow(dead_code)]
-fn _abi_used(emitter: &mut Emitter) {
-    let _ = abi::int_result_reg(emitter);
 }

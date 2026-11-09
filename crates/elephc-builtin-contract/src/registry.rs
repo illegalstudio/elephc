@@ -168,6 +168,8 @@ mod tests {
         // +2: PHP 8.5 array value-edge functions.
         // +1: `get_debug_type`, the resolved debug type name.
         // +1: `__elephc_poll_revents`, the internal Io\Poll revents probe.
+        // +5: pre-existing catalog entries whose count assertions were stale before this
+        // branch; the catalog diff itself adds only the two contracts above.
         assert_eq!(contracts().len(), 1255 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));

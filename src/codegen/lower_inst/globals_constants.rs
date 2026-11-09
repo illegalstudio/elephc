@@ -30,6 +30,15 @@ pub(super) fn lower_unset_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let name = ctx.global_name_data(data)?.to_string();
     let symbol = ir_global_symbol(&name);
     let done = ctx.next_label("unset_global_done");
+    // Ordinary globals hold a boxed Mixed cell. Under `--web`, request superglobals hold a
+    // Hash pointer instead, so their release must use the hash helper rather than reading
+    // the hash header as a Mixed box.
+    let storage_ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
+        crate::superglobals::superglobal_type().codegen_repr()
+    } else {
+        PhpType::Mixed
+    };
+    let release = abi::refcount_release_helper(&storage_ty);
     ctx.data.add_comm(symbol.clone(), 8);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -38,15 +47,19 @@ pub(super) fn lower_unset_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
             abi::emit_load_symbol_to_reg(ctx.emitter, "x10", &symbol, 0);
             abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
             ctx.emitter.instruction(&format!("cbz x10, {done}"));               // an unset global has no owner to release
-            ctx.emitter.instruction("mov x0, x10");                             // pass the retired Mixed owner
-            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            if let Some(release) = release {
+                ctx.emitter.instruction("mov x0, x10");                         // pass the retired owner to its typed release helper
+                abi::emit_call_label(ctx.emitter, release);
+            }
         }
         Arch::X86_64 => {
             abi::emit_load_symbol_to_reg(ctx.emitter, "rax", &symbol, 0);
             abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
             ctx.emitter.instruction(&format!("test rax, rax"));                 // an unset global has no owner to release
             ctx.emitter.instruction(&format!("jz {done}"));                     // skip the decrement for an empty cell
-            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+            if let Some(release) = release {
+                abi::emit_call_label(ctx.emitter, release);
+            }
         }
     }
     ctx.emitter.label(&done);

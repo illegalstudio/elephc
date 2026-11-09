@@ -237,7 +237,10 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
                         Op::StoreGlobalDynamic.default_effects(),
                         Some(stmt.span),
                     );
-                    if ctx.builder.value_defining_op(key.value) == Some(Op::Cast) {
+                    // The store borrows the key bytes. Release only a value this path owns:
+                    // a cast/string cast, a call result, or a concat. A borrowed local/global
+                    // load must stay untouched.
+                    if ctx.value_is_owning_temporary(key) {
                         crate::ir_lower::ownership::release_if_owned(
                             ctx,
                             key,

@@ -215,9 +215,10 @@ var_export($uri);
   maps keyed by `spl_object_id`, are dropped by `__destruct`, and are rebuilt by `__clone`
   and `__unserialize`. `--INI-- memory_limit` and runtime `ini_set('memory_limit', …)` both
   observe the charge.
-- A typed object property passed by reference to an output parameter is rejected at
-  compile time, so `057.phpt` (8.5) and the corresponding 8.6 builder fixture are
-  skipped until the by-reference storage rules widen.
+- `057.phpt` (8.5) and the corresponding 8.6 builder fixture run with the typed
+  property by-reference write-back. Their harness rewrites `catch (Throwable $e)` to
+  `catch (\TypeError $e)`, because the write-back raises the concrete `TypeError`
+  those fixtures expect.
 - To let user code call `parse()` and `equals()` on values whose static type is
   `?Uri` (a common php-src test shape), the prelude accepts `mixed` for those
   parameters and performs the runtime `instanceof` check itself. This means

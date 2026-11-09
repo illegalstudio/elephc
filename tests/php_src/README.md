@@ -11,7 +11,7 @@ Rust fixtures generated from them. Tests never parse these files at runtime.
 | `Zend/tests/readonly_props/readonly_with_default*.phpt` | `Zend/tests/readonly_props` | `tests/codegen/oop/readonly_property_defaults_php86.rs` |
 | `Zend/tests/readonly_props/serialization.phpt` | `Zend/tests/readonly_props` | the defaulted-property portion of the same Rust module |
 | `ext/date/tests/time/duration/serialize.phpt` | `ext/date/tests/time/duration` | `tests/codegen/time_duration_serialization.rs` |
-| `ext/uri/tests/**/{builder,getters}/*.phpt` (PHP 8.6) | `ext/uri/tests` | `tests/codegen/uri86_php_src.rs` (198 of 204 fixtures pass; 6 are skipped for opaque-path spaces, a mixed-object array_map comparison, and the typed-property by-reference shape) |
+| `ext/uri/tests/**/{builder,getters}/*.phpt` (PHP 8.6) | `ext/uri/tests` | `tests/codegen/uri86_php_src.rs` (all 204 fixtures pass; fixtures that catch `Throwable` around the typed-property write-back are rewritten to the concrete `TypeError`) |
 | `ext/standard/tests/strings/pack*.phpt`, `unpack*.phpt` | `ext/standard/tests/strings` | `tests/codegen/strings/pack_unpack_php86.rs` (10 focused tests; 32-bit-only and the `X` bug fixture are vendored for provenance but not asserted) |
 | `ext/standard/tests/poll/*.phpt` | `ext/standard/tests/poll` | `tests/codegen/io/io_poll_php86.rs` (the shared `poll.inc` helper is inlined because elephc's checker rejects its untyped helper shapes; the upstream set contains no separate edge or hang-up fixtures) |
 | `ext/standard/tests/streams/stream_errors_*.phpt` | `ext/standard/tests/streams` | `tests/codegen/io/stream_errors_php86.rs` and `tests/codegen/io/stream_errors_corpus_php86.rs` (all 14 runnable fixtures pass; 4 are `--SKIPIF--`-only) |

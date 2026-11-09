@@ -263,9 +263,9 @@ impl Checker {
             let Some((existing, site)) = rejection else {
                 continue;
             };
-            // A conditional null/typed join is a normal nullable value, not a strict-mode
-            // type error; box it silently instead of advising `--strict-locals` about a
-            // rejection that mode does not make yet.
+            // A conditional null/typed join is a normal nullable value in permissive
+            // mode; box it silently. `--strict-locals` rejects it in `locals.rs` instead,
+            // so the permissive warning must not claim that mode accepts it.
             let null_conditional =
                 matches!(existing, PhpType::Void) != matches!(site.ty, PhpType::Void);
             marks.push((

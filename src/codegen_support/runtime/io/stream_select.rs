@@ -9,7 +9,8 @@
 //! - macOS uses `select` (5 args, `timeval`); Linux uses `pselect6` (6 args,
 //!   `timespec` + signal mask). The helper sets up six argument registers so a
 //!   single `svc` works after `linux_transform` remaps the syscall number.
-//! - Descriptor sets are word-0-only bitmaps: descriptors must be below 64.
+//! - Descriptor sets are 1024-bit `FD_SETSIZE` bitmaps: descriptors `0..1023` are
+//!   observed and higher descriptors are skipped.
 //! - A set passed as `null` arrives as a zero array pointer and is skipped on both passes.
 //!   The three resource arrays are compacted in place to the ready subset.
 
@@ -32,7 +33,7 @@ pub fn emit_stream_select(emitter: &mut Emitter) {
     emitter.comment("--- runtime: stream_select ---");
     emitter.label_global("__rt_stream_select");
 
-    // Frame (544 bytes): [0]=read_arr [8]=write_arr [16]=except_arr
+    // Frame (576 bytes): [0]=read_arr [8]=write_arr [16]=except_arr
     //   [32..160)=read_fds [160..288)=write_fds [288..416)=except_fds (1024-bit sets)
     //   [416]=timeout.sec [424]=timeout.frac [432]=ready count [496]/[504]=x29/x30
     //   [512..576)=loop-register spill slots saved across __rt_user_wrapper_stream_cast
@@ -82,7 +83,7 @@ pub fn emit_stream_select(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return to the caller
 }
 
-/// Set one bit per in-range descriptor of `arr` into the word-0 bitmap at `fds_off`.
+/// Set one bit per in-range descriptor of `arr` into the 1024-bit bitmap at `fds_off`.
 /// Handles both raw-int resource arrays (`value_type != 7`) and Mixed-boxed
 /// arrays (`value_type == 7`, slots hold Mixed* cells whose payload_lo is the fd).
 fn emit_build_fdset_aarch64(emitter: &mut Emitter, arr_off: i64, fds_off: i64, suffix: &str) {
@@ -238,7 +239,7 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
 
     // Frame (rbp-relative): [-8]=read_arr [-16]=write_arr [-24]=except_arr
     //   [-152..-25)=read_fds [-280..-153)=write_fds [-408..-281)=except_fds
-    //   [-416]=timeout.sec [-424]=timeout.nsec [-432]=ready count
+    //   [-424]=timeout.sec [-416]=timeout.nsec [-432]=ready count
     //   [-440..-464]=caller-saved loop registers spilled across
     //   __rt_user_wrapper_stream_cast (r12/r13 are callee-saved and survive it)
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
@@ -247,10 +248,10 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the read resource array
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the write resource array
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the except resource array
-    emitter.instruction("mov QWORD PTR [rbp - 416], rcx");                      // timeout seconds field
+    emitter.instruction("mov QWORD PTR [rbp - 424], rcx");                      // timeout seconds field
     emitter.instruction("mov rax, r8");                                         // microseconds into a scratch register
     emitter.instruction("imul rax, rax, 1000");                                 // convert microseconds to timespec nanoseconds
-    emitter.instruction("mov QWORD PTR [rbp - 424], rax");                      // timeout nanoseconds field
+    emitter.instruction("mov QWORD PTR [rbp - 416], rax");                      // timeout nanoseconds field (after tv_sec)
 
     // -- clear the three FD_SETSIZE descriptor bitmaps --
     for base in [152, 280, 408] {
@@ -268,7 +269,7 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rsi, [rbp - 152]");                                // read descriptor bitmap pointer
     emitter.instruction("lea rdx, [rbp - 280]");                                // write descriptor bitmap pointer
     emitter.instruction("lea r10, [rbp - 408]");                                // except descriptor bitmap pointer
-    emitter.instruction("lea r8, [rbp - 416]");                                 // timeout struct pointer
+    emitter.instruction("lea r8, [rbp - 424]");                                 // timeout struct pointer (tv_sec, tv_nsec)
     emitter.instruction("xor r9d, r9d");                                        // signal mask pointer (NULL)
     emitter.instruction("mov eax, 270");                                        // Linux x86_64 syscall 270 = pselect6
     emitter.instruction("syscall");                                             // wait for descriptor readiness

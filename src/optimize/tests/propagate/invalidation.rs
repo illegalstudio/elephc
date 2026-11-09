@@ -272,3 +272,23 @@ fn test_yield_invalidates_all() {
     );
     assert_eq!(expr_invalidation(&expr), Invalidation::All);
 }
+
+/// `unset($GLOBALS['x'])` invalidates the top-level `$x` fact.
+#[test]
+fn test_unset_globals_literal_invalidates_named_global() {
+    let expr = call(
+        "unset",
+        vec![array_access(Expr::var("GLOBALS"), Expr::string_lit("x"))],
+    );
+    assert_eq!(expr_invalidation(&expr), names(&["x"]));
+}
+
+/// A computed `$GLOBALS` key can name any top-level global, so `unset` clears them all.
+#[test]
+fn test_unset_globals_computed_invalidates_all_globals() {
+    let expr = call(
+        "unset",
+        vec![array_access(Expr::var("GLOBALS"), Expr::var("name"))],
+    );
+    assert_eq!(expr_invalidation(&expr), Invalidation::All);
+}

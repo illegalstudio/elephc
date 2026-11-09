@@ -46,6 +46,10 @@ echo iconv("UTF-8", "ASCII//IGNORE", $utf8);   // Prfung caf
 A charset pair the platform cannot open raises a warning and returns `false`; a
 byte sequence the source charset rejects raises a notice and returns `false`.
 
+On musl, the platform `iconv` is deliberately minimal and may ignore `//TRANSLIT`
+or `//IGNORE`; elephc follows whatever the linked libc provides, exactly as PHP
+does. The option-restoration tests therefore run on glibc and Apple targets.
+
 ## Character-oriented strings
 
 `strlen()` and friends count bytes. These four functions count characters in the

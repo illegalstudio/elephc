@@ -1034,6 +1034,25 @@ var_dump(isset($GLOBALS[$key]), $GLOBALS[$key] ?? 'gone');
     );
 }
 
+/// A bare `$GLOBALS` snapshot is an array copy of the current global values: mutating a
+/// global in place after taking it does not publish through the snapshot.
+#[test]
+fn test_globals_snapshot_isolated_from_later_mutation_php86() {
+    let out = run86(
+        r#"<?php
+$a = [1];
+$snapshot = $GLOBALS;
+$a[] = 2;
+echo count($snapshot["a"]), ":", count($a), "\n";
+$b = "x";
+$text = $GLOBALS;
+$b .= "y";
+echo $text["b"], ":", $b, "\n";
+"#,
+    );
+    assert_eq!(out, "1:2\nx:xy\n");
+}
+
 /// A computed `$GLOBALS` read whose name has no initialized value warns like php-src and
 /// returns null.
 #[test]

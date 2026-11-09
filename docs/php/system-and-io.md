@@ -149,6 +149,23 @@ order follows the compiler's global name table plus the runtime-created entries
 rather than PHP's insertion order, and writes through the snapshot do not publish
 back.
 
+Known `$GLOBALS` limits:
+
+- The snapshot only contains names the compiler materialized. PHP's CLI SAPI also
+  exposes `_GET`, `_POST`, `_COOKIE`, `_FILES`, and `_SERVER` in `$GLOBALS`; elephc
+  adds one of those only when the source names it, so `count($GLOBALS)` can be lower
+  than PHP's.
+- A `global $x` alias is not a live view after `unset($GLOBALS['x'])`. PHP keeps the
+  removed value alive through the local reference, so `isset($x)` stays true; elephc
+  clears the shared cell, so `isset($x)` is false.
+- Under `--web`, a computed `$GLOBALS[$name]` lookup treats every named slot as an
+  ordinary boxed global. Request superglobals hold a typed Hash pointer instead, so
+  use `$_SERVER` (or a literal `$GLOBALS['_SERVER']` key) when the name is one of
+  them; a runtime name that resolves to a superglobal does not read the Hash.
+- Runtime-created global entries are released at process shutdown. A `--web` worker
+  does not drain them at the request boundary, so a name created in one request can
+  remain visible to the next until it is unset or the worker exits.
+
 ## PHP version surface
 
 elephc targets a PHP **language profile** selected by `--php-version`
@@ -492,9 +509,11 @@ wrappers are documented in [Streams](streams.md).
 
 `Io\Poll` waits for readiness on stream descriptors without blocking on a single
 stream. `Backend::getAvailableBackends()` reports `[Poll, Kqueue]` on Darwin and
-`[Poll, Epoll]` on Linux; `Backend::Auto` prefers the platform backend. `Epoll` and
-`Kqueue` support edge-triggered watchers, while `EventPorts` and `WSAPoll` stay
-unavailable because elephc has no Solaris or Windows target.
+`[Poll, Epoll]` on Linux; `Backend::Auto` prefers the platform backend. Edge-triggered
+watchers are refused on every backend until a native epoll/kqueue wait exists: the shared
+level-triggered wait cannot observe a readiness transition that happens between two
+calls. `EventPorts` and `WSAPoll` stay unavailable because elephc has no Solaris or
+Windows target.
 
 ```php
 <?php
@@ -523,20 +542,28 @@ data already buffered by the stream layer, one-shot watchers, `maxEvents`,
 `Time\Duration` timeouts, duplicate-handle rejection, closed-stream
 deactivation, and watcher/context lifetime rules are implemented.
 
-Edge-triggered watchers report one event per not-ready -> ready transition and
-rearm only after the watcher is observed not ready again. A zero-timeout `poll(2)`
-probe separates `HangUp`/`ReadHangUp` and `Error` from a bare read/write bit, so a
-closed peer is no longer reported as ordinary readiness. The runtime's
-`stream_select()` examines descriptors `0..1023` (`FD_SETSIZE`).
+A zero-timeout `poll(2)` probe separates `HangUp`/`ReadHangUp` and `Error` from a
+bare read/write bit, so a closed peer is no longer reported as ordinary readiness.
+Linux requests `POLLRDHUP`, so a TCP half-close reports `ReadHangUp`; Darwin derives
+`ReadHangUp` from `POLLHUP` on a full close. The runtime's `stream_select()` examines
+descriptors `0..1023` (`FD_SETSIZE`).
 
 Known limits:
 
-- `Epoll` and `Kqueue` are the platform backend *modes* and provide the
-  edge-capable behavior; the wait itself still runs on the shared portable
-  `stream_select()` + `poll(2)` machinery rather than issuing epoll/kqueue
-  syscalls directly.
+- `Epoll` and `Kqueue` are portable backend *modes*; the wait itself still runs
+  on the shared `stream_select()` + `poll(2)` machinery rather than issuing
+  epoll/kqueue syscalls directly, which is why edge triggering is refused.
 - `EventPorts` and `WSAPoll` constructors raise `BackendUnavailableException`
   because elephc does not target Solaris or Windows.
+- Descriptors `1024` and above are silently ignored by `stream_select()` and by
+  `Io\Poll`; PHP's `stream_select()` emits its `FD_SETSIZE` warning in that case.
+- `wait()` re-checks a level-ready descriptor that produced no watched event at
+  1 ms granularity, so an `Error`/`HangUp`-only watcher does not return early on
+  ordinary readable data. It can wake up to 1000 times per second while that data
+  remains pending; a native epoll/kqueue wait would remove that polling.
+- A watcher around a user-wrapper stream currently crashes in
+  `stream_get_meta_data()` before the wait; native OS streams are unaffected.
+  Tracked as a follow-up.
 
 ## File system
 

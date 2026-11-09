@@ -8,13 +8,14 @@
 //! Key details:
 //! - The surface is parsed from one internal PHP source, so namespaces, enums, interfaces,
 //!   exception hierarchies, and readonly metadata stay identical to the engine's declarations.
-//! - `Epoll` is advertised on Linux and `Kqueue` on Darwin; both select the edge-capable path
-//!   and `Auto` prefers them. `EventPorts` and `WSAPoll` stay unavailable because elephc has no
-//!   Solaris or Windows target. The wait itself runs on the shared runtime machinery:
-//!   `stream_select()` for level readiness (descriptors 0..1023) plus a zero-timeout `poll(2)`
-//!   revents probe that separates `HangUp`/`ReadHangUp` and `Error` from a bare read/write bit.
-//! - Edge-triggered watchers report one event per not-ready -> ready transition and rearm only
-//!   after the watcher is observed not ready again.
+//! - `Epoll` is advertised on Linux and `Kqueue` on Darwin and `Auto` prefers them; the wait
+//!   itself runs on the shared runtime machinery: `stream_select()` for level readiness
+//!   (descriptors 0..1023) plus a zero-timeout `poll(2)` revents probe that separates
+//!   `HangUp`/`ReadHangUp` and `Error` from a bare read/write bit. `EventPorts` and `WSAPoll`
+//!   stay unavailable because elephc has no Solaris or Windows target.
+//! - Edge triggering is refused: a shared level-triggered wait cannot observe a readiness
+//!   transition that happens between two calls. True edge support needs the native
+//!   epoll/kqueue syscalls.
 //! - Watchers hold the context through `WeakReference`, so a watcher does not keep a dropped
 //!   context alive and `isActive()` turns false exactly when the context is gone.
 
@@ -62,7 +63,10 @@ namespace Io\Poll {
         }
 
         public function supportsEdgeTriggering(): bool {
-            return $this === self::Epoll || $this === self::Kqueue;
+            // The shared stream_select()/poll(2) machinery cannot observe a readiness
+            // transition that happens between two waits; true edge support needs the
+            // epoll/kqueue syscalls themselves. Keep the safe refusal until then.
+            return false;
         }
     }
 
@@ -86,7 +90,6 @@ namespace Io\Poll {
         private mixed $data;
         private bool $active = true;
         private bool $fired = false;
-        private bool $edgeArmed = true;
 
         public function __construct(\WeakReference $context, \StreamPollHandle $handle, array $events, mixed $data = null) {
             $this->context = $context;
@@ -139,7 +142,6 @@ namespace Io\Poll {
             $this->watchedEvents = $events;
             $this->triggeredEvents = [];
             $this->fired = false;
-            $this->edgeArmed = true;
         }
 
         public function modifyData(mixed $data): void {
@@ -177,17 +179,6 @@ namespace Io\Poll {
             return $this->fired;
         }
 
-        public function __elephcEdgeArmed(): bool {
-            return $this->edgeArmed;
-        }
-
-        public function __elephcArmEdge(): void {
-            $this->edgeArmed = true;
-        }
-
-        public function __elephcDisarmEdge(): void {
-            $this->edgeArmed = false;
-        }
 
         public function __elephcActive(): bool {
             return $this->active && $this->handle->isValid();
@@ -286,114 +277,137 @@ namespace Io\Poll {
                 return [];
             }
 
-            $read = [];
-            $write = [];
-            $except = [];
-            $buffered = [];
-            foreach ($active as $watcher) {
-                $stream = $watcher->__elephcStream();
-                $events = $watcher->getWatchedEvents();
-                $wantsRead = in_array(Event::Read, $events, true);
-                $wantsWrite = in_array(Event::Write, $events, true);
-                $wantsError = in_array(Event::Error, $events, true);
-                $wantsHangUp = in_array(Event::HangUp, $events, true)
-                    || in_array(Event::ReadHangUp, $events, true);
-                $meta = stream_get_meta_data($stream);
-                $hasBuffered = $wantsRead && ($meta['unread_bytes'] ?? 0) > 0;
-                if ($hasBuffered) {
-                    $buffered[] = $watcher;
-                } elseif ($wantsRead || $wantsError || $wantsHangUp) {
-                    // A hang-up makes the descriptor READABLE; the zero-timeout poll below
-                    // tells that readiness apart from ordinary data.
-                    $read[] = $stream;
-                }
-                if ($wantsWrite) {
-                    $write[] = $stream;
-                }
-                if ($wantsError || $wantsHangUp) {
-                    $except[] = $stream;
-                }
+            $deadline = null;
+            if ($timeout !== null) {
+                $deadline = hrtime(true) + $seconds * 1000000000 + $micros * 1000;
             }
 
-            $ready = false;
-            if ($read !== [] || $write !== [] || $except !== []) {
-                if ($buffered !== []) {
-                    $seconds = 0;
-                    $micros = 0;
-                }
-                $selected = stream_select($read, $write, $except, $seconds, $micros);
-                if ($selected === false) {
-                    throw new FailedPollWaitException('Failed to wait for events', FailedPollOperationException::ERROR_SYSTEM);
-                }
-                $ready = true;
-            }
-
-            $events = [];
-            foreach ($active as $watcher) {
-                if (count($events) >= $limit) {
-                    break;
-                }
-                $watched = $watcher->getWatchedEvents();
-                $stream = $watcher->__elephcStream();
-                $inRead = $ready && in_array($stream, $read, true);
-                $inWrite = $ready && in_array($stream, $write, true);
-                $inExcept = $ready && in_array($stream, $except, true);
-                $isBuffered = in_array($watcher, $buffered, true);
-                $triggered = [];
-                if ($isBuffered) {
-                    $triggered[] = Event::Read;
-                } elseif ($inRead || $inExcept) {
-                    // `select()` cannot distinguish a peer hang-up from ordinary readiness, so
-                    // the descriptor is probed for POLLHUP/POLLERR/POLLNVAL here. A watcher that
-                    // asked for HangUp/ReadHangUp reports them instead of the bare Read bit.
-                    $flags = __elephc_poll_revents($stream);
-                    $hungUp = ($flags & 16) !== 0;
-                    $errored = ($flags & 8) !== 0 || ($flags & 2) !== 0;
-                    if (($flags & 32) !== 0) {
-                        continue;
+            while (true) {
+                $read = [];
+                $write = [];
+                $buffered = [];
+                foreach ($active as $watcher) {
+                    $stream = $watcher->__elephcStream();
+                    $events = $watcher->getWatchedEvents();
+                    $wantsRead = in_array(Event::Read, $events, true);
+                    $wantsWrite = in_array(Event::Write, $events, true);
+                    $wantsError = in_array(Event::Error, $events, true);
+                    $wantsHangUp = in_array(Event::HangUp, $events, true)
+                        || in_array(Event::ReadHangUp, $events, true);
+                    $meta = stream_get_meta_data($stream);
+                    $hasBuffered = $wantsRead && ($meta['unread_bytes'] ?? 0) > 0;
+                    if ($hasBuffered) {
+                        $buffered[] = $watcher;
+                    } elseif ($wantsRead || $wantsError || $wantsHangUp) {
+                        // A hang-up makes the descriptor READABLE; the zero-timeout poll below
+                        // tells that readiness apart from ordinary data.
+                        $read[] = $stream;
                     }
-                    if ($hungUp) {
-                        if (in_array(Event::HangUp, $watched, true)) {
-                            $triggered[] = Event::HangUp;
+                    if ($wantsWrite) {
+                        $write[] = $stream;
+                    }
+                }
+
+                if ($read === [] && $write === [] && $buffered === []) {
+                    // Only modifiers that cannot make a descriptor ready: wait out the timeout.
+                    if ($deadline !== null) {
+                        $remaining = $deadline - hrtime(true);
+                        if ($remaining > 0) {
+                            usleep((int) intdiv($remaining, 1000));
                         }
-                        if (in_array(Event::ReadHangUp, $watched, true)) {
-                            $triggered[] = Event::ReadHangUp;
-                        }
-                        if (in_array(Event::Read, $watched, true)) {
-                            $triggered[] = Event::Read;
+                    }
+                    return [];
+                }
+
+                $ready = false;
+                if ($read !== [] || $write !== []) {
+                    $selectSeconds = $seconds;
+                    $selectMicros = $micros;
+                    if ($buffered !== []) {
+                        $selectSeconds = 0;
+                        $selectMicros = 0;
+                    }
+                    $except = null;
+                    $selected = stream_select($read, $write, $except, $selectSeconds, $selectMicros);
+                    if ($selected === false) {
+                        throw new FailedPollWaitException('Failed to wait for events', FailedPollOperationException::ERROR_SYSTEM);
+                    }
+                    $ready = true;
+                }
+
+                $events = [];
+                foreach ($active as $watcher) {
+                    if (count($events) >= $limit) {
+                        break;
+                    }
+                    $watched = $watcher->getWatchedEvents();
+                    $stream = $watcher->__elephcStream();
+                    $inRead = $ready && in_array($stream, $read, true);
+                    $inWrite = $ready && in_array($stream, $write, true);
+                    $isBuffered = in_array($watcher, $buffered, true);
+                    $triggered = [];
+                    if ($isBuffered) {
+                        $triggered[] = Event::Read;
+                        if ($inWrite && in_array(Event::Write, $watched, true)) {
+                            $triggered[] = Event::Write;
                         }
                     } else {
-                        if ($inRead && in_array(Event::Read, $watched, true)) {
+                        $flags = ($inRead || $inWrite) ? __elephc_poll_revents($stream) : 0;
+                        $hungUp = ($flags & 16) !== 0;
+                        $readHangUp = ($flags & 8192) !== 0;
+                        // POLLERR is Event::Error. POLLPRI is priority data, which PHP 8.6 does not
+                        // expose as an event; it must not be reported as Error.
+                        $errored = ($flags & 8) !== 0;
+                        if (($flags & 32) !== 0) {
+                            continue;
+                        }
+                        if ($hungUp && in_array(Event::HangUp, $watched, true)) {
+                            $triggered[] = Event::HangUp;
+                        }
+                        if (($hungUp || $readHangUp) && in_array(Event::ReadHangUp, $watched, true)) {
+                            $triggered[] = Event::ReadHangUp;
+                        }
+                        if (($inRead || $hungUp) && in_array(Event::Read, $watched, true)) {
                             $triggered[] = Event::Read;
                         }
                         if ($inWrite && in_array(Event::Write, $watched, true)) {
                             $triggered[] = Event::Write;
                         }
-                        if (($inExcept || $errored) && in_array(Event::Error, $watched, true)) {
+                        if ($errored && in_array(Event::Error, $watched, true)) {
                             $triggered[] = Event::Error;
                         }
                     }
-                } elseif ($inWrite && in_array(Event::Write, $watched, true)) {
-                    $triggered[] = Event::Write;
-                } elseif ($inExcept && in_array(Event::Error, $watched, true)) {
-                    $triggered[] = Event::Error;
+                    if ($triggered !== []) {
+                        $watcher->__elephcMarkTriggered($triggered);
+                        $events[] = $watcher;
+                    }
                 }
-                $edge = in_array(Event::EdgeTriggered, $watched, true);
-                if ($triggered !== []) {
-                    if ($edge && !$watcher->__elephcEdgeArmed()) {
-                        continue;
+                if ($events !== []) {
+                    return $events;
+                }
+
+                if ($deadline === null) {
+                    // A level-ready descriptor that produced no reportable event would
+                    // otherwise spin: give the peer a moment to change state.
+                    if ($ready) {
+                        usleep(1000);
                     }
-                    $watcher->__elephcMarkTriggered($triggered);
-                    if ($edge) {
-                        $watcher->__elephcDisarmEdge();
-                    }
-                    $events[] = $watcher;
-                } elseif ($edge) {
-                    // Still not ready: the next readiness transition may report again.
-                    $watcher->__elephcArmEdge();
+                    continue;
+                }
+                $remaining = $deadline - hrtime(true);
+                if ($remaining <= 0) {
+                    return [];
+                }
+                $seconds = intdiv($remaining, 1000000000);
+                $micros = intdiv($remaining % 1000000000, 1000);
+                if ($ready) {
+                    // The descriptor is still level-ready but has nothing this watcher
+                    // reports; poll for the error/hang-up transition at 1 ms granularity
+                    // instead of returning early or spinning.
+                    $nap = $remaining < 1000000 ? $remaining : 1000000;
+                    usleep((int) intdiv($nap, 1000));
                 }
             }
-            return $events;
         }
 
         public function getBackend(): Backend {
@@ -418,7 +432,7 @@ namespace Io\Poll {
                 if (!$event instanceof Event) {
                     throw new \TypeError('Watched events must be of type Io\\Poll\\Event');
                 }
-                if ($event === Event::EdgeTriggered && !$this->backend->supportsEdgeTriggering()) {
+                if ($event === Event::EdgeTriggered) {
                     throw new BackendUnavailableException('Backend ' . $this->backend->name . ' does not support edge triggering');
                 }
             }

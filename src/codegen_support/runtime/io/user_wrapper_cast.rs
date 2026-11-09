@@ -19,7 +19,7 @@
 //!   `stream_cast` method, returns `-1` (stream_select skips negative fds).
 //! - The wrapper's `stream_cast(int $cast_as): resource|false` is expected to
 //!   return the underlying int fd (declare `: int`). The raw result is returned
-//!   verbatim: stream_select only sets bits for fds in `0..63`, so a boxed/large
+//!   verbatim: stream_select only sets bits for fds in `0..1023`, so a boxed/large
 //!   or out-of-range return is harmlessly skipped there rather than dereferenced.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};

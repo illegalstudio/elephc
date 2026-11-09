@@ -8,11 +8,15 @@
 //! - Sources are transcribed from `ext/standard/tests/poll/*.phpt` with the upstream
 //!   `poll.inc` helper inlined, because elephc's checker rejects several untyped helper
 //!   parameter shapes used by that file.
-//! - The portable backend maps level-triggered readiness onto `stream_select()`; edge
-//!   triggering, hang-up precision, and descriptors above 63 are documented limitations.
-//! - The closed-handle fixture now runs unchanged, including PHP's `get_debug_type()`
+//! - Level readiness runs on `stream_select()` over descriptors `0..1023`; a zero-timeout
+//!   `poll(2)` probe adds `HangUp`/`ReadHangUp` and `Error`, and the platform backend modes
+//!   (`Epoll` on Linux, `Kqueue` on Darwin) are available; edge triggering is refused
+//!   because the shared level wait cannot observe transitions between calls.
+//! - The closed-handle fixture runs unchanged, including PHP's `get_debug_type()`
 //!   `"resource (closed)"` diagnostic.
 //! - Tests compare stdout only. Warnings and fatal diagnostics are not part of these fixtures.
+
+use std::fs;
 
 use elephc::php_version::PhpVersion;
 
@@ -55,31 +59,71 @@ echo '|', $auto->getBackend()->supportsEdgeTriggering() ? 'edge' : 'level';
     assert_eq!(
         out,
         format!(
-            "Poll|{native}|yes|no|Poll|Io\\Poll\\BackendUnavailableException: Backend {unavailable} not available|{native}|edge"
+            "Poll|{native}|yes|no|Poll|Io\\Poll\\BackendUnavailableException: Backend {unavailable} not available|{native}|level"
         )
     );
 }
 
-/// The platform-native backend reports edge-triggered watchers only on readiness transitions.
+/// Edge-triggered watchers are refused until a native epoll/kqueue wait exists.
 #[test]
 fn test_io_poll_native_backend_edge_triggering_php86() {
     let out = run86(
         r#"<?php
 [$r, $w] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
 $context = new Io\Poll\Context();
-$handle = new StreamPollHandle($r);
-$context->add($handle, [Io\Poll\Event::Read, Io\Poll\Event::EdgeTriggered], 'edge');
-fwrite($w, 'a');
-echo count($context->wait(Time\Duration::fromMicroseconds(100000))), ':';
-echo count($context->wait(Time\Duration::fromMicroseconds(100000))), ':';
-fread($r, 1);
-echo count($context->wait(Time\Duration::fromMicroseconds(100000))), ':';
-fwrite($w, 'b');
-$events = $context->wait(Time\Duration::fromMicroseconds(100000));
-echo count($events), ':', $events[0]->getData(), ':', fread($r, 1);
+try {
+    $context->add(new StreamPollHandle($r), [Io\Poll\Event::Read, Io\Poll\Event::EdgeTriggered], 'edge');
+    echo "added";
+} catch (Throwable $e) {
+    echo $e::class, ': ', $e->getMessage();
+}
 "#,
     );
-    assert_eq!(out, "1:0:0:1:edge:b");
+    assert_eq!(
+        out,
+        "Io\\Poll\\BackendUnavailableException: Backend Kqueue does not support edge triggering"
+            .replace("Kqueue", if cfg!(target_os = "linux") { "Epoll" } else { "Kqueue" })
+    );
+}
+
+/// An error-only watcher on readable data does not return early: the descriptor is
+/// level-ready, but no watched event fired, so `wait()` must block out the timeout.
+#[test]
+fn test_io_poll_error_only_watcher_waits_for_timeout_php86() {
+    let out = run86(
+        r#"<?php
+[$r, $w] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+fwrite($w, "data");
+$context = new Io\Poll\Context(Io\Poll\Backend::Poll);
+$context->add(new StreamPollHandle($r), [Io\Poll\Event::Error], 'error');
+$start = hrtime(true);
+$events = $context->wait(Time\Duration::fromMicroseconds(50000));
+$elapsed = intdiv(hrtime(true) - $start, 1000000);
+echo count($events), ':', $elapsed >= 30 ? 'waited' : 'early';
+"#,
+    );
+    assert_eq!(out, "0:waited");
+}
+
+/// A TCP-style half-close reports ReadHangUp on Linux, where `poll(2)` exposes POLLRDHUP.
+#[test]
+fn test_io_poll_read_hangup_half_close_php86() {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let out = run86(
+        r#"<?php
+[$r, $w] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$context = new Io\Poll\Context(Io\Poll\Backend::Poll);
+$context->add(new StreamPollHandle($r), [Io\Poll\Event::Read, Io\Poll\Event::ReadHangUp], 'half');
+stream_socket_shutdown($w, 1);
+$events = $context->wait(Time\Duration::fromMicroseconds(100000));
+echo count($events), ':';
+echo $events[0]->hasTriggered(Io\Poll\Event::ReadHangUp) ? 'h' : '-';
+echo $events[0]->hasTriggered(Io\Poll\Event::Read) ? 'R' : '-';
+"#,
+    );
+    assert_eq!(out, "1:hR");
 }
 
 /// A closed peer reports HangUp/ReadHangUp instead of a bare Read readiness bit.
@@ -780,4 +824,50 @@ echo 'After: ', count($context->wait(Time\Duration::fromMicroseconds(100000))), 
         out,
         "Round 1 count: 4\nRound 2 count: 4\nSeen: server0,server1,server2,server3,server4,server5,server6,server7\nAfter: 0\n"
     );
+}
+
+/// The x86_64 revents probe follows the System V convention: the resolved descriptor is
+/// moved into rdi before the poll(2) helper call, on both the ordinary-fd and cast paths.
+#[test]
+fn test_io_poll_x86_64_probe_passes_resolved_fd_in_rdi() {
+    let dir = make_cli_test_dir("elephc_io_poll_x86_poll_revents");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\n$stream = fopen('php://temp', 'r+');\necho __elephc_poll_revents($stream);\n",
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .args(["--php-version=8.6", "--target", "linux-x86_64", "--emit-asm"])
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit linux-x86_64 assembly");
+    assert!(
+        output.status.success(),
+        "cross-target --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("main.s")).expect("expected target assembly output");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let probe = lines
+        .iter()
+        .position(|line| *line == "call __rt_stream_poll_revents")
+        .expect("the revents probe must be emitted");
+    assert_eq!(
+        lines[probe - 1],
+        "mov rdi, rax",
+        "the probe must receive its descriptor in rdi:\n{}",
+        asm
+    );
+    assert!(
+        lines[..probe]
+            .iter()
+            .any(|line| *line == "call __rt_user_wrapper_stream_cast"),
+        "the synthetic-fd cast must be emitted before the probe:\n{}",
+        asm
+    );
+
+    let _ = fs::remove_dir_all(&dir);
 }

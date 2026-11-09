@@ -326,8 +326,8 @@ fn parse_phpt(name: &str, path: &Path) -> Option<Phpt> {
         skip = Some("memory_limit fatal text is not yet php-src-parity".to_string());
     }
     if name == "057.phpt" {
-        // The typed-property write-back raises a TypeError, not an InvalidUrlException, and
-        // user code cannot name Throwable.
+        // The typed-property write-back raises a TypeError, not an InvalidUrlException, so
+        // name the concrete class the fixture should catch.
         source = source.replace("catch (Throwable $e)", "catch (\\TypeError $e)");
     }
     let heap_size = sections.get("INI").and_then(|ini| {

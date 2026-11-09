@@ -1170,6 +1170,11 @@ fclose($m);
 /// under glibc, `'e` under Apple's.
 #[test]
 fn test_stream_filter_iconv_write_keeps_its_options_across_bridge_conversions() {
+    // musl's iconv does not implement glibc's `//TRANSLIT` locale handling; this test
+    // validates the Apple shared-pair restore against glibc and Apple targets.
+    if cfg!(all(target_os = "linux", target_env = "musl")) {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $plain = fopen("php://temp", "r+");
@@ -1201,10 +1206,15 @@ fclose($translit);
 /// transliterating after the plain bridge conversion.
 #[test]
 fn test_stream_filter_iconv_dynamic_name_parses_options() {
+    // musl's iconv lacks `//TRANSLIT` parity; the dynamic split is still covered by the
+    // write-transcode and roundtrip tests on musl.
+    if cfg!(all(target_os = "linux", target_env = "musl")) {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $f = fopen("php://temp", "r+");
-$name = "convert.iconv.UTF-8/ASCII//TRANSLIT";
+$name = "convert.iconv.UTF-8/ASCII//TRANSLIT" . ($argv[0] !== "" ? "" : "x");
 echo stream_filter_append($f, $name, STREAM_FILTER_WRITE) !== false ? "attached|" : "missing|";
 fwrite($f, "caf\u{e9}|");
 echo iconv("UTF-8", "ASCII", "plain"), "|";
@@ -1225,7 +1235,7 @@ fn test_stream_filter_iconv_dynamic_name_write_transcodes() {
     let out = compile_and_run(
         r#"<?php
 $f = fopen("php://temp", "r+");
-$name = "convert.iconv.UTF-8/UTF-16LE";
+$name = "convert.iconv.UTF-8/UTF-16LE" . ($argv[0] !== "" ? "" : "x");
 stream_filter_append($f, $name, STREAM_FILTER_WRITE);
 fwrite($f, "Hi");
 rewind($f);
@@ -1242,12 +1252,12 @@ fclose($f);
 fn test_stream_filter_iconv_dynamic_name_write_then_read_roundtrips() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
-$wname = "convert.iconv.UTF-8/UTF-16LE";
+$wname = "convert.iconv.UTF-8/UTF-16LE" . ($argv[0] !== "" ? "" : "x");
 $w = fopen("ic.bin", "w");
 stream_filter_append($w, $wname, STREAM_FILTER_WRITE);
 fwrite($w, "Hello");
 fclose($w);
-$rname = "convert.iconv.UTF-16LE/UTF-8";
+$rname = "convert.iconv.UTF-16LE/UTF-8" . ($argv[0] !== "" ? "" : "x");
 $r = fopen("ic.bin", "r");
 stream_filter_append($r, $rname, STREAM_FILTER_READ);
 echo fread($r, 64);
@@ -1262,10 +1272,14 @@ fclose($r);
 /// literal filter and reference PHP.
 #[test]
 fn test_stream_filter_iconv_dynamic_name_ignore_option() {
+    // musl's iconv ignores `//IGNORE`; glibc and Apple targets validate the filter semantics.
+    if cfg!(all(target_os = "linux", target_env = "musl")) {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $f = fopen("php://temp", "w+");
-$name = "convert.iconv.UTF-8/ASCII//IGNORE";
+$name = "convert.iconv.UTF-8/ASCII//IGNORE" . ($argv[0] !== "" ? "" : "x");
 echo stream_filter_append($f, $name, STREAM_FILTER_WRITE) !== false ? "attached|" : "missing|";
 fwrite($f, "h\u{e9}llo");
 rewind($f);
@@ -7418,6 +7432,22 @@ echo $n, ":", count($read), ":", fread($read[0], 2);
 "#,
     );
     assert_eq!(out, "1:1:hi");
+}
+
+/// A sub-second timeout with a non-empty except set survives the pselect6 timespec layout.
+#[test]
+fn test_stream_select_timeout_with_except_set() {
+    let out = compile_and_run(
+        r#"<?php
+[$r, $w] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$read = [];
+$write = null;
+$except = [$w];
+$n = stream_select($read, $write, $except, 0, 100000);
+echo $n === 0 ? "ok" : "bad:$n";
+"#,
+    );
+    assert_eq!(out, "ok");
 }
 
 /// Verifies `stream_select()` accepts `null` for a descriptor set, PHP's usual idiom for the

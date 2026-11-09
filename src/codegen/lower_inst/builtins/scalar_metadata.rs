@@ -200,8 +200,8 @@ fn emit_static_gettype_resource(
 
 /// Emits the `gettype()` resource case once `__rt_mixed_unbox` has classified the payload.
 ///
-/// The native resource handle is in the integer result register; its sign bit marks a
-/// resource that has already been closed, which PHP names `resource (closed)`.
+/// The unboxed native resource payload is in `x1`/`rdi`; its sign bit marks a resource
+/// that has already been closed, which PHP names `resource (closed)`.
 fn emit_gettype_resource_case(ctx: &mut FunctionContext<'_>, done: &str) {
     let closed = ctx.next_label("gettype_resource_closed");
     match ctx.emitter.target.arch {
@@ -544,8 +544,8 @@ pub(crate) fn lower_get_debug_type(ctx: &mut FunctionContext<'_>, inst: &Instruc
             super::types::emit_dynamic_object_class_name(ctx, "get_class");
         }
         PhpType::Callable => emit_type_name_result(ctx, b"Closure"),
-        PhpType::Resource(_) => {
-            emit_static_resource_debug_type(ctx, value)?;
+        PhpType::Resource(kind) => {
+            emit_static_resource_debug_type(ctx, value, kind.as_deref())?;
         }
         other => {
             let Some(type_name) = static_debug_type_name(other) else {
@@ -601,6 +601,7 @@ fn emit_tagged_scalar_debug_type(
 fn emit_static_resource_debug_type(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
+    kind: Option<&str>,
 ) -> Result<()> {
     let closed = ctx.next_label("debug_type_resource_closed");
     let stream = ctx.next_label("debug_type_resource_stream");
@@ -609,9 +610,12 @@ fn emit_static_resource_debug_type(
     let done = ctx.next_label("debug_type_resource_done");
     ctx.load_value_to_result(value)?;
     emit_branch_if_closed_resource_payload(ctx.emitter, &closed);
+    // `__rt_resource_type_name` keys stream filters off subtype 9; every other static
+    // resource is resolved by the payload (contexts) or defaults to a plain stream.
+    let subtype = if kind == Some("stream filter") { 9 } else { 0 };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "x3", 0);                 // a bare static resource carries no filter subtype
+            abi::emit_load_int_immediate(ctx.emitter, "x3", subtype);           // pass the static resource's filter subtype
             abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
             ctx.emitter.instruction("cmp x2, #14");                             // "stream-context" is the 14-byte type name
             ctx.emitter.instruction(&format!("b.eq {}", context));              // report the stream-context spelling
@@ -620,7 +624,7 @@ fn emit_static_resource_debug_type(
             ctx.emitter.instruction(&format!("b {}", stream));                  // every other open resource is a stream
         }
         Arch::X86_64 => {
-            abi::emit_load_int_immediate(ctx.emitter, "rcx", 0);                // a bare static resource carries no filter subtype
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", subtype);          // pass the static resource's filter subtype
             abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
             ctx.emitter.instruction("cmp rdx, 14");                             // "stream-context" is the 14-byte type name
             ctx.emitter.instruction(&format!("je {}", context));                // report the stream-context spelling

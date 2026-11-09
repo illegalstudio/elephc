@@ -481,6 +481,9 @@ fn unset_target_invalidation(arg: &Expr) -> Invalidation {
         ExprKind::Variable(name) => Invalidation::Names(HashSet::from([name.clone()])),
         ExprKind::ArrayAccess { array, index } => {
             let mut inv = expr_invalidation(index);
+            if let Some(globals) = globals_subscript_invalidation(arg) {
+                return inv.union(globals);
+            }
             match lvalue_root(arg) {
                 Some(root) => inv.add(root),
                 // No local root (e.g. `unset($obj->list[0])`): the write hits
@@ -500,6 +503,30 @@ fn unset_target_invalidation(arg: &Expr) -> Invalidation {
     }
 }
 
+/// Returns the top-level global a `$GLOBALS[...]` write can change, if the
+/// subscript chain is rooted there.
+///
+/// A literal first key names that global (including a nested
+/// `$GLOBALS['a']['b']` write, which mutates the container in `$a`); a
+/// computed key can name any top-level global, so it invalidates everything.
+/// Returns `None` when the chain is not rooted at `$GLOBALS`.
+fn globals_subscript_invalidation(target: &Expr) -> Option<Invalidation> {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else {
+        return None;
+    };
+    let mut inv = expr_invalidation(index);
+    if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+        return Some(match &index.kind {
+            ExprKind::StringLiteral(key) => {
+                inv.add(key);
+                inv
+            }
+            _ => Invalidation::All,
+        });
+    }
+    Some(inv.union(globals_subscript_invalidation(array)?))
+}
+
 /// Computes the locals written by an assignment target: the lvalue root plus
 /// anything its sub-expressions (indices, objects) can write. Unrecognized
 /// target shapes are unknowable.
@@ -508,6 +535,9 @@ fn assignment_target_invalidation(target: &Expr) -> Invalidation {
         ExprKind::Variable(name) => Invalidation::Names(HashSet::from([name.clone()])),
         ExprKind::ArrayAccess { array, index } => {
             let mut inv = expr_invalidation(index);
+            if let Some(globals) = globals_subscript_invalidation(target) {
+                return inv.union(globals);
+            }
             match lvalue_root(target) {
                 Some(root) => inv.add(root),
                 None => inv = inv.union(expr_invalidation(array)),

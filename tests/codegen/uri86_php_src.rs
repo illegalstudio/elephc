@@ -185,8 +185,7 @@ fn parse_phpt(name: &str, path: &Path) -> Option<Phpt> {
 
     if name.ends_with("build_error_soft_errors_typed_reference_with_base.phpt") {
         // The builder's by-reference write-back raises a TypeError for the typed property,
-        // not an InvalidUrlException. Name the concrete class because the checker does not
-        // expose Throwable in user code.
+        // not an InvalidUrlException. Name the concrete class the fixture should catch.
         source = source.replace("catch (Throwable $e)", "catch (\\TypeError $e)");
     }
     if source.contains("->errors") && source.contains("catch (Throwable $e)") {

@@ -861,3 +861,29 @@ echo $box->value;
         "Cannot assign array to reference held by property Box::$value of type string|unchanged|changed"
     );
 }
+
+/// A `mixed &$out` parameter also binds a typed static property through the same
+/// hidden-temporary write-back, with the same typed-reference guard.
+#[test]
+fn test_typed_static_property_by_ref_writeback_guard() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticBox { public static string $value = "unchanged"; }
+function replaceStaticWithArray(mixed &$out): void { $out = ["a" => 1]; }
+function replaceStaticWithString(mixed &$out): void { $out = "changed"; }
+try {
+    replaceStaticWithArray(StaticBox::$value);
+    echo "unguarded|";
+} catch (TypeError $error) {
+    echo $error->getMessage(), "|";
+}
+echo StaticBox::$value, "|";
+replaceStaticWithString(StaticBox::$value);
+echo StaticBox::$value;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign array to reference held by property StaticBox::$value of type string|unchanged|changed"
+    );
+}

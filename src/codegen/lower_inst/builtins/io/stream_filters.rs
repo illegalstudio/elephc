@@ -132,7 +132,7 @@ fn lower_dynamic_iconv_filter_attach(
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 8);         // reload the stream descriptor
         }
     }
-    emit_iconv_transform_with_runtime_bits(ctx, inst, &from_symbol, &to_symbol, 0, 8);
+    emit_iconv_transform_with_runtime_bits(ctx, inst, &from_symbol, &to_symbol, 0, 8)?;
     store_if_result(ctx, inst)?;
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     match ctx.emitter.target.arch {
@@ -156,13 +156,13 @@ fn emit_iconv_transform_with_runtime_bits(
     to_sym: &str,
     bits_slot: usize,
     fd_slot: usize,
-) {
+) -> Result<()> {
     let write_label = ctx.next_label("iconv_dyn_write");
     let after_label = ctx.next_label("iconv_dyn_mode_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("str x0, [sp, #-16]!");                     // preserve the descriptor across mode evaluation
-            materialize_stream_filter_mode(ctx, inst);
+            materialize_stream_filter_mode(ctx, inst)?;
             ctx.emitter.instruction("mov x9, x0");                              // hold the selected stream-filter mode
             ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the stream descriptor
             ctx.emitter.instruction("cmp x9, #2");                              // test for STREAM_FILTER_WRITE-only mode
@@ -181,7 +181,7 @@ fn emit_iconv_transform_with_runtime_bits(
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
-            materialize_stream_filter_mode(ctx, inst);
+            materialize_stream_filter_mode(ctx, inst)?;
             ctx.emitter.instruction("mov r9, rax");                             // hold the selected stream-filter mode
             abi::emit_pop_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("cmp r9, 2");                               // test for STREAM_FILTER_WRITE-only mode
@@ -199,6 +199,7 @@ fn emit_iconv_transform_with_runtime_bits(
             ctx.emitter.label(&after_label);
         }
     }
+    Ok(())
 }
 
 /// Lowers `stream_filter_append($stream, "zlib.deflate", ...)`.

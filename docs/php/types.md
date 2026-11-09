@@ -472,6 +472,9 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 
 ### Known incompatibilities with PHP
 
+- A conditional null/typed join (`$x = null; if ($c) { $x = 5; }`) is compiled as boxed `mixed` storage so the `null` and the typed value stay distinct; `--strict-locals` rejects the assignment instead. The joined local loses static dispatch.
+- `get_debug_type()` on an anonymous class returns the compiler's synthetic name (`class@anonymous#N`) instead of PHP's `class@anonymous`, `Parent@anonymous`, or `Interface@anonymous` spelling.
+- `get_debug_type()` distinguishes the resource kinds elephc creates (`stream`, `stream-context`, `stream filter`, and `resource (closed)`); there are no `process` or `persistent stream` resources.
 - A guarded `++` or `--` on an incoming `?int &$value` reference raises a runtime storage error on integer overflow, where PHP promotes the value to float. Use `mixed &$value` when the reference must support float promotion.
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 - Dynamic property names accept statically typed strings, integers, and `mixed` values. A statically typed `Stringable` object is still rejected rather than converted through `__toString()` as PHP does.

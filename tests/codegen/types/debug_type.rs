@@ -18,11 +18,18 @@ fn test_get_debug_type_scalars_objects_and_closures() {
     let out = compile_and_run(
         r#"<?php
 class DebugTypeThing {}
+class DebugTypeInvokable {
+    public function run(): void {}
+    public function __invoke(): void {}
+}
 enum DebugTypeSuit { case Hearts; }
 $values = [1, 1.5, "s", true, false, null, [1], ["a" => 1], new DebugTypeThing(), DebugTypeSuit::Hearts, function () {}];
 foreach ($values as $value) {
     echo get_debug_type($value), "|";
 }
+echo get_debug_type([new DebugTypeInvokable(), "run"]), "|";
+echo get_debug_type("strlen"), "|";
+echo get_debug_type(new DebugTypeInvokable()), "|";
 echo \GET_DEBUG_TYPE(42), "|";
 namespace DebugTypeNamespace {
     function name(): string { return get_debug_type(1); }
@@ -34,7 +41,7 @@ namespace {
     );
     assert_eq!(
         out,
-        "int|float|string|bool|bool|null|array|array|DebugTypeThing|DebugTypeSuit|Closure|int|int"
+        "int|float|string|bool|bool|null|array|array|DebugTypeThing|DebugTypeSuit|Closure|array|string|DebugTypeInvokable|int|int"
     );
 }
 

@@ -120,14 +120,19 @@ pub fn unlink_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinRe
 
 /// Resolves libraries needed by a stream filter name.
 ///
-/// A name that is not a literal takes the run-time `convert.iconv.*` arm, which references
-/// `iconv_open`/`iconv`/`iconv_close` whichever branch runs. The arm is emitted at the call
-/// site, so the iconv library has to be linked even though the spec only exists at run time.
+/// A name that is not a literal can still be constant-propagated into one of the three
+/// inline-shape filters, and the emitted run-time iconv arm references `iconv_open` whichever
+/// branch runs. Link all three libraries in that case: the over-link is small and avoids an
+/// unresolved symbol when the AST literal and the propagated value disagree.
 pub fn stream_filter_requirements(
     input: &BuiltinRequirementInput<'_>,
 ) -> Vec<BuiltinRequirement> {
     let Some(ExprKind::StringLiteral(filter)) = input.args.get(1).map(|arg| &arg.kind) else {
-        return vec![BuiltinRequirement::MacOsLibrary("iconv")];
+        return vec![
+            BuiltinRequirement::SystemLibrary("z"),
+            BuiltinRequirement::SystemLibrary("bz2"),
+            BuiltinRequirement::MacOsLibrary("iconv"),
+        ];
     };
     if matches!(filter.as_str(), "zlib.deflate" | "zlib.inflate") {
         vec![BuiltinRequirement::SystemLibrary("z")]
@@ -202,6 +207,18 @@ mod tests {
         assert_eq!(
             stream_filter_requirements(&input(&zlib_filter)),
             vec![BuiltinRequirement::SystemLibrary("z")]
+        );
+        let dynamic_filter = [
+            Expr::new(ExprKind::Null, Span::dummy()),
+            Expr::new(ExprKind::Variable("name".to_string()), Span::dummy()),
+        ];
+        assert_eq!(
+            stream_filter_requirements(&input(&dynamic_filter)),
+            vec![
+                BuiltinRequirement::SystemLibrary("z"),
+                BuiltinRequirement::SystemLibrary("bz2"),
+                BuiltinRequirement::MacOsLibrary("iconv"),
+            ]
         );
     }
 }

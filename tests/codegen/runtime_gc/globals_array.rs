@@ -69,3 +69,72 @@ echo "ok\n";
         out.stderr
     );
 }
+
+/// A call result used as a computed `$GLOBALS` key owns its string, so the store must
+/// release that owner after the lookup copies the name.
+#[test]
+fn test_dynamic_global_call_result_key_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function makeKey(): string { return "call-key"; }
+$GLOBALS[makeKey()] = [1, 2, 3];
+echo count($GLOBALS["call-key"]), ":", $GLOBALS["call-key"][2], "\n";
+unset($GLOBALS["call-key"]);
+echo isset($GLOBALS["call-key"]) ? "set\n" : "gone\n";
+"#,
+    );
+    assert_eq!(out.stdout, "3:3\ngone\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Literal `unset($GLOBALS['name'])` retires strings, arrays, and scalars through the
+/// typed global storage path without leaving a block behind.
+#[test]
+fn test_literal_global_unset_releases_values_cleanly() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$text = str_repeat("x", 32);
+$list = [1, 2, 3];
+$number = 7;
+$before = count($GLOBALS);
+unset($GLOBALS["text"]);
+unset($GLOBALS["list"]);
+unset($GLOBALS["number"]);
+echo isset($text) ? "text-set" : "text-gone", ":";
+echo isset($list) ? "list-set" : "list-gone", ":";
+echo isset($number) ? "number-set" : "number-gone", ":";
+echo count($GLOBALS) < $before ? "count-ok" : "count-bad", "\n";
+"#,
+    );
+    assert_eq!(out.stdout, "text-gone:list-gone:number-gone:count-ok\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// An integer computed key is coerced to the global's string name; store and unset leave
+/// no scratch string or boxed value behind.
+#[test]
+fn test_dynamic_global_integer_key_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$i = 3;
+$GLOBALS[$i] = "v";
+echo $GLOBALS[3], ":", $GLOBALS[$i], "\n";
+unset($GLOBALS[$i]);
+echo isset($GLOBALS[3]) ? "set\n" : "gone\n";
+"#,
+    );
+    assert_eq!(out.stdout, "v:v\ngone\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
