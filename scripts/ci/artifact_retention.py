@@ -7,14 +7,17 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import time
 from urllib.parse import quote
 
-from artifact_retention_policy import (RETENTION, active_source, candidate,
+from artifact_retention_policy import (CI, DEVELOPMENT, PACKAGE, RETENTION, active_source, candidate,
                                        keep_ids, newest, refresh_due, trusted_run)
 from reconcile_development import BRANCH, gh, git
 
 FILE = "artifact-retention.json"
+MAX_RUNS = 20
+MAX_DELETIONS = 500
 
 
 def missing(error):
@@ -98,20 +101,20 @@ class Retention:
 
     def discover(self, state, run_id):
         """Record completed-event IDs and checkpoint scheduled discovery before acting."""
-        pending = set(state["pending"]) | set(state["queues"])
+        pending = dict.fromkeys(state["pending"] + state["queues"])
         if state["latest"]:
-            pending.add(state["latest"]["run_id"])
+            pending[state["latest"]["run_id"]] = None
         if run_id:
-            pending.add(run_id)
+            pending[run_id] = None
         else:
             runs = self.pages(f"actions/runs?created={quote('>=' + state['since'], safe='')}", "workflow_runs")
-            pending.update(run["id"] for run in runs if trusted_run(run, self.repo))
+            pending.update(dict.fromkeys(sorted(run["id"] for run in runs if trusted_run(run, self.repo))))
             state["since"] = iso(self.now - 60)
         # This workflow can later upload refreshed packages after the janitor job
         # finishes. Its creation predates the cursor, so explicitly revisit it.
         if os.environ.get("GITHUB_WORKFLOW") == "Artifact retention":
-            pending.add(int(os.environ["GITHUB_RUN_ID"]))
-        state["pending"] = sorted(pending)
+            pending[int(os.environ["GITHUB_RUN_ID"])] = None
+        state["pending"] = list(pending)
         self.save(state)
 
     def active_runs(self):
@@ -145,13 +148,29 @@ class Retention:
                 if not missing(error):
                     raise
 
+    def preserve_benchmarks(self, run, artifacts):
+        """Commit measurements to the ledger before deleting the daily importer's inputs."""
+        benchmarks = [artifact for artifact in artifacts if artifact["name"] == "benchmark-results"]
+        if not benchmarks:
+            return
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "benchmark"))
+        from archive import preserve
+        for artifact in benchmarks:
+            preserve(self.repo, run, artifact, self.api, self.apply)
+
     def run(self, run_id=None):
         """Select first, persist second, then dispose of completed runs with fresh status checks."""
         history = git("rev-list", "--first-parent", "origin/main").splitlines()
         state = self.load()
         self.discover(state, run_id)
+        selected = set(state["pending"][:MAX_RUNS])
+        if state["latest"]:
+            selected.add(state["latest"]["run_id"])
+        deferred = [identifier for identifier in state["pending"] if identifier not in selected]
         records, candidates = {}, []
         for identifier in state["pending"]:
+            if identifier not in selected:
+                continue
             try:
                 run = self.api(f"actions/runs/{identifier}")
             except subprocess.CalledProcessError as error:
@@ -165,7 +184,12 @@ class Retention:
                 records[identifier] = (run, [], [])
                 continue
             artifacts = self.pages(f"actions/runs/{identifier}/artifacts", "artifacts")
-            jobs = self.pages(f"actions/runs/{identifier}/jobs?filter=latest", "jobs") if artifacts else []
+            needs_jobs = artifacts and run.get("conclusion") == "success" and (
+                run.get("event") == "merge_group" or (
+                    run.get("head_branch") == "main" and run.get("head_sha") in history
+                    and run.get("path") in (CI, DEVELOPMENT, RETENTION)
+                    and any(PACKAGE.fullmatch(a["name"]) for a in artifacts)))
+            jobs = self.pages(f"actions/runs/{identifier}/jobs?filter=latest", "jobs") if needs_jobs else []
             records[identifier] = (run, jobs, artifacts)
             value = candidate(run, jobs, artifacts, self.repo, history)
             if value:
@@ -183,7 +207,9 @@ class Retention:
         self.save(state)
         active = self.active_runs()
         sources = {value for run in active.values() if (value := active_source(run))}
-        pending, queues = [], []
+        pending, queues = list(deferred), []
+        remaining = MAX_DELETIONS
+        partial = False
         for identifier, (run, jobs, artifacts) in records.items():
             # A user can request a rerun after discovery. Never delete inputs from
             # a newer attempt or a run that has become active in the meantime.
@@ -192,15 +218,21 @@ class Retention:
                     or current["run_attempt"] != run["run_attempt"]):
                 pending.append(identifier)
                 continue
-            if run.get("event") == "merge_group":
+            if artifacts and run.get("event") == "merge_group":
                 sources.update(value for reader in self.active_runs().values()
                                if (value := active_source(reader)))
-            exists = self.queue_exists(run) if run.get("event") == "merge_group" else False
+            exists = self.queue_exists(run) if artifacts and run.get("event") == "merge_group" else False
             keep = keep_ids(run, jobs, artifacts, state["latest"], self.repo, history,
                             sources, exists, self.now)
             deleted = [a for a in artifacts if a["id"] not in keep]
+            if len(deleted) > remaining:
+                pending.append(identifier)
+                partial = True
+            deleted = deleted[:remaining]
+            self.preserve_benchmarks(run, deleted)
             for artifact in deleted:
                 self.remove(artifact)
+            remaining -= len(deleted)
             if run.get("event") == "merge_group" and keep:
                 queues.append(identifier)
             if run.get("head_branch") == "main" and run.get("head_sha") not in history:
@@ -208,14 +240,18 @@ class Retention:
             self.summary.append({"run_id": identifier, "delete_count": len(deleted),
                                  "delete_bytes": sum(a["size_in_bytes"] for a in deleted),
                                  "keep_count": sum(a["id"] in keep for a in artifacts)})
-        state["pending"], state["queues"] = pending, queues
+        state["pending"], state["queues"] = list(dict.fromkeys(pending)), queues
         self.save(state)
         latest = state["latest"]
         result = {"apply": self.apply, "latest_sha": latest["sha"] if latest else None,
                   "downloads": {target: f"https://github.com/{self.repo}/actions/runs/"
                                 f"{latest['run_id']}/artifacts/{artifact['id']}"
                                 for target, artifact in latest["artifacts"].items()} if latest else {},
-                  "runs": self.summary, "refresh": []}
+                  "runs": self.summary, "refresh": [],
+                  # Continue only after measurable progress, never spin on active readers.
+                  "continue_cleanup": bool(deferred or partial) and (
+                      remaining < MAX_DELETIONS or bool(selected - set(pending) - set(queues)
+                                                       - ({latest["run_id"]} if latest else set())))}
         if refresh_due(latest, self.now):
             result["refresh"] = [dict(target=target, sha=latest["sha"], **{
                 key: artifact[key] for key in ("id", "name", "digest")})
@@ -234,6 +270,7 @@ def main():
     if os.environ.get("GITHUB_OUTPUT"):
         with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
             output.write("refresh=" + json.dumps(result["refresh"]) + "\n")
+            output.write("continue_cleanup=" + json.dumps(result["continue_cleanup"]) + "\n")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
             output.write("Artifact retention: " + ("applied" if args.apply else "dry run") + ".\n\n")

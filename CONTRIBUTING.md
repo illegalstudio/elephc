@@ -315,6 +315,16 @@ It checkpoints exact artifact IDs in `artifact-retention.json` on the same ledge
 branch before deletion. Old runs finishing late cannot replace a newer main set.
 Scheduled discovery recovers missed completion events. Both ledger writers share
 one concurrency group. A manual run defaults to a read-only deletion preview.
+Each pass inspects at most 20 queued run records plus the retained download and
+deletes at most 500 artifacts. Deferred work stays checkpointed; a successful pass
+that makes progress requests the next pass. Active readers alone do not trigger
+an endless continuation loop. Job inventories are read only when required to
+select a main package set or a successful queue handoff.
+
+Before deleting `benchmark-results` from main CI, the janitor validates and saves
+its measurement JSON to `benchmark-results/<artifact-id>.json` on the ledger
+branch. The daily benchmark importer reads those durable records and any remaining
+Actions artifacts. A failed archive write prevents deletion of the source report.
 
 GitHub still requires an expiry (90 days maximum for this public repository).
 Before the retained set expires, the janitor copies and verifies the original
