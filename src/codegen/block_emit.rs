@@ -2439,7 +2439,12 @@ fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock, entry_safe_poin
         }
         if let Some(mark) = stats_mark {
             if let Some(inst) = ctx.function.instruction(*inst_id) {
-                record_op_stats(op_stats_key(inst), ctx.emitter.instructions_since(mark));
+                let instructions = ctx.emitter.instructions_since(mark);
+                // The sites behind a large average: which function, how big.
+                if instructions >= 4000 {
+                    eprintln!("OPSITE {} {} instructions={instructions}", inst.op.name(), ctx.function.name);
+                }
+                record_op_stats(op_stats_key(inst), instructions);
             }
         }
         // A worker arms this watch around each body; nothing else does, so on every other path
