@@ -179,15 +179,28 @@ fn dev_package_directories(project_root: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Whether the source of `path` spells the declaration of the class `name` ends with.
+/// Whether the source of `path` spells the declaration of the class `name` ends with, inside the
+/// namespace `name` names.
+///
+/// The namespace counts: with `App\` mapped to the project root, the entry `CellTest.php`
+/// declaring `App\Tests\CellTest` is also where PSR-4 places an `App\CellTest`, and rooting that
+/// name loaded the entry a second time ("Duplicate class declaration").
 fn file_declares_class(path: &Path, name: &str) -> bool {
-    let short = name.rsplit('\\').next().unwrap_or(name);
+    let (namespace, short) = name.rsplit_once('\\').unwrap_or(("", name));
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };
     let source = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
     let short = short.to_ascii_lowercase();
-    ["class", "interface", "trait", "enum"].iter().any(|kind| {
+    let namespace = namespace.trim_start_matches('\\').to_ascii_lowercase();
+    let declares_namespace = namespace.is_empty()
+        || source.match_indices(&format!("namespace {namespace}")).any(|(at, matched)| {
+            source[at + matched.len()..]
+                .chars()
+                .find(|c| !c.is_whitespace())
+                .is_some_and(|c| c == ';' || c == '{')
+        });
+    declares_namespace && ["class", "interface", "trait", "enum"].iter().any(|kind| {
         source.match_indices(&format!("{kind} {short}")).any(|(at, matched)| {
             let next = source[at + matched.len()..].chars().next();
             !next.is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -802,6 +815,27 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Verifies a production class is one its PSR-4 file declares in the namespace it names: with
+    /// `App\` mapped to the root, `CellTest.php` holding `App\Tests\CellTest` is no `App\CellTest`.
+    #[test]
+    fn production_classes_are_declared_in_their_own_namespace() {
+        let dir = manifest_test_dir();
+        std::fs::create_dir_all(dir.join("Model")).unwrap();
+        std::fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"./"}}}"#)
+            .unwrap();
+        std::fs::write(dir.join("CellTest.php"), "<?php\nnamespace App\\Tests;\nclass CellTest {}\n")
+            .unwrap();
+        std::fs::write(dir.join("Model/Cell.php"), "<?php\nnamespace App\\Model ;\nclass Cell {}\n")
+            .unwrap();
+        std::fs::write(dir.join("Model/Other.php"), "<?php\nnamespace App\\Model\\Deep;\nclass Other {}\n")
+            .unwrap();
+
+        let root = dir.canonicalize().unwrap();
+        let index = AutoloadIndex::from_project_root(&root);
+        assert_eq!(index.production_classes(&root), vec!["App\\Model\\Cell".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Verifies that manifest contents, rather than a tool-specific filename, select the adapter.
