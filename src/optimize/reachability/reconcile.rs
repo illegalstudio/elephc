@@ -131,10 +131,24 @@ fn retain_class_metadata(
         let key = php_symbol_key(name);
         !declarations.classes.contains_key(&key) || reachability.classes.contains(&key)
     });
+    // Grouped ONCE: `prune_class_methods` used to scan every reachable method for each class,
+    // 4 528 classes times hundreds of thousands of pairs, twice -- 10 s of the Symfony demo's
+    // prune phase, which prunes nothing there.
+    let mut slots_by_class: HashMap<&str, ReachableSlots<'_>> = HashMap::new();
+    for (class, method, is_static) in &reachability.methods {
+        let slots = slots_by_class.entry(class.as_str()).or_default();
+        if *is_static {
+            slots.statics.insert(method.as_str());
+        } else {
+            slots.instance.insert(method.as_str());
+        }
+    }
+    let no_slots = ReachableSlots::default();
     for (name, class_info) in &mut check.classes {
         let key = php_symbol_key(name);
         if declarations.classes.contains_key(&key) {
-            prune_class_methods(&key, class_info, reachability);
+            let slots = slots_by_class.get(key.as_str()).unwrap_or(&no_slots);
+            prune_class_methods(&key, class_info, reachability, slots);
         }
     }
     #[cfg(debug_assertions)]
@@ -246,11 +260,19 @@ fn assert_inherited_vtable_slots_aligned(classes: &crate::fast_hash::FastMap<Str
     }
 }
 
+/// One class's reachable method names, instance and static.
+#[derive(Default)]
+struct ReachableSlots<'a> {
+    instance: HashSet<&'a str>,
+    statics: HashSet<&'a str>,
+}
+
 /// Filters every instance/static method map and rebuilds stable compact vtable slots.
 fn prune_class_methods(
     class_key: &str,
     info: &mut ClassInfo,
     reachability: &Reachability,
+    slots: &ReachableSlots<'_>,
 ) {
     let instance_impl = info.method_impl_classes.clone();
     let instance_declaring = info.method_declaring_classes.clone();
@@ -289,20 +311,8 @@ fn prune_class_methods(
     // A private override can remain as an inherited vtable slot marker even though
     // descendants do not inherit its method metadata. Preserve graph-selected
     // markers independently so compacting a descendant cannot shift later slots.
-    let reachable_instance_slots: HashSet<&str> = reachability
-        .methods
-        .iter()
-        .filter_map(|(class, method, is_static)| {
-            (class == class_key && !*is_static).then_some(method.as_str())
-        })
-        .collect();
-    let reachable_static_slots: HashSet<&str> = reachability
-        .methods
-        .iter()
-        .filter_map(|(class, method, is_static)| {
-            (class == class_key && *is_static).then_some(method.as_str())
-        })
-        .collect();
+    let reachable_instance_slots = &slots.instance;
+    let reachable_static_slots = &slots.statics;
     let keep_any: HashSet<String> = keep_instance.union(&keep_static).cloned().collect();
 
     info.method_decls.retain(|method| {
