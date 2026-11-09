@@ -301,7 +301,9 @@ pub(super) fn interface_info_by_name<'a>(
 
 /// Compares class/interface names using PHP's case-insensitive symbol rules.
 pub(super) fn same_php_type_name(left: &str, right: &str) -> bool {
-    php_symbol_key(left.trim_start_matches('\\')) == php_symbol_key(right.trim_start_matches('\\'))
+    // Compared in place: lowering both names to fresh strings cost two allocations per call,
+    // and property lowering asks this for every candidate class of every access.
+    left.trim_start_matches('\\').eq_ignore_ascii_case(right.trim_start_matches('\\'))
 }
 
 /// Returns true when a concrete value can be boxed into Mixed-shaped property storage.

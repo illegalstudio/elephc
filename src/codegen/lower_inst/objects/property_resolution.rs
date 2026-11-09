@@ -1239,13 +1239,10 @@ pub(super) fn property_interface_receiver(
     let PhpType::Object(interface_name) = ctx.value_php_type(object)?.codegen_repr() else {
         return Ok(None);
     };
+    // Through the shared key index: scanning every interface and lowering each name allocated
+    // once per interface for every property access on an interface-typed receiver.
     let key = php_symbol_key(interface_name.trim_start_matches('\\'));
-    let resolved = ctx
-        .module
-        .interface_infos
-        .keys()
-        .find(|candidate| php_symbol_key(candidate.trim_start_matches('\\')) == key)
-        .cloned();
+    let resolved = ctx.shared.interface_name_for_key(ctx.module, &key);
     if std::env::var("ELEPHC_METADATA_TRACE")
         .ok()
         .is_some_and(|target| target.trim_start_matches('\\') == interface_name.trim_start_matches('\\'))
