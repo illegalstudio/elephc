@@ -1694,3 +1694,28 @@ echo $o->m1();
     eprintln!("VTABLE_WALKS={walks}");
     assert!(walks <= 6, "{walks} vtable walks for six methods");
 }
+
+/// A class that goes live in a later round is walked against the methods already walked, and
+/// only it is: `Late` is instantiated from inside `Base::m1`, a round after `Base` and `Child`.
+/// The incremental walk must still keep `Late`'s overrides (checked against a full walk by
+/// `reach_verify` too).
+#[test]
+fn prune_walks_only_the_new_classes_for_methods_already_walked() {
+    let source = r#"<?php
+class Base { public function m1() { $late = new Late(); echo $late->m3(); return $this->m2(); } public function m2() { return 1; } public function m3() { return 7; } }
+class Child extends Base { public function m1() { return 2; } public function m2() { return 3; } public function m3() { return 8; } }
+class Late extends Base { public function m1() { return 5; } public function m2() { return 6; } public function m3() { return 9; } }
+$o = $argc > 5 ? new Base() : new Child();
+echo $o->m1();
+"#;
+    super::graph::VTABLE_WALKS.with(|walks| walks.set(0));
+    let (program, _) = prune(source);
+    let walks = super::graph::VTABLE_WALKS.with(|walks| walks.get());
+    for class in ["Base", "Child", "Late"] {
+        for method in ["m1", "m2", "m3"] {
+            assert!(has_method(&program, class, method), "{class}::{method}");
+        }
+    }
+    eprintln!("VTABLE_WALKS_LATE={walks}");
+    assert!(walks <= 12, "{walks} vtable walks");
+}

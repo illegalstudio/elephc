@@ -861,26 +861,28 @@ impl GraphState {
     ///   candidates in the same order it did, inserting the same pairs;
     /// * every other test in the loop (`has_vtable_slot`, the behavioral lookup) is untouched.
     ///
-    /// Incremental across rounds: the walk of a method depends only on the method, whether it
-    /// is behavioral, and the live classes, and the live classes only grow. While their number
-    /// is unchanged, a method walked in an earlier round (as behavioral, or still structural) is
-    /// not walked again. On the Symfony demo the full walk was 16.1 s of the 17.7 s this
+    /// Incremental across rounds: the walk of a method against a class depends only on the
+    /// method, whether it is behavioral, and the class, and live classes only ever join. So a
+    /// method walked in an earlier round (as behavioral, or still structural) is walked only
+    /// against the classes that went live since; a new method, or one that became behavioral,
+    /// against all of them. On the Symfony demo the full walk was 16.1 s of the 17.7 s this
     /// fixed point spends seeding methods, every round redoing the previous one.
-    /// `ELEPHC_REACH_VERIFY=1` walks everything again afterwards and panics if that finds more.
+    /// `ELEPHC_REACH_VERIFY=1` (always on in tests) walks everything again afterwards and panics
+    /// if that finds more.
     fn seed_vtable_slot_families(&mut self) {
         let live_classes = classes_with_vtable_slots(&self.reach.classes, &self.vtable_slot_classes);
-        if live_classes.len() != self.vtable_walked.live_classes {
-            self.vtable_walked = VtableWalked {
-                live_classes: live_classes.len(),
-                methods: HashMap::default(),
-            };
-        }
-        self.walk_vtable_slot_families(&live_classes, true);
+        let new_classes: Vec<String> = live_classes
+            .iter()
+            .filter(|class| !self.vtable_walked.classes.contains(*class))
+            .cloned()
+            .collect();
+        self.walk_vtable_slot_families(&live_classes, Some(&new_classes));
+        self.vtable_walked.classes.extend(new_classes);
         if reach_verify() {
             #[cfg(test)]
             let walks = VTABLE_WALKS.with(std::cell::Cell::get);
             let before = (self.reach.methods.len(), self.behavioral.methods.len());
-            self.walk_vtable_slot_families(&live_classes, false);
+            self.walk_vtable_slot_families(&live_classes, None);
             #[cfg(test)]
             VTABLE_WALKS.with(|counter| counter.set(walks));
             assert_eq!(
@@ -891,10 +893,13 @@ impl GraphState {
         }
     }
 
-    /// One walk of [`Self::seed_vtable_slot_families`]; `incremental` skips what an earlier
-    /// round walked against the same live classes.
-    fn walk_vtable_slot_families(&mut self, live_classes: &[String], incremental: bool) {
+    /// One walk of [`Self::seed_vtable_slot_families`]. With `new_classes`, a method an earlier
+    /// round walked is walked against those classes only; without, every method against every
+    /// live class.
+    fn walk_vtable_slot_families(&mut self, live_classes: &[String], new_classes: Option<&[String]>) {
         let descendants_by_root = live_descendants_by_root(&self.index, live_classes);
+        let new_descendants_by_root =
+            new_classes.map(|classes| live_descendants_by_root(&self.index, classes));
         // MOVED out, not cloned: this runs every fixed-point round over every kept method. The
         // pairs found go in afterwards, so the walk still sees the round's snapshot.
         let kept_methods = std::mem::take(&mut self.reach.methods);
@@ -906,23 +911,32 @@ impl GraphState {
             }
             let (class, method, is_static) = visible;
             let behavioral = self.behavioral.methods.contains(visible);
-            if incremental {
-                match self.vtable_walked.methods.get(visible) {
-                    Some(true) => continue,
-                    Some(false) if !behavioral => continue,
-                    _ => {
-                        self.vtable_walked.methods.insert(visible.clone(), behavioral);
+            // Which classes this method is walked against this round.
+            let (classes, by_root) = match (new_classes, &new_descendants_by_root) {
+                (Some(new_classes), Some(new_by_root)) => {
+                    match self.vtable_walked.methods.get(visible) {
+                        Some(walked_behavioral) if *walked_behavioral || !behavioral => {
+                            if new_classes.is_empty() {
+                                continue;
+                            }
+                            (new_classes, new_by_root)
+                        }
+                        _ => {
+                            self.vtable_walked.methods.insert(visible.clone(), behavioral);
+                            (live_classes, &descendants_by_root)
+                        }
                     }
                 }
-            }
-            #[cfg(test)]
-            VTABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
+                _ => (live_classes, &descendants_by_root),
+            };
             let lineage_root = self.vtable_lineage_root(class, method, *is_static);
-            let Some(descendants) = descendants_by_root.get(&lineage_root) else {
+            let Some(descendants) = by_root.get(&lineage_root) else {
                 continue;
             };
+            #[cfg(test)]
+            VTABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
             for position in descendants {
-                fill_method_key(&mut key, &live_classes[*position], method, *is_static);
+                fill_method_key(&mut key, &classes[*position], method, *is_static);
                 if !self.vtable_slots.contains(&key) {
                     continue;
                 }
@@ -1596,8 +1610,8 @@ fn magic_methods_by_visible_class(
 /// What [`GraphState::seed_vtable_slot_families`] walked in earlier rounds.
 #[derive(Default)]
 struct VtableWalked {
-    /// How many live vtable-slot classes the walks were made against.
-    live_classes: usize,
+    /// The live vtable-slot classes the walks were made against.
+    classes: HashSet<String>,
     /// Each walked method, and whether it was behavioral when walked.
     methods: HashMap<(String, String, bool), bool>,
 }
