@@ -290,7 +290,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // or declares an autoloadable class is seen by both, and before `resolve` so its transitive
     // requires join the OPcache script manifest. An unresolvable path is refused in here, at the
     // compile-time position closest to reference's startup fatal.
-    let parsed = opcache_prelude::inject_preload_require(
+    let (parsed, preload_path) = opcache_prelude::inject_preload_require(
         parsed,
         php_version,
         web,
@@ -352,10 +352,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // a computed path: it needs the interpreter, decided before anything is compiled for a
     // closed world.
     if closed_world_mode == crate::closed_world::Mode::Auto {
-        let early = crate::closed_world::project_computed_eval(&ast)
+        let early = crate::closed_world::project_computed_eval(&ast, preload_path.as_deref())
             .map(|site| format!("eval() of a computed string at {site}"))
             .or_else(|| {
-                crate::closed_world::project_computed_include(&ast)
+                crate::closed_world::project_computed_include(&ast, preload_path.as_deref())
                     .map(|site| format!("include of a computed path at {site}"))
             });
         if let Some(reason) = early {
@@ -2414,10 +2414,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         // A class the autoloader brought in from the project itself can evaluate a computed
         // string too; the entry's own were caught before anything was compiled.
         if closed_world_mode == crate::closed_world::Mode::Auto {
-            if let Some(site) = crate::closed_world::project_computed_eval(&ast) {
+            if let Some(site) = crate::closed_world::project_computed_eval(&ast, preload_path.as_deref()) {
                 reasons.push(format!("eval() of a computed string in the project's code at {site}"));
             }
-            if let Some(site) = crate::closed_world::project_computed_include(&ast) {
+            if let Some(site) = crate::closed_world::project_computed_include(&ast, preload_path.as_deref()) {
                 reasons.push(format!("include of a computed path in the project's code at {site}"));
             }
         }

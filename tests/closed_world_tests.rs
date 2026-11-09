@@ -266,9 +266,8 @@ fn default_build_links_the_interpreter_for_the_projects_computed_include_only() 
     assert_eq!(text(&run(&dir).stdout), "42\n");
     assert!(!links_interpreter(&dir), "a dependency's computed include keeps the build closed");
 
-    // A path the compiler folds is no computed one, `dirname()` included: Symfony's
-    // `config/preload.php` requires `dirname(__DIR__).'/var/cache/prod/…preload.php'` under an
-    // `if`, and reading that call as computed linked the interpreter into every Symfony build.
+    // A path the compiler folds is no computed one, `dirname()` included (`bin/console` requires
+    // `dirname(__DIR__).'/vendor/autoload_runtime.php'`).
     fs::create_dir_all(dir.join("conf")).unwrap();
     fs::write(dir.join("conf/data.php"), "<?php\nreturn 7;\n").unwrap();
     fs::write(
@@ -281,6 +280,45 @@ fn default_build_links_the_interpreter_for_the_projects_computed_include_only() 
     assert!(!text(&output.stderr).contains("note: the interpreter"), "{}", text(&output.stderr));
     assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
     assert!(!links_interpreter(&dir), "a folded dirname() path keeps the build closed");
+}
+
+/// What `opcache.preload` brings in is the framework's generated code, not the project's: Symfony's
+/// dumped container loads its factories with `require $this->containerDir.'/'.$file`, which the
+/// closed world answers from the units it compiled for the preload. Counted as the project's own
+/// computed include, it linked the interpreter into every Symfony build.
+#[test]
+fn default_build_stays_closed_for_a_computed_include_the_preload_brings_in() {
+    let dir = make_test_dir("cw_preload_include");
+    fs::create_dir_all(dir.join("cache")).unwrap();
+    fs::write(
+        dir.join("cache/Container.php"),
+        "<?php\nclass Container {\n    public string $dir = __DIR__;\n    public function load(string $file) { return require $this->dir . '/' . $file; }\n}\n",
+    )
+    .unwrap();
+    fs::write(dir.join("cache/factory.php"), "<?php\nreturn 'factory';\n").unwrap();
+    fs::write(
+        dir.join("preload.php"),
+        "<?php\nrequire __DIR__ . '/cache/Container.php';\nopcache_compile_file(__DIR__ . '/cache/factory.php');\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\n$c = new Container();\necho $c->load($argc > 5 ? 'none.php' : 'factory.php'), \"\\n\";\n",
+    )
+    .unwrap();
+    let preload = format!("opcache.preload={}", dir.join("preload.php").display());
+    let output = compile(&dir, &["--ini", "opcache.enable_cli=1", "--ini", &preload]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert!(!text(&output.stderr).contains("note: the interpreter"), "{}", text(&output.stderr));
+    assert!(!links_interpreter(&dir), "the preload's computed include linked the interpreter");
+    let php = Command::new("php")
+        .args(["-d", "display_errors=stderr", "-d", "opcache.enable_cli=1", "-d", &preload])
+        .arg(dir.join("main.php"))
+        .current_dir(&dir)
+        .output()
+        .expect("php must be installed to pin the reference behaviour");
+    assert_eq!(text(&php.stdout), "factory\n", "{}", text(&php.stderr));
+    assert_eq!(text(&run(&dir).stdout), "factory\n");
 }
 
 const PRELOAD: &str = r#"<?php

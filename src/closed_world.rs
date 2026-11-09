@@ -78,9 +78,13 @@ fn is_dependency_source(path: &str) -> bool {
 /// A dependency's computed eval (Symfony's VarExporter, a proxy generator) does not count: in a
 /// closed world it raises php's `Error`, which those libraries never reach on the paths an
 /// application runs. The project's own one does, so it keeps the interpreter.
-pub fn project_computed_eval(program: &[crate::parser::ast::Stmt]) -> Option<String> {
+pub fn project_computed_eval(
+    program: &[crate::parser::ast::Stmt],
+    preload: Option<&str>,
+) -> Option<String> {
     use crate::parser::ast::visit::{walk_nodes, Node};
     use crate::parser::ast::ExprKind;
+    let preloaded = preloaded_sources(program, preload);
     let mut found = None;
     walk_nodes(program, &mut |node| {
         if found.is_some() {
@@ -94,7 +98,7 @@ pub fn project_computed_eval(program: &[crate::parser::ast::Stmt]) -> Option<Str
             return;
         }
         let path = expr.span.source_path();
-        if path.as_deref().is_some_and(is_dependency_source) {
+        if path.as_deref().is_some_and(|path| is_dependency_source(path) || is_preloaded_source(path, &preloaded)) {
             return;
         }
         found = Some(format!("{}:{}", path.unwrap_or_else(|| "<entry>".to_string()), expr.span.source_line()));
@@ -109,16 +113,20 @@ pub fn project_computed_eval(program: &[crate::parser::ast::Stmt]) -> Option<Str
 /// (data files, the preload's, literal paths). A dependency's computed include (a framework's
 /// cache or configuration loader) reaches those; the project's own one can reach any file, so it
 /// keeps the interpreter, as a computed `eval()` does.
-pub fn project_computed_include(program: &[crate::parser::ast::Stmt]) -> Option<String> {
+pub fn project_computed_include(
+    program: &[crate::parser::ast::Stmt],
+    preload: Option<&str>,
+) -> Option<String> {
     use crate::parser::ast::visit::{walk_nodes, Node};
     use crate::parser::ast::{ExprKind, StmtKind};
+    let preloaded = preloaded_sources(program, preload);
     let mut found = None;
     let mut consider = |path: &crate::parser::ast::Expr, span: crate::span::Span| {
         if found.is_some() || crate::resolver::include_path_is_static(path) {
             return;
         }
         let source = span.source_path();
-        if source.as_deref().is_some_and(is_dependency_source) {
+        if source.as_deref().is_some_and(|path| is_dependency_source(path) || is_preloaded_source(path, &preloaded)) {
             return;
         }
         found = Some(format!("{}:{}", source.unwrap_or_else(|| "<entry>".to_string()), span.source_line()));
@@ -142,6 +150,48 @@ pub fn project_computed_include(program: &[crate::parser::ast::Stmt]) -> Option<
         }
     });
     found
+}
+
+/// The files the `opcache.preload` file brought in: itself and every file it includes, however
+/// deep.
+///
+/// The preload is what the framework generated at deploy time (Symfony's dumped container and
+/// its factories, `require $this->containerDir.'/'.$file`), not the application's own code, and
+/// the closed world answers its includes from the units it compiled for the preload. A computed
+/// include there linked the interpreter into every Symfony build. Collected from the include
+/// guards and marks under the preload's own: the resolver hoists declarations out of them, so the
+/// files, not the statements' positions, say where code came from.
+fn preloaded_sources(
+    program: &[crate::parser::ast::Stmt],
+    preload: Option<&str>,
+) -> std::collections::HashSet<std::path::PathBuf> {
+    use crate::parser::ast::StmtKind;
+    let canonical = |path: &std::path::Path| crate::source::canonical(path).unwrap_or_else(|_| path.to_path_buf());
+    let mut sources = std::collections::HashSet::new();
+    let Some(preload) = preload.map(|path| canonical(std::path::Path::new(path))) else {
+        return sources;
+    };
+    crate::parser::ast::visit::walk_stmts(program, &mut |stmt| {
+        let StmtKind::IncludeOnceGuard { source_path, body, .. } = &stmt.kind else { return };
+        if canonical(source_path) != preload {
+            return;
+        }
+        crate::parser::ast::visit::walk_stmts(body, &mut |inner| {
+            if let StmtKind::IncludeOnceGuard { source_path, .. } | StmtKind::IncludeOnceMark { source_path } =
+                &inner.kind
+            {
+                sources.insert(canonical(source_path));
+            }
+        });
+    });
+    sources.insert(preload);
+    sources
+}
+
+/// Whether a site's source file is one of `preloaded`.
+fn is_preloaded_source(path: &str, preloaded: &std::collections::HashSet<std::path::PathBuf>) -> bool {
+    !preloaded.is_empty()
+        && preloaded.contains(&crate::source::canonical(path).unwrap_or_else(|_| path.into()))
 }
 
 /// Re-runs this compiler with the interpreter linked, after saying why; returns only when the
