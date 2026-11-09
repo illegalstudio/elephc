@@ -81,6 +81,11 @@ pub(crate) fn lower_main(
         all_global_var_names.extend(top_level_env.keys().cloned());
         all_global_var_names.extend(candidates.iter().cloned());
     }
+    if crate::global_decls::program_reads_globals_array(program) {
+        // The bare superglobal materializes every top-level binding, so each one must live in
+        // program-global storage even when no body declares it with `global`.
+        all_global_var_names.extend(top_level_env.keys().cloned());
+    }
     for name in &all_global_var_names {
         module.data.intern_global_name(name);
     }

@@ -71,6 +71,15 @@ fn global_store_owns_persisted_string(ctx: &FunctionContext<'_>, value: ValueId,
 /// Length of PHP's undefined-global warning prefix emitted by dynamic `$GLOBALS` reads.
 const UNDEFINED_GLOBAL_PREFIX_LEN: usize = "Warning: Undefined global variable $".len();
 
+/// Lowers the bare `$GLOBALS` materialization into the runtime hash builder.
+pub(super) fn lower_load_globals_array(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    abi::emit_call_label(ctx.emitter, "__rt_globals_materialize");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a `$GLOBALS[$name]` read through the program's runtime global-name table.
 ///
 /// The lookup returns the address of the global's Mixed storage word, or zero when the name

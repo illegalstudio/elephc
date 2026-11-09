@@ -329,6 +329,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayHashUnion => arrays::lower_array_hash_union(ctx, &inst),
         Op::ArrayToHash => arrays::lower_array_to_hash(ctx, &inst),
         Op::HashNew => hashes::lower_hash_new(ctx, &inst),
+        Op::LoadGlobalsArray => globals_constants::lower_load_globals_array(ctx, &inst),
         Op::HashLen => hashes::lower_hash_len(ctx, &inst),
         Op::HashGet => hashes::lower_hash_get(ctx, &inst, true),
         Op::HashGetForWrite => hashes::lower_hash_get_for_write(ctx, &inst),

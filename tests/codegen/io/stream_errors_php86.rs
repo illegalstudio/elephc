@@ -440,16 +440,10 @@ fclose($stream);
 /// emitting a program that reads an uninitialized slot.
 #[test]
 fn test_unsupported_globals_shapes_are_rejected_php86() {
-    let cases = [
-        (
-            "<?php $x = 1; var_dump(count($GLOBALS));",
-            "The $GLOBALS array itself is not supported yet",
-        ),
-        (
-            "<?php $x = 1; $GLOBALS[] = 9;",
-            "Cannot append to $GLOBALS",
-        ),
-    ];
+    let cases = [(
+        "<?php $x = 1; $GLOBALS[] = 9;",
+        "Cannot append to $GLOBALS",
+    )];
     for (source, expected) in cases {
         let payload = std::panic::catch_unwind(|| run86(source))
             .expect_err("unsupported $GLOBALS shape compiled successfully");
@@ -463,6 +457,31 @@ fn test_unsupported_globals_shapes_are_rejected_php86() {
             "expected {expected:?}, got: {message}"
         );
     }
+}
+
+/// Bare `$GLOBALS` materializes every initialized program global as an associative array
+/// whose values are the current global cells. Ordering follows the compiler's name table,
+/// so the fixture checks the entries rather than PHP's insertion order.
+#[test]
+fn test_globals_materialize_php86() {
+    let out = run86(
+        r#"<?php
+$a = 1;
+$b = "two";
+$GLOBALS['c'] = [3, 4];
+function show(): void {
+    echo count($GLOBALS), "\n";
+    foreach ($GLOBALS as $name => $value) {
+        if ($name === "argc" || $name === "argv") {
+            continue;
+        }
+        echo $name, "=", is_array($value) ? implode(",", $value) : $value, "\n";
+    }
+}
+show();
+"#,
+    );
+    assert_eq!(out, "5\na=1\nb=two\nc=3,4\n");
 }
 
 /// A `Silent` context with `error_store = All` reports the excess read through the

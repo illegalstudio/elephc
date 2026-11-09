@@ -441,6 +441,77 @@ fn collect_in_expr(expr: &Expr, names: &mut HashSet<String>) {
     }
 }
 
+/// Returns whether the program reads the bare `$GLOBALS` superglobal anywhere.
+///
+/// A `$GLOBALS[...]` receiver is not a bare read: the two walks below rewrite every array
+/// receiver to a sentinel before the second walk looks for the real name, so a program that
+/// only indexes `$GLOBALS` keeps its literal-key storage profile.
+pub(crate) fn program_reads_globals_array(program: &[Stmt]) -> bool {
+    use std::cell::Cell;
+
+    use crate::magic_constants::walker::{walk_program, Pass};
+    use crate::parser::ast::{Expr, ExprKind, MagicConstant};
+    use crate::span::Span;
+
+    /// Replaces `$GLOBALS[...]` receivers with a sentinel so the detection walk cannot mistake
+    /// an indexed access for a bare read.
+    struct MaskIndexedGlobals;
+
+    impl Pass for MaskIndexedGlobals {
+        /// Leaves magic constants untouched; this pass only masks array receivers.
+        fn transform_magic(&self, _span: Span, magic: MagicConstant) -> ExprKind {
+            ExprKind::MagicConstant(magic)
+        }
+
+        /// Rewrites a `$GLOBALS` array receiver to an impossible variable name.
+        fn transform_expr(&self, expr: Expr) -> Expr {
+            let span = expr.span;
+            match expr.kind {
+                ExprKind::ArrayAccess { array, index }
+                    if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") =>
+                {
+                    Expr::new(
+                        ExprKind::ArrayAccess {
+                            array: Box::new(Expr::new(
+                                ExprKind::Variable("\u{1}GLOBALS".to_string()),
+                                array.span,
+                            )),
+                            index,
+                        },
+                        span,
+                    )
+                }
+                kind => Expr::new(kind, span),
+            }
+        }
+    }
+
+    /// Records any remaining `$GLOBALS` variable expression.
+    struct DetectBareGlobals {
+        found: Cell<bool>,
+    }
+
+    impl Pass for DetectBareGlobals {
+        /// Leaves magic constants untouched; this pass only looks for the superglobal name.
+        fn transform_magic(&self, _span: Span, magic: MagicConstant) -> ExprKind {
+            ExprKind::MagicConstant(magic)
+        }
+
+        /// Marks the program when the bare superglobal survives the masking pass.
+        fn transform_expr(&self, expr: Expr) -> Expr {
+            if matches!(&expr.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                self.found.set(true);
+            }
+            expr
+        }
+    }
+
+    let masked = walk_program(program.to_vec(), &mut MaskIndexedGlobals);
+    let mut probe = DetectBareGlobals { found: Cell::new(false) };
+    let _ = walk_program(masked, &mut probe);
+    probe.found.get()
+}
+
 /// Returns the literal global-name candidates when the program accesses `$GLOBALS` through a
 /// runtime key, or `None` when every access uses a literal key.
 ///

@@ -974,6 +974,8 @@ pub enum Op {
     WriteStrStdout,
     ArrayNew,
     HashNew,
+    /// Materializes the program's initialized globals as an associative Mixed-value hash.
+    LoadGlobalsArray,
     ArrayLen,
     HashLen,
     ArrayGet,
@@ -1421,6 +1423,7 @@ impl Op {
             | GeneratorNew => {
                 E::ALLOC_HEAP
             }
+            LoadGlobalsArray => E::READS_GLOBAL | E::ALLOC_HEAP | E::REFCOUNT_OP,
             ClosureNew => E::READS_LOCAL | E::WRITES_LOCAL
                 | E::READS_HEAP | E::WRITES_HEAP | E::READS_GLOBAL
                 | E::WRITES_GLOBAL | E::ALLOC_HEAP | E::MAY_THROW | E::REFCOUNT_OP,
@@ -1814,6 +1817,7 @@ impl Op {
             WriteStrStdout => "write_str_stdout",
             ArrayNew => "array_new",
             HashNew => "hash_new",
+            LoadGlobalsArray => "load_globals_array",
             ArrayLen => "array_len",
             HashLen => "hash_len",
             ArrayGet => "array_get",

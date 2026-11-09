@@ -139,11 +139,14 @@ string literals in the program. A direct read of an unset global warns
 
 Nested container writes (`$GLOBALS['a']['b'] = 1`) update the top-level array and
 autovivify a missing global. Appending to `$GLOBALS` with `$GLOBALS[] = ...` is
-rejected with PHP's `Cannot append to $GLOBALS` diagnostic, and enumerating
-`$GLOBALS` as an array is not supported yet. A global whose name is built entirely
-from runtime bytes with no identifier-shaped literal or top-level occurrence cannot
-be created; declare it with `global` or mention it in a literal when that shape is
-needed.
+rejected with PHP's `Cannot append to $GLOBALS` diagnostic. A bare `$GLOBALS`
+materializes an associative snapshot of every initialized program global, so
+`count($GLOBALS)` and `foreach ($GLOBALS as $name => $value)` work; its iteration
+order follows the compiler's global name table rather than PHP's insertion order,
+and writes through the snapshot do not publish back. A global whose name is built
+entirely from runtime bytes with no identifier-shaped literal or top-level
+occurrence cannot be created; declare it with `global` or mention it in a literal
+when that shape is needed.
 
 ## PHP version surface
 

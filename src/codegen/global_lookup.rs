@@ -10,6 +10,7 @@
 //!   programs using literal `$GLOBALS['name']` keep direct symbol access and pay nothing.
 //! - Entries use a 24-byte stride: name pointer, name byte length, global storage pointer.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::data_section::{DataSection, DataWord};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -30,7 +31,10 @@ pub(crate) fn module_uses_dynamic_globals(module: &Module) -> bool {
             function
                 .instructions
                 .iter()
-                .any(|inst| matches!(inst.op, Op::LoadGlobalDynamic | Op::StoreGlobalDynamic))
+                .any(|inst| matches!(
+                    inst.op,
+                    Op::LoadGlobalDynamic | Op::StoreGlobalDynamic | Op::LoadGlobalsArray
+                ))
         })
 }
 
@@ -65,8 +69,10 @@ pub(crate) fn emit_dynamic_global_lookup(
 
     if emitter.target.arch == Arch::X86_64 {
         emit_x86_64_helper(emitter);
+        emit_x86_64_materialize(emitter);
     } else {
         emit_aarch64_helper(emitter);
+        emit_aarch64_materialize(emitter);
     }
 }
 
@@ -144,4 +150,120 @@ fn emit_x86_64_helper(emitter: &mut Emitter) {
     emitter.label("__rt_global_lookup_miss_x86");
     emitter.instruction("xor eax, eax");                                        // unknown names have no program storage
     emitter.instruction("ret");                                                 // return to the caller
+}
+
+
+/// Emits the ARM64 bare-`$GLOBALS` hash builder.
+///
+/// The result is a fresh hash whose string keys are the program-global names and whose values
+/// are the boxed Mixed cells currently stored in each initialized global slot. Uninitialized
+/// slots (a zero cell or a zero boxed pointer) are omitted, matching PHP's `$GLOBALS`.
+fn emit_aarch64_materialize(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: globals materialize ---");
+    emitter.label_global("__rt_globals_materialize");
+    emitter.instruction("sub sp, sp, #48");                                     // reserve saved callee registers
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and continuation
+    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    emitter.instruction("stp x19, x20, [sp, #0]");                              // preserve the hash and table count
+    emitter.instruction("stp x21, x22, [sp, #16]");                             // preserve the table base and cursor
+    emitter.instruction("mov x0, #8");                                          // seed the result hash with usable capacity
+    emitter.instruction("mov x1, #7");                                          // result entries own boxed Mixed cells
+    abi::emit_call_label(emitter, "__rt_hash_new");
+    emitter.instruction("mov x19, x0");                                         // x19 = result hash
+    abi::emit_symbol_address(emitter, "x9", "_eir_global_lookup_count");
+    emitter.instruction("ldr x20, [x9]");                                       // x20 = number of program-global names
+    abi::emit_symbol_address(emitter, "x21", "_eir_global_lookup_entries");
+    emitter.instruction("mov x22, #0");                                         // start at the first table entry
+    emitter.label("__rt_globals_materialize_loop");
+    emitter.instruction("cmp x22, x20");                                        // visited every program-global name?
+    emitter.instruction("b.hs __rt_globals_materialize_done");                  // all initialized globals are in the hash
+    emitter.instruction("mov x9, #24");                                         // each entry is a 24-byte (name, length, cell) record
+    emitter.instruction("madd x10, x22, x9, x21");                              // address the current table entry
+    emitter.instruction("ldr x11, [x10, #16]");                                 // load the global storage cell address
+    emitter.instruction("cbz x11, __rt_globals_materialize_next");              // skip an uninitialized slot
+    emitter.instruction("ldr x12, [x11]");                                      // load the global's boxed Mixed pointer
+    emitter.instruction("cbz x12, __rt_globals_materialize_next");              // skip a global that was never stored
+    emitter.instruction("mov x0, x12");                                         // retain the global's boxed value for the hash
+    abi::emit_call_label(emitter, "__rt_incref");
+    emitter.instruction("mov x9, #24");                                         // reload the entry after the retain helper
+    emitter.instruction("madd x10, x22, x9, x21");                              // address the current table entry again
+    emitter.instruction("ldr x11, [x10, #16]");                                 // reload the global storage cell address
+    emitter.instruction("ldr x12, [x11]");                                      // reload the boxed Mixed pointer
+    emitter.instruction("mov x0, x19");                                         // pass the result hash
+    emitter.instruction("ldr x1, [x10]");                                       // pass the name pointer
+    emitter.instruction("ldr x2, [x10, #8]");                                   // pass the name byte length
+    emitter.instruction("mov x3, x12");                                         // pass the owned boxed value
+    emitter.instruction("mov x4, #0");                                          // boxed Mixed values use one payload word
+    emitter.instruction("mov x5, #7");                                          // the hash entry owns a boxed Mixed cell
+    abi::emit_call_label(emitter, "__rt_hash_set");
+    emitter.instruction("mov x19, x0");                                         // preserve a possibly relocated hash
+    emitter.label("__rt_globals_materialize_next");
+    emitter.instruction("add x22, x22, #1");                                    // advance to the next program-global name
+    emitter.instruction("b __rt_globals_materialize_loop");                     // continue until every entry is visited
+    emitter.label("__rt_globals_materialize_done");
+    emitter.instruction("mov x0, x19");                                         // return the materialized hash
+    emitter.instruction("ldp x19, x20, [sp, #0]");                              // restore the hash and table count
+    emitter.instruction("ldp x21, x22, [sp, #16]");                             // restore the table base and cursor
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and continuation
+    emitter.instruction("add sp, sp, #48");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return the materialized globals hash
+}
+
+/// Emits the x86_64 bare-`$GLOBALS` hash builder using the System V calling convention.
+fn emit_x86_64_materialize(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: globals materialize ---");
+    emitter.label_global("__rt_globals_materialize");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
+    emitter.instruction("push r12");                                            // preserve the result hash
+    emitter.instruction("push r13");                                            // preserve the table count
+    emitter.instruction("push r14");                                            // preserve the table base
+    emitter.instruction("push r15");                                            // preserve the table cursor
+    emitter.instruction("mov edi, 8");                                          // seed the result hash with usable capacity
+    emitter.instruction("mov esi, 7");                                          // result entries own boxed Mixed cells
+    abi::emit_call_label(emitter, "__rt_hash_new");
+    emitter.instruction("mov r12, rax");                                        // r12 = result hash
+    abi::emit_symbol_address(emitter, "r13", "_eir_global_lookup_count");
+    emitter.instruction("mov r13, QWORD PTR [r13]");                            // r13 = number of program-global names
+    abi::emit_symbol_address(emitter, "r14", "_eir_global_lookup_entries");
+    emitter.instruction("xor r15d, r15d");                                      // start at the first table entry
+    emitter.label("__rt_globals_materialize_loop_x86");
+    emitter.instruction("cmp r15, r13");                                        // visited every program-global name?
+    emitter.instruction("jae __rt_globals_materialize_done_x86");               // all initialized globals are in the hash
+    emitter.instruction("mov r10, r15");                                        // copy the table cursor before scaling
+    emitter.instruction("imul r10, 24");                                        // each entry is a 24-byte record
+    emitter.instruction("add r10, r14");                                        // address the current table entry
+    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // load the global storage cell address
+    emitter.instruction("test r11, r11");                                       // is the slot initialized?
+    emitter.instruction("jz __rt_globals_materialize_next_x86");                // skip an uninitialized slot
+    emitter.instruction("mov rax, QWORD PTR [r11]");                            // load the global's boxed Mixed pointer
+    emitter.instruction("test rax, rax");                                       // was the global ever stored?
+    emitter.instruction("jz __rt_globals_materialize_next_x86");                // skip a global that was never stored
+    abi::emit_call_label(emitter, "__rt_incref");
+    emitter.instruction("mov r10, r15");                                        // reload the table cursor after the retain helper
+    emitter.instruction("imul r10, 24");                                        // each entry is a 24-byte record
+    emitter.instruction("add r10, r14");                                        // address the current table entry again
+    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // reload the global storage cell address
+    emitter.instruction("mov rax, QWORD PTR [r11]");                            // reload the boxed Mixed pointer
+    emitter.instruction("mov rdi, r12");                                        // pass the result hash
+    emitter.instruction("mov rsi, QWORD PTR [r10]");                            // pass the name pointer
+    emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // pass the name byte length
+    emitter.instruction("mov rcx, rax");                                        // pass the owned boxed value
+    emitter.instruction("xor r8d, r8d");                                        // boxed Mixed values use one payload word
+    emitter.instruction("mov r9d, 7");                                          // the hash entry owns a boxed Mixed cell
+    abi::emit_call_label(emitter, "__rt_hash_set");
+    emitter.instruction("mov r12, rax");                                        // preserve a possibly relocated hash
+    emitter.label("__rt_globals_materialize_next_x86");
+    emitter.instruction("inc r15");                                             // advance to the next program-global name
+    emitter.instruction("jmp __rt_globals_materialize_loop_x86");               // continue until every entry is visited
+    emitter.label("__rt_globals_materialize_done_x86");
+    emitter.instruction("mov rax, r12");                                        // return the materialized hash
+    emitter.instruction("pop r15");                                             // restore the table cursor
+    emitter.instruction("pop r14");                                             // restore the table base
+    emitter.instruction("pop r13");                                             // restore the table count
+    emitter.instruction("pop r12");                                             // restore the result hash
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the materialized globals hash
 }
