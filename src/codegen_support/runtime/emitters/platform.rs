@@ -128,6 +128,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stash_connect_host(emitter);
     io::emit_fire_notification(emitter);
     io::emit_user_wrapper_stream_cast(emitter);
+    io::emit_iconv_spec_split(emitter);
     io::emit_stream_filter_register(emitter);
     io::emit_resolve_user_filter_id(emitter);
     io::emit_stream_filter_attach_user(emitter);

@@ -1193,6 +1193,89 @@ fclose($translit);
     assert_eq!(out, format!("{cafe}|plain|plain|{cafe}|{cafe}"));
 }
 
+/// A `convert.iconv` filter name held in a variable splits at run time, keeps its
+/// `//TRANSLIT` option across a bridge conversion, and matches the literal path's bytes.
+///
+/// The bridge call between the two writes is what detects the per-descriptor option restore
+/// on Apple's shared charset pair: without the run-time bits the filter would stop
+/// transliterating after the plain bridge conversion.
+#[test]
+fn test_stream_filter_iconv_dynamic_name_parses_options() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen("php://temp", "r+");
+$name = "convert.iconv.UTF-8/ASCII//TRANSLIT";
+echo stream_filter_append($f, $name, STREAM_FILTER_WRITE) !== false ? "attached|" : "missing|";
+fwrite($f, "caf\u{e9}|");
+echo iconv("UTF-8", "ASCII", "plain"), "|";
+fwrite($f, "caf\u{e9}");
+rewind($f);
+echo stream_get_contents($f);
+fclose($f);
+"#,
+    );
+    let cafe = if cfg!(any(target_os = "macos", target_os = "ios")) { "caf'e" } else { "cafe" };
+    assert_eq!(out, format!("attached|plain|{cafe}|{cafe}"));
+}
+
+/// A `convert.iconv.UTF-8/UTF-16LE` name held in a variable attaches the same streaming
+/// write transcoder as the literal name.
+#[test]
+fn test_stream_filter_iconv_dynamic_name_write_transcodes() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen("php://temp", "r+");
+$name = "convert.iconv.UTF-8/UTF-16LE";
+stream_filter_append($f, $name, STREAM_FILTER_WRITE);
+fwrite($f, "Hi");
+rewind($f);
+echo bin2hex(stream_get_contents($f));
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "48006900");
+}
+
+/// Dynamic read and write filter names roundtrip through UTF-16LE, exercising the attach-time
+/// read transform against the run-time charset buffers.
+#[test]
+fn test_stream_filter_iconv_dynamic_name_write_then_read_roundtrips() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$wname = "convert.iconv.UTF-8/UTF-16LE";
+$w = fopen("ic.bin", "w");
+stream_filter_append($w, $wname, STREAM_FILTER_WRITE);
+fwrite($w, "Hello");
+fclose($w);
+$rname = "convert.iconv.UTF-16LE/UTF-8";
+$r = fopen("ic.bin", "r");
+stream_filter_append($r, $rname, STREAM_FILTER_READ);
+echo fread($r, 64);
+fclose($r);
+"#,
+    );
+    assert_eq!(out, "Hello");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A dynamic `//IGNORE` target drops the character the target charset cannot encode, like the
+/// literal filter and reference PHP.
+#[test]
+fn test_stream_filter_iconv_dynamic_name_ignore_option() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen("php://temp", "w+");
+$name = "convert.iconv.UTF-8/ASCII//IGNORE";
+echo stream_filter_append($f, $name, STREAM_FILTER_WRITE) !== false ? "attached|" : "missing|";
+fwrite($f, "h\u{e9}llo");
+rewind($f);
+echo stream_get_contents($f);
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "attached|hllo");
+}
+
 /// Verifies compiled PHP output for stream filter base64 encode pads correctly.
 #[test]
 fn test_stream_filter_base64_encode_pads_correctly() {

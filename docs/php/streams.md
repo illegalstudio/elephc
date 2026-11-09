@@ -256,7 +256,10 @@ milestones, `$message`, `$message_code`, and `$bytes_max` are deferred.
 
 `zlib.deflate` and `gzcompress()` use system `libz`. `bzip2.compress`,
 `bzip2.decompress`, and `compress.bzip2://` use `libbz2`. `convert.iconv.*`
-uses libc `iconv` and auto-links `-liconv` on macOS.
+uses libc `iconv` and auto-links `-liconv` on macOS. A `convert.iconv.<from>/<to>`
+name held in a variable splits at run time, including the `//TRANSLIT` and
+`//IGNORE` target suffixes; the parsed options drive the same per-descriptor
+restore the literal filter uses on Apple targets.
 
 Compression filter params can be a bare integer or a literal array. `zlib.deflate`
 reads `level` (`-1..9`). `bzip2.compress` reads `blocks` (`1..9`) and `work`

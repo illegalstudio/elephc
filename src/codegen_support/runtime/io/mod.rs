@@ -132,6 +132,7 @@ mod symlink;
 mod tempnam;
 mod path_is_wrapper;
 mod readfile_wrapper;
+mod iconv_spec_split;
 mod user_filter;
 mod user_filter_lifecycle;
 mod user_filter_brigade;
@@ -258,6 +259,7 @@ pub(crate) use stream_set_timeout::emit_stream_set_timeout;
 pub(crate) use streams_ext::emit_streams_ext;
 pub(crate) use symlink::emit_symlink;
 pub(crate) use tempnam::emit_tempnam;
+pub(crate) use iconv_spec_split::{emit_iconv_spec_split, ICONV_SPEC_BUFFER_BYTES};
 pub(crate) use user_filter::{
     emit_apply_user_stream_filter, emit_resolve_user_filter_id,
     emit_stream_filter_attach_user, emit_stream_filter_register,

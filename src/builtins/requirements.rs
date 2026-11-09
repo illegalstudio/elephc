@@ -118,12 +118,16 @@ pub fn unlink_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinRe
     }
 }
 
-/// Resolves libraries needed by a literal stream filter name.
+/// Resolves libraries needed by a stream filter name.
+///
+/// A name that is not a literal takes the run-time `convert.iconv.*` arm, which references
+/// `iconv_open`/`iconv`/`iconv_close` whichever branch runs. The arm is emitted at the call
+/// site, so the iconv library has to be linked even though the spec only exists at run time.
 pub fn stream_filter_requirements(
     input: &BuiltinRequirementInput<'_>,
 ) -> Vec<BuiltinRequirement> {
     let Some(ExprKind::StringLiteral(filter)) = input.args.get(1).map(|arg| &arg.kind) else {
-        return Vec::new();
+        return vec![BuiltinRequirement::MacOsLibrary("iconv")];
     };
     if matches!(filter.as_str(), "zlib.deflate" | "zlib.inflate") {
         vec![BuiltinRequirement::SystemLibrary("z")]
