@@ -119,14 +119,14 @@ echo get_debug_type(true), "|", get_debug_type(null), "|", get_debug_type([1]), 
 echo get_debug_type(new EvalDebugParityBag()), "|", get_debug_type(EvalDebugParityKind::One), "|";
 echo get_debug_type(function () {}), "|", get_debug_type($f), "|";
 fclose($f);
-echo get_debug_type($f), "|", call_user_func("get_debug_type", 42);
+echo get_debug_type($f), "|", gettype($f), "|", call_user_func("get_debug_type", 42);
 ' : '';
 eval($code);
 "#,
     );
     assert_eq!(
         out,
-        "int|float|string|bool|null|array|EvalDebugParityBag|EvalDebugParityKind|Closure|resource (stream)|resource (closed)|int"
+        "int|float|string|bool|null|array|EvalDebugParityBag|EvalDebugParityKind|Closure|resource (stream)|resource (closed)|resource (closed)|int"
     );
 }
 
