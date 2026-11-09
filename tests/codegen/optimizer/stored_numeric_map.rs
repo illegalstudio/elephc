@@ -1409,3 +1409,31 @@ function intDivMap(int $seed): int {
         assert!(!assembly.contains("__rt_array_map_boxed"), "{target}");
     }
 }
+
+/// Every supported target emits the boxed Mixed division helper when a try handler
+/// disables the frame-cell proof.
+#[test]
+fn test_mixed_division_emits_all_supported_targets() {
+    let source = r#"<?php
+#[Export]
+function mixedDiv(int $seed): int {
+    $a = $seed + 5;
+    $b = $seed + 2;
+    try {
+        return (int)($a / $b);
+    } catch (DivisionByZeroError $e) {
+        return 0;
+    }
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_target_assembly(source, target);
+        assert!(assembly.contains("__rt_mixed_numeric_div"), "{target}");
+    }
+}

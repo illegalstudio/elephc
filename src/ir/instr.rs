@@ -547,6 +547,7 @@ pub enum MixedNumericOp {
     Add,
     Sub,
     Mul,
+    Div,
     Pow,
 }
 
@@ -644,6 +645,7 @@ impl MixedNumericOp {
             MixedNumericOp::Add => "add",
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
+            MixedNumericOp::Div => "div",
             MixedNumericOp::Pow => "pow",
         }
     }

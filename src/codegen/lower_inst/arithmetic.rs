@@ -729,6 +729,27 @@ pub(super) fn lower_mixed_numeric_binop(
         }
     }
     abi::emit_call_label(ctx.emitter, mixed_numeric_helper(op));
+    if op == MixedNumericOp::Div {
+        let nonzero = ctx.next_label("mixed_div_nonzero");
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbnz x0, {nonzero}"));        // a null result is the zero-divisor sentinel
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("test rax, rax");                       // did the helper return the null error sentinel?
+                ctx.emitter.instruction(&format!("jnz {nonzero}"));             // a real boxed result continues normally
+            }
+        }
+        if left_box_temp {
+            decref_mixed_temp_at(ctx, 16);                                     // release the boxed left operand before throwing
+        }
+        if right_box_temp {
+            decref_mixed_temp_at(ctx, 0);                                      // release the boxed right operand before throwing
+        }
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        super::exceptions::emit_division_by_zero_error(ctx, DIVISION_BY_ZERO_MESSAGE);
+        ctx.emitter.label(&nonzero);
+    }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     if left_box_temp {
         decref_mixed_temp_at(ctx, 32);
@@ -813,6 +834,7 @@ fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
         MixedNumericOp::Add => "__rt_mixed_numeric_add",
         MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
+        MixedNumericOp::Div => "__rt_mixed_numeric_div",
         MixedNumericOp::Pow => "__rt_mixed_numeric_pow",
     }
 }

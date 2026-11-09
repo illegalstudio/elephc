@@ -2029,6 +2029,20 @@ foreach ($mapped as $v) { var_dump($v); }
     assert_eq!(out, "float(0.5)\nint(1)\nfloat(1.5)\nint(2)\n");
 }
 
+/// A Mixed divisor keeps PHP's exact per-element int/float division result through the
+/// boxed Mixed division helper.
+#[test]
+fn test_array_map_mixed_divisor_preserves_int_and_float() {
+    let out = compile_and_run(
+        r#"<?php
+$divisor = $argc + 1;
+$mapped = array_map(fn($v) => $v / $divisor, [1, 2, 3, 4]);
+foreach ($mapped as $v) { var_dump($v); }
+"#,
+    );
+    assert_eq!(out, "float(0.5)\nint(1)\nfloat(1.5)\nint(2)\n");
+}
+
 /// Verifies a callback returning an ARRAY — also outside the narrowable set — survives the return
 /// boundary and can be indexed twice.
 #[test]

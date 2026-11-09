@@ -135,10 +135,9 @@ impl Checker {
                         || lt == PhpType::Str
                         || rt == PhpType::Str
                     {
-                        // A Mixed operand keeps the established float-division path: the
-                        // compiler does not yet have a Mixed `/` helper that preserves an
-                        // exact integer quotient at run time.
-                        Ok(PhpType::Float)
+                        // Mixed/string operands use the boxed division helper, which
+                        // preserves PHP's run-time exact-int-or-float result.
+                        Ok(PhpType::Mixed)
                     } else if let Some(ty) = checked_literal_int_division_type(left, right) {
                         Ok(ty)
                     } else {

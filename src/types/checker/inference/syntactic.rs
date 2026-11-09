@@ -554,8 +554,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             BinOp::Div => {
                 let lt = infer_expr_type_syntactic(left);
                 let rt = infer_expr_type_syntactic(right);
-                if lt == PhpType::Float || rt == PhpType::Float || lt == PhpType::Mixed || rt == PhpType::Mixed {
+                if lt == PhpType::Float || rt == PhpType::Float {
                     PhpType::Float
+                } else if lt == PhpType::Mixed || rt == PhpType::Mixed {
+                    PhpType::Mixed
                 } else if let Some(ty) = checked_literal_int_division_type(left, right) {
                     ty
                 } else {

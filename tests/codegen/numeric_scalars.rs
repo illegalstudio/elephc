@@ -86,6 +86,72 @@ try { $a / 0; } catch (DivisionByZeroError $e) { echo "zero:", $e->getMessage(),
     );
 }
 
+/// Mixed operands to `/` preserve PHP's exact-int-or-float result at run time,
+/// including numeric strings, null, bool, zero divisors and INT_MIN / -1.
+#[test]
+fn test_mixed_division_preserves_php_exactness() {
+    let out = compile_and_run(
+        r#"<?php
+function div($a, $b) { return $a / $b; }
+var_dump(div(6, 3));
+var_dump(div(7, 2));
+var_dump(div(PHP_INT_MIN, -1));
+var_dump(div(PHP_INT_MIN, 1));
+var_dump(div(6.0, 3));
+var_dump(div("6", 3));
+var_dump(div("6.0", 3));
+var_dump(div(null, 2));
+var_dump(div(true, 2));
+try { div(1, 0); } catch (DivisionByZeroError $e) { echo "zero:", $e->getMessage(), "\n"; }
+try { div(1, 0.0); } catch (DivisionByZeroError $e) { echo "fzero:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(2)\nfloat(3.5)\nfloat(9.223372036854776E+18)\n\
+         int(-9223372036854775808)\nfloat(2)\nint(2)\nfloat(2)\nint(0)\nfloat(0.5)\n\
+         zero:Division by zero\nfzero:Division by zero\n"
+    );
+}
+
+/// The Mixed division helper releases both operand boxes on success and on the
+/// zero-divisor throw path.
+#[test]
+fn test_mixed_division_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function div($a, $b) { return $a / $b; }
+$a = $argc + 5;
+$b = $argc + 2;
+$r = div($a, $b);
+echo $r, "|", gettype($r), "\n";
+try { div($a, 0); } catch (DivisionByZeroError $e) { echo "zero\n"; }
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "2|integer\nzero\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
+/// Mixed division produces the same output with the EIR optimizer on and off.
+#[test]
+fn test_mixed_division_ir_opt_parity() {
+    let source = r#"<?php
+function div($a, $b) { return $a / $b; }
+$a = $argc + 5;
+$b = $argc + 2;
+$sum = 0;
+for ($i = 0; $i < 3; $i++) { $sum += div($a, $b); }
+echo $sum, "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "6\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "6\n");
+}
+
 /// Verifies that float division (7.5 / 2.5) produces 3.
 #[test]
 fn test_float_division() {
@@ -553,5 +619,172 @@ foreach ([$h->big, $h->eps, $h->flat, $h->neg] as $v) { var_dump($v); }
     assert_eq!(
         out,
         "Holder Object\n(\n    [big] => 1.0E+17\n    [eps] => 0.3\n    [flat] => 1.0E+15\n    [neg] => -0\n)\nfloat(1.0E+17)\nfloat(0.30000000000000004)\nfloat(1000000000000000)\nfloat(-0)\n"
+    );
+}
+
+/// Compiles and runs one fixture through the CLI with an explicit EIR optimizer mode.
+fn run_with_ir_opt(source: &str, mode: &str) -> String {
+    let dir = make_cli_test_dir("elephc_mixed_division_ir_opt");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, source).expect("write mixed division fixture");
+    let compiled = elephc_cli_command(&dir)
+        .arg(mode)
+        .arg(&php_path)
+        .output()
+        .expect("compile mixed division fixture");
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let output = std::process::Command::new(dir.join("main"))
+        .output()
+        .expect("run mixed division fixture");
+    let _ = fs::remove_dir_all(dir);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("mixed division output is UTF-8")
+}
+
+/// Emits target assembly for one fixture, using staticlib output for every target.
+fn emit_target_assembly(source: &str, target: &str) -> String {
+    let dir = make_cli_test_dir("elephc_mixed_division_targets");
+    let path = dir.join("main.php");
+    fs::write(&path, source).expect("write mixed division target fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["--emit", "staticlib", "--emit-asm", "--target", target])
+        .arg(&path)
+        .output()
+        .expect("run elephc --emit-asm");
+    assert!(
+        output.status.success(),
+        "emit-asm for {target} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let assembly = fs::read_to_string(path.with_extension("s"))
+        .expect("read mixed division target assembly");
+    let _ = fs::remove_dir_all(dir);
+    assembly
+}
+
+/// A proven numeric loop keeps the quotient and accumulator in frame cells, so every
+/// supported target skips the boxed Mixed division helper entirely.
+#[test]
+fn test_mixed_division_cell_path_skips_heap_helper_on_all_targets() {
+    let source = r#"<?php
+#[Export]
+function mixedDivLoop(int $seed): int {
+    $a = $seed + 6;
+    $b = $seed + 2;
+    $sum = 0;
+    for ($i = 0; $i < 2; $i++) { $sum += $a / $b; }
+    return (int)$sum;
+}
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let assembly = emit_target_assembly(source, target);
+        assert!(!assembly.contains("__rt_mixed_numeric_div"), "{target}\n{assembly}");
+        assert!(assembly.contains("stack_numeric_div"), "{target}\n{assembly}");
+    }
+}
+
+/// A try handler disables the numeric frame proof, so the same division falls back to the
+/// boxed helper and keeps PHP's catchable `DivisionByZeroError`.
+#[test]
+fn test_mixed_division_helper_path_survives_try_handlers() {
+    let source = r#"<?php
+#[Export]
+function mixedDivHelper(int $seed): int {
+    $a = $seed + 6;
+    $b = $seed + 2;
+    $sum = 0;
+    try {
+        for ($i = 0; $i < 2; $i++) { $sum += $a / $b; }
+    } catch (DivisionByZeroError $e) {
+        return 0;
+    }
+    return (int)$sum;
+}
+"#;
+    let assembly = emit_target_assembly(source, "linux-aarch64");
+    assert!(assembly.contains("__rt_mixed_numeric_div"), "{assembly}");
+}
+
+/// The frame-cell integer and double paths both raise PHP's catchable
+/// `DivisionByZeroError` for a zero divisor.
+#[test]
+fn test_mixed_division_cell_path_zero_divisors_raise() {
+    let out = compile_and_run(
+        r#"<?php
+function intZero(int $argc): int {
+    $a = $argc + 5;
+    $z = $argc - 1;
+    $sum = 0;
+    for ($i = 0; $i < 3; $i++) { $sum += $a / $z; }
+    return $sum;
+}
+function floatZero(int $argc): int {
+    $a = $argc + 5;
+    $huge = PHP_INT_MAX + $argc;
+    $z = $huge - $huge;
+    $sum = 0;
+    for ($i = 0; $i < 3; $i++) { $sum += $a / $z; }
+    return $sum;
+}
+try { intZero(1); } catch (DivisionByZeroError $e) { echo "int:", $e->getMessage(), "\n"; }
+try { floatZero(1); } catch (DivisionByZeroError $e) { echo "float:", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(out, "int:Division by zero\nfloat:Division by zero\n");
+}
+
+/// The frame-cell division path produces the same values with the EIR optimizer on and off.
+#[test]
+fn test_mixed_division_cell_path_ir_opt_parity() {
+    let source = r#"<?php
+function sumExact(int $argc): int {
+    $a = $argc + 5;
+    $b = $argc + 1;
+    $sum = 0;
+    for ($i = 0; $i < 3; $i++) { $sum += $a / $b; }
+    return $sum;
+}
+echo sumExact(1), "\n";
+"#;
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), "9\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "9\n");
+}
+
+/// The frame-cell division path allocates no heap box for an exact quotient and leaves no
+/// leak behind.
+#[test]
+fn test_mixed_division_cell_path_heap_debug_is_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function sumExact(int $argc): int {
+    $a = $argc + 5;
+    $b = $argc + 1;
+    $sum = 0;
+    for ($i = 0; $i < 3; $i++) { $sum += $a / $b; }
+    return $sum;
+}
+echo sumExact(1), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "9\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
     );
 }

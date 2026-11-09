@@ -244,6 +244,7 @@ arrays::emit_array_product_int(emitter);
     arrays::emit_mixed_free_deep(emitter, features);
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_numeric_binops(emitter);
+arrays::emit_mixed_numeric_div(emitter);
     arrays::emit_int_checked_binops(emitter);
     arrays::emit_int_pow_checked(emitter);
     arrays::emit_mixed_numeric_pow(emitter);

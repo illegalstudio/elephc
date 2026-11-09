@@ -55,7 +55,9 @@ pub(super) fn numeric_binary_result_type(
         return PhpType::Float;
     }
     if matches!(op, BinOp::Div) && (lhs != IrType::I64 || rhs != IrType::I64) {
-        return PhpType::Float;
+        // Mixed/string operands go through the boxed division helper, which preserves
+        // PHP's run-time int/float result. A float operand returned Float above.
+        return PhpType::Mixed;
     }
     if lhs == IrType::I64 && rhs == IrType::I64 {
         if fallback == &PhpType::Mixed
@@ -532,6 +534,7 @@ pub(super) fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         BinOp::Add => Some(MixedNumericOp::Add),
         BinOp::Sub => Some(MixedNumericOp::Sub),
         BinOp::Mul => Some(MixedNumericOp::Mul),
+        BinOp::Div => Some(MixedNumericOp::Div),
         BinOp::Pow => Some(MixedNumericOp::Pow),
         _ => None,
     }
