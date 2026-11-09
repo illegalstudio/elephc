@@ -6,15 +6,15 @@ description: "Replaces all occurrences of a search string with a replacement str
 ## str_replace()
 
 ```php
-function str_replace(string|array $search, string|array $replace, string|array $subject, int $count = null): string
+function str_replace(string $search, string $replace, string $subject, int $count = null): string
 ```
 
 Replaces all occurrences of a search string with a replacement string.
 
 **Parameters**:
-- `$search` (`string|array`)
-- `$replace` (`string|array`)
-- `$subject` (`string|array`)
+- `$search` (`string`)
+- `$replace` (`string`)
+- `$subject` (`string`)
 - `$count` (`int`), default `null`, optional
 
 **Returns**: `string`

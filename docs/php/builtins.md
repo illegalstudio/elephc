@@ -1211,7 +1211,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`str_ireplace()`](./builtins/string/str_ireplace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
 | [`str_pad()`](./builtins/string/str_pad.md) | `(string $string, int $length, string $pad_string = ' ', int $pad_type = 1): string` | `string` | ✓ | ✓ |
 | [`str_repeat()`](./builtins/string/str_repeat.md) | `(string $string, int $times): string` | `string` | ✓ | ✓ |
-| [`str_replace()`](./builtins/string/str_replace.md) | `(string|array $search, string|array $replace, string|array $subject, int $count = null): string` | `string` | ✓ | ✓ |
+| [`str_replace()`](./builtins/string/str_replace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
 | [`str_split()`](./builtins/string/str_split.md) | `(string $string, int $length = 1): array` | `array` | ✓ | ✓ |
 | [`str_starts_with()`](./builtins/string/str_starts_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_word_count()`](./builtins/string/str_word_count.md) | `(string $string, int $format = 0, ?string $characters = null): array|int` | `array|int` | ✓ | ✓ |

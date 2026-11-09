@@ -32460,19 +32460,19 @@ echo memory_get_peak_usage();
         params: &[
             ParamSpec {
                 name: "search",
-                ty: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Array]),
+                ty: TypeSpec::Str,
                 default: None,
                 by_ref: false,
             },
             ParamSpec {
                 name: "replace",
-                ty: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Array]),
+                ty: TypeSpec::Str,
                 default: None,
                 by_ref: false,
             },
             ParamSpec {
                 name: "subject",
-                ty: TypeSpec::Union(&[TypeSpec::Str, TypeSpec::Array]),
+                ty: TypeSpec::Str,
                 default: None,
                 by_ref: false,
             },
