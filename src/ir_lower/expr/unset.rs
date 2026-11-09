@@ -40,10 +40,10 @@ pub(super) fn lower_unset_locals(
                     if let ExprKind::StringLiteral(key) = &index.kind {
                         let data = ctx.intern_global_name(key);
                         ctx.emit_void(
-                            Op::StoreGlobal,
-                            vec![null.value],
+                            Op::UnsetGlobal,
+                            Vec::new(),
                             Some(Immediate::GlobalName(data)),
-                            Op::StoreGlobal.default_effects(),
+                            Op::UnsetGlobal.default_effects(),
                             Some(arg.span),
                         );
                         None
@@ -53,8 +53,13 @@ pub(super) fn lower_unset_locals(
                         ctx.emit_void(
                             Op::StoreGlobalDynamic,
                             vec![key.value, null.value],
-                            None,
+                            Some(Immediate::Bool(true)),
                             Op::StoreGlobalDynamic.default_effects(),
+                            Some(arg.span),
+                        );
+                        crate::ir_lower::ownership::release_if_owned(
+                            ctx,
+                            key,
                             Some(arg.span),
                         );
                         None

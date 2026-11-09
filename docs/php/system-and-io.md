@@ -134,7 +134,10 @@ Computed keys share the same storage: `$GLOBALS[$name]`, `isset($GLOBALS[$name])
 `$GLOBALS[$name] ?? ...`, `unset($GLOBALS[$name])`, and writes through a runtime
 name resolve against the program globals the compiler can name — top-level
 variables, `global` declarations, literal `$GLOBALS` keys, and identifier-shaped
-string literals in the program. A direct read of an unset global warns
+string literals in the program. A computed write whose name matches none of those
+creates a runtime entry in a growable table, so a global whose name is built
+entirely from runtime bytes can be created and then read, tested with `isset()`,
+enumerated, and unset. A direct read of an unset global warns
 `Undefined global variable $name`; `isset()` and `??` stay silent.
 
 Nested container writes (`$GLOBALS['a']['b'] = 1`) update the top-level array and
@@ -142,11 +145,9 @@ autovivify a missing global. Appending to `$GLOBALS` with `$GLOBALS[] = ...` is
 rejected with PHP's `Cannot append to $GLOBALS` diagnostic. A bare `$GLOBALS`
 materializes an associative snapshot of every initialized program global, so
 `count($GLOBALS)` and `foreach ($GLOBALS as $name => $value)` work; its iteration
-order follows the compiler's global name table rather than PHP's insertion order,
-and writes through the snapshot do not publish back. A global whose name is built
-entirely from runtime bytes with no identifier-shaped literal or top-level
-occurrence cannot be created; declare it with `global` or mention it in a literal
-when that shape is needed.
+order follows the compiler's global name table plus the runtime-created entries
+rather than PHP's insertion order, and writes through the snapshot do not publish
+back.
 
 ## PHP version surface
 

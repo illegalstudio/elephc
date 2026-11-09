@@ -219,14 +219,18 @@ fn lower_dynamic_global_load(
 ) -> LoweredValue {
     let key = lower_expr(ctx, index);
     let key = coerce_to_string_at_span(ctx, key, Some(index.span));
-    ctx.emit_value(
+    let result = ctx.emit_owned_value(
         Op::LoadGlobalDynamic,
         vec![key.value],
         Some(Immediate::Bool(warn_on_missing)),
         PhpType::Mixed,
         Op::LoadGlobalDynamic.default_effects(),
         Some(expr.span),
-    )
+    );
+    // The runtime lookup borrows the key bytes; the release ledger consults the cast's
+    // runtime ownership flag, so a persisted string is freed while itoa scratch is skipped.
+    crate::ir_lower::ownership::release_if_owned(ctx, key, Some(index.span));
+    result
 }
 
 /// Lowers array access over an already evaluated receiver, taking the null-safe route when

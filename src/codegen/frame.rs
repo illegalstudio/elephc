@@ -946,6 +946,9 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    if crate::codegen::global_lookup::module_uses_dynamic_globals(ctx.module) {
+        abi::emit_call_label(ctx.emitter, "__rt_dynamic_globals_cleanup");
+    }
     let mut globals = ctx.module.data.global_names.clone();
     // Names interned while lowering a nested store can be absent from the data pool's final
     // vector (the speculative lowering truncates it). `program_global_names` is the complete

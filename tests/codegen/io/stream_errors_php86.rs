@@ -484,6 +484,41 @@ show();
     assert_eq!(out, "5\na=1\nb=two\nc=3,4\n");
 }
 
+/// A computed `$GLOBALS` key can create a global whose name exists only at run time. The
+/// runtime table serves the read, `isset()`, enumeration, unset, and the `??` default.
+#[test]
+fn test_globals_runtime_only_name_php86() {
+    let out = run86(
+        r#"<?php
+$name = "runtime-" . $argc;
+$GLOBALS[$name] = 42;
+echo $GLOBALS[$name], "|";
+var_dump(isset($GLOBALS[$name]));
+$found = "missing";
+foreach ($GLOBALS as $key => $value) {
+    if ($key === $name) { $found = $value; }
+}
+echo $found, "
+";
+$before = count($GLOBALS);
+unset($GLOBALS[$name]);
+$after = count($GLOBALS);
+echo $after === $before ? "count-ok" : "count-bad";
+var_dump(isset($GLOBALS[$name]));
+echo $GLOBALS[$name] ?? "missing", "
+";
+"#,
+    );
+    assert_eq!(
+        out,
+        "42|bool(true)
+42
+count-okbool(false)
+missing
+"
+    );
+}
+
 /// A `Silent` context with `error_store = All` reports the excess read through the
 /// context handler with a `UserspaceInvalidReturn` error and stores it.
 #[test]

@@ -47,7 +47,7 @@ pub(super) fn lower_nested_globals_assign(
                 Some(span),
             )
         }
-        None => ctx.emit_value(
+        None => ctx.emit_owned_value(
             Op::LoadGlobalDynamic,
             vec![key.value],
             Some(Immediate::Bool(false)),

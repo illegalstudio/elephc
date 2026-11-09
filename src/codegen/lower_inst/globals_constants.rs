@@ -24,6 +24,35 @@ pub(super) fn lower_load_global(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
+/// Lowers a named program-global unset: clears its cell and releases the previous owner.
+pub(super) fn lower_unset_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let data = expect_global_name(inst)?;
+    let name = ctx.global_name_data(data)?.to_string();
+    let symbol = ir_global_symbol(&name);
+    let done = ctx.next_label("unset_global_done");
+    ctx.data.add_comm(symbol.clone(), 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // The zero store resolves the symbol through x9, so the retired owner must live in
+            // a different register or it is overwritten by the address before the decref.
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", &symbol, 0);
+            abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+            ctx.emitter.instruction(&format!("cbz x10, {done}"));               // an unset global has no owner to release
+            ctx.emitter.instruction("mov x0, x10");                             // pass the retired Mixed owner
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        }
+        Arch::X86_64 => {
+            abi::emit_load_symbol_to_reg(ctx.emitter, "rax", &symbol, 0);
+            abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+            ctx.emitter.instruction(&format!("test rax, rax"));                 // an unset global has no owner to release
+            ctx.emitter.instruction(&format!("jz {done}"));                     // skip the decrement for an empty cell
+            abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+        }
+    }
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
 /// Lowers a global storage store from one SSA operand.
 pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let data = expect_global_name(inst)?;
@@ -103,6 +132,7 @@ pub(super) fn lower_load_global_dynamic(
             ctx.emitter.instruction(&format!("cbz x0, {miss}"));                // no matching global: use the undefined-name path
             ctx.emitter.instruction("ldr x0, [x0]");                            // load the global's boxed Mixed pointer
             ctx.emitter.instruction(&format!("cbz x0, {miss}"));                // an unset global uses the same miss path
+            abi::emit_call_label(ctx.emitter, "__rt_incref");                   // the read result owns one reference of its own
             ctx.emitter.instruction(&format!("b {done}"));                      // the found value is ready
         }
         Arch::X86_64 => {
@@ -115,6 +145,7 @@ pub(super) fn lower_load_global_dynamic(
             ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the global's boxed Mixed pointer
             ctx.emitter.instruction("test rax, rax");                           // an unset global uses the same miss path
             ctx.emitter.instruction(&format!("jz {miss}"));                     // an unset global uses the same miss path
+            abi::emit_call_label(ctx.emitter, "__rt_incref");                   // the read result owns one reference of its own
             ctx.emitter.instruction(&format!("jmp {done}"));                    // the found value is ready
         }
     }
@@ -154,13 +185,27 @@ pub(super) fn lower_load_global_dynamic(
 /// Lowers `$GLOBALS[$name] = $value` into the runtime-selected global storage word.
 ///
 /// Known program globals are replaced in place, publishing the new box before retiring the
-/// previous payload so a destructor observes the assigned value. A name absent from the table
-/// is evaluated for its side effects and discarded, matching the current known-name scope.
+/// previous payload so a destructor observes the assigned value. A name absent from the static
+/// table creates a runtime-global cell, so a computed write can introduce a name that exists
+/// only at run time.
 pub(super) fn lower_store_global_dynamic(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     let name = expect_operand(inst, 0)?;
+    if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.load_string_value_to_regs(name, "x0", "x1")?;
+                abi::emit_call_label(ctx.emitter, "__rt_global_unset_dynamic");
+            }
+            Arch::X86_64 => {
+                ctx.load_string_value_to_regs(name, "rdi", "rsi")?;
+                abi::emit_call_label(ctx.emitter, "__rt_global_unset_dynamic");
+            }
+        }
+        return Ok(());
+    }
     let value = expect_operand(inst, 1)?;
     let miss = ctx.next_label("dyn_global_store_miss");
     let done = ctx.next_label("dyn_global_store_done");
@@ -168,12 +213,14 @@ pub(super) fn lower_store_global_dynamic(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_string_value_to_regs(name, "x1", "x2")?;
-            abi::emit_call_label(ctx.emitter, "__rt_global_lookup_dynamic");
+            ctx.emitter.instruction("mov x0, x1");                              // create helper expects the name pointer in x0
+            ctx.emitter.instruction("mov x1, x2");                              // and the name length in x1
+            abi::emit_call_label(ctx.emitter, "__rt_global_lookup_or_create_dynamic");
             abi::emit_store_to_sp(ctx.emitter, "x0", 0);
         }
         Arch::X86_64 => {
             ctx.load_string_value_to_regs(name, "rdi", "rsi")?;
-            abi::emit_call_label(ctx.emitter, "__rt_global_lookup_dynamic");
+            abi::emit_call_label(ctx.emitter, "__rt_global_lookup_or_create_dynamic");
             abi::emit_store_to_sp(ctx.emitter, "rax", 0);
         }
     }

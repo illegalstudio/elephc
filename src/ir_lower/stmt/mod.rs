@@ -237,6 +237,13 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
                         Op::StoreGlobalDynamic.default_effects(),
                         Some(stmt.span),
                     );
+                    if ctx.builder.value_defining_op(key.value) == Some(Op::Cast) {
+                        crate::ir_lower::ownership::release_if_owned(
+                            ctx,
+                            key,
+                            Some(index.span),
+                        );
+                    }
                 }
             } else {
                 lower_array_assign(ctx, array, index, value, stmt.span);

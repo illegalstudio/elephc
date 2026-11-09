@@ -859,6 +859,8 @@ pub enum Op {
     PopCallOperandOwner,
     LoadGlobal,
     StoreGlobal,
+    /// Clears one named program-global cell and releases its previous Mixed owner.
+    UnsetGlobal,
     /// Loads a program global selected by a runtime string name (`$GLOBALS[$name]`).
     /// Operand 0 is the string key; the immediate Bool records whether a missing name warns.
     LoadGlobalDynamic,
@@ -1394,6 +1396,7 @@ impl Op {
             LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             StoreGlobal
+            | UnsetGlobal
             | StoreGlobalDynamic
             | StoreStaticLocal
             | StoreStaticProperty
@@ -1726,6 +1729,7 @@ impl Op {
             PopCallOperandOwner => "pop_call_operand_owner",
             LoadGlobal => "load_global",
             StoreGlobal => "store_global",
+            UnsetGlobal => "unset_global",
             LoadGlobalDynamic => "load_global_dynamic",
             StoreGlobalDynamic => "store_global_dynamic",
             LoadStaticLocal => "load_static_local",

@@ -37,3 +37,35 @@ echo $count > 0 ? "count-ok\n" : "count-bad\n";
         out.stderr
     );
 }
+
+/// Runtime-created global names are stored in a growable table: each iteration creates,
+/// reads, enumerates, and unsets a name that exists only at run time, and the shutdown
+/// cleanup must retire the entry's value, name buffer, and block.
+#[test]
+fn test_runtime_only_global_names_leave_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$i = 0;
+while ($i < 3) {
+    $name = "g-" . $i;
+    $GLOBALS[$name] = [$i, $i + 1];
+    $count = count($GLOBALS[$name]);
+    $seen = 0;
+    foreach ($GLOBALS as $key => $value) {
+        if ($key === $name) { $seen = count($value); }
+    }
+    echo $count, ":", $seen, ":";
+    unset($GLOBALS[$name]);
+    echo isset($GLOBALS[$name]) ? "set:" : "unset:";
+    $i++;
+}
+echo "ok\n";
+"#,
+    );
+    assert_eq!(out.stdout, "2:2:unset:2:2:unset:2:2:unset:ok\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}",
+        out.stderr
+    );
+}
