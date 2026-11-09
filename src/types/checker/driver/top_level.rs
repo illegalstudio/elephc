@@ -221,6 +221,10 @@ impl Checker {
             // and the provisional error it was written to discard reached the user instead.
             || (message.contains(" parameter $")
                 && message.ends_with(" expects callable, got null"))
+            // An untyped method's return is provisionally `int` until the method fixpoint infers
+            // it, so `takes((new B())->c())` reads `got int` in the initial pass even when `c()`
+            // returns an object. The final pass, which this is only consulted after, re-checked it.
+            || (message.contains(" parameter $") && message.ends_with(", got int"))
     }
 
     /// Builds the initial `TypeEnv` with built-in globals `$argc`, `$argv`, and external globals.

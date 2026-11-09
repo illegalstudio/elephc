@@ -12,6 +12,9 @@ use crate::support::*;
 /// HTML-only documents expose descendant text while document writes coerce and then do nothing.
 #[test]
 fn dom_html_document_text_content_is_text_and_ignores_writes() {
+    if skip_without_xml_native("dom_html_document_text_content_is_text_and_ignores_writes") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 class IgnoredDocumentText {
     public function __toString(): string { echo 'cast|'; return 'ignored'; }
@@ -31,6 +34,9 @@ echo $document->textContent;
 /// Default declarations are immutable and serialize before literal HTML attributes.
 #[test]
 fn dom_html_default_namespace_declaration_survives_repeated_writes() {
+    if skip_without_xml_native("dom_html_default_namespace_declaration_survives_repeated_writes") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 foreach (['urn:q', '', 'urn:é&"', 'urn:' . chr(255), "urn:nul\0tail"] as $uri) {
     $document = new DOMDocument();
@@ -53,6 +59,9 @@ echo $element->getAttribute("data-nul\0tail"), ':', $document->saveXML($element)
 /// HTML-only writes validate names and throw without loading the native XML bridge.
 #[test]
 fn dom_html_set_attribute_rejects_invalid_names() {
+    if skip_without_xml_native("dom_html_set_attribute_rejects_invalid_names") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $document = new DOMDocument();
 $document->loadHTML('<html><body><p>value</p></body></html>');
@@ -72,6 +81,9 @@ echo $element->getAttribute('nul'), '|', $document->saveXML($element);
 /// HTML-only attribute writes replace existing values and append new literal names.
 #[test]
 fn dom_html_set_attribute_updates_unbound_tree() {
+    if skip_without_xml_native("dom_html_set_attribute_updates_unbound_tree") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $document = new DOMDocument();
 $document->loadHTML('<html><body><p id="old">value</p></body></html>');
@@ -86,6 +98,9 @@ echo $element->getAttribute('id'), '|', $element->getAttribute('data-name'), '|'
 /// An old implied-root flag must not trim whitespace inside a later unclosed element.
 #[test]
 fn dom_html_body_boundary_review_later_element_blanks() {
+    if skip_without_xml_native("dom_html_body_boundary_review_later_element_blanks") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['<div>B</div></body><span>   ', '<div>B</div></body><div>   ', '<span>   ', '<div><span>   '] as $source) {
@@ -100,12 +115,18 @@ foreach (['<div>B</div></body><span>   ', '<div>B</div></body><div>   ', '<span>
 /// Element whitespace after a closed implied body is stable without EIR optimization.
 #[test]
 fn dom_html_body_boundary_review_later_element_blanks_no_ir_opt() {
+    if skip_without_xml_native("dom_html_body_boundary_review_later_element_blanks_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_body_boundary_review_later_element_blanks);
 }
 
 /// Closing an implied body preserves the boundary before a later explicit body or text.
 #[test]
 fn dom_html_body_boundary_review_closed_implied_body() {
+    if skip_without_xml_native("dom_html_body_boundary_review_closed_implied_body") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['<div>B</div></body><body id=x>C</body>', '<html><head></head><div>B</div></body><body id=x>C</body></html>', '<p>B</p></body><body class=z>C</body>', '<div>B</div></body>C'] as $source) {
@@ -119,6 +140,9 @@ foreach (['<div>B</div></body><body id=x>C</body>', '<html><head></head><div>B</
 /// A discarded self-closing body closes the current body without consuming a later end tag.
 #[test]
 fn dom_html_body_boundary_review_discarded_self_closing_body() {
+    if skip_without_xml_native("dom_html_body_boundary_review_discarded_self_closing_body") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['<body>A<body/>B</body><div>C</div>', '<html><head></head><div>B</div><body/>C</html>', '<body>A<div>B<body/>C</div>D</body>E', '<html><div>B<body/>C</html>D', '<html><body>A<body>B</html>C</body>D', '<html><body>A<div>B<body/>C</head>D</body>E'] as $source) {
@@ -132,6 +156,9 @@ foreach (['<body>A<body/>B</body><div>C</div>', '<html><head></head><div>B</div>
 /// Legacy frame containers do not cause a later real body to be discarded as redundant.
 #[test]
 fn dom_html_body_boundary_review_frame_exclusions() {
+    if skip_without_xml_native("dom_html_body_boundary_review_frame_exclusions") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['<frame><body id=x>C</body>', '<frameset><body id=x>C</body></frameset>', '<frame>', '<frameset><div>B</div></frameset>', '<noframes><body id=x>C</body></noframes>', '<frameset>F<body id=x>C</body></frameset>', '<noframes>F<body id=x>C</body></noframes>'] as $source) {
@@ -146,24 +173,36 @@ foreach (['<frame><body id=x>C</body>', '<frameset><body id=x>C</body></frameset
 /// Closed implied-body boundaries do not depend on EIR optimization.
 #[test]
 fn dom_html_body_boundary_review_closed_implied_body_no_ir_opt() {
+    if skip_without_xml_native("dom_html_body_boundary_review_closed_implied_body_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_body_boundary_review_closed_implied_body);
 }
 
 /// Discarded self-closing body boundaries do not depend on EIR optimization.
 #[test]
 fn dom_html_body_boundary_review_discarded_self_closing_body_no_ir_opt() {
+    if skip_without_xml_native("dom_html_body_boundary_review_discarded_self_closing_body_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_body_boundary_review_discarded_self_closing_body);
 }
 
 /// Frame exclusions do not depend on EIR optimization.
 #[test]
 fn dom_html_body_boundary_review_frame_exclusions_no_ir_opt() {
+    if skip_without_xml_native("dom_html_body_boundary_review_frame_exclusions_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_body_boundary_review_frame_exclusions);
 }
 
 /// Literal boundary recovery retires popped nodes and wrapper arrays without DOM cycles.
 #[test]
 fn dom_html_body_boundary_review_literal_owners() {
+    if skip_without_xml_native("dom_html_body_boundary_review_literal_owners") {
+        return;
+    }
     let out = compile_and_run_with_heap_debug(r#"<?php
 function enableDom(DOMDocument $doc): void {}
 for ($i = 0; $i < 16; $i++) {
@@ -202,12 +241,18 @@ for ($i = 0; $i < 16; $i++) {
 /// Boundary recovery keeps the same owner balance without EIR optimization.
 #[test]
 fn dom_html_body_boundary_review_literal_owners_no_ir_opt() {
+    if skip_without_xml_native("dom_html_body_boundary_review_literal_owners_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_body_boundary_review_literal_owners);
 }
 
 /// Body tags after implied content are ignored without nesting or displacing that content.
 #[test]
 fn dom_html_grok_current_late_body() {
+    if skip_without_xml_native("dom_html_grok_current_late_body") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['<div>B</div><body id=x>C</body>', '<html><head></head><div>B</div><body>C</body></html>', '<div>B<body>C</body>D</div>', '<html><head></head>T<body>C</body></html>'] as $source) {
@@ -221,6 +266,9 @@ foreach (['<div>B</div><body id=x>C</body>', '<html><head></head><div>B</div><bo
 /// Nested repeated body tags discard their paired end, while separate bodies remain separate.
 #[test]
 fn dom_html_grok_current_body_controls() {
+    if skip_without_xml_native("dom_html_grok_current_body_controls") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['<body>A<body id=x>B</body>C</body><div>D</div>', '<body>A</body><body>B</body>', '<html><head></head><script>X</script><body id=x>C</body></html>'] as $source) {
@@ -234,12 +282,18 @@ foreach (['<body>A<body id=x>B</body>C</body><div>D</div>', '<body>A</body><body
 /// Late-body repair does not depend on EIR optimization.
 #[test]
 fn dom_html_grok_current_late_body_no_ir_opt() {
+    if skip_without_xml_native("dom_html_grok_current_late_body_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_grok_current_late_body);
 }
 
 /// Explicit-body boundaries remain distinct without EIR optimization.
 #[test]
 fn dom_html_grok_current_body_controls_no_ir_opt() {
+    if skip_without_xml_native("dom_html_grok_current_body_controls_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_grok_current_body_controls);
 }
 
@@ -304,30 +358,45 @@ for ($i = 0; $i < ITERATIONS; $i++) {
 /// Literal tags keep the late-body builder and wrapper paths heap-clean.
 #[test]
 fn dom_html_grok_current_body_owners() {
+    if skip_without_xml_native("dom_html_grok_current_body_owners") {
+        return;
+    }
     verify_late_body_owners(false);
 }
 
 /// Runtime-owned tag names add no retention beyond the unchanged published builder baseline.
 #[test]
 fn dom_html_grok_current_owned_names_do_not_add_retention() {
+    if skip_without_xml_native("dom_html_grok_current_owned_names_do_not_add_retention") {
+        return;
+    }
     verify_late_body_owners(true);
 }
 
 /// The inherited owned-name bound does not depend on EIR optimization.
 #[test]
 fn dom_html_grok_current_owned_names_do_not_add_retention_no_ir_opt() {
+    if skip_without_xml_native("dom_html_grok_current_owned_names_do_not_add_retention_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_grok_current_owned_names_do_not_add_retention);
 }
 
 /// Raw late-body forest ownership is independent of EIR optimization.
 #[test]
 fn dom_html_grok_current_body_owners_no_ir_opt() {
+    if skip_without_xml_native("dom_html_grok_current_body_owners_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_grok_current_body_owners);
 }
 
 /// An implied body excludes head and roots following the closed outer html.
 #[test]
 fn dom_html_current_review_implied_body() {
+    if skip_without_xml_native("dom_html_current_review_implied_body") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<html><head></head><div>B</div></html><span>C</span>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
@@ -342,6 +411,9 @@ echo $body->nodeValue, ':', $html->childNodes->item(0)->nodeName;
 /// A later explicit html root is adopted rather than nested in another wrapper.
 #[test]
 fn dom_html_current_review_adopt_reopened_html() {
+    if skip_without_xml_native("dom_html_current_review_adopt_reopened_html") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<html><head></head><div>B</div></html><html><span>C</span></html>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
@@ -353,6 +425,9 @@ echo $doc->saveXML($doc->getElementsByTagName('html')->item(0));
 /// A head-only document does not acquire an empty body containing its head.
 #[test]
 fn dom_html_current_review_head_only() {
+    if skip_without_xml_native("dom_html_current_review_head_only") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<html><head></head></html>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
@@ -364,6 +439,9 @@ echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), ':', $doc->getE
 /// Legacy libxml retains text children in embed, source, track and wbr elements.
 #[test]
 fn dom_html_current_review_legacy_non_void_elements() {
+    if skip_without_xml_native("dom_html_current_review_legacy_non_void_elements") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['embed', 'source', 'track', 'wbr'] as $tag) {
@@ -378,24 +456,36 @@ foreach (['embed', 'source', 'track', 'wbr'] as $tag) {
 /// Implied-body construction preserves the same tree without EIR optimization.
 #[test]
 fn dom_html_current_review_implied_body_no_ir_opt() {
+    if skip_without_xml_native("dom_html_current_review_implied_body_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_current_review_implied_body);
 }
 
 /// Explicit reopened wrappers remain single nodes without EIR optimization.
 #[test]
 fn dom_html_current_review_adopt_reopened_html_no_ir_opt() {
+    if skip_without_xml_native("dom_html_current_review_adopt_reopened_html_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_current_review_adopt_reopened_html);
 }
 
 /// Legacy tag classification is independent of EIR optimization.
 #[test]
 fn dom_html_current_review_legacy_non_void_elements_no_ir_opt() {
+    if skip_without_xml_native("dom_html_current_review_legacy_non_void_elements_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_current_review_legacy_non_void_elements);
 }
 
 /// Literal wrapper partitioning retires its intermediate arrays without DOM cycles.
 #[test]
 fn dom_html_current_review_wrapper_owners() {
+    if skip_without_xml_native("dom_html_current_review_wrapper_owners") {
+        return;
+    }
     let out = compile_and_run_with_heap_debug(r#"<?php
 function enableDom(DOMDocument $doc): void {}
 for ($i = 0; $i < 16; $i++) {
@@ -418,18 +508,27 @@ for ($i = 0; $i < 16; $i++) {
 /// Wrapper temporary owners remain balanced without EIR optimization.
 #[test]
 fn dom_html_current_review_wrapper_owners_no_ir_opt() {
+    if skip_without_xml_native("dom_html_current_review_wrapper_owners_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_current_review_wrapper_owners);
 }
 
 /// Head-only wrapper selection is independent of EIR optimization.
 #[test]
 fn dom_html_current_review_head_only_no_ir_opt() {
+    if skip_without_xml_native("dom_html_current_review_head_only_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_current_review_head_only);
 }
 
 /// A reopened document creates its first body when the original html contained only a head.
 #[test]
 fn dom_html_latest_review_head_only_reopened_body() {
+    if skip_without_xml_native("dom_html_latest_review_head_only_reopened_body") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['<html><head></head></html><div>B</div>', '<html><head></head></html><html lang="en"><div>B</div></html>'] as $source) {
@@ -444,6 +543,9 @@ foreach (['<html><head></head></html><div>B</div>', '<html><head></head></html><
 /// An html start tag inside an open html is ignored, including its attributes.
 #[test]
 fn dom_html_latest_review_redundant_html() {
+    if skip_without_xml_native("dom_html_latest_review_redundant_html") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['<html id=a><html id=b class=c><div>B</div></html></html>', '<html><body>A</body><html lang=en><span>B</span></html></html>'] as $source) {
@@ -457,6 +559,9 @@ foreach (['<html id=a><html id=b class=c><div>B</div></html></html>', '<html><bo
 /// Head-compatible metadata after head stays outside the subsequently implied body.
 #[test]
 fn dom_html_latest_review_post_head_metadata() {
+    if skip_without_xml_native("dom_html_latest_review_post_head_metadata") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<html><head></head><script>X</script><style>Y</style><base href=x><link href=y><meta name=z><title>T</title><div>B</div></html>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
@@ -468,6 +573,9 @@ echo $doc->saveXML($doc->getElementsByTagName('html')->item(0)), ':', $doc->getE
 /// NOBLANKS removes wrapper padding only after the implied body's boundaries are known.
 #[test]
 fn dom_html_latest_review_implied_body_blanks() {
+    if skip_without_xml_native("dom_html_latest_review_implied_body_blanks") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach ([0, LIBXML_NOBLANKS] as $extra) {
@@ -481,6 +589,9 @@ foreach ([0, LIBXML_NOBLANKS] as $extra) {
 /// Legacy frame and isindex tags are void and leave following text beside them.
 #[test]
 fn dom_html_latest_review_legacy_void_elements() {
+    if skip_without_xml_native("dom_html_latest_review_legacy_void_elements") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<div>A<frame>B<isindex>C</div>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
@@ -493,6 +604,9 @@ echo $doc->saveXML($div), ':', $div->childNodes->length, ':', $div->nodeValue;
 /// A stray slash consumes its malformed attribute run but does not self-close a tag.
 #[test]
 fn dom_html_latest_review_stray_attribute_slash() {
+    if skip_without_xml_native("dom_html_latest_review_stray_attribute_slash") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach (['<div /class=x /id=y>A</div><b>Z</b>', '<div a/b=c d=e>A</div><b>Z</b>', '<div / / >A</div><b>Z</b>', '<div a=x/ b=y>A</div><b>Z</b>'] as $source) {
@@ -506,36 +620,54 @@ foreach (['<div /class=x /id=y>A</div><b>Z</b>', '<div a/b=c d=e>A</div><b>Z</b>
 /// Reopened-body construction is independent of EIR optimization.
 #[test]
 fn dom_html_latest_review_head_only_reopened_body_no_ir_opt() {
+    if skip_without_xml_native("dom_html_latest_review_head_only_reopened_body_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_latest_review_head_only_reopened_body);
 }
 
 /// Ignoring redundant html tags is independent of EIR optimization.
 #[test]
 fn dom_html_latest_review_redundant_html_no_ir_opt() {
+    if skip_without_xml_native("dom_html_latest_review_redundant_html_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_latest_review_redundant_html);
 }
 
 /// Post-head metadata placement is independent of EIR optimization.
 #[test]
 fn dom_html_latest_review_post_head_metadata_no_ir_opt() {
+    if skip_without_xml_native("dom_html_latest_review_post_head_metadata_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_latest_review_post_head_metadata);
 }
 
 /// Implied-body whitespace is preserved without EIR optimization.
 #[test]
 fn dom_html_latest_review_implied_body_blanks_no_ir_opt() {
+    if skip_without_xml_native("dom_html_latest_review_implied_body_blanks_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_latest_review_implied_body_blanks);
 }
 
 /// Legacy void-element boundaries are independent of EIR optimization.
 #[test]
 fn dom_html_latest_review_legacy_void_elements_no_ir_opt() {
+    if skip_without_xml_native("dom_html_latest_review_legacy_void_elements_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_latest_review_legacy_void_elements);
 }
 
 /// Attribute slash recovery is independent of EIR optimization.
 #[test]
 fn dom_html_latest_review_stray_attribute_slash_no_ir_opt() {
+    if skip_without_xml_native("dom_html_latest_review_stray_attribute_slash_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_latest_review_stray_attribute_slash);
 }
 
@@ -574,35 +706,53 @@ unset($tree, $roots);
 /// Literal metadata and whitespace trees retire the new body and filter owners.
 #[test]
 fn dom_html_latest_review_tree_owners() {
+    if skip_without_xml_native("dom_html_latest_review_tree_owners") {
+        return;
+    }
     verify_literal_tree_owners(false, 256);
 }
 
 /// Body and whitespace temporary owners stay balanced without EIR optimization.
 #[test]
 fn dom_html_latest_review_tree_owners_no_ir_opt() {
+    if skip_without_xml_native("dom_html_latest_review_tree_owners_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_latest_review_tree_owners);
 }
 
 /// A head-only document's reopened body retires all temporary wrapper owners.
 #[test]
 fn dom_html_latest_review_reopened_tree_owners() {
+    if skip_without_xml_native("dom_html_latest_review_reopened_tree_owners") {
+        return;
+    }
     verify_literal_tree_owners(true, 256);
 }
 
 /// Reopened-body temporary owners stay balanced without EIR optimization.
 #[test]
 fn dom_html_latest_review_reopened_tree_owners_no_ir_opt() {
+    if skip_without_xml_native("dom_html_latest_review_reopened_tree_owners_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_latest_review_reopened_tree_owners);
 }
 
 /// The reopened-body ownership control also covers parsing without blank filtering.
 #[test]
 fn dom_html_latest_review_reopened_tree_owners_no_flags() {
+    if skip_without_xml_native("dom_html_latest_review_reopened_tree_owners_no_flags") {
+        return;
+    }
     verify_literal_tree_owners(true, 0);
 }
 
 /// Reopened-body ownership without flags is independent of EIR optimization.
 #[test]
 fn dom_html_latest_review_reopened_tree_owners_no_flags_no_ir_opt() {
+    if skip_without_xml_native("dom_html_latest_review_reopened_tree_owners_no_flags_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_latest_review_reopened_tree_owners_no_flags);
 }

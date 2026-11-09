@@ -85,6 +85,11 @@ fn xml_classes() -> &'static [&'static str] {
 /// name-resolution phase; an invalid program does not need speculative bridge injection.
 pub(super) fn program_uses_xml(program: &[Stmt]) -> bool {
     let dom_available = crate::dom_html_prelude::program_uses_dom_html(program);
+    // Every DOM class is backed by the libxml2 bridge (and reports parse warnings through the
+    // SimpleXML diagnostics channel), so any DOM use needs the xml surface.
+    if dom_available {
+        return true;
+    }
     let mut classes = xml_classes().to_vec();
     classes.push("DOMDocument");
     classes.push("DOMNode");

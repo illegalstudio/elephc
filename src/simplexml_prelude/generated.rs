@@ -36,6 +36,14 @@ fn decl_extern_elephc_xml_sx_load_dom() -> Stmt {
         .build()
 }
 
+/// `elephc_xml_sx_import_dom`: a SimpleXML view over a DOM node's tree, or -1/-2.
+fn decl_extern_elephc_xml_sx_import_dom() -> Stmt {
+    extern_fn("elephc_xml_sx_import_dom", "elephc_xml")
+        .param("dom", CType::Int)
+        .returns(CType::Int)
+        .build()
+}
+
 /// `elephc_xml_sx_html_document` — transcribed from the PHP form.
 fn decl_extern_elephc_xml_sx_html_document() -> Stmt {
     extern_fn("elephc_xml_sx_html_document", "elephc_xml")
@@ -2391,385 +2399,6 @@ fn decl_class_simplexmlelement() -> Stmt {
                 ]),
         )
         .method(
-            method("__elephc_dom_text")
-                .returns(TypeExpr::Str)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_return(e_call("elephc_xml_sx_string", vec![e_var("handle"), e_int(3)])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_document_text")
-                .returns(TypeExpr::Str)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_return(e_call("elephc_xml_sx_string", vec![e_var("handle"), e_int(7)])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_xml")
-                .returns(TypeExpr::Str)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_return(e_cast(CastType::String, e_call("hex2bin", vec![e_call("elephc_xml_sx_xml_hex", vec![e_var("handle"), e_int(0)])]))),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_document_xml")
-                .param_default("nodeArgument", TypeExpr::Bool, e_bool(false))
-                .returns(TypeExpr::Str)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_return(e_cast(CastType::String, e_call("hex2bin", vec![e_call("elephc_xml_sx_xml_hex", vec![e_var("handle"), e_ternary(e_var("nodeArgument"), e_int(3), e_int(2))])]))),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_set_text")
-                .param("text", TypeExpr::Str)
-                .param_default("entities", TypeExpr::Bool, e_bool(false))
-                .returns(TypeExpr::Void)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_expr(e_call("elephc_xml_sx_mutate", vec![e_var("handle"), e_ternary(e_var("entities"), e_int(26), e_int(22)), e_str(""), e_var("text"), e_str(""), e_int(0), e_int(0)])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_attribute")
-                .param("name", TypeExpr::Str)
-                .returns(TypeExpr::Str)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_return(e_call("elephc_xml_sx_dom_attribute", vec![e_var("handle"), e_var("name")])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_local_name")
-                .returns(TypeExpr::Str)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_return(e_call("elephc_xml_sx_string", vec![e_var("handle"), e_int(1)])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_identity")
-                .returns(TypeExpr::Int)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_return(e_call("elephc_xml_sx_int", vec![e_var("handle"), e_int(12)])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_is_html")
-                .returns(TypeExpr::Bool)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_return(e_binop(e_call("elephc_xml_sx_int", vec![e_var("handle"), e_int(13)]), BinOp::StrictNotEq, e_int(0))),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_relation")
-                .param("document", t_mixed())
-                .param("kind", TypeExpr::Int)
-                .returns(t_nullable(t_class("DOMNode")))
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_assign("relative", e_call("elephc_xml_sx_select", vec![e_var("handle"), e_var("kind"), e_str(""), e_str(""), e_int(0), e_int(0)])),
-                    s_if(
-                        e_binop(e_call("elephc_xml_sx_int", vec![e_var("relative"), e_int(1)]), BinOp::StrictEq, e_int(0)),
-                        vec![
-                            s_expr(e_call("elephc_xml_sx_free", vec![e_var("relative")])),
-                            s_return(e_null()),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("view", e_call("__elephc_simplexml_wrap", vec![e_var("relative"), e_str("SimpleXMLElement")])),
-                    s_return(e_method_call(e_var("view"), "__elephc_dom_node", vec![e_var("document"), e_null()])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_attributes")
-                .returns(t_array())
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_assign("all", e_call("elephc_xml_sx_select", vec![e_var("handle"), e_int(15), e_str(""), e_str(""), e_int(0), e_int(0)])),
-                    s_assign("attributes", e_array(vec![])),
-                    s_try(vec![
-                        s_assign("length", e_call("elephc_xml_sx_int", vec![e_var("all"), e_int(2)])),
-                        s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("length"))), Some(s_expr(e_post_inc("i"))), vec![
-                            s_assign("attribute", e_call("elephc_xml_sx_item", vec![e_var("all"), e_var("i")])),
-                            s_try(vec![
-                                s_array_push("attributes", e_array(vec![e_call("elephc_xml_sx_string", vec![e_var("attribute"), e_int(6)]), e_call("elephc_xml_sx_string", vec![e_var("attribute"), e_int(3)])])),
-                            ], vec![
-                            ], Some(vec![
-                                s_expr(e_call("elephc_xml_sx_free", vec![e_var("attribute")])),
-                            ])),
-                        ]),
-                    ], vec![
-                    ], Some(vec![
-                        s_expr(e_call("elephc_xml_sx_free", vec![e_var("all")])),
-                    ])),
-                    s_return(e_var("attributes")),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_set_attribute")
-                .param("name", TypeExpr::Str)
-                .param("value", TypeExpr::Str)
-                .returns(TypeExpr::Bool)
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_return(e_binop(e_call("elephc_xml_sx_mutate", vec![e_var("handle"), e_int(25), e_var("name"), e_var("value"), e_str(""), e_int(0), e_int(0)]), BinOp::StrictNotEq, e_int(0))),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_append_child")
-                .param("parent", t_mixed())
-                .param("node", t_class("DOMNode"))
-                .returns(t_class("DOMNode"))
-                .body(vec![
-                    s_assign("handle", e_method_call(e_this(), "__elephc_initialized_handle", vec![])),
-                    s_if(
-                        e_instance_of(e_var("node"), "DOMText"),
-                        vec![
-                            s_assign("appended", e_call("elephc_xml_sx_html_append", vec![e_var("handle"), e_int(3), e_str(""), e_cast(CastType::String, e_prop(e_var("node"), "nodeValue"))])),
-                            s_if(
-                                e_binop(e_var("appended"), BinOp::StrictNotEq, e_int(0)),
-                                vec![
-                                    s_expr(e_call("elephc_xml_sx_free", vec![e_var("appended")])),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_prop_assign(e_var("node"), "parentNode", e_var("parent")),
-                            s_prop_assign(e_var("node"), "ownerDocument", e_ternary(e_instance_of(e_var("parent"), "DOMDocument"), e_var("parent"), e_prop(e_var("parent"), "ownerDocument"))),
-                            s_return(e_var("node")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_instance_of(e_var("node"), "DOMElement"),
-                        vec![
-                            s_assign("child", e_method_call(e_this(), "addChild", vec![e_prop(e_var("node"), "nodeName")])),
-                            s_if(
-                                e_not(e_instance_of(e_var("child"), "SimpleXMLElement")),
-                                vec![
-                                    s_throw(e_new("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_assign("xmlns", e_prop(e_var("node"), "__elephc_dom_xmlns")),
-                            s_if(
-                                e_binop(e_var("xmlns"), BinOp::StrictNotEq, e_null()),
-                                vec![
-                                    s_expr(e_method_call(e_var("child"), "addAttribute", vec![e_str("xmlns"), e_cast(CastType::String, e_var("xmlns"))])),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_assign("attributes", e_prop(e_var("node"), "__attrs")),
-                            s_if(
-                                e_call("is_array", vec![e_var("attributes")]),
-                                vec![
-                                    s_foreach(e_var("attributes"), None, "pair", vec![
-                                        s_if(
-                                            e_call("is_array", vec![e_var("pair")]),
-                                            vec![
-                                                s_expr(e_method_call(e_var("child"), "addAttribute", vec![e_cast(CastType::String, e_index(e_var("pair"), e_int(0))), e_cast(CastType::String, e_index(e_var("pair"), e_int(1)))])),
-                                            ],
-                                            vec![],
-                                            None,
-                                        ),
-                                    ]),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_assign("children", e_prop(e_var("node"), "childNodes")),
-                            s_if(
-                                e_instance_of(e_var("children"), "DOMNodeList"),
-                                vec![
-                                    s_foreach(e_var("children"), None, "grandchild", vec![
-                                        s_if(
-                                            e_instance_of(e_var("grandchild"), "DOMNode"),
-                                            vec![
-                                                s_expr(e_method_call(e_var("child"), "__elephc_dom_append_child", vec![e_var("child"), e_var("grandchild")])),
-                                            ],
-                                            vec![],
-                                            None,
-                                        ),
-                                    ]),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_prop_assign(e_var("node"), "parentNode", e_var("parent")),
-                            s_prop_assign(e_var("node"), "ownerDocument", e_ternary(e_instance_of(e_var("parent"), "DOMDocument"), e_var("parent"), e_prop(e_var("parent"), "ownerDocument"))),
-                            s_return(e_var("node")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_throw(e_new("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_selections")
-                .param_default("wholeDocument", TypeExpr::Bool, e_bool(false))
-                .returns(t_array())
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_assign("all", e_call("elephc_xml_sx_select", vec![e_var("handle"), e_ternary(e_var("wholeDocument"), e_int(11), e_int(6)), e_str(""), e_str(""), e_int(0), e_int(0)])),
-                    s_assign("length", e_call("elephc_xml_sx_int", vec![e_var("all"), e_int(2)])),
-                    s_assign("nodes", e_array(vec![])),
-                    s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("length"))), Some(s_expr(e_post_inc("i"))), vec![
-                        s_assign("child", e_call("elephc_xml_sx_item", vec![e_var("all"), e_var("i")])),
-                        s_array_push("nodes", e_call("__elephc_simplexml_wrap", vec![e_var("child"), e_str("SimpleXMLElement")])),
-                    ]),
-                    s_expr(e_call("elephc_xml_sx_free", vec![e_var("all")])),
-                    s_return(e_var("nodes")),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_children")
-                .param("document", t_mixed())
-                .param("parent", t_mixed())
-                .param_default("wholeDocument", TypeExpr::Bool, e_bool(false))
-                .returns(t_class("DOMNodeList"))
-                .body(vec![
-                    s_assign("children", e_array(vec![])),
-                    s_foreach(e_method_call(e_this(), "__elephc_dom_selections", vec![e_var("wholeDocument")]), None, "view", vec![
-                        s_if(
-                            e_instance_of(e_var("view"), "SimpleXMLElement"),
-                            vec![
-                                s_array_push("children", e_method_call(e_var("view"), "__elephc_dom_node", vec![e_var("document"), e_var("parent")])),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                    ]),
-                    s_assign("length", e_call("count", vec![e_var("children")])),
-                    s_for(Some(s_assign("i", e_int(1))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("length"))), Some(s_expr(e_post_inc("i"))), vec![
-                        s_assign("left", e_index(e_var("children"), e_binop(e_var("i"), BinOp::Sub, e_int(1)))),
-                        s_assign("right", e_index(e_var("children"), e_var("i"))),
-                        s_if(
-                            e_instance_of(e_var("left"), "DOMNode"),
-                            vec![
-                                s_if(
-                                    e_instance_of(e_var("right"), "DOMNode"),
-                                    vec![
-                                        s_expr(e_call("__elephc_dom_link_siblings", vec![e_var("left"), e_var("right")])),
-                                    ],
-                                    vec![],
-                                    None,
-                                ),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                    ]),
-                    s_return(e_new("DOMNodeList", vec![e_var("children")])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_node")
-                .param("document", t_mixed())
-                .param("parent", t_mixed())
-                .returns(t_class("DOMNode"))
-                .body(vec![
-                    s_assign("handle", e_this_prop("__elephc_handle")),
-                    s_assign("kind", e_call("elephc_xml_sx_int", vec![e_var("handle"), e_int(4)])),
-                    s_if(
-                        e_binop(e_binop(e_var("kind"), BinOp::StrictEq, e_int(9)), BinOp::Or, e_binop(e_var("kind"), BinOp::StrictEq, e_int(13))),
-                        vec![
-                            s_if(
-                                e_instance_of(e_var("document"), "DOMDocument"),
-                                vec![
-                                    s_return(e_var("document")),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("cached", e_call("__elephc_dom_cached_node", vec![e_var("document"), e_call("elephc_xml_sx_int", vec![e_var("handle"), e_int(12)])])),
-                    s_if(
-                        e_instance_of(e_var("cached"), "DOMNode"),
-                        vec![
-                            s_return(e_var("cached")),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("kind"), BinOp::StrictEq, e_int(4)),
-                        vec![
-                            s_assign("node", e_new("DOMText", vec![])),
-                            s_prop_assign(e_var("node"), "__elephc_raw_text", e_bool(true)),
-                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_var("node"), e_var("document"), e_var("parent"), e_str("#cdata-section")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("kind"), BinOp::StrictEq, e_int(3)),
-                        vec![
-                            s_assign("node", e_new("DOMText", vec![])),
-                            s_prop_assign(e_var("node"), "__elephc_raw_text", e_binop(e_call("elephc_xml_sx_int", vec![e_var("handle"), e_int(14)]), BinOp::StrictNotEq, e_int(0))),
-                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_var("node"), e_var("document"), e_var("parent"), e_str("#text")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("kind"), BinOp::StrictEq, e_int(8)),
-                        vec![
-                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_new("DOMComment", vec![]), e_var("document"), e_var("parent"), e_str("#comment")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("kind"), BinOp::StrictEq, e_int(7)),
-                        vec![
-                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_new("DOMProcessingInstruction", vec![e_method_call(e_this(), "getName", vec![]), e_method_call(e_this(), "__elephc_dom_text", vec![])]), e_var("document"), e_var("parent"), e_method_call(e_this(), "getName", vec![])])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("kind"), BinOp::StrictEq, e_int(1)),
-                        vec![
-                            s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_new("DOMElement", vec![]), e_var("document"), e_var("parent"), e_call("elephc_xml_sx_string", vec![e_var("handle"), e_int(6)])])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_method_call(e_this(), "__elephc_dom_bind_node", vec![e_new("DOMNode", vec![]), e_var("document"), e_var("parent"), e_method_call(e_this(), "getName", vec![])])),
-                ]),
-        )
-        .method(
-            method("__elephc_dom_bind_node")
-                .private()
-                .param("node", t_class("DOMNode"))
-                .param("document", t_mixed())
-                .param("parent", t_mixed())
-                .param("name", TypeExpr::Str)
-                .returns(t_class("DOMNode"))
-                .body(vec![
-                    s_prop_assign(e_var("node"), "__elephc_simplexml", e_this()),
-                    s_prop_assign(e_var("node"), "nodeName", e_var("name")),
-                    s_prop_assign(e_var("node"), "ownerDocument", e_var("document")),
-                    s_prop_assign(e_var("node"), "parentNode", e_var("parent")),
-                    s_expr(e_call("__elephc_dom_remember_node", vec![e_var("document"), e_method_call(e_this(), "__elephc_dom_identity", vec![]), e_var("node")])),
-                    s_return(e_var("node")),
-                ]),
-        )
-        .method(
             method("rewind")
                 .returns(TypeExpr::Void)
                 .body(vec![
@@ -3039,126 +2668,7 @@ fn decl_fn_simplexml_load_file() -> Stmt {
         .build()
 }
 
-/// `__elephc_simplexml_load_dom` — transcribed from the PHP form.
-fn decl_fn_elephc_simplexml_load_dom() -> Stmt {
-    function("__elephc_simplexml_load_dom")
-        .param("document", t_class("DOMDocument"))
-        .param("data", TypeExpr::Str)
-        .param("options", TypeExpr::Int)
-        .returns(TypeExpr::Bool)
-        .body(vec![
-            s_assign("handle", e_call("elephc_xml_sx_load_dom", vec![e_var("data"), e_call("strlen", vec![e_var("data")]), e_var("options")])),
-            s_assign("diagnostics", e_call("elephc_xml_sx_diagnostics", vec![])),
-            s_if(
-                e_binop(e_var("handle"), BinOp::StrictNotEq, e_int(0)),
-                vec![
-                    s_assign("object", e_call("__elephc_simplexml_wrap", vec![e_var("handle"), e_str("SimpleXMLElement")])),
-                    s_prop_assign(e_var("document"), "__elephc_simplexml", e_var("object")),
-                    s_prop_assign(e_var("document"), "childNodes", e_null()),
-                ],
-                vec![],
-                None,
-            ),
-            s_expr(e_call("__elephc_simplexml_report_text", vec![e_var("diagnostics"), e_str("DOMDocument::loadXML()"), e_bool(true)])),
-            s_return(e_binop(e_var("handle"), BinOp::StrictNotEq, e_int(0))),
-        ])
-        .build()
-}
 
-/// `__elephc_simplexml_bind_dom` — transcribed from the PHP form.
-fn decl_fn_elephc_simplexml_bind_dom() -> Stmt {
-    function("__elephc_simplexml_bind_dom")
-        .param("node", t_class("DOMNode"))
-        .param("view", t_class("SimpleXMLElement"))
-        .returns(TypeExpr::Void)
-        .body(vec![
-            s_assign("children", e_prop(e_var("node"), "childNodes")),
-            s_if(
-                e_instance_of(e_var("node"), "DOMDocument"),
-                vec![
-                    s_prop_assign(e_var("node"), "__elephc_simplexml", e_var("view")),
-                    s_assign("selections", e_method_call(e_var("view"), "__elephc_dom_selections", vec![e_bool(true)])),
-                    s_assign("i", e_int(0)),
-                    s_if(
-                        e_instance_of(e_var("children"), "DOMNodeList"),
-                        vec![
-                            s_foreach(e_var("children"), None, "child", vec![
-                                s_if(
-                                    e_instance_of(e_var("child"), "DOMNode"),
-                                    vec![
-                                        s_if(
-                                            e_call("isset", vec![e_index(e_var("selections"), e_var("i"))]),
-                                            vec![
-                                                s_assign("selected", e_index(e_var("selections"), e_var("i"))),
-                                                s_if(
-                                                    e_instance_of(e_var("selected"), "SimpleXMLElement"),
-                                                    vec![
-                                                        s_expr(e_call("__elephc_simplexml_bind_dom", vec![e_var("child"), e_var("selected")])),
-                                                    ],
-                                                    vec![],
-                                                    None,
-                                                ),
-                                            ],
-                                            vec![],
-                                            None,
-                                        ),
-                                    ],
-                                    vec![],
-                                    None,
-                                ),
-                                s_expr(e_post_inc("i")),
-                            ]),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_call("__elephc_dom_drop_snapshot", vec![e_var("node")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("selections", e_method_call(e_var("view"), "__elephc_dom_selections", vec![])),
-            s_prop_assign(e_var("node"), "__elephc_simplexml", e_var("view")),
-            s_expr(e_call("__elephc_dom_remember_node", vec![e_prop(e_var("node"), "ownerDocument"), e_method_call(e_var("view"), "__elephc_dom_identity", vec![]), e_var("node")])),
-            s_assign("i", e_int(0)),
-            s_if(
-                e_instance_of(e_var("children"), "DOMNodeList"),
-                vec![
-                    s_foreach(e_var("children"), None, "child", vec![
-                        s_if(
-                            e_instance_of(e_var("child"), "DOMNode"),
-                            vec![
-                                s_if(
-                                    e_call("isset", vec![e_index(e_var("selections"), e_var("i"))]),
-                                    vec![
-                                        s_assign("selected", e_index(e_var("selections"), e_var("i"))),
-                                        s_if(
-                                            e_instance_of(e_var("selected"), "SimpleXMLElement"),
-                                            vec![
-                                                s_expr(e_call("__elephc_simplexml_bind_dom", vec![e_var("child"), e_var("selected")])),
-                                            ],
-                                            vec![],
-                                            None,
-                                        ),
-                                    ],
-                                    vec![],
-                                    None,
-                                ),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                        s_expr(e_post_inc("i")),
-                    ]),
-                ],
-                vec![],
-                None,
-            ),
-            s_expr(e_call("__elephc_dom_drop_snapshot", vec![e_var("node")])),
-        ])
-        .build()
-}
 
 /// `simplexml_import_dom` — transcribed from the PHP form.
 fn decl_fn_simplexml_import_dom() -> Stmt {
@@ -3194,10 +2704,31 @@ fn decl_fn_simplexml_import_dom() -> Stmt {
                 vec![],
                 None,
             ),
+            // A DOM node shares the DOM engine's native tree (`elephc_xml_sx_import_dom`):
+            // -1 and -2 are php's "no document" and "invalid node type" warnings.
             s_if(
                 e_instance_of(e_var("node"), "DOMNode"),
                 vec![
-                    s_return(e_call("__elephc_simplexml_import_node", vec![e_var("node"), e_var("class")])),
+                    s_assign("handle", e_call("elephc_xml_sx_import_dom", vec![e_method_call(e_var("node"), "__elephc_handle", vec![])])),
+                    s_if(
+                        e_binop(e_var("handle"), BinOp::StrictEq, e_neg(e_int(1))),
+                        vec![
+                            s_expr(e_call("__elephc_simplexml_warn", vec![e_str("Warning: simplexml_import_dom(): Imported Node must have associated Document\n")])),
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("handle"), BinOp::LtEq, e_int(0)),
+                        vec![
+                            s_expr(e_call("__elephc_simplexml_warn", vec![e_str("Warning: simplexml_import_dom(): Invalid Nodetype to import\n")])),
+                            s_return(e_null()),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_call("__elephc_simplexml_wrap", vec![e_var("handle"), e_var("class")])),
                 ],
                 vec![],
                 None,
@@ -3207,238 +2738,9 @@ fn decl_fn_simplexml_import_dom() -> Stmt {
         .build()
 }
 
-/// `__elephc_simplexml_import_node` — transcribed from the PHP form.
-fn decl_fn_elephc_simplexml_import_node() -> Stmt {
-    function("__elephc_simplexml_import_node")
-        .param("node", t_class("DOMNode"))
-        .param("class", TypeExpr::Str)
-        .returns(t_nullable(t_class("SimpleXMLElement")))
-        .body(vec![
-            s_if(
-                e_binop(e_prop(e_var("node"), "nodeName"), BinOp::StrictEq, e_str("")),
-                vec![
-                    s_throw(e_new("TypeError", vec![e_str("simplexml_import_dom(): Argument #1 ($node) must be a valid XML node")])),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("bound", e_prop(e_var("node"), "__elephc_simplexml")),
-            s_if(
-                e_binop(e_instance_of(e_var("node"), "DOMElement"), BinOp::And, e_instance_of(e_var("bound"), "SimpleXMLElement")),
-                vec![
-                    s_assign("handle", e_method_call(e_var("bound"), "__elephc_handle_value", vec![])),
-                    s_return(e_call("__elephc_simplexml_wrap", vec![e_call("elephc_xml_sx_alias", vec![e_var("handle")]), e_var("class")])),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("document", e_prop(e_var("node"), "ownerDocument")),
-            s_if(
-                e_instance_of(e_var("node"), "DOMDocument"),
-                vec![
-                    s_assign("document", e_var("node")),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_not(e_instance_of(e_var("document"), "DOMDocument")),
-                vec![
-                    s_expr(e_call("__elephc_simplexml_warn", vec![e_str("Warning: simplexml_import_dom(): Imported Node must have associated Document\n")])),
-                    s_return(e_null()),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_binop(e_not(e_instance_of(e_var("node"), "DOMDocument")), BinOp::And, e_not(e_instance_of(e_var("node"), "DOMElement"))), BinOp::Or, e_binop(e_instance_of(e_var("node"), "DOMDocument"), BinOp::And, e_not(e_instance_of(e_prop(e_var("document"), "documentElement"), "DOMElement")))),
-                vec![
-                    s_expr(e_call("__elephc_simplexml_warn", vec![e_str("Warning: simplexml_import_dom(): Invalid Nodetype to import\n")])),
-                    s_return(e_null()),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_instance_of(e_var("bound"), "SimpleXMLElement"),
-                vec![
-                    s_assign("handle", e_method_call(e_var("bound"), "__elephc_handle_value", vec![])),
-                    s_return(e_call("__elephc_simplexml_wrap", vec![e_call("elephc_xml_sx_alias", vec![e_var("handle")]), e_var("class")])),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("result", e_call("__elephc_simplexml_import_document", vec![e_var("document"), e_str("SimpleXMLElement")])),
-            s_if(
-                e_not(e_instance_of(e_var("result"), "SimpleXMLElement")),
-                vec![
-                    s_return(e_null()),
-                ],
-                vec![],
-                None,
-            ),
-            s_expr(e_call("__elephc_simplexml_bind_dom", vec![e_var("document"), e_var("result")])),
-            s_assign("bound", e_prop(e_var("node"), "__elephc_simplexml")),
-            s_if(
-                e_instance_of(e_var("bound"), "SimpleXMLElement"),
-                vec![
-                    s_assign("handle", e_method_call(e_var("bound"), "__elephc_handle_value", vec![])),
-                    s_return(e_call("__elephc_simplexml_wrap", vec![e_call("elephc_xml_sx_alias", vec![e_var("handle")]), e_var("class")])),
-                ],
-                vec![],
-                None,
-            ),
-            s_return(e_null()),
-        ])
-        .build()
-}
 
-/// `__elephc_simplexml_import_document` — transcribed from the PHP form.
-fn decl_fn_elephc_simplexml_import_document() -> Stmt {
-    function("__elephc_simplexml_import_document")
-        .param("document", t_class("DOMDocument"))
-        .param("class", TypeExpr::Str)
-        .returns(t_union(vec![t_class("SimpleXMLElement"), TypeExpr::False]))
-        .body(vec![
-            s_assign("builder", e_call("elephc_xml_sx_html_document", vec![])),
-            s_if(
-                e_binop(e_var("builder"), BinOp::StrictEq, e_int(0)),
-                vec![
-                    s_return(e_bool(false)),
-                ],
-                vec![],
-                None,
-            ),
-            s_try(vec![
-                s_foreach(e_prop(e_var("document"), "childNodes"), None, "child", vec![
-                    s_if(
-                        e_instance_of(e_var("child"), "DOMNode"),
-                        vec![
-                            s_expr(e_call("__elephc_simplexml_import_child", vec![e_var("builder"), e_var("child")])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                ]),
-                s_assign("root", e_call("elephc_xml_sx_html_root", vec![e_var("builder")])),
-                s_if(
-                    e_binop(e_var("root"), BinOp::StrictEq, e_int(0)),
-                    vec![
-                        s_return(e_bool(false)),
-                    ],
-                    vec![],
-                    None,
-                ),
-                s_return(e_call("__elephc_simplexml_wrap", vec![e_var("root"), e_var("class")])),
-            ], vec![
-            ], Some(vec![
-                s_expr(e_call("elephc_xml_sx_free", vec![e_var("builder")])),
-            ])),
-        ])
-        .build()
-}
 
-/// `__elephc_simplexml_import_text_kind` — transcribed from the PHP form.
-fn decl_fn_elephc_simplexml_import_text_kind() -> Stmt {
-    function("__elephc_simplexml_import_text_kind")
-        .param("node", t_class("DOMText"))
-        .returns(TypeExpr::Int)
-        .body(vec![
-            s_return(e_ternary(e_prop(e_var("node"), "__elephc_raw_text"), e_int(4), e_int(3))),
-        ])
-        .build()
-}
 
-/// `__elephc_simplexml_import_child` — transcribed from the PHP form.
-fn decl_fn_elephc_simplexml_import_child() -> Stmt {
-    function("__elephc_simplexml_import_child")
-        .param("parent", TypeExpr::Int)
-        .param("node", t_class("DOMNode"))
-        .returns(TypeExpr::Void)
-        .body(vec![
-            s_assign("kind", e_int(0)),
-            s_if(
-                e_instance_of(e_var("node"), "DOMElement"),
-                vec![
-                    s_assign("kind", e_int(1)),
-                ],
-                vec![
-                (e_instance_of(e_var("node"), "DOMText"), vec![
-                    s_assign("kind", e_call("__elephc_simplexml_import_text_kind", vec![e_var("node")])),
-                ]),
-                (e_instance_of(e_var("node"), "DOMComment"), vec![
-                    s_assign("kind", e_int(5)),
-                ]),
-                (e_instance_of(e_var("node"), "DOMProcessingInstruction"), vec![
-                    s_assign("kind", e_int(6)),
-                ]),
-            ],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("kind"), BinOp::StrictEq, e_int(0)),
-                vec![
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_assign("value", e_ternary(e_binop(e_var("kind"), BinOp::StrictEq, e_int(1)), e_str(""), e_cast(CastType::String, e_prop(e_var("node"), "nodeValue")))),
-            s_assign("handle", e_call("elephc_xml_sx_html_append", vec![e_var("parent"), e_var("kind"), e_prop(e_var("node"), "nodeName"), e_var("value")])),
-            s_if(
-                e_binop(e_var("handle"), BinOp::StrictEq, e_int(0)),
-                vec![
-                    s_throw(e_new("Error", vec![e_str("Could not import DOM node")])),
-                ],
-                vec![],
-                None,
-            ),
-            s_try(vec![
-                s_if(
-                    e_binop(e_var("kind"), BinOp::StrictEq, e_int(1)),
-                    vec![
-                        s_assign("xmlns", e_prop(e_var("node"), "__elephc_dom_xmlns")),
-                        s_if(
-                            e_binop(e_binop(e_var("xmlns"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_call("elephc_xml_sx_mutate", vec![e_var("handle"), e_int(25), e_str("xmlns"), e_cast(CastType::String, e_var("xmlns")), e_str(""), e_int(0), e_int(0)]), BinOp::StrictEq, e_int(0))),
-                            vec![
-                                s_throw(e_new("Error", vec![e_str("Could not import DOM namespace declaration")])),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                        s_foreach(e_prop(e_var("node"), "__attrs"), None, "pair", vec![
-                            s_assign("attribute", e_call("elephc_xml_sx_html_append", vec![e_var("handle"), e_int(2), e_cast(CastType::String, e_index(e_var("pair"), e_int(0))), e_cast(CastType::String, e_index(e_var("pair"), e_int(1)))])),
-                            s_if(
-                                e_binop(e_var("attribute"), BinOp::StrictEq, e_int(0)),
-                                vec![
-                                    s_throw(e_new("Error", vec![e_str("Could not import DOM attribute")])),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_expr(e_call("elephc_xml_sx_free", vec![e_var("attribute")])),
-                        ]),
-                        s_foreach(e_prop(e_var("node"), "childNodes"), None, "child", vec![
-                            s_if(
-                                e_instance_of(e_var("child"), "DOMNode"),
-                                vec![
-                                    s_expr(e_call("__elephc_simplexml_import_child", vec![e_var("handle"), e_var("child")])),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                        ]),
-                    ],
-                    vec![],
-                    None,
-                ),
-            ], vec![
-            ], Some(vec![
-                s_expr(e_call("elephc_xml_sx_free", vec![e_var("handle")])),
-            ])),
-        ])
-        .build()
-}
 
 /// `elephc_runtime_simplexml_stream_close_mode` — transcribed from the PHP form.
 fn decl_extern_elephc_runtime_simplexml_stream_close_mode() -> Stmt {
@@ -3921,6 +3223,7 @@ pub(crate) fn declarations() -> Program {
         vec![
             decl_extern_elephc_xml_sx_load(),
             decl_extern_elephc_xml_sx_load_dom(),
+            decl_extern_elephc_xml_sx_import_dom(),
             decl_extern_elephc_xml_sx_html_document(),
             decl_extern_elephc_xml_sx_html_append(),
             decl_extern_elephc_xml_sx_html_root(),
@@ -3959,13 +3262,7 @@ pub(crate) fn declarations() -> Program {
             decl_class_simplexmliterator(),
             decl_fn_simplexml_load_string(),
             decl_fn_simplexml_load_file(),
-            decl_fn_elephc_simplexml_load_dom(),
-            decl_fn_elephc_simplexml_bind_dom(),
             decl_fn_simplexml_import_dom(),
-            decl_fn_elephc_simplexml_import_node(),
-            decl_fn_elephc_simplexml_import_document(),
-            decl_fn_elephc_simplexml_import_text_kind(),
-            decl_fn_elephc_simplexml_import_child(),
             decl_extern_elephc_runtime_simplexml_stream_close_mode(),
             decl_fn_elephc_simplexml_file_handle(),
             decl_fn_elephc_simplexml_stream_bytes(),

@@ -274,49 +274,98 @@ fn decl_class_elephcdom() -> Stmt {
                     s_if(
                         e_call("isset", vec![e_index(e_static_prop("__ElephcDOM", "objects"), e_var("handle"))]),
                         vec![
-                            s_return(e_index(e_static_prop("__ElephcDOM", "objects"), e_var("handle"))),
+                            s_assign("cached", e_index(e_static_prop("__ElephcDOM", "objects"), e_var("handle"))),
+                            s_if(
+                                e_instance_of(e_var("cached"), "DOMNode"),
+                                vec![
+                                    s_return(e_var("cached")),
+                                ],
+                                vec![],
+                                None,
+                            ),
                         ],
                         vec![],
                         None,
                     ),
                     s_static_prop_assign("__ElephcDOM", "minting", e_bool(true)),
-                    s_assign("type", e_call("elephc_xml_dom_type", vec![e_var("handle")])),
-                    s_if(
-                        e_binop(e_var("type"), BinOp::StrictEq, e_int(1)),
-                        vec![
-                            s_assign("object", e_new("DOMElement", vec![e_str("")])),
-                        ],
-                        vec![
-                        (e_binop(e_var("type"), BinOp::StrictEq, e_int(2)), vec![
-                            s_assign("object", e_new("DOMAttr", vec![e_str("")])),
-                        ]),
-                        (e_binop(e_var("type"), BinOp::StrictEq, e_int(3)), vec![
-                            s_assign("object", e_new("DOMText", vec![])),
-                        ]),
-                        (e_binop(e_var("type"), BinOp::StrictEq, e_int(4)), vec![
-                            s_assign("object", e_new("DOMCdataSection", vec![e_str("")])),
-                        ]),
-                        (e_binop(e_var("type"), BinOp::StrictEq, e_int(7)), vec![
-                            s_assign("object", e_new("DOMProcessingInstruction", vec![e_str("")])),
-                        ]),
-                        (e_binop(e_var("type"), BinOp::StrictEq, e_int(8)), vec![
-                            s_assign("object", e_new("DOMComment", vec![])),
-                        ]),
-                        (e_binop(e_binop(e_var("type"), BinOp::StrictEq, e_int(9)), BinOp::Or, e_binop(e_var("type"), BinOp::StrictEq, e_int(13))), vec![
-                            s_assign("object", e_new("DOMDocument", vec![])),
-                        ]),
-                        (e_binop(e_var("type"), BinOp::StrictEq, e_int(11)), vec![
-                            s_assign("object", e_new("DOMDocumentFragment", vec![])),
-                        ]),
-                    ],
-                        Some(vec![
-                        s_assign("object", e_new("DOMNode", vec![])),
-                    ]),
-                    ),
+                    s_assign("object", e_static_call("__ElephcDOM", "mint", vec![e_call("elephc_xml_dom_type", vec![e_var("handle")])])),
                     s_static_prop_assign("__ElephcDOM", "minting", e_bool(false)),
                     s_expr(e_method_call(e_var("object"), "__elephc_bind", vec![e_var("handle")])),
                     s_static_prop_array_assign("__ElephcDOM", "objects", e_var("handle"), e_var("object")),
                     s_return(e_var("object")),
+                ]),
+        )
+        .method(
+            method("mint")
+                .static_()
+                .param("type", TypeExpr::Int)
+                .returns(t_class("DOMNode"))
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("type"), BinOp::StrictEq, e_int(1)),
+                        vec![
+                            s_return(e_new("DOMElement", vec![e_str("")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("type"), BinOp::StrictEq, e_int(2)),
+                        vec![
+                            s_return(e_new("DOMAttr", vec![e_str("")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("type"), BinOp::StrictEq, e_int(3)),
+                        vec![
+                            s_return(e_new("DOMText", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("type"), BinOp::StrictEq, e_int(4)),
+                        vec![
+                            s_return(e_new("DOMCdataSection", vec![e_str("")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("type"), BinOp::StrictEq, e_int(7)),
+                        vec![
+                            s_return(e_new("DOMProcessingInstruction", vec![e_str("")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("type"), BinOp::StrictEq, e_int(8)),
+                        vec![
+                            s_return(e_new("DOMComment", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_binop(e_var("type"), BinOp::StrictEq, e_int(9)), BinOp::Or, e_binop(e_var("type"), BinOp::StrictEq, e_int(13))),
+                        vec![
+                            s_return(e_new("DOMDocument", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_if(
+                        e_binop(e_var("type"), BinOp::StrictEq, e_int(11)),
+                        vec![
+                            s_return(e_new("DOMDocumentFragment", vec![])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_new("DOMNode", vec![])),
                 ]),
         )
         .method(
@@ -352,15 +401,8 @@ fn decl_class_elephcdom() -> Stmt {
                         vec![],
                         None,
                     ),
-                    s_if(
-                        e_binop(e_var("result"), BinOp::StrictEq, e_int(0)),
-                        vec![
-                            s_return(e_bool(false)),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_return(e_static_call("__ElephcDOM", "wrap", vec![e_var("result")])),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_var("result")])),
+                    s_return(e_ternary(e_binop(e_var("node"), BinOp::StrictEq, e_null()), e_bool(false), e_var("node"))),
                 ]),
         )
         .method(
@@ -1276,7 +1318,16 @@ fn decl_class_domdocument() -> Stmt {
                 .param("localName", TypeExpr::Str)
                 .param_default("value", TypeExpr::Str, e_str(""))
                 .body(vec![
-                    s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(1), e_var("localName"), e_var("value")])])),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(1), e_var("localName"), e_var("value")])])),
+                    s_if(
+                        e_instance_of(e_var("node"), "DOMElement"),
+                        vec![
+                            s_return(e_var("node")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_throw(e_new("DOMException", vec![e_str("Invalid State Error"), e_int(11)])),
                 ]),
         )
         .method(
@@ -1284,7 +1335,16 @@ fn decl_class_domdocument() -> Stmt {
                 .param("data", TypeExpr::Str)
                 .returns(t_class("DOMText"))
                 .body(vec![
-                    s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(3), e_str(""), e_var("data")])])),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(3), e_str(""), e_var("data")])])),
+                    s_if(
+                        e_not(e_instance_of(e_var("node"), "DOMText")),
+                        vec![
+                            s_throw(e_new("DOMException", vec![e_str("Invalid State Error"), e_int(11)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_var("node")),
                 ]),
         )
         .method(
@@ -1292,14 +1352,32 @@ fn decl_class_domdocument() -> Stmt {
                 .param("data", TypeExpr::Str)
                 .returns(t_class("DOMComment"))
                 .body(vec![
-                    s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(8), e_str(""), e_var("data")])])),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(8), e_str(""), e_var("data")])])),
+                    s_if(
+                        e_not(e_instance_of(e_var("node"), "DOMComment")),
+                        vec![
+                            s_throw(e_new("DOMException", vec![e_str("Invalid State Error"), e_int(11)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_var("node")),
                 ]),
         )
         .method(
             method("createCDATASection")
                 .param("data", TypeExpr::Str)
                 .body(vec![
-                    s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(4), e_str(""), e_var("data")])])),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(4), e_str(""), e_var("data")])])),
+                    s_if(
+                        e_instance_of(e_var("node"), "DOMCdataSection"),
+                        vec![
+                            s_return(e_var("node")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_throw(e_new("DOMException", vec![e_str("Invalid State Error"), e_int(11)])),
                 ]),
         )
         .method(
@@ -1307,21 +1385,48 @@ fn decl_class_domdocument() -> Stmt {
                 .param("target", TypeExpr::Str)
                 .param_default("data", TypeExpr::Str, e_str(""))
                 .body(vec![
-                    s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(7), e_var("target"), e_var("data")])])),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(7), e_var("target"), e_var("data")])])),
+                    s_if(
+                        e_instance_of(e_var("node"), "DOMProcessingInstruction"),
+                        vec![
+                            s_return(e_var("node")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_throw(e_new("DOMException", vec![e_str("Invalid State Error"), e_int(11)])),
                 ]),
         )
         .method(
             method("createAttribute")
                 .param("localName", TypeExpr::Str)
                 .body(vec![
-                    s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(2), e_var("localName"), e_str("")])])),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(2), e_var("localName"), e_str("")])])),
+                    s_if(
+                        e_instance_of(e_var("node"), "DOMAttr"),
+                        vec![
+                            s_return(e_var("node")),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_throw(e_new("DOMException", vec![e_str("Invalid State Error"), e_int(11)])),
                 ]),
         )
         .method(
             method("createDocumentFragment")
                 .returns(t_class("DOMDocumentFragment"))
                 .body(vec![
-                    s_return(e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(11), e_str(""), e_str("")])])),
+                    s_assign("node", e_static_call("__ElephcDOM", "wrap", vec![e_call("elephc_xml_dom_create", vec![e_method_call(e_this(), "__elephc_handle", vec![]), e_int(11), e_str(""), e_str("")])])),
+                    s_if(
+                        e_not(e_instance_of(e_var("node"), "DOMDocumentFragment")),
+                        vec![
+                            s_throw(e_new("DOMException", vec![e_str("Invalid State Error"), e_int(11)])),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_var("node")),
                 ]),
         )
         .method(

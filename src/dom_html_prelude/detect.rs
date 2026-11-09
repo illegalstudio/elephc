@@ -37,11 +37,15 @@ const DOM_HTML_CLASSES: &[&str] = &[
     "DOMDocument",
     "DOMNode",
     "DOMElement",
+    "DOMAttr",
     "DOMText",
+    "DOMCdataSection",
     "DOMComment",
     "DOMProcessingInstruction",
     "DOMCharacterData",
+    "DOMDocumentFragment",
     "DOMNodeList",
+    "DOMNamedNodeMap",
     "Dom\\XMLDocument",
 ];
 

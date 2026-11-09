@@ -57,33 +57,45 @@ final class __ElephcDOM {
             return null;
         }
         if (isset(__ElephcDOM::$objects[$handle])) {
-            return __ElephcDOM::$objects[$handle];
+            $cached = __ElephcDOM::$objects[$handle];
+            if ($cached instanceof DOMNode) {
+                return $cached;
+            }
         }
         __ElephcDOM::$minting = true;
-        $type = elephc_xml_dom_type($handle);
-        if ($type === 1) {
-            $object = new DOMElement("");
-        } elseif ($type === 2) {
-            $object = new DOMAttr("");
-        } elseif ($type === 3) {
-            $object = new DOMText();
-        } elseif ($type === 4) {
-            $object = new DOMCdataSection("");
-        } elseif ($type === 7) {
-            $object = new DOMProcessingInstruction("");
-        } elseif ($type === 8) {
-            $object = new DOMComment();
-        } elseif ($type === 9 || $type === 13) {
-            $object = new DOMDocument();
-        } elseif ($type === 11) {
-            $object = new DOMDocumentFragment();
-        } else {
-            $object = new DOMNode();
-        }
+        $object = __ElephcDOM::mint(elephc_xml_dom_type($handle));
         __ElephcDOM::$minting = false;
         $object->__elephc_bind($handle);
         __ElephcDOM::$objects[$handle] = $object;
         return $object;
+    }
+
+    public static function mint(int $type): DOMNode {
+        if ($type === 1) {
+            return new DOMElement("");
+        }
+        if ($type === 2) {
+            return new DOMAttr("");
+        }
+        if ($type === 3) {
+            return new DOMText();
+        }
+        if ($type === 4) {
+            return new DOMCdataSection("");
+        }
+        if ($type === 7) {
+            return new DOMProcessingInstruction("");
+        }
+        if ($type === 8) {
+            return new DOMComment();
+        }
+        if ($type === 9 || $type === 13) {
+            return new DOMDocument();
+        }
+        if ($type === 11) {
+            return new DOMDocumentFragment();
+        }
+        return new DOMNode();
     }
 
     public static function fail(int $code): void {
@@ -105,10 +117,8 @@ final class __ElephcDOM {
         if ($result < 0) {
             __ElephcDOM::fail(-$result);
         }
-        if ($result === 0) {
-            return false;
-        }
-        return __ElephcDOM::wrap($result);
+        $node = __ElephcDOM::wrap($result);
+        return $node === null ? false : $node;
     }
 
     public static function document(): int {
@@ -523,31 +533,59 @@ class DOMDocument extends DOMNode {
     }
 
     public function createElement(string $localName, string $value = "") {
-        return __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 1, $localName, $value));
+        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 1, $localName, $value));
+        if ($node instanceof DOMElement) {
+            return $node;
+        }
+        throw new DOMException("Invalid State Error", 11);
     }
 
     public function createTextNode(string $data): DOMText {
-        return __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 3, "", $data));
+        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 3, "", $data));
+        if (!($node instanceof DOMText)) {
+            throw new DOMException("Invalid State Error", 11);
+        }
+        return $node;
     }
 
     public function createComment(string $data): DOMComment {
-        return __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 8, "", $data));
+        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 8, "", $data));
+        if (!($node instanceof DOMComment)) {
+            throw new DOMException("Invalid State Error", 11);
+        }
+        return $node;
     }
 
     public function createCDATASection(string $data) {
-        return __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 4, "", $data));
+        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 4, "", $data));
+        if ($node instanceof DOMCdataSection) {
+            return $node;
+        }
+        throw new DOMException("Invalid State Error", 11);
     }
 
     public function createProcessingInstruction(string $target, string $data = "") {
-        return __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 7, $target, $data));
+        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 7, $target, $data));
+        if ($node instanceof DOMProcessingInstruction) {
+            return $node;
+        }
+        throw new DOMException("Invalid State Error", 11);
     }
 
     public function createAttribute(string $localName) {
-        return __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 2, $localName, ""));
+        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 2, $localName, ""));
+        if ($node instanceof DOMAttr) {
+            return $node;
+        }
+        throw new DOMException("Invalid State Error", 11);
     }
 
     public function createDocumentFragment(): DOMDocumentFragment {
-        return __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 11, "", ""));
+        $node = __ElephcDOM::wrap(elephc_xml_dom_create($this->__elephc_handle(), 11, "", ""));
+        if (!($node instanceof DOMDocumentFragment)) {
+            throw new DOMException("Invalid State Error", 11);
+        }
+        return $node;
     }
 
     public function getElementsByTagName(string $qualifiedName): DOMNodeList {

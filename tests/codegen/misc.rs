@@ -9,6 +9,24 @@
 
 use crate::support::*;
 
+/// An untyped method returning another call's object (static, instance, or through a local)
+/// can be passed to a typed parameter from top-level code: the initial top-level pass sees the
+/// method's provisional `int` return, and only the final, post-inference pass may report.
+#[test]
+fn test_untyped_method_returning_call_result_satisfies_typed_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+class A {}
+class F { public static function make(): A { return new A(); } public function inst(): ?A { return new A(); } }
+class B { public function viaStatic() { return F::make(); } public function viaInstance() { return (new F())->inst(); } public function viaLocal() { $a = F::make(); return $a; } }
+function takes(A $a): void { echo get_class($a), "|"; }
+$b = new B();
+takes($b->viaStatic()); $v = $b->viaInstance(); if ($v !== null) { takes($v); } takes($b->viaLocal());
+"#,
+    );
+    assert_eq!(out, "A|A|A|");
+}
+
 /// Compiles a program whose source begins with a UTF-8 BOM (U+FEFF) before `<?php` and
 /// verifies it builds and runs end-to-end, matching editors that emit BOM-prefixed UTF-8.
 #[test]

@@ -14,6 +14,9 @@ use crate::support::*;
 /// Function template defaults preserve parameter references while class bounds stay canonical.
 #[test]
 fn dom_html_review_namespaced_generic_parameter_defaults() {
+    if skip_without_xml_native("dom_html_review_namespaced_generic_parameter_defaults") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 namespace App;
 class Entity { public function label(): string { return 'entity'; } }
@@ -32,12 +35,18 @@ echo '|', get_class(class_default(5));
 /// Template defaults keep the same namespace identity without EIR optimization.
 #[test]
 fn dom_html_review_namespaced_generic_parameter_defaults_no_ir_opt() {
+    if skip_without_xml_native("dom_html_review_namespaced_generic_parameter_defaults_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_review_namespaced_generic_parameter_defaults);
 }
 
 /// Legacy PHP keeps content after a closed body beside it, not inside the selected body.
 #[test]
 fn dom_html_ninth_review_closed_body_following_content() {
+    if skip_without_xml_native("dom_html_ninth_review_closed_body_following_content") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<body>A</body><div>B</div>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
@@ -54,6 +63,9 @@ echo ':', $doc->saveXML($html);
 /// Legacy libxml reopens an html child without duplicating body or moving the document instruction.
 #[test]
 fn dom_html_ninth_review_closed_document_following_content() {
+    if skip_without_xml_native("dom_html_ninth_review_closed_document_following_content") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach ([0, LIBXML_NOBLANKS] as $extra) {
@@ -75,6 +87,9 @@ foreach ([0, LIBXML_NOBLANKS] as $extra) {
 /// Reopening a literal document tree keeps every temporary wrapper owner balanced.
 #[test]
 fn dom_html_ninth_review_reopened_tree_owners() {
+    if skip_without_xml_native("dom_html_ninth_review_reopened_tree_owners") {
+        return;
+    }
     let out = compile_and_run_with_heap_debug(r#"<?php
 function enableDom(DOMDocument $doc): void {}
 for ($i = 0; $i < 16; $i++) {
@@ -97,24 +112,36 @@ for ($i = 0; $i < 16; $i++) {
 /// Closed-body sibling behavior remains independent of EIR optimization.
 #[test]
 fn dom_html_ninth_review_closed_body_no_ir_opt() {
+    if skip_without_xml_native("dom_html_ninth_review_closed_body_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_ninth_review_closed_body_following_content);
 }
 
 /// Reopened-document topology and instruction links remain independent of EIR optimization.
 #[test]
 fn dom_html_ninth_review_closed_document_no_ir_opt() {
+    if skip_without_xml_native("dom_html_ninth_review_closed_document_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_ninth_review_closed_document_following_content);
 }
 
 /// Reopened-document temporary owners remain balanced without EIR optimization.
 #[test]
 fn dom_html_ninth_review_reopened_tree_no_ir_opt() {
+    if skip_without_xml_native("dom_html_ninth_review_reopened_tree_no_ir_opt") {
+        return;
+    }
     without_ir_opt(dom_html_ninth_review_reopened_tree_owners);
 }
 
 /// Trailing comments remain document siblings without introducing a second html/body wrapper.
 #[test]
 fn dom_html_eighth_review_explicit_document_tail_comments() {
+    if skip_without_xml_native("dom_html_eighth_review_explicit_document_tail_comments") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach ([0, LIBXML_NOBLANKS] as $extra) {
@@ -134,6 +161,9 @@ foreach ([0, LIBXML_NOBLANKS] as $extra) {
 /// Explicit HTML document padding is ignored independently of fragment NOBLANKS filtering.
 #[test]
 fn dom_html_eighth_review_explicit_document_tail_whitespace() {
+    if skip_without_xml_native("dom_html_eighth_review_explicit_document_tail_whitespace") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 foreach ([0, LIBXML_NOBLANKS] as $extra) {
@@ -151,6 +181,9 @@ foreach ([0, LIBXML_NOBLANKS] as $extra) {
 /// Leading and trailing document nodes preserve their order, parents and bidirectional links.
 #[test]
 fn dom_html_eighth_review_explicit_document_siblings() {
+    if skip_without_xml_native("dom_html_eighth_review_explicit_document_siblings") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<!--lead--><html><head></head><body>x</body></html><!--tail--><?Tail data?>', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
@@ -172,6 +205,9 @@ echo ':', $doc->saveXML($html);
 /// An explicit body remains the sole body while its trailing comment stays inside the html wrapper.
 #[test]
 fn dom_html_eighth_review_explicit_body_tail() {
+    if skip_without_xml_native("dom_html_eighth_review_explicit_body_tail") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<body>x</body><!--tail-->', LIBXML_HTML_NODEFDTD | LIBXML_NOERROR);
@@ -188,6 +224,9 @@ echo ':', $doc->saveXML($html);
 /// Wrapper selection retires trailing-node partitions without tokenizer or cyclic DOM owners.
 #[test]
 fn dom_html_eighth_review_trailing_tree_owners() {
+    if skip_without_xml_native("dom_html_eighth_review_trailing_tree_owners") {
+        return;
+    }
     let out = compile_and_run_with_heap_debug(r#"<?php
 function enableDom(DOMDocument $doc): void {}
 for ($i = 0; $i < 16; $i++) {
@@ -210,6 +249,9 @@ for ($i = 0; $i < 16; $i++) {
 /// Wrapper selection and trailing document-node ownership do not depend on IR optimization.
 #[test]
 fn dom_html_eighth_review_without_ir_opt() {
+    if skip_without_xml_native("dom_html_eighth_review_without_ir_opt") {
+        return;
+    }
     crate::support::without_ir_opt(|| {
         dom_html_eighth_review_explicit_document_tail_comments();
         dom_html_eighth_review_explicit_document_tail_whitespace();
@@ -222,6 +264,9 @@ fn dom_html_eighth_review_without_ir_opt() {
 /// NOBLANKS filters html/head blanks while preserving title/body text and the no-flag control.
 #[test]
 fn dom_html_seventh_review_noblanks_wrappers() {
+    if skip_without_xml_native("dom_html_seventh_review_noblanks_wrappers") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $flags = LIBXML_NOERROR | LIBXML_COMPACT | LIBXML_HTML_NODEFDTD | LIBXML_NOBLANKS | LIBXML_NOXMLDECL;
 $doc = new DOMDocument();
@@ -242,6 +287,9 @@ echo $html->childNodes->length, ':', json_encode($html->nodeValue), ':', $doc->s
 /// XML attributes use uppercase hexadecimal Unicode references while text remains UTF-8.
 #[test]
 fn dom_html_seventh_review_unicode_attributes() {
+    if skip_without_xml_native("dom_html_seventh_review_unicode_attributes") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $flags = LIBXML_NOERROR | LIBXML_COMPACT | LIBXML_HTML_NODEFDTD | LIBXML_NOBLANKS | LIBXML_NOXMLDECL;
@@ -257,6 +305,9 @@ foreach (['é', 'a b', '€😀', '&é"\''] as $value) {
 /// Unicode references are inserted after existing XML escapes and cannot escape their own ampersand.
 #[test]
 fn dom_html_seventh_review_unicode_attribute_controls() {
+    if skip_without_xml_native("dom_html_seventh_review_unicode_attribute_controls") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML("<?xml encoding=\"UTF-8\"><div title=\"é&#13;&#10;&#9;&amp;#xE9;\">é</div>", LIBXML_NOERROR | LIBXML_HTML_NODEFDTD);
@@ -269,6 +320,9 @@ echo $doc->saveXML($div);
 /// Repeated attribute serialization releases its string arguments and intermediate byte probes.
 #[test]
 fn dom_html_seventh_review_unicode_attribute_owners() {
+    if skip_without_xml_native("dom_html_seventh_review_unicode_attribute_owners") {
+        return;
+    }
     let out = compile_and_run_with_heap_debug(r#"<?php
 function enableDom(DOMDocument $doc): void {}
 for ($i = 0; $i < 16; $i++) { echo __elephc_dom_escape_attr("é€😀"); }
@@ -282,6 +336,9 @@ echo '|', __elephc_dom_escape_attr('plain'), '|', __elephc_dom_escape_attr('');
 /// Both parser and serializer corrections remain observable with EIR optimization disabled.
 #[test]
 fn dom_html_seventh_review_without_ir_opt() {
+    if skip_without_xml_native("dom_html_seventh_review_without_ir_opt") {
+        return;
+    }
     crate::support::without_ir_opt(|| {
         dom_html_seventh_review_noblanks_wrappers();
         dom_html_seventh_review_unicode_attributes();
@@ -293,6 +350,9 @@ fn dom_html_seventh_review_without_ir_opt() {
 /// Termwind's NOBLANKS drops document padding, not interior or explicit-body spaces.
 #[test]
 fn dom_html_latest_review_document_padding() {
+    if skip_without_xml_native("dom_html_latest_review_document_padding") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $flags = LIBXML_NOERROR | LIBXML_COMPACT | LIBXML_HTML_NODEFDTD | LIBXML_NOBLANKS | LIBXML_NOXMLDECL;
@@ -313,6 +373,9 @@ echo $body->childNodes->length, ':', $doc->saveXML($body);
 /// Native direct and mixed count calls dispatch through the DOM list's Countable contract.
 #[test]
 fn dom_html_latest_review_countable_lists() {
+    if skip_without_xml_native("dom_html_latest_review_countable_lists") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 function size(mixed $value): int { return count($value); }
 $doc = new DOMDocument();
@@ -328,6 +391,9 @@ echo $list instanceof Countable ? 'Y' : 'bad';
 /// Eval observes the same registered Countable implementation as native code.
 #[test]
 fn dom_html_latest_review_eval_countable_list() {
+    if skip_without_xml_native("dom_html_latest_review_eval_countable_list") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 function enableDom(DOMDocument $doc): void {}
 echo eval('$doc = new DOMDocument(); $doc->loadHTML("<div>X</div>"); return count($doc->getElementsByTagName("div"));');
@@ -338,6 +404,9 @@ echo eval('$doc = new DOMDocument(); $doc->loadHTML("<div>X</div>"); return coun
 /// Counting does not retain extra list owners or consume its independent traversal state.
 #[test]
 fn dom_html_latest_review_countable_list_owners() {
+    if skip_without_xml_native("dom_html_latest_review_countable_list_owners") {
+        return;
+    }
     let out = compile_and_run_with_heap_debug(r#"<?php
 function size(mixed $value): int { return count($value); }
 $items = new DOMNodeList([1, 2]);
@@ -353,6 +422,9 @@ unset($items);
 /// Repeated nested traversals, including early inner exits, release their fresh iterators.
 #[test]
 fn dom_html_sixth_review_iterator_owners() {
+    if skip_without_xml_native("dom_html_sixth_review_iterator_owners") {
+        return;
+    }
     let out = compile_and_run_with_heap_debug(r#"<?php
 function walk(DOMNodeList $items): int {
     $count = 0;
@@ -374,6 +446,9 @@ unset($items);
 /// The real CLI repeats DOM discovery after loading a namespaced Composer renderer.
 #[test]
 fn dom_html_sixth_review_autoload_cli() {
+    if skip_without_xml_native("dom_html_sixth_review_autoload_cli") {
+        return;
+    }
     let dir = make_cli_test_dir("elephc_dom_autoload_sixth");
     let result: std::io::Result<(std::process::Output, Option<std::process::Output>)> = (|| {
         std::fs::create_dir_all(dir.join("src"))?;
@@ -407,6 +482,9 @@ class Renderer {
 /// Descendant queries must not consume the iterator of an active child traversal.
 #[test]
 fn dom_html_sixth_review_query_during_child_walk() {
+    if skip_without_xml_native("dom_html_sixth_review_query_during_child_walk") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<div><span>A</span><b>B</b><span>C</span></div>');
@@ -421,6 +499,9 @@ foreach ($div->childNodes as $key => $child) {
 /// Every nested traversal of the same list owns an independent cursor.
 #[test]
 fn dom_html_sixth_review_nested_child_walks() {
+    if skip_without_xml_native("dom_html_sixth_review_nested_child_walks") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $doc = new DOMDocument();
 $doc->loadHTML('<div><span>A</span><b>B</b></div>');
@@ -437,6 +518,9 @@ foreach ($list as $outerKey => $outer) {
 /// A renderer loaded through Composer can be the only source of DOM references.
 #[test]
 fn dom_html_sixth_review_autoload_renderer() {
+    if skip_without_xml_native("dom_html_sixth_review_autoload_renderer") {
+        return;
+    }
     let out = compile_and_run_files(&[
         ("composer.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
         ("src/Renderer.php", r#"<?php
@@ -458,6 +542,9 @@ class Renderer {
 /// Leading comments and instructions remain document siblings, not Termwind body children.
 #[test]
 fn dom_html_fifth_review_document_leading_nodes() {
+    if skip_without_xml_native("dom_html_fifth_review_document_leading_nodes") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 $flags = LIBXML_HTML_NODEFDTD | LIBXML_NOERROR;
@@ -490,6 +577,9 @@ echo $dom->childNodes->item(0)->nodeName;
 /// Discarded unmatched closing tags do not split adjacent text node identities.
 #[test]
 fn dom_html_fifth_review_ignored_end_tag_text_coalescing() {
+    if skip_without_xml_native("dom_html_fifth_review_ignored_end_tag_text_coalescing") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 $flags = LIBXML_HTML_NODEFDTD | LIBXML_NOERROR;
@@ -510,6 +600,9 @@ echo $div->childNodes->length, ':', $div->childNodes->item(1)->nodeName;
 /// Legacy HTML parsing drops an unfinished comment tail without creating a comment node.
 #[test]
 fn dom_html_fifth_review_unterminated_comment() {
+    if skip_without_xml_native("dom_html_fifth_review_unterminated_comment") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 $flags = LIBXML_HTML_NODEFDTD | LIBXML_NOERROR;
@@ -527,6 +620,9 @@ echo $dom->childNodes->length, ':', $dom->getElementsByTagName('body')->length;
 /// Consecutive instructions preserve typed PI fields and links across every sibling kind.
 #[test]
 fn dom_html_fourth_review_processing_instruction_fields() {
+    if skip_without_xml_native("dom_html_fourth_review_processing_instruction_fields") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div><?One a&b><?Two?><span>x</span><!--c--><?Three></div>');
@@ -551,6 +647,9 @@ echo '|', $dom->saveXML($div);
 /// A global user-owned PI name, even case-folded, must not inject a conflicting prelude.
 #[test]
 fn dom_html_fourth_review_user_processing_instruction() {
+    if skip_without_xml_native("dom_html_fourth_review_user_processing_instruction") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 class DOMProcessingInstruction { public string $marker = 'user'; }
 $pi = new \domprocessinginstruction();
@@ -562,6 +661,9 @@ echo $pi->marker;
 /// Closed HTML processing instructions retain their own value and sibling position, not parent text.
 #[test]
 fn dom_html_fourth_review_processing_instructions() {
+    if skip_without_xml_native("dom_html_fourth_review_processing_instructions") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div>a<?php echo 1; ?>b</div>');
@@ -580,6 +682,9 @@ echo $pi->parentNode === $div ? 'P' : 'bad', $pi->ownerDocument === $dom ? 'O' :
 /// PI targets preserve case and legacy HTML recovery retains unterminated target text.
 #[test]
 fn dom_html_fourth_review_processing_instruction_recovery() {
+    if skip_without_xml_native("dom_html_fourth_review_processing_instruction_recovery") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 foreach (['<div>a<?Target Data>b</div>', '<div>a<?foo>b</div>', '<div>a<?foo?>b</div>', '<div>a<?unclosed', '<div>a<?foo bar', '<div>a<?>b</div>', '<div>a<?1 bad>b</div>'] as $html) {
@@ -596,6 +701,9 @@ foreach (['<div>a<?Target Data>b</div>', '<div>a<?foo>b</div>', '<div>a<?foo?>b<
 /// HTML parse normalizes names, while the caller's tag and attribute queries remain literal.
 #[test]
 fn dom_html_fourth_review_literal_lookups() {
+    if skip_without_xml_native("dom_html_fourth_review_literal_lookups") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<DIV CLASS="X"><SPAN TITLE="Y">Hi</SPAN></DIV>');
@@ -612,6 +720,9 @@ echo $div->getElementsByTagName('SPAN')->length, ':', $div->getElementsByTagName
 /// Duplicate parsed attributes keep the first value, including empty and boolean attributes.
 #[test]
 fn dom_html_fourth_review_duplicate_attributes() {
+    if skip_without_xml_native("dom_html_fourth_review_duplicate_attributes") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div class="a" CLASS="b" id="1" id="2" title="" title="later">x</div><input disabled="" DISABLED checked checked="no">');
@@ -628,6 +739,9 @@ echo $input->getAttribute('disabled'), ':', $input->getAttribute('checked'), '|'
 /// Entity helper temporaries and the static named table release without constructing a DOM tree.
 #[test]
 fn dom_html_third_review_entity_decoder_heap_clean() {
+    if skip_without_xml_native("dom_html_third_review_entity_decoder_heap_clean") {
+        return;
+    }
     for probe in [
         "echo __elephc_dom_named_entity_codepoint('AElig');",
         "echo __elephc_dom_entity_utf8(128512);",
@@ -654,6 +768,9 @@ for ($i = 0; $i < 3; $i++) {
 /// Text, quoted and unquoted attributes decode legacy named and numeric HTML references.
 #[test]
 fn dom_html_third_review_entities() {
+    if skip_without_xml_native("dom_html_third_review_entities") {
+        return;
+    }
     let out = compile_and_run_capture(r###"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div title="&euro;&#x1F600;&#60;&apos;" data=&nbsp;&#65;>a&nbsp;b&#60;c&apos;d</div>');
@@ -669,6 +786,9 @@ echo $dom->saveXML($dom->getElementsByTagName('div')->item(0));
 /// Script and style retain raw text and serialize it as safe CDATA.
 #[test]
 fn dom_html_third_review_raw_text() {
+    if skip_without_xml_native("dom_html_third_review_raw_text") {
+        return;
+    }
     let out = compile_and_run_capture(r###"<?php
 foreach (['script', 'style'] as $tag) {
     $dom = new DOMDocument();
@@ -687,6 +807,9 @@ echo $dom->nodeValue === null ? 'N' : 'bad', '|', $div->nodeValue, '|', $dom->sa
 /// Invalid closing-name starts preserve the remaining text in one text node.
 #[test]
 fn dom_html_third_review_spaced_end_tag() {
+    if skip_without_xml_native("dom_html_third_review_spaced_end_tag") {
+        return;
+    }
     let out = compile_and_run_capture(r###"<?php
 $dom = new DOMDocument();
 foreach (['</ div>', '</1>', '</>'] as $end) {
@@ -702,6 +825,9 @@ foreach (['</ div>', '</1>', '</>'] as $end) {
 /// XML serialization escapes CR everywhere and LF/TAB inside attributes.
 #[test]
 fn dom_html_third_review_carriage_returns() {
+    if skip_without_xml_native("dom_html_third_review_carriage_returns") {
+        return;
+    }
     let out = compile_and_run_capture(r###"<?php
 $dom = new DOMDocument();
 $dom->loadHTML("<div title=\"a\r\nb\tc\">a\r\nb\tc</div>");
@@ -715,6 +841,9 @@ echo json_encode($div->nodeValue), '|', json_encode($div->getAttribute('title'))
 /// The document has no owner while its current element and text children retain the document.
 #[test]
 fn dom_html_third_review_document_owner() {
+    if skip_without_xml_native("dom_html_third_review_document_owner") {
+        return;
+    }
     let out = compile_and_run_capture(r###"<?php
 $dom = new DOMDocument();
 echo $dom->ownerDocument === null ? 'N' : 'bad', '|';
@@ -734,6 +863,9 @@ echo $dom->ownerDocument === null ? 'N' : 'bad', '|', $span->ownerDocument === $
 /// Entity decoding is nonrecursive and preserves unknown or unterminated legacy names.
 #[test]
 fn dom_html_third_review_entity_decode_once() {
+    if skip_without_xml_native("dom_html_third_review_entity_decode_once") {
+        return;
+    }
     let out = compile_and_run_capture(r###"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div>&amp;lt; &notAnEntity; &nbsp &AMP; &#65 &#x41 &#0; &#xD800;</div>');
@@ -747,6 +879,9 @@ echo $div->nodeValue, '|', $dom->saveXML($div);
 /// Every legacy HTML4 entity plus apos matches the independent PHP/libxml 2.9 oracle.
 #[test]
 fn dom_html_third_review_all_named_entities() {
+    if skip_without_xml_native("dom_html_third_review_all_named_entities") {
+        return;
+    }
     let entries = r#"
 AElig=198 Aacute=193 Acirc=194 Agrave=192 Alpha=913 Aring=197 Atilde=195 Auml=196 Beta=914
 Ccedil=199 Chi=935 Dagger=8225 Delta=916 ETH=208 Eacute=201 Ecirc=202 Egrave=200 Epsilon=917
@@ -794,6 +929,9 @@ weierp=8472 xi=958 yacute=253 yen=165 yuml=255 zeta=950 zwj=8205 zwnj=8204
 /// HTML parsing retains whitespace-only siblings even when NOBLANKS is requested.
 #[test]
 fn dom_html_second_review_noblanks_preserves_whitespace() {
+    if skip_without_xml_native("dom_html_second_review_noblanks_preserves_whitespace") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<span>a</span> <span>b</span>', LIBXML_NOERROR | LIBXML_NOBLANKS);
@@ -809,6 +947,9 @@ echo json_encode($div->nodeValue), '|', $div->childNodes->length;
 /// Legacy libxml declaration handling preserves unknown bang markup as one text run.
 #[test]
 fn dom_html_second_review_unknown_declaration_is_text() {
+    if skip_without_xml_native("dom_html_second_review_unknown_declaration_is_text") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<!DOCTYPE html><div>a<!not>b</div>');
@@ -821,6 +962,9 @@ echo $div->nodeValue, '|', $div->childNodes->length, '|', $dom->saveXML($div);
 /// XML escaping differs between text and double-quoted attribute values.
 #[test]
 fn dom_html_second_review_contextual_xml_escaping() {
+    if skip_without_xml_native("dom_html_second_review_contextual_xml_escaping") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML("<div title=\"it's &quot;ok&quot; &amp; &lt;&gt;\">say \"hi\" &amp; &lt;&gt; 'yes'</div>");
@@ -833,6 +977,9 @@ echo $dom->saveXML($div);
 /// Loading or reloading a document never changes its null nodeValue.
 #[test]
 fn dom_html_second_review_document_value_is_null() {
+    if skip_without_xml_native("dom_html_second_review_document_value_is_null") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $dom = new DOMDocument();
 echo $dom->nodeValue === null ? 'N' : 'bad';
@@ -849,6 +996,9 @@ echo '|', $dom->getElementsByTagName('html')->item(0)->nodeValue;
 /// Slashes in unquoted values remain data, while a standalone closing slash ends the tag.
 #[test]
 fn dom_html_token_review_unquoted_slashes() {
+    if skip_without_xml_native("dom_html_token_review_unquoted_slashes") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<a href=http://example.com title=ok>x</a><div class=foo/bar>z</div><span / title=kept>t</span><b data=x />');
@@ -866,6 +1016,9 @@ echo $a->getAttribute('href'), '|', $a->getAttribute('title'), '|', $a->nodeValu
 /// A less-than sign followed by a non-letter stays text rather than becoming a tag.
 #[test]
 fn dom_html_token_review_nonletter_start() {
+    if skip_without_xml_native("dom_html_token_review_nonletter_start") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div>1<2</div><span>x<_y</span><b>3<-4</b>');
@@ -880,6 +1033,9 @@ foreach (['div', 'span', 'b'] as $name) {
 /// Libxml's HTML boolean names use their name for an omitted value, unlike other attributes.
 #[test]
 fn dom_html_token_review_boolean_attributes() {
+    if skip_without_xml_native("dom_html_token_review_boolean_attributes") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<input CHECKED compact declare defer disabled ismap multiple nohref noresize noshade nowrap readonly selected hidden required title><input disabled="" checked=no>');
@@ -896,6 +1052,9 @@ echo '|', $explicit->getAttribute('disabled'), '|', $explicit->getAttribute('che
 /// XML serialization uses empty-element syntax for ordinary elements as well as void tags.
 #[test]
 fn dom_html_token_review_empty_elements() {
+    if skip_without_xml_native("dom_html_token_review_empty_elements") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div class="a"></div><span></span><p> </p><i><!--comment--></i><br>');
@@ -908,6 +1067,9 @@ foreach ($body->childNodes as $node) { echo $dom->saveXML($node); }
 /// A generic function's bound keeps the namespace ownership of a user-defined DOM class.
 #[test]
 fn dom_html_review_generic_function_bound_uses_namespace() {
+    if skip_without_xml_native("dom_html_review_generic_function_bound_uses_namespace") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 namespace App;
 class DOMDocument {}
@@ -921,6 +1083,9 @@ echo get_class($document);
 /// A DOM reference carried only by inherited generic arguments still enables dynamic creation.
 #[test]
 fn dom_html_review_generic_inheritance_injects_prelude() {
+    if skip_without_xml_native("dom_html_review_generic_inheritance_injects_prelude") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 class Box<T> {}
 class Documents extends Box<DOMDocument> {}
@@ -934,6 +1099,9 @@ echo $document->nodeName;
 /// A user's generic DOM class remains user-owned through explicit instantiation.
 #[test]
 fn dom_html_review_user_generic_class_is_not_redeclared() {
+    if skip_without_xml_native("dom_html_review_user_generic_class_is_not_redeclared") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 class DOMDocument<T> {
     public function __construct(public T $value) {}
@@ -947,6 +1115,9 @@ echo $document->value;
 /// The user-facing example exercises sibling stack reuse and comment-free aggregate text.
 #[test]
 fn dom_html_review_example() {
+    if skip_without_xml_native("dom_html_review_example") {
+        return;
+    }
     let out = compile_and_run(include_str!("../../examples/dom-html/main.php"));
     assert_eq!(out, "div class=text-green-500 text=Hi there!\n");
 }
@@ -954,6 +1125,9 @@ fn dom_html_review_example() {
 /// A global user-owned DOM class keeps its definition even under case-folded references.
 #[test]
 fn dom_html_review_user_class_is_not_redeclared() {
+    if skip_without_xml_native("dom_html_review_user_class_is_not_redeclared") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 class DOMDocument { public function marker(): string { return 'user'; } }
 $doc = new \domdocument();
@@ -965,6 +1139,9 @@ echo $doc->marker();
 /// A namespaced user class and the real global DOM surface can coexist through imports.
 #[test]
 fn dom_html_review_namespaced_user_class_and_global_prelude() {
+    if skip_without_xml_native("dom_html_review_namespaced_user_class_and_global_prelude") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 namespace App {
     class DOMDocument { public function marker(): string { return 'app'; } }
@@ -984,6 +1161,9 @@ namespace Client {
 /// Unmatched closing tags are ignored and a matching ancestor closes its descendants.
 #[test]
 fn dom_html_review_closing_tags_match_open_elements() {
+    if skip_without_xml_native("dom_html_review_closing_tags_match_open_elements") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div>A</missing>B<span>C</div>D<b>E</b></span>');
@@ -999,6 +1179,9 @@ echo $dom->saveXML($body), '|', $div->nodeValue, '|', $body->childNodes->length;
 /// Comments remain visible as nodes and in XML but not in ancestor descendant text.
 #[test]
 fn dom_html_review_comments_do_not_aggregate_into_element_text() {
+    if skip_without_xml_native("dom_html_review_comments_do_not_aggregate_into_element_text") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div>A<!--hidden--><span>C<!--nested--></span>B</div>');
@@ -1013,6 +1196,9 @@ echo $div->nodeValue, '|', $span->nodeValue, '|', $comment->nodeValue, '|', $dom
 /// A dynamic NodeList loop stops after its two nodes without reading past the end.
 #[test]
 fn dom_html_review_iterator_stops_at_the_end() {
+    if skip_without_xml_native("dom_html_review_iterator_stops_at_the_end") {
+        return;
+    }
     let out = compile_and_run_capture(r#"<?php
 $dom = new DOMDocument();
 $dom->loadHTML('<div><span>A</span><b>B</b></div>');
@@ -1034,6 +1220,9 @@ echo $seen;
 /// The tree-builder stack can append back into the integer slot removed by pop.
 #[test]
 fn dom_html_review_stack_pop_reuses_tail_index() {
+    if skip_without_xml_native("dom_html_review_stack_pop_reuses_tail_index") {
+        return;
+    }
     let out = compile_and_run(r#"<?php
 function replaceStackTop(array $stack): array {
     $removed = array_pop($stack);
@@ -1052,6 +1241,9 @@ foreach ($stack as $key => $node) { echo $key, '=', $node['name'], ';'; }
 /// Original eval forms, caller scopes, outputs and ownership assertions are retained.
 #[test]
 fn test_dom_html_eval_catalog_and_registered_surface_bundle() {
+    if skip_without_xml_native("test_dom_html_eval_catalog_and_registered_surface_bundle") {
+        return;
+    }
     let runs = compile_and_run_capture_per_argv(r####"<?php
 function enableDom(DOMDocument $doc): void {}
 if ($argc === 1) {

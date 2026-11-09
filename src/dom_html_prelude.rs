@@ -22,26 +22,18 @@
 //! - A standalone DOMException reference injects only its declaration; walker
 //!   references add the HTML helpers and weak-cache dependency when needed.
 
-mod attributes;
 mod detect;
-mod entities;
-mod generated;
-// The libxml2-backed legacy surface that replaces the termwind walker below once the
-// SimpleXML bridge is ported (bead elephc-8q7.10); until then only its oracle test uses it.
-#[cfg_attr(not(test), allow(dead_code))]
 mod legacy;
 #[cfg(test)]
 mod legacy_php;
-mod node_cache;
-mod text;
 
 use std::sync::OnceLock;
 
 use crate::errors::CompileError;
 use crate::parser::ast::{Program, TypeExpr};
 use crate::synthetic_class::{
-    class, e_int, e_method_call, e_new_fq, e_new_static, e_not, e_null, e_prop, e_str, e_var,
-    method, s_assign, s_expr, s_if, s_return, s_throw, t_class, t_nullable,
+    class, e_call, e_int, e_method_call, e_new_fq, e_new_static, e_not, e_null, e_str, e_var,
+    extern_fn, method, s_assign, s_expr, s_if, s_return, s_throw, t_class, t_nullable,
 };
 
 /// Built prelude cache. The declarations are built once and reused for every injecting
@@ -57,12 +49,8 @@ pub(crate) fn program_uses_dom_html(program: &[crate::parser::ast::Stmt]) -> boo
 pub(crate) fn declarations() -> Program {
     PRELUDE
         .get_or_init(|| {
-            let mut program = Vec::new();
-            program.extend(entities::declarations());
-            program.extend(attributes::declarations());
-            program.extend(node_cache::declarations());
-            program.extend(text::declarations());
-            program.extend(generated::declarations());
+            let mut program = legacy::declarations();
+            program.push(set_encoding_extern());
             program.push(modern_dom_declaration());
             // A non-dummy declaration span marks an elephc prelude class as user-declared for
             // PHP's coercive parameter binding; `Span::dummy()` would make `new DOMDocument(1, …)`
@@ -107,16 +95,7 @@ fn modern_dom_declaration() -> crate::parser::ast::Stmt {
                     Vec::new(),
                     None,
                 ),
-                s_if(
-                    e_prop(e_var("document"), "__elephc_simplexml"),
-                    vec![s_expr(e_method_call(
-                        e_prop(e_var("document"), "__elephc_simplexml"),
-                        "__elephc_set_document_encoding",
-                        vec![e_str("UTF-8")],
-                    ))],
-                    Vec::new(),
-                    None,
-                ),
+                set_utf8_encoding(),
                 s_return(e_var("document")),
             ]))
         .method(method("createFromString")
@@ -140,18 +119,27 @@ fn modern_dom_declaration() -> crate::parser::ast::Stmt {
                     Vec::new(),
                     None,
                 ),
-                s_if(
-                    e_prop(e_var("document"), "__elephc_simplexml"),
-                    vec![s_expr(e_method_call(
-                        e_prop(e_var("document"), "__elephc_simplexml"),
-                        "__elephc_set_document_encoding",
-                        vec![e_str("UTF-8")],
-                    ))],
-                    Vec::new(),
-                    None,
-                ),
+                set_utf8_encoding(),
                 s_return(e_var("document")),
             ]))
+        .build()
+}
+
+/// `elephc_xml_dom_set_encoding($document->__elephc_handle(), "UTF-8")`: modern documents
+/// serialize as UTF-8.
+fn set_utf8_encoding() -> crate::parser::ast::Stmt {
+    s_expr(e_call(
+        "elephc_xml_dom_set_encoding",
+        vec![e_method_call(e_var("document"), "__elephc_handle", Vec::new()), e_str("UTF-8")],
+    ))
+}
+
+/// The extern behind [`set_utf8_encoding`], declared next to the class that calls it.
+fn set_encoding_extern() -> crate::parser::ast::Stmt {
+    extern_fn("elephc_xml_dom_set_encoding", "elephc_xml")
+        .param("document", crate::parser::ast::CType::Int)
+        .param("encoding", crate::parser::ast::CType::Str)
+        .returns(crate::parser::ast::CType::Void)
         .build()
 }
 
@@ -175,13 +163,12 @@ fn inject_if_used_on_compiler_stack(
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    let Some((mut combined, walker)) = pending_prelude(&program, force, inventory) else {
+    let Some((mut combined, _)) = pending_prelude(&program, force, inventory) else {
         return program;
     };
     inventory.record_program("dom-html", &combined);
     combined.extend(program);
-    if walker { crate::core_prelude::ensure_weak_reference(combined, inventory) }
-    else { combined }
+    combined
 }
 
 /// Selects missing declarations, allowing autoload to upgrade an exception-only prelude.
@@ -219,14 +206,13 @@ pub fn inject_after_autoload(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        let Some((prelude, walker)) = pending_prelude(&program, false, inventory) else {
+        let Some((prelude, _)) = pending_prelude(&program, false, inventory) else {
             return Ok(program);
         };
         let mut combined = crate::name_resolver::resolve(prelude)?;
         inventory.record_program("dom-html", &combined);
         combined.extend(program);
-        Ok(if walker { crate::core_prelude::ensure_weak_reference(combined, inventory) }
-            else { combined })
+        Ok(combined)
     })
 }
 
@@ -272,8 +258,7 @@ mod tests {
         let program = parse_resolved("<?php namespace App; use DOMDocument as Doc; new Doc();");
         let program = inject_after_autoload(program, &mut inventory).unwrap();
         assert!(inventory.groups.contains_key("dom-html"));
-        assert!(inventory.groups.contains_key("core"));
-        assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 1);
+        assert!(!inventory.groups.contains_key("core"));
         let len = program.len();
         assert_eq!(inject_after_autoload(program, &mut inventory).unwrap().len(), len);
 
@@ -317,13 +302,13 @@ mod tests {
             "<?php namespace Loaded; use DOMDocument as Doc; new Doc();"
         )).unwrap());
         let program = inject_after_autoload(program, &mut inventory).unwrap();
-        for expected in ["DOMException", "DOMDocument", "WeakReference"] {
+        for expected in ["DOMException", "DOMDocument"] {
             assert_eq!(program.iter().filter(|stmt| matches!(
                 &stmt.kind, StmtKind::ClassDecl { name, .. } if name == expected
             )).count(), 1, "{expected}");
         }
         assert!(inventory.groups["dom-html"].classes.contains("domdocument"));
-        assert!(inventory.groups.contains_key("core"));
+        assert!(!inventory.groups.contains_key("core"));
         let len = program.len();
         assert_eq!(inject_after_autoload(program, &mut inventory).unwrap().len(), len);
     }
@@ -339,17 +324,18 @@ mod tests {
         assert_eq!(program.iter().filter(|stmt| matches!(
             &stmt.kind, StmtKind::ClassDecl { name, .. } if name == "DOMException"
         )).count(), 1);
-        assert!(inventory.groups.contains_key("core"));
+        assert!(!inventory.groups.contains_key("core"));
     }
 
-    /// DOM injection supplies its weak-cache dependency even without a user WeakReference mention.
+    /// The libxml2-backed DOM keeps node identity in the native engine, so injecting it no longer
+    /// pulls in the WeakReference cache the old pure-PHP walker needed.
     #[test]
-    fn dom_injection_declares_weak_cache_dependency_once() {
+    fn dom_injection_needs_no_weak_reference_cache() {
         let program = crate::parser::parse_test_source("<?php new DOMDocument();").unwrap();
         let mut inventory = crate::optimize::reachability::PreludeInventory::new();
         let program = inject_if_used(program, false, &mut inventory);
-        assert!(inventory.groups.contains_key("core"));
-        assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 1);
+        assert!(!inventory.groups.contains_key("core"));
+        assert_eq!(program.iter().filter(|stmt| matches!(&stmt.kind, StmtKind::ClassDecl { name, .. } if name == "WeakReference")).count(), 0);
     }
 
     /// Every top-level declaration carries a distinct synthetic span.
@@ -386,15 +372,19 @@ mod tests {
             declared,
             vec![
                 "DOMException",
+                "__ElephcDOM",
                 "DOMNode",
-                "__ElephcDOMNodeListIterator",
                 "DOMNodeList",
-                "DOMDocument",
-                "DOMElement",
+                "DOMNamedNodeMap",
+                "DOMDocumentFragment",
                 "DOMCharacterData",
                 "DOMText",
+                "DOMCdataSection",
                 "DOMComment",
                 "DOMProcessingInstruction",
+                "DOMAttr",
+                "DOMElement",
+                "DOMDocument",
                 "Dom\\XMLDocument",
             ]
         );

@@ -22,6 +22,9 @@ mod current_review;
 /// Verifies Termwind's `LIBXML_*` flag integers match php-src / libxml2.
 #[test]
 fn test_libxml_termwind_flag_values() {
+    if skip_without_xml_native("test_libxml_termwind_flag_values") {
+        return;
+    }
     let out = compile_and_run(
         "<?php echo LIBXML_NOXMLDECL, ',', LIBXML_HTML_NODEFDTD, ',', LIBXML_NOERROR, ',', LIBXML_NOBLANKS, ',', LIBXML_COMPACT;",
     );
@@ -31,6 +34,9 @@ fn test_libxml_termwind_flag_values() {
 /// Verifies weak scalar coercion still applies to the built prelude's constructor.
 #[test]
 fn test_dom_document_constructor_coerces_scalar_arguments() {
+    if skip_without_xml_native("test_dom_document_constructor_coerces_scalar_arguments") {
+        return;
+    }
     let out = compile_and_run(
         "<?php $doc = new DOMDocument(1, 9000000000); echo $doc->nodeName;",
     );
@@ -40,6 +46,9 @@ fn test_dom_document_constructor_coerces_scalar_arguments() {
 /// Verifies `loadHTML` wraps a fragment in html/body and `item(0)` returns body.
 #[test]
 fn test_load_html_body_item() {
+    if skip_without_xml_native("test_load_html_body_item") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $dom = new DOMDocument();
@@ -54,6 +63,9 @@ echo $body->nodeName;
 /// Verifies the Termwind-style walk: body child is a `div` with class and text.
 #[test]
 fn test_termwind_div_class_walk() {
+    if skip_without_xml_native("test_termwind_div_class_walk") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $dom = new DOMDocument();
@@ -79,6 +91,9 @@ echo $text->nodeValue;
 /// Verifies `foreach` over `childNodes` matches Termwind's `Node::getChildNodes`.
 #[test]
 fn test_child_nodes_foreach() {
+    if skip_without_xml_native("test_child_nodes_foreach") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $dom = new DOMDocument();
@@ -96,6 +111,9 @@ foreach ($div->childNodes as $child) {
 /// Verifies `previousSibling` / `nextSibling` and comment node identity.
 #[test]
 fn test_siblings_and_comment() {
+    if skip_without_xml_native("test_siblings_and_comment") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $dom = new DOMDocument();
@@ -118,6 +136,9 @@ echo $first->previousSibling === null ? 'N' : 'x';
 /// Verifies HTML whitespace remains visible even when `LIBXML_NOBLANKS` is requested.
 #[test]
 fn test_noblanks_preserves_html_whitespace_text() {
+    if skip_without_xml_native("test_noblanks_preserves_html_whitespace_text") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $dom = new DOMDocument();
@@ -134,6 +155,9 @@ echo $div->childNodes->item(0)->nodeName;
 /// Verifies `saveXML` on a child and `ownerDocument` identity for Termwind `getHtml`.
 #[test]
 fn test_save_xml_and_owner_document() {
+    if skip_without_xml_native("test_save_xml_and_owner_document") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $dom = new DOMDocument();
@@ -150,6 +174,9 @@ echo $div->ownerDocument->saveXML($div);
 /// Verifies several attributes on one element stay addressable by name.
 #[test]
 fn test_multiple_attributes() {
+    if skip_without_xml_native("test_multiple_attributes") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $dom = new DOMDocument();
@@ -164,6 +191,9 @@ echo $div->getAttribute('class'), '|', $div->getAttribute('id'), '|', $div->getA
 /// Verifies namespaced unqualified `LIBXML_*` and `\DOMDocument` as Termwind spells them.
 #[test]
 fn test_namespaced_termwind_call_shape() {
+    if skip_without_xml_native("test_namespaced_termwind_call_shape") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 namespace Termwind;
