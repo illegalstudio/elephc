@@ -19,6 +19,9 @@ mod invoker_sharing;
 mod json_enums;
 mod literal_catalog;
 mod native_false_returns;
+mod reflection_class_members;
+mod reflection_constant_collections;
+mod reflection_default_properties;
 mod reflection_mirror_references;
 
 /// Asserts an eval failure stayed inside the C ABI/error-status contract.

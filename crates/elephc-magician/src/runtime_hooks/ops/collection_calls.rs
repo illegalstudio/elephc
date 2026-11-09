@@ -35,6 +35,22 @@ macro_rules! impl_collection_call_ops {
         })
     }
 
+    /// Creates a boxed indexed array whose payload uses direct object slots.
+    fn object_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_object_array_new(capacity as u64) })
+    }
+
+    /// Appends one boxed object to a boxed direct-object indexed array.
+    fn object_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe {
+            __elephc_eval_value_object_array_push(array.as_ptr(), object.as_ptr())
+        })
+    }
+
     /// Creates a boxed Mixed associative array through the generated runtime wrapper.
     fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_assoc_new(capacity as u64) })
