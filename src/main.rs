@@ -25,6 +25,7 @@ mod docblock;
 mod func_args;
 mod generics;
 mod global_decls;
+mod global_alias_detach;
 mod hash_prelude;
 mod core_prelude;
 mod time_prelude;

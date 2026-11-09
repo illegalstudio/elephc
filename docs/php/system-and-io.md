@@ -155,9 +155,11 @@ Known `$GLOBALS` limits:
   exposes `_GET`, `_POST`, `_COOKIE`, `_FILES`, and `_SERVER` in `$GLOBALS`; elephc
   adds one of those only when the source names it, so `count($GLOBALS)` can be lower
   than PHP's.
-- A `global $x` alias is not a live view after `unset($GLOBALS['x'])`. PHP keeps the
-  removed value alive through the local reference, so `isset($x)` stays true; elephc
-  clears the shared cell, so `isset($x)` is false.
+- A direct, straight-line `unset($GLOBALS['x'])` detaches a `global $x` alias:
+  the removed value stays readable through the local reference, later `$x` writes
+  stay local, and `$GLOBALS['x']` remains unset, matching PHP. A conditional
+  `unset($GLOBALS['x'])` is not path-detached yet and still clears the shared cell;
+  keep that shape out of code that relies on the alias surviving.
 - Under `--web`, a computed `$GLOBALS[$name]` lookup treats every named slot as an
   ordinary boxed global. Request superglobals hold a typed Hash pointer instead, so
   use `$_SERVER` (or a literal `$GLOBALS['_SERVER']` key) when the name is one of

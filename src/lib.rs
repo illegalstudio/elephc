@@ -42,6 +42,7 @@ pub mod func_args;
 pub mod generics;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
+mod global_alias_detach;
 mod progress;
 /// Immutable BCMath Number standard-library prelude injection.
 pub mod bcmath_prelude;
