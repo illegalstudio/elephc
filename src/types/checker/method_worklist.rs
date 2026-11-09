@@ -138,8 +138,13 @@ impl MethodWorklist {
         if std::env::var_os("ELEPHC_TYPECHECK_TIMES").is_some() {
             trace_full_walk_reason(before, after);
         }
-        self.moved = moved_names(before, after).filter(|names| !names.iter().any(|name| is_implicit(name))).map(|names| {
+        self.moved = moved_names(before, after).filter(|names| !names.iter().any(|name| is_implicit(name) && !is_offset_member(name))).map(|names| {
             let mut hashes: HashSet<u64> = names.iter().map(|name| token_hash(name)).collect();
+            // `ArrayAccess` members are reached through the nodes that index a value, so a body
+            // depending on one names such a node: those nodes move with them.
+            if names.iter().any(|name| is_offset_member(name)) {
+                hashes.extend(OFFSET_ACCESS_NODES.iter().map(|node| token_hash(node)));
+            }
             if !hashes.is_empty() {
                 hashes.extend(DYNAMIC_NODES.iter().map(|node| token_hash(node)));
             }
@@ -191,6 +196,22 @@ impl MethodWorklist {
 fn is_implicit(name: &str) -> bool {
     IMPLICIT_MEMBERS.contains(&name)
 }
+
+/// The `ArrayAccess` members: php reaches them only through a node that indexes a value.
+fn is_offset_member(name: &str) -> bool {
+    matches!(name, "offsetget" | "offsetset" | "offsetexists" | "offsetunset")
+}
+
+/// AST nodes (as their `Debug` names read, lowercased) through which an `ArrayAccess` member is
+/// reached: reads and probes (`ArrayAccess`, inside `isset`/`unset`/`??` too), writes and appends
+/// on a local, a property or a static property, `list()` and `foreach` destructuring, and
+/// references to an element. On the Symfony demo `offsetGet` moving made the third method pass
+/// walk every body.
+const OFFSET_ACCESS_NODES: &[&str] = &[
+    "arrayaccess", "arrayassign", "nestedarrayassign", "arraypush", "listunpack", "foreach",
+    "arrayreference", "refassign", "propertyrefassign", "propertyarraypush", "propertyarrayassign",
+    "staticpropertyarraypush", "staticpropertyarrayassign", "staticpropertyelementrefassign",
+];
 
 /// `ELEPHC_TYPECHECK_TIMES`: says why the next pass walks every body, or which names moved.
 fn trace_full_walk_reason(before: &ClassTable, after: &ClassTable) {
@@ -433,6 +454,27 @@ mod tests {
         let mut after = before.clone();
         after.get_mut("Poly").expect("Poly").static_properties.clear();
         assert!(moved_names(&before, &after).is_none(), "a slot list that changed length is not");
+    }
+
+    /// An `ArrayAccess` member that moved re-walks the bodies that index a value, not every body;
+    /// any other implicit member still walks everything.
+    #[test]
+    fn an_offset_member_moves_the_indexing_nodes() {
+        let before = checked_classes();
+        let mut after = before.clone();
+        let poly = after.get_mut("Poly").expect("Poly");
+        let signature = poly.methods.get("cb").cloned().expect("cb");
+        poly.methods.insert("offsetGet".to_string(), signature.clone());
+        let mut worklist = MethodWorklist::default();
+        worklist.prepare_next_pass(&before, &after);
+        let moved = worklist.moved.as_ref().expect("an offset member is traced to its nodes");
+        assert!(moved.contains(&token_hash("arrayaccess")));
+        assert!(moved.contains(&token_hash("offsetget")));
+
+        let mut after = before.clone();
+        after.get_mut("Poly").expect("Poly").methods.insert("__toString".to_string(), signature);
+        worklist.prepare_next_pass(&before, &after);
+        assert!(worklist.moved.is_none(), "__toString cannot be traced to a node");
     }
 
     /// Names added after a pass are moved too, with the dynamic nodes, unless everything walks.
