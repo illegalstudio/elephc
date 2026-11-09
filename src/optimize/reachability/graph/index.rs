@@ -94,7 +94,8 @@ impl DeclarationIndex {
 
     /// Builds a declaration index matching the recursive statement shapes lowered by EIR.
     pub(crate) fn build(program: &[Stmt], check_result: &CheckResult) -> Self {
-        let call_signatures = CallSignatureIndex::from_check_result(check_result);
+        let call_signatures = CallSignatureIndex::from_check_result(check_result)
+            .with_declared_property_types(program);
         Self::build_with_signatures(program, check_result, &call_signatures)
     }
 

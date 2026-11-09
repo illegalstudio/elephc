@@ -279,6 +279,10 @@ pub(super) struct CallSignatureIndex {
     /// the whole method table per call site.
     methods_by_name: HashMap<(String, bool), Vec<Arc<FunctionSig>>>,
     class_parents: HashMap<String, Option<String>>,
+    /// Declared types of instance properties by `(class key, property name)`, read from the
+    /// AST rather than the checker (which also infers types for untyped properties). php checks
+    /// every write to a typed property, so `$this->service->m()` dispatches within that type.
+    property_types: HashMap<(String, String), TypeExpr>,
 }
 
 impl CallSignatureIndex {
@@ -361,7 +365,42 @@ impl CallSignatureIndex {
             methods,
             methods_by_name,
             class_parents,
+            property_types: HashMap::default(),
         }
+    }
+
+    /// Adds the declared types of every typed instance property of `program`'s classes,
+    /// promoted constructor parameters included.
+    pub(super) fn with_declared_property_types(mut self, program: &[Stmt]) -> Self {
+        crate::parser::ast::visit::walk_stmts(program, &mut |stmt| {
+            if let StmtKind::ClassDecl { name, properties, .. } = &stmt.kind {
+                let class = php_symbol_key(name);
+                for property in properties.iter().filter(|property| !property.is_static) {
+                    if let Some(ty) = &property.type_expr {
+                        self.property_types
+                            .insert((class.clone(), property.name.clone()), ty.clone());
+                    }
+                }
+            }
+        });
+        self
+    }
+
+    /// The declared type of instance property `property` as seen from `class`: its own
+    /// declaration or the nearest ancestor's. `None` when no class of the chain types it.
+    pub(super) fn property_type(&self, class: &str, property: &str) -> Option<&TypeExpr> {
+        let mut current = Some(php_symbol_key(class));
+        let mut seen = HashSet::default();
+        while let Some(candidate) = current {
+            if !seen.insert(candidate.clone()) {
+                return None;
+            }
+            if let Some(ty) = self.property_types.get(&(candidate.clone(), property.to_string())) {
+                return Some(ty);
+            }
+            current = self.class_parents.get(&candidate).cloned().flatten();
+        }
+        None
     }
 
     /// Returns the signature of one direct free-function call.

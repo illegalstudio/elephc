@@ -119,7 +119,7 @@ impl Scanner<'_> {
                         .instantiated_classes
                         .extend(classes.iter().cloned());
                 } else if matches!(receiver, StaticReceiver::Parent) {
-                    self.usage.hazards.dynamic_method = true;
+                    self.dynamic_method_hazard(line!());
                 }
                 self.scan_method_signature_arguments(&classes, "__construct", false, args);
                 self.scan_exprs(args);
@@ -133,7 +133,7 @@ impl Scanner<'_> {
                 self.scan_exprs(args);
             }
             ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
-                self.usage.hazards.dynamic_method = true;
+                self.dynamic_method_hazard(line!());
                 self.scan_expr(object); self.scan_expr(method); self.scan_exprs(args);
             }
             ExprKind::StaticMethodCall { receiver, method, args } => {
@@ -185,7 +185,7 @@ impl Scanner<'_> {
             }
             ExprKind::DynamicPropertyAccess { object, property }
             | ExprKind::NullsafeDynamicPropertyAccess { object, property } => {
-                self.usage.hazards.dynamic_method = true;
+                self.dynamic_method_hazard(line!());
                 self.scan_expr(object);
                 self.scan_expr(property);
             }
@@ -273,7 +273,14 @@ impl Scanner<'_> {
             }
             ExprKind::Ternary { condition, then_expr, else_expr } => { self.scan_expr(condition); self.scan_expr(then_expr); self.scan_expr(else_expr); }
             ExprKind::Closure { params, variadic_type, return_type, body, .. } => {
+                // `Closure::bind()`, `bindTo()` and `call()` give a closure another object and
+                // scope: its `$this`, `self`, `static` and `parent` name no class known here,
+                // so calls through them keep their method names on every class.
+                let class = self.current_class.take();
+                let parent = self.parent_class.take();
                 self.scan_params(params, variadic_type.as_ref(), return_type.as_ref()); self.scan_nested(body, true);
+                self.current_class = class;
+                self.parent_class = parent;
             }
             ExprKind::NamedArg { value, .. } => self.scan_expr(value),
             ExprKind::BufferNew { element_type, len } => { self.scan_type(element_type); self.scan_expr(len); }
@@ -392,7 +399,7 @@ impl Scanner<'_> {
             "method_exists" => self.method_exists(args),
             // The result is every method name the scope may call, which programs then call by
             // name, so declaration reachability cannot drop an uncalled method.
-            "get_class_methods" => self.usage.hazards.dynamic_method = true,
+            "get_class_methods" => self.dynamic_method_hazard(line!()),
             "class_exists" | "interface_exists" | "enum_exists" | "trait_exists" => self.literal_class_or_hazard(first),
             "get_declared_classes" | "get_declared_interfaces" | "get_declared_traits" | "unserialize" => self.usage.hazards.dynamic_class = true,
             // A string-literal fragment that declares nothing is source like any other: what it
@@ -470,7 +477,7 @@ impl Scanner<'_> {
             }
             "stream_wrapper_register" | "stream_filter_register" => {
                 self.scan_class_argument(name, args, 1, true);
-                self.usage.hazards.dynamic_method = true;
+                self.dynamic_method_hazard(line!());
             }
             "__elephc_new_without_constructor" => {
                 // `PDO::prepare` validates the driver-selected runtime class against
@@ -559,7 +566,7 @@ impl Scanner<'_> {
                 }
                 "get_class_methods" => {
                     self.scan_class_argument(&name, args, 0, false);
-                    self.usage.hazards.dynamic_method = true;
+                    self.dynamic_method_hazard(line!());
                 }
                 _ => {}
             }
@@ -748,7 +755,7 @@ impl Scanner<'_> {
     /// unknown shape requires.
     pub(super) fn widen_dynamic_hazards(&mut self) {
         self.usage.hazards.dynamic_function = true;
-        self.usage.hazards.dynamic_method = true;
+        self.dynamic_method_hazard(line!());
         self.usage.hazards.dynamic_class = true;
     }
 
@@ -761,7 +768,7 @@ impl Scanner<'_> {
     /// unconditionally).
     pub(super) fn unresolved_callable_hazard(&mut self) {
         self.usage.hazards.dynamic_function = true;
-        self.usage.hazards.dynamic_method = true;
+        self.dynamic_method_hazard(line!());
         if self.in_eval_fragment {
             self.usage.hazards.dynamic_class = true;
         }
@@ -811,22 +818,22 @@ impl Scanner<'_> {
     pub(super) fn method_exists(&mut self, args: &[Expr]) {
         let Some(normalized) = self.normalized_builtin_arguments("method_exists", args) else {
             self.usage.hazards.dynamic_class = true;
-            self.usage.hazards.dynamic_method = true;
+            self.dynamic_method_hazard(line!());
             return;
         };
         let Some(target) = normalized.first().map(unwrap_named_arg) else {
             self.usage.hazards.dynamic_class = true;
-            self.usage.hazards.dynamic_method = true;
+            self.dynamic_method_hazard(line!());
             return;
         };
         let classes = self.expr_classes(target);
         self.usage.classes.extend(classes.iter().cloned());
         let Some(method) = normalized.get(1).map(unwrap_named_arg) else {
-            self.usage.hazards.dynamic_method = true;
+            self.dynamic_method_hazard(line!());
             return;
         };
         let ExprKind::StringLiteral(method) = &method.kind else {
-            self.usage.hazards.dynamic_method = true;
+            self.dynamic_method_hazard(line!());
             if classes.is_empty() {
                 self.usage.hazards.dynamic_class = true;
             }
@@ -886,7 +893,7 @@ impl Scanner<'_> {
         let ExprKind::StringLiteral(method) = &unwrap_named_arg(&values[1]).kind else {
             let receiver_classes = self.expr_classes(unwrap_named_arg(&values[0]));
             self.usage.classes.extend(receiver_classes);
-            self.usage.hazards.dynamic_method = true;
+            self.dynamic_method_hazard(line!());
             return;
         };
         let first = unwrap_named_arg(&values[0]);
@@ -1138,6 +1145,14 @@ impl Scanner<'_> {
                 self.receiver_class(receiver).into_iter().collect()
             }
             ExprKind::ObjectClassName { object } => self.expr_classes(object),
+            ExprKind::PropertyAccess { object, property }
+            | ExprKind::NullsafePropertyAccess { object, property } => {
+                self.declared_property_classes(&self.expr_classes(object), property)
+            }
+            ExprKind::MethodCall { object, method, .. }
+            | ExprKind::NullsafeMethodCall { object, method, .. } => {
+                self.declared_return_classes(&self.expr_classes(object), method)
+            }
             ExprKind::Ternary {
                 then_expr,
                 else_expr,
@@ -1155,6 +1170,69 @@ impl Scanner<'_> {
             }
             _ => HashSet::default(),
         }
+    }
+
+    /// The classes property `property` of an object of `owners` can hold, from its declared
+    /// type: php checks every write against it. Empty -- every class -- unless each owner types
+    /// the property with class names; `self`, `parent` and `static` would name the declaring
+    /// class, which may be an ancestor of the owner, so they count as untyped.
+    fn declared_property_classes(&self, owners: &HashSet<String>, property: &str) -> HashSet<String> {
+        let Some(signatures) = self.call_signatures else {
+            return HashSet::default();
+        };
+        let mut classes = HashSet::default();
+        for owner in owners {
+            let Some(ty) = signatures.property_type(owner, property) else {
+                return HashSet::default();
+            };
+            if type_names_relative_class(ty) {
+                return HashSet::default();
+            }
+            let owned = self.type_classes(ty);
+            if owned.is_empty() {
+                return HashSet::default();
+            }
+            classes.extend(owned);
+        }
+        classes
+    }
+
+    /// Raises the whole-program dynamic-method hazard: every method of every live class is kept.
+    /// `ELEPHC_HAZARD_TRACE` names the scanner line and the class and method it was in.
+    pub(super) fn dynamic_method_hazard(&mut self, line: u32) {
+        if std::env::var_os("ELEPHC_HAZARD_TRACE").is_some() {
+            eprintln!(
+                "[hazard] expressions.rs:{line} in {}::{}",
+                self.current_class.as_deref().unwrap_or("-"),
+                self.current_method.as_deref().unwrap_or("-")
+            );
+        }
+        self.usage.hazards.dynamic_method = true;
+    }
+
+    /// The classes a call of instance method `method` on an object of `owners` returns, from
+    /// each owner's declared return type: php checks every return against it, and an override
+    /// may only narrow it. Empty -- every class -- unless every owner has the method with a
+    /// declared return made only of class types (and null).
+    fn declared_return_classes(&self, owners: &HashSet<String>, method: &str) -> HashSet<String> {
+        let Some(signatures) = self.call_signatures else {
+            return HashSet::default();
+        };
+        if owners.is_empty() {
+            return HashSet::default();
+        }
+        let method = php_symbol_key(method);
+        let mut classes = HashSet::default();
+        for owner in owners {
+            let found = signatures.method(&[owner.clone()].into_iter().collect(), &method, false);
+            let [signature] = found.as_slice() else {
+                return HashSet::default();
+            };
+            if !signature.declared_return || !collect_object_classes(&signature.return_type, &mut classes) {
+                return HashSet::default();
+            }
+        }
+        classes
     }
 
     /// Returns concrete class/interface receiver candidates declared by a local type hint.
@@ -1284,7 +1362,7 @@ impl Scanner<'_> {
                 false,
                 true,
             ) else {
-                self.usage.hazards.dynamic_method = true;
+                self.dynamic_method_hazard(line!());
                 continue;
             };
             for (index, argument) in plan.normalized_args().iter().enumerate() {
@@ -1355,7 +1433,7 @@ impl Scanner<'_> {
             .is_some_and(|name| name.starts_with("reflection"))
         {
             self.usage.hazards.dynamic_function = true;
-            self.usage.hazards.dynamic_method = true;
+            self.dynamic_method_hazard(line!());
             self.usage.hazards.dynamic_class = true;
         }
         self.usage.classes.insert(key.clone()); key
@@ -1384,7 +1462,7 @@ impl Scanner<'_> {
             }
             ExprKind::DynamicPropertyAccess { .. }
             | ExprKind::NullsafeDynamicPropertyAccess { .. } => {
-                self.usage.hazards.dynamic_method = true;
+                self.dynamic_method_hazard(line!());
             }
             ExprKind::ArrayAccess { array, .. } => {
                 self.record_protocol_methods(array, &["__elephc_reference"]);
@@ -1406,6 +1484,39 @@ fn php_type_may_be_callable(ty: &crate::types::PhpType) -> bool {
 }
 
 /// Removes a named-argument wrapper when inspecting builtin control arguments.
+/// Adds the class keys of a return type made only of classes and null; false for any other part.
+fn collect_object_classes(ty: &crate::types::PhpType, classes: &mut HashSet<String>) -> bool {
+    use crate::types::PhpType;
+    match ty {
+        PhpType::Object(name) => {
+            let key = php_symbol_key(name.trim_start_matches('\\'));
+            if matches!(key.as_str(), "self" | "static" | "parent" | "object" | "mixed") {
+                return false;
+            }
+            classes.insert(key);
+            true
+        }
+        PhpType::Void => true,
+        PhpType::Union(parts) => parts.iter().all(|part| collect_object_classes(part, classes)),
+        _ => false,
+    }
+}
+
+/// Whether `ty` names `self`, `parent` or `static` anywhere, a class relative to its declaration.
+fn type_names_relative_class(ty: &TypeExpr) -> bool {
+    match ty {
+        TypeExpr::Named(name) => matches!(
+            name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        ),
+        TypeExpr::Nullable(inner) => type_names_relative_class(inner),
+        TypeExpr::Union(parts) | TypeExpr::Intersection(parts) => {
+            parts.iter().any(type_names_relative_class)
+        }
+        _ => false,
+    }
+}
+
 fn unwrap_named_arg(expr: &Expr) -> &Expr {
     if let ExprKind::NamedArg { value, .. } = &expr.kind { value } else { expr }
 }

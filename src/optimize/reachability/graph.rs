@@ -95,7 +95,8 @@ pub fn compute(
     check_result: &CheckResult,
     options: &PruneOptions<'_>,
 ) -> Reachability {
-    let call_signatures = usage::CallSignatureIndex::from_check_result(check_result);
+    let call_signatures = usage::CallSignatureIndex::from_check_result(check_result)
+        .with_declared_property_types(program);
     let index = DeclarationIndex::build_with_signatures(
         program,
         check_result,
@@ -251,6 +252,11 @@ struct GraphState {
     reach: Reachability,
     behavioral: BehavioralReachability,
     structural_referenced_methods: HashSet<(String, bool)>,
+    /// Behavioral method references whose receiver class the index declares, by that class:
+    /// each is kept on the live classes that are one, see `seed_receiver_methods`.
+    behavioral_receiver_methods: HashMap<String, HashSet<(String, bool)>>,
+    /// Interface contracts by interface: structurally kept on the live classes implementing it.
+    structural_receiver_methods: HashMap<String, HashSet<(String, bool)>>,
     scoped_methods: HashSet<(String, String, bool)>,
     behavioral_scoped_methods: HashSet<(String, String, bool)>,
     instantiated_classes: HashSet<String>,
@@ -405,6 +411,8 @@ impl GraphState {
             },
             behavioral: BehavioralReachability::default(),
             structural_referenced_methods: HashSet::default(),
+            behavioral_receiver_methods: HashMap::default(),
+            structural_receiver_methods: HashMap::default(),
             scoped_methods: HashSet::default(),
             behavioral_scoped_methods: HashSet::default(),
             instantiated_classes: HashSet::default(),
@@ -665,11 +673,22 @@ impl GraphState {
             // class, purely to end the immutable borrow of `self.index` before this insert.
             // Nothing between the take and the restore reads this set, so taking it cannot
             // lose an entry; `apply_usage` writes it, and has already returned.
+            // An interface's contract binds the classes that implement it, so its methods are
+            // kept on those (`seed_receiver_methods`), not on every class declaring the names.
+            // An interface the index does not declare keeps its names everywhere, as before.
+            if !declared_methods.is_empty() {
+                self.structural_receiver_methods
+                    .entry(name.clone())
+                    .or_default()
+                    .extend(declared_methods);
+            }
             let mut referenced = std::mem::take(&mut self.structural_referenced_methods);
-            referenced.extend(declared_methods);
             for interface in &interfaces {
                 if let Some(contract) = self.index.classes.get(interface) {
-                    referenced.extend(contract.methods.keys().cloned());
+                    self.structural_receiver_methods
+                        .entry(interface.clone())
+                        .or_default()
+                        .extend(contract.methods.keys().cloned());
                 } else if let Some(methods) = self.checker_interface_methods.get(interface) {
                     referenced.extend(methods.iter().cloned());
                 }
@@ -753,6 +772,7 @@ impl GraphState {
             }
         }
         self.reach.classes = live_classes;
+        self.seed_receiver_methods();
         lap(1, &mut mark);
         self.seed_vtable_slot_families();
         lap(2, &mut mark);
@@ -760,6 +780,55 @@ impl GraphState {
         lap(3, &mut mark);
         self.seed_inherited_implementations();
         lap(4, &mut mark);
+    }
+
+    /// Keeps each receiver-scoped method reference on every live class that is the receiver's
+    /// class: the class itself, a subclass, an implementation of the interface or a user of the
+    /// trait. `seed_explicit_method_implementations` then resolves an inherited method to the
+    /// class that declares its body.
+    fn seed_receiver_methods(&mut self) {
+        if self.behavioral_receiver_methods.is_empty() && self.structural_receiver_methods.is_empty() {
+            return;
+        }
+        let live_classes: Vec<String> = self.reach.classes.iter().cloned().collect();
+        let mut key: (String, String, bool) = (String::new(), String::new(), false);
+        for class in &live_classes {
+            for family in self.class_families(class) {
+                if let Some(methods) = self.behavioral_receiver_methods.get(&family) {
+                    for (method, is_static) in methods {
+                        fill_method_key(&mut key, class, method, *is_static);
+                        insert_new_method(&mut self.reach.methods, &key);
+                        insert_new_method(&mut self.behavioral.methods, &key);
+                    }
+                }
+                if let Some(methods) = self.structural_receiver_methods.get(&family) {
+                    for (method, is_static) in methods {
+                        fill_method_key(&mut key, class, method, *is_static);
+                        insert_new_method(&mut self.reach.methods, &key);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every class-like `class` is one of: itself, its ancestors, the interfaces they implement
+    /// (and those interfaces extend) and the traits they use.
+    fn class_families(&self, class: &str) -> Vec<String> {
+        let mut families: Vec<String> = Vec::new();
+        let mut pending = vec![class.to_string()];
+        let mut seen: HashSet<String> = HashSet::default();
+        while let Some(current) = pending.pop() {
+            if !seen.insert(current.clone()) {
+                continue;
+            }
+            if let Some(node) = self.index.classes.get(current.as_str()) {
+                pending.extend(node.parent.iter().cloned());
+                pending.extend(node.interfaces.iter().cloned());
+                pending.extend(node.traits.iter().cloned());
+            }
+            families.push(current);
+        }
+        families
     }
 
     /// Keeps shared virtual slots on every live class in a lineage once any occupant survives.
@@ -1124,11 +1193,24 @@ impl GraphState {
             let key = (class.clone(), method.clone(), is_static);
             self.reach.methods.insert(key.clone());
             if behavioral {
-                self.behavioral.classes.insert(class);
                 self.behavioral.methods.insert(key);
-                self.behavioral
-                    .referenced_methods
-                    .insert((method, is_static));
+                // A receiver the program declares dispatches within its own family: the method
+                // is kept on every live class that is one (`seed_receiver_methods`), not on every
+                // class that declares the name. A receiver the index does not know (a builtin
+                // class, an unresolved name) keeps the name everywhere, as before, and so does a
+                // generic instantiation: `Holder<Dog>` is a `Holder<Animal>` through the
+                // variance of `+T`, which no parent, interface or trait edge records.
+                if self.index.classes.contains_key(class.as_str()) && !class.contains('<') {
+                    self.behavioral_receiver_methods
+                        .entry(class.clone())
+                        .or_default()
+                        .insert((method, is_static));
+                } else {
+                    self.behavioral
+                        .referenced_methods
+                        .insert((method, is_static));
+                }
+                self.behavioral.classes.insert(class);
             } else {
                 self.structural_referenced_methods
                     .insert((method, is_static));
@@ -1325,6 +1407,16 @@ impl GraphState {
             + self.behavioral.referenced_methods.len()
             + self.behavioral.instantiated_classes.len()
             + self.structural_referenced_methods.len()
+            + self
+                .behavioral_receiver_methods
+                .values()
+                .map(|methods| methods.len())
+                .sum::<usize>()
+            + self
+                .structural_receiver_methods
+                .values()
+                .map(|methods| methods.len())
+                .sum::<usize>()
             + self.scoped_methods.len()
             + self.behavioral_scoped_methods.len()
             + self.instantiated_classes.len()

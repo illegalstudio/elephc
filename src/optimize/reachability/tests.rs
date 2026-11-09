@@ -1002,6 +1002,50 @@ fn prune_keeps_interface_method() {
     assert!(!has_method(&program, "C", "extra"));
 }
 
+/// A call through a typed (promoted) property keeps the method on the property type's
+/// implementations, a subclass's inherited one included, and not on an unrelated live class that
+/// declares the same name; nor does the interface's contract keep it there.
+#[test]
+fn prune_keeps_a_typed_property_receiver_method_on_its_family_only() {
+    let (program, _) = prune(
+        "<?php interface Renderer { public function render(): string; }
+         class Html implements Renderer { public function render(): string { return 'h'; } }
+         abstract class Base implements Renderer { public function render(): string { return 'b'; } }
+         class Text extends Base {}
+         class Unrelated { public function render(): string { return 'u'; } public function hi(): string { return 'hi'; } }
+         class Page { public function __construct(private Renderer $renderer) {} public function show(): string { return $this->renderer->render(); } }
+         echo (new Unrelated())->hi(), (new Page(new Html()))->show(), (new Page(new Text()))->show();",
+    );
+    assert!(has_method(&program, "Html", "render"));
+    assert!(has_method(&program, "Base", "render"), "Text inherits Base's body");
+    assert!(!has_method(&program, "Unrelated", "render"), "an unrelated class keeps no same-named method");
+}
+
+/// A method called on the declared return of another keeps it on that return type's family only.
+#[test]
+fn prune_keeps_a_declared_return_receiver_method_on_its_family_only() {
+    let (program, _) = prune(
+        "<?php class Engine { public function start(): string { return 'go'; } }
+         class Toy { public function start(): string { return 'toy'; } public function hi(): string { return 'hi'; } }
+         class Car { public function engine(): Engine { return new Engine(); } }
+         echo (new Toy())->hi(), (new Car())->engine()->start();",
+    );
+    assert!(has_method(&program, "Engine", "start"));
+    assert!(!has_method(&program, "Toy", "start"));
+}
+
+/// Inside a closure `$this` may be any object `Closure::bind()` gives it, so a call through it
+/// keeps the method name on every class.
+#[test]
+fn prune_keeps_a_closure_this_method_on_every_class() {
+    let (program, _) = prune(
+        "<?php class Target { public function secret(): string { return 's'; } }
+         class Maker { public function make(): Closure { return function () { return $this->secret(); }; } public function secret(): string { return 'm'; } }
+         $f = (new Maker())->make(); $t = new Target(); $g = Closure::bind($f, $t, Target::class); echo get_class($t);",
+    );
+    assert!(has_method(&program, "Target", "secret"), "the bound closure calls Target::secret");
+}
+
 /// Verifies instantiating a child retains inherited constructor and destructor implementations.
 #[test]
 fn prune_keeps_inherited_magic_methods() {
