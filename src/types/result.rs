@@ -164,6 +164,8 @@ pub struct CheckResult {
     pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
     /// Checked member receiver types by body scope and source node; conflicting visits are None.
     pub member_receiver_types: HashMap<(String, Span), Option<PhpType>>,
+    /// Source-point element proofs for declared-array appends; conflicts disable projection.
+    pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
     /// Source-point value read contracts; these never change a local's reference storage.
     pub local_value_read_types: LocalValueReadTypes,
     /// Checker-authorized call-argument sites that may widen one local to a boxed Mixed cell.

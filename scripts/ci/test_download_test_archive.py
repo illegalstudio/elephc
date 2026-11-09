@@ -50,10 +50,11 @@ class ContainerPaths(unittest.TestCase):
         sleep.write_text("#!/bin/sh\nexit 0\n")
         sleep.chmod(0o755)
 
-    def run_step(self, step, download_path):
+    def run_step(self, step, download_path, payload=False):
         """Resolve contexts, then execute the unmodified action shell body."""
         contexts = {
             "github.action_path": str(self.root / "unmounted host action"),
+            "inputs.validate-payload": "true" if payload else "false",
             "inputs.path": str(self.host_artifacts),
             "inputs.name": "nextest-archive-codegen-linux-aarch64",
             **{f"steps.{name}.outputs.download-path": download_path
@@ -85,6 +86,18 @@ class ContainerPaths(unittest.TestCase):
             result = self.run_step(step, str(self.artifacts))
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(self.host_archive.read_bytes(), self.frame)
+
+    def test_generic_payload_checksum_participates_in_all_three_attempts(self):
+        """Corruption is rejected before extraction, even after a successful HTTP download."""
+        import hashlib
+        payload = b"artifact bytes"
+        (self.artifacts / "payload.tar.gz").write_bytes(payload)
+        (self.artifacts / "manifest.json").write_text(json.dumps({"archive_sha256": hashlib.sha256(payload).hexdigest()}))
+        for step in [s for s in self.steps if "validate.sh" in s.get("run", "")]:
+            (self.artifacts / "payload.tar.gz").write_bytes(payload)
+            self.assertEqual(self.run_step(step, str(self.artifacts), payload=True).returncode, 0)
+            (self.artifacts / "payload.tar.gz").write_bytes(payload[:-1])
+            self.assertNotEqual(self.run_step(step, str(self.artifacts), payload=True).returncode, 0)
 
     def test_cleanup_removes_only_the_actual_download(self):
         """Both retries remove the mapped archive and preserve host-context files."""

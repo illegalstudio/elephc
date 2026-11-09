@@ -2536,14 +2536,15 @@ fn decl_class_simplexmlelement() -> Stmt {
                             s_if(
                                 e_binop(e_var("appended"), BinOp::StrictNotEq, e_int(0)),
                                 vec![
-                                    s_expr(e_call("elephc_xml_sx_free", vec![e_var("appended")])),
+                                    s_prop_assign(e_var("node"), "parentNode", e_var("parent")),
+                                    s_prop_assign(e_var("node"), "ownerDocument", e_ternary(e_instance_of(e_var("parent"), "DOMDocument"), e_var("parent"), e_prop(e_var("parent"), "ownerDocument"))),
+                                    s_expr(e_call("__elephc_simplexml_bind_dom", vec![e_var("node"), e_call("__elephc_simplexml_wrap", vec![e_var("appended"), e_str("SimpleXMLElement")])])),
+                                    s_return(e_var("node")),
                                 ],
                                 vec![],
                                 None,
                             ),
-                            s_prop_assign(e_var("node"), "parentNode", e_var("parent")),
-                            s_prop_assign(e_var("node"), "ownerDocument", e_ternary(e_instance_of(e_var("parent"), "DOMDocument"), e_var("parent"), e_prop(e_var("parent"), "ownerDocument"))),
-                            s_return(e_var("node")),
+                            s_throw(e_new("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
                         ],
                         vec![],
                         None,
@@ -2587,6 +2588,7 @@ fn decl_class_simplexmlelement() -> Stmt {
                                 vec![],
                                 None,
                             ),
+                            s_prop_assign(e_var("node"), "ownerDocument", e_ternary(e_instance_of(e_var("parent"), "DOMDocument"), e_var("parent"), e_prop(e_var("parent"), "ownerDocument"))),
                             s_assign("children", e_prop(e_var("node"), "childNodes")),
                             s_if(
                                 e_instance_of(e_var("children"), "DOMNodeList"),
@@ -2595,7 +2597,7 @@ fn decl_class_simplexmlelement() -> Stmt {
                                         s_if(
                                             e_instance_of(e_var("grandchild"), "DOMNode"),
                                             vec![
-                                                s_expr(e_method_call(e_var("child"), "__elephc_dom_append_child", vec![e_var("child"), e_var("grandchild")])),
+                                                s_expr(e_method_call(e_var("child"), "__elephc_dom_append_child", vec![e_var("node"), e_var("grandchild")])),
                                             ],
                                             vec![],
                                             None,
@@ -2607,6 +2609,7 @@ fn decl_class_simplexmlelement() -> Stmt {
                             ),
                             s_prop_assign(e_var("node"), "parentNode", e_var("parent")),
                             s_prop_assign(e_var("node"), "ownerDocument", e_ternary(e_instance_of(e_var("parent"), "DOMDocument"), e_var("parent"), e_prop(e_var("parent"), "ownerDocument"))),
+                            s_expr(e_call("__elephc_simplexml_bind_dom", vec![e_var("node"), e_var("child")])),
                             s_return(e_var("node")),
                         ],
                         vec![],

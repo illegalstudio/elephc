@@ -22,22 +22,43 @@ inputs:
     description: Directory to extract the artifact into
     required: true
 
+  allow-builds:
+    description: Producer restoring dependencies before compiling its own variant
+    default: 'false'
+  validate-payload:
+    description: Check a generic build payload checksum before accepting a download
+    default: 'false'
+  token:
+    description: Artifact reader token
+    default: ${{ github.token }}
+  run-id:
+    description: Explicit producing workflow run
+    default: ${{ github.run_id }}
+  attempt:
+    description: Build attempt for nextest payloads
+    default: ${{ github.run_attempt }}
+
 runs:
   using: composite
   steps:
+    - uses: ./.github/actions/forbid-consumer-builds
+      if: inputs.allow-builds != 'true'
     - id: first
       uses: actions/download-artifact@v4
       continue-on-error: true
       with:
-        name: ${{ inputs.name }}
+        name: ${{ startsWith(inputs.name, 'nextest-archive-') && format('{0}-{1}', inputs.name, inputs.attempt) || inputs.name }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ inputs.token }}
         path: ${{ inputs.path }}
 
     - id: first_archive
-      if: steps.first.outcome == 'success' && startsWith(inputs.name, 'nextest-archive-')
+      if: steps.first.outcome == 'success' && (startsWith(inputs.name, 'nextest-archive-') || inputs.validate-payload == 'true')
       continue-on-error: true
       shell: bash
       env:
         ARCHIVE_DIR: ${{ steps.first.outputs.download-path }}
+        VALIDATE_PAYLOAD: ${{ inputs.validate-payload }}
       # Runtime paths are already mapped into a job container; contexts can retain host paths.
       run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
 
@@ -46,10 +67,14 @@ runs:
       env:
         ARTIFACT_NAME: ${{ inputs.name }}
         ARCHIVE_DIR: ${{ steps.first.outputs.download-path }}
+        VALIDATE_PAYLOAD: ${{ inputs.validate-payload }}
       run: |
         echo "::warning title=Artifact download retried::$ARTIFACT_NAME failed download or archive validation; retrying in 15s"
         if [[ "$ARTIFACT_NAME" == nextest-archive-* && -n "$ARCHIVE_DIR" ]]; then
           rm -f -- "$ARCHIVE_DIR/nextest-archive.tar.zst"
+        fi
+        if [[ "$VALIDATE_PAYLOAD" == true && -n "$ARCHIVE_DIR" ]]; then
+          rm -f -- "$ARCHIVE_DIR/payload.tar.gz" "$ARCHIVE_DIR/manifest.json"
         fi
         sleep 15
 
@@ -58,15 +83,18 @@ runs:
       uses: actions/download-artifact@v4
       continue-on-error: true
       with:
-        name: ${{ inputs.name }}
+        name: ${{ startsWith(inputs.name, 'nextest-archive-') && format('{0}-{1}', inputs.name, inputs.attempt) || inputs.name }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ inputs.token }}
         path: ${{ inputs.path }}
 
     - id: second_archive
-      if: steps.second.outcome == 'success' && startsWith(inputs.name, 'nextest-archive-')
+      if: steps.second.outcome == 'success' && (startsWith(inputs.name, 'nextest-archive-') || inputs.validate-payload == 'true')
       continue-on-error: true
       shell: bash
       env:
         ARCHIVE_DIR: ${{ steps.second.outputs.download-path }}
+        VALIDATE_PAYLOAD: ${{ inputs.validate-payload }}
       run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
 
     - if: steps.second.outcome == 'failure' || steps.second_archive.outcome == 'failure'
@@ -74,10 +102,14 @@ runs:
       env:
         ARTIFACT_NAME: ${{ inputs.name }}
         ARCHIVE_DIR: ${{ steps.second.outputs.download-path }}
+        VALIDATE_PAYLOAD: ${{ inputs.validate-payload }}
       run: |
         echo "::warning title=Artifact download retried::$ARTIFACT_NAME failed twice; retrying in 45s"
         if [[ "$ARTIFACT_NAME" == nextest-archive-* && -n "$ARCHIVE_DIR" ]]; then
           rm -f -- "$ARCHIVE_DIR/nextest-archive.tar.zst"
+        fi
+        if [[ "$VALIDATE_PAYLOAD" == true && -n "$ARCHIVE_DIR" ]]; then
+          rm -f -- "$ARCHIVE_DIR/payload.tar.gz" "$ARCHIVE_DIR/manifest.json"
         fi
         sleep 45
 
@@ -85,11 +117,38 @@ runs:
       if: steps.second.outcome == 'failure' || steps.second_archive.outcome == 'failure'
       uses: actions/download-artifact@v4
       with:
-        name: ${{ inputs.name }}
+        name: ${{ startsWith(inputs.name, 'nextest-archive-') && format('{0}-{1}', inputs.name, inputs.attempt) || inputs.name }}
+        run-id: ${{ inputs.run-id }}
+        github-token: ${{ inputs.token }}
         path: ${{ inputs.path }}
 
-    - if: steps.third.outcome == 'success' && startsWith(inputs.name, 'nextest-archive-')
+    - if: steps.third.outcome == 'success' && (startsWith(inputs.name, 'nextest-archive-') || inputs.validate-payload == 'true')
       shell: bash
       env:
         ARCHIVE_DIR: ${{ steps.third.outputs.download-path }}
+        VALIDATE_PAYLOAD: ${{ inputs.validate-payload }}
       run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
+
+    - name: Validate nextest source and producer
+      if: startsWith(inputs.name, 'nextest-archive-')
+      shell: bash
+      env:
+        ARTIFACT_NAME: ${{ inputs.name }}
+        ARTIFACT_RUN: ${{ inputs.run-id }}
+        ARTIFACT_ATTEMPT: ${{ inputs.attempt }}
+        ARCHIVE_DIR: ${{ steps.third.outputs.download-path || steps.second.outputs.download-path || steps.first.outputs.download-path }}
+      run: |
+        target=${ARTIFACT_NAME#nextest-archive-}
+        variant=workspace
+        if [[ "$target" == codegen-* ]]; then target=${target#codegen-}; variant=codegen; fi
+        python3 -B scripts/ci/test_archive_manifest.py verify "$ARCHIVE_DIR" \
+          --target "$target" --variant "$variant" --run-id "$ARTIFACT_RUN" --attempt "$ARTIFACT_ATTEMPT"
+        sh scripts/ci/validate_archived_nextest.sh "$ARCHIVE_DIR"
+
+    - uses: ./.github/actions/pin-test-bridges
+      if: startsWith(inputs.name, 'nextest-archive-')
+
+    - name: Explain recovery after completed-run cleanup
+      if: failure() && steps.third.outcome == 'failure'
+      shell: bash
+      run: echo '::error::Completed runs discard intermediate artifacts. If this is a rerun of a concluded workflow, use Re-run all jobs to regenerate its inputs.'

@@ -102,6 +102,17 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# The ignored GMP PHPT entry runs all 98 upstream cases sequentially. It took
+# 214s under cargo test before archive migration, so the ordinary 180s single-case
+# budget cannot cover it. Keep its corpus intact with a bounded ten-minute budget.
+[[profile.default.overrides]]
+filter = 'binary(=codegen_tests) and test(=codegen::gmp_phpt::test_gmp_php_src_phpt_corpus)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[[profile.ci.overrides]]
+filter = 'binary(=codegen_tests) and test(=codegen::gmp_phpt::test_gmp_php_src_phpt_corpus)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
 # The GMP eval parity fixture compiles one opaque-eval host (the whole builtin catalog)
 # and links the GMP bridge; it measured 329s on a debug macOS host.
 [[profile.default.overrides]]
@@ -352,6 +363,11 @@ slow-timeout = { period = "300s", terminate-after = 1 }
 [[profile.ci.overrides]]
 filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
 slow-timeout = { period = "300s", terminate-after = 1 }
+# The prebuilt bridge guard rejects accidental driver-feature substitutions.
+[[profile.ci.archive.include]]
+path = "debug/elephc-pdo-features.txt"
+relative-to = "target"
+
 # On shared macOS runners, eval-linked programs (the 65MB Magician archive per link)
 # measured 60-66s in otherwise green runs, with a different fixture crossing the guard:
 # `xml::clone`, `xml::eval`, `nested_property_defaults`, `instanceof_operand_owners`. The per-test

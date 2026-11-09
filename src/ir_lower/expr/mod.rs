@@ -339,7 +339,7 @@ fn lower_undefined_variable_read(
 ) -> LoweredValue {
     // `isset()` and the left operand of `??` are PHP's silent probes: they name storage that
     // may never have been declared, and answer null/false without an Undefined variable warning.
-    if ctx.suppresses_undefined_reads() {
+    if ctx.suppresses_undefined_reads(name, expr.span) {
         return lower_null(ctx, expr);
     }
     let message = format!("Warning: Undefined variable ${name}\n");

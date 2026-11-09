@@ -56,7 +56,11 @@ export "ELEPHC_NATIVE_AR_${TARGET_ENV}=$AR_WRAPPER"
 export "ELEPHC_NATIVE_RANLIB_${TARGET_ENV}=$RANLIB_WRAPPER"
 
 echo "==> building compiler and materializing libxml2 for $ELEPHC_TARGET"
-(cd "$PROJECT_DIR" && cargo build --bin elephc)
+if [[ ${ELEPHC_CI_PREBUILT_COMPILER:-0} == 1 ]]; then
+    test -x "$PROJECT_DIR/target/debug/elephc"
+else
+    (cd "$PROJECT_DIR" && cargo build --bin elephc)
+fi
 "$ELEPHC_BIN" native install --locked \
   --target "$ELEPHC_TARGET" \
   --manifest-path "$PROJECT_DIR/examples/xml/elephc.toml"
@@ -67,7 +71,12 @@ echo "==> building compiler and materializing libxml2 for $ELEPHC_TARGET"
 # zlib/bzip2) exactly as the Linux managed-native smoke documents. Neither bridge is
 # whole-archived, so both are plain archive inputs below.
 echo "==> cross-building the Rust xml and phar bridges for $RUST_TARGET"
-(cd "$PROJECT_DIR" && cargo build -p elephc-xml -p elephc-phar --target "$RUST_TARGET")
+if [[ ${ELEPHC_CI_PREBUILT_IOS_BRIDGES:-0} == 1 ]]; then
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_xml.a"
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
+else
+    (cd "$PROJECT_DIR" && cargo build -p elephc-xml -p elephc-phar --target "$RUST_TARGET")
+fi
 BRIDGE_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_xml.a"
 PHAR_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
 test -s "$BRIDGE_ARCHIVE"

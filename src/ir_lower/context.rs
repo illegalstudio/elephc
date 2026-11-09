@@ -256,8 +256,8 @@ pub(crate) struct LoweringSnapshot {
     /// Pending call scopes order capture cleanup by PHP parameter position.
     argument_guard_scopes: Vec<Vec<(usize, ValueId)>>,
     eval_barrier_active: bool,
-    /// Depth of `isset()`/`??` operand lowering, where a never-declared root is silent.
-    quiet_undefined_reads: usize,
+    /// Variable reads on active null-probe spines; indices, names and call arguments stay normal.
+    quiet_undefined_reads: Vec<Option<(String, Span)>>,
     eval_executed: bool,
     consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
@@ -401,6 +401,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Checked receiver views at property reads and method calls, scoped to the current body.
     pub member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
+    /// Checker-proved element types at declared-array append sites, scoped to each body.
+    pub array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
     /// Checked integer value views, separate from the physical local/reference contract.
     pub local_value_read_types: &'m crate::types::LocalValueReadTypes,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
@@ -550,8 +552,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// read there feeds a heap-kind-dispatching element op, never the `array<mixed>` view.
     promotable_view_suppressed: bool,
     eval_barrier_active: bool,
-    /// Depth of `isset()`/`??` operand lowering, where a never-declared root is silent.
-    quiet_undefined_reads: usize,
+    /// Variable reads on active null-probe spines; indices, names and call arguments stay normal.
+    quiet_undefined_reads: Vec<Option<(String, Span)>>,
     eval_executed: bool,
     consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
@@ -617,6 +619,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         closure_generator_spans: &'m HashSet<Span>,
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
+        array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
         local_value_read_types: &'m crate::types::LocalValueReadTypes,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -690,6 +693,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             closure_generator_spans,
             array_push_property_plans,
             member_receiver_types,
+            array_append_element_types,
             local_value_read_types,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
@@ -762,7 +766,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             write_operand_is_borrowed: false,
             promotable_view_suppressed: false,
             eval_barrier_active: false,
-            quiet_undefined_reads: 0,
+            quiet_undefined_reads: Vec::new(),
             eval_executed: false,
             consuming_string_append_enabled: true,
             eval_scope_read_param: None,
@@ -838,7 +842,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
-            quiet_undefined_reads: self.quiet_undefined_reads,
+            quiet_undefined_reads: self.quiet_undefined_reads.clone(),
             eval_executed: self.eval_executed,
             consuming_string_append_enabled: self.consuming_string_append_enabled,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
@@ -2053,19 +2057,31 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             .any(|parameter| parameter.by_ref && parameter.name == name))
     }
 
-    /// Opens a PHP null-probe operand (`isset()`/`??`) where a never-declared root is silent.
-    pub(crate) fn begin_quiet_undefined_reads(&mut self) {
-        self.quiet_undefined_reads += 1;
+    /// Silences only the variable at the root of this null-probe chain.
+    pub(crate) fn begin_quiet_undefined_reads(&mut self, mut operand: &Expr) {
+        let root = loop {
+            match &operand.kind {
+                ExprKind::Variable(name) => break Some((name.clone(), operand.span)),
+                ExprKind::ArrayAccess { array, .. } => operand = array,
+                ExprKind::PropertyAccess { object, .. }
+                | ExprKind::DynamicPropertyAccess { object, .. }
+                | ExprKind::NullsafePropertyAccess { object, .. }
+                | ExprKind::NullsafeDynamicPropertyAccess { object, .. } => operand = object,
+                _ => break None,
+            }
+        };
+        self.quiet_undefined_reads.push(root);
     }
 
     /// Closes one PHP null-probe operand.
     pub(crate) fn end_quiet_undefined_reads(&mut self) {
-        self.quiet_undefined_reads = self.quiet_undefined_reads.saturating_sub(1);
+        self.quiet_undefined_reads.pop();
     }
 
-    /// Returns whether the current operand is a null probe and must not warn about its root.
-    pub(crate) fn suppresses_undefined_reads(&self) -> bool {
-        self.quiet_undefined_reads > 0
+    /// Matches the nominated root read, leaving every other subexpression observable.
+    pub(crate) fn suppresses_undefined_reads(&self, name: &str, span: Span) -> bool {
+        self.quiet_undefined_reads.iter().flatten()
+            .any(|(root, site)| root == name && *site == span)
     }
 
     /// Enables direct eval-scope reads for selected variable names in an AOT eval body.

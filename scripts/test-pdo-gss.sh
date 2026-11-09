@@ -193,5 +193,9 @@ export ELEPHC_PDO_GSS_REQUIRED=1
 export ELEPHC_PG_GSS_DSN="pgsql:host=pgsql.elephc.test;hostaddr=127.0.0.1;port=$PG_PORT;dbname=testdb;user=elephc_gss;gssencmode=require;require_auth=gss;krbsrvname=postgres"
 export ELEPHC_PG_GSS_EMPTY_CACHE="FILE:$FIXTURE_DIR/missing.ccache"
 
-cargo build -p elephc-pdo --features libpq-gss
-cargo test --features pdo-libpq-gss --test codegen_tests pgsql_gss -- --ignored --test-threads=1
+if [[ -n ${ELEPHC_CI_TEST_ROOT:-} ]]; then
+    bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(pgsql_gss)' --run-ignored only -j 1
+else
+    cargo build -p elephc-pdo --features libpq-gss
+    cargo test --features pdo-libpq-gss --test codegen_tests pgsql_gss -- --ignored --test-threads=1
+fi

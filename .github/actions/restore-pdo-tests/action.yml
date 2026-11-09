@@ -1,0 +1,38 @@
+name: Restore PDO test variant
+description: Restore one exact driver configuration without rebuilding Rust consumers.
+inputs:
+  variant:
+    description: PDO driver feature
+    required: true
+  attempts:
+    description: Variant to producing attempt JSON map
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/restore-build-artifact
+      with:
+        target: linux-x86_64
+        kind: tests
+        variant: pdo-${{ inputs.variant }}
+        features: pdo-${{ inputs.variant }}
+        attempt: ${{ fromJSON(inputs.attempts)[inputs.variant] }}
+    - name: Extract the selected test variant
+      shell: bash
+      env:
+        VARIANT: ${{ inputs.variant }}
+      run: |
+        archive="$PWD/target/ci-pdo/$VARIANT"
+        sh scripts/ci/validate_archived_nextest.sh "$archive"
+        destination="$RUNNER_TEMP/pdo-$VARIANT"
+        mkdir -p "$destination"
+        "$archive/cargo-nextest" nextest list --list-type binaries-only --message-format json \
+          --archive-file "$archive/nextest-archive.tar.zst" \
+          --extract-to "$destination" --workspace-remap . > /dev/null
+        echo "ELEPHC_CI_NEXTEST=$archive/cargo-nextest" >> "$GITHUB_ENV"
+        echo "ELEPHC_CI_TEST_ROOT=$destination" >> "$GITHUB_ENV"
+        echo 'ELEPHC_TEST_PREBUILT_BRIDGES=1' >> "$GITHUB_ENV"
+
+    - uses: ./.github/actions/pin-test-bridges
+      with:
+        root: pdo-${{ inputs.variant }}

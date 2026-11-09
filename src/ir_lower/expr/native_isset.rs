@@ -5,7 +5,9 @@
 //! - `crate::ir_lower::expr`.
 //!
 //! Key details:
-//! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - Probe keys are borrowed for lookup and owned expression leases retire afterwards.
+//! - Provisional key releases are pruned when final local storage stays borrowed.
+//! - Global keys and other borrowed operands retain their existing owner.
 
 use super::*;
 
@@ -147,6 +149,11 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                     Some(expr.span),
                 )
             };
+            // A later foreach can widen a string key's slot after this probe was lowered.
+            // Its load then owns a detached copy; finalization prunes concrete borrowed reads.
+            if ctx.value_needs_release_after_use(index_value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+            }
             // Ordinary array reads stabilize their result and retire an owning receiver. Native
             // `isset` returns only a bool, so no stabilization is needed, but the receiver still
             // has to be released when it was projected from widened Mixed frame storage.
@@ -163,6 +170,9 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                 Op::HashIsset.default_effects(),
                 Some(expr.span),
             );
+            if ctx.value_needs_release_after_use(index_value) {
+                crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
+            }
             release_owning_receiver_temporary(ctx, array_value, expr.span);
             result
         }

@@ -58,23 +58,11 @@ jobs:
             exit 1
           fi
 
-      - name: Require green Build & Test check
+      - name: Require all three existing CI gates
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.tag.outputs.sha }}
-        run: |
-          RESULT="$(gh api \
-            "/repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?check_name=Build%20%26%20Test&status=completed&filter=latest" \
-            --jq '.check_runs | map(select(.app.slug == "github-actions" and .conclusion == "success")) | first // {} | [(.conclusion // ""), (.html_url // "")] | @tsv')"
-          CONCLUSION="$(printf '%s' "$RESULT" | cut -f1)"
-          CHECK_URL="$(printf '%s' "$RESULT" | cut -f2)"
-
-          if [ "$CONCLUSION" != "success" ]; then
-            echo "::error::Tagged commit ${SHA} does not have a successful Build & Test check."
-            exit 1
-          fi
-
-          echo "Found successful Build & Test check: ${CHECK_URL}"
+        run: python3 -B scripts/ci/verify_ci_verdicts.py "$SHA"
 
   prepare:
     name: Bump version on main
@@ -83,6 +71,7 @@ jobs:
     # ruleset's only bypass actor. The default token needs no write access.
     permissions:
       contents: read
+      actions: write
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ubuntu-latest
     needs:
@@ -159,6 +148,12 @@ jobs:
           git push origin HEAD:main
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Request development artifacts for the skipped CI commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.bump.outputs.sha }}
+        run: gh workflow run development-builds.yml --ref main -f "source-sha=$SOURCE_SHA"
+
   build:
     name: Build ${{ matrix.target }}
     permissions:
@@ -190,8 +185,11 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
-      - name: Build release binary
-        run: cargo build --release
+      - name: Build shared release profile
+        uses: ./.github/actions/build-release-artifacts
+        with:
+          target: ${{ matrix.target }}
+          sha: ${{ needs.prepare.outputs.sha }}
 
       - name: Verify release binary version
         run: |
@@ -207,16 +205,6 @@ jobs:
       # missing here ships a compiler that refuses the flag it advertises;
       # `every_bridge_staticlib_ships_in_the_release_tarball` fails the build
       # rather than letting the two lists drift again.
-      - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-intl -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-reference -p elephc-curl -p elephc-zend
-
-      - name: Build curl-aware Magician staticlib
-        run: |
-          cargo build --release -p elephc-magician --features curl \
-            --target-dir target/elephc-magician-curl-release-build
-          cp target/elephc-magician-curl-release-build/release/libelephc_magician.a \
-            target/release/libelephc_magician_curl.a
-
       - name: Strip binary
         run: strip target/release/elephc
 
@@ -274,7 +262,9 @@ jobs:
             libelephc_magician_curl.a \
             libelephc_zend.a \
             mbstring-notices \
-            fileinfo-notices
+            fileinfo-notices \
+            compiler-build-manifest.json \
+            bridge-build-manifest.json
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else

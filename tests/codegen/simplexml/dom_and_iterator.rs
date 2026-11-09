@@ -629,3 +629,38 @@ echo $second->saveXML(), "|", $div->textContent;
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// Appended DOM nodes and descendants keep their original PHP identities and live native writes.
+#[test]
+fn test_simplexml_followup_dom_append_live_identity_bundle() {
+    if skip_without_xml_native("test_simplexml_followup_dom_append_live_identity_bundle") { return; }
+    let source = r#"<?php
+$document = new DOMDocument();
+$document->loadXML('<r/>');
+$root = $document->documentElement;
+$node = $document->createElement('x');
+$leaf = $document->createElement('y', 'one');
+$node->appendChild($leaf);
+$returned = $root->appendChild($node);
+var_dump($returned === $node, $root->childNodes->item(0) === $node);
+var_dump($node->childNodes->item(0) === $leaf, $leaf->parentNode === $node);
+$node->setAttribute('id', 'live');
+$leaf->textContent = 'two';
+$text = new DOMText();
+$text->nodeValue = 'tail';
+$root->appendChild($text);
+$text->nodeValue = 'changed';
+var_dump($root->childNodes->item(1) === $text);
+echo $document->saveXML();
+unset($text, $leaf, $returned, $node, $root, $document);
+"#;
+    let expected = "bool(true)\nbool(true)\nbool(true)\nbool(true)\nbool(true)\n<?xml version=\"1.0\"?>\n<r><x id=\"live\"><y>two</y></x>changed</r>\n";
+    for optimized in [true, false] {
+        let run = || compile_and_run_with_heap_debug(source);
+        let out = if optimized { run() } else { without_ir_opt(run) };
+        assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, expected, "optimized={optimized}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "{}", out.stderr);
+    }
+}

@@ -557,7 +557,9 @@ fn validate_interface_method(
     );
     let tentative_return = php_symbol_key(required_owner) == "serializable"
         || (method_name == "__tostring" && !actual_sig.declared_return)
-        || (method_name == "count"
+        || (php_symbol_key(required_owner) == "countable"
+            && !declaration_is_source(checker, required_owner)
+            && method_name == "count"
             && has_return_type_will_change
             && count_scalar_return);
     validate_signature_compatibility(

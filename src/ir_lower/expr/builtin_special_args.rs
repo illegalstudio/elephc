@@ -80,7 +80,14 @@ pub(super) fn lower_static_settype(
     {
         ctx.promote_local_mixed_ref_cell(local_name, Some(var_arg.span));
     }
-    if ctx.is_ref_bound_local(local_name) && ctx.local_type(local_name).codegen_repr() == PhpType::Mixed {
+    // A narrowed value view still occupies its boxed slot after an earlier conversion.
+    // Every replacement must publish an EIR store and retire the previous occupant.
+    let boxed_storage = ctx.local_slots.get(local_name)
+        .is_some_and(|slot| ctx.builder.local_php_type(*slot).codegen_repr() == PhpType::Mixed);
+    if ctx.local_type(local_name).codegen_repr() == PhpType::Mixed || boxed_storage {
+        if boxed_storage {
+            ctx.set_local_logical_type(local_name, PhpType::Mixed);
+        }
         let target = match target_ty {
             PhpType::Int => CastType::Int,
             PhpType::Float => CastType::Float,

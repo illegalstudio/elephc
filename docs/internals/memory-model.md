@@ -1363,6 +1363,21 @@ In full-reset `--web` mode, the next request reclaims the previous PHP heap aren
 - **Object destructors (`__destruct`)**: `__rt_call_object_destructor` dispatches through the eval hook or class-id-indexed `_class_destruct_ptrs` table with a borrowed `$this`. Refcount bit 31 guards active execution. For collector-triggered destruction, heap-kind bit 14 remembers completion after that temporary guard is cleared, so a resurrected object is not destructed again on later collection or final release. Eval class/property metadata survives until actual object release. Ordinary last-owner destruction still runs at the top of `__rt_object_free_deep`, before property release; resurrection on that ordinary path remains unsupported
 - **Process exit**: all memory is reclaimed by the OS
 
+Native array and hash `isset` probes, ordinary hash reads, and indexed-array
+string-key reads borrow their keys for the lookup. Lowering releases independent key-expression owners after the
+lookup. This includes a string read whose local slot is boxed by a later
+`foreach` binding: the earlier read creates an independent string copy even if
+that loop is empty. Final storage analysis removes the provisional release when
+the local keeps the same representation. Global keys and other borrowed key
+operands remain owned by their existing storage.
+
+Branch-result temporaries retain an incoming heap value only when the
+destination itself keeps an owner. An inline nullable-integer temporary instead
+borrows a boxed branch result while converting its tag and payload, then
+releases that source expression's owner. Taking an extra reference before this
+scalar store would leak the box, because the inline slot cannot carry or retire
+it. Heap-backed merge results keep their existing transfer semantics.
+
 EIR array-element removal instructions report whether the key existed,
 including entries whose value was null. EIR combines these flags for an
 array-only unset list and runs its final automatic cycle collection only if an

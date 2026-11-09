@@ -3718,3 +3718,25 @@ fn test_standalone_null_return_requirements() {
         assert!(check_source_full(source).is_err(), "unexpectedly accepted: {source}");
     }
 }
+
+/// The tentative Countable return attribute cannot weaken an ordinary interface contract.
+#[test]
+fn test_simplexml_followup_count_attribute_keeps_user_interface_returns_strict() {
+    expect_error(r#"<?php
+interface FollowupCounter { public function count(): int; }
+class FollowupBadCounter implements FollowupCounter {
+    #[\ReturnTypeWillChange] public function count(): string { return "5"; }
+}
+"#, "incompatible return type string (interface returns int)");
+}
+
+/// Redeclaring count in a user interface makes its return a strict source contract.
+#[test]
+fn test_simplexml_followup_count_attribute_keeps_redeclared_returns_strict() {
+    expect_error(r#"<?php
+interface FollowupStrictCounter extends Countable { public function count(): int; }
+class FollowupBadStrictCounter implements FollowupStrictCounter {
+    #[\ReturnTypeWillChange] public function count(): string { return "5"; }
+}
+"#, "incompatible return type string (interface returns int)");
+}
