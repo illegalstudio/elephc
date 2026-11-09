@@ -437,7 +437,7 @@ pub(super) struct SplitPlan<'a> {
     compact: Option<&'static str>,
 }
 
-impl SplitPlan<'_> {
+impl<'a> SplitPlan<'a> {
     /// Writes the slices COMPACT: no full-line comments, no indentation, and every assembler
     /// temporary renamed to a short name built from its definition index.
     ///
@@ -548,6 +548,69 @@ impl SplitPlan<'_> {
         self.cuts.partition_point(|&cut| cut <= line)
     }
 
+    /// Body lines `start..end` of slice `part`.
+    fn line_range(&self, part: usize) -> (usize, usize) {
+        let start = if part == 0 { 0 } else { self.cuts[part - 1] };
+        let end = self.cuts.get(part).copied().unwrap_or(self.analysis.lines.len());
+        (start, end)
+    }
+
+    /// What a later slice restates before its first body line: empty for the first slice.
+    fn slice_prologue(&self, part: usize) -> String {
+        let analysis = &self.analysis;
+        let mut prologue = String::new();
+        if part == 0 {
+            return prologue;
+        }
+        let (start, _) = self.line_range(part);
+        // HAZARD 4 — `.section`/`.data` state and the `.intel_syntax` switch
+        // are file-global. A slice that starts mid-`.data` would otherwise
+        // assemble its records into `__text`.
+        for directive in &analysis.file_prologue {
+            prologue.push_str(directive);
+            prologue.push('\n');
+        }
+        let section = section_in_effect(&analysis.sections, start);
+        prologue.push_str(section);
+        prologue.push('\n');
+        // HAZARD 3 — a `.quad` record whose own alignment directive sits in
+        // the previous slice starts the new object unaligned, and `ld`
+        // rejects the object outright ("pointer not aligned"). Restate the
+        // section's alignment unless the slice already opens with one.
+        let opening = analysis.lines[start].trim_start();
+        if !opening.starts_with(".align") && !opening.starts_with(".p2align") {
+            prologue.push_str(if section == ".text" { ".p2align 2\n" } else { ".p2align 3\n" });
+        }
+        prologue
+    }
+
+    /// Slice `part` for the in-tree assembler, as three consecutive parts -- the prologue, the
+    /// body exactly as the `.s` has it, and the visibility footer -- plus the renaming its promoted
+    /// temporaries need (`inhouse::Names`).
+    ///
+    /// The body is borrowed, not rendered: on the Symfony demo rendering the compact slices copied
+    /// 2.7 GB and cost 19 s of the assembly phase, and the in-tree assembler, which skips comments
+    /// and indentation itself and keys its labels by name, gains nothing from the copy.
+    pub(super) fn assembler_parts(&self, part: usize) -> (String, &'a str, String) {
+        let (start, end) = self.line_range(part);
+        let body = &self.source[self.analysis.offset(start)..self.analysis.offset(end)];
+        let mut footer = self.visibility_footer(part);
+        if !footer.is_empty() {
+            footer.insert(0, '\n');
+        }
+        (self.slice_prologue(part), body, footer)
+    }
+
+    /// The temporaries a cut promoted, by their name in the `.s`.
+    pub(super) fn promoted(&self) -> &FastMap<&'a str, String> {
+        &self.promoted
+    }
+
+    /// The target's assembler-temporary prefix.
+    pub(super) fn local_prefix(&self) -> &'a str {
+        self.local_prefix
+    }
+
     /// Writes slice `part` through `write`, in order, as a sequence of text chunks.
     pub(super) fn render_slice(
         &self,
@@ -561,30 +624,7 @@ impl SplitPlan<'_> {
             write,
             ends_with_newline: false,
         };
-        if part > 0 {
-            // HAZARD 4 — `.section`/`.data` state and the `.intel_syntax` switch
-            // are file-global. A slice that starts mid-`.data` would otherwise
-            // assemble its records into `__text`.
-            for directive in &analysis.file_prologue {
-                out.put(directive)?;
-                out.put("\n")?;
-            }
-            let section = section_in_effect(&analysis.sections, start);
-            out.put(section)?;
-            out.put("\n")?;
-            // HAZARD 3 — a `.quad` record whose own alignment directive sits in
-            // the previous slice starts the new object unaligned, and `ld`
-            // rejects the object outright ("pointer not aligned"). Restate the
-            // section's alignment unless the slice already opens with one.
-            let opening = analysis.lines[start].trim_start();
-            if !opening.starts_with(".align") && !opening.starts_with(".p2align") {
-                out.put(if section == ".text" {
-                    ".p2align 2\n"
-                } else {
-                    ".p2align 3\n"
-                })?;
-            }
-        }
+        out.put(&self.slice_prologue(part))?;
         // `lines` indexes `source` itself, so `source[offset(a)..offset(b)]` IS lines `a..b` joined --
         // the same bytes the per-line loop pushed, in one copy. On this module that loop ran
         // 42 million times per build to rebuild a string it already had.
@@ -2055,6 +2095,33 @@ mod tests {
             outcome.promoted
         );
     }
+    /// The in-tree assembler fed a slice's borrowed parts builds, byte for byte, the object it
+    /// builds from the rendered slice -- promoted temporaries renamed in definitions, branches,
+    /// `.quad` records and the footer alike.
+    #[test]
+    fn assembler_parts_build_the_object_the_rendered_slice_builds() {
+        use super::super::inhouse::{assemble, assemble_parts, Names};
+        // `_fourth` also branches to `L_thunk`, so a promoted temporary is the target of an
+        // instruction fixup, not only of a `.quad`.
+        let source = fixture().replace("    b _second_tail\n", "    bl L_thunk\n    b _second_tail\n");
+        let plan = plan_split(&source, 4, MACOS_LOCAL, false).expect("the fixture must split");
+        assert!(!plan.promoted().is_empty(), "the fixture must promote a temporary");
+        let names = Names::promoted(plan.promoted(), plan.local_prefix());
+        for part in 0..plan.slices() {
+            let mut rendered = String::new();
+            plan.render_slice(part, &mut |chunk| {
+                rendered.push_str(chunk);
+                Ok(())
+            })
+            .expect("render");
+            let (prologue, body, footer) = plan.assembler_parts(part);
+            let direct = assemble_parts(&[prologue.as_str(), body, footer.as_str()], names)
+                .unwrap_or_else(|error| panic!("slice {part}: {error:?}"));
+            let expected = assemble(&rendered).unwrap_or_else(|error| panic!("slice {part}: {error:?}"));
+            assert!(direct == expected, "slice {part} differs from its rendered object:\n{rendered}");
+        }
+    }
+
     /// Compact slices drop comments and indentation and rename every assembler temporary to the
     /// same short name in every slice, while promoted temporaries keep their exported names.
     #[test]

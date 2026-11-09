@@ -93,6 +93,49 @@ fn lines(text: &str) -> impl Iterator<Item = &str> {
     })
 }
 
+/// The lines of a listing given as consecutive parts, each ending at a line boundary.
+fn part_lines<'p, 'a: 'p>(parts: &'p [&'a str]) -> impl Iterator<Item = &'a str> + 'p {
+    parts.iter().copied().flat_map(lines)
+}
+
+/// How the listing's names become the object's: as spelled, or with a split's promoted
+/// assembler temporaries renamed.
+///
+/// A slice of a split listing is assembled straight from the `.s` lines, without rendering a
+/// renamed copy of it (see `asm_split::SplitPlan::assembler_parts`): the few temporaries a cut
+/// promotes are renamed here, where a name is looked up anyway, instead of in every line.
+#[derive(Clone, Copy)]
+pub(crate) struct Names<'a> {
+    promoted: Option<&'a HashMap<&'a str, String>>,
+    local_prefix: &'a str,
+}
+
+impl<'a> Names<'a> {
+    /// Every name as spelled.
+    pub(crate) const IDENTITY: Names<'static> = Names {
+        promoted: None,
+        local_prefix: "",
+    };
+
+    /// Names starting with `local_prefix` renamed through `promoted`.
+    pub(crate) fn promoted(promoted: &'a HashMap<&'a str, String>, local_prefix: &'a str) -> Self {
+        Self {
+            promoted: (!promoted.is_empty()).then_some(promoted),
+            local_prefix,
+        }
+    }
+
+    /// The object's name for the listing's `name`.
+    fn get(&self, name: &'a str) -> &'a str {
+        match self.promoted {
+            Some(promoted) if name.starts_with(self.local_prefix) => {
+                promoted.get(name).map_or(name, String::as_str)
+            }
+            _ => name,
+        }
+    }
+}
+
 /// A numeric local label: `1:` defines one, `1f`/`1b` refer to the next or previous definition.
 fn numeric_label(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit())
@@ -207,25 +250,33 @@ fn padding(offset: u64, log2: u64) -> u64 {
 
 /// First pass: places every line and records labels and symbol attributes.
 fn layout(text: &str) -> Result<Layout<'_>> {
+    layout_parts(&[text], Names::IDENTITY)
+}
+
+/// [`layout`] over a listing given as consecutive parts, with its names mapped through `names`.
+fn layout_parts<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Layout<'a>> {
     // Sized up front, as `asm_split` does: a slice defines about one label per 400 bytes, and
     // growing a map of hundreds of thousands of labels by doubling rehashes all of it.
     let mut layout = Layout {
         text_align: 2,
         data_align: 0,
-        labels: HashMap::with_capacity_and_hasher(text.len() / 400, Default::default()),
+        labels: HashMap::with_capacity_and_hasher(
+            parts.iter().map(|part| part.len()).sum::<usize>() / 400,
+            Default::default(),
+        ),
         ..Layout::default()
     };
     let mut sect = Sect::Text;
     let mut offsets = [0u64; 2];
     let mut scratch = Vec::new();
-    for (index, line) in lines(text).enumerate() {
+    for (index, line) in part_lines(parts).enumerate() {
         let offset = &mut offsets[sect as usize];
         match classify(line) {
             Line::Label(name) => {
                 let place = Place { sect, offset: *offset };
                 if numeric_label(name) {
                     layout.numeric.entry(name).or_default().push((index, place));
-                } else if layout.labels.insert(name, place).is_some() {
+                } else if layout.labels.insert(names.get(name), place).is_some() {
                     return unsupported("label defined twice", line);
                 }
             }
@@ -239,10 +290,10 @@ fn layout(text: &str) -> Result<Layout<'_>> {
                 ".text" => sect = Sect::Text,
                 ".data" => sect = Sect::Data,
                 ".globl" | ".global" => {
-                    layout.exported.entry(rest).or_insert(false);
+                    layout.exported.entry(names.get(rest)).or_insert(false);
                 }
                 ".private_extern" => {
-                    layout.exported.insert(rest, true);
+                    layout.exported.insert(names.get(rest), true);
                 }
                 ".p2align" | ".align" => {
                     let log2 = rest.split(',').next().and_then(integer).and_then(|v| u64::try_from(v).ok());
@@ -262,7 +313,7 @@ fn layout(text: &str) -> Result<Layout<'_>> {
                         return unsupported("common symbol", line);
                     };
                     let align = parts.next().and_then(integer).unwrap_or(0);
-                    layout.commons.push((symbol, size as u64, align as u64));
+                    layout.commons.push((names.get(symbol), size as u64, align as u64));
                 }
                 ".subsections_via_symbols" => layout.subsections_via_symbols = true,
                 _ => match data_size(name, rest, &mut scratch) {
@@ -333,9 +384,12 @@ fn patch_branch(word: u32, kind: FixupKind, distance: i64) -> Option<u32> {
 }
 
 /// The value of `A - B` for two labels this object defines in one section.
-fn label_difference(layout: &Layout<'_>, operand: &str) -> Option<i64> {
+fn label_difference<'a>(layout: &Layout<'a>, operand: &'a str, names: Names<'a>) -> Option<i64> {
     let (left, right) = operand.split_once(" - ")?;
-    let (left, right) = (layout.labels.get(left.trim_ascii())?, layout.labels.get(right.trim_ascii())?);
+    let (left, right) = (
+        layout.labels.get(names.get(left.trim_ascii()))?,
+        layout.labels.get(names.get(right.trim_ascii()))?,
+    );
     (left.sect == right.sect).then(|| left.offset as i64 - right.offset as i64)
 }
 
@@ -358,13 +412,20 @@ fn is_symbol(text: &str) -> bool {
 
 /// Assembles one slice into a Mach-O arm64 object.
 pub(crate) fn assemble(text: &str) -> Result<Vec<u8>> {
-    let layout = layout(text)?;
+    assemble_parts(&[text], Names::IDENTITY)
+}
+
+/// Assembles a listing given as consecutive parts, each ending at a line boundary, with its
+/// names mapped through `names`: the object [`assemble`] would build from the parts joined and
+/// renamed, without a copy of them.
+pub(crate) fn assemble_parts<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Vec<u8>> {
+    let layout = layout_parts(parts, names)?;
     // Allocated once at the size the first pass measured: growing a 150 MB text section by
     // doubling copied it again on every step.
     let mut sections: [Vec<u8>; 2] = layout.sizes.map(|size| Vec::with_capacity(size as usize));
     let mut relocs: Vec<PendingReloc<'_>> = Vec::new();
     let mut sect = Sect::Text;
-    for (index, line) in lines(text).enumerate() {
+    for (index, line) in part_lines(parts).enumerate() {
         let bytes = &mut sections[sect as usize];
         match classify(line) {
             Line::Label(_) => {}
@@ -380,7 +441,7 @@ pub(crate) fn assemble(text: &str) -> Result<Vec<u8>> {
                             Unsupported(format!("numeric label: {line}"))
                         })?)
                     } else {
-                        layout.labels.get(fixup.target).copied()
+                        layout.labels.get(names.get(fixup.target)).copied()
                     };
                     let (r_type, r_pcrel) = match fixup.kind {
                         FixupKind::Page21 => (macho::ARM64_RELOC_PAGE21, true),
@@ -410,7 +471,7 @@ pub(crate) fn assemble(text: &str) -> Result<Vec<u8>> {
                     relocs.push(PendingReloc {
                         sect,
                         offset,
-                        target: fixup.target,
+                        target: names.get(fixup.target),
                         addend: fixup.addend,
                         r_type,
                         r_pcrel,
@@ -459,10 +520,11 @@ pub(crate) fn assemble(text: &str) -> Result<Vec<u8>> {
                         let offset = bytes.len() as u64;
                         let value = if let Some(value) = integer(operand) {
                             value
-                        } else if let Some(value) = label_difference(&layout, operand) {
+                        } else if let Some(value) = label_difference(&layout, operand, names) {
                             value
                         } else {
                             let (symbol, addend) = symbol_and_addend(operand);
+                            let symbol = names.get(symbol);
                             if width != 8 || !is_symbol(symbol) {
                                 return unsupported("data operand", line);
                             }

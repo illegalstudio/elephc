@@ -39,7 +39,7 @@ fn layout_aligns_and_folds_label_differences() {
     let text = ".data\nLa:\n    .byte 1\n.p2align 3\nLb:\n    .quad 7\n    .long Lb - La\n";
     let layout = layout(text).expect("layout");
     assert_eq!(layout.labels["Lb"].offset, 8);
-    assert_eq!(label_difference(&layout, "Lb - La"), Some(8));
+    assert_eq!(label_difference(&layout, "Lb - La", Names::IDENTITY), Some(8));
     assert_eq!(padding(13, 3), 3);
     assert_eq!(padding(16, 3), 0);
 }

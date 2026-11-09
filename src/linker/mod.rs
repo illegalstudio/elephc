@@ -448,6 +448,51 @@ pub(crate) fn assemble_parallel(
         // The in-tree assembler takes the slice straight from memory: writing it to disk only to
         // read it back cost a copy of the whole listing. A slice it does not handle is written
         // out and handed to `as` as before.
+        if inhouse_enabled(target) && direct_enabled() {
+            // The in-tree assembler reads the slice straight out of the mapped `.s`: rendering a
+            // compact copy of every slice first cost 19 s of the Symfony demo's assembly phase.
+            let (prologue, body, footer) = plan.assembler_parts(index);
+            if let Some(key) = key.as_mut() {
+                // Keyed apart from a rendered slice, whose object names temporaries differently.
+                for part in ["inhouse-direct\n", prologue.as_str(), body, footer.as_str()] {
+                    *key = asm_cache::extend_slice_key(*key, part.as_bytes());
+                }
+            }
+            if let Some(key) = key {
+                if asm_cache::reuse(key, &slice_obj(index)) {
+                    return Ok(SliceOutcome { key: Some(key), assembled: false });
+                }
+            }
+            let names = inhouse::Names::promoted(plan.promoted(), plan.local_prefix());
+            match inhouse::assemble_parts(&[prologue.as_str(), body, footer.as_str()], names) {
+                Ok(object) => {
+                    std::fs::write(slice_obj(index), object)?;
+                    if trace_enabled() {
+                        eprintln!(
+                            "asm-trace slice {index}: {} bytes, direct inhouse {:.2}s",
+                            body.len(),
+                            started.elapsed().as_secs_f64()
+                        );
+                    }
+                    return Ok(SliceOutcome { key, assembled: true });
+                }
+                Err(inhouse::Unsupported(reason)) => {
+                    if trace_enabled() {
+                        eprintln!("asm-trace inhouse fallback slice {index}: {reason}");
+                    }
+                    // `as` needs the rendered slice, the promoted renames written into the text.
+                    let file = std::fs::File::create(&asm)?;
+                    let mut writer = std::io::BufWriter::with_capacity(1 << 20, file);
+                    plan.render_slice(index, &mut |text| std::io::Write::write_all(&mut writer, text.as_bytes()))?;
+                    std::io::Write::flush(&mut writer)?;
+                    drop(writer);
+                    let mut assembler = assembler_command(target);
+                    assembler.arg("-o").arg(slice_obj(index)).arg(&asm);
+                    command::run_tool("Assembler", &mut assembler);
+                    return Ok(SliceOutcome { key, assembled: true });
+                }
+            }
+        }
         if inhouse_enabled(target) {
             let mut text = String::new();
             plan.render_slice(index, &mut |chunk| {
@@ -593,6 +638,12 @@ fn compact_enabled() -> bool {
 /// `ELEPHC_ASM_TRACE=1` prints each slice's size and render/assemble times to stderr.
 fn trace_enabled() -> bool {
     std::env::var_os("ELEPHC_ASM_TRACE").is_some()
+}
+
+/// Whether the in-tree assembler reads each slice straight from the `.s` (the default) rather
+/// than from a rendered copy; `ELEPHC_ASM_DIRECT=0` keeps the rendered copy, for comparison.
+fn direct_enabled() -> bool {
+    !matches!(std::env::var("ELEPHC_ASM_DIRECT").as_deref(), Ok("0") | Ok("off"))
 }
 
 fn encode_enabled() -> bool {
