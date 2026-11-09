@@ -1670,3 +1670,27 @@ fn receiverless_method_signatures_come_from_the_name_index() {
     assert!(signatures.method(&HashSet::default(), "run", true).is_empty());
     assert_eq!(signatures.method(&HashSet::default(), "run2", true).len(), 1);
 }
+
+/// The vtable-family walk is incremental: a method reached in a later fixed-point round, while
+/// the live classes stay the same, is walked once, not once per remaining round. Here the
+/// classes are live from the first round and `m1`, `m2`, `m3` are reached one round apart, so a
+/// full walk per round would walk the early methods again each round. Every reachability test
+/// also checks the incremental walk against a full one (`reach_verify` is always on in tests).
+#[test]
+fn prune_walks_each_vtable_method_once_while_the_classes_stay_the_same() {
+    let source = r#"<?php
+class Base { public function m1() { return $this->m2(); } public function m2() { return $this->m3(); } public function m3() { return 1; } }
+class Child extends Base { public function m1() { return 2; } public function m2() { return 3; } public function m3() { return 4; } }
+$o = $argc > 5 ? new Base() : new Child();
+echo $o->m1();
+"#;
+    super::graph::VTABLE_WALKS.with(|walks| walks.set(0));
+    let (program, _) = prune(source);
+    let walks = super::graph::VTABLE_WALKS.with(|walks| walks.get());
+    for method in ["m1", "m2", "m3"] {
+        assert!(has_method(&program, "Base", method), "Base::{method}");
+        assert!(has_method(&program, "Child", method), "Child::{method}");
+    }
+    eprintln!("VTABLE_WALKS={walks}");
+    assert!(walks <= 6, "{walks} vtable walks for six methods");
+}

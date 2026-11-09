@@ -89,6 +89,12 @@ thread_local! {
     static SEED_SPENT: std::cell::RefCell<[f64; 5]> = const { std::cell::RefCell::new([0.0; 5]) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Methods `walk_vtable_slot_families` walked incrementally, for the complexity test.
+    pub(super) static VTABLE_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Computes reachable declarations from executable, export, forced-prelude, and hazard roots.
 pub fn compute(
     program: &[Stmt],
@@ -260,6 +266,9 @@ struct GraphState {
     scoped_methods: HashSet<(String, String, bool)>,
     behavioral_scoped_methods: HashSet<(String, String, bool)>,
     instantiated_classes: HashSet<String>,
+    /// `seed_vtable_slot_families` between rounds: the vtable-slot methods it already walked
+    /// (with whether they were behavioral then) for the live classes it walked them against.
+    vtable_walked: VtableWalked,
     scanned_functions: HashSet<String>,
     behaviorally_scanned_functions: HashSet<String>,
     scanned_classes: HashSet<String>,
@@ -416,6 +425,7 @@ impl GraphState {
             scoped_methods: HashSet::default(),
             behavioral_scoped_methods: HashSet::default(),
             instantiated_classes: HashSet::default(),
+            vtable_walked: VtableWalked::default(),
             scanned_functions: HashSet::default(),
             behaviorally_scanned_functions: HashSet::default(),
             scanned_classes: HashSet::default(),
@@ -850,9 +860,41 @@ impl GraphState {
     /// * the lists are built in ascending `live_classes` position, so the inner loop still visits
     ///   candidates in the same order it did, inserting the same pairs;
     /// * every other test in the loop (`has_vtable_slot`, the behavioral lookup) is untouched.
+    ///
+    /// Incremental across rounds: the walk of a method depends only on the method, whether it
+    /// is behavioral, and the live classes, and the live classes only grow. While their number
+    /// is unchanged, a method walked in an earlier round (as behavioral, or still structural) is
+    /// not walked again. On the Symfony demo the full walk was 16.1 s of the 17.7 s this
+    /// fixed point spends seeding methods, every round redoing the previous one.
+    /// `ELEPHC_REACH_VERIFY=1` walks everything again afterwards and panics if that finds more.
     fn seed_vtable_slot_families(&mut self) {
         let live_classes = classes_with_vtable_slots(&self.reach.classes, &self.vtable_slot_classes);
-        let descendants_by_root = live_descendants_by_root(&self.index, &live_classes);
+        if live_classes.len() != self.vtable_walked.live_classes {
+            self.vtable_walked = VtableWalked {
+                live_classes: live_classes.len(),
+                methods: HashMap::default(),
+            };
+        }
+        self.walk_vtable_slot_families(&live_classes, true);
+        if reach_verify() {
+            #[cfg(test)]
+            let walks = VTABLE_WALKS.with(std::cell::Cell::get);
+            let before = (self.reach.methods.len(), self.behavioral.methods.len());
+            self.walk_vtable_slot_families(&live_classes, false);
+            #[cfg(test)]
+            VTABLE_WALKS.with(|counter| counter.set(walks));
+            assert_eq!(
+                before,
+                (self.reach.methods.len(), self.behavioral.methods.len()),
+                "ELEPHC_REACH_VERIFY: the incremental vtable walk missed methods"
+            );
+        }
+    }
+
+    /// One walk of [`Self::seed_vtable_slot_families`]; `incremental` skips what an earlier
+    /// round walked against the same live classes.
+    fn walk_vtable_slot_families(&mut self, live_classes: &[String], incremental: bool) {
+        let descendants_by_root = live_descendants_by_root(&self.index, live_classes);
         // MOVED out, not cloned: this runs every fixed-point round over every kept method. The
         // pairs found go in afterwards, so the walk still sees the round's snapshot.
         let kept_methods = std::mem::take(&mut self.reach.methods);
@@ -863,8 +905,19 @@ impl GraphState {
                 continue;
             }
             let (class, method, is_static) = visible;
-            let lineage_root = self.vtable_lineage_root(class, method, *is_static);
             let behavioral = self.behavioral.methods.contains(visible);
+            if incremental {
+                match self.vtable_walked.methods.get(visible) {
+                    Some(true) => continue,
+                    Some(false) if !behavioral => continue,
+                    _ => {
+                        self.vtable_walked.methods.insert(visible.clone(), behavioral);
+                    }
+                }
+            }
+            #[cfg(test)]
+            VTABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
+            let lineage_root = self.vtable_lineage_root(class, method, *is_static);
             let Some(descendants) = descendants_by_root.get(&lineage_root) else {
                 continue;
             };
@@ -1540,6 +1593,24 @@ fn magic_methods_by_visible_class(
 ///
 /// `reach.classes` also holds every name a string might denote, 278 392 entries on the Symfony
 /// Demo against ~4 000 classes. Cloning them each fixed-point round was most of the prune phase.
+/// What [`GraphState::seed_vtable_slot_families`] walked in earlier rounds.
+#[derive(Default)]
+struct VtableWalked {
+    /// How many live vtable-slot classes the walks were made against.
+    live_classes: usize,
+    /// Each walked method, and whether it was behavioral when walked.
+    methods: HashMap<(String, String, bool), bool>,
+}
+
+/// Whether `ELEPHC_REACH_VERIFY` asks incremental steps to be checked against a full one.
+fn reach_verify() -> bool {
+    if cfg!(test) {
+        return true;
+    }
+    static VERIFY: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *VERIFY.get_or_init(|| std::env::var_os("ELEPHC_REACH_VERIFY").is_some())
+}
+
 fn classes_with_vtable_slots(
     live_classes: &HashSet<String>,
     vtable_slot_classes: &HashSet<String>,
