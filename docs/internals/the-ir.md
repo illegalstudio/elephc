@@ -835,6 +835,15 @@ preserves PHP exponentiation result rules.
 | `ArrayToPointerWords` | owned array bound to a pointer-array slot | `Heap(Array)` with raw `?ptr<T>` words | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `MixedCastBool`, `MixedCastInt`, `MixedCastFloat`, `MixedCastString` | `Heap(Mixed)` | scalar/string | `reads_heap`, maybe `alloc_concat`, `may_warn` |
 
+A local indexed-array append or offset write emits `ArrayToMixed` only when the
+stored value cannot share the element storage. An object whose class is the
+element class, a subclass of it, or an implementation of the element interface
+is a nominal upcast: every object element is one counted object pointer, so an
+`array<Actor>` builder keeps its object slots when `new Player()` is written.
+The checker's loop-storage fixed point joins element writes with the same
+nominal rule, so a loop does not widen the builder before its header either.
+Wider, sibling and unrelated classes still widen to boxed `mixed` slots.
+
 ### Strings
 
 | Op | Operands | Result | Effects |
