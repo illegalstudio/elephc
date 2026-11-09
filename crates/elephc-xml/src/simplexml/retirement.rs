@@ -43,7 +43,17 @@ impl Drop for RetiredSubtree {
 impl Document {
     /// Adopts an attached document with empty weak indexes and no independent tree owners.
     pub(super) fn new(raw: Node) -> Rc<Self> {
-        Rc::new(Self { raw, detached: RefCell::new(HashMap::new()), pins: RefCell::new(HashMap::new()) })
+        Rc::new(Self { raw, detached: RefCell::new(HashMap::new()), pins: RefCell::new(HashMap::new()), owner: None })
+    }
+
+    /// Views a tree the DOM engine owns (`simplexml_import_dom()`), keeping its document alive.
+    pub(super) fn borrowed(raw: Node, owner: Rc<crate::dom::DomDocument>) -> Rc<Self> {
+        Rc::new(Self {
+            raw,
+            detached: RefCell::new(HashMap::new()),
+            pins: RefCell::new(HashMap::new()),
+            owner: Some(owner),
+        })
     }
 
     /// Shares an exposed pointer and discovers an already retired ancestor when necessary.

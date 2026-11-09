@@ -21,7 +21,7 @@ thread_local! {
 /// Runs an ABI operation without allowing Rust panics to unwind into generated code.
 fn guard<T: Default>(body: impl FnOnce() -> T) -> T { catch_unwind(AssertUnwindSafe(body)).unwrap_or_default() }
 /// Clones a wrapper so registry borrows never span native operations or new handles.
-fn view(handle: i64) -> Option<View> { REGISTRY.with(|r| r.borrow().views.get(&handle).cloned()) }
+pub(super) fn view(handle: i64) -> Option<View> { REGISTRY.with(|r| r.borrow().views.get(&handle).cloned()) }
 /// Stores one independent PHP wrapper and allocates a nonzero monotonically increasing handle.
 fn insert(value: View) -> i64 {
     REGISTRY.with(|registry| {
@@ -59,6 +59,21 @@ pub unsafe extern "C" fn elephc_xml_sx_load_dom(data: *const c_char, length: i64
         if data.is_null() || length < 0 || length > i32::MAX as i64 { return 0; }
         parse_with_diagnostics(std::slice::from_raw_parts(data.cast(), length as usize), options,
             "", false, "", 2).map(insert).unwrap_or(0)
+    })
+}
+/// `simplexml_import_dom()` for a DOM node: a SimpleXML element over the SAME libxml2 tree,
+/// keeping the DOM document alive. -1 when the node has no document, -2 for a node type that
+/// cannot be imported (php-src's two warnings).
+#[no_mangle]
+pub extern "C" fn elephc_xml_sx_import_dom(dom: i64) -> i64 {
+    guard(|| match crate::dom::simplexml_import_target(dom) {
+        Ok((raw, element, owner)) => {
+            let doc = Document::borrowed(raw, owner);
+            insert(View::new(doc, Scope::Node(element), element, Namespace::default(), None,
+                Rc::new(RefCell::new(BTreeMap::new()))))
+        }
+        Err(crate::dom::ImportRefusal::NoDocument) => -1,
+        Err(crate::dom::ImportRefusal::InvalidNodeType) => -2,
     })
 }
 /// Creates an internal document lease before any HTML element has been appended.

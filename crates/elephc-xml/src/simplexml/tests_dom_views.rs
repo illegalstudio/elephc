@@ -80,3 +80,27 @@ fn simplexml_dom_raw_text_policy_distinguishes_cdata_from_script_text() {
     }
     abi::elephc_xml_sx_free(document);
 }
+
+/// `simplexml_import_dom()` views the DOM engine's own tree: DOM mutations are visible through
+/// the view, the view keeps the DOM document alive, and only documents and elements import.
+#[test]
+fn simplexml_import_dom_shares_the_dom_tree() {
+    use crate::dom::abi as dom;
+    let version = cstring("1.0");
+    let empty = cstring("");
+    let source = cstring("<r><a>x</a></r>");
+    let document = unsafe { dom::elephc_xml_dom_document_new(version.as_ptr(), empty.as_ptr()) };
+    assert_eq!(unsafe { dom::elephc_xml_dom_load(document, source.as_ptr(), source.as_bytes().len() as i64, 0) }, 1);
+    let root = dom::elephc_xml_dom_node(document, 6);
+    let imported = abi::elephc_xml_sx_import_dom(document);
+    assert!(imported > 0);
+    let viewed = abi::view(imported).unwrap();
+    assert_eq!(viewed.first(), crate::dom::entry(root).map(|entry| entry.node));
+    let name = cstring("b");
+    let element = unsafe { dom::elephc_xml_dom_create(document, 1, name.as_ptr(), empty.as_ptr()) };
+    assert!(dom::elephc_xml_dom_insert(root, element, 0) > 0);
+    assert_eq!(viewed.select(2, "b", "", false, 0).first(), crate::dom::entry(element).map(|entry| entry.node));
+    let text = dom::elephc_xml_dom_node(dom::elephc_xml_dom_child(root, 0), 1);
+    assert_eq!(abi::elephc_xml_sx_import_dom(text), -2);
+    abi::elephc_xml_sx_free(imported);
+}

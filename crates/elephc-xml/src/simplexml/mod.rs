@@ -27,14 +27,22 @@ use std::rc::{Rc, Weak};
 use ffi::Node;
 
 /// Owns a libxml2 document; weak indexes never keep retired native storage alive.
+///
+/// A document viewed through `simplexml_import_dom()` belongs to the DOM engine: `owner`
+/// keeps that engine's document alive and the native tree is never freed from here.
 struct Document {
     raw: Node,
     detached: RefCell<HashMap<Node, Weak<RetiredSubtree>>>,
     pins: RefCell<HashMap<Node, Weak<NodePin>>>,
+    owner: Option<Rc<crate::dom::DomDocument>>,
 }
 impl Drop for Document {
     /// Releases the attached document after all independently retired owners have died.
-    fn drop(&mut self) { unsafe { ffi::doc_free(self.raw); } }
+    fn drop(&mut self) {
+        if self.owner.is_none() {
+            unsafe { ffi::doc_free(self.raw); }
+        }
+    }
 }
 
 /// Owns one parentless clone until exposed pins take responsibility for its storage.

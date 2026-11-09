@@ -652,6 +652,33 @@ pub(crate) fn elements_by_tag_name(root: Node, name: &[u8]) -> Vec<Node> {
     found
 }
 
+/// Why `simplexml_import_dom()` refuses a node (php-src `simplexml_import_dom` messages).
+pub(crate) enum ImportRefusal {
+    /// "Imported Node must have associated Document".
+    NoDocument,
+    /// "Invalid Nodetype to import".
+    InvalidNodeType,
+}
+
+/// The tree `simplexml_import_dom()` views for a DOM handle: the document element of a
+/// document, or the element itself, with the document that keeps the tree alive.
+pub(crate) fn simplexml_import_target(handle: i64) -> Result<(Node, Node, Rc<DomDocument>), ImportRefusal> {
+    let Some(entry) = entry(handle) else { return Err(ImportRefusal::InvalidNodeType) };
+    let node = match node_type(entry.node) {
+        kind::DOCUMENT | kind::HTML_DOCUMENT => unsafe { ffi::root(entry.node) },
+        kind::ELEMENT => entry.node,
+        _ => return Err(ImportRefusal::InvalidNodeType),
+    };
+    if node.is_null() {
+        return Err(ImportRefusal::InvalidNodeType);
+    }
+    let doc = owner_document(node);
+    if doc.is_null() {
+        return Err(ImportRefusal::NoDocument);
+    }
+    Ok((doc, node, entry.doc))
+}
+
 /// The document that owns a node (the document itself for a document node).
 pub(crate) fn owner_document(node: Node) -> Node {
     unsafe { ffi::node_document(node) }
