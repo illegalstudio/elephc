@@ -725,6 +725,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_php_exception_handler_stack", 8, target));
     out.push_str(&comm_directive("_json_last_error", 8, target));
     out.push_str(&comm_directive("_preg_last_error", 8, target));
+    out.push_str(&comm_directive("_preg_exec_error", 8, target));
     out.push_str(&comm_directive("_json_active_flags", 8, target));
     out.push_str(&comm_directive("_json_active_depth", 8, target));
     out.push_str(&comm_directive("_json_indent_depth", 8, target));

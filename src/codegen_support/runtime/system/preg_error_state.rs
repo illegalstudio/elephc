@@ -8,9 +8,13 @@
 //!   the exec wrapper only with the regex runtime) and fixed data emission.
 //!
 //! Key details:
-//! - EIR lowering clears `_preg_last_error` before each `preg_*` call and records
-//!   `PREG_INTERNAL_ERROR` itself when the call reports an invalid pattern; the exec
-//!   wrapper only ever records a match failure.
+//! - EIR lowering clears `_preg_last_error` and `_preg_exec_error` before each `preg_*`
+//!   call and records `PREG_INTERNAL_ERROR` itself when the call reports an invalid
+//!   pattern; the exec wrapper only ever records a match failure.
+//! - `_preg_exec_error` holds the outcome of the latest exec only. The lowering reads it
+//!   to decide whether the call failed, so an error a nested `preg_*` call recorded from
+//!   inside a `preg_replace_callback()` callback stays visible to `preg_last_error()`
+//!   without failing the outer call, like php-src.
 //! - The opaque shim folds PCRE2 match errors into POSIX codes: `REG_ESPACE` (match,
 //!   heap or memory limit) is reported as `PREG_BACKTRACK_LIMIT_ERROR`, `REG_INVARG`
 //!   (PCRE2's UTF-8 and argument errors) as `PREG_BAD_UTF8_ERROR`, any other non-match
@@ -93,13 +97,19 @@ pub(crate) fn emit_preg_last_error_msg(emitter: &mut Emitter) {
     }
 }
 
-/// Emits `__rt_preg_exec`: calls the shim's match entry point and records a failing
-/// status (other than an ordinary failed match) in `_preg_last_error`.
+/// Emits `__rt_preg_exec`: calls the shim's match entry point, records a failing status
+/// (other than an ordinary failed match) in `_preg_last_error`, and stores this call's
+/// own outcome (`0` or the error code) in `_preg_exec_error`.
+///
+/// `_preg_exec_error` lets a helper that runs PHP callbacks between matches
+/// (`preg_replace_callback()`) tell its own match failure apart from one a nested
+/// `preg_*` call in the callback recorded: the exec that ends a helper's match loop is
+/// always the helper's own, and it runs after the last callback.
 pub(crate) fn emit_preg_exec_wrapper(emitter: &mut Emitter) {
     let label = "__rt_preg_exec";
     let shim = "elephc_pcre2_v1_exec";
-    let done = format!("{label}_done");
-    let store = format!("{label}_store");
+    let outcome = format!("{label}_outcome");
+    let record = format!("{label}_record");
     emitter.blank();
     emitter.comment("--- runtime: preg_exec ---");
     emitter.label_global(label);
@@ -108,19 +118,21 @@ pub(crate) fn emit_preg_exec_wrapper(emitter: &mut Emitter) {
             emitter.instruction("stp x29, x30, [sp, #-16]!");                   // save frame pointer and return address
             emitter.instruction("mov x29, sp");                                 // establish the wrapper frame
             emitter.bl_c(shim);                                                 // call the opaque PCRE2 shim with the caller's arguments
-            emitter.instruction(&format!("cbz w0, {done}"));                    // success leaves the error state alone
+            emitter.instruction("mov x11, #0");                                 // stage PREG_NO_ERROR as this call's outcome
+            emitter.instruction(&format!("cbz w0, {outcome}"));                 // success leaves the error state alone
             emitter.instruction(&format!("cmp w0, #{}", REG_NOMATCH));          // is this an ordinary failed match?
-            emitter.instruction(&format!("b.eq {done}"));                       // a failed match is not an error
-            emitter.instruction(&format!("mov x9, #{}", PREG_BACKTRACK_LIMIT_ERROR)); // stage the match-limit error code
+            emitter.instruction(&format!("b.eq {outcome}"));                    // a failed match is not an error
+            emitter.instruction(&format!("mov x11, #{}", PREG_BACKTRACK_LIMIT_ERROR)); // stage the match-limit error code
             emitter.instruction(&format!("cmp w0, #{}", REG_ESPACE));           // did PCRE2 exhaust its match or heap budget?
-            emitter.instruction(&format!("b.eq {store}"));                      // record PREG_BACKTRACK_LIMIT_ERROR
-            emitter.instruction(&format!("mov x9, #{}", PREG_BAD_UTF8_ERROR));  // stage the malformed-UTF-8 error code
+            emitter.instruction(&format!("b.eq {record}"));                     // record PREG_BACKTRACK_LIMIT_ERROR
+            emitter.instruction(&format!("mov x11, #{}", PREG_BAD_UTF8_ERROR)); // stage the malformed-UTF-8 error code
             emitter.instruction(&format!("cmp w0, #{}", REG_INVARG));           // did PCRE2 reject the subject?
-            emitter.instruction(&format!("b.eq {store}"));                      // record PREG_BAD_UTF8_ERROR
-            emitter.instruction(&format!("mov x9, #{}", PREG_INTERNAL_ERROR));  // every other failure is an internal error
-            emitter.label(&store);
-            abi::emit_store_reg_to_symbol(emitter, "x9", "_preg_last_error", 0);
-            emitter.label(&done);
+            emitter.instruction(&format!("b.eq {record}"));                     // record PREG_BAD_UTF8_ERROR
+            emitter.instruction(&format!("mov x11, #{}", PREG_INTERNAL_ERROR)); // every other failure is an internal error
+            emitter.label(&record);
+            abi::emit_store_reg_to_symbol(emitter, "x11", "_preg_last_error", 0);
+            emitter.label(&outcome);
+            abi::emit_store_reg_to_symbol(emitter, "x11", "_preg_exec_error", 0);
             emitter.instruction("ldp x29, x30, [sp], #16");                     // restore frame pointer and return address
             emitter.instruction("ret");                                         // return the shim status in w0
         }
@@ -128,20 +140,22 @@ pub(crate) fn emit_preg_exec_wrapper(emitter: &mut Emitter) {
             emitter.instruction("push rbp");                                    // keep the C call 16-byte aligned
             emitter.instruction("mov rbp, rsp");                                // establish the wrapper frame
             emitter.bl_c(shim);                                                 // call the opaque PCRE2 shim with the caller's arguments
+            emitter.instruction("xor ecx, ecx");                                // stage PREG_NO_ERROR as this call's outcome
             emitter.instruction("test eax, eax");                               // did the shim succeed?
-            emitter.instruction(&format!("jz {done}"));                         // success leaves the error state alone
+            emitter.instruction(&format!("jz {outcome}"));                      // success leaves the error state alone
             emitter.instruction(&format!("cmp eax, {}", REG_NOMATCH));          // is this an ordinary failed match?
-            emitter.instruction(&format!("je {done}"));                         // a failed match is not an error
+            emitter.instruction(&format!("je {outcome}"));                      // a failed match is not an error
             emitter.instruction(&format!("mov ecx, {}", PREG_BACKTRACK_LIMIT_ERROR)); // stage the match-limit error code
             emitter.instruction(&format!("cmp eax, {}", REG_ESPACE));           // did PCRE2 exhaust its match or heap budget?
-            emitter.instruction(&format!("je {store}"));                        // record PREG_BACKTRACK_LIMIT_ERROR
+            emitter.instruction(&format!("je {record}"));                       // record PREG_BACKTRACK_LIMIT_ERROR
             emitter.instruction(&format!("mov ecx, {}", PREG_BAD_UTF8_ERROR));  // stage the malformed-UTF-8 error code
             emitter.instruction(&format!("cmp eax, {}", REG_INVARG));           // did PCRE2 reject the subject?
-            emitter.instruction(&format!("je {store}"));                        // record PREG_BAD_UTF8_ERROR
+            emitter.instruction(&format!("je {record}"));                       // record PREG_BAD_UTF8_ERROR
             emitter.instruction(&format!("mov ecx, {}", PREG_INTERNAL_ERROR));  // every other failure is an internal error
-            emitter.label(&store);
+            emitter.label(&record);
             abi::emit_store_reg_to_symbol(emitter, "rcx", "_preg_last_error", 0);
-            emitter.label(&done);
+            emitter.label(&outcome);
+            abi::emit_store_reg_to_symbol(emitter, "rcx", "_preg_exec_error", 0);
             emitter.instruction("pop rbp");                                     // restore the caller frame pointer
             emitter.instruction("ret");                                         // return the shim status in eax
         }

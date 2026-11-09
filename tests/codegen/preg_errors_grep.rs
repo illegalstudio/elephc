@@ -105,3 +105,45 @@ eval($source);
         "bool(false)\n4:Malformed UTF-8 characters, possibly incorrectly encoded|0:No error|{\"k\":\"a\",\"1\":\"ca\"}{\"1\":\"b\"}|410"
     );
 }
+
+/// A nested `preg_*` error inside a `preg_replace_callback()` callback stays visible through
+/// `preg_last_error()` but does not fail the outer call, while the outer call's own match
+/// error still returns `null`; the same holds in eval.
+#[test]
+fn test_preg_replace_callback_keeps_nested_errors() {
+    let source = r#"var_dump(preg_replace_callback('/a/', function ($m) { preg_match('/./u', "\xff"); return 'B'; }, 'xax'));
+echo preg_last_error(), "\n";
+var_dump(preg_replace_callback('/a/', function ($m) { return preg_replace('/x/u', 'y', "\xff") === null ? 'N' : 'S'; }, 'zaz'));
+echo preg_last_error(), "\n";
+var_dump(preg_replace_callback('/a/u', function ($m) { preg_match('/a/', 'a'); return 'B'; }, "a\xff"));
+echo preg_last_error(), "\n";
+"#;
+    let expected = "string(3) \"xBx\"\n4\nstring(3) \"zNz\"\n4\nNULL\n4\n";
+    assert_eq!(compile_and_run(&format!("<?php\n{source}")), expected);
+    let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
+    let eval = compile_and_run_with_regex(&format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"));
+    assert_eq!(eval, expected);
+}
+
+/// A backtrack-limit error after earlier matches releases the partial `preg_split()` pieces,
+/// the partial replacement strings, the capture arrays and the partial `preg_grep()` result.
+#[test]
+fn test_preg_match_errors_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$bad = 'x,y,z,' . str_repeat('a', 24) . 'b';
+$pattern = '/,|(a+)+$/';
+$failed = 0;
+for ($i = 0; $i < 2; $i++) {
+    $failed += (int) (preg_split($pattern, $bad) === false);
+    $failed += (int) (preg_replace($pattern, '-', $bad) === null);
+    $failed += (int) (preg_replace_callback($pattern, fn($m) => $m[0] . '!', $bad) === null);
+    $failed += (int) (preg_match_all($pattern, $bad, $all) === false);
+    $failed += (int) (preg_match('/(a+)+$/', $bad, $one) === false);
+    $failed += count(preg_grep('/(a+)+$/', ['a', $bad, 'a']));
+}
+echo $failed, ':', preg_last_error(), ':', count($all), count($one), "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "12:2:20\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -7,8 +7,9 @@
 //! - `crate::codegen::lower_inst::builtins::regex` around each regex helper call.
 //!
 //! Key details:
-//! - Each `preg_*` call clears `_preg_last_error` first. The runtime's
-//!   `__rt_preg_exec` wrapper records match failures (backtrack limit, malformed UTF-8);
+//! - Each `preg_*` call clears `_preg_last_error` and `_preg_exec_error` first. The
+//!   runtime's `__rt_preg_exec` wrapper records match failures (backtrack limit, malformed
+//!   UTF-8) plus the outcome of its latest exec, which decides whether the call failed;
 //!   the lowering records `PREG_INTERNAL_ERROR` when the helper reports an invalid
 //!   pattern or the removed `/e` modifier.
 //! - Like PHP, a call whose match failed returns `false` (`preg_match`, `preg_match_all`,
@@ -23,6 +24,7 @@ use crate::ir::Instruction;
 use super::super::super::context::FunctionContext;
 
 const ERROR_SYMBOL: &str = "_preg_last_error";
+const EXEC_ERROR_SYMBOL: &str = "_preg_exec_error";
 const PREG_INTERNAL_ERROR: i64 = 1;
 const NULL_TAG: i64 = 8;
 
@@ -43,20 +45,25 @@ pub(crate) fn lower_preg_last_error_msg(
     super::store_if_result(ctx, inst)
 }
 
-/// Clears the error slot before a `preg_*` helper runs.
+/// Clears the error slot and the last-exec outcome before a `preg_*` helper runs.
 pub(super) fn emit_clear_error(ctx: &mut FunctionContext<'_>) {
     abi::emit_store_zero_to_symbol(ctx.emitter, ERROR_SYMBOL, 0);
+    abi::emit_store_zero_to_symbol(ctx.emitter, EXEC_ERROR_SYMBOL, 0);
 }
 
-/// Branches to `label` when the helper recorded a match error, preserving the result registers.
+/// Branches to `label` when the helper's own last match failed, preserving the result registers.
+///
+/// This reads the last-exec outcome, not `_preg_last_error`: a nested `preg_*` call in a
+/// `preg_replace_callback()` callback may record an error that PHP reports through
+/// `preg_last_error()` without failing the outer call.
 pub(super) fn emit_branch_if_error(ctx: &mut FunctionContext<'_>, label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", ERROR_SYMBOL, 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", EXEC_ERROR_SYMBOL, 0);
             ctx.emitter.instruction(&format!("cbnz x10, {label}"));             // a recorded match error makes the call fail
         }
         Arch::X86_64 => {
-            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", ERROR_SYMBOL, 0);
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", EXEC_ERROR_SYMBOL, 0);
             ctx.emitter.instruction("test r10, r10");                           // did the helper record a match error?
             ctx.emitter.instruction(&format!("jnz {label}"));                   // a recorded match error makes the call fail
         }
