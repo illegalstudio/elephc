@@ -1116,6 +1116,10 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`session_write_close()`](./builtins/web/session_write_close.md) | `(): bool` | `bool` | ✓ | - |
 | [`setcookie()`](./builtins/web/setcookie.md) | `(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed` | `mixed` | ✓ | - |
 | [`setrawcookie()`](./builtins/web/setrawcookie.md) | `(mixed $name, mixed $value = '', mixed $expires = 0, mixed $path = '', mixed $domain = '', mixed $secure = false, mixed $httponly = false): mixed` | `mixed` | ✓ | - |
+| [`libxml_clear_errors()`](./builtins/xml/libxml_clear_errors.md) | `(): void` | `void` | ✓ | ✓ |
+| [`libxml_get_errors()`](./builtins/xml/libxml_get_errors.md) | `(): array` | `array` | ✓ | ✓ |
+| [`libxml_get_last_error()`](./builtins/xml/libxml_get_last_error.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`libxml_use_internal_errors()`](./builtins/xml/libxml_use_internal_errors.md) | `(?bool $use_errors = null): bool` | `bool` | ✓ | ✓ |
 | [`simplexml_import_dom()`](./builtins/xml/simplexml_import_dom.md) | `(object $node, ?string $class_name = 'SimpleXMLElement'): ?SimpleXMLElement` | `?SimpleXMLElement` | ✓ | ✓ |
 | [`simplexml_load_file()`](./builtins/xml/simplexml_load_file.md) | `(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |
 | [`simplexml_load_string()`](./builtins/xml/simplexml_load_string.md) | `(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |

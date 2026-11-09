@@ -1675,4 +1675,66 @@ function xmlwriter_output_memory(XMLWriter $writer, bool $flush = true): string 
 function xmlwriter_flush(XMLWriter $writer, bool $empty = true): string|int {
     return $writer->flush($empty);
 }
+
+// -- ext/libxml: the error state of php-src ext/libxml/libxml.c --
+
+extern "elephc_xml" {
+    function elephc_xml_libxml_use_internal_errors(int $mode): int;
+    function elephc_xml_libxml_error_count(): int;
+    function elephc_xml_libxml_error_select(int $index): int;
+    function elephc_xml_libxml_error_int(int $field): int;
+    function elephc_xml_libxml_error_string(int $field): string;
+    function elephc_xml_libxml_clear_errors(): void;
+}
+
+class LibXMLError {
+    public int $level;
+    public int $code;
+    public int $column;
+    public string $message;
+    public string $file;
+    public int $line;
+}
+
+function libxml_use_internal_errors(?bool $use_errors = null): bool {
+    if ($use_errors === null) {
+        return elephc_xml_libxml_use_internal_errors(-1) !== 0;
+    }
+    return elephc_xml_libxml_use_internal_errors($use_errors ? 1 : 0) !== 0;
+}
+
+function libxml_get_errors(): array {
+    $errors = [];
+    $count = elephc_xml_libxml_error_count();
+    for ($index = 0; $index < $count; $index++) {
+        elephc_xml_libxml_error_select($index);
+        $error = new LibXMLError();
+        $error->level = elephc_xml_libxml_error_int(0);
+        $error->code = elephc_xml_libxml_error_int(1);
+        $error->column = elephc_xml_libxml_error_int(2);
+        $error->message = elephc_xml_libxml_error_string(0);
+        $error->file = elephc_xml_libxml_error_string(1);
+        $error->line = elephc_xml_libxml_error_int(3);
+        $errors[] = $error;
+    }
+    return $errors;
+}
+
+function libxml_get_last_error(): LibXMLError|false {
+    if (elephc_xml_libxml_error_select(-1) === 0) {
+        return false;
+    }
+    $error = new LibXMLError();
+    $error->level = elephc_xml_libxml_error_int(0);
+    $error->code = elephc_xml_libxml_error_int(1);
+    $error->column = elephc_xml_libxml_error_int(2);
+    $error->message = elephc_xml_libxml_error_string(0);
+    $error->file = elephc_xml_libxml_error_string(1);
+    $error->line = elephc_xml_libxml_error_int(3);
+    return $error;
+}
+
+function libxml_clear_errors(): void {
+    elephc_xml_libxml_clear_errors();
+}
 "##;

@@ -9,6 +9,10 @@ sidebar:
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
+| [`libxml_clear_errors()`](./xml/libxml_clear_errors.md) | `(): void` | `void` | ✓ | ✓ |
+| [`libxml_get_errors()`](./xml/libxml_get_errors.md) | `(): array` | `array` | ✓ | ✓ |
+| [`libxml_get_last_error()`](./xml/libxml_get_last_error.md) | `(): mixed` | `mixed` | ✓ | ✓ |
+| [`libxml_use_internal_errors()`](./xml/libxml_use_internal_errors.md) | `(?bool $use_errors = null): bool` | `bool` | ✓ | ✓ |
 | [`simplexml_import_dom()`](./xml/simplexml_import_dom.md) | `(object $node, ?string $class_name = 'SimpleXMLElement'): ?SimpleXMLElement` | `?SimpleXMLElement` | ✓ | ✓ |
 | [`simplexml_load_file()`](./xml/simplexml_load_file.md) | `(string $filename, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |
 | [`simplexml_load_string()`](./xml/simplexml_load_string.md) | `(string $data, ?string $class_name = 'SimpleXMLElement', int $options = 0, string $namespace_or_prefix = '', bool $is_prefix = false): SimpleXMLElement|false` | `SimpleXMLElement|false` | ✓ | ✓ |

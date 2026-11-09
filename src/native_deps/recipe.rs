@@ -67,7 +67,7 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("libssh2", 2) => Some(BuiltInRecipe::Libssh2),
         ("curl", 4) => Some(BuiltInRecipe::Curl),
         ("libmagic", 1) => Some(BuiltInRecipe::Libmagic),
-        ("libxml2", 11) => Some(BuiltInRecipe::Libxml2),
+        ("libxml2", 12) => Some(BuiltInRecipe::Libxml2),
         ("gmp", 2) => Some(BuiltInRecipe::Gmp),
         _ => None,
     }
@@ -159,8 +159,8 @@ mod tests {
     #[test]
     fn libxml2_recipe_revision_has_dispatcher() {
         assert!(
-            built_in_recipe("libxml2", 11).is_some(),
-            "missing built-in recipe for libxml2 revision 11"
+            built_in_recipe("libxml2", 12).is_some(),
+            "missing built-in recipe for libxml2 revision 12"
         );
         assert!(built_in_recipe("libxml2", 1).is_none());
         assert!(built_in_recipe("libxml2", 2).is_none());
@@ -172,6 +172,7 @@ mod tests {
         assert!(built_in_recipe("libxml2", 8).is_none());
         assert!(built_in_recipe("libxml2", 9).is_none());
         assert!(built_in_recipe("libxml2", 10).is_none());
+        assert!(built_in_recipe("libxml2", 11).is_none());
     }
 
     /// Verifies the dispatcher recognizes libgmp by its exact catalog recipe revision,

@@ -3,7 +3,7 @@
 //! `elephc-xml` bridge links, and retains libxml2's complete public header set.
 //!
 //! Called from:
-//! - `crate::native_deps::recipe::CuratedRecipes` for libxml2 recipe revision 11.
+//! - `crate::native_deps::recipe::CuratedRecipes` for libxml2 recipe revision 12.
 //!
 //! Key details:
 //! - Out-of-tree autoconf build, static/PIC only. Python bindings, zlib, ICU, readline/history

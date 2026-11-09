@@ -28,6 +28,8 @@ fn xml_surface_is_registered() {
         "xml_error_string",
         "xmlwriter_open_memory",
         "xmlwriter_flush",
+        "libxml_use_internal_errors",
+        "libxml_get_last_error",
     ] {
         assert!(
             eval_php_visible_builtin_exists(name),

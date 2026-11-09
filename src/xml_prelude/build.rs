@@ -24,6 +24,7 @@ use crate::parser::ast::Program;
 use crate::synthetic_class::internal_declarations;
 
 mod externs;
+mod libxml;
 mod parser;
 mod writer;
 
@@ -168,6 +169,17 @@ pub(crate) fn xml_declarations() -> Program {
             writer::decl_fn_xmlwriter_write_dtd_entity(),
             writer::decl_fn_xmlwriter_output_memory(),
             writer::decl_fn_xmlwriter_flush(),
+            libxml::decl_extern_elephc_xml_libxml_use_internal_errors(),
+            libxml::decl_extern_elephc_xml_libxml_error_count(),
+            libxml::decl_extern_elephc_xml_libxml_error_select(),
+            libxml::decl_extern_elephc_xml_libxml_error_int(),
+            libxml::decl_extern_elephc_xml_libxml_error_string(),
+            libxml::decl_extern_elephc_xml_libxml_clear_errors(),
+            libxml::decl_class_libxmlerror(),
+            libxml::decl_fn_libxml_use_internal_errors(),
+            libxml::decl_fn_libxml_get_errors(),
+            libxml::decl_fn_libxml_get_last_error(),
+            libxml::decl_fn_libxml_clear_errors(),
         ]
     })
 }

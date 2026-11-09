@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Native callbacks finish before PHP handlers run; consuming the string prevents stale reports.
+//! - Every operation also hands its structured errors to `crate::libxml_errors`; with
+//!   `libxml_use_internal_errors(true)` they go to the error list instead of warnings.
 
 use super::*;
 
@@ -17,6 +19,7 @@ pub(super) fn reset() { PENDING.with(|pending| pending.borrow_mut().clear()); }
 /// Copies and frees the shim's completed operation-local buffer.
 pub(super) unsafe fn capture(raw: *mut c_char) {
     let text = owned_bytes(raw);
+    let text = if crate::libxml_errors::absorb() { Vec::new() } else { text };
     PENDING.with(|pending| *pending.borrow_mut() = text);
 }
 

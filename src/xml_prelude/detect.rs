@@ -58,7 +58,8 @@ fn xml_functions() -> &'static [&'static str] {
     })
 }
 
-/// The XMLParser, XMLWriter, SimpleXMLElement, and SimpleXMLIterator catalog classes.
+/// The XMLParser, XMLWriter, SimpleXMLElement, SimpleXMLIterator, and LibXMLError catalog
+/// classes.
 fn xml_classes() -> &'static [&'static str] {
     static NAMES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
@@ -71,6 +72,9 @@ fn xml_classes() -> &'static [&'static str] {
         ));
         names.extend_from_slice(crate::types::builtin_classes::class_names_in_module(
             elephc_builtin_contract::PhpModule::Simplexml,
+        ));
+        names.extend_from_slice(crate::types::builtin_classes::class_names_in_module(
+            elephc_builtin_contract::PhpModule::Libxml,
         ));
         names
     })
@@ -682,10 +686,14 @@ mod tests {
     /// The catalog names both modules' functions and nothing else.
     #[test]
     fn the_function_set_is_the_catalog() {
-        assert_eq!(xml_functions().len(), 67);
+        assert_eq!(xml_functions().len(), 71);
         assert!(xml_functions().contains(&"xml_parse_into_struct"));
         assert!(xml_functions().contains(&"xmlwriter_flush"));
-        assert_eq!(xml_classes(), &["XMLParser", "XMLWriter", "SimpleXMLElement", "SimpleXMLIterator"]);
+        assert!(xml_functions().contains(&"libxml_use_internal_errors"));
+        assert_eq!(
+            xml_classes(),
+            &["XMLParser", "XMLWriter", "SimpleXMLElement", "SimpleXMLIterator", "LibXMLError"]
+        );
     }
 
     /// Every enumerated function is detected on its own, so a helper that only consumes

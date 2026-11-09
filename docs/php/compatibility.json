@@ -187,15 +187,15 @@
   ],
   "coverage": {
     "classes": {
-      "have": 191,
+      "have": 192,
       "total": 329
     },
     "constants": {
-      "have": 1420,
+      "have": 1431,
       "total": 3181
     },
     "functions": {
-      "have": 1078,
+      "have": 1082,
       "total": 2169
     }
   },
@@ -975,20 +975,20 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 1,
+        "have": 1,
         "total": 1
       },
       "constants": {
-        "eval": 18,
-        "have": 18,
+        "eval": 29,
+        "have": 29,
         "total": 29
       },
       "docs": null,
       "extension": "libxml",
       "functions": {
-        "eval": 0,
-        "have": 0,
+        "eval": 4,
+        "have": 4,
         "total": 8
       },
       "name": "libxml",

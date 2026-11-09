@@ -49,12 +49,48 @@ static void sx_diagnostic_fragment(void *raw, const char *format, ...) {
     }
     va_end(args);
 }
+/* Structured copies of every libxml error of the current thread, for PHP's libxml error list.
+ * Each record is "level\x1fcode\x1fcolumn\x1fline\x1ffile\x1fmessage\x1e". Errors that parser
+ * options hide from the warnings (LIBXML_NOERROR, LIBXML_NOWARNING) are still recorded:
+ * PHP's structured handler lists them too. */
+static _Thread_local xmlBufferPtr sx_error_records;
+static void sx_record_field(const char *text) {
+    if (text) xmlBufferCat(sx_error_records, (const xmlChar *)text);
+}
+static void sx_record_error(const xmlError *error) {
+    if (!sx_error_records && !(sx_error_records = xmlBufferCreate())) return;
+    char numbers[96];
+    snprintf(numbers, sizeof numbers, "%d\x1f%d\x1f%d\x1f%d\x1f", (int)error->level,
+        error->code, error->int2, error->line);
+    sx_record_field(numbers);
+    sx_record_field(error->file);
+    sx_record_field("\x1f");
+    sx_record_field(error->message);
+    sx_record_field("\x1e");
+}
+/* libxml2 skips a parser's own handler for errors LIBXML_NOERROR/LIBXML_NOWARNING hide and
+ * raises them on the thread's global structured handler instead, where PHP's list handler
+ * receives them; this recorder takes that role. */
+static void sx_global_error(void *raw, const xmlError *error) {
+    (void)raw;
+    if (error) sx_record_error(error);
+}
+static void sx_install_global_recorder(void) { xmlSetStructuredErrorFunc(NULL, sx_global_error); }
+/* Moves the thread's recorded errors to Rust; NULL when none were recorded. */
+char *elephc_libxml2_v1_take_error_records(void) {
+    if (!sx_error_records || !xmlBufferLength(sx_error_records)) return NULL;
+    char *records = (char *)xmlStrdup(xmlBufferContent(sx_error_records));
+    xmlBufferEmpty(sx_error_records);
+    return records;
+}
 /* Parser options filter diagnostics; XPath uses the message without parser context lines. */
 static void sx_diagnostic_error(void *raw, const xmlError *error) {
     struct sx_diagnostics *capture = raw;
-    if (!capture->text || !error) return;
-    if ((error->level == XML_ERR_WARNING && (capture->options & XML_PARSE_NOWARNING)) ||
-        (error->level >= XML_ERR_ERROR && (capture->options & XML_PARSE_NOERROR))) return;
+    if (!error) return;
+    int filtered = (error->level == XML_ERR_WARNING && (capture->options & XML_PARSE_NOWARNING)) ||
+        (error->level >= XML_ERR_ERROR && (capture->options & XML_PARSE_NOERROR));
+    sx_record_error(error);
+    if (!capture->text || filtered) return;
     if (capture->formatted == 2 && error->message) {
         size_t length = strlen(error->message);
         while (length && error->message[length - 1] == '\n') length--;
@@ -81,6 +117,7 @@ void *elephc_libxml2_v1_sx_parse(const char *data, int len, int options, const c
     if (!context) return NULL;
     struct sx_diagnostics capture = { xmlBufferCreate(), options, diagnostic_style, context };
     xmlCtxtSetErrorHandler(context, sx_diagnostic_error, &capture);
+    sx_install_global_recorder();
     xmlDocPtr doc = xmlCtxtReadMemory(context, data, len, url && *url ? url : NULL, NULL, options);
     sx_diagnostic_finish(&capture, diagnostics);
     xmlFreeParserCtxt(context);
@@ -93,6 +130,7 @@ void *elephc_libxml2_v1_sx_parse_file(const char *filename, int options, char **
     if (!context) return NULL;
     struct sx_diagnostics capture = { xmlBufferCreate(), options, 1, context };
     xmlCtxtSetErrorHandler(context, sx_diagnostic_error, &capture);
+    sx_install_global_recorder();
     xmlDocPtr doc = xmlCtxtReadFile(context, filename, NULL, options);
     sx_diagnostic_finish(&capture, diagnostics);
     xmlFreeParserCtxt(context);
@@ -122,6 +160,7 @@ void *elephc_libxml2_v1_sx_parse_stream(const char *filename, const char *data, 
     struct sx_diagnostics capture = { xmlBufferCreate(), options, 1, context };
     struct sx_stream_input input = { data, length, 0 };
     xmlCtxtSetErrorHandler(context, sx_diagnostic_error, &capture);
+    sx_install_global_recorder();
     xmlCtxtSetResourceLoader(context, sx_stream_resource, &input);
     xmlDocPtr doc = xmlCtxtReadFile(context, filename, NULL, options);
     sx_diagnostic_finish(&capture, diagnostics);

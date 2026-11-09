@@ -199,6 +199,7 @@ pub(crate) static CLASSES: &[ClassContract] = &[
     class!("JsonException", "jsonexception", Class, Json, CheckerInjected),
     class!("JsonSerializable", "jsonserializable", Interface, Json, CheckerInjected),
     class!("LengthException", "lengthexception", Class, Spl, CheckerInjected),
+    class!("LibXMLError", "libxmlerror", Class, Libxml, Prelude),
     class!("LimitIterator", "limititerator", Class, Spl, CheckerInjected),
     class!("LogicException", "logicexception", Class, Spl, CheckerInjected),
     class!("MultipleIterator", "multipleiterator", Class, Spl, CheckerInjected),

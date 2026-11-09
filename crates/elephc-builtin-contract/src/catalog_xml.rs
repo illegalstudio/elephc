@@ -130,6 +130,16 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
          param!("options", Int = DefaultSpec::Int(0)), param!("namespace_or_prefix", Str = DefaultSpec::Str("")),
          param!("is_prefix", Bool = DefaultSpec::Bool(false))],
         TypeSpec::Mixed, "Parses XML bytes into a SimpleXML element."),
+    // -- ext/libxml --
+    xml_contract!("libxml_use_internal_errors", Libxml, PreludeProvided,
+        [param!("use_errors", ?Bool = DefaultSpec::Null)],
+        TypeSpec::Bool, "Collects libxml errors in a list instead of raising warnings; returns the previous mode."),
+    xml_contract!("libxml_get_errors", Libxml, PreludeProvided, [],
+        TypeSpec::Array, "Returns the collected libxml errors as LibXMLError objects."),
+    xml_contract!("libxml_get_last_error", Libxml, PreludeProvided, [],
+        TypeSpec::Mixed, "Returns the last libxml error, or false when there is none."),
+    xml_contract!("libxml_clear_errors", Libxml, PreludeProvided, [],
+        TypeSpec::Void, "Clears the collected libxml errors and the last error."),
     // -- ext/xml --
     xml_contract!(
         "xml_parser_create", Xml, PreludeProvided,

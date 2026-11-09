@@ -23,6 +23,7 @@
 
 pub mod abi;
 mod ffi;
+mod libxml_errors;
 pub mod parser;
 pub mod writer;
 mod simplexml;

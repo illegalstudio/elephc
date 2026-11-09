@@ -14,7 +14,6 @@ use super::*;
 
 /// php-src `ext/libxml/tests/001.phpt`: libxml_use_internal_errors()
 #[test]
-#[ignore = r#"DOM port pending: Undefined function: libxml_use_internal_errors"#]
 fn test_001() {
     if skip_without_xml_native("test_001") {
         return;
@@ -44,7 +43,6 @@ Done"#);
 
 /// php-src `ext/libxml/tests/002.phpt`: libxml_get_errors()
 #[test]
-#[ignore = r#"DOM port pending: Undefined function: libxml_use_internal_errors"#]
 fn test_002() {
     if skip_without_xml_native("test_002") {
         return;
@@ -134,7 +132,6 @@ Done"#);
 
 /// php-src `ext/libxml/tests/003.phpt`: libxml_use_internal_errors() memory leaks
 #[test]
-#[ignore = r#"DOM port pending: Undefined function: libxml_use_internal_errors"#]
 fn test_003() {
     if skip_without_xml_native("test_003") {
         return;

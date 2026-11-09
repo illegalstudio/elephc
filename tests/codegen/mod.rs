@@ -150,6 +150,7 @@ mod simplexml;
 mod simplexml_php_src;
 mod php_src_corpus;
 mod dom_php_src;
+mod libxml_errors;
 mod libxml_php_src;
 mod fileinfo;
 mod fileinfo_autoload;

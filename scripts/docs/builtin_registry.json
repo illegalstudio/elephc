@@ -88323,6 +88323,258 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "libxml_clear_errors",
+    "description": "Clears the collected libxml errors and the last error.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/libxml_clear_errors.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/xml_prelude/build/libxml.rs",
+      "codegen_function": "libxml_clear_errors",
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs"
+    },
+    "module": "libxml",
+    "name": "libxml_clear_errors",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "libxml_clear_errors",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "libxml_get_errors",
+    "description": "Returns the collected libxml errors as LibXMLError objects.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/libxml_get_errors.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/xml_prelude/build/libxml.rs",
+      "codegen_function": "libxml_get_errors",
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs"
+    },
+    "module": "libxml",
+    "name": "libxml_get_errors",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "libxml_get_errors",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "libxml_get_last_error",
+    "description": "Returns the last libxml error, or false when there is none.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/libxml_get_last_error.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/xml_prelude/build/libxml.rs",
+      "codegen_function": "libxml_get_last_error",
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs"
+    },
+    "module": "libxml",
+    "name": "libxml_get_last_error",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "libxml_get_last_error",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "use_errors",
+          "optional": true,
+          "type": "?bool"
+        }
+      ],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "libxml_use_internal_errors",
+    "description": "Collects libxml errors in a list instead of raising warnings; returns the previous mode.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/libxml_use_internal_errors.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "use_errors",
+          "optional": true,
+          "type": "?bool"
+        }
+      ],
+      "required_param_count": 0,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/xml_prelude/build/libxml.rs",
+      "codegen_function": "libxml_use_internal_errors",
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs"
+    },
+    "module": "libxml",
+    "name": "libxml_use_internal_errors",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "use_errors",
+          "optional": true,
+          "type": "?bool"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "libxml_use_internal_errors",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {

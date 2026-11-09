@@ -163,9 +163,9 @@ mod oracle_tests {
                 other => panic!("unexpected prelude statement {other:?}"),
             }
         }
-        assert_eq!(classes, vec!["XMLParser", "XMLWriter"]);
-        assert_eq!(externs, 69);
-        assert_eq!(functions.len(), 66);
+        assert_eq!(classes, vec!["XMLParser", "XMLWriter", "LibXMLError"]);
+        assert_eq!(externs, 75);
+        assert_eq!(functions.len(), 70);
         let catalog: std::collections::BTreeSet<&str> = elephc_builtin_contract::contracts()
             .iter()
             .filter(|contract| contract.area == elephc_builtin_contract::Area::Xml)
