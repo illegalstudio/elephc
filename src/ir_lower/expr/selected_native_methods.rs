@@ -25,9 +25,16 @@ pub(super) fn lower(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
     args: &[Expr], op: Op, expr: &Expr,
 ) -> Option<LoweredValue> {
+    let object_ty = ctx.builder.value_php_type(object.value);
+    // A nullable concrete receiver already has its own argument plan and dispatch target.
+    // Unrelated classes with the same method name must not force a global class ladder.
+    if singular_object_class(&object_ty).is_some_and(|(class, _)| !class.is_empty()
+        && (class_method_signature(ctx, class, &php_symbol_key(method)).is_some()
+            || class_method_signature(ctx, class, "__call").is_some()))
+    { return None; }
     if !matches!(op, Op::MethodCall | Op::NullsafeMethodCall)
-        || !(dynamic_method_receiver_needs_mixed_fallback(&ctx.builder.value_php_type(object.value))
-            || singular_object_class(&ctx.builder.value_php_type(object.value)).is_some_and(|(class, _)|
+        || !(dynamic_method_receiver_needs_mixed_fallback(&object_ty)
+            || singular_object_class(&object_ty).is_some_and(|(class, _)|
                 class_method_signature(ctx, class, &php_symbol_key(method)).is_none()
                     && class_method_signature(ctx, class, "__call").is_none()))
         || ctx.reference_call_context.as_ref().is_some_and(|context| context.depth == ctx.expression_depth)
