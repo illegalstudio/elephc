@@ -1,5 +1,5 @@
 //! Purpose:
-//! Rebinds unqualified function references whose conditional namespace declaration was pruned.
+//! Rebinds unqualified function references after autoloading and conditional-declaration pruning.
 //!
 //! Called from:
 //! - `crate::optimize::namespace_fallbacks` after the first target-folding pass.
@@ -34,7 +34,7 @@ impl FunctionFallbacks {
         Self { symbols }
     }
 
-    /// Returns a recorded global candidate only when its original local declaration is gone.
+    /// Returns a recorded global candidate only when the complete program has no local declaration.
     pub(crate) fn resolve_name(&self, name: &Name) -> Option<Name> {
         let fallback = name.function_fallback()?;
         if self.symbols.declares_function(name.as_str()) {

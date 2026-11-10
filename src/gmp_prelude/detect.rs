@@ -3,6 +3,8 @@
 //!
 //! Called from:
 //! - `crate::gmp_prelude::inject_if_used`.
+//! - `crate::autoload::prelude_probe::autoloaded_prelude_groups`, through
+//!   `crate::gmp_prelude::program_uses_gmp`.
 //!
 //! Key details:
 //! - Runs before name resolution, so names are raw source text and PHP function/class
@@ -13,10 +15,10 @@
 //! - Soundness beats precision here: a missed reference would remove declarations a
 //!   valid program needs, while a false positive only adds harmless declarations.
 
-use crate::parser::ast::Program;
+use crate::parser::ast::Stmt;
 
 /// Returns whether any top-level statement references the GMP surface.
-pub(super) fn program_uses_gmp(program: &Program) -> bool {
+pub(crate) fn program_uses_gmp(program: &[Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
     usage.functions.iter().any(|name| {
         name.rsplit('\\')

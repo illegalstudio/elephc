@@ -150,6 +150,7 @@ mod simplexml;
 mod simplexml_php_src;
 mod fileinfo;
 mod fileinfo_autoload;
+mod autoload_preludes;
 mod fileinfo_reflection;
 mod fileinfo_validation;
 mod fileinfo_stream_diagnostics;
