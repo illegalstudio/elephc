@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks, list/key-edge builtins, the internal array pointer family, the hash key/value sorts that relink iteration order, runtime allocation-size guards, the maximum-size bounds reference PHP reports as a catchable `ValueError`, mutating builtins whose by-reference argument is a by-reference parameter or a property, static property, or container element, array builtin parameters widened to match reference PHP's parameter lists, the storage type stamped on array literals returned directly from a closure, when an element write reads its index relative to the right-hand side, the element type an array literal stamps on a builtin call, `array_values`/`array_flip`/`in_array` over a `mixed` receiver, float-key deprecations on compound updates through property, static-property, and boxed `mixed` receivers, and integer keys that skip slots of a non-empty packed local.
+//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks, list/key-edge builtins, the internal array pointer family, the hash key/value sorts that relink iteration order, runtime allocation-size guards, the maximum-size bounds reference PHP reports as a catchable `ValueError`, mutating builtins whose by-reference argument is a by-reference parameter or a property, static property, or container element, array builtin parameters widened to match reference PHP's parameter lists, the storage type stamped on array literals returned directly from a closure, when an element write reads its index relative to the right-hand side, the element type an array literal stamps on a builtin call, `array_values`/`array_flip`/`in_array` over a `mixed` receiver, float-key deprecations on compound updates through property, static-property, and boxed `mixed` receivers, integer keys that skip slots of a non-empty packed local, and subclass or interface-implementation instances written into declared object element arrays.
 
 mod allocation_guards;
 mod fill_boxed_integers;
@@ -50,4 +50,5 @@ mod float_key_diagnostics;
 mod float_key_compound_receivers;
 mod literal_element_types;
 mod mixed_receiver_builtins;
+mod object_element_upcasts;
 mod sparse_int_keys;
