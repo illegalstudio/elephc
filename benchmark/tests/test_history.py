@@ -16,6 +16,11 @@ from history import current_results, empty_history, legacy_result, load_history,
 
 
 class HistoryTests(unittest.TestCase):
+    def setUp(self):
+        """History-only fixtures do not contact the remote durable ledger."""
+        patcher = patch("fetch.list_archives", return_value=[])
+        patcher.start()
+        self.addCleanup(patcher.stop)
     def test_backfill_covers_native_and_both_magician_php_variants(self):
         for suite in ("native", "magician"):
             old = record(suite, day="2026-10-09")
@@ -84,7 +89,7 @@ class HistoryTests(unittest.TestCase):
                     archive.writestr("../../unexpected.txt", "ignored")
                 return CompletedProcess(command, 0, stderr="")
 
-            with patch("fetch.subprocess.run", side_effect=request):
+            with patch("artifacts.subprocess.run", side_effect=request):
                 download_artifact("owner/repo", {"id": 42, "run_id": 1}, directory)
             self.assertEqual([p.name for p in directory.iterdir()], ["results.json"])
             self.assertEqual(json.loads((directory / "results.json").read_text()), {"source": "selected"})
@@ -189,7 +194,7 @@ class HistoryTests(unittest.TestCase):
                 "workflow_run": {"id": 1, "head_sha": "a", "head_branch": "main", "repository_id": 1, "head_repository_id": 1}}
         fork = copy.deepcopy(base)
         fork["workflow_run"]["head_repository_id"] = 2
-        with patch("fetch.gh", return_value=json.dumps([{"artifacts": [base, fork, {**base, "expired": True}, {**base, "name": "tests"}]}])) as api:
+        with patch("artifacts.gh", return_value=json.dumps([{"artifacts": [base, fork, {**base, "expired": True}, {**base, "name": "tests"}]}])) as api:
             self.assertEqual(len(list_artifacts("owner/repo", "main")), 1)
             self.assertIn("name=benchmark-results", api.call_args.args[1])
 

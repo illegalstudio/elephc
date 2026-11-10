@@ -140,8 +140,15 @@ origin on hover. Known platform or fixture mismatches are never backfilled. Unkn
 metadata can use the first available reference. Existing PHP measurements and
 references are preserved; each new CI run adds its own freshly measured PHP data.
 
-The existing nightly `Repository Stats` workflow fetches available benchmark
-artifacts, merges them into `data/{native,magician,hot-path}.json`, regenerates
+Before artifact retention deletes a main benchmark artifact, it validates the
+source run, commit, suite measurements and metadata, then saves its JSON records
+under `benchmark-results/<artifact-id>.json` on the
+`ci/development-artifact-ledger` branch. A failed save leaves the artifact intact.
+These small data files are Git history, not Actions artifacts or releases.
+
+The existing nightly `Repository Stats` workflow reads those durable records and
+any still-available benchmark artifacts, merges them into
+`data/{native,magician,hot-path}.json`, regenerates
 `assets/*.svg`, and publishes them together with repository statistics. It uses
 the existing Illegal Bot installation identity for a `[skip ci]` commit. Artifact
 reads use an Actions-read workflow token. Publication uses an isolated checkout
@@ -152,7 +159,7 @@ Each suite keeps the latest sample per **UTC artifact-upload day and platform**.
 A newer run can replace the existing sample for that day. Older dates remain
 saved after artifact expiry. Selection happens after reading each artifact's
 suite and platform. `data/imports.json` checkpoints sample metadata for each
-artifact, so unchanged or superseded artifacts and legacy archives lacking
+artifact and the exact durable Git blob, so unchanged or superseded artifacts and legacy archives lacking
 newer suites are not downloaded again every night. Fetch failures or malformed
 saved results fail the refresh before replacing any history.
 

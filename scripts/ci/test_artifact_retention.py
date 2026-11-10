@@ -160,6 +160,9 @@ class FakeRetention(Retention):
     def load(self):
         return copy.deepcopy(self.state)
 
+    def request_budget(self):
+        return 10000
+
     def save(self, state):
         if self.apply:
             self.saved.append(copy.deepcopy(state))
@@ -207,6 +210,42 @@ class RetentionDriverTests(unittest.TestCase):
         with patch.object(real, "remove", side_effect=checkpointed):
             real.execute()
         self.assertEqual(set(real.deleted), {1000, 1001, 1002, 1004, 1104})
+
+    def test_benchmark_archive_failure_prevents_deleting_its_source(self):
+        """A failed durable write must leave the original measurement downloadable."""
+        run, jobs, artifacts = fixture()
+        artifacts.append(dict(id=1005, name="benchmark-results", size_in_bytes=200))
+        janitor = FakeRetention([(run, jobs, artifacts)], True)
+        with patch.object(janitor, "preserve_benchmarks", create=True,
+                          side_effect=RuntimeError("archive unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "archive unavailable"):
+                janitor.execute()
+        self.assertNotIn(1005, janitor.deleted)
+
+    def test_cleanup_batches_checkpoint_unprocessed_runs_and_partial_deletions(self):
+        """Large backlogs must make bounded progress without forgetting remaining inputs."""
+        records = [fixture(10, OLD), fixture(11), fixture(12)]
+        janitor = FakeRetention(records, True)
+        with patch("artifact_retention.MAX_RUNS", 2, create=True), \
+                patch("artifact_retention.MAX_DELETIONS", 2, create=True):
+            result = janitor.execute()
+        self.assertEqual(len(janitor.deleted), 2)
+        self.assertTrue(result["continue_cleanup"])
+        self.assertIn(10, janitor.saved[-1]["pending"])
+        self.assertIn(12, janitor.saved[-1]["pending"])
+
+    def test_completed_pr_cleanup_needs_no_job_inventory(self):
+        """PR jobs cannot select main packages or a queue handoff."""
+        run, jobs, artifacts = fixture()
+        run.update(event="pull_request", head_branch="feature")
+        janitor = FakeRetention([(run, jobs, artifacts)], True)
+        request = janitor.api
+        def no_jobs(endpoint, method="GET", body=None):
+            self.assertNotIn("/jobs", endpoint)
+            return request(endpoint, method, body)
+        with patch.object(janitor, "api", side_effect=no_jobs):
+            janitor.execute()
+        self.assertEqual(len(janitor.deleted), len(artifacts))
 
     def test_partial_new_set_preserves_previous_download(self):
         old = fixture(10, OLD)
