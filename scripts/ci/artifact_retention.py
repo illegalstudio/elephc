@@ -243,6 +243,12 @@ class Retention:
         state["pending"], state["queues"] = list(dict.fromkeys(pending)), queues
         self.save(state)
         latest = state["latest"]
+        # Every continuation creates another janitor run. Merely forgetting that
+        # empty run must not keep dispatching while real workflows are still active.
+        janitors = {identifier for identifier, (run, _, _) in records.items() if run["path"] == RETENTION}
+        finished = selected - set(pending) - set(queues) - janitors
+        if latest:
+            finished.discard(latest["run_id"])
         result = {"apply": self.apply, "latest_sha": latest["sha"] if latest else None,
                   "downloads": {target: f"https://github.com/{self.repo}/actions/runs/"
                                 f"{latest['run_id']}/artifacts/{artifact['id']}"
@@ -250,8 +256,7 @@ class Retention:
                   "runs": self.summary, "refresh": [],
                   # Continue only after measurable progress, never spin on active readers.
                   "continue_cleanup": bool(deferred or partial) and (
-                      remaining < MAX_DELETIONS or bool(selected - set(pending) - set(queues)
-                                                       - ({latest["run_id"]} if latest else set())))}
+                      remaining < MAX_DELETIONS or bool(finished))}
         if refresh_due(latest, self.now):
             result["refresh"] = [dict(target=target, sha=latest["sha"], **{
                 key: artifact[key] for key in ("id", "name", "digest")})

@@ -4,7 +4,7 @@ import copy
 import unittest
 from unittest.mock import patch
 
-from test_artifact_retention import FakeRetention, fixture, candidate, REPO, HISTORY, OLD
+from test_artifact_retention import FakeRetention, fixture, candidate, REPO, HISTORY, OLD, RETENTION
 
 
 class BatchTests(unittest.TestCase):
@@ -46,6 +46,23 @@ class BatchTests(unittest.TestCase):
             result = janitor.execute()
         self.assertFalse(result["continue_cleanup"])
         self.assertEqual(janitor.saved[-1]["pending"], [12, 11])
+        self.assertEqual(janitor.deleted, [])
+
+    def test_empty_previous_janitor_does_not_keep_a_self_dispatch_chain_alive(self):
+        """Each continuation creates another run; forgetting that empty run is not cleanup progress."""
+        active = fixture(11)
+        active[0]["status"] = "in_progress"
+        prior = fixture(12, path=RETENTION)
+        prior[2].clear()
+        current = fixture(13, path=RETENTION)
+        current[0]["status"] = "in_progress"
+        latest = fixture(10)
+        latest[2].pop()
+        janitor = FakeRetention([active, prior, current, latest], True,
+                                candidate(*latest, REPO, HISTORY))
+        with patch("artifact_retention.MAX_RUNS", 2):
+            result = janitor.execute()
+        self.assertFalse(result["continue_cleanup"])
         self.assertEqual(janitor.deleted, [])
 
 
