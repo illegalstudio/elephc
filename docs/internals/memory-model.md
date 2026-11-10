@@ -1378,21 +1378,30 @@ releases that source expression's owner. Taking an extra reference before this
 scalar store would leak the box, because the inline slot cannot carry or retire
 it. Heap-backed merge results keep their existing transfer semantics.
 
-EIR array-element removal instructions report whether the key existed,
-including entries whose value was null. EIR combines these flags for an
-array-only unset list and runs its final automatic cycle collection only if an
-entry was removed. Missing keys therefore avoid a full heap graph scan. The flag
-lives in the runtime call's stack frame so reentrant destructors cannot overwrite
-another removal's result. Copy-on-write publication, sparse-array promotion, and
-normal key evaluation still precede removal.
+EIR array-element removal instructions report whether the removal may have
+stranded a cycle. `__rt_hash_unset` reads the removed entry's own runtime tag:
+an int, float, bool, string or null value owns no PHP children and clears the
+flag, while a container, object, boxed `Mixed`, reference, callable or resource
+keeps it. EIR combines these flags for an array-only unset list and runs its
+final automatic cycle collection only if one of them is set. Missing keys and
+leaf removals therefore avoid a full heap graph scan. The decision never trusts
+a declared element type, only the entry's own tag. The flag lives in
+the runtime call's stack frame so reentrant destructors cannot overwrite another
+removal's result. Copy-on-write publication, sparse-array promotion, and normal
+key evaluation still precede removal.
 
-This gate applies to scalar key literals and concrete scalar locals, plus pure
-unary string builtins applied to concrete strings, such as
-`unset($fields[strtolower($name)])`. Keys that can invoke user code, weak-coercion
-diagnostics, or other effects keep unconditional collection. Unsets of local
-roots, properties, and `ArrayAccess` offsets keep their existing safe point,
-including lists mixing those targets with array offsets. Explicit
-`gc_collect_cycles()` remains independent of the removal flags.
+This gate applies to scalar key literals, plain locals and pure unary string
+builtins applied to concrete strings, such as `unset($fields[strtolower($name)])`.
+A plain local key (an `int|float` loop counter, say) may reach a
+key-normalization diagnostic handler; garbage that handler strands is not this
+removal's and waits for the next safe point. Keys that can invoke user code or
+other effects keep unconditional collection. It covers local arrays, declared
+hook-free writable properties of `$this` or a non-nullable local object, and
+declared PHP `array` static properties, so `unset($this->ids[$i])` over integer
+ids runs no collector scan. Unsets of local roots, whole properties, magic or
+hooked properties, nullable receivers and `ArrayAccess` offsets keep their
+existing safe point, including lists mixing those targets with array offsets.
+Explicit `gc_collect_cycles()` remains independent of the removal flags.
 When a boxed reference holds a non-array value, its runtime fallback conservatively
 requests collection, preserving `ArrayAccess` and false-conversion callback effects.
 Float and boxed-key diagnostic snapshots preserve the removal flag across their
