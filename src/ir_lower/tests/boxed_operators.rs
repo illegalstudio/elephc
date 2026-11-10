@@ -5,7 +5,7 @@
 //! - The focused AST-to-EIR lowering unit tests.
 //!
 //! Key details:
-//! - XML enables internal object handlers without opaque eval's unrelated catalog.
+//! - XML and BcMath enable distinct dispatch protocols without opaque eval's catalog.
 //! - The original helper body retains handler dispatch and scalar fallbacks.
 
 use super::*;
@@ -21,6 +21,7 @@ fn verify_boxed_operator_graphs_are_shared(target: &str) {
         function sharedBoxedIncrement(mixed $value): mixed { return ++$value; } \
         function sharedBoxedLess(mixed $left, mixed $right): bool { return $left < $right; } \
         $xml = new SimpleXMLElement('<r>6</r>'); \
+        $number = new BcMath\\Number('2'); echo sharedBoxedAdd($number, 1); \
         echo sharedBoxedAdd($xml, 2), anotherBoxedAdd(2, $xml), sharedBoxedLess($xml, 8), \
             sharedBoxedInt($xml, 2), sharedIntBoxed(2, $xml), sharedBoxedIncrement('az');";
     let mut module = try_lower_source_at_for_target_with_reachability(
@@ -50,6 +51,21 @@ fn verify_boxed_operator_graphs_are_shared(target: &str) {
             assert!(bodies[0].flags.is_synthetic && bodies[0].flags.is_internal);
             assert!(bodies[0].instructions.iter().any(|instruction| instruction.op == Op::InstanceOf),
                 "{target}: the helper retains internal class precedence");
+            if operation != "lt" {
+                let positions = |class: &str| bodies[0].instructions.iter().enumerate()
+                    .filter_map(|(position, instruction)| {
+                        (instruction.op == Op::StaticMethodCall && matches!(instruction.immediate,
+                            Some(Immediate::Data(id)) if module.data.strings.get(id.as_raw() as usize)
+                                == Some(&format!("{class}::__elephc_add"))))
+                            .then_some(position)
+                    }).collect::<Vec<_>>();
+                let native = positions("BcMath\\Number");
+                let conversion = positions("SimpleXMLElement");
+                assert_eq!(native.len(), 2, "{target}: {operation} retains both native handlers");
+                assert_eq!(conversion.len(), 2, "{target}: {operation} retains both XML fallbacks");
+                assert!(native.iter().max() < conversion.iter().min(),
+                    "{target}: {operation} tries native handlers before numeric conversion");
+            }
         }
         crate::ir::validate_module(&module).unwrap();
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();

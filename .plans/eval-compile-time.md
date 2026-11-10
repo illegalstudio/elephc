@@ -213,3 +213,35 @@ pipeline (57.85 s), nullable pointer array elements, nullable pointer spreads,
 nullable integer array elements and nested heterogeneous literal GC statistics.
 The XML comparison above measures the operator/module changes before this
 additional literal-copy reduction.
+
+
+## First macOS CI evidence and review repair
+
+Run `42895531912`, head `0139b6a5c744282fb01bd7fb83ce430ec304641c`,
+reports these passing durations in the macOS codegen JUnit artifacts:
+
+| Previously raised-budget fixture | Time |
+|---|---:|
+| Computed indexed incdec eval | 307.446 s |
+| Native type boundaries | 189.599 s |
+| Native generic property handoff | 190.904 s |
+| Temporary parent handoff | 154.955 s |
+| Large namespace query | 108.652 s |
+
+The new optimized shared-operator bundle passes in 121.020 s. These observations
+cover one loaded CI run; they do not establish a worst-case scheduling margin.
+Keep the deadline and scheduling overrides until the review and target validation
+are complete.
+
+That run exposed two structural unit-test families still requiring inline object
+arithmetic in callers. Grok review round `9baeeea3` confirmed this as one P1
+coverage/CI defect, with no demonstrated runtime or heap regression. The repair
+checks each caller's connection to the shared helper, checks native adapter
+identity and precedence inside that helper, and keeps working-slot ownership,
+cleanup and native dimension selection assertions in the original caller.
+Shared add/inc tests also check both BcMath handlers before both XML conversions.
+
+The repair passes all 15 focused target cases: both corrected structural families
+and the strengthened shared-operator family on all five supported targets. The
+initial CI run completed all 80 codegen jobs successfully; its aggregate remained
+red because of the structural assertions corrected here.
