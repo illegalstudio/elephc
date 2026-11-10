@@ -184,7 +184,8 @@ class FakeRetention(Retention):
         if len(parts) == 3:
             changed = self.reread.get(identifier, [])
             return copy.deepcopy(changed.pop(0) if changed else run)
-        return {parts[3]: copy.deepcopy(jobs if parts[3] == "jobs" else artifacts)}
+        items = jobs if parts[3] == "jobs" else artifacts
+        return {parts[3]: copy.deepcopy(items), "total_count": len(items)}
 
     def execute(self):
         with patch("artifact_retention.git", return_value="\n".join(HISTORY)):

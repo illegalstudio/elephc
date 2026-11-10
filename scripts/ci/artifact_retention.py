@@ -13,8 +13,9 @@ from urllib.parse import quote
 
 from artifact_retention_policy import (CI, DEVELOPMENT, PACKAGE, RETENTION, active_source, candidate,
                                        keep_ids, newest, refresh_due, trusted_run)
-from reconcile_development import BRANCH, git
 from artifact_retention_api import RetentionAPI, run_safely
+from github_jobs import read_jobs
+from reconcile_development import BRANCH, git
 
 FILE = "artifact-retention.json"
 MAX_RUNS = 20
@@ -53,6 +54,8 @@ class Retention:
 
     def pages(self, endpoint, key, limit=20):
         """Never interpret a truncated discovery or artifact inventory as complete."""
+        if key == "jobs":
+            return read_jobs(self.api, endpoint, max_items=limit * 100)
         values = []
         for page in range(1, limit + 1):
             separator = "&" if "?" in endpoint else "?"

@@ -11,6 +11,8 @@ import re
 import subprocess
 import time
 
+from github_jobs import read_jobs
+
 BRANCH = "ci/development-artifact-ledger"
 FILE = "development-artifacts.json"
 WORKFLOW = "development-builds.yml"
@@ -133,6 +135,8 @@ class Reconciler:
 
     def pages(self, endpoint, key, limit=20):
         """Bound API work explicitly, failing closed on truncated artifact inventories."""
+        if key == "jobs":
+            return read_jobs(self.api, endpoint, max_items=limit * 100)
         values = []
         separator = "&" if "?" in endpoint else "?"
         for page in range(1, limit + 1):
