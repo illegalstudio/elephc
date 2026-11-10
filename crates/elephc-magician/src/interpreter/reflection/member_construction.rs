@@ -438,9 +438,7 @@ pub(super) fn eval_reflection_object_dynamic_property_array_result(
             context,
             values,
         )?;
-        let next_index = values.array_len(result)? as i64;
-        let key = values.int(next_index)?;
-        result = values.array_set(result, key, member_object)?;
+        result = crate::interpreter::reflection::owned_collections::push_owned_object(values, result, member_object)?;
     }
     Ok(result)
 }
