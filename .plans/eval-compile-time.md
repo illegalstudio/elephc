@@ -5,9 +5,11 @@
 - [x] Identify and implement the highest-impact semantics-preserving reduction.
 - [x] Add focused regression coverage for every affected supported target.
 - [x] Compare baseline and changed compiler output and timing on identical inputs.
-- [ ] Record remaining work and retain CI budgets until target measurements justify removal.
+- [x] Record remaining work and retain CI budgets until target measurements justify removal.
 
 Code Journal plan: `52bad3e9-054e-4fb5-8924-0a2c48ee4d1d`.
+
+- [ ] Collect exact-head CI timing evidence and reassess deadline overrides.
 
 ## Scope
 
@@ -150,3 +152,40 @@ Next, collect exact-head CI measurements for the five raised-budget SimpleXML
 fixtures and the wider family before removing deadlines or scheduling reservations.
 Profile the non-eval embedder-stack test and isolated-cache REPL tests separately.
 A reduction for opaque eval cannot by itself establish their budgets.
+
+## Independent embedder and REPL probes
+
+A separate public-API probe follows the embedder test's parser, conditional/name
+resolution, constant folding, checking and EIR lowering calls. It builds the nested
+literal on a 256 KiB thread and drops every deep value there, preserving the test's
+stack constraint. It contains no eval or internal-object operators.
+
+| Array nesting depth | Parse | Frontend | Type check | EIR lower | Drop |
+|---|---:|---:|---:|---:|---:|
+| 256 | 0.003 s | 0.032 s | 0.024 s | 1.14 s | 0.004 s |
+| 512 | 0.004 s | 0.005 s | 0.085 s | 9.56 s | 0.016 s |
+| 1,024 | 0.013 s | 0.009 s | 0.418 s | 94.32 s | 0.075 s |
+
+These measurements locate the separate cost in lowering, with steep depth growth.
+A debugger sample at depth 512 shows deep `PhpType` cloning in
+`array_literal_type_for_ir`, including preparation of the nullable-pointer probe,
+inside recursive literal inference and lowering. That identifies a candidate for
+separate optimization, not a quantified attribution. The bounded debugger driver
+did not complete its sampling sequence; the phase measurements above came from
+the successful independent run. The operator/catalog change does not address
+this input.
+
+An isolated REPL launch comparison used the pinned baseline and changed CLI, PHP
+8.5, identical bridge archives, and separate `XDG_CACHE_HOME` roots. Each submitted
+`21 * 2` and returned `int(42)`. A cold host launch took 49.59 s before and 45.90 s
+after; warm launches took 1.21 s and 1.05 s. The baseline runtime-object cache was
+already populated by a failed link attempt, while neither host executable existed.
+These are host-cache measurements, not fully cold toolchain measurements.
+
+REPL tests deliberately create independent project/cache roots. The integrity test
+also corrupts its cached executable to verify rebuilding, and the profile test
+builds separate hosts. Preserve those assertions instead of replacing them with
+one shared test cache. The ordinary non-XML catalog cost and linking need separate
+profiling if their cold-host deadlines remain tight in CI.
+
+Draft PR: https://github.com/illegalstudio/elephc/pull/2336, with `ci:macos`.
