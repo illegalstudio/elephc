@@ -42,6 +42,7 @@ use super::{
 };
 use crate::codegen::{CodegenIrError, Result};
 
+mod hash_objects;
 mod native_origins;
 
 const ITER_SOURCE_OFFSET_DELTA: usize = 0;
@@ -343,6 +344,9 @@ pub(super) fn lower_iter_current_value(
             }
             retain_current_indexed_value_if_unboxed(&mut ctx.emitter, &elem, &result_ty);
             box_current_indexed_value_if_needed(ctx, &elem, &result_ty)?;
+        }
+        IteratorSourceKind::Hash if matches!(result_ty, PhpType::Object(_)) => {
+            hash_objects::load_current_hash_object_value(ctx, offset, preserve_reference, promote_reference);
         }
         IteratorSourceKind::Hash => load_current_hash_call_value_as_mixed(ctx, offset, preserve_reference, promote_reference),
         IteratorSourceKind::DynamicIterable | IteratorSourceKind::DynamicMixed => {
