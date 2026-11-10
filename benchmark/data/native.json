@@ -3,7 +3,7 @@
   "suite": "native",
   "branch": "main",
   "sampling": "latest-per-UTC-day-and-platform",
-  "points": 176,
+  "points": 177,
   "series": [
     {
       "date": "2026-04-24",
@@ -23964,6 +23964,140 @@
           }
         }
       ]
+    },
+    {
+      "artifact_id": 13788746778,
+      "cases": [
+        {
+          "case": "array_sum",
+          "fixture_sha256": "cd5f78e52ebe065976e53310982085e4ac0a2e8ca6dbaedf48bde4a6ff258ec3",
+          "metadata": {},
+          "variants": {
+            "c": {
+              "detail": "3 runs",
+              "median_ms": 2.101374999995187,
+              "samples_ms": [
+                2.0027499999883958,
+                2.101374999995187,
+                2.2062080000040396
+              ],
+              "skipped": false
+            },
+            "elephc": {
+              "detail": "3 runs",
+              "median_ms": 2.9037909999942713,
+              "samples_ms": [
+                3.0455420000095046,
+                2.6144999999928586,
+                2.9037909999942713
+              ],
+              "skipped": false
+            },
+            "php": {
+              "detail": "3 runs",
+              "median_ms": 56.78787499999771,
+              "samples_ms": [
+                56.78787499999771,
+                54.469208000000435,
+                58.420375000011404
+              ],
+              "skipped": false
+            }
+          }
+        },
+        {
+          "case": "string_concat",
+          "fixture_sha256": "8eefa2984accdf0bdfb8f70f0feb7f18e1b1015dc42d175b7cea52e5c4abdfaf",
+          "metadata": {},
+          "variants": {
+            "c": {
+              "detail": "3 runs",
+              "median_ms": 2.8752089999954933,
+              "samples_ms": [
+                2.8517500000049267,
+                2.8752089999954933,
+                3.160042000004637
+              ],
+              "skipped": false
+            },
+            "elephc": {
+              "detail": "3 runs",
+              "median_ms": 2.0498749999973143,
+              "samples_ms": [
+                2.0654169999971828,
+                2.0498749999973143,
+                1.9970830000062278
+              ],
+              "skipped": false
+            },
+            "php": {
+              "detail": "3 runs",
+              "median_ms": 58.46395799999016,
+              "samples_ms": [
+                57.55204099999389,
+                59.09187500000712,
+                58.46395799999016
+              ],
+              "skipped": false
+            }
+          }
+        },
+        {
+          "case": "sum_loop",
+          "fixture_sha256": "f86fcb87f6a1fdbe99506038a7d8d3507d1fa7cfc8f9721311907ecc917a9986",
+          "metadata": {},
+          "variants": {
+            "c": {
+              "detail": "3 runs",
+              "median_ms": 2.190249999998173,
+              "samples_ms": [
+                2.190249999998173,
+                2.0458329999968328,
+                2.1969590000026074
+              ],
+              "skipped": false
+            },
+            "elephc": {
+              "detail": "3 runs",
+              "median_ms": 3.0500830000050883,
+              "samples_ms": [
+                2.9551249999997253,
+                3.1509589999956233,
+                3.0500830000050883
+              ],
+              "skipped": false
+            },
+            "php": {
+              "detail": "3 runs",
+              "median_ms": 58.79833299999859,
+              "samples_ms": [
+                62.00020800000061,
+                57.83291699999893,
+                58.79833299999859
+              ],
+              "skipped": false
+            }
+          }
+        }
+      ],
+      "commit": "ad5aa69318f29134159f8c874434e28afc5d496b",
+      "date": "2026-11-10",
+      "environment": {
+        "architecture": "arm64",
+        "cc": "Apple clang version 17.0.0 (clang-1700.0.13.5)",
+        "iterations": 3,
+        "measurement": "process-wall",
+        "os": "Darwin",
+        "php": "PHP 8.5.12 (cli) (built: Oct 19 2026 17:02:46) (NTS)",
+        "php_mode": "CLI; OPcache and tracing JIT enabled",
+        "runner": "macos-15",
+        "rust": "rustc 1.98.1 (48a229cea 2026-09-01)",
+        "warmup": 1
+      },
+      "measurement_timestamp": "2026-11-10T17:49:57Z",
+      "run_attempt": 1,
+      "run_id": 42865314987,
+      "timestamp": "2026-11-10T17:53:01Z"
     }
   ],
   "legacy_source": {
