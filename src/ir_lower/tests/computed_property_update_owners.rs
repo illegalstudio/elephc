@@ -233,8 +233,7 @@ guardedCompound($box); guardedIncrement($box); guardedExpression($box);
 }
 
 /// Computed updates validate and emit for scalar operands and concrete string getters.
-#[test]
-fn computed_property_update_storage_on_every_target() {
+fn verify_computed_property_update_storage(target: &str) {
     let source = r#"<?php
 class UpdateOwnerCounter {
     public int $number = 3;
@@ -271,26 +270,26 @@ echo json_encode($registry->weights);
 $xml = new SimpleXMLElement('<r><a>1</a></r>');
 $xml->a += 1;
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let numeric = module.functions.iter().find(|function| function.name == "updateOwnerNumericMask").unwrap();
-        let exercise = module.functions.iter().find(|function| function.name == "updateOwnerExercise").unwrap();
-        assert!(!exercise.instructions.iter().any(|inst| inst.op == crate::ir::Op::MethodCall
-            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
-                if module.data.strings[id.as_raw() as usize] == "__elephc_property_update")),
-            "{target}: a concrete ordinary receiver must not dispatch an XML update adapter\n{}",
-            crate::ir::print_function(exercise));
-        assert!(!numeric.instructions.iter().any(|inst| matches!(inst.op,
-            crate::ir::Op::InstanceOf | crate::ir::Op::PushCallOperandOwner)),
-            "{target}: scalar coercion must not gain native dispatch or operand owners\n{}",
-            crate::ir::print_function(numeric));
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-    }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let numeric = module.functions.iter().find(|function| function.name == "updateOwnerNumericMask").unwrap();
+    let exercise = module.functions.iter().find(|function| function.name == "updateOwnerExercise").unwrap();
+    assert!(!exercise.instructions.iter().any(|inst| inst.op == crate::ir::Op::MethodCall
+        && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+            if module.data.strings[id.as_raw() as usize] == "__elephc_property_update")),
+        "{target}: a concrete ordinary receiver must not dispatch an XML update adapter\n{}",
+        crate::ir::print_function(exercise));
+    assert!(!numeric.instructions.iter().any(|inst| matches!(inst.op,
+        crate::ir::Op::InstanceOf | crate::ir::Op::PushCallOperandOwner)),
+        "{target}: scalar coercion must not gain native dispatch or operand owners\n{}",
+        crate::ir::print_function(numeric));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
 }
+
+supported_target_cases!(computed_property_update_storage_on_every_target, verify_computed_property_update_storage);
 
 /// Erased receivers reach the existing declared-slot COW writer on every supported target.
 #[test]
@@ -314,8 +313,7 @@ fn erased_property_dimension_uses_declared_storage_on_every_target() {
 }
 
 /// Native XML candidates are excluded while ArrayAccess and buffer slots keep their typed writes.
-#[test]
-fn erased_property_dimension_eligibility_matches_typed_writers_on_every_target() {
+fn verify_erased_property_dimension_eligibility_matches_typed_writers(target: &str) {
     use crate::ir::{Immediate, Op};
     let source = r#"<?php
 class XmlDeclaredArrayWriteStorage extends SimpleXMLElement { public array $items = []; }
@@ -333,35 +331,34 @@ writeErasedDeclaredItems(new ObjectDeclaredWriteStorage());
 buffer<int> $values = buffer_new<int>(1);
 writeErasedDeclaredBuffer(new BufferDeclaredWriteStorage($values)); buffer_free($values);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let items = module.functions.iter().find(|function| function.name == "writeErasedDeclaredItems").unwrap();
-        assert!(!items.instructions.iter().any(|inst| inst.op == Op::MixedUnbox
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let items = module.functions.iter().find(|function| function.name == "writeErasedDeclaredItems").unwrap();
+    assert!(!items.instructions.iter().any(|inst| inst.op == Op::MixedUnbox
+        && inst.result.and_then(|value| items.value(value)).is_some_and(|value|
+            matches!(&value.php_type, crate::types::PhpType::Object(class)
+                if class == "XmlDeclaredArrayWriteStorage"))),
+        "{target}: native XML properties must not enter the ordinary writer");
+    let object_arm = items.blocks.iter().find(|block| block.instructions.iter().any(|id|
+        items.instruction(*id).is_some_and(|inst| inst.op == Op::PropGet
             && inst.result.and_then(|value| items.value(value)).is_some_and(|value|
-                matches!(&value.php_type, crate::types::PhpType::Object(class)
-                    if class == "XmlDeclaredArrayWriteStorage"))),
-            "{target}: native XML properties must not enter the ordinary writer");
-        let object_arm = items.blocks.iter().find(|block| block.instructions.iter().any(|id|
-            items.instruction(*id).is_some_and(|inst| inst.op == Op::PropGet
-                && inst.result.and_then(|value| items.value(value)).is_some_and(|value|
-                    matches!(&value.php_type, crate::types::PhpType::Object(class) if class == "ArrayObject")))))
-            .expect("declared ArrayObject write arm");
-        assert!(!object_arm.instructions.iter().any(|id| items.instruction(*id).is_some_and(|inst|
-            inst.op == Op::RuntimeCall && matches!(inst.immediate, Some(Immediate::Data(_))))),
-            "{target}: ArrayAccess writes must not use the stdClass-only property fallback");
-        let buffer = module.functions.iter().find(|function| function.name == "writeErasedDeclaredBuffer").unwrap();
-        assert!(buffer.instructions.iter().any(|inst| inst.op == Op::BufferSet), "{target}: typed buffer write");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{target}: {error:?}"));
-    }
+                matches!(&value.php_type, crate::types::PhpType::Object(class) if class == "ArrayObject")))))
+        .expect("declared ArrayObject write arm");
+    assert!(!object_arm.instructions.iter().any(|id| items.instruction(*id).is_some_and(|inst|
+        inst.op == Op::RuntimeCall && matches!(inst.immediate, Some(Immediate::Data(_))))),
+        "{target}: ArrayAccess writes must not use the stdClass-only property fallback");
+    let buffer = module.functions.iter().find(|function| function.name == "writeErasedDeclaredBuffer").unwrap();
+    assert!(buffer.instructions.iter().any(|inst| inst.op == Op::BufferSet), "{target}: typed buffer write");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{target}: {error:?}"));
 }
 
+supported_target_cases!(erased_property_dimension_eligibility_matches_typed_writers_on_every_target, verify_erased_property_dimension_eligibility_matches_typed_writers);
+
 /// Object arithmetic borrows an incdec working slot until overwrite and final cleanup.
-#[test]
-fn native_dimension_incdec_working_slot_has_one_owner_on_every_target() {
+fn verify_native_dimension_incdec_working_slot_has_one_owner(target: &str) {
     use crate::ir::{Immediate, LocalKind, Op, ValueDef};
     let source = r#"<?php
 function dimensionOwnerStep(SimpleXMLElement $xml): void { $xml[0]++; }
@@ -373,44 +370,44 @@ function staticDimensionOwnerStep(SimpleXMLElement $xml): mixed {
 }
 echo (string)staticDimensionOwnerStep(new SimpleXMLElement('<r>7</r>'));
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(
-            source, std::path::Path::new("main.php"), std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let function = module.functions.iter().find(|function| function.name == "dimensionOwnerStep").unwrap();
-        let call = function.instructions.iter().find(|inst| inst.op == Op::StaticMethodCall
-            && matches!(inst.immediate, Some(Immediate::Data(name))
-                if module.data.strings[name.as_raw() as usize] == "SimpleXMLElement::__elephc_add"))
-            .expect("native XML incdec must retain its object arithmetic branch");
-        let old = call.operands[0];
-        let ValueDef::Instruction { inst, .. } = function.value(old).unwrap().def else {
-            panic!("{target}: working operand must load its retained variable");
-        };
-        let load = function.instruction(inst).unwrap();
-        assert_eq!(load.op, Op::LoadLocal, "{target}: incdec working operand");
-        let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("{target}: working slot"); };
-        assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::PhpLocal,
-            "{target}: updating storage must not transfer on each load");
-        assert!(!function.instructions.iter().any(|inst| inst.op == Op::Release
-            && inst.operands.contains(&old)), "{target}: arithmetic must not consume the slot's old owner");
-        assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ReleaseLocalSlot
-            && inst.immediate == Some(Immediate::LocalSlot(slot))).count(), 2,
-            "{target}: overwrite retires the old owner and final cleanup retires the replacement");
-        let static_step = module.functions.iter().find(|function|
-            function.name == "staticDimensionOwnerStep").unwrap();
-        let methods: Vec<_> = static_step.instructions.iter().filter_map(|inst| {
-            if !matches!(inst.op, Op::MethodCall | Op::StaticMethodCall) { return None; }
-            let Some(Immediate::Data(name)) = inst.immediate else { return None; };
-            Some(module.data.strings[name.as_raw() as usize].as_str())
-        }).collect();
-        assert!(methods.iter().any(|name| name.ends_with("__elephc_dimension_select")),
-            "{target}: static postfix must use native write-context selection");
-        assert!(!methods.iter().any(|name| name.ends_with("__elephc_dimension_set")),
-            "{target}: static postfix must not write its arithmetic result into XML");
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    }
+    let module = super::lower_source_at_for_target(
+        source, std::path::Path::new("main.php"), std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let function = module.functions.iter().find(|function| function.name == "dimensionOwnerStep").unwrap();
+    let call = function.instructions.iter().find(|inst| inst.op == Op::StaticMethodCall
+        && matches!(inst.immediate, Some(Immediate::Data(name))
+            if module.data.strings[name.as_raw() as usize] == "SimpleXMLElement::__elephc_add"))
+        .expect("native XML incdec must retain its object arithmetic branch");
+    let old = call.operands[0];
+    let ValueDef::Instruction { inst, .. } = function.value(old).unwrap().def else {
+        panic!("{target}: working operand must load its retained variable");
+    };
+    let load = function.instruction(inst).unwrap();
+    assert_eq!(load.op, Op::LoadLocal, "{target}: incdec working operand");
+    let Some(Immediate::LocalSlot(slot)) = load.immediate else { panic!("{target}: working slot"); };
+    assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::PhpLocal,
+        "{target}: updating storage must not transfer on each load");
+    assert!(!function.instructions.iter().any(|inst| inst.op == Op::Release
+        && inst.operands.contains(&old)), "{target}: arithmetic must not consume the slot's old owner");
+    assert_eq!(function.instructions.iter().filter(|inst| inst.op == Op::ReleaseLocalSlot
+        && inst.immediate == Some(Immediate::LocalSlot(slot))).count(), 2,
+        "{target}: overwrite retires the old owner and final cleanup retires the replacement");
+    let static_step = module.functions.iter().find(|function|
+        function.name == "staticDimensionOwnerStep").unwrap();
+    let methods: Vec<_> = static_step.instructions.iter().filter_map(|inst| {
+        if !matches!(inst.op, Op::MethodCall | Op::StaticMethodCall) { return None; }
+        let Some(Immediate::Data(name)) = inst.immediate else { return None; };
+        Some(module.data.strings[name.as_raw() as usize].as_str())
+    }).collect();
+    assert!(methods.iter().any(|name| name.ends_with("__elephc_dimension_select")),
+        "{target}: static postfix must use native write-context selection");
+    assert!(!methods.iter().any(|name| name.ends_with("__elephc_dimension_set")),
+        "{target}: static postfix must not write its arithmetic result into XML");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
+
+supported_target_cases!(native_dimension_incdec_working_slot_has_one_owner_on_every_target, verify_native_dimension_incdec_working_slot_has_one_owner);
 
 /// Static Mixed indexed writes publish an independent box before runtime mutation.
 #[test]

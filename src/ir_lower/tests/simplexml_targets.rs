@@ -74,67 +74,65 @@ $without = __elephc_new_without_constructor($argc > 0 ? 'EvalConstructorlessTarg
 supported_target_cases!(simplexml_constructorless_factories_probe_active_eval_classes, verify_simplexml_constructorless_factories_probe_active_eval_classes);
 
 /// Nullable local returns check null before promoting compatible typed reference payloads.
-#[test]
-fn native_nullable_object_reference_returns_preserve_the_named_cell_on_every_target() {
+fn verify_native_nullable_object_reference_returns_preserve_the_named_cell(target: &str) {
     let source = include_str!("../../../tests/fixtures/simplexml/reference_object_boundaries.php");
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
-            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        for name in ["referenceReturnBoundaryXml", "presentReferenceBoundaryXml", "finallyReferenceBoundaryXml", "nullFinallyReferenceBoundaryXml"] {
-            let function = module.functions.iter().find(|function| function.name == name).unwrap();
-            let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
-            let promotion = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PromoteLocalRefCell
-                && matches!(&inst.result_php_type, crate::types::PhpType::Object(class) if class == "SimpleXMLElement"))
-                .unwrap_or_else(|| panic!("{target}: {name} must promote an object payload rather than its nullable box"));
-            assert!(guard < promotion, "{target}: {name} must reject null before changing representation");
-            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::AliasLocalRefCell),
-                "{target}: {name} must keep the source name attached for finally writes");
-            if name.contains("Finally") || name.starts_with("finally") {
-                let writes = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::StoreRefCell)
-                    .collect::<Vec<_>>();
-                assert!(!writes.is_empty(), "{target}: {name} must update the returned cell");
-                for write in writes {
-                    assert!(matches!(write.result_php_type,
-                        crate::types::PhpType::Mixed | crate::types::PhpType::Object(_)),
-                        "{target}: {name} must preserve the promoted object or fallback boxed ABI");
-                    assert_eq!(function.value(write.operands[0]).unwrap().php_type,
-                        write.result_php_type,
-                        "{target}: {name} must publish the replacement in the cell's physical ABI");
-                }
-                assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::InstanceOf),
-                    "{target}: {name} must check the replacement before unboxing");
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    for name in ["referenceReturnBoundaryXml", "presentReferenceBoundaryXml", "finallyReferenceBoundaryXml", "nullFinallyReferenceBoundaryXml"] {
+        let function = module.functions.iter().find(|function| function.name == name).unwrap();
+        let guard = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::IsNull).unwrap();
+        let promotion = function.instructions.iter().position(|inst| inst.op == crate::ir::Op::PromoteLocalRefCell
+            && matches!(&inst.result_php_type, crate::types::PhpType::Object(class) if class == "SimpleXMLElement"))
+            .unwrap_or_else(|| panic!("{target}: {name} must promote an object payload rather than its nullable box"));
+        assert!(guard < promotion, "{target}: {name} must reject null before changing representation");
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::AliasLocalRefCell),
+            "{target}: {name} must keep the source name attached for finally writes");
+        if name.contains("Finally") || name.starts_with("finally") {
+            let writes = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::StoreRefCell)
+                .collect::<Vec<_>>();
+            assert!(!writes.is_empty(), "{target}: {name} must update the returned cell");
+            for write in writes {
+                assert!(matches!(write.result_php_type,
+                    crate::types::PhpType::Mixed | crate::types::PhpType::Object(_)),
+                    "{target}: {name} must preserve the promoted object or fallback boxed ABI");
+                assert_eq!(function.value(write.operands[0]).unwrap().php_type,
+                    write.result_php_type,
+                    "{target}: {name} must publish the replacement in the cell's physical ABI");
             }
+            assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::InstanceOf),
+                "{target}: {name} must check the replacement before unboxing");
         }
-        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(assembly.contains("referenceReturnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned"),
-            "{target}: missing native reference-return boundary diagnostic");
     }
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    assert!(assembly.contains("referenceReturnBoundaryXml(): Return value must be of type SimpleXMLElement, null returned"),
+        "{target}: missing native reference-return boundary diagnostic");
 }
 
+supported_target_cases!(native_nullable_object_reference_returns_preserve_the_named_cell_on_every_target, verify_native_nullable_object_reference_returns_preserve_the_named_cell);
+
 /// Nullable ordinary DOM values erase their class hint in guarded native boolean branches.
-#[test]
-fn ordinary_nullable_dom_truthiness_keeps_native_adapter_receivers_valid_on_every_target() {
+fn verify_ordinary_nullable_dom_truthiness_keeps_native_adapter_receivers_valid(target: &str) {
     let source = r#"<?php
 function ordinaryNullableDomTruthy(?DOMNode $node): bool { return (bool)$node; }
 $document = new DOMDocument();
 echo ordinaryNullableDomTruthy($document), ordinaryNullableDomTruthy(null);
 $xml = new SimpleXMLElement('<r/>');
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
-            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        let function = module.functions.iter().find(|function| function.name == "ordinaryNullableDomTruthy").unwrap();
-        let adapters = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::MethodCall
-            && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
-                if module.data.strings[id.as_raw() as usize] == "__elephc_bool")).collect::<Vec<_>>();
-        assert!(!adapters.is_empty(), "{target}: the native boolean branch must remain covered");
-        for adapter in adapters {
-            assert_eq!(function.value(adapter.operands[0]).unwrap().php_type, crate::types::PhpType::Mixed,
-                "{target}: the boxed native branch must not resolve the DOMNode method table");
-        }
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let function = module.functions.iter().find(|function| function.name == "ordinaryNullableDomTruthy").unwrap();
+    let adapters = function.instructions.iter().filter(|inst| inst.op == crate::ir::Op::MethodCall
+        && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+            if module.data.strings[id.as_raw() as usize] == "__elephc_bool")).collect::<Vec<_>>();
+    assert!(!adapters.is_empty(), "{target}: the native boolean branch must remain covered");
+    for adapter in adapters {
+        assert_eq!(function.value(adapter.operands[0]).unwrap().php_type, crate::types::PhpType::Mixed,
+            "{target}: the boxed native branch must not resolve the DOMNode method table");
     }
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
+
+supported_target_cases!(ordinary_nullable_dom_truthiness_keeps_native_adapter_receivers_valid_on_every_target, verify_ordinary_nullable_dom_truthiness_keeps_native_adapter_receivers_valid);
 
 /// Nullable native children bypass public ArrayAccess methods on every supported target.
 fn verify_native_xml_child_reads_bypass_public_offset_get_on_every_target(target: &str) {

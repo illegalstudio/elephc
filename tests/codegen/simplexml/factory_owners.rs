@@ -10,9 +10,10 @@
 
 use crate::support::*;
 
-/// Factory errors release native views, while abstract wrappers retain their class in both modes.
-#[test]
-fn test_simplexml_constructorless_factory_owners_bundle() {
+/// Factory errors release native views, while abstract wrappers retain their class.
+///
+/// Each optimizer mode compiles the whole eval-carrying program, so the caller picks one.
+fn assert_constructorless_factory_owners(optimized: bool) {
     if skip_without_xml_native("test_simplexml_constructorless_factory_owners_bundle") { return; }
     let declarations = r#"
 interface NativeFactoryAllocationMarker { public function marker(int $value): string; }
@@ -159,8 +160,20 @@ try {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
         output.stdout
     };
-    assert_eq!(run(), expected);
-    assert_eq!(without_ir_opt(run), expected);
+    let stdout = if optimized { run() } else { without_ir_opt(run) };
+    assert_eq!(stdout, expected);
+}
+
+/// The optimized build releases native views and keeps abstract wrapper classes.
+#[test]
+fn test_simplexml_constructorless_factory_owners_bundle() {
+    assert_constructorless_factory_owners(true);
+}
+
+/// The unoptimized build releases native views and keeps abstract wrapper classes.
+#[test]
+fn test_simplexml_constructorless_factory_owners_unoptimized_bundle() {
+    assert_constructorless_factory_owners(false);
 }
 
 /// A public declaring-class reflector keeps its abstract native target refusal in both modes.
