@@ -64,6 +64,30 @@ threads-required = "num-test-threads"
 filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_constructorless_factories) or test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_factories_after_eval_returns) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval) or test(=codegen::simplexml::factory_owners::test_simplexml_constructorless_factory_owners_bundle) or test(=codegen::simplexml::factory_owners::test_simplexml_constructorless_factory_owners_unoptimized_bundle)'
 threads-required = "num-test-threads"
 
+# These five SimpleXML fixtures compile ONE catalog-sized program each, so they cannot be split
+# further. Green merge-queue runs measured them at 270-357s against the 360s bundle budget
+# (one such compile emits about 276 MB of assembly and takes about 210s on a loaded macOS
+# runner), and a slower runner evicted queue entries on that margin alone. Ten periods keep a
+# hang bounded; the fix for the cost itself is tracked in Code Journal plan 52bad3e9 (eval-catalog
+# compile time). This must stay ahead of the bundle budget below: the first match wins.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+# This probe lowers one deeply nested program on a deliberately small stack: a single
+# operation that reached 152s of its 180s budget on a loaded x86_64 runner.
+[[profile.default.overrides]]
+filter = 'binary(embedder_stack_tests) and test(=eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack)'
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.ci.overrides]]
+filter = 'binary(embedder_stack_tests) and test(=eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack)'
+slow-timeout = { period = "60s", terminate-after = 5 }
+
 # A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as
 # one: one catalog compile per optimizer mode instead of one per fixture, but the run itself
 # still executes every case under heap diagnostics, so the single test runs longer than any of
