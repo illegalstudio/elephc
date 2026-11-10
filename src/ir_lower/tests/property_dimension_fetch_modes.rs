@@ -32,8 +32,7 @@ initializeNestedAppendArray(new NestedAppendUninitializedArray());
 }
 
 /// Concrete XML parents never create a raw-object call to an array-only writable-cell helper.
-#[test]
-fn nested_native_object_parent_selection_emits_on_every_target() {
+fn verify_nested_native_object_parent_selection_emits(name: &str) {
     let source = r#"<?php
 class NativeParentShapes { public mixed $items; }
 function opaqueParentShapes(mixed $value): mixed { return $value; }
@@ -44,13 +43,13 @@ $holder = new NativeParentShapes(); $holder->items = [[1]];
 $holder->items[0][0]++;
 $cells = opaqueParentShapes([[1]]); $cells[0][0]++;
 "#;
-    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
-            std::path::Path::new("."), crate::codegen::platform::Target::parse(name).unwrap());
-        crate::codegen::generate_user_asm_from_ir(&module, false, false)
-            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-    }
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(name).unwrap());
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
 }
+
+supported_target_cases!(nested_native_object_parent_selection_emits_on_every_target, verify_nested_native_object_parent_selection_emits);
 
 /// Concrete write fetches probe initialization without acquiring an impossible null payload.
 #[test]

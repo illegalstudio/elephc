@@ -87,8 +87,7 @@ ordinaryArrayAliasLayout($argc > 0);
 }
 
 /// Every backend checks native object snapshots and can detach their explicit lease on unset.
-#[test]
-fn dynamic_eval_object_aliases_guard_tags_and_classes_on_every_target() {
+fn verify_dynamic_eval_object_aliases_guard_tags_and_classes(target: &str) {
     let source = r#"<?php
 class EvalObjectAliasLayout {
     public stdClass $node;
@@ -103,20 +102,19 @@ function evalObjectAliasLayout(bool $run): void {
 }
 evalObjectAliasLayout($argc > 0);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
-            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        for symbol in ["__elephc_eval_scope_native_type_v1", "eval_reload_invalid_heap_value",
-            "__rt_mixed_instanceof", "__rt_reference_cell_release", "eval_unset_hidden_owner"] {
-            assert!(assembly.contains(symbol), "{target}: missing native reload boundary {symbol}");
-        }
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    for symbol in ["__elephc_eval_scope_native_type_v1", "eval_reload_invalid_heap_value",
+        "__rt_mixed_instanceof", "__rt_reference_cell_release", "eval_unset_hidden_owner"] {
+        assert!(assembly.contains(symbol), "{target}: missing native reload boundary {symbol}");
     }
 }
 
+supported_target_cases!(dynamic_eval_object_aliases_guard_tags_and_classes_on_every_target, verify_dynamic_eval_object_aliases_guard_tags_and_classes);
+
 /// Whole local array aliases agree on boxed storage before eval can normalize their elements.
-#[test]
-fn dynamic_eval_array_aliases_use_boxed_reference_payloads_on_every_target() {
+fn verify_dynamic_eval_array_aliases_use_boxed_reference_payloads(target: &str) {
     let source = r#"<?php
 function evalArrayAliasLayout(bool $run): void {
     $items = [1, 2];
@@ -127,22 +125,21 @@ function evalArrayAliasLayout(bool $run): void {
 }
 evalArrayAliasLayout($argc > 0);
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
-            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        let function = module.functions.iter().find(|function| function.name == "evalArrayAliasLayout").unwrap();
-        for name in ["items", "alias"] {
-            let local = function.locals.iter().find(|local| local.name.as_deref() == Some(name)).unwrap();
-            assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Mixed,
-                "{target}: {name} must retain the shared boxed payload shape");
-        }
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let function = module.functions.iter().find(|function| function.name == "evalArrayAliasLayout").unwrap();
+    for name in ["items", "alias"] {
+        let local = function.locals.iter().find(|local| local.name.as_deref() == Some(name)).unwrap();
+        assert_eq!(local.php_type.codegen_repr(), crate::types::PhpType::Mixed,
+            "{target}: {name} must retain the shared boxed payload shape");
     }
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
 
+supported_target_cases!(dynamic_eval_array_aliases_use_boxed_reference_payloads_on_every_target, verify_dynamic_eval_array_aliases_use_boxed_reference_payloads);
+
 /// An opaque eval barrier preserves string and scalar cells shared with native properties.
-#[test]
-fn dynamic_eval_keeps_native_reference_payload_layouts_on_every_target() {
+fn verify_dynamic_eval_keeps_native_reference_payload_layouts(target: &str) {
     let source = r#"<?php
 class EvalReferenceLayout {
     public string $text = 'before';
@@ -163,28 +160,27 @@ $source = $argc > 0 ? '$box->text = "after"; $number = 2; $weight = 2.5; $maybe 
 eval($source);
 echo $text, $number, $weight, $maybe;
 "#;
-    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
-            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
-        let main = module.functions.iter().find(|function| function.name == "main").unwrap();
-        for (name, ty) in [("text", crate::types::PhpType::Str),
-            ("number", crate::types::PhpType::Int), ("weight", crate::types::PhpType::Float),
-            ("maybe", crate::types::PhpType::Union(vec![crate::types::PhpType::Int, crate::types::PhpType::Void]).codegen_repr())] {
-            let local = main.locals.iter().find(|local| local.name.as_deref() == Some(name)).unwrap();
-            assert_eq!(local.php_type.codegen_repr(), ty, "{target}: {name} lost its shared cell layout");
-            let owner = local.ref_cell_owner.expect("native alias needs an explicit lease for eval unset");
-            assert_eq!(main.locals[owner.as_raw() as usize].kind, crate::ir::LocalKind::RefCell,
-                "{target}: {name} must retire its own lease when eval detaches it");
-        }
-        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert!(assembly.contains("__rt_reference_cell_release"), "{target}: missing detached lease retirement");
-        assert!(assembly.contains("eval_reload_nullable_int_null"), "{target}: missing nullable scalar tag guard");
+    let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+        std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+    let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+    for (name, ty) in [("text", crate::types::PhpType::Str),
+        ("number", crate::types::PhpType::Int), ("weight", crate::types::PhpType::Float),
+        ("maybe", crate::types::PhpType::Union(vec![crate::types::PhpType::Int, crate::types::PhpType::Void]).codegen_repr())] {
+        let local = main.locals.iter().find(|local| local.name.as_deref() == Some(name)).unwrap();
+        assert_eq!(local.php_type.codegen_repr(), ty, "{target}: {name} lost its shared cell layout");
+        let owner = local.ref_cell_owner.expect("native alias needs an explicit lease for eval unset");
+        assert_eq!(main.locals[owner.as_raw() as usize].kind, crate::ir::LocalKind::RefCell,
+            "{target}: {name} must retire its own lease when eval detaches it");
     }
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    assert!(assembly.contains("__rt_reference_cell_release"), "{target}: missing detached lease retirement");
+    assert!(assembly.contains("eval_reload_nullable_int_null"), "{target}: missing nullable scalar tag guard");
 }
 
+supported_target_cases!(dynamic_eval_keeps_native_reference_payload_layouts_on_every_target, verify_dynamic_eval_keeps_native_reference_payload_layouts);
+
 /// A final native-alias unset preserves the established payload ABI for earlier eval barriers.
-#[test]
-fn dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory_on_every_target() {
+fn verify_dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory(target: &str) {
     let source = r#"<?php
 class EvalUnsetReferenceLayout {
     public int $number = 1;
@@ -197,38 +193,32 @@ eval($source);
 echo $number;
 unset($number, $box, $source);
 "#;
-    for target in [
-        "macos-aarch64",
-        "ios-arm64",
-        "ios-sim-arm64",
-        "linux-aarch64",
-        "linux-x86_64",
-    ] {
-        let module = super::lower_source_at_for_target(
-            source,
-            std::path::Path::new("main.php"),
-            std::path::Path::new("."),
-            crate::codegen::platform::Target::parse(target).unwrap(),
-        );
-        let main = module
-            .functions
-            .iter()
-            .find(|function| function.name == "main")
-            .unwrap();
-        let number = main
-            .locals
-            .iter()
-            .find(|local| local.name.as_deref() == Some("number"))
-            .unwrap();
-        assert_eq!(
-            number.php_type.codegen_repr(),
-            crate::types::PhpType::Int,
-            "{target}: final unset must preserve the native reference payload ABI"
-        );
-        assert!(
-            number.ref_cell_owner.is_some(),
-            "{target}: the native alias must retain its explicit lease metadata"
-        );
-        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-    }
+    let module = super::lower_source_at_for_target(
+        source,
+        std::path::Path::new("main.php"),
+        std::path::Path::new("."),
+        crate::codegen::platform::Target::parse(target).unwrap(),
+    );
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let number = main
+        .locals
+        .iter()
+        .find(|local| local.name.as_deref() == Some("number"))
+        .unwrap();
+    assert_eq!(
+        number.php_type.codegen_repr(),
+        crate::types::PhpType::Int,
+        "{target}: final unset must preserve the native reference payload ABI"
+    );
+    assert!(
+        number.ref_cell_owner.is_some(),
+        "{target}: the native alias must retain its explicit lease metadata"
+    );
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
 }
+
+supported_target_cases!(dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory_on_every_target, verify_dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory);

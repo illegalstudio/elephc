@@ -161,14 +161,14 @@ null-handler|after-null
     assert!(failures.is_empty(), "{}\nDebug composite assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &["_main".into()]));
 }
 
-/// Throwing debug hooks bypass user handlers and remain fatal in AOT and dynamic eval.
-#[test]
-fn test_simplexml_native_debug_hook_exception_is_fatal_bundle() {
+/// Throwing debug hooks bypass user handlers and remain fatal.
+///
+/// The AOT and opaque-eval programs each compile on their own, so the caller picks one.
+fn assert_native_debug_hook_exception_is_fatal(opaque_eval: bool) {
     if skip_without_xml_native("test_simplexml_native_debug_hook_exception_is_fatal_bundle") { return; }
-    for opaque_eval in [false, true] {
-        let error_class = if opaque_eval { "EvalXmlDebugError" } else { "RuntimeException" };
-        let error_declaration = if opaque_eval { "class EvalXmlDebugError extends RuntimeException {}" } else { "" };
-        let body = format!(r#"{error_declaration}
+    let error_class = if opaque_eval { "EvalXmlDebugError" } else { "RuntimeException" };
+    let error_declaration = if opaque_eval { "class EvalXmlDebugError extends RuntimeException {}" } else { "" };
+    let body = format!(r#"{error_declaration}
 class ThrowingXmlDebug extends SimpleXMLElement {{
     public function __debugInfo(): ?array {{ throw new {error_class}('debug'); }}
 }}
@@ -179,19 +179,30 @@ try {{
 }} catch (Throwable $error) {{ echo 'caught-hook|'; }}
 echo 'after-hook|';
 "#);
-        let source = if opaque_eval {
-            let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
-            format!("<?php $anchor = new SimpleXMLElement('<r/>'); $source = $argc > 0 ? '{quoted}' : ''; eval($source);")
-        } else { format!("<?php {body}") };
-        let runs = compile_and_run_capture_per_argv(&source, &[&[], &["x"]]);
-        for (operation, out) in ["print_r", "var_dump"].into_iter().zip(runs) {
-            assert!(!out.success, "{operation} eval={opaque_eval}");
-            assert!(!out.stdout.contains("unexpected-handler|") && !out.stdout.contains("caught-hook|") && !out.stdout.contains("after-hook|"), "{}", out.stdout);
-            assert!(out.stderr.contains(&format!("Warning: Uncaught {error_class}: debug")), "{}", out.stderr);
-            assert!(out.stderr.contains("\n  thrown in ") && out.stderr.contains(" on line "), "{}", out.stderr);
-            assert!(out.stderr.contains("__debuginfo() must return an array"), "{}", out.stderr);
-        }
+    let source = if opaque_eval {
+        let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+        format!("<?php $anchor = new SimpleXMLElement('<r/>'); $source = $argc > 0 ? '{quoted}' : ''; eval($source);")
+    } else { format!("<?php {body}") };
+    let runs = compile_and_run_capture_per_argv(&source, &[&[], &["x"]]);
+    for (operation, out) in ["print_r", "var_dump"].into_iter().zip(runs) {
+        assert!(!out.success, "{operation} eval={opaque_eval}");
+        assert!(!out.stdout.contains("unexpected-handler|") && !out.stdout.contains("caught-hook|") && !out.stdout.contains("after-hook|"), "{}", out.stdout);
+        assert!(out.stderr.contains(&format!("Warning: Uncaught {error_class}: debug")), "{}", out.stderr);
+        assert!(out.stderr.contains("\n  thrown in ") && out.stderr.contains(" on line "), "{}", out.stderr);
+        assert!(out.stderr.contains("__debuginfo() must return an array"), "{}", out.stderr);
     }
+}
+
+/// A throwing debug hook stays fatal in the AOT program.
+#[test]
+fn test_simplexml_native_debug_hook_exception_is_fatal_bundle() {
+    assert_native_debug_hook_exception_is_fatal(false);
+}
+
+/// A throwing debug hook stays fatal in the opaque-eval program.
+#[test]
+fn test_simplexml_native_debug_hook_exception_is_fatal_eval_bundle() {
+    assert_native_debug_hook_exception_is_fatal(true);
 }
 
 /// Classes declared inside opaque eval use their own debug hook and diagnostic class name.
