@@ -30,6 +30,9 @@
 //!   that copy has no tag tests and continues a promoted local as a raw float.
 //! - A local is rewritten only when one of its updates sits in a loop that has no sync
 //!   for it. Otherwise the box allocation would only move from the update to the read.
+//! - Each plan is tried on a copy of the function. It is dropped when it would cost
+//!   another local the frame cell codegen gives it, because that proof needs a read and
+//!   its user in one block and this rewrite splits blocks.
 
 use std::collections::{HashMap, HashSet};
 
@@ -41,7 +44,9 @@ use crate::types::PhpType;
 
 use super::driver::IrPass;
 use super::loops::compute_loops;
-use super::raw_promotable_loop::{eligible, emit, integer_op, load_mixed, mixed_local, release_slot};
+use super::raw_promotable_loop::{
+    eligible, emit, frame_cells, integer_op, load_mixed, mixed_local, release_slot,
+};
 
 /// Gives overflow-promotable accumulators a raw integer companion in general loops.
 pub struct LazyBoxedAccumulator;
@@ -66,10 +71,35 @@ impl IrPass for LazyBoxedAccumulator {
             return false;
         }
         let plans = analyze(function);
-        for plan in &plans {
-            apply(function, plan);
+        if plans.is_empty() {
+            return false;
         }
-        !plans.is_empty()
+        // Each plan is tried on a copy first: it must not cost another local its frame cell.
+        let cells = frame_cells(function, data);
+        let mut slots = HashSet::new();
+        let mut values = HashSet::new();
+        let mut changed = false;
+        for plan in &plans {
+            let mut trial = function.clone();
+            apply(&mut trial, plan);
+            slots.insert(plan.slot);
+            let results: Vec<ValueId> = plan
+                .sites
+                .iter()
+                .filter_map(|site| function.instruction(site.binop).and_then(|inst| inst.result))
+                .collect();
+            values.extend(results.iter().copied());
+            if cells.kept_by(&frame_cells(&trial, data), &slots, &values) {
+                *function = trial;
+                changed = true;
+            } else {
+                slots.remove(&plan.slot);
+                for value in results {
+                    values.remove(&value);
+                }
+            }
+        }
+        changed
     }
 }
 
@@ -172,7 +202,7 @@ fn index(function: &Function) -> Index {
 }
 
 /// Returns the local slots an instruction names in its immediate.
-fn slots_of(function: &Function, id: InstId) -> Vec<LocalSlotId> {
+pub(super) fn slots_of(function: &Function, id: InstId) -> Vec<LocalSlotId> {
     match function.instructions[id.as_raw() as usize].immediate.as_ref() {
         Some(Immediate::LocalSlot(slot)) => vec![*slot],
         Some(Immediate::LocalSlotPair { first, second }) => vec![*first, *second],

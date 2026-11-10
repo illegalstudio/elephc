@@ -212,7 +212,7 @@ var_dump(later($argc));
 }
 
 /// Five mixed accumulators exceed the loop copy's size limit. The lazy accumulator pass
-/// takes them instead, so the loop still tests overflow with fused branches.
+/// takes the ones it can move without costing another local its frame cell.
 #[test]
 fn test_raw_promotable_five_updates_fall_back_to_lazy_accumulators() {
     let source = r#"<?php
@@ -239,8 +239,8 @@ echo total(3 + $argc);
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "30");
     assert!(
-        asm.matches(FUSED_OVERFLOW_BRANCH).count() >= 5,
-        "expected one fused overflow branch per accumulator:\n{asm}"
+        asm.contains(FUSED_OVERFLOW_BRANCH) && !asm.contains("rawint."),
+        "expected lazy accumulators and no loop copy:\n{asm}"
     );
     assert!(
         output.stderr.contains("HEAP DEBUG: leak summary: clean"),

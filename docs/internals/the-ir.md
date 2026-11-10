@@ -1793,6 +1793,15 @@ it. A local read on every iteration would be boxed again each time, so it stays 
 A function that runs literal `eval` code is skipped, because the fragment reads locals by
 name and no instruction would trigger the sync.
 
+Both loop passes defer to codegen's frame-local numeric cells. That proof needs a read
+and its user in one block, and both rewrites split blocks, so a rewrite could send
+another local back to heap boxes. Each rewrite is therefore tried on a copy of the
+function, and `stack_numeric::FrameCells` is compared before and after, with the
+ownership finalizer applied to both. The lazy pass may replace the cell of the local it
+rewrites. The loop copy may replace the cells of the mixed loop it keeps as a fallback,
+and the cell of an updated local that no other loop names. Any other lost cell rejects
+that rewrite.
+
 ### Boxed Numeric Chain Fusion
 
 `src/ir_passes/checked_numeric_chain.rs` fuses compatible checked arithmetic

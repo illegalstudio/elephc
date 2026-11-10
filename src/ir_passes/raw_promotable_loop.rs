@@ -28,6 +28,7 @@
 //!   integer. A local becomes a float only when one of its own updates produced a float.
 //! - The fast path reloads a carried local where the update runs. A read that the mixed
 //!   loop takes on the other side of that local's store (`$sum + $i++`) keeps the loop mixed.
+//! - A copy that would cost a local used by another loop its codegen frame cell is not made.
 //! - The rewrite is target-neutral. Codegen fuses each integer overflow test into one branch.
 
 use std::cell::RefCell;
@@ -38,6 +39,7 @@ use crate::ir::{
     LocalKind,
     LocalSlotId, MixedNumericOp, Op, Ownership, PhpTypePredicate, Terminator, ValueDef, ValueId,
 };
+use crate::codegen::stack_numeric::FrameCells;
 use crate::types::PhpType;
 
 use super::dominance::DominanceInfo;
@@ -73,7 +75,7 @@ impl IrPass for RawPromotableLoop {
         let mut changed = false;
         // Each rewrite adds blocks, so loops are found again before the next one. The
         // eligibility limits on function size end the search.
-        while eligible(function, data) && rewrite_one(function) {
+        while eligible(function, data) && rewrite_one(function, data) {
             changed = true;
         }
         changed
@@ -81,9 +83,10 @@ impl IrPass for RawPromotableLoop {
 }
 
 /// Copies the first innermost loop that matches. Returns false when none does.
-fn rewrite_one(function: &mut Function) -> bool {
+fn rewrite_one(function: &mut Function, data: &mut DataPool) -> bool {
     let dominance = super::dominance::compute_dominance(function);
     let loops = compute_loops(function, &dominance);
+    let cells = frame_cells(function, data);
     let mut order: Vec<_> = loops.loops().iter().collect();
     order.sort_by_key(|lp| std::cmp::Reverse(lp.depth));
     for lp in order {
@@ -93,10 +96,63 @@ fn rewrite_one(function: &mut Function) -> bool {
         let Some(plan) = analyze(function, lp, &dominance) else {
             continue;
         };
-        apply(function, &plan);
+        // The copy must not cost another loop of the function its frame cells.
+        let (slots, values) = expendable_cells(function, &loops, lp, &plan);
+        let mut trial = function.clone();
+        apply(&mut trial, &plan);
+        if !cells.kept_by(&frame_cells(&trial, data), &slots, &values) {
+            continue;
+        }
+        *function = trial;
         return true;
     }
     false
+}
+
+/// Returns the frame cells the copy of `lp` may give up.
+///
+/// The mixed loop only runs after an overflow, so its own results may leave their cells.
+/// An updated local may leave its cell when no other loop names it. A local that another
+/// loop also uses must keep it, or that loop would pay a heap box on every iteration.
+fn expendable_cells(
+    function: &Function,
+    loops: &super::loops::LoopInfo,
+    lp: &NaturalLoop,
+    plan: &Plan,
+) -> (HashSet<LocalSlotId>, HashSet<ValueId>) {
+    let mut slots: HashSet<LocalSlotId> = plan.updates.iter().map(|update| update.slot).collect();
+    let mut values = HashSet::new();
+    for block in &function.blocks {
+        let inside = lp.contains(block.id);
+        let other_loop = !inside && loops.innermost_loop(block.id).is_some();
+        for id in &block.instructions {
+            if inside {
+                values.extend(function.instruction(*id).and_then(|inst| inst.result));
+            }
+            if other_loop {
+                for slot in super::lazy_boxed_accumulator::slots_of(function, *id) {
+                    slots.remove(&slot);
+                }
+            }
+        }
+    }
+    (slots, values)
+}
+
+/// Runs codegen's frame-cell proof on `function` as codegen will see it.
+///
+/// The ownership finalizer runs first on a copy, because the proof only accepts a numeric
+/// result once its assignment copy is gone. Codegen keeps proven numeric locals in frame
+/// cells, and the proof needs a read and its user in one block. A rewrite that splits them
+/// apart sends that local back to heap boxes, so both loop passes compare this proof
+/// before and after each rewrite.
+pub(super) fn frame_cells(function: &Function, data: &mut DataPool) -> FrameCells {
+    let mut copy = function.clone();
+    let finalizer = super::fresh_mixed_transfer::FreshMixedTransfer;
+    if finalizer.is_applicable(&copy) {
+        finalizer.run(&mut copy, data);
+    }
+    FrameCells::of(&copy)
 }
 
 /// Rejects scopes whose locals can be observed or unwound outside this proof.
