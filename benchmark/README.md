@@ -24,8 +24,9 @@ beforehand, as CI does. `--compiler PATH` selects an explicitly managed compiler
 without building. Neither mode rewrites the selected compiler.
 
 `--require-baselines` fails before building if PHP or a C compiler needed by the
-selected cases is missing. CI enables this flag and explicitly installs PHP 8.5
-without coverage drivers. Local runs can still skip unavailable comparison tools.
+selected cases is missing, or if PHP cannot run with its JIT on. CI enables this
+flag and explicitly installs PHP 8.5 without coverage drivers. Local runs can
+still skip unavailable comparison tools.
 
 PHP, elephc, and C are measured again in every CI run. Each case gets one warmup
 and three measured executions in CI; PHP results are not cached between runs.
@@ -36,11 +37,40 @@ execution must produce `expected.txt` exactly. Temporary sources and binaries
 are removed on success and failure. Use `--timeout SECONDS` to bound individual
 compilation/execution commands (default: 120 seconds).
 
-Missing PHP or C tools appear as skipped baselines, never zero times. PHP CLI
-OPcache and JIT are explicitly disabled for new measurements. The compiler,
-Rust, C, PHP, runner, architecture, iterations, warmup, and fixture hash are
-recorded with available raw samples. A result's commit identifies the measured
-source, not the later statistics publication commit.
+Missing PHP or C tools appear as skipped baselines, never zero times. The
+compiler, Rust, C, PHP version and mode, runner, architecture, iterations,
+warmup, and fixture hash are recorded with available raw samples. A result's
+commit identifies the measured source, not the later statistics publication
+commit.
+
+### PHP configuration
+
+PHP baselines run with OPcache and the tracing JIT, the configuration PHP is
+deployed with for speed. Every PHP execution receives these flags, which
+override the host `php.ini`:
+
+```bash
+php -d opcache.enable=1 -d opcache.enable_cli=1 -d opcache.jit=tracing \
+  -d opcache.jit_buffer_size=128M -d opcache.file_update_protection=0
+```
+
+Both JIT settings are needed: PHP 8.4 and later default to `opcache.jit=disable`,
+and earlier versions default to a zero JIT buffer. By default OPcache also
+refuses to cache a script modified in the last two seconds, so a freshly written
+fixture would run in the interpreter without any warning. Some setups turn the JIT off
+without an error, for example when Xdebug is loaded. The runner therefore asks
+`opcache_get_status()` with the same flags before measuring. If the JIT is not
+on, the PHP variants are skipped with the reason, and `--require-baselines`
+fails. A PHP time is never recorded under the wrong mode.
+
+The CLI cannot share OPcache memory between processes. Each PHP execution
+therefore compiles the script and warms the JIT inside its measured process
+time, like PHP startup itself.
+
+Samples recorded before this configuration ran with `opcache.enable_cli=0` and
+`opcache.jit=0`. Their environment says `php_mode: CLI; OPcache/JIT disabled`.
+The reports start a new line where the mode changes, and the SVG header names
+the mode of the latest sample.
 
 The hot-path variants include initialization and final checksum computation in
 their process time. They replace the former combined in-process stopwatch and
@@ -97,8 +127,8 @@ tests; they do not append performance samples to the product history.
 
 Historical native and Magician artifacts have no PHP timings because the old
 macOS job did not install PHP. Those values cannot be recovered by fetching the
-old artifacts again. New CI runs calculate the PHP baseline once with
-OPcache/JIT disabled in each run and record its installed version.
+old artifacts again. New CI runs measure the PHP baseline in each run with the
+[PHP configuration](#php-configuration) above and record its version and mode.
 
 The first available PHP measurement also supplies a reference for earlier points
 that lack PHP timings. Reports use this reference to fill historical gaps. The
@@ -156,8 +186,8 @@ with raw samples kept separately from the CI benchmark history.
 
 For an isolated numeric accumulator, compile `benchmark/diagnostics/numeric_local.php`
 and pass the iteration count at runtime. Run the same source and arguments with
-`php -n`, with CLI OPcache and JIT disabled. Output is `checksum|body_ns`; argument
-parsing and process startup precede the body clock. Measure several iteration
+`php -n` plus the [OPcache/JIT flags](#php-configuration). Output is
+`checksum|body_ns`; argument parsing and process startup precede the body clock. Measure several iteration
 counts with alternating compiler/PHP executions and report dispersion. Collect
 `--gc-stats` in separate diagnostic binaries so timings use ordinary code generation.
 
@@ -178,8 +208,9 @@ archives using `--bridge-dir` when they are not adjacent to that compiler. Opaqu
 eval can also link callbacks from other bridges, so supply their matching
 archives in the same directory. Every supplied archive is fingerprinted and its
 library-directory override replaces inherited overrides from other builds.
-Compilation happens before timing. PHP is required and runs with `-n`, OPcache
-and JIT disabled. Two warmups precede 21 measured rounds with rotating variant
+Compilation happens before timing. PHP is required and runs with `-n` plus the
+[OPcache/JIT flags](#php-configuration); the comparison stops if the JIT is not
+on. Two warmups precede 21 measured rounds with rotating variant
 order. On Linux, `--cpu N` pins every measured child to an available CPU.
 
 The output separates arithmetic, closure, append, dynamic eval, JSON decode with
@@ -204,8 +235,8 @@ body ratios must be reported separately, and isolated speedups must not be multi
 
 To separate JSON decode from explicit value release, compile
 `benchmark/diagnostics/json_lifecycle.php` and pass `INPUT_JSON REPEATS DRAIN_CACHES`.
-The last argument is `0` or `1`. Run the same source with `php -n` and the same
-arguments. Its output is `outer_count_sum|decode_ns:release_ns:drain_ns`; input
+The last argument is `0` or `1`. Run the same source with `php -n`, the
+[OPcache/JIT flags](#php-configuration) and the same arguments. Its output is `outer_count_sum|decode_ns:release_ns:drain_ns`; input
 loading is outside all three clocks. With cache draining disabled, the last
 clock only measures stopwatch overhead. `unset` includes any collector work
 triggered by the normal lowering. Repeat counts and explicit cache draining

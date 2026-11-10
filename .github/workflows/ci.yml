@@ -3372,7 +3372,9 @@ jobs:
           php-version: '8.5'
           coverage: none
           tools: none
-          ini-values: opcache.enable_cli=0, opcache.jit=0
+          # benchmark/common.py pins the same OPcache/JIT flags and fails the run if
+          # the tracing JIT is not active; this keeps `php --version` metadata consistent.
+          ini-values: opcache.enable_cli=1, opcache.jit=tracing, opcache.jit_buffer_size=128M, opcache.file_update_protection=0
 
       - name: Restore benchmark compiler
         uses: ./.github/actions/restore-build-artifact
