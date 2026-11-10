@@ -714,6 +714,10 @@ pub(super) fn instance_callable_object_class_and_nullability(
             let result = assignment_result_expr(value, result_target.as_deref(), prelude);
             return instance_callable_object_class_and_nullability(ctx, result);
         }
+        // `(clone $block)->component()` has the same receiver class as `$block`.
+        ExprKind::Clone(inner) => {
+            return instance_callable_object_class_and_nullability(ctx, inner);
+        }
         _ => infer_expr_type_syntactic(object),
     };
     let (class_name, nullable) = singular_object_class(&object_type)?;

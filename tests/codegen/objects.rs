@@ -19,6 +19,10 @@ mod classes;
 mod gc_aliasing;
 #[path = "objects/magic_methods.rs"]
 mod magic_methods;
+#[path = "objects/method_call_runtime.rs"]
+mod method_call_runtime;
+#[path = "objects/method_call_review.rs"]
+mod method_call_review;
 #[path = "objects/mixed_magic_hash.rs"]
 mod mixed_magic_hash;
 #[path = "objects/cloning.rs"]
