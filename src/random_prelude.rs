@@ -401,11 +401,17 @@ fn program_uses_random_on_compiler_stack(program: &[Stmt]) -> bool {
         "random_bytes",
         "lcg_value",
         "array_rand",
+        // Autoload probes see the helper name left by name resolution.
+        "__elephc_array_rand",
     ];
     if usage
         .functions
         .iter()
-        .any(|name| FUNCTIONS.contains(&name.as_str()))
+        .any(|name| {
+            // Deferred namespace fallback keeps the local spelling until all autoloads
+            // have contributed declarations, but still requires the global prelude.
+            FUNCTIONS.contains(&name.rsplit('\\').next().unwrap_or(name))
+        })
     {
         return true;
     }

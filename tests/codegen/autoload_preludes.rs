@@ -129,6 +129,83 @@ echo $zones->hasEurope(), "\n";
     );
 }
 
+/// `array_rand` calls alone retain the prelude after direct and imported calls are rewritten.
+#[test]
+fn test_autoload_array_rand_without_other_random_uses() {
+    let project = AutoloadPreludeProject(make_cli_test_dir("elephc_autoload_array_rand"));
+    let dir = &project.0;
+    write_composer_class(
+        dir,
+        "Picker.php",
+        r#"<?php
+namespace App;
+use function array_rand as choose;
+class Picker {
+    public function index(): int { return \array_rand([10]); }
+    public function key(): string { return choose(["selected" => 20]); }
+}
+"#,
+    );
+    fs::write(
+        dir.join("main.php"),
+        "<?php $picker = new App\\Picker(); echo $picker->index(), \"\\n\", $picker->key(), \"\\n\";",
+    )
+    .unwrap();
+    let compiled = compile_autoload_project(dir, &["elephc_random"]);
+    assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+    let output = run_binary_with_args(&dir.join("main"), dir, &[]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "0\nselected\n");
+}
+
+/// Unqualified Random calls and callables fall back globally while entry-file namespace functions win.
+#[test]
+fn test_autoload_unqualified_random_prelude_functions() {
+    let project = AutoloadPreludeProject(make_cli_test_dir("elephc_autoload_random_fallback"));
+    let dir = &project.0;
+    write_composer_class(
+        dir,
+        "Seed.php",
+        r#"<?php
+namespace App;
+class Seed {
+    public function roll(): int {
+        Mt_SrAnD(42);
+        return mt_rand(1, 100);
+    }
+    public function fraction(): bool {
+        $value = lcg_value();
+        return $value > 0.0 && $value < 1.0;
+    }
+    public function maximum(): int { return getrandmax(); }
+    public function localMaximum(): int { return mt_getrandmax(); }
+    public function callableMaximum(): int {
+        $maximum = getrandmax(...);
+        return $maximum();
+    }
+}
+"#,
+    );
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+namespace App { function mt_getrandmax(): int { return 7; } }
+namespace {
+    $seed = new App\Seed();
+    echo $seed->roll(), "\n", $seed->fraction() ? 1 : 0, "\n";
+    echo $seed->maximum(), "\n", $seed->localMaximum(), "\n";
+    echo $seed->callableMaximum(), "\n";
+}
+"#,
+    )
+    .unwrap();
+    let compiled = compile_autoload_project(dir, &["elephc_random"]);
+    assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+    let output = run_binary_with_args(&dir.join("main"), dir, &[]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "43\n1\n2147483647\n7\n2147483647\n");
+}
+
 /// GMP used only from an autoloaded class compiles and prints the successor.
 ///
 /// A current managed artifact links through the production CLI. A stale toolchain

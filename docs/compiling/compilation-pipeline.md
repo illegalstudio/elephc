@@ -120,7 +120,14 @@ Physical source (.php or .lfc)
   allocated by another compilation thread. The real pass injects the detected
   preludes with fresh global identities. Every included and
   autoloaded file gets its own source identity, which is how diagnostics name
-  the file they come from.
+  the file they come from. Detectors recognize rewritten helper names such as
+  `__elephc_array_rand` and `__elephc_list_identifiers`. Public prelude function
+  names also participate in PHP's global namespace fallback through the shared
+  builtin contract, even when an autoloaded file is resolved independently of
+  the injected declarations. Local declarations and explicit imports retain
+  their normal precedence. An unresolved local function candidate is retained
+  until the target-folding pass can choose its fallback using the complete
+  post-autoload declaration inventory.
 - **opcache-manifest-bake** — after autoload insertion and argument-introspection
   desugaring, replaces the placeholder OPcache manifest with the complete
   entry/include/autoload file set before constant folding and emits any preload

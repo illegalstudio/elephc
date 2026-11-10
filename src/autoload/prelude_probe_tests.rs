@@ -151,6 +151,8 @@ fn probe_detects_random_bcmath_gmp_and_list_identifiers() {
             r"return (new \Random\Randomizer(new \Random\Engine\Mt19937(42)))->getInt(1, 6);",
         ),
         ("random", r"\mt_srand(42); return \mt_rand(1, 100);"),
+        ("random", r"return \array_rand([10, 20]);"),
+        ("random", r"mt_srand(42); return mt_rand(1, 100);"),
         (
             "bcmath",
             r#"return (string) (new \BcMath\Number("1.5"))->add("2.25");"#,
