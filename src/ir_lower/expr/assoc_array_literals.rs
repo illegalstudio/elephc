@@ -281,12 +281,12 @@ fn assoc_array_literal_value_type_for_ir_unboxed(
         }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
-                .and_then(materializable_array_element_type)
+                .map(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
-                .and_then(materializable_array_element_type)
+                .map(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
@@ -511,6 +511,11 @@ pub(in crate::ir_lower) fn method_call_expr_type_for_ir(
     method: &str,
 ) -> Option<PhpType> {
     let method_key = php_symbol_key(method);
+    if method_key == "__invoke"
+        && super::merge_temps::materialized_expr_type_for_merge(ctx, object).codegen_repr() == PhpType::Callable
+    {
+        return Some(PhpType::Mixed);
+    }
     let Some(class_name) = instance_callable_object_class(ctx, object) else {
         return dynamic_receiver_method_call_type_for_ir(ctx, object, &method_key);
     };

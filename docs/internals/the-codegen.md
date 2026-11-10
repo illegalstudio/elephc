@@ -14,6 +14,16 @@ Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
 user assembly for the selected target.
 
+Runtime-selected native methods that need distinct argument plans select their
+concrete class in EIR before evaluating the arguments. This includes variadic
+collectors, surplus user-method arguments and missing methods handled by `__call`.
+Magic hooks receive the original method name and a boxed PHP array built through
+the shared argument-container lowering, preserving named and unpacked keys.
+Their array ABI stays generic even when a known call supplies homogeneous values.
+Receiver, argument-container and result owners participate in ordinary EIR
+unwind cleanup. A possible magic fallback also prevents inferring a common native
+return representation from explicitly declared methods alone.
+
 An explicitly declared indexed-array builder keeps its element contract when
 an append receives a physically boxed value with an exact checker proof. The
 checker records the declaration, current receiver element, and stable RHS variable

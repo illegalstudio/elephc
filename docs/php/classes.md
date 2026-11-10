@@ -999,6 +999,12 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__call($name, $args)` — intercepting missing instance methods
 - `__callStatic($name, $args)` — intercepting missing static methods
 
+Instance `__call` dispatch also works through `mixed` and bare `object` receivers.
+The hook receives the method name as written and an argument array that preserves
+named keys, including keys supplied through argument unpacking. Exceptions thrown
+by the hook remain catchable, and temporary argument containers are released on
+both normal return and exception unwinding.
+
 ## Property interception (`__get`, `__set`, `__isset`, `__unset`)
 
 When code reads, writes, tests, or removes a property that the class does not

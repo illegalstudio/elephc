@@ -1053,8 +1053,7 @@ fn array_literal_element_type_for_ir_unboxed(
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
-                return materializable_array_element_type(eir_user_function_return_type(sig))
-                    .unwrap_or(PhpType::Mixed);
+                return materializable_array_element_type(eir_user_function_return_type(sig));
             }
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
@@ -1072,12 +1071,12 @@ fn array_literal_element_type_for_ir_unboxed(
         // or an object result is cast into an incorrectly stamped scalar array.
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
-                .and_then(materializable_array_element_type)
+                .map(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
-                .and_then(materializable_array_element_type)
+                .map(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
@@ -1177,13 +1176,12 @@ pub(super) fn spread_source_storage_type_for_ir(
 /// Returns the EIR array storage type for a resolved element type.
 ///
 /// A `Void` or `Never` call result is PHP `null` when a literal collects it. Stamping
-/// `mixed` makes the push box that null. Returning `None` used to fall back to a
-/// syntactic `int` stamp, and the push then rejected `array_push for PHP type Void`.
-pub(super) fn materializable_array_element_type(return_type: PhpType) -> Option<PhpType> {
+/// `mixed` makes the push box that null instead of falling back to a syntactic integer slot.
+pub(super) fn materializable_array_element_type(return_type: PhpType) -> PhpType {
     let stored = ir_array_storage_type(return_type);
     match stored.codegen_repr() {
-        PhpType::Void | PhpType::Never => Some(PhpType::Mixed),
-        _ => Some(stored),
+        PhpType::Void | PhpType::Never => PhpType::Mixed,
+        _ => stored,
     }
 }
 
@@ -1237,7 +1235,7 @@ pub(super) fn builtin_call_result_type_for_ir(
     {
         return Some(checked.codegen_repr());
     }
-    match materializable_array_element_type(checked)? {
+    match materializable_array_element_type(checked) {
         scalar @ (PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str) => Some(scalar),
         _ => Some(PhpType::Mixed),
     }

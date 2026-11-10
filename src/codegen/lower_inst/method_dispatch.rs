@@ -241,8 +241,8 @@ pub(super) fn lower_mixed_method_call(
         builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
         abi::emit_jump(ctx.emitter, &done_label);
     } else {
-        super::method_dispatch_errors::emit_magic_or_undefined_method(
-            ctx, inst, receiver_reg, method_name, &done_label,
+        super::method_dispatch_errors::emit_undefined_or_arity_error(
+            ctx, inst, receiver_reg, method_name,
         )?;
     }
 
