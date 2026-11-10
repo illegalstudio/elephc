@@ -4,6 +4,31 @@
 use super::*;
 
 /// `.ascii` operands decode the escapes the data section writes.
+/// An instruction text with no symbolic operand is parsed once per slice: repeats take the word
+/// from the cache, and a text with a fixup is parsed every time, since its target resolves per
+/// line. The words written are the ones a fresh parse gives.
+#[test]
+fn repeated_plain_instructions_are_parsed_once() {
+    let mut text = String::from(".globl _main\n_main:\n");
+    for _ in 0..50 {
+        text.push_str("    ldr x0, [x29, #-16]\n    add x1, x0, #1\n    bl _main\n");
+    }
+    text.push_str("    ret\n");
+    super::INSTRUCTIONS_PARSED.with(|count| count.set(0));
+    let object = assemble(&text).expect("assembles");
+    let parsed = super::INSTRUCTIONS_PARSED.with(std::cell::Cell::get);
+    // Two plain texts once each, `bl _main` 50 times, `ret` once.
+    assert_eq!(parsed, 53, "{parsed} instruction texts parsed");
+    // Every repeat carries the freshly parsed word: the 50 `ldr`/`add` pairs sit in the text
+    // section, three words apart.
+    let pair: Vec<u8> = ["ldr x0, [x29, #-16]", "add x1, x0, #1"]
+        .iter()
+        .flat_map(|line| super::encode::encode_instruction(line).unwrap().word.to_le_bytes())
+        .collect();
+    let pairs = object.windows(pair.len()).filter(|window| *window == pair.as_slice()).count();
+    assert_eq!(pairs, 50, "{pairs} encoded ldr/add pairs");
+}
+
 #[test]
 fn ascii_operands_decode_the_emitted_escapes() {
     let mut out = Vec::new();

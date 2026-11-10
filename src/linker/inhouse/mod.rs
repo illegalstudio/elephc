@@ -52,6 +52,12 @@ enum Sect {
 /// `nop`, the padding `as` inserts when it aligns code.
 const NOP: u32 = 0xD503_201F;
 
+#[cfg(test)]
+thread_local! {
+    /// Instruction texts the second pass parsed rather than took from its cache.
+    pub(crate) static INSTRUCTIONS_PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// One classified line.
 enum Line<'a> {
     Label(&'a str),
@@ -438,11 +444,21 @@ pub(crate) fn assemble_parts<'a>(parts: &[&'a str], names: Names<'a>) -> Result<
     let mut sections: [Vec<u8>; 2] = layout.sizes.map(|size| Vec::with_capacity(size as usize));
     let mut relocs: Vec<PendingReloc<'_>> = Vec::new();
     let mut sect = Sect::Text;
+    // Generated code repeats the same instruction text endlessly (`ldr x0, [x29, #-16]`), and
+    // parsing one is most of this pass: an instruction with no symbolic operand always encodes
+    // to the same word, so each distinct text is parsed once per slice.
+    let mut plain_words: HashMap<&str, u32> = HashMap::default();
     for (index, line) in part_lines(parts).enumerate() {
         let bytes = &mut sections[sect as usize];
         match classify(line) {
             Line::Label(_) => {}
             Line::Instruction(instruction) => {
+                if let Some(word) = plain_words.get(instruction) {
+                    bytes.extend_from_slice(&word.to_le_bytes());
+                    continue;
+                }
+                #[cfg(test)]
+                INSTRUCTIONS_PARSED.with(|count| count.set(count.get() + 1));
                 let Some(encoded) = encode_instruction(instruction) else {
                     return unsupported("instruction", line);
                 };
@@ -490,6 +506,8 @@ pub(crate) fn assemble_parts<'a>(parts: &[&'a str], names: Names<'a>) -> Result<
                         r_pcrel,
                         r_length: 2,
                     });
+                } else {
+                    plain_words.insert(instruction, word);
                 }
                 bytes.extend_from_slice(&word.to_le_bytes());
             }
