@@ -169,6 +169,7 @@ pub(super) use descriptor_metadata::{
     class_method_body_exists, emit_runtime_descriptor_with_receiver_capture,
 };
 pub(super) use floats::{emit_fused_float_compare, float_branch_condition_suffix};
+pub(in crate::codegen) use arithmetic::{emit_fused_overflow, OverflowBranch};
 pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
 };
@@ -215,8 +216,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
     if inst.result.is_some_and(|value| ctx.allocation.rematerialized(value).is_some()) {
         return Ok(());
     }
-    if ctx.is_fused_compare(inst_id) {
-        // The block's `cond_br` emits this compare and branches on its flags directly.
+    if ctx.is_fused_compare(inst_id) || ctx.is_fused_overflow(inst_id) {
+        // The block's `cond_br` emits this compare or overflow test and branches on its flags.
         return Ok(());
     }
     match inst.op {
@@ -249,6 +250,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
         Op::ISub => arithmetic::lower_int_binop(ctx, &inst, "sub", "sub"),
         Op::IMul => arithmetic::lower_int_binop(ctx, &inst, "mul", "imul"),
+        Op::IOverflows => arithmetic::lower_ioverflows(ctx, &inst),
         Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
         Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
         Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),

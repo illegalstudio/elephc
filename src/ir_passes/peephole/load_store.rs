@@ -160,6 +160,7 @@ fn consumes_operands_by_value(op: Op) -> bool {
         op,
         IAdd | ISub
             | IMul
+            | IOverflows
             | IDiv
             | ISDiv
             | ISMod

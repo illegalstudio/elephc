@@ -73,6 +73,8 @@ use super::array_sum_loop::ArraySumLoop;
 use super::branch_simplify::BranchSimplify;
 use super::borrowed_receiver_roots::BorrowedReceiverRoots;
 use super::bounded_mixed_counter::{BoundedMixedCounter, LoopCounterVersioning};
+use super::raw_promotable_loop::RawPromotableLoop;
+use super::lazy_boxed_accumulator::LazyBoxedAccumulator;
 use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
 use super::concat_reset::{ConcatResetElim, ConcatResetHoist};
@@ -158,7 +160,9 @@ pub trait IrPass {
 /// `ICheckedNumericChainToInt` regions.
 /// CSE can then deduplicate those computations using canonical immutable loads,
 /// while LICM can move both the loads and their dependent arithmetic into loop
-/// preheaders. Canonical loop optimization shares equivalent scalar induction
+/// preheaders. Raw promotable loops then keep straight-line overflow-capable
+/// accumulators and counters in integers, and continue a promoted local as a raw float.
+/// Canonical loop optimization shares equivalent scalar induction
 /// variables before range analysis, keeping checked updates checked, and exposes
 /// invariant header arguments plus simpler integer tests for subsequent passes. Branch cleanup composes
 /// SSA forwarding edges and merges straight-line loop update blocks.
@@ -213,6 +217,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(JsonDecodeCountSink),
         Box::new(BoundedMixedCounter::new(module)),
         Box::new(LoopCounterVersioning::new(module)),
+        Box::new(RawPromotableLoop),
         Box::new(LoopOptimize),
         Box::new(CountHoist),
         Box::new(ArrayGetBounds),
@@ -283,6 +288,13 @@ pub fn optimize_module(module: &mut Module) {
         if let Err(error) = crate::ir::validate_module(module) {
             panic!("buffer resolution hoisting produced invalid module: {:?}", error);
         }
+        run_module_function_passes(module, &passes);
+    }
+    // Lazy boxed accumulators take the locals the converged loop passes left mixed. Running
+    // them earlier would claim a loop that `RawPromotableLoop` matches a few rounds later
+    // and compiles better. The scalar passes then promote and fold the new companions.
+    let lazy: Vec<Box<dyn IrPass>> = vec![Box::new(LazyBoxedAccumulator)];
+    if run_module_function_passes(module, &lazy) {
         run_module_function_passes(module, &passes);
     }
     run_module_function_passes(module, &finalizers);

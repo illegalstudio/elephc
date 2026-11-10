@@ -208,7 +208,9 @@ checked arithmetic follows its runtime call ABI unless its entire lifetime is
 proven eligible for a frame-local cell.
 
 Loop-carried numeric locals must preserve an overflow-promoted float on later
-iterations. Lowering discovers integer reads of a final Mixed slot inside a
+iterations. `raw_promotable_loop` keeps eligible accumulators and counters in raw
+integers, then continues a promoted local as a raw float so later iterations observe
+that float. Lowering discovers integer reads of a final Mixed slot inside a
 cyclic region, then replays the body with Mixed storage from its first store.
 Constraints belong to individual storage bindings, so a name reused after
 `unset` retains its new representation. This decision is separate from the

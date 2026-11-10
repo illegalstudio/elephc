@@ -1734,6 +1734,65 @@ rewrites operate on EIR and preserve the original AST binding decisions and
 source metadata. See [the optimizer](the-optimizer.md) for the complete eligibility
 and code-growth limits.
 
+### Raw promotable loops
+
+`raw_promotable_loop` runs after guarded counter versioning. It matches an innermost
+straight-line loop whose mixed locals are updated only by add, subtract, multiply, or a
+unit increment, and whose header compares two integer-compatible values. The header test
+is a PHP relational compare, or an integer compare when an earlier pass already proved the
+counter in range. Such a counter is an integer header parameter: the copy keeps it in its
+own slot and recomputes the pure integer arithmetic that feeds the back edge. The other
+side of an update may be an overflow-checked integer temporary such as `$i * $i`, which
+gets its own overflow test. The header test may also be `==` or `!=`, and one side of it may be
+a bound the header recomputes (`$i < 5 + $n`), tested for overflow on every iteration. A
+counter kept in an `I64` local is stored to that same local, which covers top-level code.
+A header parameter read after the loop becomes a parameter of the exit block, filled by
+the mixed header and by every exit of the copy. When every
+carried seed and mixed bound is a PHP int at entry, the fast copy keeps those values in
+raw `I64` slots. Each update is a wrapping integer operation plus `IOverflows` while both
+operands are still integers. A fitting result stays on that copy. Signed overflow converts
+the original operands to `f64` and keeps that local as a raw float; other locals stay
+integers until they overflow. Later iterations of a promoted local use float arithmetic,
+including a float/integer pair, and never return the value to an integer. The original
+mixed loop remains for a seed that is not an int. Each representation is boxed once, at
+its own exit. A call, extra store, or non-straight body leaves the loop unchanged.
+Every update must read its own local (`$x = $x + $y`, not `$x = $y + $z`), which is what
+makes a promoted local stay a float, and a local joins the float set only on the edge where
+its own update stored a float. The fast copy reloads a carried local where the update runs,
+so a read that the mixed loop takes on the other side of that local's store, as in
+`$sum + $i++`, also leaves the loop unchanged. So does a loop with more than four updated
+locals, because the copy needs one block chain per reachable set of promoted locals.
+Codegen fuses each integer overflow test into the following branch when the result has a
+register or a flag-preserving stack slot, so the integer path is one flag-setting
+arithmetic instruction and one not-taken branch per update.
+
+
+### Lazy boxed accumulators
+
+`lazy_boxed_accumulator` runs once after the function passes converged, so
+`raw_promotable_loop` gets every straight-line loop first. It covers the loops that pass
+leaves alone: bodies with array reads, calls, branches, `break`, nested loops, and
+any number of accumulators. It does not copy the loop. A mixed local gets two raw
+companions for the whole function, an `I64` value and a tag. The tag is RAW when the
+companion holds the value and the mixed slot holds a stale but valid int box, and BOXED
+when the mixed slot holds the value. A function starts BOXED.
+
+A modeled update (`$s += x`, `-=`, `*=`, `++`, `--`) takes the fast path when the local and
+`x` are ints and the wrapping operation plus `IOverflows` does not overflow: it stores the
+companion and sets RAW. A modeled compare of a RAW local with an int is an `ICmp`. In
+every other case the code syncs and runs the original instructions on a fresh load, so
+float promotion, warnings, and errors come from the unchanged mixed code. A sync boxes the
+companion into the slot when the tag is RAW. One sits right before every other
+instruction that names the slot, such as a read, a plain store, or an unset. A
+by-reference argument is such a read, so the slot is current while the callee runs.
+Nothing is needed at function exit, because in RAW state the slot still owns a box the
+epilogue releases.
+
+A local is rewritten only when one of its updates sits in a loop that contains no sync for
+it. A local read on every iteration would be boxed again each time, so it stays mixed.
+A function that runs literal `eval` code is skipped, because the fragment reads locals by
+name and no instruction would trigger the sync.
+
 ### Boxed Numeric Chain Fusion
 
 `src/ir_passes/checked_numeric_chain.rs` fuses compatible checked arithmetic

@@ -84,6 +84,10 @@ mod checked_int_sink;
 mod buffer_element_incdec;
 #[path = "optimizer/bounded_mixed_counter.rs"]
 mod bounded_mixed_counter;
+#[path = "optimizer/raw_promotable_loop.rs"]
+mod raw_promotable_loop;
+#[path = "optimizer/lazy_boxed_accumulator.rs"]
+mod lazy_boxed_accumulator;
 #[path = "optimizer/method_loop_counters.rs"]
 mod method_loop_counters;
 #[path = "optimizer/checked_numeric_chain.rs"]
