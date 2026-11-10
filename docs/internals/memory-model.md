@@ -205,6 +205,11 @@ new binding (see [Local retyping](the-type-checker.md#local-retyping-and-strict-
 so a counter name reused by a later loop with a boxed seed does not widen the slot of
 an earlier, provably integer loop.
 
+A `MixedClone` of a proven numeric value, such as the key snapshot that
+`$starts[$cell]--` takes of `$cell`, copies only a tag and payload. Reading a
+numeric local into such a clone is therefore an observation, and a clone stored
+into one proven local writes that local's own frame cell instead of a heap box.
+
 These frame cells have no heap header and cannot own children. Proven retains and
 releases of their SSA pointers emit no refcount calls. A selected local may still
 hold a numeric heap seed; its direct Mixed cleanup releases that seed and ignores
