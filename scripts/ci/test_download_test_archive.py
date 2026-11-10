@@ -154,20 +154,27 @@ class DownloadDeadline(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), "download complete")
 
     def test_slow_active_transfer_fails_instead_of_resetting_the_deadline(self):
-        """Accelerate a real timer, then keep the process active with periodic progress."""
+        """Start progress before arming a real timer, even when later startup is slow."""
         options = self.node_options()
         with tempfile.TemporaryDirectory(prefix=".download-deadline.", dir=REPO) as tmp:
             clock = Path(tmp) / "fast clock.cjs"
             clock.write_text("""const assert = require('node:assert/strict');
+const { writeSync } = require('node:fs');
+// A preload deadline can expire before Node reaches its -e program. Establish
+// the active-transfer fixture first, and do not rely on buffered stdout at exit.
+writeSync(1, '.');
+setInterval(() => writeSync(1, '.'), 5);
 const original = global.setTimeout;
 global.setTimeout = (callback, delay) => {
   assert.equal(delay, 300000);
   return original(callback, 50);
 };
 """)
-            env = {**os.environ, "NODE_OPTIONS": f'--require "{clock}" {options}'}
+            startup = Path(tmp) / "slow startup.cjs"
+            startup.write_text("Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);\n")
+            env = {**os.environ, "NODE_OPTIONS": f'--require "{clock}" {options} --require "{startup}"'}
             result = subprocess.run([
-                "node", "-e", "setInterval(() => process.stdout.write('.'), 5)",
+                "node", "-e", "",
             ], cwd=REPO, env=env, capture_output=True, text=True, timeout=3)
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn(".", result.stdout)
