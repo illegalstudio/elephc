@@ -69,6 +69,10 @@ pub(crate) fn lower_dynamic_object_binary(
     plans.sort_unstable_by_key(|plan| plan.class.name);
     plans.dedup_by_key(|plan| plan.class.name);
     if plans.is_empty() { return None; }
+    let result_type = if plans[0].comparison { plans[0].result_type(op) } else { PhpType::Mixed };
+    if let Some(result) = crate::ir_lower::boxed_operators::lower_call(
+        ctx, lhs, op, rhs, expr, result_type, consume,
+    ) { return Some(result); }
     Some(lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, &plans, false, scalar))
 }
 

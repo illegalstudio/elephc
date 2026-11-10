@@ -14,6 +14,26 @@ Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
 user assembly for the selected target.
 
+Dynamic operators with boxed operands share a synthetic EIR function per operator
+when internal object handlers are available. Scalar counterparts use the ordinary
+boxing conversion; source expressions are evaluated before the call and their
+owners remain rooted until it returns. Each helper lowers the existing native
+handler precedence and scalar fallback once. This prevents an opaque eval catalog
+from copying the same operator graph into every prelude function. Typed scalar
+operations and statically selected object handlers retain their direct paths.
+The helpers use compiler-only names and are excluded from PHP function and
+callable inventories. They pass through the same normalization, effect analysis,
+optimization and target-aware codegen as other EIR functions.
+Increment and decrement have separate helpers so PHP's string, boolean and null
+update rules remain distinct from arithmetic. Post-increment and post-decrement
+keep selecting the original value in the caller.
+
+Callable wrapper lowering reuses private module snapshots within one codegen run.
+Wrapper construction extends their literal pools while preserving the source
+functions and class metadata. An active snapshot stays outside the reusable pool
+until its wrapper has finished emitting, so nested wrappers have independent data
+IDs. This avoids cloning all source EIR bodies for every builtin wrapper.
+
 Runtime-selected native methods that need distinct argument plans select their
 concrete class in EIR before evaluating the arguments. This includes variadic
 collectors, surplus user-method arguments and missing methods handled by `__call`.

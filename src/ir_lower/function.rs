@@ -31,6 +31,7 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+pub(in crate::ir_lower) use builtin_wrappers::lower_builtin_callable_body;
 mod closure_defaults;
 pub(crate) use crate::types::deferred_defaults::contains_deferred_error;
 mod object_comparisons;
