@@ -483,9 +483,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                         };
                         assoc_spread_entry_types_syntactic(inner).1
                     }
-                    ArrayEntry::Keyed(_, value) | ArrayEntry::Value(value) => {
-                        infer_expr_type_syntactic(value)
-                    }
+                    ArrayEntry::Keyed(_, value)
+                    | ArrayEntry::KeyedReference(_, value)
+                    | ArrayEntry::Value(value)
+                    | ArrayEntry::Reference(value) => infer_expr_type_syntactic(value),
                 };
                 value_ty = Some(match value_ty {
                     Some(current) => {
@@ -506,7 +507,11 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::NewScopedObject { .. } => PhpType::Object(String::new()),
         ExprKind::ClassConstant { .. }
         | ExprKind::ObjectClassName { .. }
-        | ExprKind::ScopedConstantAccess { .. } => PhpType::Str,
+        // A class constant can hold any PHP value, so syntax alone cannot type it. Answering
+        // `str` made `static $args = ['x', SomeClass::VALUE]` infer as `array<string>` and then
+        // tried to materialize an integer constant as a string default. `mixed` keeps every
+        // later storage decision correct.
+        | ExprKind::ScopedConstantAccess { .. } => PhpType::Mixed,
         ExprKind::This => PhpType::Object(String::new()),
         ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => PhpType::Callable,
         ExprKind::PtrCast { target_type, .. } => PhpType::Pointer(Some(target_type.clone())),

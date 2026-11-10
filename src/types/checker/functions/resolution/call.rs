@@ -380,7 +380,23 @@ impl Checker {
         let mut param_types = Vec::new();
         let mut arg_idx = 0;
         for arg in args {
-            let ty = self.infer_type(arg, caller_env)?;
+            // PHP creates a variable passed by reference; it is not read at the call site.
+            let by_ref_undefined_local = arg_idx < decl.params.len()
+                && decl.ref_params.get(arg_idx).copied().unwrap_or(false)
+                && !defaults.get(arg_idx).copied().unwrap_or(false)
+                && matches!(&arg.kind, ExprKind::Variable(name) if !caller_env.contains_key(name));
+            let ty = if by_ref_undefined_local {
+                normalization_sig
+                    .params
+                    .get(arg_idx)
+                    .map(|(_, ty)| ty.clone())
+                    .unwrap_or(PhpType::Mixed)
+            } else {
+                self.infer_type(arg, caller_env)?
+            };
+            if by_ref_undefined_local {
+                self.record_undefined_by_ref_argument(arg, &ty, span);
+            }
             if let ExprKind::Spread(_) = &arg.kind {
                 for i in arg_idx..decl.params.len() {
                     if let Some(type_ann) = decl.param_types.get(i).and_then(|t| t.as_ref()) {

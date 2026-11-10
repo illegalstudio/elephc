@@ -318,7 +318,30 @@ impl Checker {
                 crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
             ) {
                 let mut arg_types = Vec::with_capacity(args.len());
-                for arg in args {
+                for (index, arg) in args.iter().enumerate() {
+                    // A never-declared variable at a by-reference parameter is created by the
+                    // binding; reading it here would report `Undefined variable` before the
+                    // callee can write it. Registry builtins whose pass-by-reference surface is
+                    // provided by a synthetic prelude declaration (the Intl object entry points)
+                    // hit this path instead of the shared user-call validator.
+                    let undefined_by_ref = def.ref_params.get(index).copied().unwrap_or(false)
+                        && !matches!(
+                            builtin_arg_plan
+                                .as_ref()
+                                .and_then(|plan| plan.regular_args.get(index)),
+                            Some(crate::types::call_args::PlannedRegularArg::Default(_))
+                        )
+                        && matches!(&arg.kind, ExprKind::Variable(name) if !env.contains_key(name));
+                    if undefined_by_ref {
+                        let expected = def
+                            .params
+                            .get(index)
+                            .map(|(_, ty)| ty.clone())
+                            .unwrap_or(PhpType::Mixed);
+                        self.record_undefined_by_ref_argument(arg, &expected, span);
+                        arg_types.push(expected);
+                        continue;
+                    }
                     arg_types.push(self.infer_type(arg, env)?);
                 }
                 reject_array_at_string_param(name, &def.params, def.variadic.is_some(), args, &arg_types)?;

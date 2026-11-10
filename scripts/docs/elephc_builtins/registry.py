@@ -36,6 +36,7 @@ AREAS: list[str] = [
     "Web",
     "Image",
     "XML",
+    "Intl",
 ]
 
 
@@ -86,6 +87,9 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     "xml": ("XML", "XML"),
     # `ext/random` procedural functions declared by the random prelude.
     "random": ("Math", "Random"),
+    # `Area::Intl`: the 137 procedural functions the synthetic prelude injects next to
+    # the Intl class family; the narrative page stays in docs/php/intl.md.
+    "intl": ("Intl", "Intl"),
 }
 
 

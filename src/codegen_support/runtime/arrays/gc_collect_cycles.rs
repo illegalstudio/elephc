@@ -92,6 +92,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #8]");                                   // save the initial heap end for the metadata passes
     emitter.instruction("str x9, [sp, #0]");                                    // initialize the scan pointer to the heap base
     emitter.instruction("str xzr, [sp, #80]");                                  // initialize the collected graph-node count
+    emitter.instruction("str xzr, [sp, #120]");                                 // initialize the collected object-cycle count
 
     // -- pass 1: clear all transient GC metadata while preserving kind + array value_type --
     emitter.label("__rt_gc_collect_cycles_clear_loop");
@@ -151,7 +152,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_hash");              // scan hash payload children
     emitter.instruction("cmp x15, #5");                                         // is this a boxed mixed cell?
     emitter.instruction("b.eq __rt_gc_collect_cycles_count_mixed");             // scan the boxed mixed child pointer
-    emitter.instruction("b __rt_gc_collect_cycles_count_object");               // remaining refcounted kind 4 is an object
+    emitter.instruction("b __rt_gc_collect_cycles_count_unreachable_object");   // remaining refcounted kind 4 is an object
     emitter.label("__rt_gc_collect_cycles_count_callable");
     emitter.instruction("add x0, x9, #16");                                     // pass the current descriptor payload, keeping the header cursor saved
     emitter.instruction("mov x1, #0");                                          // ARM counts every actual child in its transient header
@@ -251,7 +252,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_gc_note_child_ref");                           // add one incoming heap edge to the boxed child
     emitter.instruction("b __rt_gc_collect_cycles_count_next");                 // mixed-child counting is complete
 
-    emitter.label("__rt_gc_collect_cycles_count_object");
+    emitter.label("__rt_gc_collect_cycles_count_unreachable_object");
     emitter.instruction("mov x0, x12");                                         // pass the owning object to the optional eval-edge walker
     emitter.instruction("mov x1, xzr");                                         // ARM64 counts every edge directly in the child header
     emitter.instruction("mov x2, xzr");                                         // select incoming-edge counting rather than marking
@@ -459,6 +460,17 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #80]");                                  // load the number of graph nodes selected so far
     emitter.instruction("add x10, x10, #1");                                    // count this unreachable graph node
     emitter.instruction("str x10, [sp, #80]");                                  // persist the updated collection result
+    emitter.instruction("cmp x14, #4");                                         // is this unreachable node a PHP object?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_free_object_count");       // count object cycles separately from their array payloads
+    emitter.instruction("cmp x14, #6");                                         // is this unreachable node a throwable object?
+    emitter.instruction("b.eq __rt_gc_collect_cycles_free_object_count");       // throwables participate in object cycles
+    emitter.instruction(&format!("cmp x14, #{CALLABLE_HEAP_KIND}"));            // is this unreachable node a callable descriptor?
+    emitter.instruction("b.ne __rt_gc_collect_cycles_free_object_count_done");  // array and mixed payloads do not add an object cycle
+    emitter.label("__rt_gc_collect_cycles_free_object_count");
+    emitter.instruction("ldr x10, [sp, #120]");                                 // load the object-cycle count
+    emitter.instruction("add x10, x10, #1");                                    // count this unreachable object graph node
+    emitter.instruction("str x10, [sp, #120]");                                 // persist the object-cycle count
+    emitter.label("__rt_gc_collect_cycles_free_object_count_done");
     emitter.instruction("add x10, x9, x11");                                    // compute the next header before reclaiming this block
     emitter.instruction("add x10, x10, #16");                                   // account for the 16-byte heap header
     scans::next(emitter, "x10", "r10", "[sp]", "[rbp - 24]", "arm_sweep");
@@ -528,7 +540,11 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
     emitter.instruction("bl __rt_exception_chain");                             // keep an earlier destructor throw behind the cleanup throw
     emitter.label("__rt_gc_collect_cycles_cleanup_done");
-    emitter.instruction("ldr x0, [sp, #80]");                                   // return the collection count when no exception escaped
+    emitter.instruction("ldr x0, [sp, #80]");                                   // load the reclaimed-node count
+    emitter.instruction("ldr x1, [sp, #120]");                                  // load the object-cycle count
+    emitter.instruction("cbz x1, __rt_gc_collect_cycles_use_node_count");       // array-only graphs keep their node count
+    emitter.instruction("mov x0, x1");                                          // PHP reports object cycles, not their array payload nodes
+    emitter.label("__rt_gc_collect_cycles_use_node_count");
     emitter.instruction("ldr x19, [sp, #48]");                                  // restore the callee-saved scratch register after collection
     emitter.instruction("ldr x20, [sp, #56]");                                  // restore the callee-saved payload-size register after collection
     emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address

@@ -52,9 +52,11 @@ class ContractPipelineTests(unittest.TestCase):
                     # Four hash_*, the thirty-four PHP-visible curl_* contracts the
                     # canonical `--features curl` docs configuration publishes (see
                     # extract.run_gen_builtins), the fifty-four xml_* / xmlwriter_*
-                    # functions of the XML prelude, the SimpleXML, tokenizer and
-                    # random and fileinfo surfaces, the full mysqli procedural surface, and the remaining injected preludes.
-                    "prelude": 421,
+                    # functions of the XML prelude, the SimpleXML, tokenizer and random and
+                    # fileinfo surfaces, the full mysqli procedural surface, the remaining
+                    # injected preludes, and the 137 procedural Intl entries the synthetic
+                    # prelude injects.
+                    "prelude": 558,
                     # Calls rewritten from their enclosing lexical function frame.
                     "compiler-transform": 3,
                     # The date/calendar procedural families rewritten by the name resolver.

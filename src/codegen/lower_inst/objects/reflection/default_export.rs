@@ -96,7 +96,9 @@ impl DefaultExporter<'_> {
                     }
                     StaticReceiver::Self_ => "self".to_string(),
                     StaticReceiver::Parent => "parent".to_string(),
-                    StaticReceiver::Static | StaticReceiver::Generic(_) => return None,
+                    StaticReceiver::Static
+                    | StaticReceiver::Generic(_)
+                    | StaticReceiver::Dynamic(_) => return None,
                 };
                 Some(format!("{receiver}::{}", reflection_dump_text(name)))
             }
@@ -134,6 +136,9 @@ impl DefaultExporter<'_> {
                     crate::parser::ast::ArrayEntry::Keyed(key, value) =>
                         Some(format!("{} => {}", self.export(key)?, self.export(value)?)),
                     crate::parser::ast::ArrayEntry::Value(value) => self.export(value),
+                    crate::parser::ast::ArrayEntry::Reference(value) => self.export(value),
+                    crate::parser::ast::ArrayEntry::KeyedReference(key, value) =>
+                        Some(format!("{} => {}", self.export(key)?, self.export(value)?)),
                     crate::parser::ast::ArrayEntry::Spread(_) => None,
                 }).collect::<Option<Vec<_>>>()?;
                 Some(format!("[{}]", items.join(", ")))

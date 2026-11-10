@@ -362,7 +362,8 @@ fn literal_class_argument(argument: &Expr) -> Option<String> {
             StaticReceiver::Self_
             | StaticReceiver::Static
             | StaticReceiver::Parent
-            | StaticReceiver::Generic(_) => None,
+            | StaticReceiver::Generic(_)
+            | StaticReceiver::Dynamic(_) => None,
         },
         _ => None,
     }

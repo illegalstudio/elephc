@@ -261,7 +261,7 @@ pub(super) fn static_receiver_class_name(checker: &Checker, receiver: &StaticRec
             .and_then(|class_info| class_info.parent.clone()),
         // `generics::classes` rewrites every generic receiver before the checker runs; should one
         // survive, "may return null" is the answer that cannot fold anything away wrongly.
-        StaticReceiver::Generic(_) => None,
+        StaticReceiver::Generic(_) | StaticReceiver::Dynamic(_) => None,
     }
 }
 

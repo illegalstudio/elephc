@@ -20,11 +20,171 @@ pub(super) fn datetime_zone_constructor() -> ClassMethod {
             false,
         )],
         None,
-        vec![assign_this_property(
-            "name",
-            Expr::new(ExprKind::Variable("timezone".to_string()), dummy()),
-        )],
+        {
+            let var = |n: &str| Expr::new(ExprKind::Variable(n.to_string()), dummy());
+            let int = |v: i64| Expr::new(ExprKind::IntLiteral(v), dummy());
+            let strlit = |v: &str| Expr::new(ExprKind::StringLiteral(v.to_string()), dummy());
+            let binop = |l: Expr, op: BinOp, r: Expr| {
+                Expr::new(ExprKind::BinaryOp { left: Box::new(l), op, right: Box::new(r) }, dummy())
+            };
+            let call = |name: &str, args: Vec<Expr>| {
+                Expr::new(ExprKind::FunctionCall { name: Name::unqualified(name), args }, dummy())
+            };
+            let byte_at = |index: i64| {
+                Expr::new(ExprKind::ArrayAccess {
+                    array: Box::new(var("__name")),
+                    index: Box::new(int(index)),
+                }, dummy())
+            };
+            vec![
+                // PHP normalises `GMT+04:05` to `+04:05`; the offset spelling is the zone name.
+                Stmt::assign("__name", var("timezone")),
+                Stmt::new(
+                    StmtKind::If {
+                        condition: binop(
+                            binop(
+                                call("strlen", vec![var("__name")]),
+                                BinOp::Gt,
+                                int(3),
+                            ),
+                            BinOp::And,
+                            binop(
+                                binop(
+                                    call("substr", vec![var("__name"), int(0), int(3)]),
+                                    BinOp::StrictEq,
+                                    strlit("GMT"),
+                                ),
+                                BinOp::And,
+                                binop(
+                                    binop(byte_at(3), BinOp::StrictEq, strlit("+")),
+                                    BinOp::Or,
+                                    binop(byte_at(3), BinOp::StrictEq, strlit("-")),
+                                ),
+                            ),
+                        ),
+                        then_body: vec![Stmt::assign(
+                            "__name",
+                            call("substr", vec![var("__name"), int(3)]),
+                        )],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::If {
+                        condition: binop(var("__name"), BinOp::StrictEq, strlit("Etc/Unknown")),
+                        then_body: vec![Stmt::new(
+                            StmtKind::Throw(Expr::new(
+                                ExprKind::NewObject {
+                                    class_name: Name::unqualified("DateInvalidTimeZoneException"),
+                                    args: vec![strlit(
+                                        "DateTimeZone::__construct(): Unknown or bad timezone (Etc/Unknown)",
+                                    )],
+                                },
+                                dummy(),
+                            )),
+                            dummy(),
+                        )],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    dummy(),
+                ),
+                // A tzdb abbreviation or numeric offset keeps its fixed offset on the zone:
+                // PHP's `CET` is +01:00 even in August, and libc's `TZ` cannot express it.
+                Stmt::assign(
+                    "__token",
+                    crate::synthetic_class::e_static_call(
+                        "DateTime",
+                        "__elephc_parse_zone_token",
+                        vec![var("__name")],
+                    ),
+                ),
+                Stmt::new(
+                    StmtKind::If {
+                        condition: binop(
+                            binop(var("__token"), BinOp::StrictNotEq, Expr::new(ExprKind::BoolLiteral(false), dummy())),
+                            BinOp::And,
+                            binop(
+                                Expr::new(ExprKind::ArrayAccess {
+                                    array: Box::new(var("__token")),
+                                    index: Box::new(int(2)),
+                                }, dummy()),
+                                BinOp::StrictEq,
+                                int(0),
+                            ),
+                        ),
+                        then_body: vec![
+                            Stmt::assign(
+                                "__name",
+                                Expr::new(ExprKind::ArrayAccess {
+                                    array: Box::new(var("__token")),
+                                    index: Box::new(int(0)),
+                                }, dummy()),
+                            ),
+                            assign_this_property("__elephc_fixed", Expr::new(ExprKind::BoolLiteral(true), dummy())),
+                            assign_this_property(
+                                "__elephc_fixed_offset",
+                                Expr::new(ExprKind::ArrayAccess {
+                                    array: Box::new(var("__token")),
+                                    index: Box::new(int(1)),
+                                }, dummy()),
+                            ),
+                        ],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    dummy(),
+                ),
+                assign_this_property("name", var("__name")),
+            ]
+        },
     )
+}
+
+/// `DateTimeZone::__elephc_from_parts(string $name, int $offset, bool $fixed): DateTimeZone`.
+///
+/// Rebuilds the zone carried by a `DateTime` without re-parsing the name, so abbreviation and
+/// fixed-offset zones keep their PHP-visible offset even when libc cannot reproduce it.
+pub(super) fn datetime_zone_from_parts() -> ClassMethod {
+    let var = |n: &str| Expr::new(ExprKind::Variable(n.to_string()), dummy());
+    let assign_prop = |object: Expr, name: &str, value: Expr| {
+        Stmt::new(
+            StmtKind::PropertyAssign {
+                object: Box::new(object),
+                property: name.to_string(),
+                value,
+            },
+            dummy(),
+        )
+    };
+    let mut built = method(
+        "__elephc_from_parts",
+        vec![
+            ("name".to_string(), Some(TypeExpr::Str), None, false),
+            ("offset".to_string(), Some(TypeExpr::Int), None, false),
+            ("fixed".to_string(), Some(TypeExpr::Bool), None, false),
+        ],
+        Some(TypeExpr::Named(Name::unqualified("DateTimeZone"))),
+        vec![
+            Stmt::assign(
+                "__zone",
+                Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("DateTimeZone"),
+                        args: vec![var("name")],
+                    },
+                    dummy(),
+                ),
+            ),
+            assign_prop(var("__zone"), "__elephc_fixed", var("fixed")),
+            assign_prop(var("__zone"), "__elephc_fixed_offset", var("offset")),
+            return_expr(var("__zone")),
+        ],
+    );
+    built.is_static = true;
+    built
 }
 
 /// `DateTimeZone::getName(): string` — returns the stored identifier.
@@ -43,6 +203,11 @@ pub(super) fn datetime_zone_get_offset() -> ClassMethod {
         Expr::new(ExprKind::FunctionCall { name: Name::unqualified(name), args }, dummy())
     };
     let var = |n: &str| Expr::new(ExprKind::Variable(n.to_string()), dummy());
+    let int = |v: i64| Expr::new(ExprKind::IntLiteral(v), dummy());
+    let strlit = |v: &str| Expr::new(ExprKind::StringLiteral(v.to_string()), dummy());
+    let binop = |l: Expr, op: BinOp, r: Expr| {
+        Expr::new(ExprKind::BinaryOp { left: Box::new(l), op, right: Box::new(r) }, dummy())
+    };
     let expr_stmt = |e: Expr| Stmt::new(StmtKind::ExprStmt(e), dummy());
     // $datetime->getTimestamp()
     let dt_ts = Expr::new(
@@ -64,10 +229,107 @@ pub(super) fn datetime_zone_get_offset() -> ClassMethod {
         )],
         Some(TypeExpr::Int),
         vec![
+            // Abbreviation/fixed-offset zones carry their offset; the `TZ` switch below would
+            // otherwise reinterpret `CET` as Europe/Berlin DST or invert `+03:40`.
+            Stmt::new(
+                StmtKind::If {
+                    condition: this_property("__elephc_fixed"),
+                    then_body: vec![return_expr(this_property("__elephc_fixed_offset"))],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy(),
+            ),
+            // Fixed-offset zones (`+04:05`, `GMT+04:05`) are valid DateTimeZone identifiers
+            // but are not IANA names the date runtime's `TZ` switch understands. Parse them
+            // directly instead of falling back to the process default.
+            Stmt::assign("__name", this_property("name")),
+            // if (substr($__name, 0, 3) === "GMT") { $__name = substr($__name, 3); }
+            Stmt::new(
+                StmtKind::If {
+                    condition: binop(
+                        call("substr", vec![var("__name"), int(0), int(3)]),
+                        BinOp::StrictEq,
+                        strlit("GMT"),
+                    ),
+                    then_body: vec![Stmt::assign(
+                        "__name",
+                        call("substr", vec![var("__name"), int(3)]),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy(),
+            ),
+            // if (strlen($__name) >= 6 && ($__name[0] === "+" || $__name[0] === "-")) { ... }
+            Stmt::new(
+                StmtKind::If {
+                    condition: binop(
+                        binop(call("strlen", vec![var("__name")]), BinOp::GtEq, int(6)),
+                        BinOp::And,
+                        binop(
+                            binop(
+                                Expr::new(ExprKind::ArrayAccess {
+                                    array: Box::new(var("__name")),
+                                    index: Box::new(int(0)),
+                                }, dummy()),
+                                BinOp::StrictEq,
+                                strlit("+"),
+                            ),
+                            BinOp::Or,
+                            binop(
+                                Expr::new(ExprKind::ArrayAccess {
+                                    array: Box::new(var("__name")),
+                                    index: Box::new(int(0)),
+                                }, dummy()),
+                                BinOp::StrictEq,
+                                strlit("-"),
+                            ),
+                        ),
+                    ),
+                    then_body: vec![
+                        Stmt::assign(
+                            "__sign",
+                            Expr::new(ExprKind::Ternary {
+                                condition: Box::new(binop(
+                                    Expr::new(ExprKind::ArrayAccess {
+                                        array: Box::new(var("__name")),
+                                        index: Box::new(int(0)),
+                                    }, dummy()),
+                                    BinOp::StrictEq,
+                                    strlit("+"),
+                                )),
+                                then_expr: Box::new(int(1)),
+                                else_expr: Box::new(int(-1)),
+                            }, dummy()),
+                        ),
+                        Stmt::assign(
+                            "__hours",
+                            call("intval", vec![call("substr", vec![var("__name"), int(1), int(2)])]),
+                        ),
+                        Stmt::assign(
+                            "__minutes",
+                            call("intval", vec![call("substr", vec![var("__name"), int(4), int(2)])]),
+                        ),
+                        return_expr(binop(
+                            var("__sign"),
+                            BinOp::Mul,
+                            binop(
+                                binop(var("__hours"), BinOp::Mul, int(3600)),
+                                BinOp::Add,
+                                binop(var("__minutes"), BinOp::Mul, int(60)),
+                            ),
+                        )),
+                    ],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                dummy(),
+            ),
             // $__saved = date_default_timezone_get();
             Stmt::assign("__saved", call("date_default_timezone_get", Vec::new())),
-            // date_default_timezone_set($this->name);
-            expr_stmt(call("date_default_timezone_set", vec![this_property("name")])),
+            // date_default_timezone_set($__name);
+            expr_stmt(call("date_default_timezone_set", vec![var("__name")])),
             // $__off = intval(date("Z", $datetime->getTimestamp()));
             Stmt::assign("__off", call("intval", vec![call("date", vec![z_spec, dt_ts])])),
             // date_default_timezone_set($__saved);  (restore the previous default)

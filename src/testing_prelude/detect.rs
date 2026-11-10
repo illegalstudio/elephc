@@ -60,6 +60,7 @@ fn receiver_refs_testing(receiver: &StaticReceiver) -> bool {
         // `Box<TestCase>::of()`: the head and the type arguments are both class positions.
         StaticReceiver::Generic(type_expr) => type_refs_testing(type_expr),
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => false,
+        StaticReceiver::Dynamic(class_expr) => expr_refs_testing(class_expr),
     }
 }
 

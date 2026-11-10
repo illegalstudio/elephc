@@ -662,6 +662,7 @@ fn collect_static_receiver(receiver: &StaticReceiver, out: &mut HashSet<String>)
         // `Box<User>::of()` demands the file declaring `Box` and the file declaring `User`.
         StaticReceiver::Generic(class_type) => collect_type_expr(class_type, out),
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => {}
+        StaticReceiver::Dynamic(class_expr) => collect_refs_expr(class_expr, out),
     }
 }
 

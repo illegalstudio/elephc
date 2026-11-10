@@ -173,6 +173,9 @@ impl Checker {
                         "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
                     ));
                 }
+                if let Some(message) = crate::types::checker::deprecated_constant_message(constant_name) {
+                    self.warnings.push(crate::errors::CompileWarning::deprecation(expr.span, message));
+                }
                 if pcntl_int_constants(self.target)
                     .iter()
                     .any(|(constant, _)| *constant == constant_name)
@@ -367,8 +370,14 @@ impl Checker {
                 let object_only = match &object_type {
                     PhpType::Object(_) => true,
                     PhpType::Union(members) => {
+                        // `$e::class` after `catch (Throwable $e)` carries the caught variable's
+                        // nullable type until the catch block's flow narrows it. An object plus
+                        // null is still a valid class-name receiver at run time.
                         !members.is_empty()
-                            && members.iter().all(|member| matches!(member, PhpType::Object(_)))
+                            && members.iter().any(|member| matches!(member, PhpType::Object(_)))
+                            && members.iter().all(|member| {
+                                matches!(member, PhpType::Object(_) | PhpType::Void | PhpType::Never)
+                            })
                     }
                     _ => false,
                 };
@@ -394,6 +403,12 @@ impl Checker {
                     crate::parser::ast::StaticReceiver::Generic(_) => unreachable!(
                         "StaticReceiver::Generic must be instantiated by generics::classes"
                     ),
+                    crate::parser::ast::StaticReceiver::Dynamic(_) => {
+                        return Err(CompileError::new(
+                            expr.span,
+                            "Dynamic class access is not supported for `new`",
+                        ));
+                    }
                     crate::parser::ast::StaticReceiver::Self_ => {
                         self.current_class.clone().ok_or_else(|| {
                             CompileError::new(

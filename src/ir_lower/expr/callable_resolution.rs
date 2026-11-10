@@ -39,6 +39,162 @@ pub(super) fn static_callable_call_lowers_directly(
     }
 }
 
+/// Returns the static PHP type of one callable argument at this lowering point.
+///
+/// The checker does not validate the arguments of a `$callable(...)` site; it only knows the
+/// callback variable's type. Direct-call lowering therefore has to recover the obvious local
+/// types itself, or it hands an object to a string parameter and the callee crashes.
+/// Returns the static PHP type of one callable argument at this lowering point.
+fn callable_argument_static_type(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> PhpType {
+    match &arg.kind {
+        ExprKind::Variable(name) => ctx.local_type(name),
+        ExprKind::This => ctx
+            .current_class
+            .as_ref()
+            .map(|class| PhpType::Object(class.trim_start_matches('\\').to_string()))
+            .unwrap_or(PhpType::Object(String::new())),
+        ExprKind::StringLiteral(_) => PhpType::Str,
+        ExprKind::IntLiteral(_) => PhpType::Int,
+        ExprKind::FloatLiteral(_) => PhpType::Float,
+        ExprKind::BoolLiteral(_) => PhpType::Bool,
+        ExprKind::Null => PhpType::Void,
+        ExprKind::NewObject { class_name, .. } => PhpType::Object(
+            class_name.as_canonical().trim_start_matches('\\').to_string(),
+        ),
+        ExprKind::ArrayLiteral(_) => PhpType::Array(Box::new(PhpType::Mixed)),
+        ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => {
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Mixed),
+                value: Box::new(PhpType::Mixed),
+            }
+        }
+        _ => super::merge_temps::fallback_expr_type(arg),
+    }
+}
+
+/// Returns whether an argument is clearly outside a parameter's declared PHP type.
+///
+/// Only clear storage mismatches are rejected here. Scalar-to-scalar coercions stay on the
+/// callee's ordinary conversion path, and `Mixed`/union arguments are left alone because this
+/// pre-check is intentionally narrower than the checker.
+fn callable_argument_is_clearly_incompatible(
+    ctx: &LoweringContext<'_, '_>,
+    expected: &PhpType,
+    actual: &PhpType,
+) -> bool {
+    if matches!(actual, PhpType::Mixed | PhpType::Union(_)) {
+        return false;
+    }
+    match expected.codegen_repr() {
+        PhpType::Mixed => false,
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| callable_argument_is_clearly_incompatible(ctx, member, actual)),
+        PhpType::Object(target) => match actual.codegen_repr() {
+            // Leave null-to-object validation to the callee/runtime. The optimizer's dynamic
+            // callable paths deliberately accept a null receiver so the body's own access can
+            // raise the observable error; this pre-check only rejects clearly wrong storage.
+            PhpType::Void => false,
+            PhpType::Object(actual) => {
+                let target = target.trim_start_matches('\\');
+                let actual = actual.trim_start_matches('\\');
+                if target.is_empty() {
+                    // A bare `object` parameter accepts every object; this arm already
+                    // established that the actual storage is an object.
+                    return false;
+                }
+                if actual.is_empty() {
+                    // The checker could not name the receiver's class here. That is an unknown,
+                    // not a proof of incompatibility; the callee still guards its own boundary.
+                    return false;
+                }
+                if actual.eq_ignore_ascii_case(target)
+                    || crate::ir_lower::expr::class_extends_class(ctx, actual, target)
+                {
+                    return false;
+                }
+                !ctx.classes
+                    .get(actual)
+                    .is_some_and(|info| {
+                        info.interfaces
+                            .iter()
+                            .any(|interface| interface.eq_ignore_ascii_case(target))
+                    })
+            }
+            _ => true,
+        },
+        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False => {
+            matches!(
+                actual.codegen_repr(),
+                PhpType::Object(_)
+                    | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
+                    | PhpType::Iterable
+            )
+        }
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            matches!(
+                actual.codegen_repr(),
+                PhpType::Object(_)
+                    | PhpType::Str
+                    | PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Bool
+                    | PhpType::False
+                    | PhpType::Void
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Evaluates every supplied argument for PHP-visible side effects before a guard throws.
+///
+/// PHP evaluates the argument list before it validates an internal function's arity or types,
+/// so `$f(side_effect(), ...)` runs the side effect even when the call is rejected. A value that
+/// terminates the block (`throw`, `exit`) stops the remaining arguments, matching PHP.
+fn lower_callable_guard_arguments(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) {
+    for arg in args {
+        if ctx.builder.insertion_block_is_terminated() {
+            return;
+        }
+        let value = lower_expr(ctx, arg);
+        release_discarded_branch_value(ctx, value, arg.span);
+    }
+}
+
+/// Builds PHP's argument-count message for a dynamic callable guard.
+///
+/// php-src distinguishes a fixed arity (`expects exactly N arguments`) from a range
+/// (`expects at least N arguments` / `expects at most N arguments`).
+fn callable_arity_message(function_name: &str, required: usize, maximum: usize, given: usize) -> String {
+    let (bound, relation) = if required == maximum {
+        (required, "exactly")
+    } else if given < required {
+        (required, "at least")
+    } else {
+        (maximum, "at most")
+    };
+    let noun = if bound == 1 { "argument" } else { "arguments" };
+    format!("{function_name}() expects {relation} {bound} {noun}, {given} given")
+}
+
+/// Builds PHP's standard parameter type message for a dynamic callable guard.
+fn callable_type_message(
+    function_name: &str,
+    index: usize,
+    parameter: &str,
+    expected: &PhpType,
+    actual: &PhpType,
+) -> String {
+    format!(
+        "{function_name}(): Argument #{} (${parameter}) must be of type {}, {} given",
+        index + 1,
+        crate::types::diagnostic_names::php_type_name(expected),
+        crate::types::diagnostic_names::php_type_name(actual),
+    )
+}
+
 /// Lowers one resolved static callable target to the corresponding EIR call opcode.
 pub(super) fn lower_static_callable_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -55,6 +211,73 @@ pub(super) fn lower_static_callable_call(
     match target {
         StaticCallableBinding::UserFunction(function_name) => {
             let sig = ctx.functions.get(&function_name).cloned();
+            // A callable string reaches this path without the checker's arity validation. A
+            // hidden argument collector also changes the physical parameter list, so the
+            // direct opcode cannot materialize this call; the descriptor path builds the
+            // collector and lets the callee raise its own ArgumentCountError.
+            let statically_positional = !crate::types::call_args::has_named_args(callback_args)
+                && !callback_args.iter().any(is_spread_arg);
+            if statically_positional {
+                if let Some(sig) = sig.as_ref() {
+                    let required = crate::types::call_args::required_param_count(sig);
+                    let maximum = sig
+                        .variadic
+                        .is_some()
+                        .then_some(usize::MAX)
+                        .unwrap_or(crate::types::call_args::regular_param_count(sig));
+                    if callback_args.len() < required || callback_args.len() > maximum {
+                        lower_callable_guard_arguments(ctx, callback_args);
+                        return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
+                            ctx,
+                            "ArgumentCountError",
+                            &callable_arity_message(
+                                &function_name,
+                                required,
+                                maximum,
+                                callback_args.len(),
+                            ),
+                            expr.span,
+                            PhpType::Mixed,
+                        ));
+                    }
+                }
+            }
+            // Only the Intl synthetic surface needs this early type guard: its prelude wrappers
+            // cross the bridge without a PHP entry guard. Ordinary user functions already carry
+            // their own entry guard, which emits PHP's standard "Argument #N ($x) must be of
+            // type ..." TypeError and must see the argument side effects first.
+            let intl_surface = elephc_builtin_contract::lookup(
+                function_name.trim_start_matches('\\'),
+            )
+            .is_some_and(|contract| {
+                contract.module == elephc_builtin_contract::PhpModule::Intl
+            });
+            let intl_mismatch = if intl_surface && statically_positional {
+                sig.as_ref().and_then(|sig| {
+                    let regular = crate::types::call_args::regular_param_count(sig);
+                    callback_args.iter().enumerate().find_map(|(index, arg)| {
+                        if index >= regular {
+                            return None;
+                        }
+                        let (parameter, expected) = sig.params.get(index)?;
+                        let actual = callable_argument_static_type(ctx, arg);
+                        callable_argument_is_clearly_incompatible(ctx, expected, &actual)
+                            .then(|| (index, parameter.clone(), expected.clone(), actual))
+                    })
+                })
+            } else {
+                None
+            };
+            if let Some((index, parameter, expected, actual)) = intl_mismatch {
+                lower_callable_guard_arguments(ctx, callback_args);
+                return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
+                    ctx,
+                    "TypeError",
+                    &callable_type_message(&function_name, index, &parameter, &expected, &actual),
+                    expr.span,
+                    PhpType::Mixed,
+                ));
+            }
             let php_type = call_return_type(ctx, &function_name, &[]);
             let return_alias = ctx.return_alias_summaries.function(&function_name)
                 .cloned().unwrap_or(ReturnArgAlias::Unknown);
@@ -125,6 +348,74 @@ pub(super) fn lower_static_callable_call(
             Some(call)
         }
         StaticCallableBinding::Builtin(function_name) => {
+            let sig = call_signature(
+                ctx,
+                &function_name,
+                source_prefers_extension_builtin(&function_name),
+            );
+            // A dynamic call site reaches this path with arguments the checker never validated
+            // against the builtin's signature (for example a literal-foreach callable). If the
+            // count cannot bind, leave the call to the runtime descriptor path so PHP's
+            // ArgumentCountError is raised at execution time instead of failing codegen. Named
+            // and spread calls keep the direct planner, which owns their binding rules.
+            //
+            // `clone` is a language-construct builtin: its runtime op validates both operands and
+            // must observe argument side effects before raising TypeError, so it stays on the
+            // descriptor path instead of the direct-call guard.
+            let enforce_signature = function_name != "clone";
+            let statically_positional = !crate::types::call_args::has_named_args(callback_args)
+                && !callback_args.iter().any(is_spread_arg);
+            if enforce_signature && statically_positional {
+                if let Some(sig) = sig.as_ref() {
+                    let required = crate::types::call_args::required_param_count(sig);
+                    let maximum = sig
+                        .variadic
+                        .is_some()
+                        .then_some(usize::MAX)
+                        .unwrap_or(sig.params.len());
+                    if callback_args.len() < required || callback_args.len() > maximum {
+                        lower_callable_guard_arguments(ctx, callback_args);
+                        return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
+                            ctx,
+                            "ArgumentCountError",
+                            &callable_arity_message(
+                                &function_name,
+                                required,
+                                maximum,
+                                callback_args.len(),
+                            ),
+                            expr.span,
+                            PhpType::Mixed,
+                        ));
+                    }
+                }
+            }
+            let builtin_mismatch = if enforce_signature && statically_positional {
+                sig.as_ref().and_then(|sig| {
+                    let regular = crate::types::call_args::regular_param_count(sig);
+                    callback_args.iter().enumerate().find_map(|(index, arg)| {
+                        if index >= regular {
+                            return None;
+                        }
+                        let (parameter, expected) = sig.params.get(index)?;
+                        let actual = callable_argument_static_type(ctx, arg);
+                        callable_argument_is_clearly_incompatible(ctx, expected, &actual)
+                            .then(|| (index, parameter.clone(), expected.clone(), actual))
+                    })
+                })
+            } else {
+                None
+            };
+            if let Some((index, parameter, expected, actual)) = builtin_mismatch {
+                lower_callable_guard_arguments(ctx, callback_args);
+                return Some(crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
+                    ctx,
+                    "TypeError",
+                    &callable_type_message(&function_name, index, &parameter, &expected, &actual),
+                    expr.span,
+                    PhpType::Mixed,
+                ));
+            }
             if let Some(value) =
                 lower_class_introspection(ctx, &function_name, callback_args, expr)
             {
@@ -135,11 +426,6 @@ pub(super) fn lower_static_callable_call(
             {
                 return Some(value);
             }
-            let sig = call_signature(
-                ctx,
-                &function_name,
-                source_prefers_extension_builtin(&function_name),
-            );
             if let Some(call) = lower_packed_builtin_call(
                 ctx, &function_name, sig.as_ref(), callback_args, expr,
             ) {

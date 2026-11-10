@@ -128,12 +128,11 @@ assign_capture(null);
 
 /// Refuses untracked parameter and property alias storage before emitting an unsafe wrapper pointer.
 #[test]
-fn test_mbstring_regex_capture_unsupported_reference_forms() {
-    for source in [
-        "<?php function capture(mixed &$matches): bool { return mb_ereg('a', 'a', $matches); } function run(mixed $matches): void { var_dump(capture($matches)); } run(null);",
-        "<?php class CaptureBox { public mixed $value = null; } $matches = null; $alias =& $matches; $box = new CaptureBox(); $alias =& $box->value; var_dump(mb_ereg('a', 'a', $alias));",
-    ] {
-        let error = compile_source_expect_backend_error(source);
-        assert!(error.contains("mbstring output requires a managed Mixed local reference"), "{error}");
-    }
+fn test_mbstring_regex_capture_rejects_unmanaged_reference_forms() {
+    // A reference passed through a by-value parameter has no caller-owned Mixed local to
+    // write back into. Property-backed reference aliases ARE managed cells now and take the
+    // ordinary by-reference path instead.
+    let source = "<?php function capture(mixed &$matches): bool { return mb_ereg('a', 'a', $matches); } function run(mixed $matches): void { var_dump(capture($matches)); } run(null);";
+    let error = compile_source_expect_backend_error(source);
+    assert!(error.contains("mbstring output requires a managed Mixed local reference"), "{error}");
 }

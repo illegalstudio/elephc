@@ -75,6 +75,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");                        // save the initial heap end for all x86_64 metadata, root, and free scans
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // initialize the outer scan pointer to the heap base for the clear pass
     emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // initialize the collected graph-node count
+    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // initialize the collected object-cycle count
 
     // -- pass 1: clear the x86_64 reachable bit while preserving kind + array value_type + heap marker --
     emitter.label("__rt_gc_collect_cycles_clear_loop");
@@ -199,7 +200,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_gc_collect_cycles_count_hash");                // yes — scan hash entry child payloads
     emitter.instruction("cmp r10, 5");                                          // is the source block a boxed mixed cell?
     emitter.instruction("je __rt_gc_collect_cycles_count_mixed");               // yes — compare the boxed child pointer against the candidate
-    emitter.instruction("jmp __rt_gc_collect_cycles_count_object");             // the remaining refcounted heap kind is an object instance
+    emitter.instruction("jmp __rt_gc_collect_cycles_count_unreachable_object"); // the remaining refcounted heap kind is an object instance
     emitter.label("__rt_gc_collect_cycles_count_callable");
     emitter.instruction("push rdi");                                            // preserve the source payload size across capture traversal
     emitter.instruction("push rsi");                                            // preserve the exact candidate and maintain C-call alignment
@@ -291,7 +292,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     edge_cache::emit_edge(emitter, "QWORD PTR [r9 + 8]", "__rt_gc_collect_cycles_count_next", "mixed");
     emitter.instruction("jmp __rt_gc_collect_cycles_count_next");               // boxed mixed-child comparison is complete for this source block
 
-    emitter.label("__rt_gc_collect_cycles_count_object");
+    emitter.label("__rt_gc_collect_cycles_count_unreachable_object");
     emitter.instruction("push rdi");                                            // preserve source payload size for heap iteration
     emitter.instruction("push rsi");                                            // preserve the candidate pointer and C-call stack alignment
     emitter.instruction("lea rdi, [rdx + 16]");                                 // pass the owning raw object through the C ABI
@@ -453,6 +454,15 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test r11, 0x10000");                                   // was this live block marked reachable from an external root during the root pass?
     emitter.instruction("jnz __rt_gc_collect_cycles_free_next");                // yes — reachable graph nodes remain live
     emitter.instruction("add QWORD PTR [rbp - 56], 1");                         // count this unreachable graph node in the explicit result
+    emitter.instruction("cmp rcx, 4");                                          // is this unreachable node a PHP object?
+    emitter.instruction("je __rt_gc_collect_cycles_free_object_count_x86");     // count object cycles separately from their array payloads
+    emitter.instruction("cmp rcx, 6");                                          // is this unreachable node a throwable object?
+    emitter.instruction("je __rt_gc_collect_cycles_free_object_count_x86");     // throwables participate in object cycles
+    emitter.instruction(&format!("cmp rcx, {CALLABLE_HEAP_KIND}"));             // is this unreachable node a callable descriptor?
+    emitter.instruction("jne __rt_gc_collect_cycles_free_object_count_done_x86"); // array and mixed payloads do not add an object cycle
+    emitter.label("__rt_gc_collect_cycles_free_object_count_x86");
+    emitter.instruction("add QWORD PTR [rbp - 64], 1");                         // count this unreachable object graph node
+    emitter.label("__rt_gc_collect_cycles_free_object_count_done_x86");
     emitter.instruction("mov DWORD PTR [r8 + 4], 0");                           // pre-clear the doomed node refcount so back-edges released during deep-free cannot recursively reclaim it again
     emitter.instruction("lea rax, [r8 + 16]");                                  // compute the current user pointer before dispatching to the deep-free helper
     emitter.instruction("cmp rcx, 2");                                          // is this unreachable node an indexed array?
@@ -498,7 +508,12 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_gc_drop_pins");                              // release snapshot chunks without reading reclaimed PHP headers
     crate::codegen_support::abi::emit_store_zero_to_symbol(emitter, "_gc_freeing_unreachable", 0);
     emitter.instruction("call __rt_gc_collector_end");                          // accumulate collector and graph-free phase durations
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the number of unreachable graph nodes reclaimed
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // load the reclaimed-node count
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // load the object-cycle count
+    emitter.instruction("test rdx, rdx");                                       // were any object graph nodes reclaimed?
+    emitter.instruction("jz __rt_gc_collect_cycles_use_node_count_x86");        // array-only graphs keep their node count
+    emitter.instruction("mov rax, rdx");                                        // PHP reports object cycles, not their array payload nodes
+    emitter.label("__rt_gc_collect_cycles_use_node_count_x86");
     emitter.instruction("test rax, rax");                                       // did this pass reclaim any graph nodes?
     emitter.instruction("jz __rt_gc_collect_cycles_stats_done");                // empty passes do not count as productive collector runs
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_runs");

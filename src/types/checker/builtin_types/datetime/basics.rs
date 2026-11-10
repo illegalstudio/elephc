@@ -16,40 +16,14 @@ use super::*;
 /// and the zone becomes the display zone. `"now"` is the current instant regardless of zone.
 #[cfg(test)]
 pub(super) const CONSTRUCT_SRC: &str = r#"<?php
-// Capture a trailing fractional second (HH:MM:SS.ffffff) into the microsecond
-// component and strip it before strtotime() (which does not accept it). The
-// parsing lives in static helpers so the constructor body stays small (adding
-// locals + a loop here corrupts the frame when a caller also formats the result).
 $this->microsecond = DateTime::__elephc_extract_micros($datetime);
 $datetime = DateTime::__elephc_strip_micros($datetime);
-if ($timezone === null) {
-    if ($datetime === "now") {
-        $this->timestamp = time();
-    } else {
-        $__ts = strtotime($datetime);
-        if ($__ts === false) {
-            throw new DateMalformedStringException("Failed to parse time string (" . $datetime . ")");
-        }
-        $this->timestamp = $__ts;
-    }
-    $this->timezone_name = date_default_timezone_get();
-} else {
-    $tzname = $timezone->getName();
-    if ($datetime === "now") {
-        $this->timestamp = time();
-    } else {
-        $saved = date_default_timezone_get();
-        date_default_timezone_set($tzname);
-        $__ts = strtotime($datetime);
-        if ($__ts === false) {
-            date_default_timezone_set($saved);
-            throw new DateMalformedStringException("Failed to parse time string (" . $datetime . ")");
-        }
-        $this->timestamp = $__ts;
-        date_default_timezone_set($saved);
-    }
-    $this->timezone_name = $tzname;
-}
+$state = DateTime::__elephc_construct_state($datetime, $timezone);
+$this->timestamp = $state[0];
+$this->timezone_name = $state[1];
+$this->timezone_offset = $state[2];
+$this->timezone_fixed = $state[3];
+$this->__elephc_initialized = true;
 "#;
 
 /// `DateTime`/`DateTimeImmutable::__construct(string $datetime = "now", ?DateTimeZone $timezone = null)`
@@ -103,9 +77,14 @@ pub(super) fn datetime_immutable_get_timezone() -> ClassMethod {
         Vec::new(),
         Some(TypeExpr::Named(Name::unqualified("DateTimeZone"))),
         vec![return_expr(Expr::new(
-            ExprKind::NewObject {
-                class_name: Name::unqualified("DateTimeZone"),
-                args: vec![this_property("timezone_name")],
+            ExprKind::StaticMethodCall {
+                receiver: crate::parser::ast::StaticReceiver::Named(Name::unqualified("DateTimeZone")),
+                method: "__elephc_from_parts".to_string(),
+                args: vec![
+                    this_property("timezone_name"),
+                    this_property("timezone_offset"),
+                    this_property("timezone_fixed"),
+                ],
             },
             dummy(),
         ))],
@@ -120,7 +99,7 @@ pub(super) fn datetime_immutable_get_timezone() -> ClassMethod {
 #[cfg(test)]
 pub(super) const FORMAT_SRC: &str = r#"<?php
 $saved = date_default_timezone_get();
-date_default_timezone_set($this->timezone_name);
+if (!$this->timezone_fixed) { date_default_timezone_set($this->timezone_name); }
 $us = $this->microsecond;
 $fmt = "";
 $flen = strlen($format);
@@ -149,7 +128,7 @@ while ($k < $flen) {
         continue;
     }
     if ($ch === "X" || $ch === "x") {
-        $year = intval(date("Y", $this->timestamp));
+        if ($this->timezone_fixed) { $year = intval(gmdate("Y", $this->timestamp + $this->timezone_offset)); } else { $year = intval(date("Y", $this->timestamp)); }
         if ($year < 0) {
             $year = -$year;
             $sign = "-";
@@ -169,7 +148,7 @@ while ($k < $flen) {
     $fmt = $fmt . $ch;
     $k = $k + 1;
 }
-$r = date($fmt, $this->timestamp);
+if ($this->timezone_fixed) { $r = gmdate($fmt, $this->timestamp + $this->timezone_offset); } else { $r = date($fmt, $this->timestamp); }
 date_default_timezone_set($saved);
 return $r;
 "#;

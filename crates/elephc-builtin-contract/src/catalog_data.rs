@@ -15930,6 +15930,18 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
                 default: None,
                 by_ref: false,
             },
+            ParamSpec {
+                name: "flags",
+                ty: TypeSpec::Int,
+                default: Some(DefaultSpec::Int(11)),
+                by_ref: false,
+            },
+            ParamSpec {
+                name: "encoding",
+                ty: TypeSpec::Nullable(&TypeSpec::Str),
+                default: Some(DefaultSpec::Null),
+                by_ref: false,
+            },
         ],
         variadic: None,
         variadic_by_ref: false,
@@ -15938,7 +15950,7 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
         arity_error: None,
         returns: TypeSpec::Str,
         by_ref_return: false,
-        summary: "Converts HTML entities in a string back into their corresponding characters.",
+        summary: "Converts HTML entities in a string back into their corresponding characters. The compiled decoder supports the default quote policy (ENT_QUOTES|ENT_SUBSTITUTE|ENT_HTML401) and UTF-8 only; other flags or encodings are rejected at compile time.",
         examples: &[
         ],
         php_manual: Some("https://www.php.net/manual/en/function.html-entity-decode.php"),

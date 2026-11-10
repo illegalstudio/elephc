@@ -31,6 +31,8 @@ const BRIDGE_NATIVE_PACKAGES: &[(&str, &[&str])] = &[
     // The cipher bridge declares libcrypto's provider/EVP symbols without
     // linking them; the package's zlib dependency supplies `libz.a` after it.
     ("elephc_openssl", &["openssl-crypto"]),
+    // The Intl bridge reaches ICU through the managed package's shim archive.
+    ("elephc_intl", &["icu"]),
 ];
 
 /// Returns the managed native packages a planned library set needs, in link order.

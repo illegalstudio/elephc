@@ -47,6 +47,7 @@ mod curl_native;
 mod gmp_native;
 mod native_cache;
 pub(crate) mod fileinfo_native;
+pub(crate) mod intl_native;
 mod native_projects;
 mod oniguruma;
 mod openssl_native;

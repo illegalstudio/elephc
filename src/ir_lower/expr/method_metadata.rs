@@ -34,6 +34,17 @@ pub(super) fn method_signature_for_receiver_type(
             return class_method_signature(ctx, normalized, &key).cloned();
         }
     }
+    // A union that mixes one object class with non-object members still has exactly one
+    // possible method owner. Its signature pads omitted defaults at the call site, which the
+    // mixed dispatch needs because the callee ABI always has every physical parameter.
+    if let Some(class_name) = unique_union_object_class(object_ty) {
+        let normalized = class_name.trim_start_matches('\\');
+        if !normalized.is_empty() {
+            if let Some(signature) = class_method_signature(ctx, normalized, &key).cloned() {
+                return Some(signature);
+            }
+        }
+    }
     if dynamic_method_receiver_needs_mixed_fallback(object_ty) {
         if ctx.has_eval_barrier() {
             return None;
@@ -330,6 +341,21 @@ pub(super) fn common_dynamic_method_signature(
         }
     }
     common
+}
+
+/// Returns the single object class in a union that may also contain non-object members.
+fn unique_union_object_class(php_type: &PhpType) -> Option<&str> {
+    let PhpType::Union(members) = php_type else { return None };
+    let mut found = None;
+    for member in members {
+        if let PhpType::Object(name) = member {
+            if found.is_some_and(|existing| existing != name.as_str()) {
+                return None;
+            }
+            found = Some(name.as_str());
+        }
+    }
+    found
 }
 
 /// Returns true when an instance-method receiver has no single compile-time class.

@@ -47,7 +47,13 @@ TARGET_VOLUME="${ELEPHC_DOCKER_TARGET_VOLUME:-elephc-target-linux-x86_64-$WORKTR
 KEEP_TARGET_VOLUME="${ELEPHC_KEEP_DOCKER_TARGET_VOLUME:-0}"
 DOCKERFILE="$PROJECT_DIR/Dockerfile.test-linux-x86_64"
 DOCKER_ROOT="$(docker info -f '{{.DockerRootDir}}')"
-AVAILABLE_KIB="$(df -Pk "$DOCKER_ROOT" | awk 'NR == 2 {print $4}')"
+# Docker Desktop reports a VM path (for example /var/lib/docker) that is not visible on the
+# host. Fall back to the project filesystem for the disk guard in that case.
+DOCKER_DF_ROOT="$DOCKER_ROOT"
+if ! df -Pk "$DOCKER_DF_ROOT" >/dev/null 2>&1; then
+    DOCKER_DF_ROOT="$PROJECT_DIR"
+fi
+AVAILABLE_KIB="$(df -Pk "$DOCKER_DF_ROOT" | awk 'NR == 2 {print $4}')"
 if (( AVAILABLE_KIB < MIN_FREE_KIB )); then
     echo "Docker has less than $MIN_FREE_GIB GiB free; refusing to start the test." >&2
     exit 1
@@ -112,24 +118,27 @@ trap 'exit 143' TERM
 # libelephc_fileinfo.a / libelephc_magician.a / libelephc_curl.a exist in the target dir:
 # `cargo test` alone never emits the staticlib crate-type.
 #
-# Then materialize the managed native libxml2 and libmagic packages. The xml parser
-# uses libxml2; fileinfo uses libmagic and its embedded database. The freshly
-# built compiler installs both into a cache on the target volume
-# (ELEPHC_NATIVE_CACHE), so a kept volume reuses their source builds. The
-# exported native-library directories and required-artifact flags cover both bridges:
-# ELEPHC_XML_LIBXML2_LIB_DIR compiles the crate's libxml2-calling unit tests in
-# (crates/elephc-xml/build.rs), and ELEPHC_TEST_REQUIRE_XML_NATIVE turns a
+# Then materialize the managed native libxml2, ICU and libmagic packages. The xml
+# parser uses libxml2; ext/intl uses ICU; fileinfo uses libmagic and its embedded
+# database. The freshly built compiler installs all three into a cache on the
+# target volume (ELEPHC_NATIVE_CACHE), so a kept volume reuses their source builds.
+# The exported native-library directories and required-artifact flags cover the
+# bridges: ELEPHC_XML_LIBXML2_LIB_DIR compiles the crate's libxml2-calling unit
+# tests in (crates/elephc-xml/build.rs), and ELEPHC_TEST_REQUIRE_XML_NATIVE turns a
 # missing artifact into a loud failure in tests/codegen/xml instead of a skip.
-# The corresponding FILEINFO variables enable native tests and forbid fileinfo skips.
+# The corresponding FILEINFO and INTL variables enable native tests and forbid
+# skips for those bridges.
 # shellcheck disable=SC2016 # Expanded by the container shell.
-DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-reference -p elephc-instr -p elephc-probe -p elephc-curl -p elephc-zend \
+DOCKER_TEST_COMMAND='cargo build -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-intl -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-reference -p elephc-instr -p elephc-probe -p elephc-curl -p elephc-zend \
     && cargo build --bin elephc \
     && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-x86_64 --manifest-path examples/xml/elephc.toml \
+    && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-x86_64 --manifest-path examples/intl/elephc.toml \
     && "$CARGO_TARGET_DIR/debug/elephc" native install --locked --target linux-x86_64 --manifest-path examples/fileinfo/elephc.toml \
     && ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
        ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-x86_64)" \
        ELEPHC_TEST_REQUIRE_XML_NATIVE=1 \
        ELEPHC_TEST_REQUIRE_FILEINFO_NATIVE=1 \
+       ELEPHC_TEST_REQUIRE_INTL_NATIVE=1 \
        cargo test "$@"'
 if [ "$TEST_ARG_COUNT" -eq 0 ]; then
     echo "Running all tests on Linux x86_64 using temporary target volume '$TARGET_VOLUME'..."

@@ -24,6 +24,52 @@ pub(super) fn lower_args(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) -> Ve
         .collect()
 }
 
+/// Boxes an array_walk receiver whose elements need the boxed walker.
+///
+/// `array_walk()` and `array_walk_recursive()` take `mixed &$array`. Their static callback path
+/// handles one-word scalar elements, while object or nested-container elements are only
+/// representable through the boxed runtime walker. Widening the local to a boxed `Mixed` value
+/// keeps the same PHP value and lets the walker mutate it and publish the result back.
+pub(super) fn box_heap_element_array_local(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    span: crate::span::Span,
+) {
+    if ctx.is_ref_bound_local(name) {
+        return;
+    }
+    let source_ty = ctx.local_type(name).codegen_repr();
+    let element_ty = match &source_ty {
+        PhpType::Array(element) => element.codegen_repr(),
+        PhpType::AssocArray { value: element, .. } => element.codegen_repr(),
+        _ => return,
+    };
+    if !matches!(
+        element_ty,
+        PhpType::Object(_)
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Union(_)
+            | PhpType::Callable
+    ) {
+        return;
+    }
+    let loaded = ctx.load_local(name, Some(span));
+    let boxed = ctx.emit_owned_value(
+        Op::MixedBox,
+        vec![loaded.value],
+        None,
+        PhpType::Mixed,
+        Op::MixedBox.default_effects(),
+        Some(span),
+    );
+    let slot = ctx.declare_local(name, PhpType::Mixed);
+    ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
+    ctx.set_local_type(name, PhpType::Mixed);
+    ctx.set_local_logical_type(name, PhpType::Mixed);
+    ctx.store_local(name, boxed, PhpType::Mixed, Some(span));
+}
+
 /// Lowers one argument while applying by-reference storage normalization from a signature.
 pub(super) fn lower_arg_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
@@ -94,6 +140,26 @@ fn lower_signature_argument(
     }
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
+    }
+    // PHP binds an undefined variable passed to a boxed by-reference parameter as a null
+    // reference cell before the call; leaving the frame slot uninitialized crashes the callee.
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        && sig
+            .params
+            .get(index)
+            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+    {
+        if let ExprKind::Variable(name) = &arg.kind {
+            let uninitialized = ctx
+                .local_slots
+                .get(name)
+                .is_none_or(|slot| !ctx.slot_is_initialized(*slot));
+            if uninitialized && !ctx.local_uses_global_storage(name) {
+                let null = crate::ir_lower::expr::scalar_literals::lower_boxed_null(ctx, arg);
+                ctx.store_local(name, null, PhpType::Mixed, Some(arg.span));
+                ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
+            }
+        }
     }
     guard_boxed_object_reference_argument(ctx, sig, index, arg);
     promote_boxed_reference_local_argument(ctx, sig, index, arg);
@@ -467,6 +533,7 @@ fn promote_boxed_reference_local_argument(
     let owner_needs_promotion = ctx.local_type(name).codegen_repr() == PhpType::Mixed
         && ctx.ref_cell_owner_slot(name).is_some_and(|owner| !ctx.slot_is_initialized(owner));
     if (!ctx.is_ref_bound_local(name) || owner_needs_promotion) && ctx.local_can_own_reference_cell(name) {
+
         ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
     }
 }
@@ -678,7 +745,20 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     {
         return unbox_iterable_param_storage(ctx, value, Some(arg.span));
     }
-    if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
+    let simple_xml_object = match &source_ty {
+        PhpType::Object(class_name) => crate::ir_lower::expr::class_extends_class(
+            ctx,
+            class_name.trim_start_matches('\\'),
+            "SimpleXMLElement",
+        ),
+        _ => false,
+    };
+    if param_ty == PhpType::Str
+        && (matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) || simple_xml_object)
+    {
+        // The native SimpleXML views reach a string parameter through their prelude
+        // `__toString`; userland Stringable objects stay on the backend's explicit
+        // refusal path, which the inet/explode diagnostics assert.
         return coerce_to_string(ctx, value, arg);
     }
     if bindable {

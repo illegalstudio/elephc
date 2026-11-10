@@ -10,6 +10,7 @@
 pub(super) mod util;
 pub mod curl;
 pub mod gmp;
+pub mod icu;
 pub mod libssh2;
 pub mod libxml2;
 pub mod libmagic;

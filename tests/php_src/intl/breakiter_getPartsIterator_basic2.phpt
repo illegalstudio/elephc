@@ -1,0 +1,35 @@
+--TEST--
+IntlBreakIterator::getPartsIterator(): basic test, ICU >= 58.1
+--EXTENSIONS--
+intl
+--SKIPIF--
+<?php
+if (version_compare(INTL_ICU_VERSION, '57.1') <= 0) die('skip for ICU > 57.1');
+?>
+--FILE--
+<?php
+
+$bi = IntlBreakIterator::createWordInstance('pt');
+$pi = $bi->getPartsIterator();
+var_dump(get_class($pi));
+print_r(iterator_to_array($pi));
+
+$bi->setText("foo bar");
+$pi = $bi->getPartsIterator();
+var_dump(get_class($pi->getBreakIterator()));
+print_r(iterator_to_array($pi));
+var_dump($pi->getRuleStatus());
+?>
+--EXPECTF--
+string(17) "IntlPartsIterator"
+Array
+(
+)
+string(26) "IntlRuleBasedBreakIterator"
+Array
+(
+    [0] => foo
+    [1] =>  
+    [2] => bar
+)
+int(%d)

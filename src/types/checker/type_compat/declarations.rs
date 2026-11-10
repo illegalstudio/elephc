@@ -320,6 +320,39 @@ impl Checker {
             if expected_ty.codegen_repr() == PhpType::Mixed && can_widen_local {
                 return Ok(());
             }
+            // A property-backed reference cannot be passed as the property's concrete cell to a
+            // mixed by-reference parameter. EIR lowering rewrites the argument to the property
+            // place, passes a boxed temporary, and writes it back through the property with
+            // PHP's typed-property coercion. Direct property arguments use the same rewrite.
+            if expected_ty.codegen_repr() == PhpType::Mixed {
+                match &arg.kind {
+                    ExprKind::Variable(name)
+                        if self.property_ref_aliased_locals.contains(name) =>
+                    {
+                        return Ok(());
+                    }
+                    ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => {
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+            // A previous by-reference call already promoted this local to a boxed Mixed cell
+            // (for example the OO parseCurrency call followed by the procedural one on the same
+            // offset). The static value type stays concrete, but the storage is the boxed cell
+            // every later mixed reference expects.
+            if expected_ty.codegen_repr() == PhpType::Mixed
+                && self.boxed_reference_layout_precedes(arg)
+            {
+                return Ok(());
+            }
+            if expected_ty.codegen_repr() == PhpType::Mixed {
+                if let ExprKind::Variable(name) = &arg.kind {
+                    if self.mixed_storage_locals.contains(name) {
+                        return Ok(());
+                    }
+                }
+            }
             // `lower_by_ref_array_element_arg_with_signature` widens a local
             // indexed array to Mixed slots before taking the element address.
             // Only that addressable shape has this conversion, not arbitrary
@@ -801,6 +834,10 @@ fn requires_by_ref_boxed_storage(ty: &PhpType) -> bool {
 }
 
 /// Returns true when an argument variable's storage can accept boxed or nullable writebacks.
+///
+/// A `Void` slot holds PHP null (for example a `mixed &$position = null` parameter), which a
+/// boxed reference cell can replace without changing any concrete storage representation.
 fn supports_by_ref_boxed_storage(ty: &PhpType) -> bool {
     matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar)
+        || matches!(ty, PhpType::Void)
 }

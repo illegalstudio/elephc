@@ -46,6 +46,19 @@ pub(crate) fn lower_html_escape(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `html_entity_decode(string $string, int $flags = ..., ?string $encoding = ...)`.
+///
+/// The runtime decoder always applies PHP's default quote/doctype policy, so the optional
+/// `$flags` and `$encoding` operands are evaluated for their side effects but not read. That
+/// keeps the builtin's three-parameter PHP signature while the decoder itself stays unary.
+pub(crate) fn lower_html_entity_decode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let ptr_reg = string_ptr_reg(ctx);
+    let len_reg = string_len_reg(ctx);
+    load_string_arg_to_regs(ctx, inst, 0, "html_entity_decode", ptr_reg, len_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_html_entity_decode");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `grapheme_strrev()` and boxes its `string|false` result as `Mixed`.
 pub(crate) fn lower_grapheme_strrev(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     load_single_string_arg(ctx, inst, "grapheme_strrev")?;

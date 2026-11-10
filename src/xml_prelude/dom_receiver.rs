@@ -293,6 +293,7 @@ impl DomReceiver {
             StaticReceiver::Generic(ty) => type_classes(ty),
             StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent =>
                 self.class.clone().map(|class| HashSet::from([class])),
+            StaticReceiver::Dynamic(class_expr) => self.classes(class_expr),
         };
         classes.is_none_or(|classes| self.may_load_classes(classes))
     }

@@ -518,6 +518,52 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
 
     *pos = assign_pos + 1;
+    // `C::$property = &$local` aliases the static slot to the local. PHP's reference is
+    // symmetric, so storing the local's current value first and then binding the local to
+    // the static slot gives both names the same storage. Only a plain local source is
+    // desugared here; other reference sources keep the explicit diagnostic.
+    if op == AssignmentOperator::Assign
+        && !is_append
+        && matches!(tokens.get(*pos).map(|(token, _)| token), Some(Token::Ampersand))
+    {
+        if let ExprKind::StaticPropertyAccess { receiver, property } = &lhs_expr.kind {
+            *pos += 1; // consume '&'
+            let Some((Token::Variable(source), _)) = tokens.get(*pos).cloned() else {
+                return Err(CompileError::new(
+                    span,
+                    "Static property reference assignment requires a local variable source",
+                ));
+            };
+            *pos += 1;
+            expect_semicolon(tokens, pos)?;
+            let value = Expr::new(ExprKind::Variable(source.clone()), span);
+            let assign = Stmt::new(
+                StmtKind::StaticPropertyAssign {
+                    receiver: receiver.clone(),
+                    property: property.clone(),
+                    value,
+                },
+                span,
+            );
+            let alias = Stmt::new(
+                StmtKind::RefAssign {
+                    target: source,
+                    source: Expr::new(
+                        ExprKind::StaticPropertyAccess {
+                            receiver: receiver.clone(),
+                            property: property.clone(),
+                        },
+                        span,
+                    ),
+                },
+                span,
+            );
+            return Ok(Some(Stmt::new(
+                StmtKind::Synthetic(vec![assign, alias]),
+                span,
+            )));
+        }
+    }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {

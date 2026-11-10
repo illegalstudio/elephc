@@ -45,6 +45,7 @@ mod strftime;
 mod strptime;
 mod sun_sources;
 mod timezone;
+mod zone_parse;
 
 #[allow(unused_imports)]
 use ast::*;
@@ -82,6 +83,8 @@ use strptime::*;
 use sun_sources::*;
 #[allow(unused_imports)]
 use timezone::*;
+#[allow(unused_imports)]
+use zone_parse::*;
 
 pub(crate) use gate::program_may_reference_datetime;
 pub(crate) use injection::inject_builtin_datetime;

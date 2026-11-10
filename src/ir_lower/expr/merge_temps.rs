@@ -921,6 +921,7 @@ pub(super) fn receiver_name(receiver: &StaticReceiver) -> String {
         StaticReceiver::Self_ => "self".to_string(),
         StaticReceiver::Static => "static".to_string(),
         StaticReceiver::Parent => "parent".to_string(),
+        StaticReceiver::Dynamic(_) => "dynamic".to_string(),
     }
 }
 

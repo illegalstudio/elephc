@@ -846,9 +846,21 @@ pub(crate) fn lower_throw_access_error_expr_as(
     span: Span,
     php_type: PhpType,
 ) -> LoweredValue {
+    lower_throw_access_exception_expr_as(ctx, "Error", message, span, php_type)
+}
+
+/// Lowers a statically-decided violation as a catchable exception of `class_name` in expression
+/// position and returns a placeholder null value.
+pub(crate) fn lower_throw_access_exception_expr_as(
+    ctx: &mut LoweringContext<'_, '_>,
+    class_name: &str,
+    message: &str,
+    span: Span,
+    php_type: PhpType,
+) -> LoweredValue {
     let error_expr = Expr::new(
         ExprKind::NewObject {
-            class_name: crate::names::Name::unqualified("Error"),
+            class_name: crate::names::Name::unqualified(class_name),
             args: vec![Expr::new(ExprKind::StringLiteral(message.to_string()), span)],
         },
         span,

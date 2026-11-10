@@ -265,6 +265,31 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
 
     emitter.label("__rt_obj_prop_value_tagged");
+    emitter.instruction("and x9, x0, #255");                                    // low byte = reference marker?
+    emitter.instruction("cmp x9, #14");                                         // is this a reference cell?
+    emitter.instruction("b.ne __rt_obj_prop_value_dispatch");                   // ordinary tags keep their payload
+    emitter.instruction("cbz x1, __rt_obj_prop_value_null");                    // an absent cell is PHP null
+    emitter.instruction("ldr x10, [x1, #-8]");                                  // read the cell's payload descriptor
+    emitter.instruction("ubfx x10, x10, #8, #7");                               // isolate the stored payload tag
+    emitter.instruction("cmp x10, #7");                                         // is the payload a boxed Mixed cell?
+    emitter.instruction("b.eq __rt_obj_prop_value_ref_boxed");                  // boxed payloads unbox to their concrete tag
+    emitter.instruction("lsr x9, x0, #8");                                      // else use the declared runtime tag
+    emitter.instruction("and x9, x9, #255");                                    // isolate the declared tag
+    emitter.instruction("ldr x10, [x1]");                                       // cell low word = payload
+    emitter.instruction("ldr x11, [x1, #8]");                                   // cell high word = payload length/pointer
+    emitter.instruction("cmp x9, #12");                                         // an inline tagged scalar keeps its tag in the high word
+    emitter.instruction("b.ne __rt_obj_prop_value_ref_plain");                  // ordinary scalars use the declared tag
+    emitter.instruction("mov x9, x11");                                         // tagged scalar: high word is the runtime tag
+    emitter.instruction("mov x11, #0");                                         // and carries no payload high word
+    emitter.label("__rt_obj_prop_value_ref_plain");
+    emitter.instruction("mov x0, x9");                                          // dereferenced payload tag
+    emitter.instruction("mov x1, x10");                                         // dereferenced low word
+    emitter.instruction("mov x2, x11");                                         // dereferenced high word
+    emitter.instruction("b __rt_obj_prop_value_dispatch");                      // box the decoded payload
+    emitter.label("__rt_obj_prop_value_ref_boxed");
+    emitter.instruction("ldr x0, [x1]");                                        // dereference the boxed Mixed cell
+    emitter.instruction("bl __rt_mixed_unbox");                                 // x0=inner tag, x1=lo, x2=hi
+    emitter.label("__rt_obj_prop_value_dispatch");
     emitter.instruction("cmp x0, #4");                                          // only pointer-shaped tags can carry a null payload
     emitter.instruction("b.lt __rt_obj_prop_value_box");                        // scalar payloads box exactly as stored
     emit_branch_if_null_container(emitter, "x1", "x9", "__rt_obj_prop_value_null"); // a zero/sentinel pointer is PHP null
@@ -339,6 +364,36 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
 
     emitter.label("__rt_obj_prop_value_tagged_x86");
+    emitter.instruction("mov rcx, rax");                                        // copy the tag for the reference test
+    emitter.instruction("and rcx, 255");                                        // low byte = reference marker?
+    emitter.instruction("cmp rcx, 14");                                         // is this a reference cell?
+    emitter.instruction("jne __rt_obj_prop_value_dispatch_x86");                // ordinary tags keep their payload
+    emitter.instruction("test rdi, rdi");                                       // does the cell pointer exist?
+    emitter.instruction("jz __rt_obj_prop_value_null_x86");                     // an absent cell is PHP null
+    emitter.instruction("mov r9, QWORD PTR [rdi - 8]");                         // read the cell's payload descriptor
+    emitter.instruction("shr r9, 8");                                           // move the payload descriptor down
+    emitter.instruction("and r9, 127");                                         // isolate the stored payload tag
+    emitter.instruction("cmp r9, 7");                                           // is the payload a boxed Mixed cell?
+    emitter.instruction("je __rt_obj_prop_value_ref_boxed_x86");                // boxed payloads unbox to their concrete tag
+    emitter.instruction("mov rcx, rax");                                        // copy the encoded tag
+    emitter.instruction("shr rcx, 8");                                          // move the declared tag down
+    emitter.instruction("and rcx, 255");                                        // isolate the declared tag
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // cell low word = payload
+    emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // cell high word = payload length/pointer
+    emitter.instruction("cmp rcx, 12");                                         // an inline tagged scalar keeps its tag in the high word
+    emitter.instruction("jne __rt_obj_prop_value_ref_plain_x86");               // ordinary scalars use the declared tag
+    emitter.instruction("mov rcx, r10");                                        // tagged scalar: high word is the runtime tag
+    emitter.instruction("xor r10d, r10d");                                      // and carries no payload high word
+    emitter.label("__rt_obj_prop_value_ref_plain_x86");
+    emitter.instruction("mov rax, rcx");                                        // dereferenced payload tag
+    emitter.instruction("mov rdi, r9");                                         // dereferenced low word
+    emitter.instruction("mov rsi, r10");                                        // dereferenced high word
+    emitter.instruction("jmp __rt_obj_prop_value_dispatch_x86");                // box the decoded payload
+    emitter.label("__rt_obj_prop_value_ref_boxed_x86");
+    emitter.instruction("mov rax, QWORD PTR [rdi]");                            // dereference the boxed Mixed cell
+    emitter.instruction("call __rt_mixed_unbox");                               // rax=inner tag, rdi=lo, rdx=hi
+    emitter.instruction("mov rsi, rdx");                                        // boxing reads the high word from rsi
+    emitter.label("__rt_obj_prop_value_dispatch_x86");
     emitter.instruction("cmp rax, 4");                                          // only pointer-shaped tags can carry a null payload
     emitter.instruction("jl __rt_obj_prop_value_box_x86");                      // scalar payloads box exactly as stored
     emit_branch_if_null_container(emitter, "rdi", "r9", "__rt_obj_prop_value_null_x86"); // a zero/sentinel pointer is PHP null

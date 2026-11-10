@@ -600,6 +600,13 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "OPcache",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    # The Intl procedural surface is built from the `functions.rs` spec table and
+    # injected as synthetic PHP functions; its contracts live in their own module.
+    "intl": (
+        "intl/functions.rs",
+        "Intl",
+        "crates/elephc-builtin-contract/src/catalog_intl.rs",
+    ),
     # The xml surface keeps its own catalog module; the built prelude splits the parser
     # (`xml_*`) and writer (`xmlwriter_*`) declarations across two generated files.
     "xml": (
@@ -633,6 +640,14 @@ def find_prelude_declaration(source: str, canonical: str):
     )
     if built is not None:
         return built
+    # Intl lists one `IntlFunction { name: "...", ... }` spec per procedural
+    # function; the injector turns each spec into a synthetic PHP declaration.
+    intl = re.search(
+        rf"(?<![A-Za-z0-9_])IntlFunction\s*\{{\s*name:\s*\"{re.escape(canonical)}\"",
+        source,
+    )
+    if intl is not None:
+        return intl
     return re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
 
 

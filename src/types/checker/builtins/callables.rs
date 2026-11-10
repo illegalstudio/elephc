@@ -915,6 +915,10 @@ fn resolve_static_receiver_class(
         StaticReceiver::Named(name) => resolve_class_name(checker, name.as_str())
             .map(str::to_string)
             .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", name))),
+        StaticReceiver::Dynamic(_) => Err(CompileError::new(
+            span,
+            "Dynamic class access is not supported for a class constant",
+        )),
         StaticReceiver::Self_ | StaticReceiver::Static => checker
             .current_class
             .clone()
@@ -2078,6 +2082,10 @@ fn array_walk_callback_arg_types(
     let elem_ty = array_element_type(arr_ty);
     if callback_declares_at_least_two_params(checker, callback) {
         vec![elem_ty, array_key_type(arr_ty)]
+    } else if matches!(&callback.kind, ExprKind::Closure { params, .. } if params.is_empty()) {
+        // PHP passes the value/key, but a zero-parameter closure ignores them; invoking it with
+        // no arguments keeps the compiler's surplus-argument rule out of the way.
+        Vec::new()
     } else {
         vec![elem_ty]
     }

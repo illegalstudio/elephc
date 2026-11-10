@@ -49,8 +49,11 @@ fn known_tree(checker: &Checker, expression: &Expr) -> bool {
         ExprKind::ArrayLiteral(values) => values.iter().all(|value| known_tree(checker, value)),
         ExprKind::ArrayLiteralAssoc(values) => values.iter().all(|(key, value)| known_tree(checker, key) && known_tree(checker, value)),
         ExprKind::ArrayLiteralMixed(entries) => entries.iter().all(|entry| match entry {
-            ArrayEntry::Value(value) | ArrayEntry::Spread(value) => known_tree(checker, value),
-            ArrayEntry::Keyed(key, value) => known_tree(checker, key) && known_tree(checker, value),
+            ArrayEntry::Value(value)
+            | ArrayEntry::Spread(value)
+            | ArrayEntry::Reference(value) => known_tree(checker, value),
+            ArrayEntry::Keyed(key, value) | ArrayEntry::KeyedReference(key, value) =>
+                known_tree(checker, key) && known_tree(checker, value),
         }),
         _ => false,
     }

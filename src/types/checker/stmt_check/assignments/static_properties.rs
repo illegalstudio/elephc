@@ -270,6 +270,12 @@ fn resolve_static_property_assignment_target(
             "StaticReceiver::Generic must be instantiated by generics::classes"
         ),
         StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
+        StaticReceiver::Dynamic(_) => {
+            return Err(CompileError::new(
+                span,
+                "Dynamic class access is not supported for a static property",
+            ));
+        }
         StaticReceiver::Self_ => checker
             .current_class
             .as_ref()

@@ -173,12 +173,23 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                     .union(expr_invalidation(value))
             })
         }
-        ExprKind::ArrayLiteralMixed(entries) => entries
-            .iter()
-            .flat_map(|entry| entry.exprs())
-            .fold(Invalidation::none(), |acc, expr| {
-                acc.union(expr_invalidation(expr))
-            }),
+        ExprKind::ArrayLiteralMixed(entries) => {
+            let mut invalidation = Invalidation::none();
+            for entry in entries {
+                if let Some(value) = entry.reference_value() {
+                    // `[&$x]` exposes `$x` as a reference; later writes through either side
+                    // invalidate every propagated fact about it.
+                    if let ExprKind::Variable(name) = &value.kind {
+                        mark_reference_volatile(name);
+                        invalidation.add(name);
+                    }
+                }
+                for expr in entry.exprs() {
+                    invalidation = invalidation.union(expr_invalidation(expr));
+                }
+            }
+            invalidation
+        }
         ExprKind::Match {
             subject,
             arms,

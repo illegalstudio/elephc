@@ -22,6 +22,7 @@ mod catalog_constants_tokenizer;
 mod catalog_constants_curl;
 mod catalog_data;
 mod catalog_gmp;
+mod catalog_intl;
 mod catalog_mbstring;
 mod catalog_pcntl;
 mod catalog_xml;

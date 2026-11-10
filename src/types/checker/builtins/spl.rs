@@ -44,6 +44,11 @@ fn iterator_source_supported(checker: &Checker, ty: &PhpType) -> bool {
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => true,
         PhpType::Object(name) => traversable_object_supported(checker, name),
+        // A union that can yield an array or Traversable at run time is accepted; EIR
+        // lowering dispatches on the boxed value and raises php's TypeError otherwise.
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| iterator_source_supported(checker, member)),
         _ => false,
     }
 }

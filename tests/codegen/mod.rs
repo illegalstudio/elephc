@@ -154,4 +154,6 @@ mod fileinfo_reflection;
 mod fileinfo_validation;
 mod fileinfo_stream_diagnostics;
 mod fileinfo_wrapper_stat;
+mod intl_php_src;
+mod intl_review_fixes;
 mod fileinfo_stream_magic;

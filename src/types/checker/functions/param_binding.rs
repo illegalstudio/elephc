@@ -69,6 +69,36 @@ impl Checker {
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
         }
+        // PHP checks an object parameter at run time. A variable holding a union that names
+        // the declared class (plus scalar/array alternatives) is accepted here; EIR lowering
+        // emits the instance guard and extracts the payload on the accepted branch. Only
+        // re-runnable argument shapes are relaxed because that guard re-reads the variable.
+        if let PhpType::Object(class_name) = expected {
+            if let PhpType::Union(members) = actual {
+                let expected_object = PhpType::Object(class_name.clone());
+                let mentions_class = members
+                    .iter()
+                    .any(|member| Self::types_compatible(&expected_object, member));
+                let single_object = members
+                    .iter()
+                    .filter(|member| matches!(member, PhpType::Object(_)))
+                    .count()
+                    <= 1;
+                let rerunnable = matches!(
+                    arg.kind,
+                    crate::parser::ast::ExprKind::Variable(_)
+                        | crate::parser::ast::ExprKind::This
+                        | crate::parser::ast::ExprKind::BoolLiteral(_)
+                        | crate::parser::ast::ExprKind::Null
+                        | crate::parser::ast::ExprKind::IntLiteral(_)
+                        | crate::parser::ast::ExprKind::FloatLiteral(_)
+                        | crate::parser::ast::ExprKind::StringLiteral(_)
+                );
+                if mentions_class && single_object && rerunnable {
+                    return Ok(());
+                }
+            }
+        }
         if by_ref && matches!(expected, PhpType::Object(_))
             && actual.codegen_repr() == PhpType::Mixed
             && matches!(arg.kind, crate::parser::ast::ExprKind::Variable(_))

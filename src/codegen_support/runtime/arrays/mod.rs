@@ -54,6 +54,7 @@ mod array_grow;
 mod array_hash_union;
 mod array_internal_pointer;
 mod array_intersect;
+mod array_intersect_mixed;
 mod array_intersect_refcounted;
 mod array_intersect_key;
 mod array_is_list;
@@ -324,6 +325,10 @@ pub use array_hash_union::emit_array_hash_union;
 /// Emit array hash union helper.
 pub use array_intersect::emit_array_intersect;
 /// Emit array intersection helper.
+pub use array_intersect_mixed::{
+    emit_array_intersect_mixed, emit_array_intersect_mixed_str,
+};
+/// Emit value-comparing boxed Mixed and mixed/string intersection helpers.
 pub use array_intersect_refcounted::emit_array_intersect_refcounted;
 /// Emit array intersection by key helper.
 pub use array_intersect_key::emit_array_intersect_key;

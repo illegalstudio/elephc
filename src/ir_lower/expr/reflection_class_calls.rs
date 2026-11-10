@@ -17,6 +17,43 @@ pub(super) fn lower_reflection_class_new_instance(
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(object_expr) = object_expr {
+        if let Some(class_name) = reflection_class_reflected_class(ctx, object_expr) {
+            let trimmed = class_name.trim_start_matches('\\');
+            let non_public_constructor = crate::types::constructor_owner(&ctx.classes, trimmed)
+                .is_some_and(|(owner_name, owner)| {
+                    let Some(visibility) = owner
+                        .method_visibilities
+                        .get(&crate::names::php_symbol_key("__construct"))
+                    else {
+                        return false;
+                    };
+                    if *visibility == crate::parser::ast::Visibility::Public {
+                        return false;
+                    }
+                    // An inherited PRIVATE constructor is not callable from the
+                    // descendant; the AOT constructor-owner walk deliberately lets that
+                    // descendant be constructed without calling it (see the
+                    // inherited-private regression in tests/codegen/oop/relative_types.rs).
+                    let owner_is_class = owner_name
+                        .trim_start_matches('\\')
+                        .eq_ignore_ascii_case(trimmed);
+                    owner_is_class || *visibility != crate::parser::ast::Visibility::Private
+                });
+            if non_public_constructor {
+                if ctx.value_is_owning_temporary(object) {
+                    crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+                }
+                return crate::ir_lower::stmt::lower_throw_access_exception_expr_as(
+                    ctx,
+                    "ReflectionException",
+                    &format!("Access to non-public constructor of class {}", trimmed),
+                    expr.span,
+                    PhpType::Mixed,
+                );
+            }
+        }
+    }
     let args = reflection_class_new_instance_args(args);
     let constructor_sig =
         reflection_class_new_instance_constructor_signature(ctx, object_expr, &args).cloned();
@@ -85,6 +122,66 @@ pub(super) fn lower_reflection_class_new_instance_args(
     let Some(forwarded_args) = reflection_class_new_instance_args_array(ctx, args) else {
         return lower_reflection_class_new_instance_args_unsupported(ctx, expr);
     };
+    // When the reflected class is statically known, construct it directly. The dynamic class
+    // ladder has to compile every possible constructor at this site's argument types; a
+    // statically-known class avoids both that over-approximation and runtime class dispatch.
+    if let Some(object_expr) = object_expr {
+        if let Some(class_name) = reflection_class_reflected_class(ctx, object_expr) {
+            // Abstract classes and non-public constructors keep the reflective runtime path,
+            // which raises PHP's ReflectionException instead of a source-scope visibility error.
+            let non_public_constructor = crate::types::constructor_owner(
+                &ctx.classes,
+                class_name.trim_start_matches('\\'),
+            )
+            .is_some_and(|(owner_name, owner)| {
+                let Some(visibility) = owner
+                    .method_visibilities
+                    .get(&crate::names::php_symbol_key("__construct"))
+                else {
+                    return false;
+                };
+                if *visibility == crate::parser::ast::Visibility::Public {
+                    return false;
+                }
+                // An inherited PRIVATE constructor is not part of the descendant's
+                // callable surface; the compiler's constructor-owner walk deliberately
+                // lets that descendant be constructed without calling the private
+                // ancestor constructor (see the inherited-private regression in
+                // `tests/codegen/oop/relative_types.rs`). Every other non-public
+                // constructor stays on the reflective path.
+                let owner_is_class = owner_name
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case(class_name.trim_start_matches('\\'));
+                owner_is_class || *visibility != crate::parser::ast::Visibility::Private
+            });
+            if ctx.classes.get(class_name.trim_start_matches('\\')).is_some_and(|info| {
+                info.is_abstract
+            }) || non_public_constructor {
+                return lower_reflection_class_new_instance(
+                    ctx, Some(object_expr), object, &forwarded_args, expr,
+                );
+            }
+            let class_name = crate::names::Name::from_parts(
+                crate::names::NameKind::FullyQualified,
+                class_name
+                    .trim_start_matches('\\')
+                    .split('\\')
+                    .map(str::to_string)
+                    .collect(),
+            );
+            if ctx.value_is_owning_temporary(object) {
+                crate::ir_lower::ownership::release_if_owned(ctx, object, Some(expr.span));
+            }
+            let constructor = Expr::new(
+                ExprKind::NewObject {
+                    class_name,
+                    args: forwarded_args,
+                },
+                expr.span,
+            );
+            return lower_expr(ctx, &constructor);
+        }
+    }
     lower_reflection_class_new_instance(ctx, object_expr, object, &forwarded_args, expr)
 }
 

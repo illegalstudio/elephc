@@ -247,6 +247,7 @@ pub(crate) struct LoweringSnapshot {
     /// Casts that borrowed a concrete string local inside this speculative state.
     provisional_borrowed_string_casts: HashSet<String>,
     append_update_cell_aliases: HashSet<String>,
+    property_ref_alias_sources: HashMap<String, Expr>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -364,6 +365,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// This sealed replay proof survives speculative rollback, unlike provisional value IDs.
     pub(crate) owned_string_offset_sites: HashSet<Span>,
     pub(crate) append_update_cell_aliases: HashSet<String>,
+    /// Instance properties behind `$local =& $object->property` aliases.
+    ///
+    /// A mixed by-reference parameter cannot receive the property's raw concrete cell. The call
+    /// boundary rewrites the alias to this property place, passes a boxed temporary, and writes
+    /// the temporary back through the property so PHP's typed-property coercion runs.
+    pub(crate) property_ref_alias_sources: HashMap<String, Expr>,
     initialized_slots: HashSet<LocalSlotId>,
     /// PHP slots assigned by an already lowered store, including conditional stores.
     assigned_php_local_slots: HashSet<LocalSlotId>,
@@ -753,6 +760,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             this_storage_stays_concrete: false,
             eval_reference_snapshots: false,
             append_update_cell_aliases: HashSet::new(),
+            property_ref_alias_sources: HashMap::new(),
             argument_guards: HashMap::new(),
             argument_guard_scopes: Vec::new(),
             write_operand_is_borrowed: false,
@@ -830,6 +838,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             owned_string_cast_locals: self.owned_string_cast_locals.clone(),
             provisional_borrowed_string_casts: self.provisional_borrowed_string_casts.clone(),
             append_update_cell_aliases: self.append_update_cell_aliases.clone(),
+            property_ref_alias_sources: self.property_ref_alias_sources.clone(),
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
@@ -945,6 +954,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.owned_string_cast_locals = snapshot.owned_string_cast_locals;
         self.provisional_borrowed_string_casts = snapshot.provisional_borrowed_string_casts;
         self.append_update_cell_aliases = snapshot.append_update_cell_aliases;
+        self.property_ref_alias_sources = snapshot.property_ref_alias_sources;
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;

@@ -87,7 +87,8 @@ pub(crate) use search::{
     lower_substr_replace,
 };
 pub(crate) use simple::{
-    lower_binary_string_runtime, lower_bin2hex_len, lower_grapheme_strrev, lower_html_escape, lower_lcfirst,
+    lower_binary_string_runtime, lower_bin2hex_len, lower_grapheme_strrev, lower_html_entity_decode,
+    lower_html_escape, lower_lcfirst,
     lower_trim_like, lower_ucfirst,
 };
 pub(crate) use strip_tags::{lower_strip_tags, lower_strip_tags_len};

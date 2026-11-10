@@ -85,6 +85,7 @@ fn receiver_refs_dom(receiver: &StaticReceiver) -> bool {
         StaticReceiver::Named(name) => name_is_dom_class(name),
         StaticReceiver::Generic(class_type) => type_refs_dom(class_type),
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => false,
+        StaticReceiver::Dynamic(class_expr) => expr_refs_dom(class_expr),
     }
 }
 

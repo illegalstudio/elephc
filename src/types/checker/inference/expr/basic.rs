@@ -219,11 +219,13 @@ impl Checker {
                             // returns the source's element type, including nested array elements.
                             self.infer_type(source, env)?
                         }
-                        ArrayEntry::Keyed(key, value) => {
+                        ArrayEntry::Keyed(key, value)
+                        | ArrayEntry::KeyedReference(key, value) => {
                             self.infer_type(key, env)?;
                             self.infer_type(value, env)?
                         }
-                        ArrayEntry::Value(value) => self.infer_type(value, env)?,
+                        ArrayEntry::Value(value) | ArrayEntry::Reference(value) =>
+                            self.infer_type(value, env)?,
                     };
                     val_ty = Some(match val_ty {
                         Some(acc) if acc == next => acc,

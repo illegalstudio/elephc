@@ -69,6 +69,7 @@ pub(in crate::codegen) fn resolve_array_const_default(
                 collect_enum_reads(&value, &mut reads);
                 insert_array_element(&mut elements, &mut highest, ConstDefaultArrayKey::Int(key), value);
             }
+            ArrayEntry::Reference(_) | ArrayEntry::KeyedReference(_, _) => return None,
             ArrayEntry::Spread(value) => {
                 let source = match &value.kind { ExprKind::Spread(inner) => inner.as_ref(), _ => &value };
                 let source = resolve_const_default_at(source, context, depth + 1)?;

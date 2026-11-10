@@ -297,6 +297,7 @@ fn area_name(area: Area) -> &'static str {
         Area::Opcache => "opcache",
         Area::Xml => "xml",
         Area::Random => "random",
+        Area::Intl => "intl",
     }
 }
 

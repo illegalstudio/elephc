@@ -678,7 +678,8 @@ fn static_receiver_has_regex_call(receiver: &StaticReceiver) -> bool {
         StaticReceiver::Named(_)
         | StaticReceiver::Self_
         | StaticReceiver::Static
-        | StaticReceiver::Parent => false,
+        | StaticReceiver::Parent
+        | StaticReceiver::Dynamic(_) => false,
     }
 }
 

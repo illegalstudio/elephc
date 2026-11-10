@@ -614,6 +614,10 @@ fn rewrite_constant_receiver(
             "StaticReceiver::Generic must be instantiated by generics::classes"
         ),
         StaticReceiver::Named(name) => Ok(StaticReceiver::Named(name.clone())),
+        StaticReceiver::Dynamic(_) => Err(CompileError::new(
+            span,
+            "Dynamic class access is not supported for a class constant",
+        )),
         StaticReceiver::Self_ | StaticReceiver::Parent
             if matches!(parent_name, ParentScope::NoClass | ParentScope::NoClassFunction) => {
             let keyword = if matches!(receiver, StaticReceiver::Self_)

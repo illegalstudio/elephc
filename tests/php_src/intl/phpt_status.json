@@ -1,0 +1,1930 @@
+{
+ "IntlIterator_cycle_management.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "badargs.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter___construct.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter___construct_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_clone_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_createCodePointInstance_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_current_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_factories_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_first_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_following_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_getLocale_basic2.phpt": {
+  "reason": "for ICU < 64.0",
+  "status": "SKIP"
+ },
+ "breakiter_getLocale_basic3.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_getPartsIterator_basic.phpt": {
+  "reason": "for ICU <= 57.1",
+  "status": "SKIP"
+ },
+ "breakiter_getPartsIterator_basic2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_getPartsIterator_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_getPartsIterator_var1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_getText_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_isBoundary_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_last_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_next_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_preceding_basic.phpt": {
+  "reason": "for ICU <= 57.1",
+  "status": "SKIP"
+ },
+ "breakiter_preceding_basic2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_previous_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "breakiter_setText_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug12887.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug14562.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug48227.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug50590.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug53512.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug53735.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug55562.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug58756_MessageFormatter_variant2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug59597_32.phpt": {
+  "reason": "32-bit only",
+  "status": "SKIP"
+ },
+ "bug59597_64.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug60192-compare.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug60192-getlocale.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug60192-getsortkey.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug60192-sort.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug60192-sortwithsortkeys.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug61487.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug61860.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug62017.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug62070_2.phpt": {
+  "reason": "for ICU < 62.1",
+  "status": "SKIP"
+ },
+ "bug62070_3.phpt": {
+  "reason": "for ICU < 76.1",
+  "status": "SKIP"
+ },
+ "bug62070_icu76_1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug62081.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug62082.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug62083.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug62759.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug62915-2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug62915.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug65732.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug67052-win32.phpt": {
+  "reason": "Valid only on Windows",
+  "status": "SKIP"
+ },
+ "bug67052.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug67397.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug68447.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug68471.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug69374.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug69398-icu74.1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug69398.phpt": {
+  "reason": "for ICU < 74.1",
+  "status": "SKIP"
+ },
+ "bug70451.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug70452.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug71020.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug72061.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug72241.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug72506.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug72533.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug72639.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug74063.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug74264.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug74298.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug74433.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug74468.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug74484_MessageFormatter.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug74705.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug75090.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug75193.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug75317.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug75318.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug75378.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug76556.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug77895.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug78804.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug78912.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug80763.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "bug81019.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_add_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_clear_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_clear_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_clear_variation1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_const_field_field_count.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_createInstance_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_createInstance_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_createInstance_variation1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_equals_before_after_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_fieldDifference_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_fieldDifference_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_fromDateTime_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_fromDateTime_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getAvailableLocales_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getDayOfWeekType_basic2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getDayOfWeekType_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getErrorCode_getErrorMessage_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getFirstDayOfWeek_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getKeywordValuesForLocale_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getLocale_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getMinimalDaysInFirstWeek_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getNow_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getTimeZone_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getTime_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getType_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getWeekendTransition_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getWeekendTransition_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getXMaximum_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_getXMinimum_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_get_Least_Greatest_Minimum_Maximum_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_get_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_get_getActualMaximum_Minumum_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_get_getActualMaximum_Minumum_error2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_get_setRepeatedWallTimeOption_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_get_setSkippedWallTimeOption_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_inDaylightTime_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_isEquivalentTo_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_isSet_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_isSet_empty_time.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_isSet_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_isWeekend_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_is_set_lenient_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_roll_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_roll_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_roll_variation1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setFirstDayOfWeek_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setFirstDayOfWeek_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setMinimalDaysInFirstWeek_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setMinimalDaysInFirstWeek_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setSkipped_RepeatedWallTimeOption_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setTimeZone_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setTimeZone_error2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setTimeZone_variation1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setTimeZone_variation2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_setTime_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_set_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_set_date.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_set_date_out_of_bounds.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_set_date_time.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_set_date_time_out_of_bounds.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_set_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_set_out_of_bounds.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_set_variation1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_toDateTime_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_toDateTime_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "calendar_uninitialized_argument_position.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_asort_variant2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_compare_variant2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_create.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_create_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_customization.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_double_ctor.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_get_error_code.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_get_invalid_attribute.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_get_locale2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_get_set_attribute.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_get_set_strength.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_get_sort_key_variant6.phpt": {
+  "reason": "for ICU < 62.1",
+  "status": "SKIP"
+ },
+ "collator_get_sort_key_variant7.phpt": {
+  "reason": "for ICU < 76.1",
+  "status": "SKIP"
+ },
+ "collator_get_sort_key_variant_icu76_1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_sort_modify_during_compare.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_sort_variant2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "collator_sort_with_sort_keys_variant2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "cpbi_clone_equality.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "cpbi_getLastCodePoint_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "cpbi_parts_iterator.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "datefmt_parse_localtime_references.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat___construct_bad_tz_cal.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_bug65683.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_bug65683_2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_bug68893.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_bug71516.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_calendars_variant.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "dateformat_calendars_variant_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_clone2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_clone_bad_obj.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_create_cal_arg_variant4.phpt": {
+  "reason": "for ICU < 58.1",
+  "status": "SKIP"
+ },
+ "dateformat_create_cal_arg_variant5.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_create_default.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "dateformat_create_default_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_formatObject_calendar_variant5.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "dateformat_formatObject_calendar_variant_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_formatObject_datetime_variant5.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "dateformat_formatObject_datetime_variant_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_formatObject_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_format_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_format_parse_version2.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "dateformat_format_parse_version_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_format_references.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_format_relative.phpt": {
+  "reason": "Required extensions missing: --INI, date.timezone=America/Los_Angeles",
+  "status": "SKIP"
+ },
+ "dateformat_format_variant3.phpt": {
+  "reason": "",
+  "status": "XFAIL"
+ },
+ "dateformat_get_datetype.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_get_locale.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_get_set_calendar_variant4.phpt": {
+  "reason": "for ICU < 58.1",
+  "status": "SKIP"
+ },
+ "dateformat_get_set_calendar_variant5.phpt": {
+  "reason": "for ICU >= 58.1 and < 70.1",
+  "status": "SKIP"
+ },
+ "dateformat_get_set_calendar_variant_icu70.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_get_set_pattern2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_get_set_timezone_variant5.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_get_timetype.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_get_timezone_id.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_is_set_lenient.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_setTimeZone_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_set_timezone_id3.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "dateformat_set_timezone_id_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "dateformat_timezone_arg_variations4.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "datepatterngenerator_clone.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "datepatterngenerator_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "datepatterngenerator_get_best_pattern.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "datepatterngenerator_get_best_pattern_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "deprecated_U_MULTIPLE_DECIMAL_SEPERATORS.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "deprecated_number_formater_type_currency.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter/currencies.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter/rounding_modes.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_clone.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_clone_bad_obj.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_fail.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_format6.phpt": {
+  "reason": "for ICU < 61.1",
+  "status": "SKIP"
+ },
+ "formatter_format7.phpt": {
+  "reason": "for ICU < 62.1",
+  "status": "SKIP"
+ },
+ "formatter_format8.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_format_and_parse_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_format_conv.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_format_currency2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_format_decimal_compact.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_get_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_get_locale_variant2.phpt": {
+  "reason": "for ICU < 58.1",
+  "status": "SKIP"
+ },
+ "formatter_get_locale_variant3.phpt": {
+  "reason": "for ICU < 62.1",
+  "status": "SKIP"
+ },
+ "formatter_get_locale_variant4.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_get_set_pattern.phpt": {
+  "reason": "for ICU < 62.1",
+  "status": "SKIP"
+ },
+ "formatter_get_set_pattern2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_get_set_symbol2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_get_set_text_attribute_var2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_parse.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_parse_currency.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "formatter_set_invalid_pattern.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh10647.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh11658.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh11874.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh11942_datefmt_locale_canonicalization.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh11942_numfmt_locale_canonicalization.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh12020.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh12243.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh12282.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh12727.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh13766.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh17469.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh18566.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh7734.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh8115.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gh8364.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme.phpt": {
+  "reason": "for ICU < 65.0",
+  "status": "SKIP"
+ },
+ "grapheme2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme_empty.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme_extract_references.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme_levenshtein.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme_out_of_bounds.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme_str_split.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme_stripos_locale_dependency.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme_stristr_locale_dependency.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme_strpos_locale_dependency.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "grapheme_strripos_locale_dependency.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gregoriancalendar___construct_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gregoriancalendar___construct_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gregoriancalendar___construct_out_of_bounds.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gregoriancalendar___construct_variant1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gregoriancalendar_get_setGregorianChange_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gregoriancalendar_isLeapYear_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gregoriancalendar_set_date_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "gregoriancalendar_set_date_time_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "idn.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "idn_bug76829.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "idn_uts46_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "idn_uts46_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "ini_use_exceptions_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "intl_error_name.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "intl_get_error_code.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "intl_get_error_message.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "intl_icu_data_version_constant.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "intl_icu_version_constant.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "intl_is_failure.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "intlchar_reset_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "intltz_get_canonical_id_refs.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "intltz_get_offset_references.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "listformatter/listformatter_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "listformatter/listformatter_clone.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "listformatter/listformatter_constructor_error_reset.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "listformatter/listformatter_double_ctor.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "listformatter/listformatter_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "listformatter/listformatter_get_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "listformatter/listformatter_with_parameters.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "listformatter/listformatter_with_parameters_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale/bug72809.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale/bug74993.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_accept.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_bug66289.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_bug72658.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_bug74439.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_compose_locale.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_compose_locale_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_compose_lookup_references.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_filter_matches3.phpt": {
+  "reason": "for ICU < 67.1",
+  "status": "SKIP"
+ },
+ "locale_filter_matches4.phpt": {
+  "reason": "for ICU >= 67.1 and < 70.1",
+  "status": "SKIP"
+ },
+ "locale_filter_matches_icu70.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_all_variants.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_default.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_display_language.phpt": {
+  "reason": "for ICU < 68.1",
+  "status": "SKIP"
+ },
+ "locale_get_display_language2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_display_language3.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_display_language4.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_display_name5.phpt": {
+  "reason": "for ICU < 64.0",
+  "status": "SKIP"
+ },
+ "locale_get_display_name6.phpt": {
+  "reason": "for ICU < 65.0",
+  "status": "SKIP"
+ },
+ "locale_get_display_name7.phpt": {
+  "reason": "for ICU < 68.1",
+  "status": "SKIP"
+ },
+ "locale_get_display_name8.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_display_script4.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_display_variant2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_keywords2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_primary_language.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_region.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_get_script.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_is_right_to_left.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_lookup_invalid_language_tag.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_lookup_variant2.phpt": {
+  "reason": "for ICU < 67.1",
+  "status": "SKIP"
+ },
+ "locale_lookup_variant3.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_parse_locale2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_set_default.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "locale_subtags.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_bug70484.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_clone.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_clone_bad_obj.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_fail2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_datetime.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "msgfmt_format_datetime_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_error1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_error2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_error3.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_error4.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_error5.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_error6.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_intlcalendar_variant4.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_message_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_mixed_params.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_simple_types_numeric_strings.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "msgfmt_format_simple_types_numeric_strings_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_subpatterns.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_format_subpatterns_named.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_get_locale.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_get_set_pattern.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_millisecond_dates.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_parse.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_parse_message_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_setPattern_cache.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "msgfmt_set_pattern_syntax_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "normalizer_get_raw_decomposition.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "normalizer_normalize.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "normalizer_normalize_kc_cf.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "numfmt_parse_currency_references.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "parseToCalendar_references_type_system.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "rbbiter___construct_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "rbbiter_getBinaryRules_basic.phpt": {
+  "reason": "for ICU < 61.1",
+  "status": "SKIP"
+ },
+ "rbbiter_getBinaryRules_basic2.phpt": {
+  "reason": "for ICU < 68.1",
+  "status": "SKIP"
+ },
+ "rbbiter_getBinaryRules_basic3.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "rbbiter_getRuleStatusVec_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "rbbiter_getRuleStatus_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "rbbiter_getRules_basic.phpt": {
+  "reason": "for ICU < 61.1",
+  "status": "SKIP"
+ },
+ "rbbiter_getRules_basic2.phpt": {
+  "reason": "for ICU < 68.1",
+  "status": "SKIP"
+ },
+ "rbbiter_getRules_basic3.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "regression_sort_and_cow.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "regression_sort_eq.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "regression_sortwsk_and_cow.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "regression_sortwsk_eq.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_arrayaccess.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_countable.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_create.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_create_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_dimension_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_double_ctor.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_get_errors.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_individual.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_internal.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_iterator.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_locales.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_null_mandatory_args_variant2.phpt": {
+  "reason": "for ICU < 72.1",
+  "status": "SKIP"
+ },
+ "resourcebundle_null_mandatory_args_variant_icu72-1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "resourcebundle_traversable.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_002.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_003.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_005.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_006.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_007.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_008.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_double_ctor.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_self_references.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_supported_icu57_apis.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_typed_references.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "spoofchecker_unknown_restriction_level.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_IDforWindowsID_basic.phpt": {
+  "reason": "for ICU < 58.1",
+  "status": "SKIP"
+ },
+ "timezone_IDforWindowsID_basic_icu58_1.phpt": {
+  "reason": "for ICU <= 76.1",
+  "status": "SKIP"
+ },
+ "timezone_IDforWindowsID_basic_icu76_1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_IDforWindowsID_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_clone_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_clone_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_countEquivalentIDs_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_countEquivalentIDs_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createDefault_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createEnumeration_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createEnumeration_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createEnumeration_variation1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createEnumeration_variation2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createTimeZoneIDEnumeration_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createTimeZoneIDEnumeration_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createTimeZoneIDEnumeration_error_64bit.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createTimeZoneIDEnumeration_variant1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createTimeZoneIDEnumeration_variant2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createTimeZone_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_createTimeZone_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_equals_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_equals_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_fromDateTimeZone_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_fromDateTimeZone_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getCanonicalID_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getCanonicalID_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getCanonicalID_variant1_2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getDSTSavings_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getDisplayName_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getDisplayName_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getDisplayName_variant1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getDisplayName_variant4.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getEquivalentID_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getEquivalentID_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getErrorCodeMessage_basic.phpt": {
+  "reason": "requires x86",
+  "status": "SKIP"
+ },
+ "timezone_getGMT_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getIanaID.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getOffset_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getOffset_error.phpt": {
+  "reason": "requires x86",
+  "status": "SKIP"
+ },
+ "timezone_getRawOffset_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getRegion_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getRegion_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getTZData_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_getUnknown_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_hasSameRules_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_toDateTimeZone_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_toDateTimeZone_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_useDaylightTime_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "timezone_windowsID_basic.phpt": {
+  "reason": "for ICU < 58.1",
+  "status": "SKIP"
+ },
+ "timezone_windowsID_basic2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_child.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_clone.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_create_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_create_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_create_from_rule_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_create_from_rule_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_create_inverse_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_get_error_message_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_list_ids_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_property_id.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_transliterate_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_transliterate_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "transliterator_transliterate_variant1.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter___construct_error.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_bug66873.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_enum.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_func_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_func_subst.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_getDestinationEncoding.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_getSourceEncoding.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_getstandards_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_oop_algo.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_oop_basic.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_oop_callback.phpt": {
+  "reason": "for ICU < 58.1",
+  "status": "SKIP"
+ },
+ "uconverter_oop_callback2.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_oop_callback_return.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_oop_subst.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_setSourceEncoding.phpt": {
+  "reason": "",
+  "status": "PASS"
+ },
+ "uconverter_transcode_references.phpt": {
+  "reason": "",
+  "status": "PASS"
+ }
+}

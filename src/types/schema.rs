@@ -193,6 +193,7 @@ fn scoped_receiver_type_name(receiver: &StaticReceiver) -> Option<String> {
         ),
         StaticReceiver::Named(name) => Some(name.as_str().to_string()),
         StaticReceiver::Self_ | StaticReceiver::Static | StaticReceiver::Parent => None,
+        StaticReceiver::Dynamic(_) => None,
     }
 }
 

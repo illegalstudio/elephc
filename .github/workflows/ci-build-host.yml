@@ -55,6 +55,7 @@ env:
     -p elephc-tokenizer
     -p elephc-magician
     -p elephc-reference
+    -p elephc-intl
     -p elephc-web
     -p elephc-instr
     -p elephc-probe
@@ -343,6 +344,29 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target macos-aarch64 \
             --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Cache managed native ICU
+        if: inputs.scope == 'tests'
+        # tests/codegen/intl fixtures link the elephc_intl bridge against the
+        # managed ICU package (see tests/codegen/support/intl_native.rs). The
+        # archive job warms this key; the codegen shards restore it.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/icu
+            ~/.cache/elephc/native/sources
+          key: icu-native-macos-aarch64-${{ hashFiles('examples/intl/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/icu.rs', 'src/native_deps/recipes/elephc_icu_intl_shim.cpp', 'src/native_deps/recipes/elephc_icu_intl_shim.h', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            icu-native-macos-aarch64-
+
+      - name: Materialize managed native ICU
+        if: inputs.scope == 'tests'
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/intl/elephc.lock builds from source.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/intl/elephc.toml
 
       - name: Test the fileinfo bridge against managed libmagic
         if: inputs.scope == 'tests'
@@ -637,6 +661,29 @@ jobs:
             --target linux-x86_64 \
             --manifest-path examples/fileinfo/elephc.toml
 
+      - name: Cache managed native ICU
+        if: inputs.scope == 'tests'
+        # tests/codegen/intl fixtures link the elephc_intl bridge against the
+        # managed ICU package (see tests/codegen/support/intl_native.rs). The
+        # archive job warms this key; the codegen shards restore it.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/icu
+            ~/.cache/elephc/native/sources
+          key: icu-native-linux-x86_64-${{ hashFiles('examples/intl/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/icu.rs', 'src/native_deps/recipes/elephc_icu_intl_shim.cpp', 'src/native_deps/recipes/elephc_icu_intl_shim.h', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            icu-native-linux-x86_64-
+
+      - name: Materialize managed native ICU
+        if: inputs.scope == 'tests'
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/intl/elephc.lock builds from source.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/intl/elephc.toml
+
       - name: Test the fileinfo bridge against managed libmagic
         if: inputs.scope == 'tests'
         run: |
@@ -924,6 +971,29 @@ jobs:
           ./target/debug/elephc native install --locked \
             --target linux-aarch64 \
             --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Cache managed native ICU
+        if: inputs.scope == 'tests'
+        # tests/codegen/intl fixtures link the elephc_intl bridge against the
+        # managed ICU package (see tests/codegen/support/intl_native.rs). The
+        # archive job warms this key; the codegen shards restore it.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/icu
+            ~/.cache/elephc/native/sources
+          key: icu-native-linux-aarch64-${{ hashFiles('examples/intl/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/icu.rs', 'src/native_deps/recipes/elephc_icu_intl_shim.cpp', 'src/native_deps/recipes/elephc_icu_intl_shim.h', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
+          restore-keys: |
+            icu-native-linux-aarch64-
+
+      - name: Materialize managed native ICU
+        if: inputs.scope == 'tests'
+        # A no-op on the warm cache restored above; otherwise the pinned
+        # examples/intl/elephc.lock builds from source.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/intl/elephc.toml
 
       - name: Test the fileinfo bridge against managed libmagic
         if: inputs.scope == 'tests'

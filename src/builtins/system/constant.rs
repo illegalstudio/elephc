@@ -72,6 +72,9 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     };
     let name = elephc_builtin_contract::canonical_constant_name(&name);
+    if let Some(message) = crate::types::checker::deprecated_constant_message(&name) {
+        cx.checker.warnings.push(crate::errors::CompileWarning::deprecation(cx.span, message));
+    }
     if name.contains("::") {
         return Err(CompileError::new(
             cx.span,

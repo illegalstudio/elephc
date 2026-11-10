@@ -56,59 +56,12 @@ pub(super) fn construct() -> Vec<Stmt> {
     vec![
         s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_extract_micros", vec![e_var("datetime")])),
         s_assign("datetime", e_static_call("DateTime", "__elephc_strip_micros", vec![e_var("datetime")])),
-        s_if(
-            e_binop(e_var("timezone"), BinOp::StrictEq, e_null()),
-            vec![
-                s_if(
-                    e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
-                    vec![
-                        s_prop_assign(e_this(), "timestamp", e_call("time", vec![])),
-                    ],
-                    vec![],
-                    Some(vec![
-                    s_assign("__ts", e_call("strtotime", vec![e_var("datetime")])),
-                    s_if(
-                        e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
-                        vec![
-                            s_throw(e_new("DateMalformedStringException", vec![e_binop(e_binop(e_str("Failed to parse time string ("), BinOp::Concat, e_var("datetime")), BinOp::Concat, e_str(")"))])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_prop_assign(e_this(), "timestamp", e_var("__ts")),
-                ]),
-                ),
-                s_prop_assign(e_this(), "timezone_name", e_call("date_default_timezone_get", vec![])),
-            ],
-            vec![],
-            Some(vec![
-            s_assign("tzname", e_method_call(e_var("timezone"), "getName", vec![])),
-            s_if(
-                e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
-                vec![
-                    s_prop_assign(e_this(), "timestamp", e_call("time", vec![])),
-                ],
-                vec![],
-                Some(vec![
-                s_assign("saved", e_call("date_default_timezone_get", vec![])),
-                s_expr(e_call("date_default_timezone_set", vec![e_var("tzname")])),
-                s_assign("__ts", e_call("strtotime", vec![e_var("datetime")])),
-                s_if(
-                    e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
-                    vec![
-                        s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
-                        s_throw(e_new("DateMalformedStringException", vec![e_binop(e_binop(e_str("Failed to parse time string ("), BinOp::Concat, e_var("datetime")), BinOp::Concat, e_str(")"))])),
-                    ],
-                    vec![],
-                    None,
-                ),
-                s_prop_assign(e_this(), "timestamp", e_var("__ts")),
-                s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
-            ]),
-            ),
-            s_prop_assign(e_this(), "timezone_name", e_var("tzname")),
-        ]),
-        ),
+        s_assign("state", e_static_call("DateTime", "__elephc_construct_state", vec![e_var("datetime"), e_var("timezone")])),
+        s_prop_assign(e_this(), "timestamp", e_index(e_var("state"), e_int(0))),
+        s_prop_assign(e_this(), "timezone_name", e_index(e_var("state"), e_int(1))),
+        s_prop_assign(e_this(), "timezone_offset", e_index(e_var("state"), e_int(2))),
+        s_prop_assign(e_this(), "timezone_fixed", e_index(e_var("state"), e_int(3))),
+        s_prop_assign(e_this(), "__elephc_initialized", e_bool(true)),
     ]
 }
 
@@ -116,7 +69,12 @@ pub(super) fn construct() -> Vec<Stmt> {
 pub(super) fn format() -> Vec<Stmt> {
     vec![
         s_assign("saved", e_call("date_default_timezone_get", vec![])),
-        s_expr(e_call("date_default_timezone_set", vec![e_this_prop("timezone_name")])),
+        s_if(
+            e_not(e_this_prop("timezone_fixed")),
+            vec![s_expr(e_call("date_default_timezone_set", vec![e_this_prop("timezone_name")]))],
+            vec![],
+            None,
+        ),
         s_assign("us", e_this_prop("microsecond")),
         s_assign("fmt", e_str("")),
         s_assign("flen", e_call("strlen", vec![e_var("format")])),
@@ -174,7 +132,12 @@ pub(super) fn format() -> Vec<Stmt> {
             s_if(
                 e_binop(e_binop(e_var("ch"), BinOp::StrictEq, e_str("X")), BinOp::Or, e_binop(e_var("ch"), BinOp::StrictEq, e_str("x"))),
                 vec![
-                    s_assign("year", e_call("intval", vec![e_call("date", vec![e_str("Y"), e_this_prop("timestamp")])])),
+                    s_if(
+                        e_this_prop("timezone_fixed"),
+                        vec![s_assign("year", e_call("intval", vec![e_call("gmdate", vec![e_str("Y"), e_binop(e_this_prop("timestamp"), BinOp::Add, e_this_prop("timezone_offset"))])]))],
+                        vec![],
+                        Some(vec![s_assign("year", e_call("intval", vec![e_call("date", vec![e_str("Y"), e_this_prop("timestamp")])]))]),
+                    ),
                     s_if(
                         e_binop(e_var("year"), BinOp::Lt, e_int(0)),
                         vec![
@@ -209,7 +172,12 @@ pub(super) fn format() -> Vec<Stmt> {
             s_assign("fmt", e_binop(e_var("fmt"), BinOp::Concat, e_var("ch"))),
             s_assign("k", e_binop(e_var("k"), BinOp::Add, e_int(1))),
         ]),
-        s_assign("r", e_call("date", vec![e_var("fmt"), e_this_prop("timestamp")])),
+        s_if(
+            e_this_prop("timezone_fixed"),
+            vec![s_assign("r", e_call("gmdate", vec![e_var("fmt"), e_binop(e_this_prop("timestamp"), BinOp::Add, e_this_prop("timezone_offset"))]))],
+            vec![],
+            Some(vec![s_assign("r", e_call("date", vec![e_var("fmt"), e_this_prop("timestamp")]))]),
+        ),
         s_expr(e_call("date_default_timezone_set", vec![e_var("saved")])),
         s_return(e_var("r")),
     ]

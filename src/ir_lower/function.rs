@@ -2932,7 +2932,9 @@ fn direct_closure_return_mixed_literal_type(
                 .1
             }
             crate::parser::ast::ArrayEntry::Keyed(_, value)
-            | crate::parser::ast::ArrayEntry::Value(value) => direct_closure_return_array_item_type(
+            | crate::parser::ast::ArrayEntry::KeyedReference(_, value)
+            | crate::parser::ast::ArrayEntry::Value(value)
+            | crate::parser::ast::ArrayEntry::Reference(value) => direct_closure_return_array_item_type(
                 value,
                 captures,
                 params,

@@ -17,7 +17,7 @@ runs:
     - name: Build compiler and bridge outputs
       shell: bash
       env:
-        BRIDGE_CRATES: -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-reference -p elephc-curl -p elephc-zend
+        BRIDGE_CRATES: -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-intl -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-reference -p elephc-curl -p elephc-zend
       run: |
         cargo build --locked --release --bin elephc
         cargo build --locked --release $BRIDGE_CRATES

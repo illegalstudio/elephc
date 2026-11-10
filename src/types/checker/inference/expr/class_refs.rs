@@ -233,6 +233,10 @@ impl Checker {
                 "StaticReceiver::Generic must be instantiated by generics::classes"
             ),
             StaticReceiver::Named(name) => Ok(name.as_canonical()),
+            StaticReceiver::Dynamic(_) => Err(CompileError::new(
+                span,
+                "Dynamic class access is not supported for a class constant",
+            )),
             StaticReceiver::Self_ | StaticReceiver::Static => self
                 .current_class
                 .clone()
@@ -273,6 +277,10 @@ impl Checker {
                 "StaticReceiver::Generic must be instantiated by generics::classes"
             ),
             StaticReceiver::Named(_) => Ok(()),
+            StaticReceiver::Dynamic(_) => Err(CompileError::new(
+                span,
+                "Dynamic class access is not supported for a class constant",
+            )),
             StaticReceiver::Self_ | StaticReceiver::Static => {
                 if self.current_class.is_some() {
                     Ok(())

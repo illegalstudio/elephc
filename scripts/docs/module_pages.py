@@ -19,6 +19,7 @@ MODULE_PAGES: dict[str, str] = {
     "gmagick": "image.md",
     "iconv": "iconv.md",
     "imagick": "image.md",
+    "intl": "intl.md",
     "mysqli": "mysqli.md",
     "pcntl": "pcntl.md",
     "pcre": "regex.md",

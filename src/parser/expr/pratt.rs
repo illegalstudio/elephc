@@ -216,10 +216,24 @@ fn parse_expr_bp_inner(
                         span,
                     );
                 } else {
-                    return Err(CompileError::new(
+                    // `$class::$property` / `$class::PROPERTY` is a static property read. The
+                    // member token is the literal property name, exactly as in `C::$property`.
+                    let property = match member.kind {
+                        ExprKind::StringLiteral(name) | ExprKind::Variable(name) => name,
+                        _ => {
+                            return Err(CompileError::new(
+                                span,
+                                "Dynamic class property access requires a literal property name",
+                            ));
+                        }
+                    };
+                    lhs = Expr::new(
+                        ExprKind::StaticPropertyAccess {
+                            receiver: crate::parser::ast::StaticReceiver::Dynamic(Box::new(lhs)),
+                            property,
+                        },
                         span,
-                        "Dynamic class access (`$class::X`) is only supported for method calls",
-                    ));
+                    );
                 }
             }
             Token::Arrow | Token::QuestionArrow => {

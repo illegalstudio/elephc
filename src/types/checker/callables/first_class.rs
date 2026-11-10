@@ -148,6 +148,12 @@ impl Checker {
                         "StaticReceiver::Generic must be instantiated by generics::classes"
                     ),
                     StaticReceiver::Named(class_name) => class_name.as_str().to_string(),
+                    StaticReceiver::Dynamic(_) => {
+                        return Err(CompileError::new(
+                            span,
+                            "Dynamic class access is not supported for a first-class callable",
+                        ));
+                    }
                     StaticReceiver::Self_ => {
                         self.current_class.as_ref().cloned().ok_or_else(|| {
                             CompileError::new(
@@ -647,6 +653,7 @@ impl Checker {
     ) -> Option<String> {
         match receiver {
             StaticReceiver::Named(class_name) => Some(class_name.as_str().to_string()),
+            StaticReceiver::Dynamic(_) => None,
             // Same contract every other checker site states: a generic receiver is instantiated
             // into an ordinary named one before type checking, so a template never reaches here.
             StaticReceiver::Generic(_) => unreachable!(

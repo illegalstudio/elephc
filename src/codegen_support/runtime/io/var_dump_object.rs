@@ -879,6 +879,12 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #32]");                                  // reload the descriptor row pointer
     emitter.instruction("ldr x13, [sp, #40]");                                  // reload the property slot pointer
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
+    emitter.instruction(&format!("tst x0, #{}", crate::codegen_support::sentinels::SERPROP_REFERENCE_PROPERTY_FLAG)); // does the descriptor mark a reference cell?
+    emitter.instruction("b.eq __rt_vd_obj_no_ref_pending");                     // ordinary cells request no reference prefix
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_vd_ref_pending");
+    emitter.instruction("mov x10, #1");                                         // request the `&` prefix on the next pad
+    emitter.instruction("str x10, [x9]");                                       // publish the one-shot prefix request
+    emitter.label("__rt_vd_obj_no_ref_pending");
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x13", "x0", "x14", "__rt_vd_obj_payload");
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
@@ -996,6 +1002,11 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot pointer
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
+    emitter.instruction(&format!("test rdi, {}", crate::codegen_support::sentinels::SERPROP_REFERENCE_PROPERTY_FLAG)); // does the descriptor mark a reference cell?
+    emitter.instruction("jz __rt_vd_obj_no_ref_pending_x86");                   // ordinary cells request no reference prefix
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_vd_ref_pending");
+    emitter.instruction("mov QWORD PTR [r9], 1");                               // publish the one-shot prefix request
+    emitter.label("__rt_vd_obj_no_ref_pending_x86");
     crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "rdi", "r8", "__rt_vd_obj_payload");
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer

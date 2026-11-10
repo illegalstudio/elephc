@@ -165,6 +165,7 @@ impl Checker {
             narrowed_local_origins: HashMap::new(),
             next_guard_binding_revision: 0,
             ref_aliased_locals: HashSet::new(),
+            property_ref_aliased_locals: HashSet::new(),
             non_builtin_ref_aliased_locals: HashSet::new(),
             ref_assign_aliased_locals: HashSet::new(),
             by_ref_captured_locals: HashSet::new(),
