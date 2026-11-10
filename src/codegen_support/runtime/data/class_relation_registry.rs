@@ -217,23 +217,21 @@ fn lookup_interface<'a>(module: &'a Module, name: &str) -> Option<&'a InterfaceI
 }
 
 /// Looks up a class name by PHP-style case-insensitive name.
+///
+/// Through the module's folded-name index, which answers the first name in iteration order as
+/// the scan it replaces did: that scan lowercased every class name on every lookup, ~850 samples
+/// of a sampled Symfony demo console build.
 fn lookup_class_name(module: &Module, raw: &str) -> Option<String> {
-    lookup_folded(module.class_infos.keys(), raw)
+    module
+        .class_info_by_key(&php_symbol_key(raw.trim_start_matches('\\')))
+        .map(|(name, _)| name.to_string())
 }
 
-/// Looks up an interface name by PHP-style case-insensitive name.
+/// Looks up an interface name by PHP-style case-insensitive name, as [`lookup_class_name`].
 fn lookup_interface_name(module: &Module, raw: &str) -> Option<String> {
-    lookup_folded(module.interface_infos.keys(), raw)
-}
-
-/// Returns a matching symbol name using PHP case-insensitive comparison.
-fn lookup_folded<'a>(names: impl Iterator<Item = &'a String>, raw: &str) -> Option<String> {
-    let clean = raw.trim_start_matches('\\');
-    let key = php_symbol_key(clean);
-    names
-        .into_iter()
-        .find(|name| php_symbol_key(name.trim_start_matches('\\')) == key)
-        .cloned()
+    module
+        .interface_info_by_key(&php_symbol_key(raw.trim_start_matches('\\')))
+        .map(|(name, _)| name.to_string())
 }
 
 /// Returns true for internal helper classes hidden from PHP-visible registries.
@@ -241,7 +239,7 @@ fn lookup_folded<'a>(names: impl Iterator<Item = &'a String>, raw: &str) -> Opti
 /// Mirrors `crate::codegen::is_internal_synthetic_class_name` and its
 /// siblings so this registry's row set agrees with `_class_table`'s.
 fn is_internal_synthetic_class_name(name: &str) -> bool {
-    php_symbol_key(name).starts_with("__elephc")
+    crate::names::has_internal_elephc_prefix(name)
 }
 
 /// Appends one uniform 64-byte-row, name-sorted relation table to `out`.

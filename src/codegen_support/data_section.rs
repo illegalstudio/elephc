@@ -546,6 +546,9 @@ impl DataSection {
     /// `target` is required because `.comm`'s alignment operand is spelled differently per object
     /// format; see [`comm_alignment_operand`].
     pub fn emit(&self, target: Target) -> String {
+        // Lines are written straight into `out`: each `push_str(&format!(..))` built and copied a
+        // temporary string, ~1,100 samples of a sampled Symfony demo console build.
+        use std::fmt::Write as _;
         if self.entries.is_empty()
             && self.float_entries.is_empty()
             && self.word_entries.is_empty()
@@ -557,14 +560,14 @@ impl DataSection {
 
         let mut out = String::from(".data\n");
         for label in &self.private_identities {
-            out.push_str(&format!(".p2align 3\n{}:\n    .quad 0\n", label));
+            let _ = write!(out, ".p2align 3\n{}:\n    .quad 0\n", label);
         }
         let comm_align = comm_alignment_operand(target, COMM_ALIGN_BYTES);
         for (label, size) in &self.comm_entries {
-            out.push_str(&format!(".comm {}, {}, {}\n", label, size, comm_align));
+            let _ = write!(out, ".comm {}, {}, {}\n", label, size, comm_align);
         }
         for (label, bytes) in &self.entries {
-            out.push_str(&format!("{}:\n", label));
+            let _ = write!(out, "{}:\n", label);
             out.push_str("    .ascii \"");
             for &b in bytes {
                 match b {
@@ -573,23 +576,25 @@ impl DataSection {
                     b'\\' => out.push_str("\\\\"),
                     b'"' => out.push_str("\\\""),
                     0x20..=0x7e => out.push(b as char),
-                    _ => out.push_str(&format!("\\{:03o}", b)),
+                    _ => {
+                        let _ = write!(out, "\\{:03o}", b);
+                    }
                 }
             }
             out.push_str("\"\n");
         }
         for (label, bits) in &self.float_entries {
-            out.push_str(&format!(".p2align 3\n{}:\n    .quad 0x{:016x}\n", label, bits));
+            let _ = write!(out, ".p2align 3\n{}:\n    .quad 0x{:016x}\n", label, bits);
         }
         for (label, words) in &self.word_entries {
-            out.push_str(&format!(".p2align 3\n{}:\n", label));
+            let _ = write!(out, ".p2align 3\n{}:\n", label);
             for word in words {
                 match word {
                     DataWord::U64(value) => {
-                        out.push_str(&format!("    .quad 0x{:016x}\n", value));
+                        let _ = write!(out, "    .quad 0x{:016x}\n", value);
                     }
                     DataWord::Symbol(symbol) => {
-                        out.push_str(&format!("    .quad {}\n", symbol));
+                        let _ = write!(out, "    .quad {}\n", symbol);
                     }
                 }
             }

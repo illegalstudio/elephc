@@ -940,5 +940,5 @@ fn sorted_lowercased_registry_names<'a>(names: impl Iterator<Item = &'a String>)
 
 /// Returns true for compiler-internal classes hidden from PHP class lookup.
 fn is_internal_synthetic_class_name(name: &str) -> bool {
-    php_symbol_key(name).starts_with("__elephc")
+    crate::names::has_internal_elephc_prefix(name)
 }

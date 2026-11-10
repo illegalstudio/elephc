@@ -45,7 +45,7 @@ pub(in crate::codegen::lower_inst) fn contains_folded<'a>(
 
 /// Returns true for internal helper classes that should not be visible to PHP class_exists().
 pub(in crate::codegen::lower_inst) fn is_internal_synthetic_class_name(name: &str) -> bool {
-    php_symbol_key(name).starts_with("__elephc")
+    crate::names::has_internal_elephc_prefix(name)
 }
 
 /// Returns a compile-time string value defined by `ConstStr` or `ConstClassName`.

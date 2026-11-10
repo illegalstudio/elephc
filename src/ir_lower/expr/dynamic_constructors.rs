@@ -201,7 +201,7 @@ fn dynamic_new_class_is_planning_candidate(
     if class_info.is_abstract || ctx.enums.contains_key(class_name) {
         return false;
     }
-    if php_symbol_key(class_name).starts_with("__elephc") {
+    if crate::names::has_internal_elephc_prefix(class_name) {
         return false;
     }
     if crate::codegen_support::dynamic_new::known_dynamic_new_builtin_class_names()
@@ -717,7 +717,7 @@ fn static_new_class_is_planning_candidate(
     if class_info.is_abstract
         || ctx.enums.contains_key(class_name)
         || class_info.declaration_span == Span::dummy()
-        || php_symbol_key(class_name).starts_with("__elephc")
+        || crate::names::has_internal_elephc_prefix(class_name)
         || !is_same_or_descendant_class(ctx, class_name, required_parent)
     {
         return false;

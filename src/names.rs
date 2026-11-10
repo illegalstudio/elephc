@@ -413,6 +413,17 @@ pub fn php_symbol_key(name: &str) -> String {
     name.to_ascii_lowercase()
 }
 
+/// Whether `name` starts with `__elephc` in any case: the compiler's internal helper classes.
+///
+/// `php_symbol_key(name).starts_with("__elephc")`, without lowercasing the whole name into a
+/// fresh string: six registries asked it of every class, each allocating.
+pub fn has_internal_elephc_prefix(name: &str) -> bool {
+    const PREFIX: &[u8] = b"__elephc";
+    name.as_bytes()
+        .get(..PREFIX.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(PREFIX))
+}
+
 /// Returns an assembly-safe mangled form of a fully-qualified name.
 ///
 /// ASCII letters and digits are preserved; `_` → `_u_` and `\` → `_N_`. Any other
@@ -1068,6 +1079,18 @@ mod tests {
         CALLED_CLASS_ID_LOCAL, CLOSURE_SCOPE_LOCAL, EVAL_AOT_SCOPE_LOCAL, GENERATED_LOCAL_MARKER,
         SYNTHETIC_PLACE_LOCAL_STEM,
     };
+
+    /// The allocation-free prefix test answers what lowercasing the whole name answered.
+    #[test]
+    fn internal_prefix_matches_the_folded_test() {
+        for name in ["__elephc", "__ELEPHC_helper", "__Elephc\\X", "__eleph", "", "App\\__elephc", "__élephc"] {
+            assert_eq!(
+                super::has_internal_elephc_prefix(name),
+                super::php_symbol_key(name).starts_with("__elephc"),
+                "{name}"
+            );
+        }
+    }
 
     /// Only names carrying the unforgeable marker segment count as compiler-generated.
     #[test]

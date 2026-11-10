@@ -365,7 +365,7 @@ fn emit_name_bytes(out: &mut String, label: &str, value: &str) {
 
 /// Returns true for compiler-internal classes excluded from PHP introspection.
 fn is_internal_synthetic_class_name(name: &str) -> bool {
-    php_symbol_key(name).starts_with("__elephc")
+    crate::names::has_internal_elephc_prefix(name)
 }
 
 #[cfg(test)]

@@ -181,5 +181,5 @@ fn prepend_internal_names<'a>(
 
 /// Returns true when internal synthetic class name.
 fn is_internal_synthetic_class_name(name: &str) -> bool {
-    crate::names::php_symbol_key(name).starts_with("__elephc")
+    crate::names::has_internal_elephc_prefix(name)
 }

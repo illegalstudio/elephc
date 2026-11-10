@@ -38,10 +38,11 @@ const BUILTIN_DATETIME_CLASSES: &[&str] = &[
 
 /// Returns true when `name` is one of the synthetic builtin date/time classes.
 fn is_builtin_datetime_class(name: &str) -> bool {
-    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    let name = name.trim_start_matches('\\');
     BUILTIN_DATETIME_CLASSES
         .iter()
-        .any(|candidate| crate::names::php_symbol_key(candidate) == key)
+        // Compared in place: lowering both sides allocated twice per candidate per call.
+        .any(|candidate| candidate.eq_ignore_ascii_case(name))
 }
 
 /// Returns the normalized builtin date/time class or descendant named by `ty`, if any.
