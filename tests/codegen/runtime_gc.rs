@@ -333,3 +333,4 @@ mod gmp_exception_operands;
 mod eval_reference_escape;
 mod leaf_unset_collection;
 mod foreach_hash_objects;
+mod nullable_identity_guards;
