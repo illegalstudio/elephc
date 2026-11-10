@@ -150,7 +150,7 @@ Keep semantic repairs separate from this compile-time change.
 
 Next, collect exact-head CI measurements for the five raised-budget SimpleXML
 fixtures and the wider family before removing deadlines or scheduling reservations.
-Profile the non-eval embedder-stack test and isolated-cache REPL tests separately.
+Use the independent embedder and REPL results below when reassessing their budgets.
 A reduction for opaque eval cannot by itself establish their budgets.
 
 ## Independent embedder and REPL probes
@@ -170,10 +170,11 @@ These measurements locate the separate cost in lowering, with steep depth growth
 A debugger sample at depth 512 shows deep `PhpType` cloning in
 `array_literal_type_for_ir`, including preparation of the nullable-pointer probe,
 inside recursive literal inference and lowering. That identifies a candidate for
-separate optimization, not a quantified attribution. The bounded debugger driver
+separate optimization, not a quantified attribution by itself. The bounded debugger driver
 did not complete its sampling sequence; the phase measurements above came from
 the successful independent run. The operator/catalog change does not address
-this input.
+this input by itself. A separate change now avoids the redundant copies described
+below.
 
 An isolated REPL launch comparison used the pinned baseline and changed CLI, PHP
 8.5, identical bridge archives, and separate `XDG_CACHE_HOME` roots. Each submitted
@@ -189,3 +190,26 @@ one shared test cache. The ordinary non-XML catalog cost and linking need separa
 profiling if their cold-host deadlines remain tight in CI.
 
 Draft PR: https://github.com/illegalstudio/elephc/pull/2336, with `ci:macos`.
+
+### Deep literal copy reduction
+
+Indexed literal inference now rejects nested container elements before preparing
+the nullable-pointer probe. It also checks whether an element can become a tagged
+scalar before asking for a cloned representation, and returns already-materialized
+nested literal storage directly. The type rules and emitted container layouts are
+unchanged; no inference cache was added.
+
+Repeating the public-API phase probe with these changes gives:
+
+| Depth | EIR lower before | EIR lower after |
+|---|---:|---:|
+| 256 | 1.14 s | 0.353 s |
+| 512 | 9.56 s | 3.31 s |
+| 1,024 | 94.32 s | 36.43 s |
+
+The depth-1,024 reduction is 61.4%. The actual small-stack regression passes in
+36.46 s. Five additional focused executable tests pass: the depth-1,024 literal
+pipeline (57.85 s), nullable pointer array elements, nullable pointer spreads,
+nullable integer array elements and nested heterogeneous literal GC statistics.
+The XML comparison above measures the operator/module changes before this
+additional literal-copy reduction.

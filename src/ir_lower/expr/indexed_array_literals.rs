@@ -768,16 +768,21 @@ pub(crate) fn array_literal_type_for_ir(
             None => array_literal_element_type_for_ir(ctx, item),
         })
         .collect();
-    let probe_types: Vec<Option<PhpType>> = item_types
-        .iter()
-        .zip(&spread_storage)
-        .map(|(item_ty, storage)| match storage {
-            Some(storage) => Some(spread_storage_probe_element_type(storage)),
-            None => Some(item_ty.clone()),
-        })
-        .collect();
-    if let Some(pointer) = pointer_literal_element_type(ctx, items, &probe_types) {
-        return PhpType::Array(Box::new(pointer));
+    // A nested literal is a container, never a pointer element. Reject that shape before
+    // cloning its recursively nested type just to let the pointer probe reject it again.
+    if !items.iter().any(|item| matches!(item.kind,
+        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_))) {
+        let probe_types: Vec<Option<PhpType>> = item_types
+            .iter()
+            .zip(&spread_storage)
+            .map(|(item_ty, storage)| match storage {
+                Some(storage) => Some(spread_storage_probe_element_type(storage)),
+                None => Some(item_ty.clone()),
+            })
+            .collect();
+        if let Some(pointer) = pointer_literal_element_type(ctx, items, &probe_types) {
+            return PhpType::Array(Box::new(pointer));
+        }
     }
     let mut item_types = item_types.into_iter();
     let mut elem_ty = item_types.next().expect("a non-empty literal has a first item");
@@ -1002,7 +1007,9 @@ pub(super) fn array_literal_element_type_for_ir(
 /// boxed `mixed` cell, which carries the tag and reads back as the int or the null it holds,
 /// the way `[$c ? $n : null]` was built before the merge kept its tag word (#1944).
 pub(in crate::ir_lower) fn box_tagged_scalar_element(element: PhpType) -> PhpType {
-    if element.codegen_repr() == PhpType::TaggedScalar {
+    // Other kinds cannot become tagged scalars. Inspect them without cloning nested metadata.
+    if matches!(element, PhpType::TaggedScalar | PhpType::Union(_))
+        && element.codegen_repr() == PhpType::TaggedScalar {
         PhpType::Mixed
     } else {
         element
@@ -1035,7 +1042,8 @@ fn array_literal_element_type_for_ir_unboxed(
         ExprKind::Spread(inner) => {
             spread_storage_element_type(&spread_source_storage_type_for_ir(ctx, inner).codegen_repr())
         }
-        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item).codegen_repr(),
+        // Literal inference already returns materializable container storage.
+        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item),
         ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, item),
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
