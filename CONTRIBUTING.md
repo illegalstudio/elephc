@@ -320,6 +320,11 @@ deletes at most 500 artifacts. Deferred work stays checkpointed; a successful pa
 that makes progress requests the next pass. Active readers alone do not trigger
 an endless continuation loop. Job inventories are read only when required to
 select a main package set or a successful queue handoff.
+The live API quota can reduce the deletion batch, with 200 requests reserved for
+status checks, checkpoints and other readers. Mutations are spaced by at least
+one second. Low quota or an explicit GitHub rate-limit response defers remaining
+checkpointed work to a later scheduled invocation instead of dispatching a loop;
+permission failures and unrelated API errors still fail visibly.
 
 Before deleting `benchmark-results` from main CI, the janitor validates and saves
 its measurement JSON to `benchmark-results/<artifact-id>.json` on the ledger

@@ -160,6 +160,9 @@ class FakeRetention(Retention):
     def load(self):
         return copy.deepcopy(self.state)
 
+    def request_budget(self):
+        return 10000
+
     def save(self, state):
         if self.apply:
             self.saved.append(copy.deepcopy(state))

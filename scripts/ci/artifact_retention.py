@@ -13,7 +13,8 @@ from urllib.parse import quote
 
 from artifact_retention_policy import (CI, DEVELOPMENT, PACKAGE, RETENTION, active_source, candidate,
                                        keep_ids, newest, refresh_due, trusted_run)
-from reconcile_development import BRANCH, gh, git
+from reconcile_development import BRANCH, git
+from artifact_retention_api import RetentionAPI, run_safely
 
 FILE = "artifact-retention.json"
 MAX_RUNS = 20
@@ -40,10 +41,15 @@ class Retention:
         self.file_sha = None
         self.branch_exists = False
         self.summary = []
+        self.transport = RetentionAPI(repo)
 
     def api(self, endpoint, method="GET", body=None):
         """Route every GitHub read and write through the official CLI."""
-        return gh(self.repo, endpoint, method, body)
+        return self.transport.request(endpoint, method, body)
+
+    def request_budget(self):
+        """Dry runs plan the normal batch; writes respect the token's live quota."""
+        return self.transport.budget() if self.apply else MAX_DELETIONS
 
     def pages(self, endpoint, key, limit=20):
         """Never interpret a truncated discovery or artifact inventory as complete."""
@@ -160,6 +166,7 @@ class Retention:
 
     def run(self, run_id=None):
         """Select first, persist second, then dispose of completed runs with fresh status checks."""
+        self.request_budget()
         history = git("rev-list", "--first-parent", "origin/main").splitlines()
         state = self.load()
         self.discover(state, run_id)
@@ -208,7 +215,8 @@ class Retention:
         active = self.active_runs()
         sources = {value for run in active.values() if (value := active_source(run))}
         pending, queues = list(deferred), []
-        remaining = MAX_DELETIONS
+        remaining = min(MAX_DELETIONS, self.request_budget())
+        delete_limit = remaining
         partial = False
         for identifier, (run, jobs, artifacts) in records.items():
             # A user can request a rerun after discovery. Never delete inputs from
@@ -256,7 +264,7 @@ class Retention:
                   "runs": self.summary, "refresh": [],
                   # Continue only after measurable progress, never spin on active readers.
                   "continue_cleanup": bool(deferred or partial) and (
-                      remaining < MAX_DELETIONS or bool(finished))}
+                      remaining < delete_limit or bool(finished))}
         if refresh_due(latest, self.now):
             result["refresh"] = [dict(target=target, sha=latest["sha"], **{
                 key: artifact[key] for key in ("id", "name", "digest")})
@@ -270,7 +278,7 @@ def main():
     parser.add_argument("--run-id", type=int)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
-    result = Retention(os.environ["GITHUB_REPOSITORY"], args.apply).run(args.run_id)
+    result = run_safely(Retention(os.environ["GITHUB_REPOSITORY"], args.apply), args.run_id)
     print(json.dumps(result, indent=2))
     if os.environ.get("GITHUB_OUTPUT"):
         with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
@@ -278,8 +286,11 @@ def main():
             output.write("continue_cleanup=" + json.dumps(result["continue_cleanup"]) + "\n")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as output:
-            output.write("Artifact retention: " + ("applied" if args.apply else "dry run") + ".\n\n")
-            output.write(f"Latest complete main source: `{result['latest_sha']}`.\n\n")
+            if result.get("deferred"):
+                output.write("Artifact retention deferred: " + result["deferred"] + ".\n\n")
+            else:
+                output.write("Artifact retention: " + ("applied" if args.apply else "dry run") + ".\n\n")
+                output.write(f"Latest complete main source: `{result['latest_sha']}`.\n\n")
             for target, url in sorted(result["downloads"].items()):
                 output.write(f"- [{target}]({url})\n")
             output.write("\n")
