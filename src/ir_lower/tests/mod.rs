@@ -73,6 +73,7 @@ mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;
 mod unset_collection;
+mod typed_element_refs;
 mod array_edge_guards;
 mod sparse_key_writes;
 mod assoc_push;

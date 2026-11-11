@@ -462,6 +462,47 @@ Known gaps against PHP for these nullable by-reference parameters:
 - A `?Item` property passed to `?Item &$item` is rejected at compile time with the same
   message. An `array`-typed property given `null` raises PHP's `TypeError`, as in PHP.
 
+An element of a **typed array** can be passed to a wider by-reference parameter such as
+`mixed &$slot`. For a plain local (`array<int, int> $ids`), the array's entries are widened
+to `mixed` before the element binds, so whatever the callee stores reads back unchanged,
+exactly as for an untyped array. An element of a typed instance or static property
+(`$holder->items[0]`, `Holder::$shared[0]`), or of a typed local that is itself a reference
+(a by-reference parameter or a `&` alias, whose array another scope keeps reading with the
+declared type), keeps the declared element type, the way PHP keeps a typed property's type on
+a reference to it. A compatible value is converted
+like a weak-mode assignment (`"7"` becomes `7` in an `int` element), and anything else raises
+a catchable `TypeError` (`Cannot assign Node to reference held by property Holder::$items
+element of type int`) and leaves the element unchanged:
+
+```php
+<?php
+final class Holder { public array<int, int> $items = [1, 2]; }
+function seven(mixed &$slot): void { $slot = "7"; }
+$h = new Holder();
+seven($h->items[0]);
+echo $h->items[0] + 1; // 8
+```
+
+The element travels through a hidden boxed cell and is written back when the call returns, so
+the callee does not see its own writes through `$h->items[0]` until then.
+
+An element that is itself a typed array is written back the way a declared typed local is.
+An indexed element (`array<array<int>>`) accepts an array of the declared layout, and one the
+callee built from `mixed` values is converted. A typed hash element (`array<array<string,
+int>>`) accepts a hash whose entries already carry the declared scalar kind; entries that are
+boxed `mixed` values (`$slot = ["k" => $n]` with a `mixed` `$n`) are not converted. A value of
+another kind stops the program with `a by-reference argument was replaced by a value its typed
+variable cannot hold`, and an array or hash with entries of another kind with `a by-reference
+argument was replaced by an array whose elements its typed variable cannot hold`. An indexed
+array of such hashes is checked the same way, entry by entry inside each hash. A plain local
+hash of raw pointers, buffers or packed records is never widened (that would turn every
+pointer into an integer), so its element is rejected at compile time like the other shapes
+below. An element holding raw
+pointers, or a hash (at any indexed nesting depth) whose own values are arrays, objects or
+pointers, cannot be validated that way, so passing it to a wider by-reference parameter is
+rejected at compile time; declare the
+parameter with the element's exact type instead.
+
 ## References to array elements
 
 A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through

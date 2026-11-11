@@ -1131,7 +1131,42 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
     };
     let local_ty = ctx.local_type(array_name).codegen_repr();
     let (_, param_ty) = sig.params.get(index)?;
-    if let PhpType::AssocArray { .. } = local_ty {
+    if let PhpType::AssocArray { key, value } = &local_ty {
+        // A ref-bound table is shared with another frame that keeps its declared layout; the
+        // typed write-back rewrite in `ref_place_args` handles those elements instead.
+        if param_ty.codegen_repr() == PhpType::Mixed
+            && matches!(value.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_))
+        {
+            // Widening boxes raw pointer, buffer and packed words as plain integers, which would
+            // corrupt every entry of the hash before the callee even runs.
+            crate::ir_lower::diagnostics::refuse(
+                arg.span,
+                "A typed array element holding pointers, or whose own entries are arrays or \
+                 objects, cannot be passed to a wider by-reference parameter; declare the \
+                 parameter with the element's exact type",
+            );
+        } else if param_ty.codegen_repr() == PhpType::Mixed
+            && value.codegen_repr() != PhpType::Mixed
+            && !ctx.is_ref_bound_local(array_name)
+        {
+            // Same as the indexed branch below: the callee can store any value through this
+            // entry, so widen the hash's entries to boxed Mixed cells first. Binding the concrete
+            // entry left the local typed `int` while the callee stored an object in it, and every
+            // later typed read decoded that object pointer as an integer.
+            let parent = ctx.load_local(array_name, Some(array.span));
+            let owned =
+                crate::ir_lower::ownership::acquire_if_refcounted(ctx, parent, Some(arg.span));
+            let boxed_ty = PhpType::AssocArray { key: key.clone(), value: Box::new(PhpType::Mixed) };
+            let converted = ctx.emit_value(
+                Op::HashToMixed,
+                vec![owned.value],
+                None,
+                boxed_ty.clone(),
+                Op::HashToMixed.default_effects(),
+                Some(arg.span),
+            );
+            ctx.store_call_argument_local(array_name, converted, boxed_ty, Some(arg.span));
+        }
         let hash_value = ctx.load_local(array_name, Some(array.span));
         let element_index = lower_expr(ctx, element_index);
         let cell = ctx.emit_value(
