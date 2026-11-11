@@ -88,7 +88,7 @@ jobs:
       # bot token pins the same SHA; bump them together.
       - name: Mint Illegal Bot token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
         with:
           app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
           private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
@@ -391,7 +391,7 @@ jobs:
         # code authorised to rewrite this repository's releases, tags and
         # published artifacts without any diff to review here. Both publish
         # paths pin the same SHA; bump them together.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           generate_release_notes: true
           files: dist/*
@@ -401,7 +401,7 @@ jobs:
       # full commit SHA for the same reason as the other bot-token steps.
       - name: Mint Illegal Bot token for the tap
         id: tap-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510
         with:
           app-id: ${{ secrets.ILLEGAL_BOT_APP_ID }}
           private-key: ${{ secrets.ILLEGAL_BOT_PRIVATE_KEY }}
