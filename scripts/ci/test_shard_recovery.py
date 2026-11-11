@@ -105,12 +105,32 @@ class RecoveryStates(unittest.TestCase):
         inputs = ["linux-x86_64", "codegen", "2", "32", "a" * 40, "123", "1",
                   "ghcr.io/illegalstudio/elephc-ci@sha256:" + "b" * 64]
         validate(*inputs)
+        _head.assert_called_once_with(
+            ["git", "-c", f"safe.directory={Path.cwd().resolve()}", "rev-parse", "HEAD"], text=True,
+        )
         for index, value in ((0, "linux-other"), (2, "0"), (3, "1"), (4, "c" * 40),
                              (5, ""), (6, "0"), (7, "ghcr.io/illegalstudio/elephc-ci:latest")):
             changed = list(inputs)
             changed[index] = value
             with self.assertRaises(ValueError):
                 validate(*changed)
+
+    def test_container_ownership_check_accepts_only_the_requested_checkout_sha(self):
+        """Force Git's different-owner guard and validate through the real subprocess."""
+        head = subprocess.check_output(
+            ["git", "-c", f"safe.directory={Path.cwd().resolve()}", "rev-parse", "HEAD"], text=True,
+        ).strip()
+        image = "ghcr.io/illegalstudio/elephc-ci@sha256:" + "b" * 64
+        with patch.dict(os.environ, {"GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+                                   "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "safe.directory",
+                                   "GIT_CONFIG_VALUE_0": ""}):
+            unsafe = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
+            self.assertNotEqual(unsafe.returncode, 0)
+            self.assertIn("dubious ownership", unsafe.stderr)
+            validate("linux-x86_64", "codegen", "1", "32", head, "123", "1", image)
+            wrong = ("0" if head[0] != "0" else "1") + head[1:]
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                validate("linux-x86_64", "codegen", "1", "32", wrong, "123", "1", image)
 
 
 class WorkflowRecovery(unittest.TestCase):

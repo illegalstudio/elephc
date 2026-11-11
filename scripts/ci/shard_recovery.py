@@ -1,6 +1,7 @@
 """Keep transfer recovery separate from test success and required-check verdicts."""
 
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -21,7 +22,9 @@ def validate(target, family, shard, count, source, run_id, attempt, image):
         raise ValueError("An exact producer run and attempt are required")
     if target.startswith("linux-") and not re.fullmatch(r"ghcr\.io/illegalstudio/elephc-ci@sha256:[0-9a-f]{64}", image):
         raise ValueError("Linux recovery requires the coordinator's immutable CI image")
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    head = subprocess.check_output(
+        ["git", "-c", f"safe.directory={Path.cwd().resolve()}", "rev-parse", "HEAD"], text=True,
+    ).strip()
     if head != source:
         raise ValueError("Shard checkout does not match its requested source SHA")
 
