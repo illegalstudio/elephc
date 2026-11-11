@@ -27,13 +27,15 @@ ARG NEXTEST_VERSION=0.9.140
 # netbase (/etc/protocols + /etc/services — present on the runner VMs but not
 # in the ubuntu base image; the compiled runtime and the magician interpreter
 # read them for getprotobyname()/getservbyname() and friends).
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+COPY --chmod=0755 scripts/ci/apt_install.sh /usr/local/bin/elephc-ci-apt-install
+RUN elephc-ci-apt-install --no-install-recommends \
         binutils \
         build-essential \
         ca-certificates \
         curl \
         file \
         freetds-dev \
+        gdb \
         git \
         libbz2-dev \
         libpcre2-dev \
@@ -46,6 +48,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         unixodbc-dev \
         zlib1g-dev \
         zstd \
+    && gdb --version \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the toolchain outside $HOME: GitHub job containers run steps with

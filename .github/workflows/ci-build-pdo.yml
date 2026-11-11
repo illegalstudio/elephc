@@ -46,8 +46,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install native link dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libpq-dev libssl-dev freetds-dev unixodbc-dev libbz2-dev zlib1g-dev libpcre2-dev
+          sudo bash scripts/ci/apt_install.sh libpq-dev libssl-dev freetds-dev unixodbc-dev libbz2-dev zlib1g-dev libpcre2-dev
       - name: Install nextest
         uses: taiki-e/install-action@e88e69ecdb9658bd172693dcdc2c84e7f0ab6a11 # nextest, 2026-09-20
         with:

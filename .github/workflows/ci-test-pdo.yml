@@ -74,8 +74,7 @@ jobs:
 
       - name: Install native test dependencies
         run: |
-          sudo apt-get update
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          sudo bash scripts/ci/apt_install.sh \
             binutils \
             build-essential \
             file \
@@ -329,8 +328,7 @@ jobs:
         if: matrix.suite == 'sqlsrv-oci'
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libaio1t64 unzip
+          sudo bash scripts/ci/apt_install.sh libaio1t64 unzip
           curl --fail --location --retry 5 --retry-all-errors \
             --output "$RUNNER_TEMP/instantclient-basiclite.zip" \
             https://download.oracle.com/otn_software/linux/instantclient/2326200v2/instantclient-basiclite-linux.x64-23.26.2.0.0.zip
@@ -346,8 +344,7 @@ jobs:
 
       - name: Install native test dependencies
         run: |
-          sudo apt-get update
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          sudo bash scripts/ci/apt_install.sh \
             binutils \
             build-essential \
             file \
@@ -369,8 +366,7 @@ jobs:
         run: |
           curl -fsSLo "$RUNNER_TEMP/packages-microsoft-prod.deb" https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
           sudo dpkg -i "$RUNNER_TEMP/packages-microsoft-prod.deb"
-          sudo apt-get update
-          sudo env ACCEPT_EULA=Y DEBIAN_FRONTEND=noninteractive apt-get install -y msodbcsql18
+          sudo env ACCEPT_EULA=Y bash scripts/ci/apt_install.sh msodbcsql18
 
       - name: Restore PDO sqlsrv tests
         if: matrix.suite == 'sqlsrv-oci'

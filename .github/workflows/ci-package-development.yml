@@ -40,12 +40,13 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.source-sha }}
         run: python3 -B scripts/ci/reconcile_development.py validate "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      # Provision with current-main tooling before checking out historical source.
+      - name: Install native link prerequisites
+        if: runner.os == 'Linux'
+        run: sudo bash scripts/ci/apt_install.sh binutils build-essential libbz2-dev zlib1g-dev
       - uses: actions/checkout@v7
         with:
           ref: ${{ steps.source.outputs.sha }}
-      - name: Install native link prerequisites
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libbz2-dev zlib1g-dev
       - name: Restore verified compiler
         uses: ./.github/actions/restore-build-artifact
         with:

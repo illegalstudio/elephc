@@ -51,8 +51,7 @@ jobs:
         # because the bridge's prelude calls `fopen()` and that enables the
         # runtime's phar stream feature.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
+          sudo bash scripts/ci/apt_install.sh binutils build-essential file libbz2-dev zlib1g-dev
 
       - name: Restore shared compiler
         uses: ./.github/actions/restore-build-artifact
@@ -196,7 +195,7 @@ jobs:
             cat "$RUNNER_TEMP/date-json-regex.out"
             if [[ "${{ runner.os }}" == "Linux" ]]; then
               if ! command -v gdb >/dev/null; then
-                sudo apt-get update && sudo apt-get install -y gdb
+                sudo bash scripts/ci/apt_install.sh gdb
               fi
               gdb --batch -ex run -ex bt -ex 'x/12i $pc-16' -ex 'info registers' -ex 'x/16gx $sp' \
                 -ex up -ex 'x/20i $pc-48' \

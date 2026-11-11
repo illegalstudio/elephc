@@ -346,8 +346,7 @@ jobs:
       - name: Install a linking toolchain
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
+          sudo bash scripts/ci/apt_install.sh binutils build-essential file libbz2-dev zlib1g-dev
 
       # The probe adds every managed native package the packaged binary names in
       # `--print-capabilities` before force-enabling its packed bridge in an empty

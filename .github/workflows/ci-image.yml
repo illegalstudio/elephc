@@ -13,10 +13,12 @@ on:
     branches: [main]
     paths:
       - '.github/docker/ci.Dockerfile'
+      - 'scripts/ci/apt_install.sh'
       - '.github/workflows/ci-image.yml'
   pull_request:
     paths:
       - '.github/docker/ci.Dockerfile'
+      - 'scripts/ci/apt_install.sh'
       - '.github/workflows/ci-image.yml'
   workflow_dispatch:
 
@@ -62,7 +64,7 @@ jobs:
       - name: Build image (push on main)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6, 2026-02-12
         with:
-          context: .github/docker
+          context: .
           file: .github/docker/ci.Dockerfile
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ env.IMAGE }}:${{ matrix.arch }}

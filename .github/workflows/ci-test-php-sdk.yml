@@ -107,7 +107,7 @@ jobs:
 
       - name: Install Valgrind for native and adapter memory checks
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y valgrind libc6-dbg
+        run: sudo bash scripts/ci/apt_install.sh valgrind libc6-dbg
 
       - name: Cache real PHP debug embed SDK
         uses: actions/cache@v6

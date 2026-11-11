@@ -265,6 +265,24 @@ existing required-check name. The workflow remains active until recovery and the
 verdict finish, so the existing retention policy preserves its inputs. Other
 artifact consumers retain the downloader's normal failure behavior.
 
+Ubuntu package provisioning uses `scripts/ci/apt_install.sh` on both runner VMs
+and containers. It requires `apt-get --error-on=any update` to finish before
+installing packages, so DNS errors cannot leave a successful update with missing
+indexes. A recognized transport failure permits one retry using kernel.org's
+Ubuntu mirror for amd64 or dotsrc's Ubuntu Ports mirror for arm64. The whole
+operation has a five-minute budget, including bounded individual APT commands.
+Signature, checksum, permission and missing-package failures remain fatal.
+
+The retry uses private source-file copies, preserving suites, components,
+architectures, signing keys and third-party repositories such as Microsoft's PDO
+driver feed. Original source files are unchanged and temporary copies are removed.
+HTTPS is used when the host has a CA bundle; minimal image bootstrap can use HTTP
+with APT archive authentication still mandatory. The multi-architecture CI image
+includes `gdb`, and changes to the shared installer also rebuild that image. Older
+images and VM jobs retain the same checked installer when dependencies are needed.
+The strict update option is documented in the
+[Ubuntu APT manual](https://manpages.ubuntu.com/manpages/noble/en/man8/apt-get.8.html).
+
 Separate producers retain configurations that are not interchangeable: PDO driver
 features, curl-enabled tools and contract tests, release-mode frame tests, iOS device
 and Simulator bridges, and the main-only release benchmark. A partial matrix rerun

@@ -305,8 +305,7 @@ jobs:
         # installation; the guard makes the step a no-op on macOS and warm images.
         run: |
           if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+            bash scripts/ci/apt_install.sh --no-install-recommends m4
           fi
 
       - name: Materialize managed native gmp
@@ -486,8 +485,7 @@ jobs:
         shell: bash
         run: |
           if ! command -v python3 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
+            bash scripts/ci/apt_install.sh --no-install-recommends python3
           fi
           python3 --version
 
@@ -598,8 +596,7 @@ jobs:
         # installation; the guard makes the step a no-op on macOS and warm images.
         run: |
           if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+            bash scripts/ci/apt_install.sh --no-install-recommends m4
           fi
 
       - name: Materialize managed native gmp
@@ -774,8 +771,7 @@ jobs:
         shell: bash
         run: |
           if ! command -v python3 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
+            bash scripts/ci/apt_install.sh --no-install-recommends python3
           fi
           python3 --version
 
@@ -886,8 +882,7 @@ jobs:
         # installation; the guard makes the step a no-op on macOS and warm images.
         run: |
           if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
+            bash scripts/ci/apt_install.sh --no-install-recommends m4
           fi
 
       - name: Materialize managed native gmp
