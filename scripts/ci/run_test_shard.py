@@ -42,13 +42,13 @@ def run(family, target, shard, count, root, env):
     if family == "codegen":
         execute([compiler, "native", "install", "--locked", "--target", target,
                  "--manifest-path", "examples/xml/elephc.toml"], env)
-        if shutil.which("apt-get") and not shutil.which("m4"):
-            execute(["bash", "scripts/ci/apt_install.sh", "--no-install-recommends", "m4"], env)
+        if not macos:
+            for tool in ("m4", "gdb"):
+                if not shutil.which(tool):
+                    raise ValueError(f"CI image is missing preinstalled {tool}")
         for example in ("gmp", "openssl-cipher", "fileinfo"):
             execute([compiler, "native", "install", "--locked", "--target", target,
                      "--manifest-path", f"examples/{example}/elephc.toml"], env)
-        if target == "linux-x86_64" and int(shard) in {2, 8} and not shutil.which("gdb"):
-            execute(["bash", "scripts/ci/apt_install.sh", "--no-install-recommends", "gdb"], env)
         env.update({f"ELEPHC_TEST_REQUIRE_{package}_NATIVE": "1"
                     for package in ("XML", "GMP", "FILEINFO", "OPENSSL")})
         phases = json.loads(Path("scripts/ci/shard_fixture_phases.json").read_text())

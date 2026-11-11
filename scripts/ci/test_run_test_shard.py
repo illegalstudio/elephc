@@ -87,15 +87,13 @@ class ShardExecution(unittest.TestCase):
                 run("eval", "linux-x86_64", "1", "16", self.root, os.environ)
         self.assertEqual(execute.call_count, 1)
 
-    def test_missing_native_tools_use_the_checked_apt_wrapper(self):
-        """Older CI images must install m4/gdb through the same bounded provisioning."""
-        with patch("run_test_shard.execute", side_effect=lambda args, env: self.calls.append(
-                ([str(arg) for arg in args], dict(env)))), patch("run_test_shard.shutil.which",
-                side_effect=lambda tool: "/usr/bin/apt-get" if tool == "apt-get" else None):
-            run("codegen", "linux-x86_64", "2", "32", self.root, {})
-        installs = [args for args, _ in self.calls if "scripts/ci/apt_install.sh" in args]
-        self.assertEqual(installs, [["bash", "scripts/ci/apt_install.sh", "--no-install-recommends", package]
-                                   for package in ("m4", "gdb")])
+    def test_missing_native_tools_fail_without_network_provisioning(self):
+        """A stale image must fail instead of silently installing during test execution."""
+        for tool in ("m4", "gdb"):
+            with self.subTest(tool=tool), patch("run_test_shard.execute"), \
+                 patch("run_test_shard.shutil.which", side_effect=lambda name: None if name == tool else "/tool"):
+                with self.assertRaisesRegex(ValueError, f"missing preinstalled {tool}"):
+                    run("codegen", "linux-x86_64", "2", "32", self.root, {})
 
 
 if __name__ == "__main__":

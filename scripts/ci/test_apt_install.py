@@ -177,19 +177,22 @@ class AptWiring(unittest.TestCase):
             for line in path.read_text().splitlines():
                 if not line.lstrip().startswith("#"):
                     self.assertIsNone(re.search(r"\bapt-get (?:update|install)\b", line), (path, line))
+                    self.assertIsNone(re.search(r"\bbash scripts/ci/apt_install\.sh\b", line), (path, line))
 
     def test_image_contains_gdb_and_rebuilds_when_its_shared_installer_changes(self):
         image = (ROOT / ".github/docker/ci.Dockerfile").read_text()
         workflow = (ROOT / ".github/workflows/ci-image.yml").read_text()
         self.assertIn("COPY --chmod=0755 scripts/ci/apt_install.sh", image)
-        self.assertRegex(image, r"(?m)^\s+gdb \\\s*$")
+        self.assertRegex(image, r"\bgdb\b")
         self.assertEqual(workflow.count("- 'scripts/ci/apt_install.sh'"), 2)
         self.assertIn("          context: .\n", workflow)
 
-    def test_historical_package_builds_provision_before_switching_source(self):
+    def test_historical_package_builds_select_environment_before_switching_source(self):
+        """Trusted current-main tooling must survive the historical checkout boundary."""
         workflow = (ROOT / ".github/workflows/ci-package-development.yml").read_text()
-        self.assertLess(workflow.index("sudo bash scripts/ci/apt_install.sh"),
+        self.assertLess(workflow.index("uses: ./.github/actions/use-ci-image"),
                         workflow.index("ref: ${{ steps.source.outputs.sha }}"))
+        self.assertIn('"$RUNNER_TEMP/elephc-image-shell.py" command', workflow)
 
 
 if __name__ == "__main__":

@@ -99,11 +99,17 @@ docker run -d \
     -p "127.0.0.1:$KDC_PORT:88/tcp" \
     -p "127.0.0.1:$KDC_PORT:88/udp" \
     -v "$FIXTURE_DIR:/fixture" \
-    debian:bookworm-slim \
+    -e "ELEPHC_GSS_PREINSTALLED=${ELEPHC_GSS_KDC_IMAGE:+1}" \
+    "${ELEPHC_GSS_KDC_IMAGE:-debian:bookworm-slim}" \
     sh -ec '
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y -qq krb5-kdc krb5-admin-server >/dev/null
+        if [ "${ELEPHC_GSS_PREINSTALLED:-}" = 1 ]; then
+            command -v krb5kdc >/dev/null
+            command -v kdb5_util >/dev/null
+        else
+            apt-get update -qq
+            apt-get install -y -qq krb5-kdc krb5-admin-server >/dev/null
+        fi
         install -m 0644 /fixture/krb5-kdc.conf /etc/krb5.conf
         install -m 0644 /fixture/kdc.conf /etc/krb5kdc/kdc.conf
         install -m 0600 /fixture/kadm5.acl /etc/krb5kdc/kadm5.acl

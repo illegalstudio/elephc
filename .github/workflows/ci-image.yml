@@ -1,55 +1,135 @@
 name: CI Image
 
-# Builds and publishes the container image used by the Linux jobs in ci.yml
-# (see .github/docker/ci.Dockerfile). Each architecture builds natively on its
-# own runner (no QEMU), then a manifest job stitches the per-arch tags into
-# the multi-arch :latest tag the CI jobs pull.
-#
-# Pull requests touching the image only build it (no push) to validate the
-# Dockerfile; pushes to main and manual dispatches publish.
-
+# Candidate dispatches publish only source-addressed tags. Consumers switch
+# after content checks on every architecture, without replacing live images.
 on:
   push:
     branches: [main]
     paths:
       - '.github/docker/ci.Dockerfile'
       - 'scripts/ci/apt_install.sh'
+      - 'scripts/ci/install_pdo_clients.sh'
+      - 'scripts/ci/verify_image.sh'
+      - 'scripts/ci/verify_libclang.py'
+      - 'scripts/phpext/build_host.py'
+      - 'examples/testing/composer.json'
       - '.github/workflows/ci-image.yml'
   pull_request:
     paths:
       - '.github/docker/ci.Dockerfile'
       - 'scripts/ci/apt_install.sh'
+      - 'scripts/ci/install_pdo_clients.sh'
+      - 'scripts/ci/verify_image.sh'
+      - 'scripts/ci/verify_libclang.py'
+      - 'scripts/phpext/build_host.py'
+      - 'examples/testing/composer.json'
       - '.github/workflows/ci-image.yml'
   workflow_dispatch:
 
-# Serialize publishes so two close-together pushes cannot interleave their
-# per-arch tags into a mixed manifest.
 concurrency:
-  group: ci-image
+  group: ci-image-${{ github.event_name == 'pull_request' && github.ref || 'publish' }}
   cancel-in-progress: false
-
 permissions:
   contents: read
   packages: write
-
 env:
   IMAGE: ghcr.io/${{ github.repository }}-ci
 
 jobs:
   build:
-    name: Build image (${{ matrix.arch }})
+    name: Build image (${{ matrix.role }}, ${{ matrix.arch }})
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - role: ci
+            target: ci
+            ubuntu: '24.04'
+            zts: '0'
+            arch: amd64
             runner: ubuntu-24.04
-          - arch: arm64
+          - role: ci
+            target: ci
+            ubuntu: '24.04'
+            zts: '0'
+            arch: arm64
             runner: ubuntu-24.04-arm
+          - role: smoke
+            target: smoke
+            ubuntu: '24.04'
+            zts: '0'
+            arch: amd64
+            runner: ubuntu-24.04
+          - role: smoke
+            target: smoke
+            ubuntu: '24.04'
+            zts: '0'
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - role: smoke22
+            target: smoke
+            ubuntu: '22.04'
+            zts: '0'
+            arch: amd64
+            runner: ubuntu-24.04
+          - role: smoke22
+            target: smoke
+            ubuntu: '22.04'
+            zts: '0'
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - role: php-nts
+            target: php
+            ubuntu: '24.04'
+            zts: '0'
+            arch: amd64
+            runner: ubuntu-24.04
+          - role: php-nts
+            target: php
+            ubuntu: '24.04'
+            zts: '0'
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - role: php-ts
+            target: php
+            ubuntu: '24.04'
+            zts: '1'
+            arch: amd64
+            runner: ubuntu-24.04
+          - role: php-ts
+            target: php
+            ubuntu: '24.04'
+            zts: '1'
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - role: pdo
+            target: pdo
+            ubuntu: '24.04'
+            zts: '0'
+            arch: amd64
+            runner: ubuntu-24.04
+          - role: kdc
+            target: kdc
+            ubuntu: '24.04'
+            zts: '0'
+            arch: amd64
+            runner: ubuntu-24.04
+          - role: reference84
+            target: reference
+            ubuntu: '24.04'
+            zts: '0'
+            arch: amd64
+            runner: ubuntu-24.04
+          - role: reference85
+            target: reference
+            ubuntu: '24.04'
+            zts: '0'
+            arch: amd64
+            runner: ubuntu-24.04
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v3, 2025-12-16
 
@@ -61,24 +141,45 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build image (push on main)
+
+      - name: Build candidate
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v6, 2026-02-12
         with:
           context: .
           file: .github/docker/ci.Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ env.IMAGE }}:${{ matrix.arch }}
-          # Keep the per-arch tags as plain image manifests: provenance
-          # attestations would wrap each tag in an OCI index and complicate
-          # the manifest stitch below.
+          target: ${{ matrix.target }}
+          build-args: |
+            UBUNTU_VERSION=${{ matrix.ubuntu }}
+            PHP_ZTS=${{ matrix.zts }}
+            PHP_VERSION=${{ matrix.role == 'reference84' && '8.4.27' || '8.5.11' }}
+          load: true
+          tags: ${{ env.IMAGE }}:build-${{ github.run_id }}-${{ matrix.role }}-${{ matrix.arch }}
           provenance: false
+          cache-from: type=gha,scope=${{ matrix.role }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.role }}-${{ matrix.arch }}
+      - name: Verify installed tools and isolation
+        env:
+          ROLE: ${{ matrix.role }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          docker run --rm --network none \
+            --volume "$PWD/scripts/ci/verify_image.sh:/verify-image:ro" \
+            "${IMAGE}:build-${GITHUB_RUN_ID}-${ROLE}-${ARCH}" bash /verify-image "$ROLE"
+      - name: Publish verified candidate
+        if: github.event_name != 'pull_request'
+        env:
+          ROLE: ${{ matrix.role }}
+          ARCH: ${{ matrix.arch }}
+        run: docker push "${IMAGE}:build-${GITHUB_RUN_ID}-${ROLE}-${ARCH}"
 
   manifest:
-    name: Publish multi-arch manifest
+    name: Publish manifest (${{ matrix.role }})
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    strategy:
+      matrix:
+        role: [ci, smoke, smoke22, php-nts, php-ts, pdo, kdc, reference84, reference85]
     steps:
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v3, 2026-01-27
@@ -86,11 +187,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create and push the multi-arch tags
+      - name: Publish source-addressed manifest
+        env:
+          ROLE: ${{ matrix.role }}
         run: |
-          docker buildx imagetools create \
-            --tag "${IMAGE}:latest" \
-            --tag "${IMAGE}:sha-${GITHUB_SHA::7}" \
-            "${IMAGE}:amd64" \
-            "${IMAGE}:arm64"
+          images=("${IMAGE}:build-${GITHUB_RUN_ID}-${ROLE}-amd64")
+          if [[ "$ROLE" != pdo && "$ROLE" != kdc && "$ROLE" != reference* ]]; then
+            images+=("${IMAGE}:build-${GITHUB_RUN_ID}-${ROLE}-arm64")
+          fi
+          docker buildx imagetools create --tag "${IMAGE}:sha-${GITHUB_SHA}-${ROLE}" "${images[@]}"
+          # Only the default branch can activate the shared producer image.
+          if [[ "$GITHUB_REF" == refs/heads/main && "$ROLE" == ci ]]; then
+            docker buildx imagetools create --tag "${IMAGE}:latest" --tag "${IMAGE}:sha-${GITHUB_SHA::7}" "${images[@]}"
+          fi
+          docker buildx imagetools inspect "${IMAGE}:sha-${GITHUB_SHA}-${ROLE}"

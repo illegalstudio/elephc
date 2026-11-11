@@ -1,0 +1,23 @@
+name: Use preinstalled CI environment
+description: Pin a prebuilt consumer environment while retaining VM service networking.
+inputs:
+  role:
+    description: Verified image role in the committed digest catalog
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Retain current execution tooling
+      shell: bash
+      run: python3 -B scripts/ci/image_shell.py install
+    - name: Prepare the pinned Linux image
+      if: runner.os == 'Linux'
+      shell: bash
+      env:
+        IMAGE_ROLE: ${{ inputs.role }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        printf '%s' "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+        trap 'docker logout ghcr.io >/dev/null 2>&1 || true' EXIT
+        python3 -B scripts/ci/image_shell.py prepare "$IMAGE_ROLE" scripts/ci/images.json

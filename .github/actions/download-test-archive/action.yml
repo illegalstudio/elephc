@@ -175,7 +175,11 @@ runs:
         target=${ARTIFACT_NAME#nextest-archive-}
         variant=workspace
         if [[ "$target" == codegen-* ]]; then target=${target#codegen-}; variant=codegen; fi
-        python3 -B scripts/ci/test_archive_manifest.py verify "$ARCHIVE_DIR" \
+        python=(python3 -B)
+        if [[ -n ${ELEPHC_CI_EXEC_IMAGE:-} ]]; then
+          python=(python3 "$RUNNER_TEMP/elephc-image-shell.py" command python3 -B)
+        fi
+        "${python[@]}" scripts/ci/test_archive_manifest.py verify "$ARCHIVE_DIR" \
           --target "$target" --variant "$variant" --run-id "$ARTIFACT_RUN" --attempt "$ARTIFACT_ATTEMPT"
         sh scripts/ci/validate_archived_nextest.sh "$ARCHIVE_DIR"
 
