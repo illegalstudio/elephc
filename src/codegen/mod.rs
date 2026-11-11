@@ -59,7 +59,7 @@ mod shared_mixed_string;
 mod shared_mbstring_callable;
 mod shared_state;
 pub(crate) mod stack_guard;
-mod stack_numeric;
+pub(crate) mod stack_numeric;
 pub mod value_placement;
 mod web;
 use runtime_metadata::*;

@@ -118,7 +118,13 @@ pub(super) fn lower_terminator(
             else_target,
             else_args,
         } => {
-            let condition = match ctx.machine_layout.fused_compare {
+            let condition = if let Some((arith, _)) = ctx.machine_layout.fused_overflow {
+                BranchCondition::Overflow {
+                    kind: super::lower_inst::emit_fused_overflow(ctx, arith)?,
+                    inverted: false,
+                }
+            } else {
+                match ctx.machine_layout.fused_compare {
                 Some(compare) => match ctx.function.instruction(compare).map(|inst| inst.op) {
                     Some(Op::ICmp) => BranchCondition::IntegerFlags(
                         super::lower_inst::emit_fused_int_compare(ctx, compare)?,
@@ -136,6 +142,7 @@ pub(super) fn lower_terminator(
                 None => {
                     ctx.load_value_to_result(*cond)?;
                     BranchCondition::ResultNonzero
+                }
                 }
             };
             validate_block_args(ctx, *then_target, then_args, "cond_br then")?;
@@ -311,6 +318,11 @@ enum BranchCondition {
         predicate: CmpPredicate,
         inverted: bool,
     },
+    /// The flags of a fused signed overflow test select the then-edge when overflow occurred.
+    Overflow {
+        kind: super::lower_inst::OverflowBranch,
+        inverted: bool,
+    },
 }
 
 impl BranchCondition {
@@ -325,6 +337,7 @@ impl BranchCondition {
             Self::FloatFlags { predicate, inverted } => {
                 Self::FloatFlags { predicate, inverted: !inverted }
             }
+            Self::Overflow { kind, inverted } => Self::Overflow { kind, inverted: !inverted },
         }
     }
 }
@@ -400,6 +413,43 @@ fn emit_conditional_jump(
                         inverted,
                     )?;
                     ctx.emitter.instruction(&format!("j{taken} {label}"));      // branch on float flags with unordered-aware polarity
+                }
+            }
+        }
+        BranchCondition::Overflow { kind, inverted } => {
+            ctx.emitter.comment("-- branch on signed overflow flags --");
+            match (ctx.emitter.target.arch, kind, inverted) {
+                (Arch::AArch64, super::lower_inst::OverflowBranch::Signed, false) => {
+                    ctx.emitter.instruction("b.vc 1f");                         // skip the far branch when the signed result fits
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by signed overflow
+                    ctx.emitter.label("1");
+                }
+                (Arch::AArch64, super::lower_inst::OverflowBranch::Signed, true) => {
+                    ctx.emitter.instruction("b.vs 1f");                         // skip the far branch when the signed result overflows
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by an in-range signed result
+                    ctx.emitter.label("1");
+                }
+                (Arch::AArch64, super::lower_inst::OverflowBranch::NotEqual, false) => {
+                    ctx.emitter.instruction("b.eq 1f");                         // skip the far branch when the product fits
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by a product that does not fit
+                    ctx.emitter.label("1");
+                }
+                (Arch::AArch64, super::lower_inst::OverflowBranch::NotEqual, true) => {
+                    ctx.emitter.instruction("b.ne 1f");                         // skip the far branch when the product does not fit
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by a product that fits
+                    ctx.emitter.label("1");
+                }
+                (Arch::X86_64, super::lower_inst::OverflowBranch::Signed, false) => {
+                    ctx.emitter.instruction(&format!("jo {label}"));            // branch when signed arithmetic sets the overflow flag
+                }
+                (Arch::X86_64, super::lower_inst::OverflowBranch::Signed, true) => {
+                    ctx.emitter.instruction(&format!("jno {label}"));           // branch when signed arithmetic fits in an integer
+                }
+                (Arch::X86_64, super::lower_inst::OverflowBranch::NotEqual, false) => {
+                    ctx.emitter.instruction(&format!("jne {label}"));           // branch when the product high half is not a sign extension
+                }
+                (Arch::X86_64, super::lower_inst::OverflowBranch::NotEqual, true) => {
+                    ctx.emitter.instruction(&format!("je {label}"));            // branch when the product high half is a sign extension
                 }
             }
         }

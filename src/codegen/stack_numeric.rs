@@ -44,6 +44,39 @@ pub(super) struct NumericFrame {
     pub(super) proven_values: HashSet<ValueId>,
 }
 
+/// The frame cells and proven numeric locals of one function, as codegen would select them.
+///
+/// An optimizer pass compares this proof before and after a rewrite, so a rewrite that
+/// moves a read away from its user cannot send another local back to heap boxes.
+pub(crate) struct FrameCells {
+    locals: HashSet<LocalSlotId>,
+    values: HashSet<ValueId>,
+}
+
+impl FrameCells {
+    /// Runs the frame-cell proof on `function`.
+    pub(crate) fn of(function: &Function) -> Self {
+        let frame = plan(function);
+        Self {
+            locals: frame.locals,
+            values: frame.cell_groups.into_iter().flatten().collect(),
+        }
+    }
+
+    /// Returns true when `after` keeps every cell and numeric local of this proof.
+    ///
+    /// `slots` and `values` are the locals and results the rewrite replaced on purpose.
+    pub(crate) fn kept_by(
+        &self,
+        after: &Self,
+        slots: &HashSet<LocalSlotId>,
+        values: &HashSet<ValueId>,
+    ) -> bool {
+        self.locals.iter().all(|slot| slots.contains(slot) || after.locals.contains(slot))
+            && self.values.iter().all(|value| values.contains(value) || after.values.contains(value))
+    }
+}
+
 /// Returns checked producers whose complete pointer lifetime stays inside their frame.
 pub(super) fn plan(function: &Function) -> NumericFrame {
     if !function.instructions.iter().any(producer_op) {

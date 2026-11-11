@@ -56,6 +56,8 @@ mod token_get_all_count_hoist;
 mod array_sum_loop;
 mod boxed_narrowing;
 mod bounded_mixed_counter;
+mod raw_promotable_loop;
+mod lazy_boxed_accumulator;
 mod branch_simplify;
 mod borrowed_receiver_roots;
 mod receiver_local_roots;

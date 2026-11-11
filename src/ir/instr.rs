@@ -922,6 +922,12 @@ pub enum Op {
     IAdd,
     ISub,
     IMul,
+    /// Reports whether signed add, subtract, or multiply of two `I64` integers overflows.
+    ///
+    /// The immediate is `MixedNumericOp::Add`, `Sub`, or `Mul`. The boolean result is `1`
+    /// when the mathematical result does not fit in a signed 64-bit integer. The wrapping
+    /// result, when needed, is a separate `IAdd`, `ISub`, or `IMul` of the same operands.
+    IOverflows,
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
@@ -1376,6 +1382,7 @@ impl Op {
             | IAdd
             | ISub
             | IMul
+            | IOverflows
             | ICheckedAddToInt
             | ICheckedSubToInt
             | ICheckedMulToInt
@@ -1826,6 +1833,7 @@ impl Op {
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
+            IOverflows => "ioverflows",
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",

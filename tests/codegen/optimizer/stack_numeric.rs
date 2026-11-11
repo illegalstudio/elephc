@@ -244,6 +244,8 @@ sum_echo($argc + 1000);
 }
 
 /// A TaggedScalar array element narrows to null-as-zero int and keeps the accumulator cell.
+///
+/// The cast inside the loop keeps the lazy accumulator pass from taking `$sum`.
 #[test]
 fn test_stack_numeric_tagged_scalar_rhs_uses_frame_cell() {
     let source = r#"<?php
@@ -258,6 +260,7 @@ function sum_tagged_rhs(int $n): void {
     $i = 0;
     while ($i < count($data)) {
         $sum += $data[$i];
+        if ((int)$sum === PHP_INT_MIN) { break; }
         $i += 1;
     }
     echo $sum . "|" . $i;

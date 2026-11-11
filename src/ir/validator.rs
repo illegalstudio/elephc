@@ -933,6 +933,17 @@ fn validate_opcode_rules(
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
+        IOverflows => {
+            check_binary(function, inst_id, inst, IrType::I64, "I64")?;
+            match inst.immediate {
+                Some(Immediate::MixedNumericOp(
+                    crate::ir::MixedNumericOp::Add
+                    | crate::ir::MixedNumericOp::Sub
+                    | crate::ir::MixedNumericOp::Mul,
+                )) => Ok(()),
+                _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
+            }
+        }
         ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt | ICheckedSubToInt
         | ICheckedMulToInt | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")

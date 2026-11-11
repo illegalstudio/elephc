@@ -1487,6 +1487,17 @@ operation, the final integer cast, and removable `Release` instructions into
 `ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the
 first signed overflow promotes the exact accumulator and operand, finishes the
 remaining suffix in double, and then uses the existing PHP float-to-int conversion.
+
+Before that range proof, `RawPromotableLoop` copies a straight-line loop whose
+accumulators and counters are still mixed only because add, subtract, or multiply may
+overflow. The copy keeps those locals in `I64` until a signed overflow, then keeps each
+promoted local as a raw float for the rest of the loop. A float is boxed only at the
+exit. The original mixed loop remains for a seed that is not an integer.
+
+`LazyBoxedAccumulator` then handles accumulators in loops of any other shape. It keeps a
+raw integer companion and a tag next to the mixed local, runs updates and compares on the
+companion while every operand is an int, and boxes the value only before something else
+reads the local.
 Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's
