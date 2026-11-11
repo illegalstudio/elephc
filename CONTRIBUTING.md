@@ -265,6 +265,16 @@ existing required-check name. The workflow remains active until recovery and the
 verdict finish, so the existing retention policy preserves its inputs. Other
 artifact consumers retain the downloader's normal failure behavior.
 
+Artifact API calls made through `fetch` participate in the same transport-failure
+classification as the archive transfer. Explicit transient HTTP responses and
+network errors may permit recovery; authentication errors, missing artifacts,
+completed archive bodies and integrity failures remain fatal.
+
+JUnit reports and failing fixture assembly are diagnostic uploads. An upload
+failure remains visible in the step log but does not override a successful test
+execution or mask a failed one. The consumer compilation audit and the required
+compiler, bridge and test-archive payloads remain mandatory.
+
 Linux producers and test consumers use the preinstalled environments described
 in [Linux CI environments](.github/docker/README.md). The committed
 `scripts/ci/images.json` catalog selects immutable role digests. Compiler and

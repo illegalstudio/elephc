@@ -33,6 +33,7 @@ subscribe('http.client.request.start', ({ request }) => {
   }
   request.prependOnceListener('response', response => {
     failure.responseReceived(response.statusCode, request);
+    response.prependOnceListener('end', () => failure.requestEnded(request));
     const mime = (response.headers['content-type'] || '').split(';', 1)[0].trim();
     if (response.statusCode !== 200 || !(blob || mime === 'application/zip' ||
         mime === 'application/x-zip-compressed' || /\.zip(?:\?|$)/i.test(request.path))) {
@@ -72,6 +73,33 @@ subscribe('http.client.request.start', ({ request }) => {
 });
 
 subscribe('http.client.request.error', ({ request, error }) => failure.requestFailed(error, request));
+
+// Octokit's artifact API uses fetch, whose requests bypass Node's http channels.
+// Observe status codes without reading API bodies or logging signed URLs.
+const fetchArchives = new WeakSet();
+subscribe('undici:request:create', ({ request }) => failure.requestStarted(request));
+subscribe('undici:request:headers', ({ request, response }) => {
+  failure.responseReceived(response.statusCode, request);
+  if (response.statusCode !== 200) return;
+  const host = new URL(request.origin).hostname;
+  let mime = '';
+  for (let index = 0; index < response.headers.length; index += 2) {
+    if (String(response.headers[index]).toLowerCase() === 'content-type') {
+      mime = String(response.headers[index + 1]).split(';', 1)[0].trim();
+      break;
+    }
+  }
+  if (host.endsWith('.blob.core.windows.net') || host.endsWith('.results.githubusercontent.com') ||
+      mime === 'application/zip' || mime === 'application/x-zip-compressed' ||
+      /\.zip(?:\?|$)/i.test(request.path)) {
+    fetchArchives.add(request);
+  }
+});
+subscribe('undici:request:trailers', ({ request }) => {
+  if (fetchArchives.has(request)) failure.bodyCompleted();
+  failure.requestEnded(request);
+});
+subscribe('undici:request:error', ({ request, error }) => failure.requestFailed(error, request));
 
 // Both diagnostics timers are unreferenced, so successful actions exit naturally.
 setInterval(report, 15 * 1000).unref();
