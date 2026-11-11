@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Automatic safe points honor `_gc_enabled`, while explicit collection bypasses it.
+//! - Generated unset safe points enter through the heap-proportional budget wrapper.
 //! - Status reads use one scalar selector shared with the typed EIR `GcControlOp`.
 //! - Float metrics return their IEEE-754 bits through the integer result register.
 
@@ -23,6 +24,7 @@ pub fn emit_gc_control(emitter: &mut Emitter) {
         Arch::AArch64 => emit_gc_control_aarch64(emitter),
         Arch::X86_64 => emit_gc_control_x86_64(emitter),
     }
+    super::gc_collect_budget::emit_gc_collect_budget(emitter);
 }
 
 /// Emits the GC control entry points for AArch64 targets.

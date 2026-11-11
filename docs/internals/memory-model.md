@@ -1412,6 +1412,33 @@ requests collection, preserving `ArrayAccess` and false-conversion callback effe
 Float and boxed-key diagnostic snapshots preserve the removal flag across their
 temporary hash-owner cleanup.
 
+Outside candidate mode a collection walks the whole bump heap up to `_heap_off`,
+so the automatic safe point runs through `__rt_gc_collect_cycles_budgeted`. Each
+safe point adds a fixed 64 KiB scan credit to `_gc_safe_point_credit`, and the
+collector runs (spending the whole credit) once the credit covers `_heap_off`.
+Programs whose heap fits in one credit still collect at every safe point. A larger
+heap collects once every `_heap_off / 64 KiB` safe points, so removing open-class
+elements from a big scene in a loop costs a bounded amortized scan per unset
+instead of a full heap walk each time.
+
+The credit alone cannot bound garbage: one removal may strand far more than 64 KiB,
+and no allocation path collects in non-web builds. Stranded garbage still counts in
+`_gc_live`, so a safe point also collects once `_gc_live` reaches
+`_gc_safe_point_live_limit`. After every budgeted collection that limit becomes twice
+the surviving live bytes, capped at half of `_heap_max`; it starts at zero, so the
+first safe point always collects. Garbage therefore never outgrows the reachable
+heap, and a nearly full arena collects at every safe point as before. A safe point reached
+while `gc_disable()` is active, or from a destructor or container cleanup during a
+collection, would not scan; it defers instead, keeping the saved credit and the live
+limit for the next safe point that can collect.
+
+Garbage stranded by a deferred safe point, and its destructors, wait for a later safe
+point, an explicit `gc_collect_cycles()`, or the shutdown collection that the main
+epilogue runs after releasing locals, globals and statics. `exit()`, `die()` and fatal
+errors terminate without that shutdown collection, so destructors of a cycle still
+pending at that moment do not run. Web application candidate mode already scales with
+lost owners and always collects.
+
 Collector-triggered destructors run under individual native exception handlers.
 Both explicit collection and automatic EIR safe points have conservative callback
 effects, including `MAY_THROW`, so optimizers must preserve surrounding catches

@@ -334,3 +334,4 @@ mod eval_reference_escape;
 mod leaf_unset_collection;
 mod foreach_hash_objects;
 mod nullable_identity_guards;
+mod safe_point_budget;
