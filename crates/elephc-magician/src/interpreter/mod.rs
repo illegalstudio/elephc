@@ -25,6 +25,7 @@ mod constant_eval;
 mod constants;
 mod context_calls;
 pub use context_calls::*;
+mod bytecode;
 mod control;
 mod dynamic_functions;
 mod expressions;
@@ -74,6 +75,7 @@ use builtin_interfaces::*;
 use builtins::*;
 use constant_eval::*;
 use constants::*;
+pub(crate) use bytecode::with_executable_cache_key;
 pub use control::EvalOutcome;
 use control::{
     BoundMethodArg, BoundNativeFunctionArgs, BoundNativeFunctionRefSlot, EvalArraySpliceDirectArgs,
@@ -145,13 +147,21 @@ pub fn execute_program_with_context(
 }
 
 /// Executes an EvalIR program and preserves escaping Throwable cells.
+///
+/// A fragment that fits the bytecode slice runs there. Any named gap, or a cached
+/// gap for the same source, keeps the tree walker.
 pub fn execute_program_outcome_with_context(
     context: &mut ElephcEvalContext,
     program: &EvalProgram,
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    match execute_program_statements(program, context, scope, values) {
+    let executed = match bytecode::try_execute(context, program, scope, values) {
+        Ok(Some(control)) => Ok(control),
+        Ok(None) => execute_program_statements(program, context, scope, values),
+        Err(status) => Err(status),
+    };
+    match executed {
         Ok(EvalControl::None | EvalControl::ReturnVoid) => values.null().map(EvalOutcome::Value),
         Ok(EvalControl::Return(result)) => {
             let result = if result.is_borrowed() { values.retain(result)? } else { result };
