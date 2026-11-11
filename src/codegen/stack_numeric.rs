@@ -66,6 +66,11 @@ impl FrameCells {
         }
     }
 
+    /// Returns whether the local already has proven numeric frame storage for all its accesses.
+    pub(crate) fn contains_local(&self, slot: LocalSlotId) -> bool {
+        self.locals.contains(&slot)
+    }
+
     /// Returns true when `after` keeps every cell and numeric local of this proof.
     ///
     /// `slots` and `values` are the locals and results the rewrite replaced on purpose.

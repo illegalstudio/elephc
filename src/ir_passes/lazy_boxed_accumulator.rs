@@ -30,6 +30,8 @@
 //!   that copy has no tag tests and continues a promoted local as a raw float.
 //! - A local is rewritten only when one of its updates sits in a loop that has no sync
 //!   for it. Otherwise the box allocation would only move from the update to the read.
+//! - A local already covered by codegen's numeric frame cells is left alone: its seed,
+//!   updates and final publication already allocate nothing, including after overflow.
 //! - Each plan is tried on a copy of the function. It is dropped when it would cost
 //!   another local the frame cell codegen gives it, because that proof needs a read and
 //!   its user in one block and this rewrite splits blocks.
@@ -80,6 +82,10 @@ impl IrPass for LazyBoxedAccumulator {
         let mut values = HashSet::new();
         let mut changed = false;
         for plan in &plans {
+            // Replacing an existing frame cell would add heap boxes at seeds and syncs.
+            if cells.contains_local(plan.slot) {
+                continue;
+            }
             let mut trial = function.clone();
             apply(&mut trial, plan);
             slots.insert(plan.slot);
