@@ -1,0 +1,115 @@
+name: Execute one archived test shard
+description: Share the exact download, setup, test and audit procedure between original and recovery runners.
+inputs:
+  target:
+    description: Host target
+    required: true
+  family:
+    description: Test family
+    required: true
+  shard:
+    description: Partition number
+    required: true
+  shards:
+    description: Partition count
+    required: true
+  source-sha:
+    description: Exact source being validated
+    required: true
+  artifact-run:
+    description: Exact producer workflow run
+    required: true
+  artifact-attempt:
+    description: Exact nextest producer attempt
+    required: true
+  job-key:
+    description: Original consumer name for reports
+    required: true
+  execution:
+    description: Original or recovery report suffix
+    required: true
+outputs:
+  status:
+    description: passed or retryable-transfer; all other outcomes fail this action
+    value: ${{ steps.result.outputs.status }}
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/forbid-consumer-builds
+    - name: Validate frozen shard inputs
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        FAMILY: ${{ inputs.family }}
+        SHARD: ${{ inputs.shard }}
+        SHARDS: ${{ inputs.shards }}
+        SOURCE_SHA: ${{ inputs.source-sha }}
+        ARTIFACT_RUN: ${{ inputs.artifact-run }}
+        ARTIFACT_ATTEMPT: ${{ inputs.artifact-attempt }}
+      run: python3 -B scripts/ci/shard_recovery.py validate
+    - id: archive
+      uses: ./.github/actions/download-test-archive
+      with:
+        name: ${{ contains(fromJSON('["non-codegen","cli","web"]'), inputs.family) && format('nextest-archive-{0}', inputs.target) || format('nextest-archive-codegen-{0}', inputs.target) }}
+        path: ${{ runner.temp }}
+        run-id: ${{ inputs.artifact-run }}
+        attempt: ${{ inputs.artifact-attempt }}
+        defer-transfer-failure: 'true'
+    - id: curl
+      if: steps.archive.outputs.status == 'downloaded' && inputs.family == 'curl'
+      uses: ./.github/actions/download-test-archive
+      with:
+        name: managed-native-curl-${{ inputs.target }}
+        path: ${{ runner.temp }}
+        run-id: ${{ inputs.artifact-run }}
+        defer-transfer-failure: 'true'
+    - id: prepare
+      shell: bash
+      env:
+        ARCHIVE_STATUS: ${{ steps.archive.outputs.status }}
+        CURL_STATUS: ${{ steps.curl.outputs.status || 'skipped' }}
+        FAMILY: ${{ inputs.family }}
+      run: python3 -B scripts/ci/shard_recovery.py prepare
+    - name: Install macOS test-only native providers
+      if: steps.prepare.outputs.status == 'ready' && inputs.target == 'macos-aarch64'
+      shell: bash
+      run: brew install pcre2
+    - uses: ./.github/actions/cache-codegen-native
+      if: steps.prepare.outputs.status == 'ready' && inputs.family == 'codegen'
+      with:
+        target: ${{ inputs.target }}
+    - name: Run the complete shard
+      id: tests
+      if: steps.prepare.outputs.status == 'ready'
+      shell: bash
+      env:
+        FAMILY: ${{ inputs.family }}
+        TARGET: ${{ inputs.target }}
+        SHARD: ${{ inputs.shard }}
+        SHARDS: ${{ inputs.shards }}
+      run: python3 -B scripts/ci/run_test_shard.py
+    - id: result
+      shell: bash
+      env:
+        PREPARED: ${{ steps.prepare.outputs.status }}
+        TESTS_OUTCOME: ${{ steps.tests.outcome }}
+      run: python3 -B scripts/ci/shard_recovery.py attempt
+    - name: Upload JUnit report
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: junit-${{ inputs.job-key }}-${{ inputs.shard }}-${{ inputs.execution }}
+        path: target/nextest/ci/junit*.xml
+        if-no-files-found: ignore
+        retention-days: 7
+    - name: Upload failing fixture assembly
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: fixture-diagnostics-${{ inputs.job-key }}-${{ inputs.shard }}-${{ inputs.execution }}
+        path: target/codegen-diagnostics/
+        if-no-files-found: ignore
+        retention-days: 7
+    - name: Audit consumer compilation
+      if: always()
+      uses: ./.github/actions/assert-consumer-builds

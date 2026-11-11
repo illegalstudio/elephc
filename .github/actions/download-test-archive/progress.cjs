@@ -3,6 +3,7 @@
 // Never log request URLs, headers or errors: artifact URLs contain credentials.
 const { subscribe } = require('node:diagnostics_channel');
 const { writeSync } = require('node:fs');
+const failure = require('./transfer_failure.cjs');
 
 const started = Date.now();
 let phase = 'artifact-api';
@@ -22,6 +23,7 @@ function report() {
 }
 
 subscribe('http.client.request.start', ({ request }) => {
+  failure.requestStarted(request);
   const host = request.host || '';
   const blob = host.endsWith('.blob.core.windows.net') ||
     host.endsWith('.results.githubusercontent.com');
@@ -30,6 +32,7 @@ subscribe('http.client.request.start', ({ request }) => {
     report();
   }
   request.prependOnceListener('response', response => {
+    failure.responseReceived(response.statusCode, request);
     const mime = (response.headers['content-type'] || '').split(';', 1)[0].trim();
     if (response.statusCode !== 200 || !(blob || mime === 'application/zip' ||
         mime === 'application/x-zip-compressed' || /\.zip(?:\?|$)/i.test(request.path))) {
@@ -54,9 +57,11 @@ subscribe('http.client.request.start', ({ request }) => {
       }
       if (transfer === current) {
         if (event === 'end') {
+          failure.bodyCompleted();
           phase = 'zip-extraction-or-finalization';
           report();
         } else if (event === 'aborted' || event === 'error') {
+          if (event === 'error') failure.requestFailed(args[0], request);
           phase = 'transfer-interrupted';
           report();
         }
@@ -65,6 +70,8 @@ subscribe('http.client.request.start', ({ request }) => {
     };
   });
 });
+
+subscribe('http.client.request.error', ({ request, error }) => failure.requestFailed(error, request));
 
 // Both diagnostics timers are unreferenced, so successful actions exit naturally.
 setInterval(report, 15 * 1000).unref();

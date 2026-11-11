@@ -5,6 +5,7 @@ const { writeSync } = require('node:fs');
 const progress = require('./progress.cjs');
 
 setTimeout(() => {
+  require('./transfer_failure.cjs').deadlineExceeded();
   progress.report();
   writeSync(2, '::error::Artifact download exceeded 5 minutes; failing this attempt so the composite action can retry.\n');
   process.exit(124);

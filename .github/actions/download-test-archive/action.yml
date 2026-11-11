@@ -42,6 +42,14 @@ inputs:
   attempt:
     description: Build attempt for nextest payloads
     default: ${{ github.run_attempt }}
+  defer-transfer-failure:
+    description: Return a recoverable status only for a shard with a mandatory recovery verdict
+    default: 'false'
+
+outputs:
+  status:
+    description: downloaded or retryable-transfer; integrity and unknown failures still fail the action
+    value: ${{ steps.classify.outputs.status }}
 
 runs:
   using: composite
@@ -127,6 +135,7 @@ runs:
     - id: third
       if: steps.second.outcome == 'failure' || steps.second_archive.outcome == 'failure'
       uses: actions/download-artifact@v8.0.2
+      continue-on-error: true
       env:
         NODE_OPTIONS: --require ./.github/actions/download-test-archive/deadline.cjs
       with:
@@ -136,15 +145,26 @@ runs:
         path: ${{ inputs.path }}
         digest-mismatch: error
 
-    - if: steps.third.outcome == 'success' && (startsWith(inputs.name, 'nextest-archive-') || inputs.validate-payload == 'true')
+    - id: third_archive
+      if: steps.third.outcome == 'success' && (startsWith(inputs.name, 'nextest-archive-') || inputs.validate-payload == 'true')
+      continue-on-error: true
       shell: bash
       env:
         ARCHIVE_DIR: ${{ steps.third.outputs.download-path }}
         VALIDATE_PAYLOAD: ${{ inputs.validate-payload }}
       run: bash "$GITHUB_ACTION_PATH/validate.sh" "$ARCHIVE_DIR"
 
+    - id: classify
+      shell: bash
+      env:
+        DOWNLOAD_OUTCOMES: ${{ toJSON(fromJSON(format('["{0}","{1}","{2}"]', steps.first.outcome, steps.second.outcome, steps.third.outcome))) }}
+        VALIDATION_OUTCOMES: ${{ toJSON(fromJSON(format('["{0}","{1}","{2}"]', steps.first_archive.outcome, steps.second_archive.outcome, steps.third_archive.outcome))) }}
+        TRANSFER_FLAGS: ${{ toJSON(fromJSON(format('["{0}","{1}","{2}"]', steps.first.outputs.retryable-transfer, steps.second.outputs.retryable-transfer, steps.third.outputs.retryable-transfer))) }}
+        DEFER_TRANSFER_FAILURE: ${{ inputs.defer-transfer-failure }}
+      run: python3 -B scripts/ci/artifact_download_outcome.py
+
     - name: Validate nextest source and producer
-      if: startsWith(inputs.name, 'nextest-archive-')
+      if: steps.classify.outputs.status == 'downloaded' && startsWith(inputs.name, 'nextest-archive-')
       shell: bash
       env:
         ARTIFACT_NAME: ${{ inputs.name }}
@@ -160,7 +180,7 @@ runs:
         sh scripts/ci/validate_archived_nextest.sh "$ARCHIVE_DIR"
 
     - uses: ./.github/actions/pin-test-bridges
-      if: startsWith(inputs.name, 'nextest-archive-')
+      if: steps.classify.outputs.status == 'downloaded' && startsWith(inputs.name, 'nextest-archive-')
 
     - name: Explain recovery after completed-run cleanup
       if: failure() && steps.third.outcome == 'failure'

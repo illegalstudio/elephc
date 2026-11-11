@@ -246,8 +246,24 @@ deadline, including streamed ZIP extraction. Progress logs every 15 seconds show
 received and expected body bytes, buffered bytes and time since the last body chunk.
 `download-and-zip-extraction` means those operations overlap;
 `zip-extraction-or-finalization` means the HTTP body has finished. The observer
-does not consume the response or print signed URLs. Retries run on the same runner;
-they do not restart the test job on another machine.
+does not consume the response or print signed URLs. These three local attempts run
+on the same runner.
+
+The 21 sharded host test jobs use `ci-test-shard.yml`, which runs the same
+`test-shard-attempt` action on the original runner and, when needed, one fresh
+runner. Recovery requires all three downloads to have positively classified
+transport failures. Authentication errors, missing artifacts, completed-body
+digest errors, archive validation errors and test failures are not eligible.
+The source SHA, producer run and attempt, partition, worker limits and Linux image
+digest stay fixed. Setup and tests are shared by both executions.
+
+A recoverable download returns `retryable-transfer` without running tests. The
+shard verdict accepts only `passed` from the original execution, or `passed` from
+its one recovery after that transfer-only result. Unknown, cancelled, skipped and
+exhausted recovery states fail. `Build & Test` waits for this verdict under its
+existing required-check name. The workflow remains active until recovery and the
+verdict finish, so the existing retention policy preserves its inputs. Other
+artifact consumers retain the downloader's normal failure behavior.
 
 Separate producers retain configurations that are not interchangeable: PDO driver
 features, curl-enabled tools and contract tests, release-mode frame tests, iOS device
