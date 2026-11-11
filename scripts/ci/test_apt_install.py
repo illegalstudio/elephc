@@ -92,6 +92,15 @@ if mode=='install-timeout' and phase=='install':sys.exit(124)
         self.assertIn("--no-install-recommends", calls[1]["args"])
         self.assertTrue(all("APT::Get::AllowUnauthenticated=false" in call["args"] for call in calls))
 
+    def test_first_attempt_has_no_placeholder_for_empty_source_options(self):
+        """Bash 3.2 must omit empty arrays without injecting an empty APT argument."""
+        result, calls = self.run_installer()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(calls)
+        for call in calls:
+            self.assertNotIn("", call["args"])
+            self.assertFalse(call["fallback"])
+
     def test_network_failure_restarts_indexes_on_the_architecture_specific_mirror(self):
         before = self.ubuntu.read_bytes(), self.vendor.read_bytes()
         for arch, mirror in (("amd64", "mirrors.edge.kernel.org/ubuntu"),

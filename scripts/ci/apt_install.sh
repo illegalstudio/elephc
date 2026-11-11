@@ -61,7 +61,7 @@ run_apt() {
     if ((limit > remaining)); then limit=$remaining; fi
     echo "APT phase=$phase attempt=$attempt/2 architecture=$architecture budget_seconds=$remaining"
     set +e
-    timeout --kill-after=5 "$limit" apt-get "${common_options[@]}" "${source_options[@]}" "$@" \
+    timeout --kill-after=5 "$limit" apt-get "${common_options[@]}" ${source_options[@]+"${source_options[@]}"} "$@" \
         2>&1 | tee "$work/apt.log"
     local codes=("${PIPESTATUS[@]}")
     set -e
