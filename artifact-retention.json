@@ -12,67 +12,67 @@
     42935609365
   ],
   "latest": {
-    "sha": "2d9fe6025b2e9522c5dab9ec6b1ddb515175c53f",
-    "run_id": 42923326110,
+    "sha": "d602faa680addc7bdc38cc8dd2d1a8f4dade7e05",
+    "run_id": 42944071238,
     "artifacts": {
       "linux-x86_64": {
-        "id": 13813630295,
-        "node_id": "MDg6QXJ0aWZhY3QxMzgxMzYzMDI5NQ==",
-        "name": "elephc-dev-linux-x86_64-2d9fe6025b2e9522c5dab9ec6b1ddb515175c53f-1",
-        "size_in_bytes": 373012150,
-        "url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13813630295",
-        "archive_download_url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13813630295/zip",
+        "id": 13823341489,
+        "node_id": "MDg6QXJ0aWZhY3QxMzgyMzM0MTQ4OQ==",
+        "name": "elephc-dev-linux-x86_64-d602faa680addc7bdc38cc8dd2d1a8f4dade7e05-1",
+        "size_in_bytes": 373017487,
+        "url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13823341489",
+        "archive_download_url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13823341489/zip",
         "expired": false,
-        "digest": "sha256:dffa1387084d702a2d62b0e3015d4796ff4e6c6743242736be8ee006f674986c",
-        "created_at": "2026-11-10T23:32:26Z",
-        "updated_at": "2026-11-10T23:32:26Z",
-        "expires_at": "2027-02-08T23:26:05Z",
+        "digest": "sha256:0dab7c86c05cff02b67746e935d0c0004616b41830e7d1a5f82c2cab42168105",
+        "created_at": "2026-11-11T02:32:47Z",
+        "updated_at": "2026-11-11T02:32:47Z",
+        "expires_at": "2027-02-09T02:09:46Z",
         "workflow_run": {
-          "id": 42923326110,
+          "id": 42944071238,
           "repository_id": 1187949566,
           "head_repository_id": 1187949566,
           "head_branch": "main",
-          "head_sha": "2d9fe6025b2e9522c5dab9ec6b1ddb515175c53f"
+          "head_sha": "d602faa680addc7bdc38cc8dd2d1a8f4dade7e05"
         }
       },
       "linux-aarch64": {
-        "id": 13813530939,
-        "node_id": "MDg6QXJ0aWZhY3QxMzgxMzUzMDkzOQ==",
-        "name": "elephc-dev-linux-aarch64-2d9fe6025b2e9522c5dab9ec6b1ddb515175c53f-1",
-        "size_in_bytes": 366356817,
-        "url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13813530939",
-        "archive_download_url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13813530939/zip",
+        "id": 13823182233,
+        "node_id": "MDg6QXJ0aWZhY3QxMzgyMzE4MjIzMw==",
+        "name": "elephc-dev-linux-aarch64-d602faa680addc7bdc38cc8dd2d1a8f4dade7e05-1",
+        "size_in_bytes": 366397747,
+        "url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13823182233",
+        "archive_download_url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13823182233/zip",
         "expired": false,
-        "digest": "sha256:8018b159551edacc8672b39c399783ceac3fe584d8089c5ac815437fc91824fb",
-        "created_at": "2026-11-10T23:32:44Z",
-        "updated_at": "2026-11-10T23:32:44Z",
-        "expires_at": "2027-02-08T23:26:05Z",
+        "digest": "sha256:f695b950cc2cddae03fe5dc60c3921a46f7d6d580ee4d254fb1b2981c5b7831b",
+        "created_at": "2026-11-11T02:33:13Z",
+        "updated_at": "2026-11-11T02:33:13Z",
+        "expires_at": "2027-02-09T02:09:46Z",
         "workflow_run": {
-          "id": 42923326110,
+          "id": 42944071238,
           "repository_id": 1187949566,
           "head_repository_id": 1187949566,
           "head_branch": "main",
-          "head_sha": "2d9fe6025b2e9522c5dab9ec6b1ddb515175c53f"
+          "head_sha": "d602faa680addc7bdc38cc8dd2d1a8f4dade7e05"
         }
       },
       "macos-aarch64": {
-        "id": 13812923804,
-        "node_id": "MDg6QXJ0aWZhY3QxMzgxMjkyMzgwNA==",
-        "name": "elephc-dev-macos-aarch64-2d9fe6025b2e9522c5dab9ec6b1ddb515175c53f-1",
-        "size_in_bytes": 336357650,
-        "url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13812923804",
-        "archive_download_url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13812923804/zip",
+        "id": 13822139377,
+        "node_id": "MDg6QXJ0aWZhY3QxMzgyMjEzOTM3Nw==",
+        "name": "elephc-dev-macos-aarch64-d602faa680addc7bdc38cc8dd2d1a8f4dade7e05-1",
+        "size_in_bytes": 336372950,
+        "url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13822139377",
+        "archive_download_url": "https://api.github.com/repos/illegalstudio/elephc/actions/artifacts/13822139377/zip",
         "expired": false,
-        "digest": "sha256:d204a5183aafa5f55e30530531e3f4850302b06d22d1d58e24796e28360e8206",
-        "created_at": "2026-11-10T23:37:00Z",
-        "updated_at": "2026-11-10T23:37:00Z",
-        "expires_at": "2027-02-08T23:26:05Z",
+        "digest": "sha256:cc38d1b9b7fc5d5251c538d3e51516d34b69cbe4bd8993884989cfcb2f3d9f63",
+        "created_at": "2026-11-11T02:33:28Z",
+        "updated_at": "2026-11-11T02:33:28Z",
+        "expires_at": "2027-02-09T02:09:46Z",
         "workflow_run": {
-          "id": 42923326110,
+          "id": 42944071238,
           "repository_id": 1187949566,
           "head_repository_id": 1187949566,
           "head_branch": "main",
-          "head_sha": "2d9fe6025b2e9522c5dab9ec6b1ddb515175c53f"
+          "head_sha": "d602faa680addc7bdc38cc8dd2d1a8f4dade7e05"
         }
       }
     }
