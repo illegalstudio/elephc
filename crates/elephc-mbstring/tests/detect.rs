@@ -2,7 +2,7 @@
 //! Compares encoding detection with PHP across candidate order, strictness, and complete byte pairs.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test detect`.
+//! - `cargo test -p elephc-mbstring --test engine detect::`.
 //!
 //! Key details:
 //! - The oracle retains whether PHP's canonical encoding-list object disabled order weighting.

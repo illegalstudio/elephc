@@ -2,7 +2,7 @@
 //! Verifies kana modes, validation, Unicode mappings, composition, and encoded output against PHP.
 //!
 //! Called from:
-//! - `cargo test -p elephc-mbstring --test kana`.
+//! - `cargo test -p elephc-mbstring --test engine kana::`.
 //!
 //! Key details:
 //! - Every one-, two-, and three-flag combination is compared with an independent PHP oracle.
