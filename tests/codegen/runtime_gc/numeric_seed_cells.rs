@@ -115,7 +115,7 @@ integer:9223372036854775805 integer:9223372036854775806 double:9.2233720368548E+
 fn test_numeric_seed_cells_computed_key_snapshot_does_not_allocate() {
     let source = r#"<?php
 packed class GridRange { public int $firstRow; public int $lastRow; public int $firstColumn; public int $lastColumn; }
-function scatter(buffer<GridRange> $ranges, buffer<int> $starts, buffer<int> $entries, int $columns, int $count): int
+function scatter(buffer<GridRange> $ranges, buffer<int> $starts, buffer<int> $entries, int $columns, int $count): void
 {
     for ($box = $count - 1; $box >= 0; $box--) {
         for ($row = $ranges[$box]->firstRow; $row <= $ranges[$box]->lastRow; $row++) {
@@ -126,9 +126,6 @@ function scatter(buffer<GridRange> $ranges, buffer<int> $starts, buffer<int> $en
             }
         }
     }
-    $sum = 0;
-    for ($i = 0; $i < 4 * $count; $i++) { $sum += $entries[$i]; }
-    return $sum;
 }
 function run(int $count): void
 {
@@ -141,8 +138,10 @@ function run(int $count): void
     }
     for ($i = 0; $i < 4; $i++) { $starts[$i] = ($i + 1) * $count; }
     $before = memory_get_allocations();
-    $checksum = scatter($ranges, $starts, $entries, 2, $count);
+    scatter($ranges, $starts, $entries, 2, $count);
     $after = memory_get_allocations();
+    $checksum = 0;
+    for ($i = 0; $i < 4 * $count; $i++) { $checksum += $entries[$i]; }
     echo "allocations=", $after - $before, " checksum=", $checksum, " first=", $starts[0], " last=", $starts[3];
     buffer_free($entries);
     buffer_free($starts);
@@ -152,7 +151,9 @@ run($argc + 1023);
 "#;
     let (optimized, plain) = both_modes(source);
     assert_eq!(optimized, "allocations=0 checksum=10240 first=0 last=3072");
-    assert!(plain.ends_with(" checksum=10240 first=0 last=3072"), "{plain}");
+    // `--no-ir-opt` still boxes on the 4096 visits (about 3.5 allocations each); pinning the
+    // count catches a plain-mode regression as well as the optimized zero.
+    assert_eq!(plain, "allocations=14338 checksum=10240 first=0 last=3072");
 }
 
 /// Key snapshots of an `int|float` local into an ordinary array keep PHP's updates and keys.
