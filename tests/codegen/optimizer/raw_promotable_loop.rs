@@ -211,8 +211,8 @@ var_dump(later($argc));
     assert_eq!(run(source), "int(4611686018427387904)\nfloat(1.3835058055282164E+19)\n");
 }
 
-/// Five mixed accumulators exceed the loop copy's size limit. The lazy accumulator pass
-/// takes the ones it can move without costing another local its frame cell.
+/// Five escaping accumulators exceed the loop copy's size limit and cannot use frame cells.
+/// Their lazy companions still avoid per-iteration boxing without copying the loop.
 #[test]
 fn test_raw_promotable_five_updates_fall_back_to_lazy_accumulators() {
     let source = r#"<?php
@@ -231,9 +231,10 @@ function total(int $n): mixed {
         $e += $i;
         $i += 1;
     }
-    return $a + $b + $c + $d + $e;
+    return [$a, $b, $c, $d, $e];
 }
-echo total(3 + $argc);
+$totals = total(3 + $argc);
+echo $totals[0] + $totals[1] + $totals[2] + $totals[3] + $totals[4];
 "#;
     let (output, asm) = compile_and_run_with_heap_debug_and_asm(source);
     assert!(output.success, "{}", output.stderr);
