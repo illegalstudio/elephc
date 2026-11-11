@@ -165,6 +165,7 @@ use scalar_literals::*;
 use numeric_binary::*;
 use string_concat::*;
 use comparisons::*;
+pub(in crate::ir_lower) use comparisons::release_binary_operand_temporary;
 use unary_logic::*;
 use lazy_branches::*;
 use pipe::*;

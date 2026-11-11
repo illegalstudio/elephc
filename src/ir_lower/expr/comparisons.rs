@@ -190,7 +190,7 @@ fn needs_runtime_ordering_dispatch(ctx: &LoweringContext<'_, '_>, value: ValueId
 }
 
 /// Retires owned operands and provisional string unboxes after the binary opcode has read them.
-pub(super) fn release_binary_operand_temporary(
+pub(in crate::ir_lower) fn release_binary_operand_temporary(
     ctx: &mut LoweringContext<'_, '_>,
     operand: LoweredValue,
     span: Span,

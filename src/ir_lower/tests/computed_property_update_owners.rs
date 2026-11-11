@@ -375,10 +375,16 @@ echo (string)staticDimensionOwnerStep(new SimpleXMLElement('<r>7</r>'));
         crate::codegen::platform::Target::parse(target).unwrap(),
     );
     let function = module.functions.iter().find(|function| function.name == "dimensionOwnerStep").unwrap();
-    let call = function.instructions.iter().find(|inst| inst.op == Op::StaticMethodCall
+    let dispatch = module.functions.iter().find(|function| function.name == "__eir_boxed_operator@inc")
+        .expect("native XML incdec must retain its shared arithmetic graph");
+    let call = function.instructions.iter().find(|inst| inst.op == Op::Call
         && matches!(inst.immediate, Some(Immediate::Data(name))
-            if module.data.strings[name.as_raw() as usize] == "SimpleXMLElement::__elephc_add"))
-        .expect("native XML incdec must retain its object arithmetic branch");
+            if module.data.function_names.get(name.as_raw() as usize) == Some(&dispatch.name)))
+        .expect("native XML incdec must call its shared arithmetic graph");
+    assert!(dispatch.instructions.iter().any(|inst| inst.op == Op::StaticMethodCall
+        && matches!(inst.immediate, Some(Immediate::Data(name))
+            if module.data.strings[name.as_raw() as usize] == "SimpleXMLElement::__elephc_add")),
+        "{target}: shared incdec must retain its native XML arithmetic branch");
     let old = call.operands[0];
     let ValueDef::Instruction { inst, .. } = function.value(old).unwrap().def else {
         panic!("{target}: working operand must load its retained variable");

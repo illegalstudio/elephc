@@ -491,8 +491,14 @@ echo $doc->saveXML();
         && matches!(instruction.immediate, Some(crate::ir::Immediate::Data(id))
             if module.data.strings.get(id.as_raw() as usize).is_some_and(|name| name == "__elephc_dom_nodes"))),
         "{target}: cache insertion must not use the stdClass-only mixed property fallback");
-    let arithmetic = module.functions.iter().find(|function| function.name == "xmlMixedArithmetic")
+    let arithmetic_caller = module.functions.iter().find(|function| function.name == "xmlMixedArithmetic")
         .expect("mixed arithmetic fixture must remain reachable");
+    let arithmetic = module.functions.iter().find(|function| function.name == "__eir_boxed_operator@add")
+        .expect("mixed arithmetic must retain its shared dispatch graph");
+    assert!(arithmetic_caller.instructions.iter().any(|inst| inst.op == crate::ir::Op::Call
+        && matches!(inst.immediate, Some(crate::ir::Immediate::Data(id))
+            if module.data.function_names.get(id.as_raw() as usize) == Some(&arithmetic.name))),
+        "{target}: mixed arithmetic must call the shared dispatch graph");
     for class in ["SimpleXMLElement", "BcMath\\Number"] {
         let method = elephc_builtin_contract::lookup_class(class).unwrap().operators.unwrap()
             .arithmetic_method(elephc_builtin_contract::ObjectArithmetic::Add).unwrap();

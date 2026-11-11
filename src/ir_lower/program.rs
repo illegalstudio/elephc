@@ -183,6 +183,8 @@ fn lower_on_compiler_stack(
         &constants,
         &fiber_return_sigs,
     )?;
+    super::boxed_operators::lower_requested(&mut module);
+    include_lowered_runtime_features(&mut module);
     super::boxed_array_appends::normalize_module(&mut module);
     super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);
