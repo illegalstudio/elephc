@@ -99,7 +99,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// serialized layouts, so neither branch's earlier entries can decode as this build.
 /// Format 26 adds property update expressions and preserves computed property name staging.
 /// Format 27 combines SimpleXML property updates with native variable increment statements.
-pub(crate) const FORMAT_VERSION: u32 = 27;
+/// Format 28 records bytecode-backed function metadata in the conservative source guard,
+/// even though serde omits the executable cache from the stored payload.
+pub(crate) const FORMAT_VERSION: u32 = 28;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

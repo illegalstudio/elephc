@@ -587,6 +587,9 @@ older generic and ordinary eval entries, including incorrectly rewritten PHPDoc 
 member annotations discarded after uppercase or mixed-case native class-like keywords.
 Earlier format changes also invalidated stored parse errors for valid comparisons after class references.
 The format guard covers the combined serialized IR and its corresponding type sources.
+Format 28 records the source change for bytecode-backed function metadata. Executable
+images remain excluded from serialization, but the conservative source guard still
+requires a new cache identity.
 Retained token streams distinguish reserved words used as qualified-name segments, so
 entries written before that token variant was introduced must also be rejected.
 Format 24 also retains method reference-return flags and generic dimension-write
