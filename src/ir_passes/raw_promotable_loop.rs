@@ -86,7 +86,8 @@ impl IrPass for RawPromotableLoop {
 fn rewrite_one(function: &mut Function, data: &mut DataPool) -> bool {
     let dominance = super::dominance::compute_dominance(function);
     let loops = compute_loops(function, &dominance);
-    let cells = frame_cells(function, data);
+    // The frame-cell proof clones the function, so it only runs once a loop matches.
+    let mut cells = None;
     let mut order: Vec<_> = loops.loops().iter().collect();
     order.sort_by_key(|lp| std::cmp::Reverse(lp.depth));
     for lp in order {
@@ -100,7 +101,8 @@ fn rewrite_one(function: &mut Function, data: &mut DataPool) -> bool {
         let (slots, values) = expendable_cells(function, &loops, lp, &plan);
         let mut trial = function.clone();
         apply(&mut trial, &plan);
-        if !cells.kept_by(&frame_cells(&trial, data), &slots, &values) {
+        let before = cells.get_or_insert_with(|| frame_cells(function, data));
+        if !before.kept_by(&frame_cells(&trial, data), &slots, &values) {
             continue;
         }
         *function = trial;

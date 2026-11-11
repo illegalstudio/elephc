@@ -239,6 +239,27 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
     ]
 }
 
+/// Returns the cheap scalar passes that tidy up after a pass introduces new locals.
+///
+/// They promote the locals to SSA values, fold and forward them, and drop what is left
+/// dead. Every one is also a member of `default_passes`, so running them first changes how
+/// soon a function converges, not which passes it gets.
+fn scalar_cleanup_passes() -> Vec<Box<dyn IrPass>> {
+    vec![
+        Box::new(IdentityArith),
+        Box::new(Peephole),
+        Box::new(Mem2Reg),
+        Box::new(ImmutableLocalLoads),
+        Box::new(LoopOptimize),
+        Box::new(ConstFold),
+        Box::new(Cse),
+        Box::new(Licm),
+        Box::new(DeadInst),
+        Box::new(DeadStore),
+        Box::new(BranchSimplify),
+    ]
+}
+
 /// Runs the whole EIR optimization pipeline over the module to a module-level
 /// fixed point.
 ///
@@ -293,10 +314,20 @@ pub fn optimize_module(module: &mut Module) {
     // Lazy boxed accumulators take the locals the converged loop passes left mixed. Running
     // them earlier would claim a loop that `RawPromotableLoop` matches a few rounds later
     // and compiles better. The scalar passes then promote and fold the new companions.
+    // Only a function the lazy pass rewrote is optimized again: every other one is already
+    // converged, and a module-wide rerun would pay for all of them. The cheap scalar passes
+    // converge first, so the whole list usually runs once, to confirm, instead of once per
+    // cleanup round. Its analyses dominate the time on a large function.
     let lazy: Vec<Box<dyn IrPass>> = vec![Box::new(LazyBoxedAccumulator)];
-    if run_module_function_passes(module, &lazy) {
-        run_module_function_passes(module, &passes);
-    }
+    let cleanup = scalar_cleanup_passes();
+    for_each_function(module, |function, data| {
+        if !run_function_passes(function, &lazy, data) {
+            return false;
+        }
+        run_function_passes(function, &cleanup, data);
+        run_function_passes(function, &passes, data);
+        true
+    });
     run_module_function_passes(module, &finalizers);
 }
 
@@ -341,6 +372,16 @@ fn run_module_function_passes(module: &mut Module, passes: &[Box<dyn IrPass>]) -
     if passes.is_empty() {
         return false;
     }
+    for_each_function(module, |function, data| run_function_passes(function, passes, data))
+}
+
+/// Calls `visit` on every function-like body of the module with the shared literal pool.
+///
+/// Returns true when any call did.
+fn for_each_function(
+    module: &mut Module,
+    mut visit: impl FnMut(&mut Function, &mut DataPool) -> bool,
+) -> bool {
     let Module {
         functions,
         class_methods,
@@ -361,7 +402,7 @@ fn run_module_function_passes(module: &mut Module, passes: &[Box<dyn IrPass>]) -
         .chain(runtime_callable_invokers.iter_mut());
     let mut changed = false;
     for function in all_functions {
-        changed |= run_function_passes(function, passes, data);
+        changed |= visit(function, data);
     }
     changed
 }
