@@ -240,6 +240,15 @@ configuration and checksums, then execute the archived tests. They cannot quietl
 invoke Cargo to rebuild missing outputs. A `Build` aggregate fails if any selected
 producer fails or is cancelled; `Build & Test` requires that aggregate.
 
+The shared downloader uses `actions/download-artifact@v8.0.2` with digest
+mismatches treated as errors. Each of its three attempts has a five-minute process
+deadline, including streamed ZIP extraction. Progress logs every 15 seconds show
+received and expected body bytes, buffered bytes and time since the last body chunk.
+`download-and-zip-extraction` means those operations overlap;
+`zip-extraction-or-finalization` means the HTTP body has finished. The observer
+does not consume the response or print signed URLs. Retries run on the same runner;
+they do not restart the test job on another machine.
+
 Separate producers retain configurations that are not interchangeable: PDO driver
 features, curl-enabled tools and contract tests, release-mode frame tests, iOS device
 and Simulator bridges, and the main-only release benchmark. A partial matrix rerun

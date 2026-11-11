@@ -2896,6 +2896,7 @@ jobs:
         run: |
           bash scripts/ci/test_validate_nextest_archive.sh
           python3 -B scripts/ci/test_download_test_archive.py
+          node --test scripts/ci/test_download_progress.cjs
 
       - name: Test artifact retention and bounded cleanup
         run: python3 -B -m unittest discover -s scripts/ci -p 'test_*retention*.py' -v
