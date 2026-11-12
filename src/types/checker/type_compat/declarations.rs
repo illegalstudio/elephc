@@ -298,6 +298,49 @@ impl Checker {
         if self.nullable_reference_keeps_concrete_storage(expected_ty, actual_ty, arg) {
             return Ok(());
         }
+        // Rule 4: a declared container parameter reads and writes the caller's storage with the
+        // layout it declares. A typed list has another layout when the parameter is a hash
+        // (`array<K, V>`) or a list of boxed values (a written `array<mixed>`). `types_compatible`
+        // admits the list (correct for a by-VALUE parameter, which receives a converted copy), so
+        // nothing refused the binding: `function f(array<int, int> &$ids) { $ids[0] = 7; }` given
+        // `$ids = [4, 5]` wrote hash entries into the vector and crashed, and `array<mixed> &$a`
+        // stored boxed cells the caller went on reading as integers.
+        //
+        // An ordinary local can change representation in place, exactly as `unset($a[$k])`
+        // promotes one, and lowering emits that conversion before taking the reference. Storage
+        // other code already reads as a typed list (a declared `array<T>` variable, a parameter
+        // bound by reference, an alias, a global, a static, a property, an element) cannot.
+        if crate::types::binds_packed_reference_argument(expected_ty, &storage_ty) {
+            // `can_widen_local` was decided before this argument was recorded as an alias root,
+            // so it answers for the FIRST time a call binds the local. A call can be checked
+            // more than once (a loop infers its calls before its body is checked), and by then
+            // the local is an alias root: the conversion that earlier check approved is still
+            // pending and approves this one. A pending output of another layout (an earlier
+            // `mixed &` slot of the same call boxing the local) is a conflict instead.
+            let target =
+                crate::types::packed_reference_argument_storage(expected_ty, &storage_ty);
+            let pending = self.pending_boxed_reference_output(by_ref_storage_place(arg));
+            let approved = match pending {
+                Some(pending) => Some(pending) == target.as_ref(),
+                None => can_widen_local,
+            };
+            let promotable = matches!(by_ref_storage_place(arg).kind, ExprKind::Variable(_))
+                && target.is_some()
+                && approved;
+            if promotable {
+                return Ok(());
+            }
+            return Err(CompileError::new(
+                arg.span,
+                &format!(
+                    "{} expects {}, got {}: a by-reference parameter uses the caller's own \
+                     storage, and this list cannot be converted to the parameter's layout \
+                     there. Declare the variable with the parameter's type (`{} $v = [...]`), \
+                     or declare the parameter as the list `{}` or as plain `array`",
+                    context, expected_ty, storage_ty, expected_ty, storage_ty
+                ),
+            ));
+        }
         // The call lowering boxes PHP array locals before exposing their ref-cell address.
         // This changes storage, not the declared values accepted by the reference parameter.
         if expected_ty.is_php_array()
@@ -398,6 +441,49 @@ impl Checker {
                      declared type; initialize it (for example `= 0`), or declare BOTH the \
                      parameter and the variable nullable (`?int &$p` with `?int $v = null`)",
                     context, expected_ty
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Returns the storage a call still being checked has decided to give the local `arg` names.
+    ///
+    /// Recorded outputs are removed once their call has been applied, so an entry of the current
+    /// scope belongs to a call whose arguments are still being validated, or to a call a loop
+    /// inferred ahead of checking its body.
+    fn pending_boxed_reference_output(&self, arg: &Expr) -> Option<&PhpType> {
+        let ExprKind::Variable(name) = &arg.kind else {
+            return None;
+        };
+        self.boxed_reference_outputs
+            .iter()
+            .filter(|((scope, _), _)| scope == &self.current_loop_storage_scope)
+            .find_map(|(_, outputs)| outputs.get(name))
+    }
+
+    /// Refuses a list argument whose elements cannot be rebuilt as a declared hash parameter's
+    /// values.
+    ///
+    /// A list is a valid value for a declared `array<K, V>` parameter and lowering rebuilds it
+    /// as the hash the callee is compiled for (`crate::types::packed_argument_hash_storage`).
+    /// Element storage that conversion cannot produce is refused: bound unchanged, the callee
+    /// would read one layout as another.
+    pub(crate) fn require_packed_argument_hash_storage(
+        &self,
+        expected_ty: &PhpType,
+        actual_ty: &PhpType,
+        span: crate::span::Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if crate::types::binds_packed_argument_to_hash(expected_ty, actual_ty)
+            && crate::types::packed_argument_hash_storage(expected_ty, actual_ty).is_none()
+        {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "{} expects {}, got {}; the element storage differs",
+                    context, expected_ty, actual_ty
                 ),
             ));
         }

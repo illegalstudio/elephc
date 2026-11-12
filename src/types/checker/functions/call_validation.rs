@@ -1045,6 +1045,18 @@ impl Checker {
                                     item.kind,
                                     crate::parser::ast::ExprKind::StringLiteral(_)
                                 )));
+                    // A by-value list is rebuilt as the declared hash; refuse what cannot be.
+                    if sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        && !supplied_reference
+                        && !runtime_descriptor_projection
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                        )?;
+                    }
                     if !proven_callable_array && !runtime_descriptor_projection
                         && !literal_str_replace_search
                     {
@@ -1131,6 +1143,21 @@ impl Checker {
                         arg.span,
                         &format!("{} variadic parameter ${}", callee_desc, vname),
                     )?;
+                    // Same list-to-hash rule as a regular declared parameter: a collected list
+                    // is rebuilt as the element hash, or refused when no conversion exists.
+                    if variadic_index
+                        .and_then(|index| sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                        && !variadic_by_ref
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                        )?;
+                    }
                 }
             }
             param_idx += 1;

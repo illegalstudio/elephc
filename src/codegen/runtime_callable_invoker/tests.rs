@@ -48,6 +48,50 @@ fn mixed_invoker_returns_follow_runtime_ownership_on_all_targets() {
     }
 }
 
+/// A boxed argument bound to a declared `array<K, V>` parameter is rebuilt as a hash when it
+/// carries a list, and both arms report an owned result, on every target.
+#[test]
+fn boxed_list_argument_is_rebuilt_as_hash_for_hash_parameter_on_all_targets() {
+    let hash_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Int),
+        value: Box::new(PhpType::Int),
+    };
+    for name in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+        let mut ctx = InvokerEmitContext::new("hash_arg_invoker", owners, false, Vec::new(), target);
+        let (pushed, owned) = coerce_current_value_to_target(
+            &mut emitter, &mut ctx, &mut data, &PhpType::Mixed, Some(&hash_ty),
+        );
+        assert_eq!(pushed, hash_ty, "{name}: the callee receives its declared hash type");
+        assert!(owned, "{name}: both arms hand the invoker an owner to release");
+        let output = emitter.output();
+        let unbox = output.find("__rt_mixed_unbox").expect("the argument is unboxed first");
+        let retain = output.find("__rt_incref").expect("a boxed hash passes through retained");
+        let convert = output.find("__rt_array_to_hash").expect("a boxed list is rebuilt");
+        assert!(unbox < retain && retain < convert, "{name}: unbox, then pass through or rebuild");
+
+        // A list parameter keeps the plain borrowed unbox.
+        let mut emitter = Emitter::new(target);
+        let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+        let mut ctx = InvokerEmitContext::new("list_arg_invoker", owners, false, Vec::new(), target);
+        let list_ty = PhpType::Array(Box::new(PhpType::Int));
+        let (_, owned) = coerce_current_value_to_target(
+            &mut emitter, &mut ctx, &mut data, &PhpType::Mixed, Some(&list_ty),
+        );
+        assert!(!owned, "{name}: a list parameter still borrows the boxed payload");
+        assert!(!emitter.output().contains("__rt_array_to_hash"), "{name}");
+    }
+}
+
 /// Publishes both ownership states in the target-specific internal return register.
 #[test]
 fn eir_return_ownership_status_is_target_aware() {

@@ -372,7 +372,7 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
 }
 
 /// Returns whether a local array slot can be converted at the current program point.
-fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+pub(in crate::ir_lower) fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
     repr_fixpoint::local_slot_kind_is_convertible(ctx, name)
         && ctx
             .local_slots

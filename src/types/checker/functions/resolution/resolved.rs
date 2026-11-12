@@ -233,6 +233,16 @@ impl Checker {
                         .copied()
                         .unwrap_or(false)
                     {
+                        if !supplied_reference {
+                            // A by-value list is rebuilt as the declared hash; refuse what
+                            // cannot be.
+                            self.require_packed_argument_hash_storage(
+                                expected_ty,
+                                &actual_ty,
+                                arg.span,
+                                &format!("Function '{}' parameter ${}", name, param_name),
+                            )?;
+                        }
                         self.require_bound_param_arg_type(
                             expected_ty,
                             &actual_ty,
@@ -291,6 +301,23 @@ impl Checker {
                         arg.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
+                    let declared = variadic_index
+                        .and_then(|index| effective_sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false);
+                    let by_reference = variadic_index
+                        .and_then(|index| effective_sig.ref_params.get(index))
+                        .copied()
+                        .unwrap_or(false);
+                    if declared && !by_reference {
+                        // A collected list is rebuilt as the element hash, or refused.
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                        )?;
+                    }
                 }
             }
             param_idx += 1;

@@ -8,6 +8,7 @@
 //! - Arguments are already normalized by the shared call planner.
 //! - A referenced array element widens its local root to boxed Mixed element storage.
 //! - A `null` local bound to a `?ptr<T>` parameter becomes a `?ptr<T>` local.
+//! - A typed list local bound to a declared hash or `array<mixed>` parameter takes that layout.
 
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
@@ -249,6 +250,12 @@ impl Checker {
             && matches!(actual.codegen_repr(), PhpType::Void | PhpType::Never)
         {
             expected.clone()
+        } else if let Some(promoted) =
+            crate::types::packed_reference_argument_storage(expected, actual)
+        {
+            // A typed list bound to a declared hash or boxed-list parameter is converted to that
+            // layout before the call (`require_boxed_by_ref_storage` rule 4), and keeps it.
+            promoted
         } else if let Some(storage) = guarded_storage {
             storage
         } else {

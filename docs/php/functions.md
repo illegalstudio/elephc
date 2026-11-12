@@ -503,6 +503,59 @@ pointers, cannot be validated that way, so passing it to a wider by-reference pa
 rejected at compile time; declare the
 parameter with the element's exact type instead.
 
+### Lists passed to `array<K, V>` parameters
+
+A list (`[4, 5]`, or a variable holding one) is a valid value for a declared keyed-array
+parameter such as `array<int, int> $map`, even though a list is stored as a packed vector and
+the parameter as a hash table.
+
+**By value**, the argument is rebuilt as an independent hash for the callee, in functions,
+methods, constructors (promoted properties included), closures, default values and variadic
+collectors. The caller's list is not changed. The elements must have the parameter's value
+storage, or the parameter's values must be `mixed`; anything else (an `int` list for
+`array<int, float>`, a list of lists for `array<int, array<int, int>>`) is rejected at compile
+time with `the element storage differs`.
+
+**By reference**, the callee writes a hash through the caller's own variable, so the variable
+itself becomes that keyed array before the call, exactly as `unset($list[$k])` turns a list
+into one, and stays one afterwards:
+
+```php
+<?php
+function put(array<int, int> &$map, int $key): void { $map[$key] = 7; }
+function run(): void
+{
+    $ids = [4, 5];
+    put($ids, 9);
+    echo count($ids), " ", $ids[9]; // 3 7
+}
+run();
+```
+
+A list first bound this way inside a loop is converted once, at the loop entry. One variable
+may fill two reference slots of the same call; both then name the converted variable.
+
+Only an ordinary local can change representation in place. A variable declared as a list
+(`array<int> $ids`), a property, an array element, a `global` or `static` variable, a variable
+with a `&` alias, and a variable an earlier `mixed &` slot of the same call is boxing are
+rejected at compile time (`a by-reference parameter uses the caller's own storage, and this
+list cannot be converted to the parameter's layout there`). Declare the variable with the
+parameter's type, or declare the parameter as the list or as plain `array`.
+
+A written `array<mixed> &$items` parameter follows the same rule: it is a storage contract (a
+list of boxed values), not a hint that is specialized per caller. A typed list local
+(`[4, 5]`, a list of objects, of strings) bound to it has its elements boxed in place before
+the call and reads back whatever the callee stored; a variable declared `array<int>` or a
+typed list property is rejected with the diagnostic above. Plain `array &$items` accepts every
+array without any of this.
+
+Calls made through a callable (`call_user_func()`, a callable array, a first-class callable
+chosen at run time) pass their arguments boxed, and a boxed list is rebuilt as the hash the
+`array<K, V>` parameter expects in the same way.
+
+Assigning a list to a typed keyed-array property, static property or declared local converts a
+copy in the same way and leaves the source list as it was.
+
 ## References to array elements
 
 A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through

@@ -118,6 +118,7 @@ mod destructor_unwind_calls;
 mod reference_property_payload;
 mod references;
 mod typed_element_reference_args;
+mod list_hash_param_binding;
 mod runtime_gc;
 mod runtime_reachability;
 mod runtime_introspection;
