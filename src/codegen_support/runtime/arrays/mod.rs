@@ -14,6 +14,8 @@
 mod incref_register_tests;
 #[cfg(test)]
 mod gc_incoming_cache_tests;
+#[cfg(test)]
+mod overwrite_order_tests;
 
 mod array_chunk;
 mod array_chunk_refcounted;

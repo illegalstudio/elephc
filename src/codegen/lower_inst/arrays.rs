@@ -1397,6 +1397,10 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
         stamp_scalar_array_write_result(ctx, &value_ty);
     }
+    if let Some(property) = super::objects::in_place_property_container(ctx, array)? {
+        // A property lent its own separated array: only a relocated array is published back.
+        return property.publish_relocated(ctx, array);
+    }
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_mutated_container_writeback_to_local(slot, array)?;
@@ -1998,6 +2002,10 @@ pub(super) fn lower_array_push_value(
         && inst.immediate == Some(Immediate::PromotableArray)
         && promotable_scalar_element(&elem_ty);
     lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type, raw_scalar_hash)?;
+    if let Some(property) = super::objects::in_place_property_container(ctx, array)? {
+        // A property lent its own separated array: only a relocated array is published back.
+        return property.publish_relocated(ctx, array);
+    }
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_mutated_container_writeback_to_local(slot, array)?;

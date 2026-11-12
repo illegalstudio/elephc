@@ -1036,6 +1036,14 @@ reference cell by `$r = &$o->x` — there the container lives inside the cell, s
 split reads and republishes through the cell and every alias of the reference sees
 the result.
 
+Element writes into an indexed array or hash property take the same borrowed
+container: `$o->items[$k] = $v` and `$o->items[] = $v` lower to `PropGetForWrite`
+immediately followed by `HashSet`, `HashAppend`, `ArraySet` or `ArrayPush`, with no
+`Acquire` and no `PropSet` of the container. The backend recognizes the
+`PropGetForWrite` producer behind the write's receiver and publishes the helper's
+returned pointer into the slot only when the write relocated the container; the
+memory model's notes on property element writes give the ownership argument.
+
 The receiver has to outlive the loop, because the borrowed container's only owner
 is the property slot inside it. A receiver that names stable backing storage does
 that by itself: a variable or `$this`, optionally followed by a chain of plain
