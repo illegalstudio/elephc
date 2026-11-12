@@ -80,8 +80,8 @@ pub(crate) use array_keys::{
 pub(crate) use array_cast::{array_cast_result_type, php_cast_result_type, ArrayCast};
 pub(crate) use array_storage::{
     array_storage_conversion, binds_packed_argument_to_hash, binds_packed_reference_argument,
-    join_array_storage_conversion, packed_argument_hash_storage,
-    packed_reference_argument_storage,
+    is_written_reference_array_param, join_array_storage_conversion,
+    packed_argument_hash_storage, packed_reference_argument_storage,
 };
 pub use ffi::{
     align_up, ctype_field_layout, ctype_to_abi_type, ctype_to_php_type, packed_type_layout,

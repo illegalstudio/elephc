@@ -268,10 +268,10 @@ impl Checker {
                             PhpType::Mixed
                         };
                         self.require_boxed_by_ref_storage(
-                            &output, &actual, arg, env, can_widen_local,
+                            &output, &actual, arg, env, can_widen_local, false,
                             &format!("Builtin '{}'", name),
                         )?;
-                        self.record_boxed_reference_output(arg, &output, &actual, span, env)?;
+                        self.record_boxed_reference_output(arg, &output, &actual, span, env, false)?;
                     }
                     continue;
                 }

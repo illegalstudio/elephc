@@ -205,12 +205,18 @@ impl Checker {
                             .unwrap_or(false)
                             || matches!(expected_ty, PhpType::Mixed));
                     if tracks_boxed_reference_output {
+                        let layout_contract = crate::types::is_written_reference_array_param(
+                            &effective_sig.ref_params,
+                            &effective_sig.param_type_exprs,
+                            param_idx,
+                        );
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
                             arg,
                             caller_env,
                             can_widen_by_ref_local,
+                            layout_contract,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                         self.record_boxed_reference_output(
@@ -219,6 +225,7 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
+                            layout_contract,
                         )?;
                     }
                     // PHP's parameter binding only applies to a *declared* parameter type.

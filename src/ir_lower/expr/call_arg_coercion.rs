@@ -1171,7 +1171,8 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
         promote_reference_return_local_argument(ctx, sig, index, arg);
         return Some(ctx.load_local(name, Some(arg.span)).value);
     }
-    if sig.declared_params.get(index).copied().unwrap_or(false) {
+    // Only a written array type is a layout contract; a plain `array` hint keeps the paths below.
+    if crate::types::is_written_reference_array_param(&sig.ref_params, &sig.param_type_exprs, index) {
         if let Some(storage_ty) =
             crate::types::packed_reference_argument_storage(param_ty, &ctx.local_type(name))
         {

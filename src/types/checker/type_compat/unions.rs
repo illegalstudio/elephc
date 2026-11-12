@@ -476,14 +476,7 @@ impl Checker {
         param_type_exprs: &[Option<crate::parser::ast::TypeExpr>],
         index: usize,
     ) -> bool {
-        ref_params.get(index).copied().unwrap_or(false)
-            && matches!(
-                param_type_exprs.get(index),
-                Some(Some(
-                    crate::parser::ast::TypeExpr::Array(_)
-                        | crate::parser::ast::TypeExpr::AssocArray { .. }
-                ))
-            )
+        crate::types::is_written_reference_array_param(ref_params, param_type_exprs, index)
     }
 
     /// If `declared_ty` is a generic array hint and `actual_ty` is a concrete array or

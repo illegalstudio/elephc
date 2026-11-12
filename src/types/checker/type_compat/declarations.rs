@@ -258,6 +258,9 @@ impl Checker {
     /// as an operation on a null-typed value: issue #892 reported
     /// `unsupported EIR backend feature: icmp for PHP type Void`, positionless, from
     /// `$running = null; do { … } while ($running > 0);` around `curl_multi_exec()`.
+    ///
+    /// `layout_contract` says the parameter carries a written array type; rule 4 in the body
+    /// (in-place conversion of a typed list to that layout) applies to no other parameter.
     pub(crate) fn require_boxed_by_ref_storage(
         &mut self,
         expected_ty: &PhpType,
@@ -265,6 +268,7 @@ impl Checker {
         arg: &Expr,
         env: &TypeEnv,
         can_widen_local: bool,
+        layout_contract: bool,
         context: &str,
     ) -> Result<(), CompileError> {
         if matches!(expected_ty.codegen_repr(), PhpType::Mixed | PhpType::Object(_))
@@ -310,7 +314,14 @@ impl Checker {
         // promotes one, and lowering emits that conversion before taking the reference. Storage
         // other code already reads as a typed list (a declared `array<T>` variable, a parameter
         // bound by reference, an alias, a global, a static, a property, an element) cannot.
-        if crate::types::binds_packed_reference_argument(expected_ty, &storage_ty) {
+        //
+        // Only a WRITTEN array type is that contract (`layout_contract`). A plain `array` hint
+        // resolves to the same `array<mixed>` before a call site sharpens it, and is bound
+        // through the boxed reference cell below: `mysqli_poll(..., array &$reject, ...)`
+        // forwards its own parameter to `mysqli::poll()`'s, which no caller could convert.
+        if layout_contract
+            && crate::types::binds_packed_reference_argument(expected_ty, &storage_ty)
+        {
             // `can_widen_local` was decided before this argument was recorded as an alias root,
             // so it answers for the FIRST time a call binds the local. A call can be checked
             // more than once (a loop infers its calls before its body is checked), and by then

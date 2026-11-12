@@ -14,6 +14,25 @@
 
 use crate::support::*;
 
+/// `mysqli_poll()` forwards its own `array &$reject` parameter to `mysqli::poll()`'s. A plain
+/// `array` hint is no layout contract, so a typed list (`[1, 2]`) binds through both and is
+/// left intact when the call throws before writing. Expected output is php 8.5's.
+#[test]
+fn test_mysqli_poll_binds_typed_lists_through_plain_array_reference_parameters() {
+    let out = compile_and_run(
+        r#"<?php
+$read = null;
+$error = null;
+$ids = [1, 2];
+try { mysqli_poll($read, $error, $ids, 0); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+$more = [3];
+try { mysqli_poll($read, $error, $more, 0, 5); } catch (ValueError $e) { echo $e->getMessage(), "|"; }
+echo count($ids), count($more), "|", $ids[1], $more[0];
+"#,
+    );
+    assert_eq!(out, "No stream arrays were passed|No stream arrays were passed|21|23");
+}
+
 /// A bare `MYSQLI_*` constant is enough to inject the surface (issue: a config
 /// array or helper that only forwards the constant must not fail with
 /// "undefined constant"), and `mysqli_sql_exception::getSqlState()` reads the

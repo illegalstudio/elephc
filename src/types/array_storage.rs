@@ -159,6 +159,29 @@ pub(crate) fn binds_packed_reference_argument(expected: &PhpType, actual: &PhpTy
         || binds_packed_argument_to_boxed_list(expected, actual)
 }
 
+/// Returns whether parameter `index` is passed by reference and carries a WRITTEN array type
+/// (`array<T>` or `array<K, V>`).
+///
+/// Such a parameter is a storage contract in both directions: the callee reads and writes the
+/// caller's variable with exactly that layout, so the caller's list is converted to it in place
+/// or refused. A plain `array` hint resolves to the same `array<mixed>` but is no contract: it
+/// is sharpened to what call sites pass and bound through the boxed reference cell, which is
+/// how a wrapper forwards its own `array &` parameter to another `array &` parameter.
+pub(crate) fn is_written_reference_array_param(
+    ref_params: &[bool],
+    param_type_exprs: &[Option<crate::parser::ast::TypeExpr>],
+    index: usize,
+) -> bool {
+    ref_params.get(index).copied().unwrap_or(false)
+        && matches!(
+            param_type_exprs.get(index),
+            Some(Some(
+                crate::parser::ast::TypeExpr::Array(_)
+                    | crate::parser::ast::TypeExpr::AssocArray { .. }
+            ))
+        )
+}
+
 /// Returns whether `actual` is a list of unboxed elements bound to a list of boxed values.
 fn binds_packed_argument_to_boxed_list(expected: &PhpType, actual: &PhpType) -> bool {
     let (PhpType::Array(expected_element), PhpType::Array(element)) =

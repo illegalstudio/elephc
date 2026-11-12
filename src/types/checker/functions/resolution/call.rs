@@ -507,12 +507,18 @@ impl Checker {
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
                     if supplied_reference {
+                        let layout_contract = crate::types::is_written_reference_array_param(
+                            &decl.ref_params,
+                            &decl.param_types,
+                            arg_idx,
+                        );
                         self.require_boxed_by_ref_storage(
                             &declared_ty,
                             &ty,
                             arg,
                             caller_env,
                             can_widen_by_ref_local,
+                            layout_contract,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                         self.record_boxed_reference_output(
@@ -521,6 +527,7 @@ impl Checker {
                             &ty,
                             span,
                             caller_env,
+                            layout_contract,
                         )?;
                     }
                     if !supplied_reference {
@@ -577,6 +584,7 @@ impl Checker {
                         arg,
                         caller_env,
                         can_widen_by_ref_local,
+                        false,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
                     self.record_boxed_reference_output(
@@ -585,6 +593,7 @@ impl Checker {
                         &ty,
                         span,
                         caller_env,
+                        false,
                     )?;
                 }
                 param_types.push((decl.params[arg_idx].clone(), storage_ty));
