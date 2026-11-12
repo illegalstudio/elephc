@@ -17,6 +17,8 @@
 //!   rejected ahead of that read.
 //! - Compound updates and `++`/`--` of a property element, as statements or expressions, throw
 //!   before their element read: no warning, no `offsetGet` call, no readonly diagnostic.
+//! - With the missed element itself as the receiver (`$nodes[5]->list[0]++`), PHP's one
+//!   `Undefined array key` warning per update is the only diagnostic before the `Error`.
 //! - Every fixture runs in both EIR modes under heap debugging and must leave a clean heap.
 
 use crate::support::*;
@@ -215,6 +217,52 @@ expressions([$node]);
     for (mode, output) in [("optimized", &optimized), ("--no-ir-opt", &plain)] {
         assert_eq!(output.stdout, expected, "{mode}");
         assert!(!output.stderr.contains("Warning"), "{mode}: nothing is read: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{mode}: {}", output.stderr);
+    }
+}
+
+/// An expression update whose receiver is the missed element itself throws before reading the
+/// property: the element fetch warns once, as in PHP, and nothing else is diagnosed.
+#[test]
+fn test_property_element_expression_updates_on_missing_element_receiver_throw_before_reading() {
+    let source = r#"<?php
+final class Node
+{
+    public array<int> $list = [5];
+    public readonly array<int> $roList;
+    public ArrayObject $items;
+    public array<Node> $peers = [];
+    public function __construct() { $this->roList = [1]; $this->items = new ArrayObject([3]); }
+    public function go(array<Node> $nodes): void
+    {
+        $this->peers[] = $nodes[0];
+        try { $x = $nodes[5]->list[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $x = ++$nodes[6]->list[0]; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $x = ($nodes[7]->list[0] += 4); echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $x = $nodes[8]->roList[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $x = $nodes[9]->items[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $x = $this->peers[3]->list[0]--; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        $a = $nodes[0]->list[0]++; $b = ++$nodes[0]->list[0]; $c = ($nodes[0]->list[0] += 4);
+        $d = $nodes[0]->items[0]++; $f = $this->peers[0]->list[0]--;
+        echo $a, ",", $b, ",", $c, ",", $d, ",", $f, ",", $nodes[0]->list[0], ",", $nodes[0]->items[0];
+    }
+}
+$node = new Node();
+$node->go([$node]);
+"#;
+    let items = "Attempt to modify property \"items\" on null|";
+    let ro_list = "Attempt to modify property \"roList\" on null|";
+    let list = "Attempt to modify property \"list\" on null|";
+    let expected = format!("{list}{list}{list}{ro_list}{items}{list}5,7,11,3,11,10,4");
+    let optimized = compile_and_run_with_heap_debug(source);
+    let plain = without_ir_opt(|| compile_and_run_with_heap_debug(source));
+    for (mode, output) in [("optimized", &optimized), ("--no-ir-opt", &plain)] {
+        assert_eq!(output.stdout, expected, "{mode}");
+        assert_eq!(output.stderr.matches("Undefined array key").count(), 6,
+            "{mode}: each missed element is fetched once: {}", output.stderr);
+        assert!(!output.stderr.contains("Attempt to read property")
+            && !output.stderr.contains("Trying to access array offset"),
+            "{mode}: nothing is read through the null receiver: {}", output.stderr);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{mode}: {}", output.stderr);
     }
 }

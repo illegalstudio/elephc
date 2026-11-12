@@ -373,6 +373,33 @@ pub(super) fn reject_null_receiver(
     ctx.restore_initialized_slots(slots);
 }
 
+/// Rejects a null receiver read only to be tested, releasing that read before either successor.
+///
+/// An update whose receiver is an element (`$x = $nodes[5]->list[0]++`) replays the element
+/// read for its own read and write; this extra read exists for the null test alone, so its
+/// owner is retired as soon as the test is computed.
+pub(super) fn reject_null_receiver_probe(
+    ctx: &mut LoweringContext<'_, '_>, probe: LoweredValue, property: &str, span: Span,
+) {
+    if !receiver_may_be_null_sentinel(ctx, probe) {
+        crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+        return;
+    }
+    let slots = ctx.initialized_slots_snapshot();
+    let null = ctx.emit_value(Op::IsNull, vec![probe.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(span));
+    crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+    let null_receiver = ctx.builder.create_named_block("property.array.null_receiver", vec![]);
+    let checked = ctx.builder.create_named_block("property.array.receiver_checked", vec![]);
+    ctx.builder.terminate(Terminator::CondBr { cond: null.value,
+        then_target: null_receiver, then_args: vec![], else_target: checked, else_args: vec![] });
+    ctx.builder.position_at_end(null_receiver);
+    lower_throw_access_exception(ctx, "Error",
+        &format!("Attempt to modify property \"{property}\" on null"), span);
+    ctx.builder.position_at_end(checked);
+    ctx.restore_initialized_slots(slots);
+}
+
 /// Sends a null receiver straight to `fetch`, past the initialization guard of a write fetch.
 ///
 /// A class-typed receiver can be the null sentinel of a missed element read

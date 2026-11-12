@@ -244,11 +244,12 @@ fn reads_property_array_element(read: &Expr, object: &Expr, property: &str, inde
     )
 }
 
-/// Rejects a null variable receiver before a prelude statement reads the element `target`
-/// names, the first step of an expression `++`/`--` or compound update of `$v->p[k]`.
+/// Rejects a null receiver before a prelude statement reads the element `target` names, the
+/// first step of an expression `++`/`--` or compound update of `$receiver->p[k]`.
 ///
-/// PHP fetches the property for read-write there and throws before any read. The parser has
-/// already bound a computed receiver to a variable, so a variable is the only shape to probe.
+/// PHP fetches the property for read-write there and throws before any read. The parser binds
+/// a computed receiver to a variable and replays a side-effect-free one, so the receiver is a
+/// variable or an element of array storage (`$nodes[5]`); both are probed.
 pub(crate) fn reject_null_receiver_before_element_read(
     ctx: &mut LoweringContext<'_, '_>, target: &Expr, prelude: &Stmt, span: Span,
 ) {
@@ -261,7 +262,37 @@ pub(crate) fn reject_null_receiver_before_element_read(
         _ => read,
     };
     if !reads_property_array_element(read, object, property, index) { return; }
-    reject_null_variable_receiver(ctx, object, property, span);
+    if matches!(object.kind, ExprKind::Variable(_)) {
+        reject_null_variable_receiver(ctx, object, property, span);
+    } else if reads_class_element_of_array_storage(ctx, object) {
+        // The probe reports PHP's one `Undefined array key` warning for a missed element.
+        let probe = crate::ir_lower::expr::lower_expr(ctx, object);
+        runtime_receivers::reject_null_receiver_probe(ctx, probe, property, span);
+    }
+}
+
+/// Returns whether `receiver` reads an element of a local's or a declared property's array
+/// storage, the read that answers the null sentinel for a missing key.
+///
+/// An `ArrayAccess` object or a boxed container is excluded: reading it again could call
+/// `offsetGet`, and its null is not the sentinel.
+fn reads_class_element_of_array_storage(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &receiver.kind else { return false; };
+    let local = |object: &Expr| match &object.kind {
+        ExprKind::This => ctx.local_load_php_type("this"),
+        ExprKind::Variable(name) => ctx.local_load_php_type(name),
+        _ => None,
+    };
+    let storage = match &array.kind {
+        ExprKind::PropertyAccess { object, property } => local(object).and_then(|ty| {
+            let PhpType::Object(class) = ty.codegen_repr() else { return None; };
+            ctx.classes.get(&class)?.visible_property(property).map(|(_, (_, ty))| ty.clone())
+        }),
+        _ => local(array),
+    };
+    matches!(storage.map(|ty| ty.codegen_repr()),
+        Some(PhpType::Array(element) | PhpType::AssocArray { value: element, .. })
+            if matches!(element.codegen_repr(), PhpType::Object(_)))
 }
 
 /// Probes a variable receiver without consuming it and rejects the null sentinel.
