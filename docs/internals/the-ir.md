@@ -1799,12 +1799,22 @@ Both loop passes defer to codegen's frame-local numeric cells. That proof needs 
 and its user in one block, and both rewrites split blocks, so a rewrite could send
 another local back to heap boxes. Each rewrite is therefore tried on a copy of the
 function, and `stack_numeric::FrameCells` is compared before and after, with the
-ownership finalizer applied to both. The lazy pass skips a local already covered by
-numeric frame storage, keeping its seed, updates and publication free of heap boxes.
-This also preserves zero-allocation packed-field loop seeds on repeated entry. Other
-locals remain eligible for lazy boxing. The loop copy may replace the cells of the mixed
+ownership finalizer applied to both. The lazy pass reloads a boxed slot in the block
+that unboxes its integer payload, keeping each borrowed numeric-cell read beside its
+consumer. Numeric buffer sums, overflow fallback and repeated packed-field loop seeds
+can therefore keep frame cells while retaining the lazy integer fast path. A proven
+numeric slot is still eligible for a companion, including loops with five or more
+accumulators. The loop copy may replace the cells of the mixed
 loop it keeps as a fallback, and the cell of an updated local that no other loop names.
 Any other lost cell rejects that rewrite.
+
+Numeric slot safety and the selected storage of its writers are separate proofs.
+After frame layout assigns producer and scalar-seed cells, codegen checks every
+store to each proven numeric slot. When all writers use that selected frame
+storage, retiring the slot only clears its pointer, regardless of the number of
+cells in the function. This avoids repeated runtime cleanup calls in loops with
+several accumulators. A writer without selected frame storage retains the normal
+numeric cleanup path, including heap decref.
 
 ### Boxed Numeric Chain Fusion
 

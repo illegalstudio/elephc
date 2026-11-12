@@ -204,6 +204,32 @@ measureSum($argc);
     assert_eq!(plain, "2001:1000\n1:0\n3:1\n");
 }
 
+/// A lazy buffer sum retains frame cells through overflow and subsequent float updates.
+#[test]
+fn test_numeric_seed_cells_lazy_buffer_sum_overflow_does_not_allocate() {
+    let source = r#"<?php
+function sumOverflow(buffer<int> $entries, int $n): float {
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) { $sum += $entries[$i]; }
+    return (float)$sum;
+}
+$entries = buffer_new<int>(4);
+$entries[0] = PHP_INT_MAX;
+$entries[1] = $argc;
+$entries[2] = -PHP_INT_MAX;
+$entries[3] = $argc;
+$before = memory_get_allocations();
+$sum = sumOverflow($entries, $argc + 3);
+$after = memory_get_allocations();
+echo $after - $before, ':';
+var_dump($sum);
+buffer_free($entries);
+"#;
+    let (optimized, plain) = both_modes(source);
+    assert_eq!(optimized, "0:float(1)\n");
+    assert_eq!(plain, "9:float(1)\n");
+}
+
 /// Ivory's constant-index scatter keeps packed-field row and column seeds off the heap on re-entry.
 #[test]
 fn test_numeric_seed_cells_lazy_packed_scatter_does_not_allocate() {

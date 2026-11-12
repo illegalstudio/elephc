@@ -211,6 +211,29 @@ var_dump(later($argc));
     assert_eq!(run(source), "int(4611686018427387904)\nfloat(1.3835058055282164E+19)\n");
 }
 
+/// Five numeric frame-cell accumulators retain the lazy integer fast path beyond the copy limit.
+#[test]
+fn test_raw_promotable_five_frame_accumulators_keep_lazy_fast_path() {
+    let source = r#"<?php
+function total(int $n): mixed {
+    $a = 0; $b = 0; $c = 0; $d = 0; $e = 0; $i = 0;
+    while ($i < $n) {
+        $a += $i; $b += $i; $c += $i; $d += $i; $e += $i; $i += 1;
+    }
+    return $a + $b + $c + $d + $e;
+}
+echo total(3 + $argc);
+"#;
+    let (output, asm) = compile_and_run_with_heap_debug_and_asm(source);
+    assert!(output.success, "{}", output.stderr);
+    assert_eq!(output.stdout, "30");
+    assert!(
+        asm.contains(FUSED_OVERFLOW_BRANCH) && !asm.contains("rawint."),
+        "expected the original five-accumulator lazy fast path:\n{asm}"
+    );
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Five escaping accumulators exceed the loop copy's size limit and cannot use frame cells.
 /// Their lazy companions still avoid per-iteration boxing without copying the loop.
 #[test]

@@ -30,10 +30,10 @@
 //!   that copy has no tag tests and continues a promoted local as a raw float.
 //! - A local is rewritten only when one of its updates sits in a loop that has no sync
 //!   for it. Otherwise the box allocation would only move from the update to the read.
-//! - A local already covered by codegen's numeric frame cells is left alone: its seed,
-//!   updates and final publication already allocate nothing, including after overflow.
+//! - Tag tests and integer payload reads reload the slot in their own blocks, so borrowed
+//!   numeric frame pointers do not cross the branch introduced by the rewrite.
 //! - Each plan is tried on a copy of the function. It is dropped when it would cost
-//!   another local the frame cell codegen gives it, because that proof needs a read and
+//!   an unmodified local the frame cell codegen gives it, because that proof needs a read and
 //!   its user in one block and this rewrite splits blocks.
 
 use std::collections::{HashMap, HashSet};
@@ -78,14 +78,12 @@ impl IrPass for LazyBoxedAccumulator {
         }
         // Each plan is tried on a copy first: it must not cost another local its frame cell.
         let cells = frame_cells(function, data);
+        // Frame-proven accumulators can still benefit from lazy companions. Only slots
+        // deliberately rewritten so far are exempt from the pre-existing-local check.
         let mut slots = HashSet::new();
         let mut values = HashSet::new();
         let mut changed = false;
         for plan in &plans {
-            // Replacing an existing frame cell would add heap boxes at seeds and syncs.
-            if cells.contains_local(plan.slot) {
-                continue;
-            }
             let mut trial = function.clone();
             apply(&mut trial, plan);
             slots.insert(plan.slot);
@@ -718,6 +716,8 @@ fn rewrite_update(function: &mut Function, local: Companions, site: &Site) {
     // The companion is written while the tag is still BOXED. A later failure of the fast
     // path leaves the tag BOXED, so this value is never read.
     builder.position_at_end(unbox);
+    // Keep the payload read beside its consumer so a numeric slot can retain its frame cell.
+    let current = load_mixed(&mut builder, local.slot);
     let payload = emit(&mut builder, Op::MixedUnbox, vec![current], None, IrType::I64, PhpType::Int);
     builder.emit_store_local(local.int, payload);
     builder.terminate(Terminator::Br { target: compute, args: vec![] });

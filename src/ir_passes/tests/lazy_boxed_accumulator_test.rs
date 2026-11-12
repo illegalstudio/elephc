@@ -145,7 +145,7 @@ shown($argc);
     assert!(!has_companion(&function), "{text}");
 }
 
-/// Every supported target keeps proven buffer sums in frame cells while specializing dynamic sums.
+/// Every supported target specializes buffer sums without losing their numeric slot proof.
 #[test]
 fn lazy_accumulator_frame_numeric_locals_keep_cells_on_every_target() {
     let source = r#"<?php
@@ -167,10 +167,33 @@ buffer_free($entries);
         let function = optimized_for_target(source, "bufferSum", target);
         let text = crate::ir::print_function(&function);
         let sum = function.locals.iter().find(|local| local.name.as_deref() == Some("sum")).unwrap();
-        assert!(!has_companion(&function), "{target}: unexpected lazy rewrite:\n{text}");
+        assert!(has_companion(&function), "{target}: missing lazy companion:\n{text}");
         assert!(crate::codegen::stack_numeric::FrameCells::of(&function).contains_local(sum.id),
             "{target}: sum lost its frame cell:\n{text}");
         let dynamic = optimized_for_target(source, "dynamicSum", target);
         assert!(has_companion(&dynamic), "{target}: dynamic sum was not specialized");
+    }
+}
+
+/// The original five-accumulator sum keeps the two lazy fast paths admitted on main.
+#[test]
+fn lazy_accumulator_five_numeric_locals_keep_upstream_fast_paths() {
+    let source = r#"<?php
+function fiveTotals(int $n): mixed {
+    $a = 0; $b = 0; $c = 0; $d = 0; $e = 0; $i = 0;
+    while ($i < $n) {
+        $a += $i; $b += $i; $c += $i; $d += $i; $e += $i; $i += 1;
+    }
+    return $a + $b + $c + $d + $e;
+}
+echo fiveTotals($argc);
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let function = optimized_for_target(source, "fiveTotals", target);
+        let count = function.locals.iter().filter(|local| {
+            local.name.as_deref().is_some_and(|name| name.starts_with("lazyint"))
+        }).count();
+        assert_eq!(count, 2, "{target}: upstream lazy paths changed:\n{}",
+            crate::ir::print_function(&function));
     }
 }

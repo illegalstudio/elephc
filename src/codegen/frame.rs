@@ -76,6 +76,8 @@ pub(super) struct FrameLayout {
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
     pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
+    /// Numeric locals whose every writer uses physically selected frame storage.
+    pub(super) numeric_frame_only_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
@@ -153,6 +155,9 @@ pub(super) fn layout_for_function(
         offset += 24;
         numeric_seed_offsets.insert(slot, offset);
     }
+    let numeric_frame_only_slots = super::stack_numeric::frame_only_locals(
+        function, &numeric.locals, &numeric_cell_offsets, &numeric_seed_offsets,
+    );
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
@@ -221,6 +226,7 @@ pub(super) fn layout_for_function(
         numeric_cell_offsets,
         numeric_seed_offsets,
         numeric_local_slots: numeric.locals,
+        numeric_frame_only_slots,
         numeric_values: numeric.proven_values,
         ref_cell_state_offsets,
         try_handler_offsets,
@@ -1890,6 +1896,11 @@ pub(super) fn emit_owned_local_cleanup(
 ) {
     if ctx.numeric_local_slots.contains(&slot) {
         // -- numeric cells have no child that can run a PHP destructor --
+        if ctx.numeric_frame_only_slots.contains(&slot) {
+            // -- every store to this slot publishes storage owned by this frame --
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            return;
+        }
         let result = abi::int_result_reg(ctx.emitter);
         abi::load_at_offset(ctx.emitter, result, offset);
         let done = ctx.next_label("numeric_local_cleanup_done");
