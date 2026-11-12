@@ -15,6 +15,8 @@
 //!   and a readonly store reports the null receiver, not an initialized overwrite.
 //! - An `ArrayAccess` object property is read before its `offsetSet` call; the null receiver is
 //!   rejected ahead of that read.
+//! - Compound updates and `++`/`--` of a property element, as statements or expressions, throw
+//!   before their element read: no warning, no `offsetGet` call, no readonly diagnostic.
 //! - Every fixture runs in both EIR modes under heap debugging and must leave a clean heap.
 
 use crate::support::*;
@@ -151,6 +153,68 @@ write([new Slot()]);
     for (mode, output) in [("optimized", &optimized), ("--no-ir-opt", &plain)] {
         assert_eq!(output.stdout, expected, "{mode}");
         assert!(!output.stderr.contains("Warning"), "{mode}: no property is read: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{mode}: {}", output.stderr);
+    }
+}
+
+/// A read-modify-write of a property element through a null receiver throws before the element
+/// is read, for list, readonly and `ArrayAccess` properties, and the same updates through a
+/// present object still work.
+#[test]
+fn test_property_element_updates_on_null_object_receiver_throw_before_reading() {
+    let source = r#"<?php
+final class Node
+{
+    public array<int> $list = [5];
+    public readonly array<int> $roList;
+    public ArrayObject $items;
+    public function __construct() { $this->roList = [1]; $this->items = new ArrayObject([3]); }
+    public function go(array<Node> $nodes): void
+    {
+        $missing = @$nodes[5];
+        try { $missing->items[0] += 1; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $missing->items[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $missing->roList[0] += 1; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $missing->roList[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $missing->list[0] += 1; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { $missing->list[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        try { --$missing->list[0]; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+        $present = $nodes[0];
+        $present->list[0] += 1; $present->list[0]++; --$present->list[0];
+        $present->items[0] += 1; $present->items[0]++;
+        $this->list[0] += 10; $this->list[0]++;
+        echo $present->list[0], ",", $present->items[0], ",", $this->list[0], "\n";
+    }
+}
+function expressions(array<Node> $nodes): void
+{
+    $missing = @$nodes[5];
+    try { $x = $missing->list[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $x = ++$missing->list[0]; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $x = ($missing->list[0] += 4); echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $x = $missing->items[0]--; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $missing->items[0] .= "x"; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $missing->list[0] ??= 1; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    $x = $nodes[0]->list[0]++; $y = ++$nodes[0]->list[0]; $nodes[0]->list[1] ??= 9;
+    $z = ($nodes[0]->list[0] += 4); $w = $nodes[0]->items[0]--;
+    echo $x, ",", $y, ",", $z, ",", $w, ",", $nodes[0]->list[0], ",", $nodes[0]->list[1], ",", $nodes[0]->items[0];
+}
+$node = new Node();
+$node->go([$node]);
+expressions([$node]);
+"#;
+    let items = "Attempt to modify property \"items\" on null|";
+    let ro_list = "Attempt to modify property \"roList\" on null|";
+    let list = "Attempt to modify property \"list\" on null|";
+    let expected = format!(
+        "{items}{items}{ro_list}{ro_list}{list}{list}{list}17,5,17\n\
+         {list}{list}{list}{items}{items}{list}17,19,23,5,23,9,4"
+    );
+    let optimized = compile_and_run_with_heap_debug(source);
+    let plain = without_ir_opt(|| compile_and_run_with_heap_debug(source));
+    for (mode, output) in [("optimized", &optimized), ("--no-ir-opt", &plain)] {
+        assert_eq!(output.stdout, expected, "{mode}");
+        assert!(!output.stderr.contains("Warning"), "{mode}: nothing is read: {}", output.stderr);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{mode}: {}", output.stderr);
     }
 }

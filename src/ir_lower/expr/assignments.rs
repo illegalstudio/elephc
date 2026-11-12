@@ -75,6 +75,10 @@ fn lower_ordinary_assignment_expr(
     );
     let mut compound_receiver = None;
     for (position, stmt) in prelude.iter().enumerate() {
+        // A read-modify-write of `$v->p[k]` throws on a null receiver before its element read.
+        if conditional_value_temp.is_none() {
+            crate::ir_lower::stmt::reject_null_receiver_before_element_read(ctx, target, stmt, expr.span);
+        }
         if position + 1 == prelude.len() {
             if let Some((operation, old)) = incdec {
                 if super::ordinary_property_incdec::scalar_operand(ctx, old)

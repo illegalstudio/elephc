@@ -318,17 +318,7 @@ fn apply_slot_guard(
     if mode == FetchMode::Write {
         // The accepted arm may read the slot before any fetch for write (an `ArrayAccess`
         // object is read, then called), so a null receiver is rejected here, as PHP does.
-        if receiver_may_be_null_sentinel(ctx, receiver) {
-            let null_receiver = ctx.builder.create_named_block("property.array.null_receiver", vec![]);
-            skip_guard_for_null_receiver(ctx, receiver, null_receiver,
-                "property.array.receiver_checked", span);
-            let probe = ctx.builder.insertion_block();
-            ctx.builder.position_at_end(null_receiver);
-            lower_throw_access_exception(ctx, "Error",
-                &format!("Attempt to modify property \"{property}\" on null"), span);
-            if let Some(probe) = probe { ctx.builder.position_at_end(probe); }
-            ctx.restore_initialized_slots(initialized_slots.clone());
-        }
+        reject_null_receiver(ctx, receiver, property, span);
         let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
         let read = if guard.nullable || guard.object_only {
@@ -362,6 +352,27 @@ fn apply_slot_guard(
     ctx.restore_initialized_slots(initialized_slots);
 }
 
+/// Throws PHP's `Attempt to modify property "p" on null` when `receiver` is the null sentinel.
+///
+/// PHP fetches the property of an element write, a compound update or an increment for write
+/// (`FETCH_OBJ_W` / `FETCH_OBJ_RW`) and rejects a null receiver there, before any property
+/// read, `offsetGet` call or readonly check. Paths that read the property first call this once
+/// their operands are evaluated. `$this` and receivers that cannot be the sentinel get no check.
+pub(super) fn reject_null_receiver(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str, span: Span,
+) {
+    if !receiver_may_be_null_sentinel(ctx, receiver) { return; }
+    let slots = ctx.initialized_slots_snapshot();
+    let null_receiver = ctx.builder.create_named_block("property.array.null_receiver", vec![]);
+    skip_guard_for_null_receiver(ctx, receiver, null_receiver, "property.array.receiver_checked", span);
+    let checked = ctx.builder.insertion_block();
+    ctx.builder.position_at_end(null_receiver);
+    lower_throw_access_exception(ctx, "Error",
+        &format!("Attempt to modify property \"{property}\" on null"), span);
+    if let Some(checked) = checked { ctx.builder.position_at_end(checked); }
+    ctx.restore_initialized_slots(slots);
+}
+
 /// Sends a null receiver straight to `fetch`, past the initialization guard of a write fetch.
 ///
 /// A class-typed receiver can be the null sentinel of a missed element read
@@ -383,11 +394,14 @@ fn skip_guard_for_null_receiver(
     ctx.builder.position_at_end(probe);
 }
 
-/// Returns whether a write receiver is a class-typed value other than a load of `$this`.
+/// Returns whether a write receiver is a concrete class value other than a load of `$this`.
+///
+/// Interface-typed and classless object values travel boxed, where null is not the sentinel.
 fn receiver_may_be_null_sentinel(ctx: &LoweringContext<'_, '_>, receiver: LoweredValue) -> bool {
-    if !matches!(ctx.builder.value_php_type(receiver.value).codegen_repr(), PhpType::Object(_)) {
+    let PhpType::Object(class) = ctx.builder.value_php_type(receiver.value).codegen_repr() else {
         return false;
-    }
+    };
+    if class.is_empty() || ctx.interfaces.contains_key(&class) { return false; }
     let this_slot = ctx.local_slots.get("this").copied();
     let mut value = receiver.value;
     loop {

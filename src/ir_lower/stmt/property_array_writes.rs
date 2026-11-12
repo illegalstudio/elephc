@@ -244,6 +244,40 @@ fn reads_property_array_element(read: &Expr, object: &Expr, property: &str, inde
     )
 }
 
+/// Rejects a null variable receiver before a prelude statement reads the element `target`
+/// names, the first step of an expression `++`/`--` or compound update of `$v->p[k]`.
+///
+/// PHP fetches the property for read-write there and throws before any read. The parser has
+/// already bound a computed receiver to a variable, so a variable is the only shape to probe.
+pub(crate) fn reject_null_receiver_before_element_read(
+    ctx: &mut LoweringContext<'_, '_>, target: &Expr, prelude: &Stmt, span: Span,
+) {
+    let ExprKind::ArrayAccess { array, index } = &target.kind else { return; };
+    let ExprKind::PropertyAccess { object, property } = &array.kind else { return; };
+    let StmtKind::Assign { value: read, .. } = &prelude.kind else { return; };
+    // An increment captures the element itself; a compound binds `element OP rhs`.
+    let read = match &read.kind {
+        ExprKind::BinaryOp { left, .. } => left.as_ref(),
+        _ => read,
+    };
+    if !reads_property_array_element(read, object, property, index) { return; }
+    reject_null_variable_receiver(ctx, object, property, span);
+}
+
+/// Probes a variable receiver without consuming it and rejects the null sentinel.
+///
+/// Of the storage-only receivers a write defers past its operands, only a variable can hold
+/// the null sentinel of a missed element read.
+fn reject_null_variable_receiver(
+    ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &str, span: Span,
+) {
+    let ExprKind::Variable(name) = &object.kind else { return; };
+    if !ctx.local_slots.contains_key(name.as_str()) { return; }
+    let probe = ctx.load_local(name, Some(span));
+    ctx.builder.set_value_ownership(probe.value, Ownership::Borrowed);
+    runtime_receivers::reject_null_receiver(ctx, probe, property, span);
+}
+
 /// Lowers `$object->prop[index] = value`, optionally reusing a float-key diagnosis.
 ///
 /// `key_already_diagnosed` marks the write half of a compound update: its read of the same
@@ -307,7 +341,12 @@ pub(super) fn lower_property_array_assign_with_update(
     let staged_index = if late_index.is_some() { &placeholder } else { index };
     let source_value = if delayed_incdec.is_some() { &placeholder } else { compound.map_or(value, |(_, rhs)| rhs) };
     let mut roots = Vec::new();
+    // A `++`/`--` lowered from its desugared value reads the element while that value is staged;
+    // PHP rejects a null receiver before the read. The parser hoisted the key, so no operand
+    // effect is skipped.
+    let early_null_check = matches!(update, PropertyElementUpdate::IncDec(_)) && delayed_incdec.is_none();
     let (mut receiver, index, value) = if deferred_property_receiver(ctx, object) && !known_buffer_property(ctx, object, property) {
+        if early_null_check { reject_null_variable_receiver(ctx, object, property, span); }
         let source = match update {
             PropertyElementUpdate::Stored(stored) => PropertyWriteValue::Stored(stored),
             PropertyElementUpdate::Written | PropertyElementUpdate::IncDec(_) => {
@@ -321,6 +360,9 @@ pub(super) fn lower_property_array_assign_with_update(
     } else {
         let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
+        if early_null_check {
+            runtime_receivers::reject_null_receiver(ctx, receiver.value, property, span);
+        }
         let source = match update {
             PropertyElementUpdate::Written => PropertyWriteValue::Expr(source_value),
             PropertyElementUpdate::IncDec(_) if delayed_incdec.is_some() => PropertyWriteValue::Expr(&placeholder),
