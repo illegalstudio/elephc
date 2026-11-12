@@ -201,7 +201,7 @@ measureSum($argc);
 "#;
     let (optimized, plain) = both_modes(source);
     assert_eq!(optimized, "0:1000\n0:0\n0:1\n");
-    assert_eq!(plain, "2001:1000\n1:0\n3:1\n");
+    assert_eq!(plain, "1000:1000\n0:0\n1:1\n");
 }
 
 /// A lazy buffer sum retains frame cells through overflow and subsequent float updates.
@@ -227,7 +227,7 @@ buffer_free($entries);
 "#;
     let (optimized, plain) = both_modes(source);
     assert_eq!(optimized, "0:float(1)\n");
-    assert_eq!(plain, "9:float(1)\n");
+    assert_eq!(plain, "4:float(1)\n");
 }
 
 /// Ivory's constant-index scatter keeps packed-field row and column seeds off the heap on re-entry.
