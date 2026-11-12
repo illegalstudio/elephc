@@ -223,6 +223,44 @@ pub(super) fn is_promoted_reference_property_bind(
     Ok(value_source.is_ref_cell && local_slot_is_by_ref_param(ctx, value_source.slot))
 }
 
+/// Returns whether `object` is a load of the method receiver `$this`, which is never null.
+pub(super) fn object_is_this_receiver(ctx: &FunctionContext<'_>, object: ValueId) -> Result<bool> {
+    Ok(loaded_local_source(ctx, object)?
+        .is_some_and(|source| !source.is_ref_cell && local_slot_name_is(ctx, source.slot, "this")))
+}
+
+/// Raises PHP's catchable `Error` when the object receiver of a property write is null.
+///
+/// A receiver can be null at run time even where its static type is a class: an element read
+/// that misses its container answers the null sentinel with the element's declared type, so
+/// `$objects[5]->count = 2` reaches the store with that sentinel in `base_reg`. Writing through
+/// it dereferenced the sentinel and crashed; PHP throws `Error` with `message` instead.
+/// `$this` is never null and is not checked.
+pub(super) fn emit_null_write_receiver_error(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    base_reg: &str,
+    message: &str,
+) -> Result<()> {
+    if object_is_this_receiver(ctx, object)? {
+        return Ok(());
+    }
+    let null_label = ctx.next_label("prop_write_null_receiver");
+    let ok_label = ctx.next_label("prop_write_receiver_ok");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        base_reg,
+        scratch_reg,
+        &null_label,
+    );
+    abi::emit_jump(ctx.emitter, &ok_label);
+    ctx.emitter.label(&null_label);
+    super::super::exceptions::emit_error(ctx, message);
+    ctx.emitter.label(&ok_label);
+    Ok(())
+}
+
 /// Describes an SSA value that was produced by loading an addressable local slot.
 struct LoadedLocalSource {
     slot: LocalSlotId,

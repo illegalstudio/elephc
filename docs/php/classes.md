@@ -821,6 +821,13 @@ Traits may declare abstract hooked property contracts. A concrete class using th
 ## Property access
 `->` for properties and methods.
 
+Writing through a receiver that is `null` at run time throws a catchable `Error`, as in PHP,
+including a receiver whose static type is a class, such as a missing element of an
+`array<Node>`: `$nodes[5]->count = 2` reports `Attempt to assign property "count" on null`,
+and an element write or append (`$nodes[5]->items[] = 1`) reports `Attempt to modify property
+"items" on null`. Reading the missing element still emits PHP's `Undefined array key` warning
+first, where PHP fetches it for write silently.
+
 ### Dynamic property access
 
 The property name can be computed at runtime with the `$obj->{$expr}` syntax,

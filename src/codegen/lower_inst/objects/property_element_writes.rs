@@ -210,4 +210,28 @@ mod tests {
                 "{name}: a boxed value into boxed storage needs no conversion and stays in place");
         }
     }
+
+    /// A store or an initialization probe through a class-typed receiver that may be the null
+    /// sentinel is guarded on every supported target, and `$this` is not.
+    #[test]
+    fn null_object_receiver_writes_are_guarded_on_every_target() {
+        let source = "<?php final class GuardedNode { public int $count = 0; public array<int> $list; \
+            public function own(): void { $this->count = 1; } } \
+            function writeThrough(array<GuardedNode> $nodes): void { \
+                $nodes[5]->count = 2; $nodes[5]->list[] = 3; } \
+            $node = new GuardedNode(); $node->own(); writeThrough([$node]);";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let module = crate::ir_lower::tests::lower_source_at_for_target(source,
+                std::path::Path::new("main.php"), std::path::Path::new("."), Target::parse(name).unwrap());
+            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            let body = |function: &str| assembly
+                .split_once(&format!("@fn name={function} symbol=")).unwrap().1
+                .split_once(&format!("@endfn name={function}")).unwrap().0.to_string();
+            let through = body("writeThrough");
+            assert!(through.contains("prop_write_null_receiver"), "{name}: the store is guarded");
+            assert!(through.contains("prop_initialized_null_receiver"), "{name}: the probe is guarded");
+            let own = body("GuardedNode::own");
+            assert!(!own.contains("prop_write_null_receiver"), "{name}: $this needs no guard");
+        }
+    }
 }
