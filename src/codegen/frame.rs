@@ -2778,6 +2778,8 @@ fn store_argc_local_if_present(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
     if matches!(argc_ty, PhpType::Mixed | PhpType::Union(_)) {
+        // This implicit heap writer is absent from the EIR StoreLocal proof.
+        ctx.numeric_frame_only_slots.remove(&argc_slot);
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
     }
     abi::store_at_offset(ctx.emitter, result_reg, offset);
@@ -2801,6 +2803,8 @@ fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
     if matches!(argv_ty, PhpType::Mixed | PhpType::Union(_)) {
+        // Preserve retirement of the process-owned array box before an EIR overwrite.
+        ctx.numeric_frame_only_slots.remove(&argv_slot);
         crate::codegen_support::emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
     }
     abi::emit_store(ctx.emitter, &argv_ty, offset);

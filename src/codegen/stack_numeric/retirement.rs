@@ -8,6 +8,7 @@
 //! - Slot-access safety alone does not prove that every stored producer uses a frame cell.
 //! - Every live store must resolve to a selected producer or the slot's scalar seed cell.
 //! - Unknown writers retain runtime retirement; transparent aliases reuse the existing proof.
+//! - Process-entry heap initializers invalidate this EIR-only proof before publishing storage.
 
 use std::collections::{HashMap, HashSet};
 
@@ -154,5 +155,46 @@ mod tests {
     #[test]
     fn frame_only_numeric_retirement_requires_selected_seed_storage() {
         check_cleanup(false, true, 1);
+    }
+
+    /// Implicit process boxes retain cleanup without disabling unrelated numeric locals.
+    #[test]
+    fn frame_only_numeric_retirement_preserves_process_initializers_on_every_target() {
+        let (mut function, slots, _) = fixture();
+        function.name = "main".into();
+        function.flags.is_main = true;
+        function.locals[slots[0].as_raw() as usize].name = Some("argc".into());
+        function.locals[slots[1].as_raw() as usize].name = Some("argv".into());
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let module = Module::new(target);
+            let layout = crate::codegen::frame::layout_for_function(
+                &function, target, false, false, false,
+            );
+            assert_eq!(layout.numeric_frame_only_slots.len(), 6, "{name}");
+            let offsets = layout.local_offsets.clone();
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            let mut shared = SharedCodegenState::default();
+            {
+                let mut ctx = FunctionContext::new(
+                    &module, &function, &mut emitter, &mut data, &mut shared,
+                    layout, true, false, false, None,
+                );
+                crate::codegen::frame::emit_main_prologue(&mut ctx);
+                assert!(!ctx.numeric_frame_only_slots.contains(&slots[0]), "{name}");
+                assert!(!ctx.numeric_frame_only_slots.contains(&slots[1]), "{name}");
+                assert_eq!(ctx.numeric_frame_only_slots.len(), 4, "{name}");
+                ctx.emitter.comment("process initializer retirement checks");
+                for slot in &slots {
+                    crate::codegen::frame::emit_owned_local_cleanup(
+                        &mut ctx, *slot, offsets[slot], &PhpType::Mixed,
+                    );
+                }
+            }
+            let asm = emitter.output();
+            let cleanup = asm.split("process initializer retirement checks").nth(1).unwrap();
+            assert_eq!(cleanup.matches("__rt_decref_mixed").count(), 2, "{name}:\n{cleanup}");
+        }
     }
 }

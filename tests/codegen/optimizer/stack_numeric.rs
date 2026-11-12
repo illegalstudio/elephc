@@ -15,6 +15,8 @@ mod comparisons;
 mod counter_keys;
 #[path = "stack_numeric/integer_casts.rs"]
 mod integer_casts;
+#[path = "stack_numeric/process_args.rs"]
+mod process_args;
 
 /// Runtime-bound typed reductions exercise both a return check and a checked producer chain.
 const TYPED_CHAIN: &str = r#"<?php

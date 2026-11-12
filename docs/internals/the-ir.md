@@ -1815,6 +1815,9 @@ storage, retiring the slot only clears its pointer, regardless of the number of
 cells in the function. This avoids repeated runtime cleanup calls in loops with
 several accumulators. A writer without selected frame storage retains the normal
 numeric cleanup path, including heap decref.
+Process-entry initialization also revokes this EIR-only proof when it publishes
+a heap box for `$argc` or `$argv`, so their first explicit overwrite still
+releases the implicit owner. Unrelated numeric slots retain direct retirement.
 
 ### Boxed Numeric Chain Fusion
 
