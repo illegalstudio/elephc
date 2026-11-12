@@ -108,3 +108,71 @@ integer:9223372036854775805 integer:9223372036854775806 double:9.2233720368548E+
     assert_eq!(optimized, expected);
     assert_eq!(plain, expected);
 }
+
+/// A computed cell key held in a local and snapshotted by `$starts[$cell]--` stays off the heap
+/// (Ivory grid-index-consumer probe): the key copy and the cell local both use frame cells.
+#[test]
+fn test_numeric_seed_cells_computed_key_snapshot_does_not_allocate() {
+    let source = r#"<?php
+packed class GridRange { public int $firstRow; public int $lastRow; public int $firstColumn; public int $lastColumn; }
+function scatter(buffer<GridRange> $ranges, buffer<int> $starts, buffer<int> $entries, int $columns, int $count): void
+{
+    for ($box = $count - 1; $box >= 0; $box--) {
+        for ($row = $ranges[$box]->firstRow; $row <= $ranges[$box]->lastRow; $row++) {
+            for ($column = $ranges[$box]->firstColumn; $column <= $ranges[$box]->lastColumn; $column++) {
+                $cell = $row * $columns + $column;
+                $starts[$cell]--;
+                $entries[$starts[$cell]] = $cell + 1;
+            }
+        }
+    }
+}
+function run(int $count): void
+{
+    $ranges = buffer_new<GridRange>($count);
+    $starts = buffer_new<int>(4);
+    $entries = buffer_new<int>(4 * $count);
+    for ($i = 0; $i < $count; $i++) {
+        $ranges[$i]->firstRow = 0; $ranges[$i]->lastRow = 1;
+        $ranges[$i]->firstColumn = 0; $ranges[$i]->lastColumn = 1;
+    }
+    for ($i = 0; $i < 4; $i++) { $starts[$i] = ($i + 1) * $count; }
+    $before = memory_get_allocations();
+    scatter($ranges, $starts, $entries, 2, $count);
+    $after = memory_get_allocations();
+    $checksum = 0;
+    for ($i = 0; $i < 4 * $count; $i++) { $checksum += $entries[$i]; }
+    echo "allocations=", $after - $before, " checksum=", $checksum, " first=", $starts[0], " last=", $starts[3];
+    buffer_free($entries);
+    buffer_free($starts);
+    buffer_free($ranges);
+}
+run($argc + 1023);
+"#;
+    let (optimized, plain) = both_modes(source);
+    assert_eq!(optimized, "allocations=0 checksum=10240 first=0 last=3072");
+    // `--no-ir-opt` still boxes on the 4096 visits (about 3.5 allocations each); pinning the
+    // count catches a plain-mode regression as well as the optimized zero.
+    assert_eq!(plain, "allocations=14338 checksum=10240 first=0 last=3072");
+}
+
+/// Key snapshots of an `int|float` local into an ordinary array keep PHP's updates and keys.
+#[test]
+fn test_numeric_seed_cells_array_key_snapshot_keeps_php_semantics() {
+    let source = r#"<?php
+function histogram(int $limit): string
+{
+    $counts = [0 => 0, 2 => 0, 4 => 0];
+    for ($i = 0; $i < $limit; $i++) {
+        $key = ($i % 3) * 2;
+        $counts[$key]++;
+        $counts[$key] += 10;
+    }
+    return implode(',', $counts) . ' ' . implode(',', array_keys($counts));
+}
+echo histogram($argc + 5);
+"#;
+    let (optimized, plain) = both_modes(source);
+    assert_eq!(optimized, "22,22,22 0,2,4");
+    assert_eq!(plain, "22,22,22 0,2,4");
+}

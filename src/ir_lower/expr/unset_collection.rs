@@ -5,8 +5,12 @@
 //! - `super::unset::lower_unset_locals()`.
 //!
 //! Key details:
-//! - A removal flag gates collection only when key evaluation cannot change the owner graph.
-//! - Root, property, object-offset and effectful-key unsets retain unconditional collection.
+//! - The runtime removal flag is set only when the removed value may own a graph that can close
+//!   a cycle (any value but int, float, bool, string or null), read from the entry's own tag, so
+//!   no declared element type has to be trusted.
+//! - A flag gates collection only when key evaluation cannot change the owner graph.
+//! - Root, magic or hooked property, object-offset and effectful-key unsets keep unconditional
+//!   collection.
 
 use super::*;
 
@@ -33,6 +37,16 @@ pub(super) fn key_has_no_callbacks(ctx: &LoweringContext<'_, '_>, key: &Expr) ->
         }
         _ => false,
     }
+}
+
+/// Returns true when a removal's runtime flag may decide the collection safe point.
+///
+/// A callback-free key qualifies. So does a plain local key (an `int|float` loop counter, say):
+/// reading it changes no owner graph, and it reaches PHP code only through a key-normalization
+/// diagnostic handler, whose stranded garbage is not this removal's and waits for the next safe
+/// point.
+pub(super) fn key_can_gate_removal(ctx: &LoweringContext<'_, '_>, key: &Expr) -> bool {
+    matches!(key.kind, ExprKind::Variable(_)) || key_has_no_callbacks(ctx, key)
 }
 
 /// Requires a concrete string before a pure transform so weak coercion cannot invoke PHP.

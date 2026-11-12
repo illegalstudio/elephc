@@ -16,6 +16,9 @@
 //! - A raw integer/float seed stored into a proven numeric local gets one cell per slot; the
 //!   slot exclusively owns that cell, so only a later store to the same slot rewrites it.
 //! - An explicit box of a raw integer/float stored into one such local is a cell producer too.
+//! - A Mixed clone of a proven numeric value copies only its tag and payload, so reading a cell
+//!   into a clone is an observation, and the clone itself can own a frame cell for one local
+//!   (an update's key snapshot, say) instead of a fresh heap box.
 
 use crate::ir::{
     Function, Immediate, InstId, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, Ownership,
@@ -137,11 +140,15 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
         slots: HashMap::new(),
         invalidations: RefCell::new(HashMap::new()),
     };
-    let cells: Vec<_> = function
+    // Collected first: `cell_box` borrows `proof` shared, while `producer` below needs it `&mut`.
+    let candidates: Vec<_> = function
         .instructions
         .iter()
-        .filter(|inst| producer_op(inst) || numeric_box(function, inst))
+        .filter(|inst| producer_op(inst) || proof.cell_box(inst))
         .filter_map(|inst| inst.result)
+        .collect();
+    let cells: Vec<_> = candidates
+        .into_iter()
         .filter(|&value| proof.producer(value))
         .collect();
     let cell_groups = placement::storage_groups(&proof, &cells);
@@ -211,12 +218,28 @@ impl Proof<'_> {
         self.domain.borrow_mut().prove(values)
     }
 
+    /// Recognizes a Mixed clone whose whole input graph holds only integers or floats.
+    ///
+    /// `__rt_mixed_clone` of such a value only copies the tag and payload words into a fresh
+    /// box, so a frame cell holding the same words is an equivalent private copy.
+    fn clone_box(&self, inst: &crate::ir::Instruction) -> bool {
+        inst.op == Op::MixedClone
+            && inst.operands.len() == 1
+            && inst.result_type == IrType::Heap(IrHeapKind::Mixed)
+            && self.numeric_inputs(&inst.operands)
+    }
+
+    /// Recognizes every box that can be written straight into one local's frame cell.
+    fn cell_box(&self, inst: &crate::ir::Instruction) -> bool {
+        numeric_box(self.function, inst) || self.clone_box(inst)
+    }
+
     /// Requires an owned numeric producer with an independently proven scalar-input ABI.
     fn producer(&mut self, value: ValueId) -> bool {
         let Some((id, definition)) = definition(self.function, value) else {
             return false;
         };
-        let boxed = numeric_box(self.function, definition);
+        let boxed = self.cell_box(definition);
         // A scalar box is always fresh; guarded exits label it with the generic Mixed ownership.
         let owned = definition.result_ownership == Ownership::Owned
             || (boxed && definition.result_ownership == Ownership::MaybeOwned);
@@ -417,6 +440,7 @@ impl Proof<'_> {
                     };
                     value = source;
                 }
+                Op::MixedClone => return self.clone_box(inst),
                 Op::MixedBox => {
                     return inst.operands.first().is_some_and(|&source| {
                         self.function.value(source).is_some_and(|source| {
@@ -456,6 +480,10 @@ impl Proof<'_> {
                 }
                 // Strict identity copies the tag and payload like an ordered comparison.
                 if domain::identity(inst) && self.numeric_inputs(&inst.operands) {
+                    return self.stable_read(load, user);
+                }
+                // A numeric clone copies the tag and payload into its own cell or heap box.
+                if self.clone_box(inst) {
                     return self.stable_read(load, user);
                 }
                 let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
@@ -502,7 +530,7 @@ impl Proof<'_> {
             let mut source = source;
             for _ in 0..self.function.values.len() {
                 let Some((producer, writer)) = definition(self.function, source) else { break; };
-                if producer_op(writer) || numeric_box(self.function, writer) { invalidating.insert(producer); break; }
+                if producer_op(writer) || self.cell_box(writer) { invalidating.insert(producer); break; }
                 if writer.op != Op::Acquire || writer.immediate.is_some() { break; }
                 let Some(&input) = writer.operands.first() else { break; };
                 source = input;

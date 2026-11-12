@@ -118,6 +118,25 @@ fn unset_receiver_declared_property_type(
         .map(|(_, (_, property_ty))| property_ty.clone())
 }
 
+/// Returns true when `unset($object->prop[$key])` may trust its runtime removal flag: the
+/// receiver is a non-nullable declared class whose property is hook-free and writable, so the
+/// property fetch itself runs no user code before the removal reports what it released.
+pub(super) fn property_element_unset_reports_removal(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+    property: &str,
+) -> bool {
+    let Some((class_name, nullable)) = instance_callable_object_class_and_nullability(ctx, object)
+    else {
+        return false;
+    };
+    let Some(class_info) = ctx.classes.get(class_name.as_str()) else { return false; };
+    !nullable
+        && !class_info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
+        && !class_info.readonly_properties.contains(property)
+        && unset_receiver_declared_property_type(ctx, object, property).is_some()
+}
+
 /// Returns the static receiver and property when `unset(Class::$prop[$key])` lowers directly,
 /// which is the case for a declared PHP `array` static property.
 pub(super) fn unset_array_access_static_php_array_receiver<'e>(
@@ -200,7 +219,7 @@ pub(super) fn lower_unset_property_array_element(
     property_ty: &PhpType,
     index: &Expr,
     expr: &Expr,
-) {
+) -> LoweredValue {
     let typed = unset_receiver_property_is_typed(ctx, object, property);
     let (object_value, object_owner, index_value) = lower_unset_receiver_and_key(ctx, object, index);
     let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
@@ -217,22 +236,26 @@ pub(super) fn lower_unset_property_array_element(
         let remove_block = ctx
             .builder
             .create_named_block("unset.property_element.remove", Vec::new());
-        let join_block = ctx
-            .builder
-            .create_named_block("unset.property_element.done", Vec::new());
+        let join_block = ctx.builder.create_named_block(
+            "unset.property_element.done",
+            vec![(IrType::I64, PhpType::Bool)],
+        );
+        // An uninitialized typed property has no element to remove.
+        let nothing = ctx.emit_value(Op::ConstBool, Vec::new(), Some(Immediate::Bool(false)),
+            PhpType::Bool, Op::ConstBool.default_effects(), Some(expr.span));
         ctx.builder.terminate(Terminator::CondBr {
             cond: initialized.value,
             then_target: remove_block,
             then_args: Vec::new(),
             else_target: join_block,
-            else_args: Vec::new(),
+            else_args: vec![nothing.value],
         });
         ctx.builder.position_at_end(remove_block);
         Some(join_block)
     } else {
         None
     };
-    crate::ir_lower::stmt::lower_property_array_unset(
+    let mut removed = crate::ir_lower::stmt::lower_property_array_unset(
         ctx,
         object_value,
         property,
@@ -244,10 +267,14 @@ pub(super) fn lower_unset_property_array_element(
         if !ctx.builder.insertion_block_is_terminated() {
             ctx.builder.terminate(Terminator::Br {
                 target: join_block,
-                args: Vec::new(),
+                args: vec![removed.value],
             });
         }
         ctx.builder.position_at_end(join_block);
+        removed = LoweredValue {
+            value: ctx.builder.block_param(join_block, 0),
+            ir_type: IrType::I64,
+        };
     }
     if let Some(slot) = key_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
@@ -255,6 +282,7 @@ pub(super) fn lower_unset_property_array_element(
     if let Some(slot) = object_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+    removed
 }
 
 /// Returns true when `$object->prop` names a property with a declared type, which PHP leaves
@@ -302,11 +330,11 @@ pub(super) fn lower_unset_static_property_array_element(
     property: &str,
     index: &Expr,
     expr: &Expr,
-) {
+) -> Option<LoweredValue> {
     let index_value = lower_expr(ctx, index);
     let (index_value, key_owner) = root_owned_call_operand(ctx, index_value, index.span);
     if crate::ir_lower::property_default_errors::for_receiver(ctx, receiver, expr.span).is_some() {
-        return;
+        return None;
     }
     let data = ctx.intern_string(&format!("{}::{}", receiver_name(receiver), property));
     let initialized = ctx.emit_value(
@@ -318,29 +346,40 @@ pub(super) fn lower_unset_static_property_array_element(
         Some(expr.span),
     );
     let remove = ctx.builder.create_named_block("unset.static_property.remove", Vec::new());
-    let done = ctx.builder.create_named_block("unset.static_property.done", Vec::new());
+    let done = ctx.builder.create_named_block(
+        "unset.static_property.done",
+        vec![(IrType::I64, PhpType::Bool)],
+    );
+    // An uninitialized static property has no element to remove.
+    let nothing = ctx.emit_value(Op::ConstBool, Vec::new(), Some(Immediate::Bool(false)),
+        PhpType::Bool, Op::ConstBool.default_effects(), Some(expr.span));
     ctx.builder.terminate(Terminator::CondBr {
         cond: initialized.value,
         then_target: remove,
         then_args: Vec::new(),
         else_target: done,
-        else_args: Vec::new(),
+        else_args: vec![nothing.value],
     });
     ctx.builder.position_at_end(remove);
-    crate::ir_lower::stmt::lower_static_property_array_unset(
+    let removed = crate::ir_lower::stmt::lower_static_property_array_unset(
         ctx,
         receiver,
         property,
         index_value,
         expr.span,
     );
+    let mut reported = true;
     if !ctx.builder.insertion_block_is_terminated() {
-        ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
+        // A refused separation removes nothing; keep the conservative safe point for it.
+        reported = removed.is_some();
+        let flag = removed.map(|removed| removed.value).unwrap_or(nothing.value);
+        ctx.builder.terminate(Terminator::Br { target: done, args: vec![flag] });
     }
     ctx.builder.position_at_end(done);
     if let Some(slot) = key_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }
+    reported.then(|| LoweredValue { value: ctx.builder.block_param(done, 0), ir_type: IrType::I64 })
 }
 
 /// Lowers `unset($object->prop[$key])` when the property holds an `ArrayAccess` object.

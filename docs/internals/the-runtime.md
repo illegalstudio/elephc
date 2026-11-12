@@ -1156,6 +1156,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_gc_note_child_ref` | Add one transient incoming edge to a heap child during cycle counting | `x0` = child pointer | — |
 | `__rt_gc_mark_reachable` | Recursively mark array/hash/object blocks reachable from external roots | `x0` = pointer | — |
 | `__rt_gc_collect_cycles` | Run the targeted cycle collector over heap-backed arrays/hashes/objects | — | — |
+| `__rt_gc_collect_cycles_budgeted` | Automatic unset safe point: collect once the saved per-safe-point scan credit covers `_heap_off` or live bytes reach `_gc_safe_point_live_limit` (always in candidate mode) | — | — |
 | `__rt_mixed_free_deep` | Free a mixed cell and release any nested heap-backed payload; for tag-9 resources, dispatch the kind-specific destructor (kind 1 `close`, kind 2 `__rt_hash_ctx_free`, kind 3 `__rt_pclose`, kind 4 `__rt_closedir`) | `x0` = mixed pointer | — |
 | `__rt_object_free_deep` | Free an object and release heap-backed properties using runtime/class metadata | `x0` = object pointer | — |
 

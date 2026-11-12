@@ -604,25 +604,26 @@ pub(super) fn bind_mixed_static_array_write_root(
 /// static slot's boxed cell is separated first, the same way an element write separates it, so a
 /// `$copy = Class::$prop` taken earlier keeps its own storage; `OffsetUnset` then promotes the
 /// separated cell to hash storage and removes the key without renumbering the survivors.
+/// Returns the runtime removal flag (set only for a removed value that may own a graph).
 pub(crate) fn lower_static_property_array_unset(
     ctx: &mut LoweringContext<'_, '_>,
     receiver: &StaticReceiver,
     property: &str,
     index: LoweredValue,
     span: Span,
-) {
+) -> Option<LoweredValue> {
     // `unset_target_supported` only admits this shape for a declared PHP `array` static
     // property, and the separation succeeds for exactly that type.
-    let Some(array) = separate_php_array_static_property(ctx, receiver, property, span) else {
-        return;
-    };
-    ctx.emit_void(
+    let array = separate_php_array_static_property(ctx, receiver, property, span)?;
+    // The runtime flag reports a removed value that may own a cycle-capable graph.
+    Some(ctx.emit_value(
         Op::OffsetUnset,
         vec![array.value, index.value],
         None,
+        PhpType::Bool,
         Op::OffsetUnset.default_effects(),
         Some(span),
-    );
+    ))
 }
 
 /// Publishes a detached boxed PHP array before a static-property element mutation.

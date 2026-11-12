@@ -519,13 +519,14 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_unset_result(ctx, inst)
 }
 
-/// Stores the runtime removal flag while leaving the legacy hash-pointer result unused.
+/// Stores the runtime collection flag (a removed value that may own a graph) while leaving the
+/// legacy hash-pointer result unused.
 pub(super) fn store_unset_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.result.is_none() { return Ok(()); }
     // -- materialize the boolean result returned alongside the retired table pointer --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // a present entry reports one even when its value was null
+            ctx.emitter.instruction("mov x0, x1");                              // a removed value that may own a graph reports one
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rax, rdx");                            // consume the per-call flag before any later helper can clobber it

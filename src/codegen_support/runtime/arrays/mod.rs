@@ -140,6 +140,7 @@ mod gc_collect_cycles;
 mod gc_host_roots;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
+mod gc_collect_budget;
 mod memory;
 mod gc_destructors;
 mod gc_weak_observers;

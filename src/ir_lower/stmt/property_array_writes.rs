@@ -811,6 +811,9 @@ fn lower_property_array_assign_value_direct(
 /// A packed indexed `array<T>` property never reaches this function: removing a key leaves a
 /// hole, so the storage would have to become a hash, and a property slot's representation is
 /// shared by every reader of the class. The caller refuses that shape instead.
+///
+/// Returns the runtime removal flag, which is set only when the removed value may own a graph
+/// that can close a cycle (any value but int, float, bool, string or null).
 pub(crate) fn lower_property_array_unset(
     ctx: &mut LoweringContext<'_, '_>,
     object: LoweredValue,
@@ -818,7 +821,7 @@ pub(crate) fn lower_property_array_unset(
     property_ty: &PhpType,
     index: LoweredValue,
     span: Span,
-) {
+) -> LoweredValue {
     let data = ctx.intern_string(property);
     let (container_ty, remove) = if property_ty.is_php_array() {
         (PhpType::php_array(), Op::OffsetUnset)
@@ -836,13 +839,15 @@ pub(crate) fn lower_property_array_unset(
         Some(span),
     );
     ctx.builder.set_value_ownership(container.value, Ownership::Borrowed);
-    ctx.emit_void(
+    // The runtime flag reports a removed value that may own a cycle-capable graph.
+    ctx.emit_value(
         remove,
         vec![container.value, index.value],
         None,
+        PhpType::Bool,
         remove.default_effects(),
         Some(span),
-    );
+    )
 }
 
 /// Separates a declared PHP array property before mutating its packed-or-hash boxed payload.

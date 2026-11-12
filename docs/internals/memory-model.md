@@ -205,6 +205,11 @@ new binding (see [Local retyping](the-type-checker.md#local-retyping-and-strict-
 so a counter name reused by a later loop with a boxed seed does not widen the slot of
 an earlier, provably integer loop.
 
+A `MixedClone` of a proven numeric value, such as the key snapshot that
+`$starts[$cell]--` takes of `$cell`, copies only a tag and payload. Reading a
+numeric local into such a clone is therefore an observation, and a clone stored
+into one proven local writes that local's own frame cell instead of a heap box.
+
 These frame cells have no heap header and cannot own children. Proven retains and
 releases of their SSA pointers emit no refcount calls. A selected local may still
 hold a numeric heap seed; its direct Mixed cleanup releases that seed and ignores
@@ -1378,25 +1383,61 @@ releases that source expression's owner. Taking an extra reference before this
 scalar store would leak the box, because the inline slot cannot carry or retire
 it. Heap-backed merge results keep their existing transfer semantics.
 
-EIR array-element removal instructions report whether the key existed,
-including entries whose value was null. EIR combines these flags for an
-array-only unset list and runs its final automatic cycle collection only if an
-entry was removed. Missing keys therefore avoid a full heap graph scan. The flag
-lives in the runtime call's stack frame so reentrant destructors cannot overwrite
-another removal's result. Copy-on-write publication, sparse-array promotion, and
-normal key evaluation still precede removal.
+EIR array-element removal instructions report whether the removal may have
+stranded a cycle. `__rt_hash_unset` reads the removed entry's own runtime tag:
+an int, float, bool, string or null value owns no PHP children and clears the
+flag, while a container, object, boxed `Mixed`, reference, callable or resource
+keeps it. EIR combines these flags for an array-only unset list and runs its
+final automatic cycle collection only if one of them is set. Missing keys and
+leaf removals therefore avoid a full heap graph scan. The decision never trusts
+a declared element type, only the entry's own tag. The flag lives in
+the runtime call's stack frame so reentrant destructors cannot overwrite another
+removal's result. Copy-on-write publication, sparse-array promotion, and normal
+key evaluation still precede removal.
 
-This gate applies to scalar key literals and concrete scalar locals, plus pure
-unary string builtins applied to concrete strings, such as
-`unset($fields[strtolower($name)])`. Keys that can invoke user code, weak-coercion
-diagnostics, or other effects keep unconditional collection. Unsets of local
-roots, properties, and `ArrayAccess` offsets keep their existing safe point,
-including lists mixing those targets with array offsets. Explicit
-`gc_collect_cycles()` remains independent of the removal flags.
+This gate applies to scalar key literals, plain locals and pure unary string
+builtins applied to concrete strings, such as `unset($fields[strtolower($name)])`.
+A plain local key (an `int|float` loop counter, say) may reach a
+key-normalization diagnostic handler; garbage that handler strands is not this
+removal's and waits for the next safe point. Keys that can invoke user code or
+other effects keep unconditional collection. It covers local arrays, declared
+hook-free writable properties of `$this` or a non-nullable local object, and
+declared PHP `array` static properties, so `unset($this->ids[$i])` over integer
+ids runs no collector scan. Unsets of local roots, whole properties, magic or
+hooked properties, nullable receivers and `ArrayAccess` offsets keep their
+existing safe point, including lists mixing those targets with array offsets.
+Explicit `gc_collect_cycles()` remains independent of the removal flags.
 When a boxed reference holds a non-array value, its runtime fallback conservatively
 requests collection, preserving `ArrayAccess` and false-conversion callback effects.
 Float and boxed-key diagnostic snapshots preserve the removal flag across their
 temporary hash-owner cleanup.
+
+Outside candidate mode a collection walks the whole bump heap up to `_heap_off`,
+so the automatic safe point runs through `__rt_gc_collect_cycles_budgeted`. Each
+safe point adds a fixed 64 KiB scan credit to `_gc_safe_point_credit`, and the
+collector runs (spending the whole credit) once the credit covers `_heap_off`.
+Programs whose heap fits in one credit still collect at every safe point. A larger
+heap collects once every `_heap_off / 64 KiB` safe points, so removing open-class
+elements from a big scene in a loop costs a bounded amortized scan per unset
+instead of a full heap walk each time.
+
+The credit alone cannot bound garbage: one removal may strand far more than 64 KiB,
+and no allocation path collects in non-web builds. Stranded garbage still counts in
+`_gc_live`, so a safe point also collects once `_gc_live` reaches
+`_gc_safe_point_live_limit`. After every budgeted collection that limit becomes twice
+the surviving live bytes, capped at half of `_heap_max`; it starts at zero, so the
+first safe point always collects. Garbage therefore never outgrows the reachable
+heap, and a nearly full arena collects at every safe point as before. A safe point reached
+while `gc_disable()` is active, or from a destructor or container cleanup during a
+collection, would not scan; it defers instead, keeping the saved credit and the live
+limit for the next safe point that can collect.
+
+Garbage stranded by a deferred safe point, and its destructors, wait for a later safe
+point, an explicit `gc_collect_cycles()`, or the shutdown collection that the main
+epilogue runs after releasing locals, globals and statics. `exit()`, `die()` and fatal
+errors terminate without that shutdown collection, so destructors of a cycle still
+pending at that moment do not run. Web application candidate mode already scales with
+lost owners and always collects.
 
 Collector-triggered destructors run under individual native exception handlers.
 Both explicit collection and automatic EIR safe points have conservative callback

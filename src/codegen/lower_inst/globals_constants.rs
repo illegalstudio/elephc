@@ -216,6 +216,10 @@ pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 /// producer to a scalar constant. The final SSA storage type is authoritative: clone an existing
 /// Mixed cell, otherwise box the current scalar, string, heap payload, or tagged nullable value.
 pub(super) fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    // A proven numeric clone owns a frame cell; it copies the tag and payload there.
+    if let Some(cell) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return super::arithmetic::stack_cell::lower_clone(ctx, inst, cell);
+    }
     let value = expect_operand(inst, 0)?;
     let source_ir_type = ctx.value_ir_type(value)?;
     if matches!(

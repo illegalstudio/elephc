@@ -152,6 +152,9 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | MixedCastString | ReturnBoundaryMixedToInt
             | PropertyBoundaryCheckedToInt
+            // A Mixed clone loads its operand and copies the dereferenced value into a new cell
+            // (or retains a shared resource cell); it never takes the source slot's address.
+            | MixedClone
             // String value operations.
             | StrConcat | StrAppend | StrLen | StrPersist | StrCharAt | StrInterpolate | StrIncDec
             // Output operations consume their operand by value.

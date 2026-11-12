@@ -812,7 +812,7 @@ preserves PHP exponentiation result rules.
 | `ICmp(predicate)` | `I64`, `I64` | `I64` bool | pure |
 | `FCmp(predicate)` | `F64`, `F64` | `I64` bool | pure |
 | `StrEq`, `StrCmp`, `StrLooseEq` | `Str`, `Str` | `I64` or compare int | `reads_heap` only if non-static bytes require helper reads |
-| `StrictEq`, `StrictNotEq` | typed values | `I64` bool | pure for scalars, `reads_heap` for mixed/refcounted |
+| `StrictEq`, `StrictNotEq` | typed values | `I64` bool | pure for scalars, `reads_heap` for mixed/refcounted; a `Mixed` operand against `null` tests the unwrapped runtime tag without boxing the null |
 | `LooseEq`, `LooseNotEq`, `Spaceship` | typed values | `I64` or compare int | may coerce, `reads_heap`, `may_warn`, `may_deopt` |
 | `IsNull`, `IsTruthy`, `IsEmpty` | typed value | `I64` bool | pure for scalars, `reads_heap` for mixed/containers |
 | `InstanceOf` | value, target metadata | `I64` bool | `reads_heap`, `reads_global`, maybe `may_deopt` |
@@ -1085,10 +1085,12 @@ drifting apart silently.
 
 `foreach` over arrays/hashes uses container-specific iterator operations.
 Hash iteration yields each entry as a boxed `Mixed`. A by-value loop over a hash
-whose value type is a concrete class unboxes that entry into an owned object
-(`MixedUnbox`) and releases the box, so the loop variable keeps the class type,
-as it does over an indexed object list, and appending it to a typed `array<C>`
-builder keeps object storage.
+whose value type is a concrete class asks `IterCurrentValue` for the owned object
+itself, so the loop variable keeps the class type, as it does over an indexed
+object list, and appending it to a typed `array<C>` builder keeps object storage.
+The backend retains a plain object entry directly; only reference entries, nested
+boxes and null containers take the boxed path and are unboxed there, so the usual
+walk allocates no temporary cell.
 `foreach` over objects uses iterator dispatch metadata and may call user code.
 
 ### Objects, Classes, Enums, and Attributes
