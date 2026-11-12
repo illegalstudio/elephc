@@ -192,6 +192,29 @@ class WorkflowRecovery(unittest.TestCase):
         self.assertEqual(audit["uses"], "./.github/actions/assert-consumer-builds")
         self.assertNotIn("continue-on-error", json.dumps(self.workflow))
 
+    def test_diagnostic_uploads_do_not_override_tests_or_audits(self):
+        """Reports are optional; test execution, integrity and build audits remain gates."""
+        steps = self.action["runs"]["steps"]
+        reports = [step for step in steps
+                   if step.get("uses", "").startswith("actions/upload-artifact@")]
+        self.assertEqual({step["name"] for step in reports},
+                         {"Upload JUnit report", "Upload failing fixture assembly"})
+        for step in reports:
+            self.assertIs(step.get("continue-on-error"), True, step["name"])
+        for step in steps:
+            if step not in reports:
+                self.assertNotIn("continue-on-error", step, step.get("name", step.get("id")))
+        self.assertEqual(next(step for step in reports if step["name"] == "Upload JUnit report")["if"],
+                         "always()")
+        self.assertEqual(next(step for step in reports
+                              if step["name"] == "Upload failing fixture assembly")["if"], "failure()")
+        for action in ("publish-build-artifact", "build-release-artifacts"):
+            producer = read_yaml(ROOT / ".github/actions" / action / "action.yml")
+            for step in producer["runs"]["steps"]:
+                if step.get("uses", "").startswith("actions/upload-artifact@"):
+                    self.assertNotIn("continue-on-error", step)
+                    self.assertEqual(step["with"]["if-no-files-found"], "error")
+
     def test_active_recovery_preserves_inputs_until_the_workflow_finishes(self):
         """The existing janitor must retain every input while the verdict is pending."""
         run = {"id": 123, "path": ".github/workflows/ci.yml", "status": "in_progress",

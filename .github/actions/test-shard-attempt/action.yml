@@ -96,6 +96,8 @@ runs:
       run: python3 -B scripts/ci/shard_recovery.py attempt
     - name: Upload JUnit report
       if: always()
+      # The required test result was decided above; reports are diagnostics.
+      continue-on-error: true
       uses: actions/upload-artifact@v7
       with:
         name: junit-${{ inputs.job-key }}-${{ inputs.shard }}-${{ inputs.execution }}
@@ -104,6 +106,7 @@ runs:
         retention-days: 7
     - name: Upload failing fixture assembly
       if: failure()
+      continue-on-error: true
       uses: actions/upload-artifact@v7
       with:
         name: fixture-diagnostics-${{ inputs.job-key }}-${{ inputs.shard }}-${{ inputs.execution }}
