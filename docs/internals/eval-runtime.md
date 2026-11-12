@@ -128,6 +128,53 @@ shapes, `try`/`throw`, unsupported control flow, and unsupported static calls.
 Eligibility is intentionally conservative: a fragment falls back rather than
 being partially compiled with different observable behavior.
 
+## Magician bytecode slice
+
+The interpreter still walks EvalIR. A second consumer compiles a narrow fragment
+to a flat opcode list and runs that list on an explicit frame stack.
+`RuntimeValueOps` remains the only value semantics.
+
+The slice accepts echo and print, literals, locals, unary operators, arithmetic,
+comparisons, concatenation, boolean operators (including short circuit), ternary
+and elvis expressions, assignment expressions and increment/decrement statements,
+casts except `(array)`, `if` / `while` / `do-while` / `for`, loop `break` and
+`continue`, `return`, and positional calls whose arity matches a simple function
+declaration in the same fragment. Arrays, properties, class syntax, references,
+`??`, and other unsupported forms are named compile gaps
+(`bytecode compile: unsupported ...`). Calls without an admitted declaration,
+including ordinary builtin calls, are `UnresolvedCall` gaps. The tree
+walker then runs the whole fragment. Effects, declarations, and scope writes
+still run on every execution; only the executable form is cached.
+
+The cache is keyed by the eval source bytes (64 KiB, 256 entries, including
+gaps) and is separate from the parse cache. A frame records the resume
+instruction index, the value-stack base, and the scope. That record is what a
+future `yield` or `Fiber::suspend` would park. Line numbers and exception
+regions are omitted until EvalIR carries the spans those tables need. A walker
+call into a compiled body, and a compiled call to another compiled body, both
+enter the same loop. The positional fast path is only the exact-arity case with
+no references, defaults, variadics, or types.
+
+Both consumers use the same object adapters for output and scalar casts, and
+the same cleanup helpers for operands and call arguments. The shared dispatcher
+owns fallback argument evaluation and cleanup, including binding failures.
+Fast calls register ordinary PHP argument and
+backtrace metadata against boxed scopes, whose addresses stay stable as the
+explicit stack grows. Returns and errors remove that metadata before releasing
+the activation scope. Compiled declarations retain the walker's collision check
+against existing generic function templates.
+
+Each admitted call resolves its target before argument evaluation. An already
+defined compiled callee with an exact positional signature is retained for the
+fast call. Otherwise the shared tree-walker dispatcher receives the original
+source arguments and the current scope, skipping the flattened argument opcodes.
+This preserves builtin precedence, retained native and generic callees,
+by-reference parameters, and errors that must occur before argument effects.
+Discarded direct calls run the same `NoDiscard` warning policy as statement
+execution, while explicit assignments and used values remain silent. Signal
+safe points occur at original statement boundaries, so a queued async handler
+observes a completed assignment before the next statement begins.
+
 ## Runtime-created throwables
 
 An `eval()` declaration can introduce a class that the compiler cannot resolve
@@ -540,6 +587,9 @@ older generic and ordinary eval entries, including incorrectly rewritten PHPDoc 
 member annotations discarded after uppercase or mixed-case native class-like keywords.
 Earlier format changes also invalidated stored parse errors for valid comparisons after class references.
 The format guard covers the combined serialized IR and its corresponding type sources.
+Format 28 records the source change for bytecode-backed function metadata. Executable
+images remain excluded from serialization, but the conservative source guard still
+requires a new cache identity.
 Retained token streams distinguish reserved words used as qualified-name segments, so
 entries written before that token variant was introduced must also be rejected.
 Format 24 also retains method reference-return flags and generic dimension-write

@@ -74,6 +74,7 @@ use abstract_requirements::*;
 pub(in crate::interpreter) use abstract_method_calls::*;
 use array_append::eval_array_append_owned_value_with_type;
 pub(crate) use array_updates::*;
+pub(in crate::interpreter) use array_updates::eval_inc_dec_value;
 // Re-exported under a distinct name so the `class_resolution::*` glob below and the crate-level
 // re-export in `interpreter/mod.rs` cannot import the same name at two visibilities.
 #[cfg(not(test))]
@@ -83,6 +84,7 @@ pub(crate) use class_resolution::eval_object_clone_with_properties_result as eva
 pub(crate) use instance_property_access::eval_property_set_result as eval_property_set_for_ffi;
 use attributes_magic_validation::*;
 use core_attributes::*;
+pub(in crate::interpreter) use core_attributes::warn_eval_discarded_function_call;
 pub(in crate::interpreter) use callable_objects::*;
 pub(in crate::interpreter) use class_declarations::*;
 pub(in crate::interpreter) use class_resolution::*;

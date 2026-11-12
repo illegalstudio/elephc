@@ -19,6 +19,15 @@ pub(in crate::interpreter) fn eval_output_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let original = eval_owned_expr(expr, context, scope, values)?;
+    eval_output_value(original, context, values)
+}
+
+/// Consumes one output owner through the shared object string adapter and balanced cleanup.
+pub(in crate::interpreter) fn eval_output_value(
+    original: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     let mut converted = None;
     let mut result = (|| {
         let value = eval_string_context_value(original, context, values)?;
