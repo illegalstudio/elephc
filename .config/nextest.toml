@@ -184,12 +184,12 @@ retries = 1
 slow-timeout = { period = "60s", terminate-after = 3 }
 status-level = "slow"
 
-# File-cache probes compile eval-capable hosts and reached the 180s cap when
+# OPcache probes compile eval-capable hosts and reached the 180s cap when
 # two catalog compiles shared a macOS runner. Reserve the worker pool for each
 # probe to serialize this compilation work within the shard.
 [[profile.ci.overrides]]
 platform = 'cfg(target_os = "macos")'
-filter = 'binary(=opcache_file_cache_tests)'
+filter = 'binary(/^opcache_/)'
 threads-required = "num-test-threads"
 
 # One JUnit report per CI run, written under nextest's store dir, which is
