@@ -316,6 +316,19 @@ fn apply_slot_guard(
     let write = ctx.builder.create_named_block("property.array.nonnull_write", vec![]);
     let initialized_slots = ctx.initialized_slots_snapshot();
     if mode == FetchMode::Write {
+        // The accepted arm may read the slot before any fetch for write (an `ArrayAccess`
+        // object is read, then called), so a null receiver is rejected here, as PHP does.
+        if receiver_may_be_null_sentinel(ctx, receiver) {
+            let null_receiver = ctx.builder.create_named_block("property.array.null_receiver", vec![]);
+            skip_guard_for_null_receiver(ctx, receiver, null_receiver,
+                "property.array.receiver_checked", span);
+            let probe = ctx.builder.insertion_block();
+            ctx.builder.position_at_end(null_receiver);
+            lower_throw_access_exception(ctx, "Error",
+                &format!("Attempt to modify property \"{property}\" on null"), span);
+            if let Some(probe) = probe { ctx.builder.position_at_end(probe); }
+            ctx.restore_initialized_slots(initialized_slots.clone());
+        }
         let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value],
             Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
         let read = if guard.nullable || guard.object_only {
@@ -349,15 +362,60 @@ fn apply_slot_guard(
     ctx.restore_initialized_slots(initialized_slots);
 }
 
+/// Sends a null receiver straight to `fetch`, past the initialization guard of a write fetch.
+///
+/// A class-typed receiver can be the null sentinel of a missed element read
+/// (`$nodes[5]->items[] = 1`). The initialization probe answers false for it, which would send
+/// the write into the initializer or the guard's rejection, and report those instead of PHP's
+/// `Attempt to modify property ... on null`. That diagnostic belongs to the fetch-for-write
+/// that follows the guard, so a null receiver branches there directly. `$this` is never null
+/// and gets no check.
+fn skip_guard_for_null_receiver(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, fetch: crate::ir::BlockId,
+    probe_block: &str, span: Span,
+) {
+    if !receiver_may_be_null_sentinel(ctx, receiver) { return; }
+    let null = ctx.emit_value(Op::IsNull, vec![receiver.value], None, PhpType::Bool,
+        Op::IsNull.default_effects(), Some(span));
+    let probe = ctx.builder.create_named_block(probe_block, vec![]);
+    ctx.builder.terminate(Terminator::CondBr { cond: null.value,
+        then_target: fetch, then_args: vec![], else_target: probe, else_args: vec![] });
+    ctx.builder.position_at_end(probe);
+}
+
+/// Returns whether a write receiver is a class-typed value other than a load of `$this`.
+fn receiver_may_be_null_sentinel(ctx: &LoweringContext<'_, '_>, receiver: LoweredValue) -> bool {
+    if !matches!(ctx.builder.value_php_type(receiver.value).codegen_repr(), PhpType::Object(_)) {
+        return false;
+    }
+    let this_slot = ctx.local_slots.get("this").copied();
+    let mut value = receiver.value;
+    loop {
+        let Some(inst) = ctx.builder.value_defining_instruction(value) else { return true; };
+        match inst.op {
+            Op::Acquire | Op::Borrow | Op::Move => {
+                let Some(source) = inst.operands.first().copied() else { return true; };
+                value = source;
+            }
+            Op::LoadLocal => {
+                return !matches!(inst.immediate,
+                    Some(Immediate::LocalSlot(slot)) if Some(slot) == this_slot);
+            }
+            _ => return true,
+        }
+    }
+}
+
 /// Initializes legal array-bearing storage only for a W fetch, preserving ordinary RW reads.
 fn initialize_array_slot(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str, span: Span,
 ) {
     let data = ctx.intern_string(property);
-    let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value],
-        Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
     let initialize = ctx.builder.create_named_block("property.array.initialize", vec![]);
     let done = ctx.builder.create_named_block("property.array.initialized", vec![]);
+    skip_guard_for_null_receiver(ctx, receiver, done, "property.array.receiver_checked", span);
+    let initialized = ctx.emit_value(Op::PropInitialized, vec![receiver.value],
+        Some(Immediate::Data(data)), PhpType::Bool, Op::PropInitialized.default_effects(), Some(span));
     let slots = ctx.initialized_slots_snapshot();
     ctx.builder.terminate(Terminator::CondBr { cond: initialized.value,
         then_target: done, then_args: vec![], else_target: initialize, else_args: vec![] });

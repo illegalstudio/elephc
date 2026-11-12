@@ -577,9 +577,9 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
         && !object_is_this_receiver(ctx, object)?
     {
         // A class-typed receiver can still be the null sentinel of a missed element read.
-        // There is no slot to inspect then, and nothing to initialize: answer "initialized"
-        // so the operation this probe guards meets the null receiver itself and reports
-        // PHP's diagnostic for it, instead of this probe dereferencing the sentinel.
+        // There is no slot to inspect then, so the probe answers false without dereferencing
+        // the sentinel, exactly as the boxed nullable probe answers for a non-object: `isset`,
+        // `empty` and `??` stay silent, and a store goes on to meet the null receiver itself.
         let null_label = ctx.next_label("prop_initialized_null_receiver");
         let done_label = ctx.next_label("prop_initialized_done");
         let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -592,7 +592,7 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
         emit_typed_property_initialized_bool(ctx, &slot, base_reg);
         abi::emit_jump(ctx.emitter, &done_label);
         ctx.emitter.label(&null_label);
-        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         ctx.emitter.label(&done_label);
         return store_if_result(ctx, inst);
     }

@@ -11,6 +11,10 @@
 //! - Plain assignments report `Attempt to assign property`, element writes and appends report
 //!   `Attempt to modify property`, as PHP 8.5 does. Expected output is PHP's.
 //! - The missed element read is silenced with `@`: PHP fetches it for write without a warning.
+//! - `isset`, `empty` and `??` on a property of that receiver stay silent and answer as for null,
+//!   and a readonly store reports the null receiver, not an initialized overwrite.
+//! - An `ArrayAccess` object property is read before its `offsetSet` call; the null receiver is
+//!   rejected ahead of that read.
 //! - Every fixture runs in both EIR modes under heap debugging and must leave a clean heap.
 
 use crate::support::*;
@@ -70,4 +74,83 @@ run([new Node()], ['a' => new Node()]);
         "no error|4567".to_string(),
     ].concat();
     assert_eq!(run_clean(source), expected);
+}
+
+/// Probing a property of a null receiver is silent, and readonly stores made from inside the
+/// class report the null receiver instead of a readonly violation.
+#[test]
+fn test_property_probes_and_readonly_stores_on_null_object_receiver_match_php() {
+    let source = r#"<?php
+final class Node
+{
+    public int $count = 0;
+    public array<int> $list = [];
+    public readonly int $ro;
+    public readonly array<int> $roList;
+    public function __construct() { $this->ro = 1; $this->roList = [1]; }
+    public function reset(array<Node> $nodes): void
+    {
+        $other = @$nodes[5];
+        try { $other->ro = 3; echo "no error|"; } catch (Error $e) { echo $e->getMessage(), "|"; }
+        try { $other->roList[] = 3; echo "no error|"; } catch (Error $e) { echo $e->getMessage(), "|"; }
+    }
+}
+function run(array<Node> $nodes): void
+{
+    $missing = @$nodes[5];
+    var_export(isset($missing->count)); echo ",";
+    var_export(empty($missing->count)); echo ",";
+    var_export($missing->count ?? 1); echo ",";
+    var_export($missing->list[0] ?? 7); echo "|";
+    $nodes[0]->reset($nodes);
+    $present = $nodes[0];
+    var_export(isset($present->count)); echo ",";
+    var_export(empty($present->count)); echo ",";
+    var_export($present->count ?? 1); echo ",";
+    var_export($present->list[0] ?? 7);
+}
+run([new Node()]);
+"#;
+    let expected = "false,true,1,7|Attempt to assign property \"ro\" on null|\
+                    Attempt to modify property \"roList\" on null|true,true,0,7";
+    let optimized = compile_and_run_with_heap_debug(source);
+    let plain = without_ir_opt(|| compile_and_run_with_heap_debug(source));
+    for (mode, output) in [("optimized", &optimized), ("--no-ir-opt", &plain)] {
+        assert_eq!(output.stdout, expected, "{mode}");
+        assert!(!output.stderr.contains("Warning"), "{mode}: probes stay silent: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{mode}: {}", output.stderr);
+    }
+}
+
+/// An element write into an `ArrayAccess` object property reads the slot before calling it;
+/// through a null receiver it throws PHP's `Error` instead of reading the property of null.
+#[test]
+fn test_array_access_property_element_write_on_null_object_receiver_throws_error() {
+    let source = r#"<?php
+class Slot
+{
+    public ArrayObject $items;
+    public ?ArrayObject $maybe = null;
+    public function __construct() { $this->items = new ArrayObject(); }
+}
+function write(array<Slot> $slots): void
+{
+    try { $missing = @$slots[5]; $missing->items[0] = 1; echo "no error|"; }
+    catch (Throwable $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+    try { $missing = @$slots[5]; $missing->maybe[0] = 1; echo "no error|"; }
+    catch (Throwable $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+    $slots[0]->items[0] = 1;
+    echo count($slots[0]->items);
+}
+write([new Slot()]);
+"#;
+    let expected = "Error:Attempt to modify property \"items\" on null|\
+                    Error:Attempt to modify property \"maybe\" on null|1";
+    let optimized = compile_and_run_with_heap_debug(source);
+    let plain = without_ir_opt(|| compile_and_run_with_heap_debug(source));
+    for (mode, output) in [("optimized", &optimized), ("--no-ir-opt", &plain)] {
+        assert_eq!(output.stdout, expected, "{mode}");
+        assert!(!output.stderr.contains("Warning"), "{mode}: no property is read: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{mode}: {}", output.stderr);
+    }
 }
