@@ -155,6 +155,7 @@ var_dump(
     total([1, "2", "3.5"], 0),
     total([1, null, true, 4], 0),
     total([1, 2], 0.5),
+    total([1, 2], null),
     product([3037000500, 3037000500, 2]),
     product([7, 8, $argc]),
     down([1, 2, 3, 4]),
@@ -162,7 +163,7 @@ var_dump(
     then_float([1, 2, 3, 4, 5])
 );
 "#;
-    assert_eq!(run(source), "float(9.223372036854776E+18)\nfloat(9.223372036854776E+18)\nfloat(6.5)\nfloat(6.5)\nint(6)\nfloat(3.5)\nfloat(1.84467440740005E+19)\nint(56)\nfloat(-9.223372036854776E+18)\nint(-98)\narray(2) {\n  [0]=>\n  float(9.223372036854776E+18)\n  [1]=>\n  int(5)\n}\n");
+    assert_eq!(run(source), "float(9.223372036854776E+18)\nfloat(9.223372036854776E+18)\nfloat(6.5)\nfloat(6.5)\nint(6)\nfloat(3.5)\nint(3)\nfloat(1.84467440740005E+19)\nint(56)\nfloat(-9.223372036854776E+18)\nint(-98)\narray(2) {\n  [0]=>\n  float(9.223372036854776E+18)\n  [1]=>\n  int(5)\n}\n");
 }
 
 /// Reads, plain stores, by-reference calls, and early returns see the current value.

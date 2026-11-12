@@ -15,6 +15,8 @@ mod comparisons;
 mod counter_keys;
 #[path = "stack_numeric/integer_casts.rs"]
 mod integer_casts;
+#[path = "stack_numeric/process_args.rs"]
+mod process_args;
 
 /// Runtime-bound typed reductions exercise both a return check and a checked producer chain.
 const TYPED_CHAIN: &str = r#"<?php
@@ -300,8 +302,8 @@ sum_tagged_rhs($argc + 9);
         "the narrowed element must stay out of the boxed numeric helper:\n{body}"
     );
     assert!(
-        body.contains("numeric_local_cleanup_done"),
-        "the numeric slot retirement must recognize its frame cell:\n{body}"
+        !function.contains("__rt_decref_mixed"),
+        "frame-only numeric owners must retire without a runtime decref:\n{function}"
     );
     let condition = function
         .split("@block name=while.cond")

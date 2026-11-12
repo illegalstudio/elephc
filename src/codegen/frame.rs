@@ -76,6 +76,8 @@ pub(super) struct FrameLayout {
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
     pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
+    /// Numeric locals whose every writer uses physically selected frame storage.
+    pub(super) numeric_frame_only_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
@@ -153,6 +155,9 @@ pub(super) fn layout_for_function(
         offset += 24;
         numeric_seed_offsets.insert(slot, offset);
     }
+    let numeric_frame_only_slots = super::stack_numeric::frame_only_locals(
+        function, &numeric.locals, &numeric_cell_offsets, &numeric_seed_offsets,
+    );
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
@@ -221,6 +226,7 @@ pub(super) fn layout_for_function(
         numeric_cell_offsets,
         numeric_seed_offsets,
         numeric_local_slots: numeric.locals,
+        numeric_frame_only_slots,
         numeric_values: numeric.proven_values,
         ref_cell_state_offsets,
         try_handler_offsets,
@@ -1890,6 +1896,11 @@ pub(super) fn emit_owned_local_cleanup(
 ) {
     if ctx.numeric_local_slots.contains(&slot) {
         // -- numeric cells have no child that can run a PHP destructor --
+        if ctx.numeric_frame_only_slots.contains(&slot) {
+            // -- every store to this slot publishes storage owned by this frame --
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            return;
+        }
         let result = abi::int_result_reg(ctx.emitter);
         abi::load_at_offset(ctx.emitter, result, offset);
         let done = ctx.next_label("numeric_local_cleanup_done");
@@ -2767,6 +2778,8 @@ fn store_argc_local_if_present(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
     if matches!(argc_ty, PhpType::Mixed | PhpType::Union(_)) {
+        // This implicit heap writer is absent from the EIR StoreLocal proof.
+        ctx.numeric_frame_only_slots.remove(&argc_slot);
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
     }
     abi::store_at_offset(ctx.emitter, result_reg, offset);
@@ -2790,6 +2803,8 @@ fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
     if matches!(argv_ty, PhpType::Mixed | PhpType::Union(_)) {
+        // Preserve retirement of the process-owned array box before an EIR overwrite.
+        ctx.numeric_frame_only_slots.remove(&argv_slot);
         crate::codegen_support::emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
     }
     abi::emit_store(ctx.emitter, &argv_ty, offset);

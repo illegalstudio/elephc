@@ -33,6 +33,8 @@ mod tests;
 #[cfg(test)]
 mod comparison_tests;
 mod placement;
+mod retirement;
+pub(super) use retirement::frame_only_locals;
 use crate::ir_passes::numeric_domain as domain;
 
 /// Stack cells and the exclusively numeric locals proven while selecting them.
@@ -64,6 +66,12 @@ impl FrameCells {
             locals: frame.locals,
             values: frame.cell_groups.into_iter().flatten().collect(),
         }
+    }
+
+    /// Returns whether every access to the slot passed the numeric payload-copy proof.
+    #[cfg(test)]
+    pub(crate) fn contains_local(&self, slot: LocalSlotId) -> bool {
+        self.locals.contains(&slot)
     }
 
     /// Returns true when `after` keeps every cell and numeric local of this proof.
