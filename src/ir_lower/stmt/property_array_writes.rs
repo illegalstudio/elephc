@@ -271,28 +271,48 @@ pub(crate) fn reject_null_receiver_before_element_read(
     }
 }
 
-/// Returns whether `receiver` reads an element of a local's or a declared property's array
-/// storage, the read that answers the null sentinel for a missing key.
+/// Returns whether `receiver` reads an element of array storage whose declared element is a
+/// concrete class, the read that answers null for a missing key.
 ///
-/// An `ArrayAccess` object or a boxed container is excluded: reading it again could call
-/// `offsetGet`, and its null is not the sentinel.
+/// The chain is typed from declarations alone, through any depth of elements and declared
+/// properties (`$nodes[5]`, `$grid[0][1]`, `$nodes[0]->peers[3]`). An `ArrayAccess` object, a
+/// boxed container, a hooked property and an interface element are excluded: reading them
+/// again could run user code, or their null is not this check's to make.
 fn reads_class_element_of_array_storage(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -> bool {
-    let ExprKind::ArrayAccess { array, .. } = &receiver.kind else { return false; };
-    let local = |object: &Expr| match &object.kind {
+    matches!(receiver.kind, ExprKind::ArrayAccess { .. })
+        && static_receiver_storage(ctx, receiver)
+            .is_some_and(|ty| concrete_class(ctx, &ty).is_some())
+}
+
+/// Returns the declared storage type a side-effect-free receiver chain reads, when it is known.
+fn static_receiver_storage(ctx: &LoweringContext<'_, '_>, receiver: &Expr) -> Option<PhpType> {
+    match &receiver.kind {
         ExprKind::This => ctx.local_load_php_type("this"),
         ExprKind::Variable(name) => ctx.local_load_php_type(name),
+        ExprKind::PropertyAccess { object, property } => {
+            let class = concrete_class(ctx, &static_receiver_storage(ctx, object)?)?;
+            let info = ctx.classes.get(&class)?;
+            if info.property_hooks.get(property.as_str()).is_some_and(|hooks| hooks.any()) {
+                return None;
+            }
+            info.visible_property(property).map(|(_, (_, ty))| ty.clone())
+        }
+        ExprKind::ArrayAccess { array, .. } => {
+            match static_receiver_storage(ctx, array)?.codegen_repr() {
+                PhpType::Array(element) | PhpType::AssocArray { value: element, .. } => Some(*element),
+                _ => None,
+            }
+        }
         _ => None,
-    };
-    let storage = match &array.kind {
-        ExprKind::PropertyAccess { object, property } => local(object).and_then(|ty| {
-            let PhpType::Object(class) = ty.codegen_repr() else { return None; };
-            ctx.classes.get(&class)?.visible_property(property).map(|(_, (_, ty))| ty.clone())
-        }),
-        _ => local(array),
-    };
-    matches!(storage.map(|ty| ty.codegen_repr()),
-        Some(PhpType::Array(element) | PhpType::AssocArray { value: element, .. })
-            if matches!(element.codegen_repr(), PhpType::Object(_)))
+    }
+}
+
+/// Returns the class of a value typed as one declared, non-interface class.
+fn concrete_class(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> Option<String> {
+    let PhpType::Object(class) = ty.codegen_repr() else { return None; };
+    let class = class.trim_start_matches('\\').to_string();
+    (!class.is_empty() && !ctx.interfaces.contains_key(&class) && ctx.classes.contains_key(&class))
+        .then_some(class)
 }
 
 /// Probes a variable receiver without consuming it and rejects the null sentinel.
@@ -389,9 +409,13 @@ pub(super) fn lower_property_array_assign_with_update(
             ctx, object, &[index.value, value.value], span);
         (receiver, index, value)
     } else {
+        // A receiver reached through a nullable step is lowered boxed; its source decides.
+        let element_receiver = reads_class_element_of_array_storage(ctx, object);
         let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
         let mut receiver = property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
-        if early_null_check {
+        if early_null_check && element_receiver {
+            runtime_receivers::reject_null_receiver_value(ctx, receiver.value, property, span);
+        } else if early_null_check {
             runtime_receivers::reject_null_receiver(ctx, receiver.value, property, span);
         }
         let source = match update {
@@ -407,6 +431,11 @@ pub(super) fn lower_property_array_assign_with_update(
         };
         let (index, value) = lower_property_write_operands(ctx, staged_index, source, &mut roots, span);
         receiver.place_above_operand_roots(ctx, &roots, span);
+        // A compound or delayed `++`/`--` reads the element after its operands; the receiver
+        // is rejected here, once they have run, as PHP's read-write fetch does.
+        if element_receiver && !early_null_check && (compound.is_some() || delayed_incdec.is_some()) {
+            runtime_receivers::reject_null_receiver_value(ctx, receiver.value, property, span);
+        }
         (receiver, index, value)
     };
     receiver.narrow_for_array(ctx, property, &[index.value, value.value], span);

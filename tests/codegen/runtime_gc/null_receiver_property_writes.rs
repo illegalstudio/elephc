@@ -18,7 +18,9 @@
 //! - Compound updates and `++`/`--` of a property element, as statements or expressions, throw
 //!   before their element read: no warning, no `offsetGet` call, no readonly diagnostic.
 //! - With the missed element itself as the receiver (`$nodes[5]->list[0]++`), PHP's one
-//!   `Undefined array key` warning per update is the only diagnostic before the `Error`.
+//!   `Undefined array key` warning per update is the only diagnostic before the `Error`. The
+//!   same holds through nested and multidimensional receivers (`$nodes[0]->peers[3]`,
+//!   `$grid[0][1]`), which are lowered boxed.
 //! - Every fixture runs in both EIR modes under heap debugging and must leave a clean heap.
 
 use crate::support::*;
@@ -263,6 +265,78 @@ $node->go([$node]);
         assert!(!output.stderr.contains("Attempt to read property")
             && !output.stderr.contains("Trying to access array offset"),
             "{mode}: nothing is read through the null receiver: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{mode}: {}", output.stderr);
+    }
+}
+
+/// Updates whose receiver is a missed element reached through another element or a declared
+/// property throw before reading, as statements and as expressions.
+#[test]
+fn test_property_element_updates_on_nested_missing_element_receiver_throw_before_reading() {
+    let source = r#"<?php
+final class Node
+{
+    public array<int> $list = [5];
+    public ArrayObject $items;
+    public array<Node> $peers = [];
+    public function __construct() { $this->items = new ArrayObject([3]); }
+}
+function run(array<Node> $nodes, array<array<Node>> $grid): void
+{
+    $nodes[0]->peers[] = $nodes[0];
+    try { $x = $nodes[0]->peers[3]->list[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $x = $grid[0][1]->list[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $x = ($grid[0][2]->list[0] += 4); echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $x = $nodes[0]->peers[6]->items[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $nodes[0]->peers[4]->list[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $nodes[0]->peers[5]->list[0] += 2; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { --$grid[0][3]->list[0]; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    try { $grid[0][4]->items[0] .= "x"; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    $a = $nodes[0]->peers[0]->list[0]++; $b = ($grid[0][0]->list[0] += 4);
+    $nodes[0]->peers[0]->list[0]++; $grid[0][0]->list[0] += 2; --$grid[0][0]->list[0];
+    $c = $nodes[0]->peers[0]->items[0]++;
+    echo $a, ",", $b, ",", $c, ",", $nodes[0]->list[0], ",", $nodes[0]->items[0];
+}
+$node = new Node();
+run([$node], [[$node]]);
+"#;
+    let items = "Attempt to modify property \"items\" on null|";
+    let list = "Attempt to modify property \"list\" on null|";
+    let expected = format!("{list}{list}{list}{items}{list}{list}{list}{items}5,10,3,12,4");
+    let optimized = compile_and_run_with_heap_debug(source);
+    let plain = without_ir_opt(|| compile_and_run_with_heap_debug(source));
+    for (mode, output) in [("optimized", &optimized), ("--no-ir-opt", &plain)] {
+        assert_eq!(output.stdout, expected, "{mode}");
+        assert_eq!(output.stderr.matches("Undefined array key").count(), 8,
+            "{mode}: each missed element is fetched once: {}", output.stderr);
+        assert!(!output.stderr.contains("Attempt to read property")
+            && !output.stderr.contains("Trying to access array offset"),
+            "{mode}: nothing is read through the null receiver: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{mode}: {}", output.stderr);
+    }
+}
+
+/// An interface-typed element keeps its boxed receiver path: the null test adds no element
+/// fetch of its own (PHP reports one `Undefined array key`; the replayed write fetch repeats it).
+#[test]
+fn test_interface_element_receiver_update_is_not_probed() {
+    let source = r#"<?php
+interface Item { public function id(): int; }
+final class Tag implements Item { public array<int> $list = [1]; public function id(): int { return 1; } }
+function run(array<Item> $items): void
+{
+    try { $x = $items[5]->list[0]++; echo "no error|"; } catch (Throwable $e) { echo $e->getMessage(), "|"; }
+    $y = $items[0]->list[0]++;
+    echo $y, ",", $items[0]->list[0];
+}
+run([new Tag()]);
+"#;
+    let optimized = compile_and_run_with_heap_debug(source);
+    let plain = without_ir_opt(|| compile_and_run_with_heap_debug(source));
+    for (mode, output) in [("optimized", &optimized), ("--no-ir-opt", &plain)] {
+        assert_eq!(output.stdout, "Attempt to modify property \"list\" on null|1,2", "{mode}");
+        assert!(output.stderr.matches("Undefined array key").count() <= 2,
+            "{mode}: no fetch is added for the null test: {}", output.stderr);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{mode}: {}", output.stderr);
     }
 }

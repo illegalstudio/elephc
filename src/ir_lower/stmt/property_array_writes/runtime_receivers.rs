@@ -362,15 +362,18 @@ pub(super) fn reject_null_receiver(
     ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str, span: Span,
 ) {
     if !receiver_may_be_null_sentinel(ctx, receiver) { return; }
-    let slots = ctx.initialized_slots_snapshot();
-    let null_receiver = ctx.builder.create_named_block("property.array.null_receiver", vec![]);
-    skip_guard_for_null_receiver(ctx, receiver, null_receiver, "property.array.receiver_checked", span);
-    let checked = ctx.builder.insertion_block();
-    ctx.builder.position_at_end(null_receiver);
-    lower_throw_access_exception(ctx, "Error",
-        &format!("Attempt to modify property \"{property}\" on null"), span);
-    if let Some(checked) = checked { ctx.builder.position_at_end(checked); }
-    ctx.restore_initialized_slots(slots);
+    reject_null(ctx, receiver, property, span, false);
+}
+
+/// Rejects a null receiver whose SOURCE is known to read a class element of array storage.
+///
+/// A receiver reached through a nullable step (`$nodes[0]->peers[4]`) is lowered boxed, where a
+/// missed element is a boxed null rather than the sentinel, so the value's type cannot select
+/// the check; the caller's static reading of the source does.
+pub(super) fn reject_null_receiver_value(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str, span: Span,
+) {
+    reject_null(ctx, receiver, property, span, false);
 }
 
 /// Rejects a null receiver read only to be tested, releasing that read before either successor.
@@ -381,14 +384,19 @@ pub(super) fn reject_null_receiver(
 pub(super) fn reject_null_receiver_probe(
     ctx: &mut LoweringContext<'_, '_>, probe: LoweredValue, property: &str, span: Span,
 ) {
-    if !receiver_may_be_null_sentinel(ctx, probe) {
-        crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
-        return;
-    }
+    reject_null(ctx, probe, property, span, true);
+}
+
+/// Tests `receiver` for null and throws the modify error on that arm, optionally releasing an
+/// owned probe once the test is computed.
+fn reject_null(
+    ctx: &mut LoweringContext<'_, '_>, receiver: LoweredValue, property: &str, span: Span,
+    release: bool,
+) {
     let slots = ctx.initialized_slots_snapshot();
-    let null = ctx.emit_value(Op::IsNull, vec![probe.value], None, PhpType::Bool,
+    let null = ctx.emit_value(Op::IsNull, vec![receiver.value], None, PhpType::Bool,
         Op::IsNull.default_effects(), Some(span));
-    crate::ir_lower::ownership::release_if_owned(ctx, probe, Some(span));
+    if release { crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span)); }
     let null_receiver = ctx.builder.create_named_block("property.array.null_receiver", vec![]);
     let checked = ctx.builder.create_named_block("property.array.receiver_checked", vec![]);
     ctx.builder.terminate(Terminator::CondBr { cond: null.value,
