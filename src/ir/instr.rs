@@ -476,22 +476,30 @@ impl CheckedNumericChainImmediate {
     }
 }
 
-/// Direction and tie policy of one `Op::MixedMinMax` selection between a left and a right operand.
+/// Direction and tie policy of one `Op::MixedMinMax` selection over its operands.
 ///
-/// php-src keeps the earlier argument on a tie and on an unordered (`NAN`) comparison when it
-/// folds three or more arguments, but its two-argument fast paths evaluate `a >= b ? a : b`
-/// for `max()` and `a < b ? a : b` for `min()`, so a two-argument `min()` returns the right
-/// operand on a tie and both two-argument forms return the right operand when either is `NAN`.
+/// php-src selects in one of two modes. While every argument so far is an `int` or a `float`
+/// (and no integer that a double cannot represent has met a float) it compares numbers
+/// directly; the first other argument switches the rest of the call to the generic
+/// `zend_compare`, which reports every unordered (`NAN`) comparison as "greater".
+///
+/// The pair rules are the two-argument forms, `a >= b ? a : b` for `max()` and
+/// `a < b ? a : b` for `min()`: a two-argument `min()` returns its right operand on a tie,
+/// and an unordered numeric pair returns the right operand. The fold rules cover three or
+/// more arguments in one instruction: a later argument replaces the running result only on
+/// a strict win, and an unordered numeric comparison keeps the earlier argument. In generic
+/// mode an unordered comparison instead keeps the left operand of a two-argument `max()`
+/// and replaces the running result of a longer `max()`; `min()` is the same in both modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(i64)]
 pub enum MinMaxRule {
     /// Two-argument `max()`: the left operand wins when `left >= right`.
     MaxPair = 0,
-    /// A later step of a longer `max()`: the right operand wins only when `left < right`.
+    /// `max()` of three or more operands: a later operand wins only when it is greater.
     MaxFold = 1,
     /// Two-argument `min()`: the left operand wins only when `left < right`.
     MinPair = 2,
-    /// A later step of a longer `min()`: the right operand wins only when `right < left`.
+    /// `min()` of three or more operands: a later operand wins only when it is smaller.
     MinFold = 3,
 }
 
@@ -512,7 +520,17 @@ impl MinMaxRule {
         self as i64
     }
 
-    /// Returns the rule for one step of a `min()`/`max()` call with `operands` arguments.
+    /// Returns true for the two-argument rules, false for the three-or-more-argument rules.
+    pub const fn is_pair(self) -> bool {
+        matches!(self, Self::MaxPair | Self::MinPair)
+    }
+
+    /// Returns true when an instruction with this rule may carry `operands` operands.
+    pub const fn accepts_operand_count(self, operands: usize) -> bool {
+        if self.is_pair() { operands == 2 } else { operands >= 3 }
+    }
+
+    /// Returns the rule of a `min()`/`max()` call with `operands` arguments.
     pub const fn for_call(want_max: bool, operands: usize) -> Self {
         match (want_max, operands == 2) {
             (true, true) => Self::MaxPair,

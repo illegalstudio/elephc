@@ -263,8 +263,16 @@ impl Proof<'_> {
         {
             return false;
         }
+        // An increment has one operand and a min/max selection as many as its rule admits
+        // (`domain::min_max` already checked that); every other producer is binary.
+        let arity = definition.operands.len();
+        let arity_fits = if domain::increment(definition) {
+            arity == 1
+        } else {
+            arity == 2 || domain::min_max(definition)
+        };
         if !boxed && (!producer_op(definition)
-            || definition.operands.len() != if domain::increment(definition) { 1 } else { 2 }
+            || !arity_fits
             || (!tagged_producer(definition) && definition.operands.iter().any(|&input| {
                 self.function.value(input).is_none_or(|input| {
                     input.ir_type != IrType::I64 || input.php_type != PhpType::Int

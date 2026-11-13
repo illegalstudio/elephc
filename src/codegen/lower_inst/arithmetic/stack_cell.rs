@@ -57,12 +57,16 @@ pub(super) fn lower_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruction, off
     tagged(ctx, inst, offset, op, left_type, right_type)
 }
 
-/// Selects the `min()`/`max()` of two proven numeric operands into the result's frame cell.
+/// Selects a two-argument `min()`/`max()` of proven numeric operands into the result's frame cell.
 ///
 /// Two integer tags compare as signed integers; any float promotes both sides to doubles for
 /// the comparison only, as PHP does. The winner's original tag and payload are then copied,
 /// so the result keeps the selected operand's type. Both payloads are read before the cell is
 /// written, which keeps `$m = max($m, $x)` correct when `$m` already lives in this cell.
+///
+/// An unordered (`NAN`) pair returns the right operand, with php-src's one exception: a
+/// `max()` whose other operand is an integer that a double cannot represent compares
+/// generically there and keeps its left operand (`unordered_max`).
 pub(super) fn lower_min_max(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: usize, rule: MinMaxRule) -> Result<()> {
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
@@ -72,6 +76,7 @@ pub(super) fn lower_min_max(ctx: &mut FunctionContext<'_>, inst: &Instruction, o
     let left_type = numeric_payloads::payload(ctx, lhs, left, left_tag)?;
     let right_type = numeric_payloads::payload(ctx, rhs, right, right_tag)?;
     let integer = ctx.next_label("stack_min_max_integer");
+    let unordered = ctx.next_label("stack_min_max_unordered");
     let take_left = ctx.next_label("stack_min_max_left");
     let take_right = ctx.next_label("stack_min_max_right");
     let done = ctx.next_label("stack_min_max_done");
@@ -79,7 +84,7 @@ pub(super) fn lower_min_max(ctx: &mut FunctionContext<'_>, inst: &Instruction, o
     // -- compare two integer tags exactly and any other numeric pair as PHP doubles --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("orr {combined}, {left_tag}, {right_tag}")); // a zero combined tag means both payloads are PHP integers
+            ctx.emitter.instruction(&format!("orr {combined}, {left_tag}, {right_tag}"));// a zero combined tag means both payloads are PHP integers
             ctx.emitter.instruction(&format!("cbz {combined}, {integer}"));     // compare two integers without a lossy double conversion
         }
         Arch::X86_64 => {
@@ -94,43 +99,37 @@ pub(super) fn lower_min_max(ctx: &mut FunctionContext<'_>, inst: &Instruction, o
     match (ctx.emitter.target.arch, rule) {
         (Arch::AArch64, MinMaxRule::MaxPair) => {
             ctx.emitter.instruction("fcmp d0, d1");                             // order the left double against the right double
-            ctx.emitter.instruction(&format!("b.lt {take_right}"));             // a smaller or unordered left operand fails `left >= right`
-        }
-        (Arch::AArch64, MinMaxRule::MaxFold) => {
-            ctx.emitter.instruction("fcmp d0, d1");                             // order the running double against the candidate double
-            ctx.emitter.instruction(&format!("b.mi {take_right}"));             // only an ordered, strictly greater candidate replaces the result
+            ctx.emitter.instruction(&format!("b.vs {unordered}"));              // a NAN is decided by php-src's comparison mode
+            ctx.emitter.instruction(&format!("b.mi {take_right}"));             // a smaller left operand fails `left >= right`
         }
         (Arch::AArch64, MinMaxRule::MinPair) => {
             ctx.emitter.instruction("fcmp d0, d1");                             // order the left double against the right double
             ctx.emitter.instruction(&format!("b.pl {take_right}"));             // an equal, greater or unordered left operand fails `left < right`
         }
-        (Arch::AArch64, MinMaxRule::MinFold) => {
-            ctx.emitter.instruction("fcmp d0, d1");                             // order the running double against the candidate double
-            ctx.emitter.instruction(&format!("b.gt {take_right}"));             // only an ordered, strictly smaller candidate replaces the result
-        }
         (Arch::X86_64, MinMaxRule::MaxPair) => {
             ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // order the left double against the right double
-            ctx.emitter.instruction(&format!("jb {take_right}"));               // a smaller or unordered left operand fails `left >= right`
-        }
-        (Arch::X86_64, MinMaxRule::MaxFold) => {
-            ctx.emitter.instruction("ucomisd xmm1, xmm0");                      // order the candidate double against the running double
-            ctx.emitter.instruction(&format!("ja {take_right}"));               // only an ordered, strictly greater candidate replaces the result
+            ctx.emitter.instruction(&format!("jp {unordered}"));                // a NAN is decided by php-src's comparison mode
+            ctx.emitter.instruction(&format!("jb {take_right}"));               // a smaller left operand fails `left >= right`
         }
         (Arch::X86_64, MinMaxRule::MinPair) => {
             ctx.emitter.instruction("ucomisd xmm1, xmm0");                      // order the right double against the left double
             ctx.emitter.instruction(&format!("jbe {take_right}"));              // a right operand that is not strictly greater, or unordered, wins
         }
-        (Arch::X86_64, MinMaxRule::MinFold) => {
-            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // order the running double against the candidate double
-            ctx.emitter.instruction(&format!("ja {take_right}"));               // only an ordered, strictly smaller candidate replaces the result
+        (_, MinMaxRule::MaxFold | MinMaxRule::MinFold) => {
+            return Err(crate::codegen::CodegenIrError::invalid_module(
+                "a min/max selection of three or more operands has no inline frame form".to_string(),
+            ));
         }
     }
     ctx.emit_branch(&take_left);
+    if rule == MinMaxRule::MaxPair {
+        ctx.emitter.label(&unordered);
+        unordered_max(ctx, (left, left_tag), (right, right_tag), combined, &take_left, &take_right);
+    }
     ctx.emitter.label(&integer);
     let (aarch64, x86_64) = match rule {
         MinMaxRule::MaxPair | MinMaxRule::MaxFold => ("b.lt", "jl"),
-        MinMaxRule::MinPair => ("b.ge", "jge"),
-        MinMaxRule::MinFold => ("b.gt", "jg"),
+        MinMaxRule::MinPair | MinMaxRule::MinFold => ("b.ge", "jge"),
     };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -153,6 +152,82 @@ pub(super) fn lower_min_max(ctx: &mut FunctionContext<'_>, inst: &Instruction, o
     abi::emit_reg_move(ctx.emitter, combined, right_tag);
     write_cell(ctx, offset, right, CellTag::Register(combined));
     ctx.emitter.label(&done);
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    store_if_result(ctx, inst)
+}
+
+/// Decides a two-argument `max()` whose double comparison was unordered.
+///
+/// At least one operand is `NAN`. Two floats, or a float and an integer that a double
+/// represents exactly, are php-src's numeric path: `left >= right` is false and the right
+/// operand is returned. A float against any other integer is its generic comparison, which
+/// reports the pair as "greater" and keeps the left operand.
+fn unordered_max(
+    ctx: &mut FunctionContext<'_>,
+    (left, left_tag): (&str, &str),
+    (right, right_tag): (&str, &str),
+    scratch: &str,
+    take_left: &str,
+    take_right: &str,
+) {
+    let right_integer = ctx.next_label("stack_min_max_nan_right");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {left_tag}, {right_integer}"));// a float left operand leaves the right one to check
+            representable_or(ctx, left, scratch, take_left);
+            ctx.emit_branch(take_right);
+            ctx.emitter.label(&right_integer);
+            ctx.emitter.instruction(&format!("cbnz {right_tag}, {take_right}"));// two floats fail `left >= right`
+            representable_or(ctx, right, scratch, take_left);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {left_tag}, {left_tag}"));   // is the left operand the integer of the pair?
+            ctx.emitter.instruction(&format!("jnz {right_integer}"));           // a float left operand leaves the right one to check
+            representable_or(ctx, left, scratch, take_left);
+            ctx.emit_branch(take_right);
+            ctx.emitter.label(&right_integer);
+            ctx.emitter.instruction(&format!("test {right_tag}, {right_tag}")); // is the right operand the integer of the pair?
+            ctx.emitter.instruction(&format!("jnz {take_right}"));              // two floats fail `left >= right`
+            representable_or(ctx, right, scratch, take_left);
+        }
+    }
+    ctx.emit_branch(take_right);
+}
+
+/// Branches to `otherwise` unless a double represents the signed integer in `value` exactly.
+///
+/// This is php-src's `zend_dval_to_lval((double) value) == value` test. `scratch` and the
+/// third float register are clobbered.
+fn representable_or(ctx: &mut FunctionContext<'_>, value: &str, scratch: &str, otherwise: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("scvtf d2, {value}"));             // convert the integer to a double
+            ctx.emitter.instruction(&format!("fcvtzs {scratch}, d2"));          // convert the double back to an integer
+            ctx.emitter.instruction(&format!("cmp {scratch}, {value}"));        // did the round trip preserve the integer?
+            ctx.emitter.instruction(&format!("b.ne {otherwise}"));              // a double cannot represent this integer
+            ctx.emitter.instruction(&format!("mov {scratch}, #0x7fffffffffffffff"));// the largest integer rounds up to 2^63 and saturates back
+            ctx.emitter.instruction(&format!("cmp {value}, {scratch}"));        // is this that unrepresentable integer?
+            ctx.emitter.instruction(&format!("b.eq {otherwise}"));              // a double cannot represent the largest integer either
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cvtsi2sd xmm2, {value}"));        // convert the integer to a double
+            ctx.emitter.instruction(&format!("cvttsd2si {scratch}, xmm2"));     // convert it back; 2^63 yields the integer indefinite value
+            ctx.emitter.instruction(&format!("cmp {scratch}, {value}"));        // did the round trip preserve the integer?
+            ctx.emitter.instruction(&format!("jne {otherwise}"));               // a double cannot represent this integer
+        }
+    }
+}
+
+/// Copies the operand cell selected by `__rt_mixed_min_max_select` into the result's frame cell.
+///
+/// The integer result register holds the winner's borrowed cell pointer, which may point
+/// into the `staging` bytes of temporary stack that this releases once both words are read.
+pub(super) fn store_selected(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: usize, staging: usize) -> Result<()> {
+    let (payload, _, _, _, tag) = registers(ctx);
+    abi::emit_load_from_address(ctx.emitter, tag, payload, 0);
+    abi::emit_load_from_address(ctx.emitter, payload, payload, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, staging);
+    write_cell(ctx, offset, payload, CellTag::Register(tag));
     abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
     store_if_result(ctx, inst)
 }

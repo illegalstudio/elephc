@@ -24,11 +24,12 @@ pub(crate) fn mixed(inst: &crate::ir::Instruction) -> bool {
 
 /// Recognizes a `min()`/`max()` selection, which copies one operand's tag and payload.
 ///
-/// With two numeric operands the winner is an integer or a float, so the result stays inside
+/// With only numeric operands the winner is an integer or a float, so the result stays inside
 /// the numeric domain and the selection only observes its operands.
 pub(crate) fn min_max(inst: &crate::ir::Instruction) -> bool {
-    inst.op == Op::MixedMinMax && inst.operands.len() == 2 && matches!(inst.immediate,
-        Some(Immediate::I64(rule)) if crate::ir::MinMaxRule::from_immediate(rule).is_some())
+    inst.op == Op::MixedMinMax && matches!(inst.immediate,
+        Some(Immediate::I64(rule)) if crate::ir::MinMaxRule::from_immediate(rule)
+            .is_some_and(|rule| rule.accepts_operand_count(inst.operands.len())))
 }
 
 /// Recognizes only the two unary steps whose numeric semantics are checked addition.

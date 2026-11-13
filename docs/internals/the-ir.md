@@ -801,19 +801,28 @@ slot ends in the state one whose store never ran is already in.
 | `IBitAnd`, `IBitOr`, `IBitXor`, `IShl`, `IShrA` | `I64`, `I64` | `I64` | pure |
 | `FAdd`, `FSub`, `FMul`, `FDiv`, `FPow`, `FNeg` | `F64` operands | `F64` | pure or libcall |
 | `MixedNumericBinop(add\|sub\|mul)` | mixed/union operands | mixed/scalar | `reads_heap`, maybe `alloc_heap`, `may_warn`, `may_fatal`, `may_deopt` |
-| `MixedMinMax(rule)` | two operands, each a raw `int`/`float` or a boxed Mixed cell | owned Mixed copy of the winner | `reads_heap`, `alloc_heap`, `refcount_op`, `may_deopt` |
+| `MixedMinMax(rule)` | two operands for a pair rule, three or more for a fold rule; each a raw `int`/`float` or a boxed Mixed cell | owned Mixed copy of the winner | `reads_heap`, `alloc_heap`, `refcount_op`, `may_deopt` |
 
-`MixedMinMax` is one step of a variadic `min()` / `max()` whose arguments are neither all
-statically `int` nor all statically `float`. Its `I64` immediate is a `MinMaxRule`: `MaxPair` and `MinPair`
-are the two-argument forms (`left >= right` and `left < right` select the left operand,
-so an unordered `NAN` comparison selects the right one), while `MaxFold` and `MinFold`
-are the steps of a longer call, which replace the running left operand only on a strict,
-ordered win of the right one. A call whose operand may hold a GMP object (statically, or
-runtime-typed in a program that declares GMP) never becomes a selection: it keeps the prelude
-reducer, because the GMP comparator is PHP code that may throw. Operands are only read; the result is a detached copy that
-keeps the winner's runtime tag, so call lowering treats it as fresh and releases every
-owned argument. With two proven numeric operands the selection is a numeric observation
-and a frame-cell producer (see
+`MixedMinMax` is a whole variadic `min()` / `max()` call whose arguments are neither all
+statically `int` nor all statically `float`. Its `I64` immediate is a `MinMaxRule`:
+`MaxPair` and `MinPair` are the two-argument forms (`left >= right` and `left < right`
+select the left operand), `MaxFold` and `MinFold` take every argument of a longer call and
+replace the running result only on a strict win. One instruction carries the whole call
+because php-src's comparison mode is state that one argument leaves for the next: a call
+compares numbers directly while every argument so far is an `int` or a `float`, and
+switches for good to the generic `zend_compare` at the first other argument, or when a
+float meets an integer a double cannot represent. The modes differ only on an unordered
+(`NAN`) comparison. Numerically a two-argument call returns its right operand and a longer
+call keeps its running result; generically `zend_compare` reports the pair as "greater",
+so a two-argument `max()` keeps its left operand and a longer `max()` takes the later
+argument, while `min()` behaves the same in both modes.
+
+A call whose operand may hold a GMP object (statically, or runtime-typed in a program that
+declares GMP) never becomes a selection: it keeps the prelude reducer, which follows the
+same modes, because the GMP comparator is PHP code that may throw. Operands are only read;
+the result is a detached copy that keeps the winner's runtime tag, so call lowering treats
+it as fresh and releases every owned argument. With only proven numeric operands the
+selection is a numeric observation and a frame-cell producer (see
 [Frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells)).
 
 `BinOp::Div` follows PHP division behavior and may produce float. `BinOp::Pow`

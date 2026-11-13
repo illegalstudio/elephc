@@ -646,9 +646,24 @@ fn intval_helpers() -> Vec<Stmt> {
 /// longer call replaces the running result only on a strict win, and the two-argument
 /// forms keep the first argument only for `first >= second` (max) or `first < second`
 /// (min). The single-array form keeps its three-way comparison.
+///
+/// `$state` follows php-src's comparison mode for the variadic forms: 0 while every value
+/// is an `int`, 1 once a float joined integers a double represents exactly, and 2 (generic)
+/// from the first other value on. `zend_compare` reports an unordered pair as "greater", so
+/// in generic mode a two-argument `max()` keeps its first argument and a longer `max()`
+/// takes the later one, the opposite of the numeric modes. `min()` is the same in all three.
 fn minmax_array() -> Stmt {
     let mode_is = |mode: i64| bin(v("mode"), BinOp::StrictEq, i(mode));
+    let state_is = |state: i64| bin(v("state"), BinOp::StrictEq, i(state));
     let three_way = || bin(v("value"), BinOp::Spaceship, v("best"));
+    // php-src's `zend_dval_to_lval((double) $n) == $n`. The largest integer rounds up to
+    // 2^63, whose conversion back is target-defined, so it is excluded by value.
+    let representable = |name: &str| {
+        and(
+            bin(v(name), BinOp::StrictNotEq, i(i64::MAX)),
+            bin(as_int(call("floatval", vec![v(name)])), BinOp::StrictEq, v(name)),
+        )
+    };
     function("__elephc_gmp_minmax_array")
         .param("strict", TypeExpr::Bool)
         .param("max", TypeExpr::Bool)
@@ -670,12 +685,58 @@ fn minmax_array() -> Stmt {
             ),
             assign("best", e_null()),
             assign("first", b(true)),
+            assign("state", i(2)),
             foreach_(v("values"), None, "value", vec![
                 if_(
                     v("first"),
-                    vec![assign("best", v("value"))],
+                    vec![
+                        assign("best", v("value")),
+                        assign(
+                            "state",
+                            e_ternary(
+                                call("is_int", vec![v("value")]),
+                                i(0),
+                                e_ternary(call("is_float", vec![v("value")]), i(1), i(2)),
+                            ),
+                        ),
+                    ],
                     Vec::new(),
                     Some(vec![
+                        if_(
+                            state_is(0),
+                            vec![if_(
+                                not(call("is_int", vec![v("value")])),
+                                vec![assign(
+                                    "state",
+                                    e_ternary(
+                                        and(
+                                            call("is_float", vec![v("value")]),
+                                            representable("best"),
+                                        ),
+                                        i(1),
+                                        i(2),
+                                    ),
+                                )],
+                                Vec::new(),
+                                None,
+                            )],
+                            vec![(
+                                state_is(1),
+                                vec![if_(
+                                    not(or(
+                                        call("is_float", vec![v("value")]),
+                                        and(
+                                            call("is_int", vec![v("value")]),
+                                            representable("value"),
+                                        ),
+                                    )),
+                                    vec![assign("state", i(2))],
+                                    Vec::new(),
+                                    None,
+                                )],
+                            )],
+                            None,
+                        ),
                         assign("replace", b(false)),
                         if_(
                             or(
@@ -714,10 +775,18 @@ fn minmax_array() -> Stmt {
                                     v("max"),
                                     e_ternary(
                                         mode_is(2),
-                                        not(bin(v("best"), BinOp::GtEq, v("value"))),
+                                        e_ternary(
+                                            state_is(2),
+                                            bin(v("best"), BinOp::Lt, v("value")),
+                                            not(bin(v("best"), BinOp::GtEq, v("value"))),
+                                        ),
                                         e_ternary(
                                             mode_is(1),
-                                            bin(v("value"), BinOp::Gt, v("best")),
+                                            e_ternary(
+                                                state_is(2),
+                                                not(bin(v("value"), BinOp::LtEq, v("best"))),
+                                                bin(v("value"), BinOp::Gt, v("best")),
+                                            ),
                                             bin(three_way(), BinOp::Gt, i(0)),
                                         ),
                                     ),

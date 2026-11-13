@@ -15,7 +15,7 @@
 use super::*;
 
 /// Cross-checks PHP-compatible fixtures when the focused run opts into the PHP oracle.
-fn php_oracle(source: &str, expected: &str) {
+pub(super) fn php_oracle(source: &str, expected: &str) {
     if std::env::var_os("ELEPHC_PHP_CHECK").is_none() { return; }
     let output = Command::new("php").args(["-n", "-r", source.trim_start_matches("<?php")])
         .output().expect("run PHP min/max oracle");
@@ -24,7 +24,7 @@ fn php_oracle(source: &str, expected: &str) {
 }
 
 /// Compiles one variant, validates its heap and returns stdout.
-fn run(source: &str, optimized: bool) -> String {
+pub(super) fn run(source: &str, optimized: bool) -> String {
     let dir = make_cli_test_dir("elephc_min_max_selection");
     let path = dir.join("main.php");
     fs::write(&path, source).unwrap();
@@ -339,7 +339,7 @@ cold-growth allocations=0 checksum=7200\n";
 }
 
 /// Emits one named function's target assembly, using library mode on iOS.
-fn function_assembly(source: &str, target: &str, name: &str) -> String {
+pub(super) fn function_assembly(source: &str, target: &str, name: &str) -> String {
     let dir = make_cli_test_dir("elephc_min_max_selection_asm");
     let path = dir.join("main.php");
     fs::write(&path, source).unwrap();
@@ -372,13 +372,13 @@ hot($argc);
 "#;
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let generic = function_assembly(source, name, "generic");
-        assert!(generic.contains("__rt_mixed_min_max"), "{name}: {generic}");
+        assert!(generic.contains("__rt_mixed_min_max_select"), "{name}: {generic}");
         let hot = function_assembly(source, name, "hot");
-        assert!(!hot.contains("__rt_mixed_min_max"), "{name}: {hot}");
+        assert!(!hot.contains("__rt_mixed_min_max_select"), "{name}: {hot}");
         assert!(hot.contains("fcmp d0, d1") || hot.contains("ucomisd xmm1, xmm0"), "{name}: {hot}");
         let target = Target::parse(name).expect("supported target");
         let runtime = elephc::codegen::generate_runtime(8_388_608, target);
-        assert!(runtime.contains("__rt_mixed_min_max:"), "{name} runtime lacks __rt_mixed_min_max");
+        assert!(runtime.contains("__rt_mixed_min_max_select:"), "{name} runtime lacks the selection helper");
     }
 }
 

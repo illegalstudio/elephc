@@ -24,7 +24,9 @@ fn selection(rule: MinMaxRule, numeric: bool) -> (Function, ValueId, ValueId) {
     let checked = builder.emit(Op::ICheckedSub, vec![one, one], None,
         IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
     let left = if numeric { one } else { builder.emit_const_bool(true) };
-    let selected = builder.emit(Op::MixedMinMax, vec![left, checked],
+    // A fold rule selects among three or more operands, a pair rule between exactly two.
+    let operands = if rule.is_pair() { vec![left, checked] } else { vec![left, checked, one] };
+    let selected = builder.emit(Op::MixedMinMax, operands,
         Some(Immediate::I64(rule.immediate())),
         IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
     builder.emit(Op::Release, vec![checked], None, IrType::Void, PhpType::Void,

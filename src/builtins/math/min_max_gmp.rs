@@ -9,8 +9,8 @@
 //!   keeps the scalar `RuntimeFnId::Min`/`Max` backend, as does the single-array form.
 //! - Every other comparable variadic call (an `int` beside a `float`, a bool, null, a
 //!   nullable or runtime-typed value, a checked arithmetic result that may have promoted to
-//!   float, a string) is typed `mixed` and lowers to a chain of `Op::MixedMinMax`
-//!   selections, so the winner keeps its own value and runtime type as in PHP.
+//!   float, a string) is typed `mixed` and lowers to one `Op::MixedMinMax`
+//!   selection, so the winner keeps its own value and runtime type as in PHP.
 //! - A call that may meet a GMP object (a statically GMP operand, an array of them, or a
 //!   boxed operand in a program that declares GMP) is reduced by the prelude helper
 //!   instead. The helper encodes php-src's tie and `NAN` rules for the single-array, the
@@ -238,12 +238,13 @@ fn finish_reducer_result(
     )
 }
 
-/// Lowers a runtime-typed variadic call to a left fold of `Op::MixedMinMax` selections.
+/// Lowers a runtime-typed variadic call to one `Op::MixedMinMax` selection over every operand.
 ///
-/// Raw `int`/`float` operands and boxed cells are passed as they are, because the selection
-/// only reads them. Every other representation (a string, a bool, null, a nullable scalar) is
-/// boxed for the call. Each selection returns a detached copy of its winner, so the intermediate
-/// results of a longer fold and the temporary boxes are released here.
+/// The whole call is a single instruction because php-src's comparison mode is state that
+/// one argument leaves for the following ones (see `MinMaxRule`). Raw `int`/`float` operands
+/// and boxed cells are passed as they are, because the selection only reads them. Every
+/// other representation (a string, a bool, null, a nullable scalar) is boxed for the call
+/// and released after it; the result is a detached copy of the winner.
 ///
 /// No operand can hold a GMP object here (`lower` keeps those calls on the reducer), so the
 /// comparison runs no PHP code and cannot throw between a box and its release.
@@ -277,21 +278,14 @@ fn lower_selection(
             boxed.value
         })
         .collect();
-    let mut best = LoweredBuiltinValue { value: operands[0] };
-    for (step, &candidate) in operands[1..].iter().enumerate() {
-        let selected = ctx.emit_value(
-            Op::MixedMinMax,
-            vec![best.value, candidate],
-            Some(Immediate::I64(rule.immediate())),
-            PhpType::Mixed,
-            Op::MixedMinMax.default_effects(),
-            Some(call.span),
-        );
-        if step > 0 {
-            temporaries.push(best.value);
-        }
-        best = selected;
-    }
+    let selected = ctx.emit_value(
+        Op::MixedMinMax,
+        operands,
+        Some(Immediate::I64(rule.immediate())),
+        PhpType::Mixed,
+        Op::MixedMinMax.default_effects(),
+        Some(call.span),
+    );
     for temporary in temporaries {
         ctx.emit_void(
             Op::Release,
@@ -301,15 +295,15 @@ fn lower_selection(
             Some(call.span),
         );
     }
-    best
+    selected
 }
 
-/// Lowers `min()` / `max()` to the scalar runtime, a `MixedMinMax` fold or the GMP reducer.
+/// Lowers `min()` / `max()` to the scalar runtime, a `MixedMinMax` selection or the GMP reducer.
 ///
 /// The reducer is used for the variadic form as soon as one operand may hold GMP, and for
 /// the single-array form when the array's elements may hold GMP. It receives one temporary
 /// operand array and the comparison mode. A runtime-typed variadic call that cannot meet a
-/// GMP object folds through `lower_selection`; everything else keeps the scalar runtime.
+/// GMP object selects through `lower_selection`; everything else keeps the scalar runtime.
 fn lower(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,

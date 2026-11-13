@@ -286,11 +286,16 @@ condition `$divisor * $divisor <= $candidate`. Strict identity against a proven
 numeric partner is admitted on the same terms, including reads of the owning local
 as in `$value = $i * 4; if ($value !== 20)`. The product retains overflow-to-float
 semantics; this does not require or imply an integer range proof for either counter.
-A variadic `min()` / `max()` selection (`MixedMinMax`) over two proven numeric operands is
+A variadic `min()` / `max()` selection (`MixedMinMax`) over proven numeric operands is
 both an observation and a producer: two integer tags compare as integers, any float
 promotes both sides to doubles for the comparison only, and the winner's own tag and
-payload are copied into the result's cell. `$sum += min($i, $count - 1)` and a checked
-accumulator read by `max($total, 0)` after its loop therefore allocate nothing. A direct
+payload are copied into the result's cell. A two-argument selection is emitted inline; a
+longer one lends its operands to `__rt_mixed_min_max_select`, which carries php-src's
+comparison mode across the arguments, and copies the returned winner into the cell.
+`$sum += min($i, $count - 1)`, `max($a, $b, 2.5)` in a loop and a checked accumulator
+read by `max($total, 0)` after its loop therefore allocate nothing. A selection whose
+result is not a frame cell (a runtime-typed operand, or a result that escapes) calls the
+same helper and clones the winner, which costs one Mixed cell per call. A direct
 `echo` or `print` of a cell is an observation as well, because it runs the string cast's
 tag dispatch and writes the formatted number without retaining the cell.
 An array or hash key is also a numeric observation: `$arr[$j + 1]` and
