@@ -211,8 +211,11 @@ impl Checker {
             current_class = self.classes.get(cn).and_then(|i| i.parent.clone());
         }
         // Fallback: search implemented interfaces (and parent interfaces).
-        if let Some(class_info) = self.classes.get(&class_name).cloned() {
-            for iface_name in &class_info.interfaces {
+        // Only the interface list is needed: cloning the whole class record for it was a top
+        // checker frame on Symfony (every interface-constant read through a class name).
+        let interfaces = self.classes.get(&class_name).map(|info| info.interfaces.clone());
+        if let Some(interfaces) = interfaces {
+            for iface_name in &interfaces {
                 if let Some((value, type_expr)) = self.lookup_interface_constant(iface_name, name) {
                     if let Some(type_expr) = type_expr {
                         return self.resolve_type_expr(&type_expr, expr.span);

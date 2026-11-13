@@ -212,7 +212,7 @@ fn emit_push_string_handler_triple(
         len_offset: 8,
         call_reg,
     };
-    for case in &cases {
+    for case in cases.iter() {
         let next_case = ctx.next_label("ob_start_cb_next");
         let matched_label = ctx.next_label("ob_start_cb_case");
         callable_dispatch::emit_branch_if_callable_case_mismatch(

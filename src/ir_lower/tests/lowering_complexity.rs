@@ -285,6 +285,46 @@ fn callable_array_scopes_share_the_public_static_tables() {
     assert!(small_scans <= 1 && large_scans <= 1, "non-public statics rescanned: {small_scans}, {large_scans}");
 }
 
+/// `count` classes reaching a protected method, each with two open Mixed callable sites (one
+/// shared mixed-callable body per class scope), plus user functions enough for the string
+/// lookup table every such body holds.
+fn many_open_string_callable_sites(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..12 {
+        source.push_str(&format!("function u{index}($x) {{ return $x + {index}; }}\n"));
+    }
+    let mut calls = String::new();
+    for index in 0..count {
+        source.push_str(&format!(
+            "class C{index} {{\n    protected function p($x) {{ return $x; }}\n    \
+             public function a($cb, array $args) {{ return call_user_func_array($cb, $args); }}\n    \
+             public function b($cb, array $args) {{ return call_user_func_array($cb, $args); }}\n}}\n"
+        ));
+        calls.push_str(&format!(
+            "$o = new C{index}();\n$n += $o->a($argv[1] ?? 'u1', [$argc]) + $o->b($argv[2] ?? 'u2', [$argc]);\n"
+        ));
+    }
+    format!("{source}$n = 0;\n{calls}echo $n, \"\\n\";\n")
+}
+
+/// Runtime string-callable lookup tables built while generating code for `source`.
+fn string_table_builds(source: &str) -> u64 {
+    let module = lower_source(source);
+    crate::codegen::STRING_TABLE_BUILDS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    crate::codegen::STRING_TABLE_BUILDS.with(|count| count.get())
+}
+
+/// Every site resolving an open runtime name shares the table of the cached case list: each
+/// rebuilt and re-interned the same rows.
+#[test]
+fn open_string_callable_sites_share_one_lookup_table() {
+    let small = string_table_builds(&many_open_string_callable_sites(4));
+    let large = string_table_builds(&many_open_string_callable_sites(32));
+    assert!(small > 0, "the fixture no longer reaches the string lookup table");
+    assert_eq!(small, large, "string tables grew with the sites: {small} vs {large}");
+}
+
 /// `class Base` with `count` methods, `count` subclasses each overriding one, and a function
 /// calling every method on a `Base` receiver: `count` dispatch folds over Base's family.
 fn many_base_dispatch_folds(count: usize) -> String {

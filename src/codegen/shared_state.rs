@@ -32,7 +32,19 @@ use super::shared_reflection::SharedReflectionState;
 /// `(source type, candidate names, strict, arity, cases)`: the arity is part of the key because an
 /// arity-bounded table is a different one, and leaving it out of the cache rebuilt the whole
 /// runtime-name ladder at every arity-specific site (a quarter of a Symfony build's codegen).
-type StringCasesEntry = (Option<PhpType>, Option<Vec<String>>, bool, Option<usize>, Vec<RuntimeCallableCase>);
+type StringCasesEntry = (Option<PhpType>, Option<Vec<String>>, bool, Option<usize>, std::sync::Arc<Vec<RuntimeCallableCase>>);
+
+/// The form of a lookup table built from a cached case list; see
+/// `SharedCodegenState::case_lookup_table`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(super) enum CaseTableForm {
+    /// Static methods keyed by class name and method name.
+    StaticByName,
+    /// Static methods keyed by the receiver's class id and method name.
+    StaticByObject,
+    /// Runtime string callables keyed by name.
+    StringName,
+}
 
 /// Cached static-method callable cases for one candidate-name set.
 type StaticCasesEntry = (Option<Vec<String>>, std::sync::Arc<Vec<RuntimeStaticMethodCallableCase>>);
@@ -84,11 +96,11 @@ pub(crate) struct SharedCodegenState {
     /// table; each used to look every target's descriptor up and rebuild the table.
     instance_lookup_tables:
         std::cell::RefCell<crate::fast_hash::FastMap<Vec<usize>, crate::codegen_support::callable_lookup::StringLookupTable>>,
-    /// Finished static lookup tables built from a cached static-case list, keyed by that list's
-    /// identity and the table form. Every callable-array search body asked for the same two
+    /// Finished lookup tables built from a cached static or string case list, keyed by that
+    /// list's identity and the table form. Every callable-array search body asked for the same
     /// public tables and rebuilt them: 788 bodies on the Symfony demo console.
-    static_lookup_tables:
-        std::cell::RefCell<crate::fast_hash::FastMap<(usize, bool), crate::codegen_support::callable_lookup::StringLookupTable>>,
+    case_lookup_tables:
+        std::cell::RefCell<crate::fast_hash::FastMap<(usize, CaseTableForm), crate::codegen_support::callable_lookup::StringLookupTable>>,
     /// Keys of the keyed helpers this state already emitted. Two cache entries can need one
     /// helper (an instance-method entry wrapper serves every receiver class of its implementing
     /// class), and a second copy in the same text is a duplicate definition: only the parallel
@@ -599,7 +611,7 @@ impl SharedCodegenState {
             mixed_method_candidates: Default::default(),
             base_target_signatures: std::cell::OnceCell::new(),
             instance_lookup_tables: Default::default(),
-            static_lookup_tables: Default::default(),
+            case_lookup_tables: Default::default(),
             emitted_instance_methods: EmittedMethods::default(),
             emitted_static_methods: EmittedMethods::default(),
             emitted_keyed_helpers: HashSet::default(),
@@ -1103,7 +1115,7 @@ impl SharedCodegenState {
         // `_data_h…` the serial pass never defines (it spells its own tables by counter), and a
         // Symfony `--web` build without preload failed to link on three such labels.
         self.instance_lookup_tables.borrow_mut().clear();
-        self.static_lookup_tables.borrow_mut().clear();
+        self.case_lookup_tables.borrow_mut().clear();
         self.inaccessible_method_table = None;
     }
 
@@ -1195,7 +1207,7 @@ impl SharedCodegenState {
         candidate_names: Option<&[String]>,
         strict_php: bool,
         arity: Option<usize>,
-    ) -> Option<Vec<RuntimeCallableCase>> {
+    ) -> Option<std::sync::Arc<Vec<RuntimeCallableCase>>> {
         let matches = |(cached_ty, cached_names, cached_strict_php, cached_arity, _): &&StringCasesEntry| {
             cached_ty.as_ref() == source_arg_ty
                 && cached_names.as_deref() == candidate_names
@@ -1220,7 +1232,7 @@ impl SharedCodegenState {
         candidate_names: Option<&[String]>,
         strict_php: bool,
         arity: Option<usize>,
-        cases: &[RuntimeCallableCase],
+        cases: std::sync::Arc<Vec<RuntimeCallableCase>>,
     ) {
         self.touch_cache();
         self.runtime_string_descriptor_cases.push((
@@ -1228,7 +1240,7 @@ impl SharedCodegenState {
             candidate_names.map(|names| names.to_vec()),
             strict_php,
             arity,
-            cases.to_vec(),
+            cases,
         ));
     }
 
@@ -1277,26 +1289,39 @@ impl SharedCodegenState {
             .then_some(cases.as_ptr() as usize)
     }
 
-    /// A finished static lookup table built from the cached case list `identity` names, in the
-    /// `object` (class-id keyed) or class-name keyed form. Keyed like the instance tables.
-    pub(super) fn static_lookup_table(
-        &self,
-        identity: usize,
-        object: bool,
-    ) -> Option<crate::codegen_support::callable_lookup::StringLookupTable> {
-        self.touch_cache_keyed();
-        self.static_lookup_tables.borrow().get(&(identity, object)).cloned()
+    /// `static_cases_identity` for the runtime string-callable case lists.
+    pub(super) fn string_cases_identity(&self, cases: &[RuntimeCallableCase]) -> Option<usize> {
+        if cases.is_empty() {
+            return None;
+        }
+        let same = |entry: &StringCasesEntry| {
+            entry.4.as_ptr() == cases.as_ptr() && entry.4.len() == cases.len()
+        };
+        let preset = self.preset.as_ref().map(|preset| preset.string_cases.as_slice()).unwrap_or(&[]);
+        (preset.iter().any(same) || self.runtime_string_descriptor_cases.iter().any(same))
+            .then_some(cases.as_ptr() as usize)
     }
 
-    /// Records a finished static lookup table; see `static_lookup_table`.
-    pub(super) fn cache_static_lookup_table(
+    /// A finished lookup table built in `form` from the cached case list `identity` names.
+    /// Keyed like the instance tables.
+    pub(super) fn case_lookup_table(
         &self,
         identity: usize,
-        object: bool,
+        form: CaseTableForm,
+    ) -> Option<crate::codegen_support::callable_lookup::StringLookupTable> {
+        self.touch_cache_keyed();
+        self.case_lookup_tables.borrow().get(&(identity, form)).cloned()
+    }
+
+    /// Records a finished lookup table; see `case_lookup_table`.
+    pub(super) fn cache_case_lookup_table(
+        &self,
+        identity: usize,
+        form: CaseTableForm,
         table: crate::codegen_support::callable_lookup::StringLookupTable,
     ) {
         self.touch_cache_keyed();
-        self.static_lookup_tables.borrow_mut().insert((identity, object), table);
+        self.case_lookup_tables.borrow_mut().insert((identity, form), table);
     }
 
     /// Returns one static-method descriptor case already emitted for another target set.

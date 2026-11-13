@@ -444,7 +444,7 @@ where
     // them per case made a single `array_map('name', ...)` site scale with the program's
     // callable count (a million instructions per site in the Symfony console).
     let call_label = ctx.next_label(&format!("{}_runtime_string_callback_call", owner));
-    for case in &cases {
+    for case in cases.iter() {
         let next_case = ctx.next_label(&format!("{}_runtime_string_callback_next", owner));
         let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(

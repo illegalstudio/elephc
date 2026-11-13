@@ -30,7 +30,7 @@ use crate::types::{FunctionSig, PhpType};
 
 use super::super::context::FunctionContext;
 use super::super::shared_state::{
-    CallableResolverMiss, CallableResolverSpec, DynamicPropHelperKind,
+    CallableResolverMiss, CallableResolverSpec, CaseTableForm, DynamicPropHelperKind,
     RuntimeInstanceMethodDescriptorTemplate,
 };
 use super::{
@@ -1462,11 +1462,30 @@ fn emit_string_name_descriptor_miss(
 }
 
 /// Resolves the pushed runtime string name through a compact metadata table.
+///
+/// The open-name case lists are shared, and each site (and each shared mixed-callable body)
+/// built the table again from the same list: a table built from a list the codegen state holds
+/// is kept by that list's identity.
 fn emit_runtime_string_lookup_table(
     ctx: &mut FunctionContext<'_>,
     cases: &[callable_dispatch::RuntimeCallableCase],
 ) -> Result<()> {
-    let table = emit_string_lookup_table(ctx.data, cases).map_err(CodegenIrError::invalid_module)?;
+    let identity = ctx.shared.string_cases_identity(cases);
+    let cached = identity
+        .and_then(|identity| ctx.shared.case_lookup_table(identity, CaseTableForm::StringName));
+    let table = match cached {
+        Some(table) => table,
+        None => {
+            #[cfg(test)]
+            STRING_TABLE_BUILDS.with(|count| count.set(count.get() + 1));
+            let table = emit_string_lookup_table(ctx.data, cases)
+                .map_err(CodegenIrError::invalid_module)?;
+            if let Some(identity) = identity {
+                ctx.shared.cache_case_lookup_table(identity, CaseTableForm::StringName, table.clone());
+            }
+            table
+        }
+    };
     let (label, bound, helper) = match table {
         StringLookupTable::Linear { label, count } => {
             (label, count, "__rt_callable_lookup_string_linear")
@@ -2054,13 +2073,13 @@ fn emit_runtime_object_static_lookup_table(
     miss_label: &str,
 ) -> Result<()> {
     let identity = ctx.shared.static_cases_identity(object_static_cases);
-    let cached = identity.and_then(|identity| ctx.shared.static_lookup_table(identity, true));
+    let cached = identity.and_then(|identity| ctx.shared.case_lookup_table(identity, CaseTableForm::StaticByObject));
     let table = match cached {
         Some(table) => Some(table),
         None => {
             let table = build_object_static_lookup_table(ctx, object_static_cases)?;
             if let (Some(identity), Some(table)) = (identity, &table) {
-                ctx.shared.cache_static_lookup_table(identity, true, table.clone());
+                ctx.shared.cache_case_lookup_table(identity, CaseTableForm::StaticByObject, table.clone());
             }
             table
         }
@@ -2136,7 +2155,7 @@ fn emit_runtime_static_lookup_table(
     method_len_offset: usize,
 ) -> Result<()> {
     let identity = ctx.shared.static_cases_identity(cases);
-    let cached = identity.and_then(|identity| ctx.shared.static_lookup_table(identity, false));
+    let cached = identity.and_then(|identity| ctx.shared.case_lookup_table(identity, CaseTableForm::StaticByName));
     let table = match cached {
         Some(table) => table,
         None => {
@@ -2153,7 +2172,7 @@ fn emit_runtime_static_lookup_table(
             let table = emit_static_lookup_table(ctx.data, table_cases)
                 .map_err(CodegenIrError::invalid_module)?;
             if let Some(identity) = identity {
-                ctx.shared.cache_static_lookup_table(identity, false, table.clone());
+                ctx.shared.cache_case_lookup_table(identity, CaseTableForm::StaticByName, table.clone());
             }
             table
         }
@@ -2285,7 +2304,7 @@ pub(super) fn runtime_string_descriptor_cases(
     source_arg_ty: Option<&PhpType>,
     candidate_names: Option<&[String]>,
     strict_php: bool,
-) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
+) -> Result<std::sync::Arc<Vec<callable_dispatch::RuntimeCallableCase>>> {
     runtime_string_descriptor_cases_at_arity(ctx, source_arg_ty, candidate_names, strict_php, None)
 }
 
@@ -2299,7 +2318,7 @@ fn runtime_string_descriptor_cases_at_arity(
     candidate_names: Option<&[String]>,
     strict_php: bool,
     arity: Option<usize>,
-) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
+) -> Result<std::sync::Arc<Vec<callable_dispatch::RuntimeCallableCase>>> {
     let cache_ty = source_arg_ty.map(PhpType::codegen_repr);
     if let Some(cases) = ctx
         .shared
@@ -2349,8 +2368,9 @@ fn runtime_string_descriptor_cases_at_arity(
     // A finite candidate set without a compiled case keeps an empty table: every case of the
     // open table is keyed by a name outside that set, so none could ever match, and building it
     // cost a full runtime-name ladder (tens of thousands of compares) at every such site.
+    let cases = std::sync::Arc::new(cases);
     ctx.shared.cache_runtime_string_descriptor_cases(
-        cache_ty.as_ref(), candidate_names, strict_php, arity, &cases,
+        cache_ty.as_ref(), candidate_names, strict_php, arity, cases.clone(),
     );
     Ok(cases)
 }
@@ -2800,7 +2820,7 @@ fn emit_runtime_string_descriptor_value_impl(
         len_offset: 8,
         call_reg: dest_reg,
     };
-    for case in &cases {
+    for case in cases.iter() {
         let next_case = ctx.next_label("runtime_string_descriptor_next");
         let matched_label = ctx.next_label("callable_string_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
@@ -2902,7 +2922,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         len_offset: 8,
         call_reg: abi::int_result_reg(ctx.emitter),
     };
-    for case in &cases {
+    for case in cases.iter() {
         let next_case = ctx.next_label("mixed_string_descriptor_next");
         let matched_label = ctx.next_label("mixed_string_descriptor_match");
         callable_dispatch::emit_branch_if_callable_case_mismatch(
@@ -6534,6 +6554,8 @@ std::thread_local! {
     pub(crate) static INSTANCE_TARGET_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Static callable-array lookup tables (class-name or class-id keyed) built on this thread.
     pub(crate) static STATIC_TABLE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Runtime string-callable lookup tables built on this thread.
+    pub(crate) static STRING_TABLE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Scans of the module for its non-public static methods on this thread.
     pub(crate) static NON_PUBLIC_STATIC_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
