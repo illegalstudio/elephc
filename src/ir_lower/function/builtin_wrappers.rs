@@ -111,13 +111,29 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
     label: &str,
     signature: &FunctionSig,
     php_only: bool,
-    mut statements: Vec<Stmt>,
+    statements: Vec<Stmt>,
 ) -> Function {
     let source_mode = if php_only {
         crate::source::SourceMode::Php
     } else {
         crate::source::SourceMode::Lfc
     };
+    lower_callable_body(module, label, signature, source_mode, true, statements)
+}
+
+/// Retains the caller's operator policy without creating a public builtin invocation boundary.
+pub(in crate::ir_lower) fn lower_operator_callable_body(
+    module: &mut Module, label: &str, signature: &FunctionSig,
+    source_mode: crate::source::SourceMode, statements: Vec<Stmt>,
+) -> Function {
+    lower_callable_body(module, label, signature, source_mode, false, statements)
+}
+
+/// Shares parameter ownership and exceptional cleanup while keeping invocation contracts explicit.
+fn lower_callable_body(
+    module: &mut Module, label: &str, signature: &FunctionSig,
+    source_mode: crate::source::SourceMode, builtin_contract: bool, mut statements: Vec<Stmt>,
+) -> Function {
     for statement in &mut statements {
         statement.source_mode = source_mode;
     }
@@ -127,7 +143,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
     );
     function.params = function_params(signature);
     function.signature = Some(signature.clone());
-    function.flags.is_builtin_contract_wrapper = true;
+    function.flags.is_builtin_contract_wrapper = builtin_contract;
     // Prefer the emitted signatures so a call into an injected prelude helper also sees the
     // hidden `func_args` ABI slots `capture_all_frames` appended to it. Without this map the
     // builtin lowering at the bottom of this wrapper cannot tell the helper needs a collector.

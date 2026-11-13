@@ -74,3 +74,48 @@ fn verify_boxed_operator_graphs_are_shared(target: &str) {
 }
 
 supported_target_cases!(boxed_operator_graphs_are_shared, verify_boxed_operator_graphs_are_shared);
+
+
+/// Shared native dispatch keeps trusted PHP arithmetic separate from user operation guarantees.
+#[test]
+fn strict_boxed_operator_helpers_preserve_caller_policy_on_all_targets() {
+    use crate::source::SourceMode;
+    use elephc_semantics::{SemanticProfile, StrictFeature};
+    let source = "<?php function userAdd(mixed $a, mixed $b): mixed { return $a + $b; } function userPow(mixed $a, mixed $b): mixed { return $a ** $b; } function userInc(mixed $a): mixed { return ++$a; }";
+    let internal = source.replace("user", "trusted");
+    let mut program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), SourceMode::Php).unwrap();
+    program.extend(crate::parser::parse_with_mode(&crate::lexer::tokenize(&internal).unwrap(), SourceMode::Internal).unwrap());
+    program.extend(crate::parser::parse(&crate::lexer::tokenize("<?php $number = new BcMath\\Number('2');").unwrap()).unwrap());
+    let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+    let program = crate::core_prelude::inject_if_used(program, &mut inventory);
+    let program = crate::bcmath_prelude::inject_if_used(program, false, &mut inventory);
+    let program = crate::name_resolver::resolve(program).unwrap();
+    for feature in [StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions] {
+        let profile = SemanticProfile::PERMISSIVE.with(feature, true);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+            let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            for optimize in [false, true] {
+                let mut module = module.clone(); if optimize { crate::ir_passes::optimize_module(&mut module); }
+                for (operation, function_suffix) in [("add", "Add"), ("pow", "Pow"), ("inc", "Inc")] {
+                    for (prefix, trusted) in [("user", false), ("trusted", true)] {
+                        let helper_name = format!("__eir_boxed_operator@{operation}{}", if trusted { "@internal" } else { "" });
+                        let caller = module.functions.iter().find(|function| function.name == format!("{prefix}{function_suffix}")).unwrap();
+                        assert!(caller.instructions.iter().any(|inst| inst.op == Op::Call && matches!(inst.immediate,
+                            Some(Immediate::Data(id)) if module.data.function_names[id.as_raw() as usize] == helper_name)),
+                            "{name}, {feature:?}, opt={optimize}: {prefix}{function_suffix}");
+                        let helper = module.functions.iter().find(|function| function.name == helper_name).unwrap();
+                        assert!(!helper.flags.is_builtin_contract_wrapper);
+                        assert_eq!(helper.instructions.iter().any(|inst| inst.arithmetic_policy().checked_overflow()),
+                            !trusted && feature == StrictFeature::Overflow, "{name}: {helper_name}, {feature:?}");
+                        assert_eq!(helper.instructions.iter().any(|inst| inst.op == Op::ThrowTypeError),
+                            !trusted && feature != StrictFeature::Overflow, "{name}: {helper_name}, {feature:?}");
+                    }
+                }
+                crate::ir::validate_module(&module).unwrap();
+                crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            }
+        }
+    }
+}

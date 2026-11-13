@@ -16,6 +16,7 @@ use std::process::Output;
 struct StagedRuntimeOptions {
     eval_bridge: bool,
     bcmath: bool,
+    source_mode: Option<elephc::source::SourceMode>,
 }
 
 /// A PHP entry with optional include or Composer/autoload companions.
@@ -90,13 +91,25 @@ impl StrictFixture {
         self.capture_staged_runtime(profile, optimize, StagedRuntimeOptions { bcmath: true, ..Default::default() })
     }
 
+    /// Checks trusted implementation operators with native class dispatch in a strict module.
+    pub(crate) fn capture_staged_internal_bcmath(
+        &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
+    ) -> ProgramOutput {
+        self.capture_staged_runtime(profile, optimize, StagedRuntimeOptions {
+            bcmath: true, source_mode: Some(elephc::source::SourceMode::Internal), ..Default::default()
+        })
+    }
+
     /// Shares isolated assembly/link/heap validation with an explicitly requested eval runtime.
     fn capture_staged_runtime(
         &self, profile: elephc_semantics::SemanticProfile, optimize: bool, options: StagedRuntimeOptions,
     ) -> ProgramOutput {
         let source = fs::read_to_string(self.directory.join("main.php")).unwrap();
-        let tokens = elephc::lexer::tokenize_with_semantics(&source, elephc::source::SourceMode::Php, 0, profile).unwrap();
-        let mut program = elephc::parser::parse(&tokens).unwrap();
+        let source_mode = options.source_mode.unwrap_or(elephc::source::SourceMode::Php);
+        let source = if source_mode == elephc::source::SourceMode::Php { source.as_str() }
+            else { source.strip_prefix("<?php").unwrap_or(&source) };
+        let tokens = elephc::lexer::tokenize_with_semantics(&source, source_mode, 0, profile).unwrap();
+        let mut program = elephc::parser::parse_with_mode(&tokens, source_mode).unwrap();
         if options.bcmath {
             let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
             program = elephc::core_prelude::inject_if_used(program, &mut inventory);

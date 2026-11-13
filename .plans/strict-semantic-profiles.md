@@ -1277,3 +1277,25 @@ assembly comment alignment, example PHP syntax and diff hygiene pass. Compiler
 and exporter builds also pass. Public feature admission
 remains unchanged. Next verify caller policy across outlined boxed helpers before
 continuing builtin domains and the remaining strict families.
+
+### Caller policy in outlined boxed operators
+
+Shared boxed operator helpers now distinguish trusted implementation source from
+user operations whenever a semantic profile is active. User helpers retain their
+selected guards and overflow kernels. Trusted helpers carry an internal identity
+and lower with SourceMode::Internal, preserving PHP promotion, numeric-string
+conversion, negative integer powers and string updates. Permissive helper names
+remain stable. Both paths share parameter ownership and exceptional cleanup with
+callable bodies, while only public builtin adapters carry the builtin invocation
+flag. Native object comparison dispatch also has an explicit Internal contract.
+
+A selected-frontend EIR regression passes on all five targets for Overflow,
+Arithmetic and Coercions, with both optimizer settings and both caller policies
+in one module. Native promotion/conversion/power/update/Number cases pass with
+both optimizers and clean heaps. Existing shared XML/Number dispatch and public
+pow policy controls pass, as does the previous native builtin power coverage.
+The initial native fixture setup was corrected to feed tagless input to the
+Internal lexer before runtime verification. Compiler build, the prebuilt target
+architecture gate, assembly comment checks and diff hygiene pass. No public
+feature admission changes. Builtin domains, conversion/binding contracts and the
+remaining strict families are still active implementation work.

@@ -67,3 +67,27 @@ $result = numericBuiltinPow($number, 3); echo '|', get_class($result), ':', $res
         }
     }
 }
+
+
+/// Outlined internal arithmetic keeps PHP promotion, conversion and updates in a strict module.
+#[test]
+fn test_strict_boxed_operator_internal_policy_native_dispatch_and_owners() {
+    let source = r#"<?php
+function trustedAdd(mixed $left, mixed $right): mixed { return $left + $right; }
+function trustedPow(mixed $left, mixed $right): mixed { return $left ** $right; }
+function trustedInc(mixed $value): mixed { return ++$value; }
+$number = new BcMath\Number('2');
+echo is_float(trustedAdd(PHP_INT_MAX, 1)) ? 'F' : 'I', ':', trustedAdd('2', 3), '|';
+echo trustedPow(2, -1), ':', trustedPow('2', 3), '|', trustedInc('az'), '|';
+$result = trustedAdd($number, 3); echo get_class($result), ':', $result->value;
+"#;
+    for feature in [StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions] {
+        for optimize in [false, true] {
+            let output = StrictFixture::new(source).capture_staged_internal_bcmath(
+                SemanticProfile::PERMISSIVE.with(feature, true), optimize);
+            assert!(output.success, "{feature:?}, opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+            assert_eq!(output.stdout, "F:5|0.5:8|ba|BcMath\\Number:5", "{feature:?}, opt={optimize}");
+            assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{feature:?}, opt={optimize}: {}", output.stderr);
+        }
+    }
+}
