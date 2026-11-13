@@ -16,8 +16,9 @@
 //!   proof falls back to the ordinary `array_map()` lowering.
 //! - Non-empty all-int array literals, `range()` calls with integer-literal arguments,
 //!   key-renumbering `array_slice()` calls, `array_values()`, default
-//!   `array_reverse()` calls, and `array_fill(0, $n, <int literal>)` are proven
-//!   structurally (recursively through slices, values, reversals and fills).
+//!   `array_reverse()` calls, `array_fill(0, $n, <int literal>)`, and two-operand
+//!   `array_merge()` calls are proven structurally (recursively through slices,
+//!   values, reversals, fills and merges).
 //! - A candidate is marked only when every use of its destination local and value aliases
 //!   is one of: indexed reads, value-`foreach`, read-only aliasing, or a whitelisted
 //!   storage-neutral builtin. Any element write, direct or through an alias, keeps the
@@ -609,6 +610,11 @@ pub(crate) fn is_packed_int_source_candidate(
                     args.len() == 3
                         && matches!(args[0].kind, ExprKind::IntLiteral(0))
                         && literal_i64(&args[2]).is_some()
+                }
+                "array_merge" => {
+                    args.len() == 2
+                        && is_packed_int_source_candidate(&args[0], functions)
+                        && is_packed_int_source_candidate(&args[1], functions)
                 }
                 _ => false,
             }

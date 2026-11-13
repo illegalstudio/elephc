@@ -669,8 +669,9 @@ pub(super) fn lower_count_explode(
 ///
 /// Variables use the lowering context's flow-sensitive type. Array literals, `range()` with
 /// integer-literal arguments, key-renumbering `array_slice()` over another proven source,
-/// `array_values()`, default `array_reverse()`, and `array_fill(0, $n, <int literal>)` are
-/// proven structurally. The marker accepts the same shapes; when this proof fails before
+/// `array_values()`, default `array_reverse()`, `array_fill(0, $n, <int literal>)`, and
+/// two-operand `array_merge()` are proven structurally. The marker accepts the same shapes;
+/// when this proof fails before
 /// any emission, the dispatcher falls back to the ordinary `array_map()` lowering.
 fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
     match &expr.kind {
@@ -721,6 +722,11 @@ fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> boo
                     args.len() == 3
                         && matches!(args[0].kind, ExprKind::IntLiteral(0))
                         && integer_literal(&args[2]).is_some()
+                }
+                "array_merge" => {
+                    args.len() == 2
+                        && lowering_packed_int_source(ctx, &args[0])
+                        && lowering_packed_int_source(ctx, &args[1])
                 }
                 _ => false,
             }
