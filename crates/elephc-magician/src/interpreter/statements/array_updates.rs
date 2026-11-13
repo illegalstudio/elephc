@@ -13,11 +13,15 @@ use super::*;
 pub(in crate::interpreter) fn eval_inc_dec_value(
     current: RuntimeCellHandle,
     increment: bool,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Overflow) {
+        return crate::interpreter::checked_numeric::update(current, increment, context, values);
+    }
     if !increment && values.is_null(current)? {
         values.warning(
-            "Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n",
+            elephc_semantics::numeric::NULL_DECREMENT_WARNING,
         )?;
         return values.retain(current);
     }
@@ -73,7 +77,7 @@ pub(super) fn eval_static_property_inc_dec_result(
 ) -> Result<(), EvalStatus> {
     let current = eval_static_property_get_result(class_name, property, context, values)?;
     with_eval_value_lease(current, context, values, |current, context, values| {
-        let value = eval_inc_dec_value(current, increment, values)?;
+        let value = eval_inc_dec_value(current, increment, context, values)?;
         with_eval_value_lease(value, context, values, |value, context, values| {
             eval_static_property_set_result(class_name, property, value, context, values)
         })

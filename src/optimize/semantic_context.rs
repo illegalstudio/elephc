@@ -90,6 +90,13 @@ pub(super) fn checked_numeric_conversion_may_dispatch(expr: &crate::parser::ast:
     })
 }
 
+/// Dynamic checked updates may diagnose values or enter arbitrary warning callbacks.
+pub(super) fn checked_update_may_dispatch(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::ExprKind;
+    enabled(StrictFeature::Overflow) && matches!(expr.kind, ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_)
+        | ExprKind::PreDecrement(_) | ExprKind::PostDecrement(_))
+}
+
 /// Conservatively preserves a condition guard unless syntax guarantees a boolean result.
 pub(super) fn boolean_guard_may_throw(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::{BinOp, CastType, ExprKind};

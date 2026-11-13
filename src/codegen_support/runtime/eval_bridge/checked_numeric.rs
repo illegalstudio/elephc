@@ -36,6 +36,8 @@ fn body(emitter: &mut Emitter) {
         (CheckedNumericOp::Abs, "__rt_strict_abs_mixed"),
         (CheckedNumericOp::ArraySum, "__rt_strict_array_sum_boxed"),
         (CheckedNumericOp::ArrayProduct, "__rt_strict_array_product_boxed"),
+        (CheckedNumericOp::Increment, "__rt_strict_mixed_inc_dec"),
+        (CheckedNumericOp::Decrement, "__rt_strict_mixed_inc_dec"),
     ];
     if supported {
         abi::emit_load_temporary_stack_slot(emitter, result, TRY_HANDLER_SLOT_SIZE);
@@ -52,8 +54,12 @@ fn body(emitter: &mut Emitter) {
     if supported {
         for (op, target) in operations {
             emitter.label(&format!("{prefix}_{}", op as u64));
-            abi::emit_load_temporary_stack_slot(emitter, result, TRY_HANDLER_SLOT_SIZE + 8);
-            abi::emit_load_temporary_stack_slot(emitter, right, TRY_HANDLER_SLOT_SIZE + 16);
+            if matches!(op, CheckedNumericOp::Increment | CheckedNumericOp::Decrement) {
+                borrowed_update(emitter, op);
+            } else {
+                abi::emit_load_temporary_stack_slot(emitter, result, TRY_HANDLER_SLOT_SIZE + 8);
+                abi::emit_load_temporary_stack_slot(emitter, right, TRY_HANDLER_SLOT_SIZE + 16);
+            }
             abi::emit_call_label(emitter, target);
             abi::emit_jump(emitter, &success);
         }
@@ -63,6 +69,33 @@ fn body(emitter: &mut Emitter) {
         abi::emit_load_int_immediate(emitter, result, 0);
     }
     emitter.label(&done);
+}
+
+/// Copies a canonical borrowed value into headerless spills so unique-cell updates cannot mutate it.
+fn borrowed_update(emitter: &mut Emitter, op: CheckedNumericOp) {
+    let result = abi::int_result_reg(emitter);
+    let (low, high) = if emitter.target.arch == Arch::AArch64 { ("x1", "x2") } else { ("rdi", "rdx") };
+    abi::emit_load_temporary_stack_slot(emitter, result, TRY_HANDLER_SLOT_SIZE + 8);
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    for (register, offset) in [(result, 0), (low, 8), (high, 16)] {
+        abi::emit_store_to_sp(emitter, register, TRY_HANDLER_SLOT_SIZE + offset);
+    }
+    if op == CheckedNumericOp::Decrement {
+        let ready = "__rt_eval_checked_numeric_v1_decrement_ready";
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("cmp x0, #8"),                 // null decrement diagnoses a no-op without entering Rust
+            Arch::X86_64 => emitter.instruction("cmp rax, 8"),                  // null decrement diagnoses a no-op without entering Rust
+        }
+        abi::emit_branch_if_not_equal_wide(emitter, ready);
+        abi::emit_symbol_address(emitter, if emitter.target.arch == Arch::AArch64 { "x1" } else { "rdi" },
+            "_strict_eval_null_decrement_warning");
+        abi::emit_load_int_immediate(emitter, if emitter.target.arch == Arch::AArch64 { "x2" } else { "rsi" },
+            elephc_semantics::numeric::NULL_DECREMENT_WARNING.len() as i64);
+        abi::emit_call_label(emitter, "__rt_diag_warning");
+        emitter.label(ready);
+    }
+    abi::emit_sp_address(emitter, result, TRY_HANDLER_SLOT_SIZE);
+    abi::emit_load_int_immediate(emitter, low, if op == CheckedNumericOp::Increment { 1 } else { -1 });
 }
 
 #[cfg(test)]
@@ -88,6 +121,12 @@ mod tests {
                     assert_eq!(asm.contains(&format!("__rt_strict_mixed_numeric_{entry}")), checked, "{name}");
                 }
                 assert_eq!(asm.contains("__rt_strict_abs_mixed"), checked, "{name}");
+                assert_eq!(asm.matches("__rt_strict_mixed_inc_dec").count(), if checked { 2 } else { 0 }, "{name}");
+                if checked {
+                    assert!(asm.contains("_strict_eval_null_decrement_warning"), "{name}");
+                    let address = if name.ends_with("x86_64") { "lea rax, [rsp + 224]" } else { "add x0, x0, #224" };
+                    assert_eq!(asm.matches(address).count(), 2, "{name}: updates must lend headerless value copies");
+                }
                 for op in ["sum", "product"] {
                     assert_eq!(asm.contains(&format!("__rt_strict_array_{op}_boxed")), checked, "{name}");
                 }

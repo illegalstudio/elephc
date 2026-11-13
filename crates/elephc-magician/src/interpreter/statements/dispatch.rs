@@ -300,7 +300,7 @@ pub(in crate::interpreter) fn execute_stmt(
                 scope,
                 values,
             )?;
-            let value = match eval_inc_dec_value(current, *increment, values) {
+            let value = match eval_inc_dec_value(current, *increment, context, values) {
                 Ok(value) => value,
                 Err(status) => {
                     let _ = eval_release_value(context, values, current);

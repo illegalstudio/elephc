@@ -278,7 +278,7 @@ fn step(
         Op::IncDec(slot, increment) => {
             let name = local_name(vm, slot)?;
             let current = load_local(vm, &name, context, scope, values)?;
-            let updated = with_runtime_owners(&current, || eval_inc_dec_value(current, increment, values));
+            let updated = with_runtime_owners(&current, || eval_inc_dec_value(current, increment, context, values));
             let updated = finish_eval_argument_values(updated, [current], context, values)?;
             store_local(vm, &name, updated, context, scope, values)?;
         }

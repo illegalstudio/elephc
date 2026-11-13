@@ -74,7 +74,16 @@ pub(super) fn mixed_entry(emitter: &mut Emitter) {
         Arch::AArch64 => emitter.instruction("cmp x0, #0"),                     // genuine integer payloads need a checked step before any mutation
         Arch::X86_64 => emitter.instruction("cmp rax, 0"),                      // genuine integer payloads need a checked step before any mutation
     }
-    abi::emit_branch_if_not_equal_wide(emitter, "__rt_strict_mixed_inc_dec_php");
+    abi::emit_branch_if_equal_wide(emitter, "__rt_strict_mixed_inc_dec_integer");
+    for tag in [2, 3, 8] {
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction(&format!("cmp x0, #{tag}")),   // retain the reviewed scalar PHP update domains
+            Arch::X86_64 => emitter.instruction(&format!("cmp rax, {tag}")),    // retain the reviewed scalar PHP update domains
+        }
+        abi::emit_branch_if_equal_wide(emitter, "__rt_strict_mixed_inc_dec_php");
+    }
+    abi::emit_jump(emitter, super::super::arrays::strict_numeric_operand::TYPE_FAIL);
+    emitter.label("__rt_strict_mixed_inc_dec_integer");
     abi::emit_load_temporary_stack_slot(emitter, scratch, 8);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction("adds x9, x1, x9"),                // test the signed integer step without changing the source cell

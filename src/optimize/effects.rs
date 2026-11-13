@@ -373,7 +373,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::PreDecrement(name)
         | ExprKind::PostDecrement(name) => {
             let effect = Effect::PURE.with_side_effects();
-            if is_reference_volatile(name) {
+            if is_reference_volatile(name) || super::semantic_context::checked_update_may_dispatch(expr) {
                 effect.with_may_throw().with_writes_globals()
             } else if super::semantic_context::integer_overflow_may_throw(expr) {
                 effect.with_may_throw()

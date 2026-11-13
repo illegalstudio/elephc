@@ -152,3 +152,89 @@ if ($argc < 0) { throw new ArithmeticError('reduction callback metadata'); }
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+
+/// Mutation-capable kernels receive borrowed stack cells and return independent result owners.
+#[test]
+fn test_strict_eval_updates_staged_native_callback_borrows_and_failures() {
+    let source = r#"<?php
+extern class UpdateCell { public int $tag; public int $low; public int $high; }
+extern class UpdateOutput { public ptr $cell; }
+extern function malloc(int $size): ptr;
+extern function free(ptr $memory): void;
+extern function __elephc_eval_value_int(int $value): ptr;
+extern function __elephc_eval_value_null(): ptr;
+extern function __elephc_eval_value_string(string $value, int $length): ptr;
+extern function __elephc_eval_value_array_new(int $capacity): ptr;
+extern function __elephc_eval_checked_numeric_v1(int $op, ptr $left, ptr $right, ptr $output): int;
+extern function __elephc_eval_value_take_pending_throwable_v2(): ptr;
+extern function __elephc_eval_value_release_v3(ptr $cell, ptr $error): int;
+$error = malloc(8); ptr_set($error, 0);
+$output = ptr_cast<UpdateOutput>(malloc(8));
+foreach ([7, 8] as $op) {
+    $input = __elephc_eval_value_int(10); $original = ptr_cast<UpdateCell>($input);
+    echo __elephc_eval_checked_numeric_v1($op, $input, $input, $output), ':';
+    $result = ptr_cast<UpdateCell>($output->cell); echo $result->low, ':', $original->low, ':';
+    echo __elephc_eval_value_release_v3($output->cell, $error), ':';
+    echo __elephc_eval_value_release_v3($input, $error), '|';
+    $input = __elephc_eval_value_int($op === 7 ? PHP_INT_MAX : PHP_INT_MIN);
+    $original = ptr_cast<UpdateCell>($input); ptr_set($output, 123);
+    echo __elephc_eval_checked_numeric_v1($op, $input, $input, $output), ':', ptr_get($output), ':', $original->low, ':';
+    $thrown = __elephc_eval_value_take_pending_throwable_v2();
+    echo __elephc_eval_value_release_v3($thrown, $error), ':';
+    echo __elephc_eval_value_release_v3($input, $error), '|';
+}
+$input = __elephc_eval_value_string('9223372036854775807', 19); ptr_set($output, 123);
+echo __elephc_eval_checked_numeric_v1(7, $input, $input, $output), ':', ptr_get($output), ':';
+$thrown = __elephc_eval_value_take_pending_throwable_v2();
+echo __elephc_eval_value_release_v3($thrown, $error), ':';
+echo __elephc_eval_value_release_v3($input, $error), '|';
+$input = __elephc_eval_value_null(); ptr_set($output, 123);
+set_error_handler(function (int $severity, string $message): bool { throw new RuntimeException('null decrement'); });
+echo __elephc_eval_checked_numeric_v1(8, $input, $input, $output), ':', ptr_get($output), ':';
+$thrown = __elephc_eval_value_take_pending_throwable_v2();
+echo __elephc_eval_value_release_v3($thrown, $error), ':';
+restore_error_handler();
+echo __elephc_eval_value_release_v3($input, $error), '|';
+$input = __elephc_eval_value_array_new(0); ptr_set($output, 123);
+echo __elephc_eval_checked_numeric_v1(7, $input, $input, $output), ':', ptr_get($output), ':';
+$thrown = __elephc_eval_value_take_pending_throwable_v2();
+echo __elephc_eval_value_release_v3($thrown, $error), ':';
+echo __elephc_eval_value_release_v3($input, $error);
+free($output); free($error);
+if ($argc < 0) { throw new ArithmeticError('update metadata'); throw new TypeError('type metadata'); }
+"#;
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "0:11:10:0:0|2:123:9223372036854775807:0:0|0:9:10:0:0|2:123:-9223372036854775808:0:0|2:123:0:0|2:123:0:0|2:123:0:0", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
+
+/// Checked update callbacks keep catch clauses and argument owners alive through optimization.
+#[test]
+fn test_strict_eval_updates_staged_aot_warning_and_type_failures() {
+    let source = r#"<?php
+function strictNullUpdate(): void {
+    $value = null;
+    try { $value--; } catch (RuntimeException $error) { echo 'N'; }
+}
+function strictInvalidUpdate(mixed $value): void {
+    try { $value++; } catch (TypeError $error) { echo 'A'; }
+}
+set_error_handler(function (int $severity, string $message): bool { throw new RuntimeException('update warning'); });
+strictNullUpdate();
+restore_error_handler();
+strictInvalidUpdate([1]);
+"#;
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "NA", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

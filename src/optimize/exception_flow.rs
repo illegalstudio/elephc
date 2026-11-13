@@ -892,7 +892,10 @@ impl ExceptionFlowAnalysis {
         let overflow = if super::semantic_context::integer_overflow_may_throw(expr) {
             ThrownTypes::exact("ArithmeticError")
         } else { ThrownTypes::default() };
-        overflow.combined(match &expr.kind {
+        let update = if super::semantic_context::checked_update_may_dispatch(expr) {
+            ThrownTypes::unknown()
+        } else { ThrownTypes::default() };
+        overflow.combined(update).combined(match &expr.kind {
             ExprKind::Throw(inner) => operand(inner)
                 .combined(self.thrown_value_types(inner, bindings, class_context)),
             ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {

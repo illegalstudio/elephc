@@ -14,7 +14,7 @@ use elephc_semantics::{SemanticProfile, StrictFeature};
 
 const TYPE_MESSAGE: &str = "Unsupported operand types for numeric arithmetic";
 const TYPE_LABEL: &str = "_strict_numeric_operand_type_message";
-const TYPE_FAIL: &str = "__rt_strict_numeric_operand_type_fail";
+pub(in crate::codegen_support::runtime) const TYPE_FAIL: &str = "__rt_strict_numeric_operand_type_fail";
 pub(super) const PREFIX_WARNING: &str = "Warning: A non-numeric value encountered\n";
 pub(super) const PREFIX_LABEL: &str = "_strict_numeric_prefix_warning";
 

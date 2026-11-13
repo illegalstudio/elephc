@@ -45,3 +45,19 @@ pub(super) fn apply(
         result => result,
     }
 }
+
+
+/// Checks a scalar update before writeback and preserves internal-class arithmetic adapters.
+pub(super) fn update(
+    current: RuntimeCellHandle, increment: bool,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if values.type_tag(current)? == EVAL_TAG_OBJECT {
+        let one = values.int(1)?;
+        let result = binary(if increment { EvalBinOp::Add } else { EvalBinOp::Sub }, current, one, context, values)
+            .and_then(|value| value.ok_or(EvalStatus::UnsupportedConstruct));
+        return finish_synthesized_method_arguments(result, [one], context, values);
+    }
+    let op = if increment { CheckedNumericOp::Increment } else { CheckedNumericOp::Decrement };
+    apply(op, current, current, context, values)
+}

@@ -922,3 +922,33 @@ docs/architecture audits and assembly/diff hygiene pass; generated docs are
 unchanged. The older permissive interpreter loop's intermediate-owner cleanup is
 tracked separately as journal task b388f531. Checked eval updates and the remaining
 strict guarantees continue before public activation.
+
+
+### Checked eval updates and borrowed native inputs
+
+The numeric callback appends Increment/Decrement selectors. Each selected update
+canonicalizes its borrowed input into the protected callback's headerless spills
+before invoking the existing update kernel, preventing its unique-cell fast path
+from mutating the caller's original value. The output pointer keeps its separate
+spill, and no extra retained input can be stranded by a native throw. Null
+-decrement warnings execute inside the protected callback. Internal-class update
+arithmetic retains the reviewed object adapters. Invalid scalar update domains
+throw through the shared TypeError path before replacement.
+
+Walker/VM, member/static and reference consumers pass their context through the
+same checked operation selector. Checked update EIR effects and AST exception/
+mutation summaries include arbitrary callbacks, retaining catch clauses and
+invalidating affected facts. The existing PHP boolean update kind deviation is
+tracked in the pre-existing task03217601; duplicate audit task afea61a3 was
+explicitly dismissed in favor of that original.
+
+Validation: both focused eval matrices pass for numeric/string domains, empty
+strings, null warnings, overflow, original-value preservation and by-ref cleanup.
+Both native fixtures pass both optimizer settings with clean heaps, independent
+results from uniquely owned inputs, intact failure outputs, protected warning
+exceptions and retained AOT catch clauses. The all-five-target callback/update
+units, existing AOT storage/update matrix and prior native arithmetic/reduction
+callback matrices pass. Compiler build, assembly comments and diff hygiene pass.
+Updates use the shared stack-pointer address helper through a crate-local ABI
+re-export. No builtin surface or generated documentation metadata changed. Other
+strict guarantees and remaining boundary audits continue before activation.

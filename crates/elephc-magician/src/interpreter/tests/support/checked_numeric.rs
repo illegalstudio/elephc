@@ -50,6 +50,9 @@ impl FakeOps {
     pub(super) fn runtime_checked_numeric(
         &mut self, op: CheckedNumericOp, left: RuntimeCellHandle, right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if matches!(op, CheckedNumericOp::Increment | CheckedNumericOp::Decrement) {
+            return self.runtime_checked_update(left, op == CheckedNumericOp::Increment);
+        }
         if matches!(op, CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct) {
             return self.runtime_checked_aggregate(op, left);
         }
@@ -75,7 +78,8 @@ impl FakeOps {
         let integer_op = match op {
             CheckedNumericOp::Add => IntegerOp::Add, CheckedNumericOp::Sub => IntegerOp::Sub,
             CheckedNumericOp::Mul => IntegerOp::Mul, CheckedNumericOp::Pow => IntegerOp::Pow,
-            CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct =>
+            CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
+                | CheckedNumericOp::Increment | CheckedNumericOp::Decrement =>
                 unreachable!("unary and reduction operations were handled above"),
         };
         if let (Number::Int(left), Number::Int(right)) = (left, right) {
@@ -91,9 +95,57 @@ impl FakeOps {
             CheckedNumericOp::Sub => left.float() - right.float(),
             CheckedNumericOp::Mul => left.float() * right.float(),
             CheckedNumericOp::Pow => left.float().powf(right.float()),
-            CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct =>
+            CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
+                | CheckedNumericOp::Increment | CheckedNumericOp::Decrement =>
                 unreachable!("unary and reduction operations were handled above"),
         })
+    }
+
+    /// Preserves PHP string update domains while checking integer steps before any replacement.
+    fn runtime_checked_update(
+        &mut self, current: RuntimeCellHandle, increment: bool,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if !increment && matches!(self.get(current), FakeValue::Null) {
+            self.warning(elephc_semantics::numeric::NULL_DECREMENT_WARNING)?;
+            return self.null();
+        }
+        let bytes = match self.get(current) {
+            FakeValue::String(value) => Some(value.into_bytes()), FakeValue::Bytes(value) => Some(value), _ => None,
+        };
+        if let Some(mut bytes) = bytes {
+            let numeric = std::str::from_utf8(&bytes).ok()
+                .and_then(elephc_semantics::numeric_string::scan_numeric_prefix)
+                .is_some_and(|scan| scan.is_fully_numeric());
+            if !numeric {
+                if bytes.is_empty() {
+                    return if increment { self.string("1") } else { self.int(-1) };
+                }
+                if increment {
+                    let mut carry = true;
+                    let mut leading = b'1';
+                    for byte in bytes.iter_mut().rev() {
+                        match *byte {
+                            b'9' => { *byte = b'0'; leading = b'1'; }
+                            b'z' => { *byte = b'a'; leading = b'a'; }
+                            b'Z' => { *byte = b'A'; leading = b'A'; }
+                            b'0'..=b'8' | b'a'..=b'y' | b'A'..=b'Y' => { *byte += 1; carry = false; break; }
+                            _ => { carry = false; break; }
+                        }
+                    }
+                    if carry { bytes.insert(0, leading); }
+                }
+                return self.string_bytes_value(&bytes);
+            }
+        }
+        let one = self.int(1)?;
+        let op = if increment { CheckedNumericOp::Add } else { CheckedNumericOp::Sub };
+        let result = self.runtime_checked_numeric(op, current, one);
+        let released = self.release(one);
+        match (result, released) {
+            (Err(status), _) => Err(status),
+            (Ok(value), Err(status)) => { let _ = self.release(value); Err(status) }
+            (Ok(value), Ok(())) => Ok(value),
+        }
     }
 
     /// Models checked numeric reductions without allocating an unrooted intermediate carry.

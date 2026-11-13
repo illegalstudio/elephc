@@ -275,3 +275,74 @@ fn strict_eval_reductions_staged_calls_kinds_and_ownership() {
         for (id, count) in &values.cell_owners { assert_eq!(*count, 0, "{source}: {:?}", values.values[id]); }
     }
 }
+
+
+/// Scalar updates check before replacement and preserve string domains in both eval consumers.
+#[test]
+fn strict_eval_updates_staged_walker_vm_values_and_owners() {
+    for (initial, update, expected) in [
+        ("10", "$value++;", Some(FakeValue::Int(11))),
+        ("10", "--$value;", Some(FakeValue::Int(9))),
+        ("1.5", "$value++;", Some(FakeValue::Float(2.5))),
+        ("'1.5'", "$value--;", Some(FakeValue::Float(0.5))),
+        ("'az'", "$value++;", Some(FakeValue::String("ba".into()))),
+        ("'abc'", "$value--;", Some(FakeValue::String("abc".into()))),
+        ("''", "$value++;", Some(FakeValue::String("1".into()))),
+        ("''", "$value--;", Some(FakeValue::Int(-1))),
+        ("null", "$value--;", Some(FakeValue::Null)),
+        ("9223372036854775807", "$value++;", None),
+        ("-9223372036854775808", "--$value;", None),
+        ("'9223372036854775807'", "$value++;", None),
+    ] {
+        let source = format!("$value = {initial}; {update} return $value;");
+        for vm in [false, true] {
+            let mut context = ElephcEvalContext::new();
+            context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)).unwrap();
+            let mut scope = ElephcEvalScope::new();
+            let mut values = FakeOps::default();
+            match (staged_numeric_execution(&source, vm, &mut context, &mut scope, &mut values), &expected) {
+                (Ok(EvalControl::Return(value)), Some(expected)) => {
+                    assert_eq!(&values.get(value), expected, "{source}, vm={vm}");
+                    values.release(value).unwrap();
+                    if initial == "null" { assert_eq!(values.warnings, [elephc_semantics::numeric::NULL_DECREMENT_WARNING]); }
+                }
+                (Err(EvalStatus::UncaughtThrowable), None) => {
+                    let error = context.take_pending_throw().expect("update exception owner");
+                    assert!(values.object_is_a(error, "ArithmeticError", false).unwrap());
+                    values.release(error).unwrap();
+                    let expected = if initial.starts_with('\'') { FakeValue::String("9223372036854775807".into()) }
+                        else { FakeValue::Int(if initial.starts_with('-') { i64::MIN } else { i64::MAX }) };
+                    assert_eq!(values.get(scope.visible_cell("value").unwrap()), expected, "{source}, vm={vm}");
+                }
+                _ => panic!("unexpected update result: {source}, vm={vm}"),
+            }
+            for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+            for (id, count) in &values.cell_owners { assert_eq!(*count, 0, "{source}, vm={vm}: {:?}", values.values[id]); }
+        }
+    }
+}
+
+
+/// By-reference eval calls cannot publish an overflowing update through their caller's slot.
+#[test]
+fn strict_eval_updates_staged_reference_writeback_preserves_original() {
+    for (initial, operation, expected) in [
+        ("9223372036854775807", "$argument++;", FakeValue::Int(i64::MAX)),
+        ("-9223372036854775808", "--$argument;", FakeValue::Int(i64::MIN)),
+        ("'9223372036854775807'", "$argument++;", FakeValue::String("9223372036854775807".into())),
+    ] {
+        let source = format!("function updateStrictReference(&$argument) {{ {operation} }} $value = {initial}; updateStrictReference($value);");
+        let mut context = ElephcEvalContext::new();
+        context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)).unwrap();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert!(matches!(staged_numeric_execution(&source, false, &mut context, &mut scope, &mut values),
+            Err(EvalStatus::UncaughtThrowable)), "{source}");
+        let error = context.take_pending_throw().expect("reference update failure owner");
+        assert!(values.object_is_a(error, "ArithmeticError", false).unwrap());
+        values.release(error).unwrap();
+        assert_eq!(values.get(scope.visible_cell("value").unwrap()), expected, "{source}");
+        for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+        for (id, count) in &values.cell_owners { assert_eq!(*count, 0, "{source}: {:?}", values.values[id]); }
+    }
+}

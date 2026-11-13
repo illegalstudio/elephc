@@ -1393,7 +1393,7 @@ impl Op {
     /// Includes catchable arithmetic failure and unwinding for an explicitly checked operation.
     pub fn arithmetic_effects(self, policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy) -> Effects {
         // Numeric string warnings may enter arbitrary PHP callbacks before arithmetic completes.
-        if self == Op::MixedNumericBinop && policy.checked_overflow() { return Effects::php_callback(); }
+        if matches!(self, Op::MixedNumericBinop | Op::StrIncDec) && policy.checked_overflow() { return Effects::php_callback(); }
         self.default_effects() | if policy.checked_overflow() { Op::ThrowArithmeticError.default_effects() } else { Effects::PURE }
     }
 

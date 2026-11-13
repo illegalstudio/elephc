@@ -13,6 +13,7 @@ mod borrowed_numeric;
 mod calls;
 mod call_operand_scope;
 mod frame;
+pub(crate) use frame::emit_sp_address;
 pub(crate) mod immediate;
 mod registers;
 mod php_return;
