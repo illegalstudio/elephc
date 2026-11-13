@@ -422,7 +422,8 @@ pub(super) fn root_non_aliasing_callback_operands(
     use crate::ir::RuntimeCallTarget;
     let needs_unwind_roots = match def.spec.semantics.lowering {
         BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)
-            | RuntimeCallTarget::ProfiledFunction { target, .. }) => {
+            | RuntimeCallTarget::ProfiledFunction { target, .. }
+            | RuntimeCallTarget::NumericFunction { target, .. }) => {
             target.string_callback_operand_index().is_some()
                 // Aggregates enter user code through warning handlers rather than
                 // an explicit callback operand. Their internal snapshot does not

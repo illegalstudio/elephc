@@ -1474,6 +1474,13 @@ fn validate_typed_runtime_call(
     let Some(Immediate::RuntimeCall(target)) = inst.immediate else {
         return Ok(());
     };
+    if let crate::ir::RuntimeCallTarget::NumericFunction { target, policy } = target {
+        if target != crate::ir::RuntimeFnId::Abs || !policy.checked_overflow()
+            || !inst.effects.contains(Effects::MAY_THROW)
+            || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
+            || inst.result_php_type != PhpType::Mixed
+        { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
+    }
     if target == crate::ir::RuntimeCallTarget::ExceptionGuardOwned {
         check_count(inst_id, inst, 2, "owned heap value and insertion token")?;
         check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")?;

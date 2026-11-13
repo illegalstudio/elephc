@@ -125,7 +125,8 @@ pub(super) fn lower(
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)
         }
-        RuntimeCallTarget::Function(target) => super::runtime_functions::lower(ctx, inst, target),
+        RuntimeCallTarget::Function(target) | RuntimeCallTarget::NumericFunction { target, .. } =>
+            super::runtime_functions::lower(ctx, inst, target),
         RuntimeCallTarget::ProfiledFunction { target, .. } => {
             super::runtime_functions::lower(ctx, inst, target)
         }

@@ -17,7 +17,7 @@
 //!   trailing id keeps two functions with similar names from emitting the same label.
 
 use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethodCallableCase};
-use crate::ir::{CoreBuiltinOp, Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
+use crate::ir::{CoreBuiltinOp, Function, Immediate, Module, Op, RuntimeFnId};
 use crate::types::{FunctionSig, PhpType};
 
 /// Optional runtime families discovered while codegen lowers synthetic EIR functions.
@@ -165,14 +165,7 @@ impl SharedCodegenState {
         for inst in &function.instructions {
             match inst.op {
                 Op::RuntimeCall => {
-                    let target = match inst.immediate {
-                        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
-                        | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
-                            target,
-                            ..
-                        })) => Some(target),
-                        _ => None,
-                    };
+                    let target = inst.runtime_function();
                     self.generated_runtime_features.object_clone |=
                         target == Some(RuntimeFnId::CloneWith);
                 }

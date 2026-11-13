@@ -101,10 +101,16 @@ impl PassOrigin {
 }
 
 impl Instruction {
+    /// Exposes typed builtin identity to metadata consumers while leaving the full call policy intact.
+    pub fn runtime_function(&self) -> Option<RuntimeFnId> {
+        match self.immediate { Some(Immediate::RuntimeCall(target)) => target.function_id(), _ => None }
+    }
+
     /// Returns the explicit operation policy, leaving legacy PHP numeric instructions unchanged.
     pub fn arithmetic_policy(&self) -> elephc_semantics::arithmetic_policy::ArithmeticPolicy {
         match self.immediate {
-            Some(Immediate::NumericOperation { policy, .. } | Immediate::NumericUpdate { policy, .. }) => policy,
+            Some(Immediate::NumericOperation { policy, .. } | Immediate::NumericUpdate { policy, .. }
+                | Immediate::RuntimeCall(RuntimeCallTarget::NumericFunction { policy, .. })) => policy,
             _ => elephc_semantics::arithmetic_policy::ArithmeticPolicy::PERMISSIVE,
         }
     }
@@ -177,6 +183,7 @@ impl Instruction {
                     | RuntimeCallTarget::PendingAppendFetchForWriteAlreadyDiagnosed,
                 )) => false,
                 Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+                | Some(Immediate::RuntimeCall(RuntimeCallTarget::NumericFunction { target, .. }))
                 | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
                     target,
                     ..

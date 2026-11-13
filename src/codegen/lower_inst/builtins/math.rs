@@ -43,6 +43,15 @@ const CLAMP_STACK_BYTES: usize = 48;
 /// Lowers `abs()` for concrete integer-like and floating operands.
 pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "abs", 1)?;
+    if inst.arithmetic_policy().checked_overflow() {
+        let value = expect_operand(inst, 0)?;
+        abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+        super::arrays::store_borrowed_cell(ctx, value, 0)?;
+        abi::emit_temporary_stack_address(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        abi::emit_call_label(ctx.emitter, "__rt_strict_abs_mixed");
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        return store_if_result(ctx, inst);
+    }
     let value = expect_operand(inst, 0)?;
     let emitted_type = match ctx.load_value_to_result(value)?.codegen_repr() {
         PhpType::Float => {

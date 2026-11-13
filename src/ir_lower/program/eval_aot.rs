@@ -196,13 +196,7 @@ pub(in crate::ir_lower) fn all_lowered_functions(module: &Module) -> impl Iterat
 pub(super) fn typed_builtin_target(
     inst: &crate::ir::Instruction,
 ) -> Option<crate::ir::RuntimeFnId> {
-    match inst.immediate {
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => Some(target),
-        Some(Immediate::RuntimeCall(
-            crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
-        )) => Some(target),
-        _ => None,
-    }
+    inst.runtime_function()
 }
 
 /// Returns whether a typed builtin callback operand needs descriptor invocation support.

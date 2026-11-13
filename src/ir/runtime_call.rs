@@ -174,6 +174,13 @@ pub enum RuntimeCallTarget {
     Pcntl(crate::ir::PcntlRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
     Function(crate::ir::RuntimeFnId),
+    /// A numeric operation whose explicit guarantees survive lowering and optimization.
+    NumericFunction {
+        /// Authoritative builtin runtime identity, shared with its ordinary PHP entry.
+        target: crate::ir::RuntimeFnId,
+        /// Projected operation policy, never inferred from the emitter's module profile.
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy,
+    },
     /// A source-sensitive runtime function with visibility and parameter-coercion profiles.
     ProfiledFunction {
         /// Stable runtime function dispatched by the backend.
@@ -189,6 +196,16 @@ pub enum RuntimeCallTarget {
 }
 
 impl RuntimeCallTarget {
+    /// Reads builtin identity for dependency and contract analysis without discarding invocation policy.
+    /// Consumers rewriting a call must retain the original target rather than reconstruct Function.
+    pub fn function_id(self) -> Option<crate::ir::RuntimeFnId> {
+        match self {
+            Self::Function(target) | Self::ProfiledFunction { target, .. }
+            | Self::NumericFunction { target, .. } => Some(target),
+            _ => None,
+        }
+    }
+
     /// Returns the logical signature shared by EIR validation and backend lowering.
     pub fn signature(self) -> Option<RuntimeCallSignature> {
         match self {
@@ -323,7 +340,7 @@ impl RuntimeCallTarget {
                 result: IrType::Str,
             }),
             RuntimeCallTarget::Pcntl(target) => Some(target.signature()),
-            RuntimeCallTarget::Function(target) => {
+            RuntimeCallTarget::Function(target) | RuntimeCallTarget::NumericFunction { target, .. } => {
                 target.descriptor().logical_signature
             }
             RuntimeCallTarget::ProfiledFunction { target, arguments, .. } => {
@@ -401,7 +418,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::StringOffsetSet => "string.offset_set",
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
-            RuntimeCallTarget::Function(target) => target.as_eir(),
+            RuntimeCallTarget::Function(target) | RuntimeCallTarget::NumericFunction { target, .. } => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),
         }
     }

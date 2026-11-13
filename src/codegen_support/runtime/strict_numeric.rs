@@ -14,7 +14,7 @@ use elephc_semantics::{SemanticProfile, StrictFeature, numeric::INTEGER_OVERFLOW
 /// Emits the checked overflow message only when its runtime policy is present.
 pub(crate) fn data(profile: SemanticProfile) -> String {
     if !profile.contains(StrictFeature::Overflow) { return String::new(); }
-    format!("\n.data\n_strict_integer_overflow_message:\n.ascii \"{INTEGER_OVERFLOW_MESSAGE}\"\n")
+    format!("\n.data\n_strict_integer_overflow_message:\n.ascii \"{INTEGER_OVERFLOW_MESSAGE}\"\n{}", super::arrays::strict_abs::data(profile))
 }
 
 /// Emits a nonreturning overflow entry through the existing native exception machinery.

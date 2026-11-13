@@ -321,3 +321,37 @@ eval($code);
 "#);
     assert_eq!(fixture.run(&["--strict-bools"]), "5:0:E");
 }
+
+
+/// Checked abs throws before returning an invalid magnitude and releases every temporary argument.
+#[test]
+fn test_strict_abs_staged_native_calls_and_numeric_kinds() {
+    let source = r#"<?php
+function strict_abs_value(mixed $value): mixed { return abs($value); }
+function strict_abs_integer(int $value): mixed { return abs($value); }
+$minimum = $argc > 0 ? PHP_INT_MIN : 0;
+try { strict_abs_value($minimum); } catch (ArithmeticError $error) { echo 'M'; }
+try { strict_abs_integer($minimum); } catch (ArithmeticError $error) { echo 'I'; }
+$callback = abs(...);
+try { $callback($minimum); } catch (ArithmeticError $error) { echo 'F'; }
+try { call_user_func('abs', $minimum); } catch (ArithmeticError $error) { echo 'C'; }
+try { call_user_func_array('abs', [$minimum]); } catch (ArithmeticError $error) { echo 'A'; }
+$name = $argc > 0 ? 'abs' : 'floor';
+try { $name($minimum); } catch (ArithmeticError $error) { echo 'D'; }
+try { strict_abs_value('-922337203685477580' . (string) (7 + $argc)); } catch (ArithmeticError $error) { echo 'S'; } finally { echo 'X'; }
+try { strict_abs_value('12x'); } catch (TypeError $error) { echo 'T'; }
+echo is_int(strict_abs_value(-42)) ? 'N' : 'x';
+echo is_float(strict_abs_value(-1.25)) ? 'F' : 'x';
+echo is_float(strict_abs_value('-9223372036854775809')) ? 'W' : 'x';
+echo is_float(strict_abs_value('-1.25')) ? 'S' : 'x';
+echo is_float(strict_abs_value(-0.0)) ? 'Z' : 'x';
+echo strict_abs_value(true), strict_abs_value(null);
+"#;
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE.with(elephc_semantics::StrictFeature::Overflow, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "MIFCADSXTNFWSZ10", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

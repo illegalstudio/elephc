@@ -690,6 +690,44 @@ call_user_func and call_user_func_array paths on all five targets and all three
 source modes. Internal-only argument conditions verify that callable contract
 selection does not leak into expression checking. Architecture and assembly
 comment audits pass. Compiler and docs-exporter builds pass, and the generated
-builtin docs audits pass with no generated changes. Three unused convenience
-methods were removed after the compiler reported them; a final binary warning
-check is queued. Numeric builtin operations and eval parity remain next.
+builtin docs audits pass with no generated changes. Subsequent compiler builds
+also confirm the cleanup of unused convenience methods. Numeric operations are
+integrated in the following steps.
+
+
+### Checked absolute values and typed builtin operation policies
+
+Numeric runtime calls now carry an explicit ArithmeticPolicy beside the existing
+RuntimeFnId, with module identity and throwing-result validation. The ordinary
+Function target remains the PHP entry, so legacy integer-sink specializations
+cannot erase the new contract. Shared identity readers support dependency,
+resource, export and eval metadata analysis without reconstructing a call and
+losing its invocation policy.
+
+The abs home declares shared effects and EIR result normalization. Checked
+integer inputs retain Int contracts; dynamic inputs preserve runtime int/float
+kinds. The backend reuses borrowed stack-cell materialization instead of allocating
+untracked argument boxes. A separate checked runtime entry rejects INT_MIN with
+ArithmeticError, classifies full numeric strings without float rounding, retains
+float kinds and rejects unsupported numeric parameters with TypeError. Trusted
+Internal operations keep the ordinary PHP-promoting entry.
+
+Source evidence also covers abs through its typed runtime inventory and shared
+argument planner, including named arguments and static positional spreads. It
+retains numeric-string completeness, bool/null provenance and PHP strict_types
+state, so a parameter error cannot be mistaken for a proven overflow. Normalized
+argument clones use fresh address memos with the active constant cycle guard.
+Forward or conditional source/extern declarations prevent guessing a builtin
+binding, and unresolved namespaces remain conservative.
+
+Validation so far: checker, EIR and runtime tests pass on all five targets and all
+source modes. The source-constant regression and four prior numeric-evidence
+regressions pass. A native fixture passes with AST/EIR optimization enabled and
+disabled and a clean heap across direct, typed, first-class, CUF/CUFA and dynamic
+calls, fresh string inputs, exceptions/finally and numeric kind controls. Six
+ordinary PHP abs regressions pass. Compiler and docs-exporter builds, full builtin
+docs generation/audits, assembly comment alignment and diff hygiene pass. The
+final shared-identity refactor passes the same four new unit tests, four prior
+constant-evidence tests, both native optimization modes and the compiler build.
+Overflow remains staged until power, reductions, conversions, storage contracts
+and eval parity are complete.

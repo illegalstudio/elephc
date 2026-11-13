@@ -42,6 +42,7 @@ mod push;
 mod boxed_map_callback;
 mod boxed_merge;
 mod boxed_membership;
+pub(in crate::codegen::lower_inst) use boxed_membership::store_borrowed_cell;
 mod boxed_aggregate;
 mod boxed_reduce;
 mod boxed_predicates;

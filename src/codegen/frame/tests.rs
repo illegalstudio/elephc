@@ -9,6 +9,7 @@
 //! - Eval fixtures cover implicit process-superglobal ownership across all supported targets.
 
 use super::*;
+use crate::ir::RuntimeCallTarget;
 use crate::codegen::generate_user_asm_from_ir;
 use crate::codegen::platform::{Arch, Platform, Target};
 use crate::ir::{Builder, FunctionParam, IrType, LocalKind, Module, Ownership, Terminator};

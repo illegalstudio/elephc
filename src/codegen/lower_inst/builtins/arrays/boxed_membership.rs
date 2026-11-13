@@ -62,7 +62,7 @@ pub(super) fn lower_dynamic_membership(
 }
 
 /// Writes a borrowed tag/payload triple without allocating a managed Mixed cell.
-pub(super) fn store_borrowed_cell(ctx: &mut FunctionContext<'_>, value: ValueId, offset: usize) -> Result<()> {
+pub(in crate::codegen::lower_inst) fn store_borrowed_cell(ctx: &mut FunctionContext<'_>, value: ValueId, offset: usize) -> Result<()> {
     let ty = ctx.value_php_type(value)?.codegen_repr();
     ctx.load_value_to_result(value)?;
     let result = abi::int_result_reg(ctx.emitter);

@@ -30,7 +30,7 @@ use crate::codegen::{
 use crate::codegen_support::data_section::DataWord;
 use crate::codegen_support::try_handlers::{EXCEPTION_GUARD_SLOT_SIZE, TRY_HANDLER_SLOT_SIZE};
 use crate::ir::{
-    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op, RuntimeCallTarget,
+    Function, GcControlOp, Immediate, LocalKind, LocalSlotId, Module, Op,
     Terminator, ValueDef, ValueId,
 };
 use crate::ir_passes::{allocate_registers, Allocation};
@@ -332,14 +332,7 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
         .chain(module.runtime_callable_invokers.iter())
         .flat_map(|function| function.instructions.iter())
         .any(|inst| {
-            let id = match inst.immediate {
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(id)))
-                | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
-                    target: id,
-                    ..
-                })) => id,
-                _ => return false,
-            };
+            let Some(id) = inst.runtime_function() else { return false; };
             id.produces_resource_inventory_entry()
                 || matches!(id, crate::ir::RuntimeFnId::StreamFilterRegister | crate::ir::RuntimeFnId::StreamWrapperRegister)
         })

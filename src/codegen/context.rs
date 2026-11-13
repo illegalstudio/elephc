@@ -1796,7 +1796,8 @@ impl<'a> FunctionContext<'a> {
         }
         use crate::builtins::semantics::BuiltinResultOwnership;
         let fresh = match inst.immediate {
-            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) =>
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target)))
+            | Some(Immediate::RuntimeCall(RuntimeCallTarget::NumericFunction { target, .. })) =>
                 target.result_ownership() == BuiltinResultOwnership::Fresh,
             Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) =>
                 target.result_ownership() == BuiltinResultOwnership::Fresh,

@@ -738,3 +738,6 @@ var_dump((new Mw())->check(new Req()));
         );
     }
 }
+
+#[cfg(test)]
+mod strict_abs_tests;

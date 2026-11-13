@@ -13,24 +13,30 @@
 //!   `$a + $b` on two runtime ints is already typed `Mixed` so the checked helper can promote
 //!   on overflow. An `int` *literal* argument is still exact, so it keeps the precise `Int`
 //!   (or `Mixed` for the single overflowing literal) result.
+//! - Checked overflow retains an Int result for typed integers and rejects INT_MIN before
+//!   returning a value. Boxed calls retain dynamic numeric kinds and catchable failures.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::PhpType;
 
+#[path = "abs_semantics.rs"]
+mod semantics;
+
 builtin! {
     contract: "abs",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Abs,
-    ),
+    semantics: semantics::semantics(),
 }
 
 /// Returns the most precise result type for `abs($num)` based on the argument type.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let checked = crate::semantics::numeric::operation_policy(cx.checker.semantic_profile, cx.source_mode).checked_overflow();
     Ok(match ty {
+        PhpType::Int if checked => PhpType::Int,
+        PhpType::Str if checked => PhpType::Mixed,
         PhpType::Float => PhpType::Float,
         PhpType::Mixed => PhpType::Mixed,
         PhpType::Union(ref members) if members.iter().any(|m| *m == PhpType::Float) => {

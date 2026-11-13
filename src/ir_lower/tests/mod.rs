@@ -730,3 +730,5 @@ echo checks($argc);
         );
     }
 }
+
+mod strict_abs;

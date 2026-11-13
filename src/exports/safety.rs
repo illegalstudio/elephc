@@ -501,10 +501,7 @@ fn validate_runtime_call<'a>(
 /// Returns the typed runtime function id carried by one `RuntimeCall` instruction.
 fn runtime_function_id(immediate: Option<&Immediate>) -> Option<RuntimeFnId> {
     match immediate? {
-        Immediate::RuntimeCall(RuntimeCallTarget::Function(target))
-        | Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. }) => {
-            Some(*target)
-        }
+        Immediate::RuntimeCall(target) => target.function_id(),
         _ => None,
     }
 }
