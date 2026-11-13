@@ -413,15 +413,6 @@ fn run_server(
                     fast_deaths = 0;
                 }
             }
-            #[cfg(target_vendor = "apple")]
-            if let Some(shared) = &shared_tcp {
-                // The worker is already reaped, so descriptors still waiting
-                // for it are released before the replacement starts. A
-                // descriptor already queued in the dead worker's channel may
-                // fail fast when the replacement reads it; it is not
-                // re-dispatched.
-                shared.release_worker(worker_index);
-            }
             // The worker is gone (crash or recycle): replace it to keep the pool at N.
             let new_pid = spawn_worker(
                 &args.listen,

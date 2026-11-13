@@ -257,6 +257,8 @@ struct ForwardedElement {
     scheme: Option<&'static str>,
     /// The element's `host=` port, when present and valid.
     host_port: Option<u16>,
+    /// Whether the element carried a `for=` parameter (even an invalid one).
+    for_present: bool,
 }
 
 /// Applies one element's `proto` and `host` without touching the address.
@@ -291,6 +293,7 @@ impl ForwardedHeader {
             let mut node = None;
             let mut scheme = None;
             let mut host_port_value = None;
+            let mut for_present = false;
             for pair in split_quoted(element, ';') {
                 if pair.trim().is_empty() {
                     continue;
@@ -301,7 +304,10 @@ impl ForwardedHeader {
                 let key = key.trim().to_ascii_lowercase();
                 let value = unquote(value.trim());
                 match key.as_str() {
-                    "for" => node = parse_forwarded_node(&value),
+                    "for" => {
+                        for_present = true;
+                        node = parse_forwarded_node(&value);
+                    }
                     "proto" => scheme = normalize_scheme(&value),
                     "host" => host_port_value = host_port(&value),
                     _ => {}
@@ -311,6 +317,7 @@ impl ForwardedHeader {
                 node,
                 scheme,
                 host_port: host_port_value,
+                for_present,
             });
         }
         (!elements.is_empty()).then_some(Self { elements })
@@ -324,8 +331,12 @@ impl ForwardedHeader {
         let mut closest_trusted = None;
         for element in self.elements.iter().rev() {
             let Some(node) = element.node else {
-                // Unknown, obfuscated, or malformed: stop the walk instead of
-                // trusting anything further left or discarding the whole header.
+                if !element.for_present {
+                    // A `proto=`/`host=`-only element is still the trusted
+                    // hop's statement about the client-facing connection.
+                    apply_scheme_and_host(facts, element);
+                }
+                // Unknown, obfuscated, or malformed `for=` ends the walk.
                 return;
             };
             if trusted.is_trusted_ip(node.ip) {
@@ -727,6 +738,20 @@ mod tests {
             &trusted("127.0.0.1/32"),
         );
         assert_eq!(facts.remote_addr, "2001:db8::1");
+    }
+
+    /// A proto/host-only `Forwarded` element still supplies the scheme.
+    #[test]
+    fn forwarded_proto_without_for_applies() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("Forwarded", "proto=https")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "127.0.0.1");
+        assert_eq!(facts.request_scheme, "https");
+        assert!(facts.https);
+        assert_eq!(facts.server_port, 443);
     }
 
     /// An all-trusted chain keeps the peer address but uses the closest

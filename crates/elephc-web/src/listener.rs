@@ -64,6 +64,12 @@ const LISTEN_BACKLOG: i32 = 1024;
 #[cfg(target_vendor = "apple")]
 const TCP_PASS_QUEUE: usize = 64;
 
+/// How long the master keeps a descriptor that no worker has acknowledged.
+/// A replacement worker normally acknowledges queued descriptors immediately;
+/// this only bounds a handoff lost to a crash.
+#[cfg(target_vendor = "apple")]
+const PENDING_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Serializes descriptor-map mutation against `fork()`.
 ///
 /// A child forked while another thread holds the `pending` mutex inherits a
@@ -157,7 +163,7 @@ pub(crate) struct SharedTcp {
     #[cfg(target_vendor = "apple")]
     next_id: AtomicU64,
     #[cfg(target_vendor = "apple")]
-    pending: Mutex<HashMap<u64, (usize, std::net::TcpStream)>>,
+    pending: Mutex<HashMap<u64, (usize, std::net::TcpStream, Instant)>>,
     #[cfg(target_vendor = "apple")]
     master_pid: libc::pid_t,
     #[cfg(target_vendor = "apple")]
@@ -187,11 +193,10 @@ pub(crate) fn install_shared(
     socket.listen(LISTEN_BACKLOG)?;
     set_close_on_exec(socket.as_raw_fd())?;
     let listener: std::net::TcpListener = socket.into();
-    let listener = listener.into_raw_fd();
 
     let workers = workers.max(1);
-    let mut master_ends = Vec::with_capacity(workers);
-    let mut worker_ends = Vec::with_capacity(workers);
+    let mut master_owned = Vec::with_capacity(workers);
+    let mut worker_owned = Vec::with_capacity(workers);
     for _ in 0..workers {
         let (master, worker) = UnixDatagram::pair()?;
         // A full channel is reported to the acceptor as `WouldBlock`, which
@@ -203,9 +208,19 @@ pub(crate) fn install_shared(
         set_recv_timeout(worker.as_raw_fd(), 1)?;
         set_close_on_exec(master.as_raw_fd())?;
         set_close_on_exec(worker.as_raw_fd())?;
-        master_ends.push(master.into_raw_fd());
-        worker_ends.push(worker.into_raw_fd());
+        master_owned.push(master);
+        worker_owned.push(worker);
     }
+    // All fallible setup is done; only now transfer ownership to raw fds.
+    let listener = listener.into_raw_fd();
+    let master_ends = master_owned
+        .into_iter()
+        .map(IntoRawFd::into_raw_fd)
+        .collect();
+    let worker_ends = worker_owned
+        .into_iter()
+        .map(IntoRawFd::into_raw_fd)
+        .collect();
 
     Ok(Some(Arc::new(SharedTcp {
         listener,
@@ -292,35 +307,6 @@ impl SharedTcp {
             unsafe { libc::close(fd) };
         }
     }
-
-    /// Drops every descriptor still waiting for `index` and clears its stale
-    /// acks. Called after the supervisor reaps a worker and before the
-    /// replacement is forked, so a lost handoff cannot pin a client forever.
-    #[cfg(target_vendor = "apple")]
-    pub(crate) fn release_worker(&self, index: usize) {
-        let mut pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        pending.retain(|_, (owner, _)| *owner != index);
-        if let Some(&socket) = self.master_ends.get(index) {
-            let mut id = [0u8; 8];
-            loop {
-                let read = unsafe {
-                    libc::recv(socket, id.as_mut_ptr().cast(), id.len(), 0)
-                };
-                if read == 8 {
-                    continue;
-                }
-                if read < 0
-                    && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
-                {
-                    continue;
-                }
-                break;
-            }
-        }
-    }
 }
 
 #[cfg(target_vendor = "apple")]
@@ -342,6 +328,7 @@ fn accept_loop(shared: Arc<SharedTcp>) {
         {
             let _gate = lock_fork_gate();
             shared.drain_acks();
+            shared.expire_pending();
         }
         // Only accept when a connection is pending AND at least one worker can
         // receive a descriptor. Connections that cannot be handed off stay in
@@ -432,6 +419,20 @@ impl SharedTcp {
             .any(|entry| entry.revents & libc::POLLOUT != 0)
     }
 
+    /// Closes pending descriptors that no worker acknowledged before the
+    /// timeout, bounding a handoff lost to a crash.
+    #[cfg(target_vendor = "apple")]
+    fn expire_pending(&self) {
+        let now = Instant::now();
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending.retain(|_, (_, _, queued_at)| {
+            now.duration_since(*queued_at) < PENDING_TIMEOUT
+        });
+    }
+
     /// Retires every acked descriptor whose worker installed its own copy.
     #[cfg(target_vendor = "apple")]
     fn drain_acks(&self) {
@@ -478,7 +479,7 @@ impl SharedTcp {
                 self.pending
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .insert(id, (index, stream));
+                    .insert(id, (index, stream, Instant::now()));
                 return true;
             }
         }
@@ -1230,8 +1231,8 @@ mod tests {
         assert!(shared.worker_receiver(2).is_err());
     }
 
-    /// A forked worker releases the master descriptors exactly once and keeps
-    /// its receiver duplicate open.
+    /// A forked worker releases the master descriptors exactly once, drops its
+    /// inherited pending sockets, and keeps a usable receiver duplicate.
     #[cfg(target_vendor = "apple")]
     #[test]
     fn close_in_worker_is_idempotent_and_keeps_the_receiver() {
@@ -1239,10 +1240,36 @@ mod tests {
             .unwrap()
             .expect("Apple targets install a shared listener");
         let receiver = shared.worker_receiver(0).unwrap();
+        let master_dup = unsafe { libc::dup(shared.master_ends[0]) };
+        assert!(master_dup >= 0);
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        assert!(shared.pass_descriptor(server));
+        assert_eq!(shared.pending.lock().unwrap().len(), 1);
+
         shared.close_in_worker();
         assert!(!shared.owns_descriptors.load(Ordering::SeqCst));
+        assert!(
+            shared.pending.lock().unwrap().is_empty(),
+            "the child must drop its inherited pending sockets"
+        );
         // A second call must not close a reused descriptor.
         shared.close_in_worker();
+
+        // The queued descriptor survives the master-only close and the
+        // receiver clone can still install new descriptors through a dup.
+        let (fd, id) = recv_fd(&receiver).expect("queued descriptor must survive");
+        assert_eq!(id, 0);
+        unsafe { libc::close(fd) };
+        let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        send_fd(master_dup, reader.as_raw_fd(), 9).unwrap();
+        let (fd, id) = recv_fd(&receiver).unwrap();
+        assert_eq!(id, 9);
+        unsafe { libc::close(fd) };
+        unsafe { libc::close(master_dup) };
+        drop(writer);
         let receiver_flags = unsafe { libc::fcntl(receiver.as_raw_fd(), libc::F_GETFD) };
         assert!(
             receiver_flags >= 0,
@@ -1357,10 +1384,38 @@ mod tests {
         assert_eq!(&bytes, b"hello");
     }
 
-    /// Reaping a worker releases descriptors that never reached a live worker.
+    /// The master holds its accepted socket until the worker acknowledges the
+    /// descriptor, which is the ownership handoff a replacement inherits.
     #[cfg(target_vendor = "apple")]
     #[test]
-    fn release_worker_drops_pending_descriptors() {
+    fn pending_descriptor_is_held_until_ack() {
+        let shared = install_shared("127.0.0.1:0".parse().unwrap(), 1)
+            .unwrap()
+            .expect("Apple targets install a shared listener");
+        let receiver = shared.worker_receiver(0).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        assert!(shared.pass_descriptor(server));
+        assert_eq!(shared.pending.lock().unwrap().len(), 1);
+        let id = std::thread::spawn(move || {
+            let (fd, id) = recv_fd(&receiver).expect("descriptor must arrive");
+            send_ack(&receiver, id).expect("ack must reach the master");
+            unsafe { libc::close(fd) };
+            id
+        })
+        .join()
+        .unwrap();
+        assert_eq!(id, 0);
+        shared.drain_acks();
+        assert!(shared.pending.lock().unwrap().is_empty());
+    }
+
+    /// A lost handoff is closed after the pending timeout.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn pending_descriptor_expires_without_an_ack() {
         let shared = install_shared("127.0.0.1:0".parse().unwrap(), 1)
             .unwrap()
             .expect("Apple targets install a shared listener");
@@ -1369,8 +1424,15 @@ mod tests {
         let _client = TcpStream::connect(addr).unwrap();
         let (server, _) = listener.accept().unwrap();
         assert!(shared.pass_descriptor(server));
-        assert_eq!(shared.pending.lock().unwrap().len(), 1);
-        shared.release_worker(0);
+        {
+            let mut pending = shared.pending.lock().unwrap();
+            for entry in pending.values_mut() {
+                entry.2 = Instant::now()
+                    .checked_sub(Duration::from_secs(6))
+                    .unwrap_or_else(Instant::now);
+            }
+        }
+        shared.expire_pending();
         assert!(shared.pending.lock().unwrap().is_empty());
     }
 
