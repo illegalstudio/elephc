@@ -170,6 +170,10 @@ impl Broker {
             }
         });
         wait_until_ready(&address);
+        if let Ok(Some(status)) = child.try_wait() {
+            let log = stderr.lock().unwrap().clone();
+            panic!("elephc debug --web exited before the DAP session ({status}):\n{log}");
+        }
         Self {
             child,
             stdin,
@@ -194,9 +198,18 @@ impl Broker {
         });
         let body = serde_json::to_vec(&message).expect("encode DAP request");
         let stdin = self.stdin.as_mut().expect("broker stdin");
-        write!(stdin, "Content-Length: {}\r\n\r\n", body.len()).expect("write DAP header");
-        stdin.write_all(&body).expect("write DAP body");
-        stdin.flush().expect("flush DAP request");
+        if let Err(error) = write!(stdin, "Content-Length: {}\r\n\r\n", body.len()) {
+            let log = self.stderr.lock().unwrap().clone();
+            panic!("write DAP header failed: {error}; broker log:\n{log}");
+        }
+        if let Err(error) = stdin.write_all(&body) {
+            let log = self.stderr.lock().unwrap().clone();
+            panic!("write DAP body failed: {error}; broker log:\n{log}");
+        }
+        if let Err(error) = stdin.flush() {
+            let log = self.stderr.lock().unwrap().clone();
+            panic!("flush DAP request failed: {error}; broker log:\n{log}");
+        }
         seq
     }
 
