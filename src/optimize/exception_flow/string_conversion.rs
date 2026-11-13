@@ -21,7 +21,11 @@ impl ExceptionFlowAnalysis {
     ) -> ThrownTypes {
         match &expr.kind {
             ExprKind::FloatLiteral(value) if value.is_nan() => ThrownTypes::unknown(),
-            ExprKind::ConstRef(name) if name.eq_ignore_ascii_case("NAN") => ThrownTypes::unknown(),
+            ExprKind::BinaryOp { op, .. } if matches!(op,
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow
+            ) => ThrownTypes::unknown(),
+            ExprKind::Negate(inner) => self.string_conversion_throws(inner, class_context),
+            ExprKind::Cast { target: CastType::Float, .. } => ThrownTypes::unknown(),
             ExprKind::StringLiteral(_)
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
@@ -31,13 +35,10 @@ impl ExceptionFlowAnalysis {
             | ExprKind::ArrayLiteralAssoc(_)
             | ExprKind::BinaryOp { .. }
             | ExprKind::InstanceOf { .. }
-            | ExprKind::Negate(_)
             | ExprKind::Not(_)
             | ExprKind::BitNot(_)
             | ExprKind::Print(_)
             | ExprKind::Cast { .. }
-            | ExprKind::ConstRef(_)
-            | ExprKind::ClassConstant { .. }
             | ExprKind::ObjectClassName { .. }
             | ExprKind::MagicConstant(_)
             | ExprKind::Throw(_) => ThrownTypes::default(),

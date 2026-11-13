@@ -667,9 +667,31 @@ set_error_handler(function($n, $m) { throw new RuntimeException($m . ":" . $n); 
 function discard_nan_string(): void { (string) NAN; }
 try { discard_nan_string(); echo "missed\n"; }
 catch (RuntimeException $e) { echo "caught:" . $e->getMessage() . "\n"; }
+function discard_nan_sum(float $value): void { (string) ($value + 0.0); }
+try { discard_nan_sum(NAN); echo "missed-sum\n"; }
+catch (RuntimeException $e) { echo "caught-sum:" . $e->getMessage() . "\n"; }
+function discard_nan_negation(float $value): void { (string) -$value; }
+try { discard_nan_negation(NAN); echo "missed-negation\n"; }
+catch (RuntimeException $e) { echo "caught-negation:" . $e->getMessage() . "\n"; }
+function discard_nan_float_cast(mixed $value): void { (string) (float) $value; }
+try { discard_nan_float_cast(NAN); echo "missed-float-cast\n"; }
+catch (RuntimeException $e) { echo "caught-float-cast:" . $e->getMessage() . "\n"; }
+const STORED_NAN_STRING_VALUE = NAN;
+function discard_nan_constant(): void { (string) STORED_NAN_STRING_VALUE; }
+try { discard_nan_constant(); echo "missed-constant\n"; }
+catch (RuntimeException $e) { echo "caught-constant:" . $e->getMessage() . "\n"; }
+class NanStringConstant { const VALUE = NAN; }
+function discard_nan_class_constant(): void { (string) NanStringConstant::VALUE; }
+try { discard_nan_class_constant(); echo "missed-class-constant\n"; }
+catch (RuntimeException $e) { echo "caught-class-constant:" . $e->getMessage() . "\n"; }
 "#,
         "handled:unexpected NAN value was coerced to string\n\
-caught:unexpected NAN value was coerced to string:2\n",
+caught:unexpected NAN value was coerced to string:2\n\
+caught-sum:unexpected NAN value was coerced to string:2\n\
+caught-negation:unexpected NAN value was coerced to string:2\n\
+caught-float-cast:unexpected NAN value was coerced to string:2\n\
+caught-constant:unexpected NAN value was coerced to string:2\n\
+caught-class-constant:unexpected NAN value was coerced to string:2\n",
         &NAN_STRING_WARNING.repeat(2),
     );
 }
