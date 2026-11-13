@@ -220,6 +220,7 @@ mod mixed_bit_not;
 mod mixed_cast_array;
 mod mixed_clone;
 mod mixed_min_max;
+mod mixed_reuse_int_cell;
 mod mixed_reference;
 mod mixed_cast_bool;
 mod mixed_cast_float;
@@ -584,6 +585,8 @@ pub use mixed_cast_array::emit_mixed_cast_array;
 pub use mixed_clone::emit_mixed_clone;
 /// Emit the two-operand `min()` / `max()` selection over Mixed-shaped cells.
 pub use mixed_min_max::emit_mixed_min_max;
+/// Emit the in-place integer boxing helper for a uniquely owned Mixed local cell.
+pub use mixed_reuse_int_cell::emit_mixed_reuse_int_cell;
 pub use mixed_reference::emit_mixed_reference;
 /// Emit Mixed from value conversion helper.
 pub use mixed_from_value::{emit_mixed_from_owned_string, emit_mixed_from_value};

@@ -1098,7 +1098,7 @@ drifting apart silently.
 | Op | Operands | Result | Effects |
 |---|---|---|---|
 | `IterStart` | iterable value | iterator state | `reads_heap`, maybe `alloc_heap`, `may_deopt` |
-| `IterCurrentKey` | iterator state | key value | `reads_heap`, maybe `may_deopt` |
+| `IterCurrentKey` | iterator state, optional key-variable slot | key value | `reads_heap`, maybe `may_deopt` |
 | `IterCurrentValue` | iterator state | value | `reads_heap`, maybe `may_deopt` |
 | `IterNext` | iterator state | `I64` bool | `reads_heap`, `writes_heap`, maybe `may_deopt` |
 | `IterEnd` | iterator state | `Void` | maybe `refcount_op` |
@@ -1114,6 +1114,17 @@ The backend retains a plain object entry directly; only reference entries, neste
 boxes and null containers take the boxed path and are unboxed there, so the usual
 walk allocates no temporary cell.
 `foreach` over objects uses iterator dispatch metadata and may call user code.
+
+A by-value `foreach` over a source that is statically a PHP array passes the Mixed slot of
+its key variable as the `IterCurrentKey` immediate when that variable is a plain local. For
+an integer key the backend then calls `__rt_mixed_reuse_int_cell`, which rewrites the cell
+the slot still owns when its reference count is one and it holds a scalar, clears the slot
+and returns the cell as the instruction's owned result. A key that anything else still
+holds and a string key keep the allocating box. Such a fetch is emitted after the value
+has been published, so no destructor or handler can observe the emptied slot; the loop
+iterates a retained snapshot, so the key is the same one. Every other source (an object
+iterator, `iterable`, `mixed`) keeps the fetch before both publications and never names a
+slot. Passes treat the instruction as a writer of the named slot.
 
 ### Objects, Classes, Enums, and Attributes
 
