@@ -290,19 +290,19 @@ main() {
   local wrk_timeout=120
   while (($#)); do
     case $1 in
-      --elephc-url) elephc_url=$2; shift 2 ;;
-      --fpm-url) fpm_url=$2; shift 2 ;;
-      --threads) threads=$2; shift 2 ;;
-      --connections) connections=$2; shift 2 ;;
-      --duration) duration=$2; shift 2 ;;
-      --repeat) repeat=$2; shift 2 ;;
-      --new-connections) new_connections=$2; shift 2 ;;
+      --elephc-url) require_value "$@"; elephc_url=$2; shift 2 ;;
+      --fpm-url) require_value "$@"; fpm_url=$2; shift 2 ;;
+      --threads) require_value "$@"; threads=$2; shift 2 ;;
+      --connections) require_value "$@"; connections=$2; shift 2 ;;
+      --duration) require_value "$@"; duration=$2; shift 2 ;;
+      --repeat) require_value "$@"; repeat=$2; shift 2 ;;
+      --new-connections) require_value "$@"; new_connections=$2; shift 2 ;;
       --skip-keepalive) skip_keepalive=1; shift ;;
       --skip-new-connection) skip_new_connection=1; shift ;;
-      --json) json_out=$2; shift 2 ;;
-      --markdown) markdown_out=$2; shift 2 ;;
-      --timeout) timeout=$2; shift 2 ;;
-      --wrk-timeout) wrk_timeout=$2; shift 2 ;;
+      --json) require_value "$@"; json_out=$2; shift 2 ;;
+      --markdown) require_value "$@"; markdown_out=$2; shift 2 ;;
+      --timeout) require_value "$@"; timeout=$2; shift 2 ;;
+      --wrk-timeout) require_value "$@"; wrk_timeout=$2; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown argument: $1" ;;
     esac

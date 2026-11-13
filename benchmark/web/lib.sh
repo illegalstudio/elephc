@@ -15,6 +15,13 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "$1 is required${2:+: $2}"
 }
 
+# Requires a value after an option, exiting in the CALLER's shell on failure.
+# Do not call this through a command substitution: `exit` there only leaves the
+# subshell and the caller would loop forever.
+require_value() {
+  [[ $# -ge 2 ]] || die "missing value for $1"
+}
+
 # Returns success when the argument looks like a JSON number.
 is_number() {
   [[ $1 =~ ^-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$ ]]

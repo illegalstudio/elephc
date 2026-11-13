@@ -88,6 +88,15 @@ case $wrk_socket_errors in
   *) printf 'FAIL wrk socket errors: %s\n' "$wrk_socket_errors" >&2; failures=$((failures + 1)) ;;
 esac
 
+if "$WEB_DIR/run.sh" --workers >/dev/null 2>&1; then
+  printf 'FAIL run.sh accepted a missing option value\n' >&2
+  failures=$((failures + 1))
+fi
+if "$WEB_DIR/fpm_compare.sh" --threads >/dev/null 2>&1; then
+  printf 'FAIL fpm_compare.sh accepted a missing option value\n' >&2
+  failures=$((failures + 1))
+fi
+
 if ! "$WEB_DIR/run.sh" --help >/dev/null 2>&1; then
   printf 'FAIL run.sh --help\n' >&2
   failures=$((failures + 1))

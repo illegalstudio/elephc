@@ -348,23 +348,23 @@ main() {
   local scenario
   while (($#)); do
     case $1 in
-      --fixture) fixture=$2; shift 2 ;;
-      --compiler) compiler_arg=$2; shift 2 ;;
+      --fixture) require_value "$@"; fixture=$2; shift 2 ;;
+      --compiler) require_value "$@"; compiler_arg=$2; shift 2 ;;
       --no-build) no_build=1; shift ;;
-      --workers) workers=$2; shift 2 ;;
-      --isolation) isolation=$2; shift 2 ;;
-      --clients) clients=$2; shift 2 ;;
-      --threads) threads=$2; shift 2 ;;
-      --connections) connections=$2; shift 2 ;;
-      --duration) duration=$2; shift 2 ;;
-      --warmup) warmup=$2; shift 2 ;;
-      --repeat) repeat=$2; shift 2 ;;
+      --workers) require_value "$@"; workers=$2; shift 2 ;;
+      --isolation) require_value "$@"; isolation=$2; shift 2 ;;
+      --clients) require_value "$@"; clients=$2; shift 2 ;;
+      --threads) require_value "$@"; threads=$2; shift 2 ;;
+      --connections) require_value "$@"; connections=$2; shift 2 ;;
+      --duration) require_value "$@"; duration=$2; shift 2 ;;
+      --warmup) require_value "$@"; warmup=$2; shift 2 ;;
+      --repeat) require_value "$@"; repeat=$2; shift 2 ;;
       --cpu) cpu_enabled=1; shift ;;
-      --k6) k6_scenarios+=("$2"); shift 2 ;;
+      --k6) require_value "$@"; k6_scenarios+=("$2"); shift 2 ;;
       --php-baseline) php_enabled=1; shift ;;
-      --json) json_out=$2; shift 2 ;;
-      --markdown) markdown_out=$2; shift 2 ;;
-      --timeout) timeout=$2; shift 2 ;;
+      --json) require_value "$@"; json_out=$2; shift 2 ;;
+      --markdown) require_value "$@"; markdown_out=$2; shift 2 ;;
+      --timeout) require_value "$@"; timeout=$2; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown argument: $1" ;;
     esac

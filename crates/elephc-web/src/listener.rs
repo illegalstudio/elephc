@@ -1263,7 +1263,7 @@ mod tests {
         let (fd, id) = recv_fd(&receiver).expect("queued descriptor must survive");
         assert_eq!(id, 0);
         unsafe { libc::close(fd) };
-        let (mut writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
+        let (writer, reader) = std::os::unix::net::UnixStream::pair().unwrap();
         send_fd(master_dup, reader.as_raw_fd(), 9).unwrap();
         let (fd, id) = recv_fd(&receiver).unwrap();
         assert_eq!(id, 9);
