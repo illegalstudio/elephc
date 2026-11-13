@@ -670,6 +670,9 @@ catch (RuntimeException $e) { echo "caught:" . $e->getMessage() . "\n"; }
 function discard_nan_sum(float $value): void { (string) ($value + 0.0); }
 try { discard_nan_sum(NAN); echo "missed-sum\n"; }
 catch (RuntimeException $e) { echo "caught-sum:" . $e->getMessage() . "\n"; }
+function discard_nan_division(float $value): void { (string) ($value / 1.0); }
+try { discard_nan_division(NAN); echo "missed-division\n"; }
+catch (RuntimeException $e) { echo "caught-division:" . $e->getMessage() . "\n"; }
 function discard_nan_negation(float $value): void { (string) -$value; }
 try { discard_nan_negation(NAN); echo "missed-negation\n"; }
 catch (RuntimeException $e) { echo "caught-negation:" . $e->getMessage() . "\n"; }
@@ -688,6 +691,7 @@ catch (RuntimeException $e) { echo "caught-class-constant:" . $e->getMessage() .
         "handled:unexpected NAN value was coerced to string\n\
 caught:unexpected NAN value was coerced to string:2\n\
 caught-sum:unexpected NAN value was coerced to string:2\n\
+caught-division:unexpected NAN value was coerced to string:2\n\
 caught-negation:unexpected NAN value was coerced to string:2\n\
 caught-float-cast:unexpected NAN value was coerced to string:2\n\
 caught-constant:unexpected NAN value was coerced to string:2\n\

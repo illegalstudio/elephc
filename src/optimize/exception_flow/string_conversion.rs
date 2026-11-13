@@ -21,9 +21,11 @@ impl ExceptionFlowAnalysis {
     ) -> ThrownTypes {
         match &expr.kind {
             ExprKind::FloatLiteral(value) if value.is_nan() => ThrownTypes::unknown(),
-            ExprKind::BinaryOp { op, .. } if matches!(op,
+            // Operand failures are summarized separately; a proven failing operator
+            // cannot produce a value for the subsequent string conversion.
+            ExprKind::BinaryOp { left, op, right } if matches!(op,
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow
-            ) => ThrownTypes::unknown(),
+            ) && binary_op_exact_throw_type(left, op, right).is_none() => ThrownTypes::unknown(),
             ExprKind::Negate(inner) => self.string_conversion_throws(inner, class_context),
             ExprKind::Cast { target: CastType::Float, .. } => ThrownTypes::unknown(),
             ExprKind::StringLiteral(_)
