@@ -33,6 +33,7 @@ fn emit_gc_control_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_gc_enabled");
     emitter.instruction("ldr x9, [x9]");                                        // read whether automatic safe points are enabled
     emitter.instruction("cbz x9, __rt_gc_collect_cycles_disabled");             // skip an automatic collection while disabled
+    abi::emit_store_zero_to_symbol(emitter, "_gc_run_explicit", 0);             // automatic safe points are not explicit gc_collect_cycles() calls
     emitter.instruction("b __rt_gc_collect_cycles_explicit");                   // tail-call the collector without changing its result
     emitter.label("__rt_gc_collect_cycles_disabled");
     emitter.instruction("mov x0, #0");                                          // a skipped automatic pass collects no graph nodes
@@ -118,6 +119,7 @@ fn emit_gc_control_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_gc_enabled");
     emitter.instruction("cmp QWORD PTR [r8], 0");                               // read whether automatic safe points are enabled
     emitter.instruction("je __rt_gc_collect_cycles_disabled");                  // skip an automatic collection while disabled
+    abi::emit_store_zero_to_symbol(emitter, "_gc_run_explicit", 0);             // automatic safe points are not explicit gc_collect_cycles() calls
     emitter.instruction("jmp __rt_gc_collect_cycles_explicit");                 // tail-call the collector without changing its result
     emitter.label("__rt_gc_collect_cycles_disabled");
     emitter.instruction("xor eax, eax");                                        // a skipped automatic pass collects no graph nodes
@@ -387,6 +389,12 @@ fn emit_gc_timing_aarch64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_gc_collector_started");
     emitter.instruction("ldr d1, [x9]");                                        // load the collector phase start timestamp
     emitter.instruction("fsub d1, d0, d1");                                     // calculate this collector pass duration
+    abi::emit_load_int_immediate(emitter, "x9", 1_000_000_000);                 // nanoseconds per second for the integer report
+    emitter.instruction("scvtf d2, x9");                                        // convert the scale to a double
+    emitter.instruction("fmul d1, d1, d2");                                     // convert this pass duration to nanoseconds
+    emitter.instruction("fcvtzs x9, d1");                                       // truncate to an integer nanosecond count
+    abi::emit_symbol_address(emitter, "x10", "_gc_last_pass_duration_ns");
+    emitter.instruction("str x9, [x10]");                                       // publish the last completed pass duration
     abi::emit_symbol_address(emitter, "x9", "_gc_collector_time");
     emitter.instruction("ldr d2, [x9]");                                        // load prior cumulative collector seconds
     emitter.instruction("fadd d2, d2, d1");                                     // include this pass duration
@@ -521,6 +529,13 @@ fn emit_gc_timing_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r8", "_gc_collector_started");
     emitter.instruction("movsd xmm1, QWORD PTR [r8]");                          // load the collector phase start timestamp
     emitter.instruction("subsd xmm0, xmm1");                                    // calculate this collector pass duration
+    abi::emit_load_int_immediate(emitter, "rax", 1_000_000_000);                // nanoseconds per second for the integer report
+    emitter.instruction("cvtsi2sd xmm3, rax");                                  // convert the scale to a double
+    emitter.instruction("movsd xmm4, xmm0");                                    // keep the seconds value while scaling a copy
+    emitter.instruction("mulsd xmm4, xmm3");                                    // convert this pass duration to nanoseconds
+    emitter.instruction("cvttsd2si rax, xmm4");                                 // truncate to an integer nanosecond count
+    abi::emit_symbol_address(emitter, "r8", "_gc_last_pass_duration_ns");
+    emitter.instruction("mov QWORD PTR [r8], rax");                             // publish the last completed pass duration
     abi::emit_symbol_address(emitter, "r8", "_gc_collector_time");
     emitter.instruction("movsd xmm2, QWORD PTR [r8]");                          // load prior cumulative collector seconds
     emitter.instruction("addsd xmm2, xmm0");                                    // include this pass duration
@@ -622,14 +637,22 @@ mod tests {
                 status_time < request_start,
                 "status branches must stay in the dispatcher atom on {target:?}\n{asm}"
             );
+            assert!(
+                asm.contains("_gc_last_pass_duration_ns"),
+                "the collector must publish its pass duration for --gc-stats on {target:?}"
+            );
             match target.arch {
                 Arch::AArch64 => {
                     assert!(asm.contains("bl __rt_heap_consolidate"));
                     assert!(asm.contains("fmov x0, d0"));
+                    assert!(asm.contains("fcvtzs x9, d1"));
+                    assert!(asm.contains("_gc_run_explicit"));
                 }
                 Arch::X86_64 => {
                     assert!(asm.contains("call __rt_heap_consolidate"));
                     assert!(asm.contains("movq rax, xmm0"));
+                    assert!(asm.contains("cvttsd2si rax, xmm4"));
+                    assert!(asm.contains("_gc_run_explicit"));
                 }
             }
         }

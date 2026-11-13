@@ -243,7 +243,17 @@ exits — useful when debugging reference-counting and ownership behavior.
 ```bash
 elephc --gc-stats heavy.php
 ./heavy
+GC: allocs=120 frees=120
+GC collector: runs=2 collected=7 live=0 peak=4096 last_collected=3 last_duration_ns=18420 last_before=4096 last_after=1024 last_trigger=explicit
 ```
+
+The `GC:` line is the allocation/free contract used by existing tooling. The
+separate `GC collector:` line reports the cycle collector: total productive
+`runs`, cumulative reclaimed graph nodes, live/peak heap bytes, and the most
+recent productive pass (`last_collected`, duration in nanoseconds, live memory
+before/after, and whether PHP called `gc_collect_cycles()` explicitly or an
+automatic safe point ran it). Empty passes do not replace the last productive
+run.
 
 Combined with `--web`, the server never reaches the process-exit report, so the
 counters are printed to stderr after every handled request instead. In default

@@ -43,6 +43,7 @@ pub(super) fn lower(
             Ok(())
         }
         RuntimeCallTarget::PhpextCollectObjectCycles => {
+            abi::emit_store_imm_to_symbol(ctx.emitter, "_gc_run_explicit", 0, 1);
             abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
             Ok(())
         }

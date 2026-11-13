@@ -2738,10 +2738,12 @@ fn emit_counters_dump(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Emits the `--gc-stats` allocation summary to stderr.
+/// Emits the `--gc-stats` allocation and cycle-collector summary to stderr.
 ///
 /// Called from both the exit-based main epilogue and, under `--web`, the
-/// per-request handler epilogue — a server never reaches the former.
+/// per-request handler epilogue — a server never reaches the former. The
+/// allocation line keeps its standalone format for existing parsers; collector
+/// statistics go on their own line.
 fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
     ctx.emitter
         .comment("gc-stats: print allocation statistics to stderr");
@@ -2758,6 +2760,67 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
     emit_write_current_string_stderr(ctx.emitter);
     let (newline_label, _) = ctx.data.add_string(b"\n");
     emit_write_literal_stderr(ctx.emitter, &newline_label, 1);
+    emit_gc_collector_stats(ctx);
+}
+
+/// Emits the `--gc-stats` cycle-collector counters and last productive run.
+///
+/// Kept on its own line so the existing `GC: allocs=<n> frees=<n>` contract
+/// stays parseable by tools that split the allocation counters.
+fn emit_gc_collector_stats(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter
+        .comment("gc-stats: print cycle-collector statistics to stderr");
+    let (label, len) = ctx.data.add_string(b"GC collector:");
+    emit_write_literal_stderr(ctx.emitter, &label, len);
+    for (label, symbol) in [
+        (" runs=", "_gc_runs"),
+        (" collected=", "_gc_collected"),
+        (" live=", "_gc_live"),
+        (" peak=", "_gc_peak"),
+        (" last_collected=", "_gc_last_run_collected"),
+        (" last_duration_ns=", "_gc_last_run_duration_ns"),
+        (" last_before=", "_gc_last_run_memory_before"),
+        (" last_after=", "_gc_last_run_memory_after"),
+    ] {
+        let (field, field_len) = ctx.data.add_string(label.as_bytes());
+        emit_write_literal_stderr(ctx.emitter, &field, field_len);
+        let result = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_itoa");
+        emit_write_current_string_stderr(ctx.emitter);
+    }
+    let (field, field_len) = ctx.data.add_string(b" last_trigger=");
+    emit_write_literal_stderr(ctx.emitter, &field, field_len);
+    let trigger = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, trigger, "_gc_last_run_explicit", 0);
+    let automatic = ctx.next_label("gc_stats_automatic");
+    let trigger_done = ctx.next_label("gc_stats_trigger_done");
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {trigger}, {automatic}"));            // zero means an automatic safe-point collection
+            let (explicit, explicit_len) = ctx.data.add_string(b"explicit");
+            emit_write_literal_stderr(ctx.emitter, &explicit, explicit_len);
+            ctx.emitter
+                .instruction(&format!("b {trigger_done}"));                     // skip the automatic spelling
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {trigger}, {trigger}"));             // check whether PHP called gc_collect_cycles()
+            ctx.emitter
+                .instruction(&format!("jz {automatic}"));                       // zero means an automatic safe-point collection
+            let (explicit, explicit_len) = ctx.data.add_string(b"explicit");
+            emit_write_literal_stderr(ctx.emitter, &explicit, explicit_len);
+            ctx.emitter
+                .instruction(&format!("jmp {trigger_done}"));                   // skip the automatic spelling
+        }
+    }
+    ctx.emitter.label(&automatic);
+    let (automatic_text, automatic_len) = ctx.data.add_string(b"automatic");
+    emit_write_literal_stderr(ctx.emitter, &automatic_text, automatic_len);
+    ctx.emitter.label(&trigger_done);
+    let (newline, newline_len) = ctx.data.add_string(b"\n");
+    emit_write_literal_stderr(ctx.emitter, &newline, newline_len);
 }
 
 /// Emits a path-specific epilogue for one user-function return terminator.

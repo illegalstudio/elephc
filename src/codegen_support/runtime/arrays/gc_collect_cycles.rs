@@ -78,6 +78,10 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #96]");                                  // start with no destructor-driven rescan
     CLEANUP.begin(emitter);
     emitter.instruction("bl __rt_gc_collector_begin");                          // start timing this complete collector pass
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_live");
+    emitter.instruction("ldr x10, [x9]");                                       // snapshot live heap bytes before this pass
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_last_pass_memory_before");
+    emitter.instruction("str x10, [x9]");                                       // publish the pre-collection memory sample
 
     // -- refresh heap bounds after destructor callbacks have mutated the graph --
     emitter.label("__rt_gc_collect_cycles_recount");
@@ -516,6 +520,24 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // load the cumulative collected-node count
     emitter.instruction("add x10, x10, x0");                                    // include the nodes reclaimed by this pass
     emitter.instruction("str x10, [x9]");                                       // persist the cumulative collected-node count
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_last_run_collected");
+    emitter.instruction("str x0, [x9]");                                        // publish the nodes reclaimed by this productive run
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_last_pass_memory_before");
+    emitter.instruction("ldr x10, [x9]");                                       // reload the pre-collection memory sample
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_last_run_memory_before");
+    emitter.instruction("str x10, [x9]");                                       // publish it as the last run's memory-before value
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_last_pass_duration_ns");
+    emitter.instruction("ldr x10, [x9]");                                       // reload this pass's measured duration
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_last_run_duration_ns");
+    emitter.instruction("str x10, [x9]");                                       // publish it as the last run's duration
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_live");
+    emitter.instruction("ldr x10, [x9]");                                       // read live heap bytes after reclamation
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_last_run_memory_after");
+    emitter.instruction("str x10, [x9]");                                       // publish the post-collection memory sample
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_run_explicit");
+    emitter.instruction("ldr x10, [x9]");                                       // read whether PHP called the collector explicitly
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_last_run_explicit");
+    emitter.instruction("str x10, [x9]");                                       // publish the trigger kind for the report
     emitter.label("__rt_gc_collect_cycles_stats_done");
     super::gc_host_roots::finish(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");
@@ -562,6 +584,35 @@ mod tests {
                         < output[end..].find("ldr x14, [x12]").unwrap(), "{name}, {phase}");
                 }
             }
+        }
+    }
+
+    #[test]
+    /// Verifies every supported target publishes the last productive run for `--gc-stats`.
+    fn collector_publishes_last_run_stats_on_every_target() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit_gc_collect_cycles(&mut emitter);
+            let output = emitter.output();
+            for symbol in [
+                "_gc_last_run_collected",
+                "_gc_last_run_memory_before",
+                "_gc_last_run_memory_after",
+                "_gc_last_run_duration_ns",
+                "_gc_last_run_explicit",
+            ] {
+                assert!(output.contains(symbol), "{name} misses {symbol}");
+            }
+            assert!(
+                output.contains("_gc_last_pass_memory_before"),
+                "{name} does not sample the pre-collection heap"
+            );
         }
     }
 

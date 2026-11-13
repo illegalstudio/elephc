@@ -112,6 +112,55 @@ fn test_cli_monitor_writes_cachegrind_profile() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--gc-stats` reports cycle-collector runs, reclaimed nodes and the
+/// last productive run's memory, duration and explicit/automatic trigger.
+#[test]
+fn test_cli_gc_stats_reports_cycle_collector_runs() {
+    let dir = make_cli_test_dir("elephc_cli_gc_stats_collector");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nclass Node { public $next = null; }\nfunction make_cycle(): int {\n    $a = new Node();\n    $b = new Node();\n    $a->next = $b;\n    $b->next = $a;\n    unset($a, $b);\n    return gc_collect_cycles();\n}\ngc_disable();\necho make_cycle(), \"\\n\";\ngc_enable();\n",
+    )
+    .expect("write gc-stats collector fixture");
+    let compile = elephc_cli_command(&dir)
+        .args(["--gc-stats", "main.php"])
+        .output()
+        .expect("compile gc-stats collector fixture");
+    assert!(
+        compile.status.success(),
+        "gc-stats fixture compilation failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let output = run_binary(&dir.join("main"), &dir);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("GC: allocs="), "{stderr}");
+    let line = stderr
+        .lines()
+        .find(|line| line.starts_with("GC collector:"))
+        .unwrap_or_else(|| panic!("missing collector stats: {stderr}"));
+    let field = |name: &str| -> u64 {
+        line.split_whitespace()
+            .find_map(|part| part.strip_prefix(name))
+            .unwrap_or_else(|| panic!("missing {name} in {line}"))
+            .parse()
+            .unwrap_or_else(|_| panic!("invalid {name} in {line}"))
+    };
+    assert_eq!(field("runs="), 1, "{line}");
+    assert_eq!(field("collected="), 2, "{line}");
+    assert_eq!(field("last_collected="), 2, "{line}");
+    assert!(field("last_duration_ns=") > 0, "{line}");
+    let before = field("last_before=");
+    let after = field("last_after=");
+    assert!(before > 0, "{line}");
+    assert!(after < before, "{line}");
+    assert!(line.ends_with("last_trigger=explicit"), "{line}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// End-to-end `elephc monitor`: compiles a busy fixture, activates exact
 /// instrumentation through the control channel, and writes a two-view
 /// Speedscope document whose frames are PHP names — not EIR block labels or
