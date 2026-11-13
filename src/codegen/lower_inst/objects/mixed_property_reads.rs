@@ -1220,6 +1220,15 @@ pub(super) fn mixed_class_hash_arms(
     // `dynamic_property_hash_offset_for_class` answers `None` for every class whose hash is not
     // name-addressable, so only those few are asked (see `Module::name_addressable_hash_classes`).
     let addressable = ctx.module.name_addressable_hash_classes();
+    // A class that does not declare `property` answers from its hash at the offset its slot count
+    // gives (`dynamic_property_hash_offset_for_class` with no slot to resolve), so only the few
+    // that declare it are asked: each ask scanned the class's slots, ~1,900 samples of a sampled
+    // Symfony demo console build.
+    let by_property = ctx.module.classes_by_property();
+    let declaring: crate::fast_hash::FastSet<&str> = by_property
+        .get(property)
+        .map(|classes| classes.iter().map(String::as_str).collect())
+        .unwrap_or_default();
     for class_name in addressable.iter() {
         let Some(class_info) = ctx.module.class_infos.get(class_name) else {
             continue;
@@ -1229,9 +1238,16 @@ pub(super) fn mixed_class_hash_arms(
         {
             continue;
         }
-        let Some(hash_offset) = dynamic_property_hash_offset_for_class(ctx, class_name, property)?
-        else {
-            continue;
+        let hash_offset = if declaring.contains(class_name.as_str()) {
+            #[cfg(test)]
+            HASH_OFFSET_SLOT_SCANS.with(|scans| scans.set(scans.get() + 1));
+            let Some(hash_offset) = dynamic_property_hash_offset_for_class(ctx, class_name, property)?
+            else {
+                continue;
+            };
+            hash_offset
+        } else {
+            super::allocation_clone::dynamic_property_hash_offset(class_info.properties.len())
         };
         arms.push(MixedClassHashArm {
             class_id: class_info.class_id,
@@ -1344,6 +1360,12 @@ fn classes_that_may_declare<'a>(
     #[cfg(test)]
     MIXED_CANDIDATE_CLASSES.with(|visited| visited.set(visited.get() + classes.len()));
     classes
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Addressable classes `mixed_class_hash_arms` asked to resolve the name against their slots.
+    pub(crate) static HASH_OFFSET_SLOT_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -1850,7 +1872,34 @@ mod tests {
     //! - Counts classes handed to the candidate collectors, not time: a site reading `->x` must
     //!   consider the classes declaring `x`, not every class of the program.
 
-    use super::MIXED_CANDIDATE_CLASSES;
+    use super::{HASH_OFFSET_SLOT_SCANS, MIXED_CANDIDATE_CLASSES};
+
+    /// Classes with dynamic properties that do not declare `x` answer `->x` from their hash at the
+    /// offset their slot count gives, with no slot scan: only the class declaring `x` is scanned.
+    #[test]
+    fn hash_arms_scan_only_the_classes_declaring_the_name() {
+        let mut source = String::from("<?php\n#[\\AllowDynamicProperties]\nclass A { public int $x = 1; }\n");
+        for index in 0..40 {
+            source.push_str(&format!(
+                "#[\\AllowDynamicProperties]\nclass D{index} {{ public int $p{index} = {index}; }}\n"
+            ));
+        }
+        source.push_str(
+            "$items = [$argc > 1 ? new A() : new D3(), 5];\n\
+             foreach ($items as $o) { if (is_object($o)) { echo $o->x ?? 'none'; } }\n",
+        );
+        HASH_OFFSET_SLOT_SCANS.with(|count| count.set(0));
+        let module = crate::ir_lower::tests::lower_source_at_for_target(
+            &source,
+            std::path::Path::new("main.php"),
+            std::path::Path::new("."),
+            crate::codegen::platform::Target::parse("macos-aarch64").unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+        let scans = HASH_OFFSET_SLOT_SCANS.with(std::cell::Cell::get);
+        eprintln!("HASH_OFFSET_SLOT_SCANS={scans}");
+        assert!(scans < 10, "{scans} slot scans for one class declaring `x` among 41");
+    }
 
     /// 300 classes declare unrelated properties and two declare `x`: every `Mixed` read of `->x`
     /// considers those two, where it used to walk every property of all 302 classes.

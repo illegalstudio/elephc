@@ -399,6 +399,12 @@ pub(super) fn plan_split<'a>(
         published_count += 1;
     }
     promoted_names.sort();
+    let mut footer_by_slice: Vec<Vec<&'a str>> = vec![Vec::new(); parts];
+    for &name in &analysis.footer {
+        if let Some(&id) = analysis.ids.get(name) {
+            footer_by_slice[slice_of(analysis.spans[id].def)].push(name);
+        }
+    }
     Some(SplitPlan {
         source,
         analysis,
@@ -407,6 +413,7 @@ pub(super) fn plan_split<'a>(
         encode,
         promoted,
         published,
+        footer_by_slice,
         summary: SplitSummary {
             promoted: promoted_names,
             published: published_count,
@@ -431,6 +438,8 @@ pub(super) struct SplitPlan<'a> {
     promoted: FastMap<&'a str, String>,
     /// Per slice, the names it defines that another slice references.
     published: Vec<Vec<&'a str>>,
+    /// Per slice, the file-global footer names it defines, in footer order.
+    footer_by_slice: Vec<Vec<&'a str>>,
     pub(super) summary: SplitSummary,
     /// The target's full-line comment prefix when slices are written compact (see
     /// [`SplitPlan::compact`]); `None` writes every line as the `.s` has it.
@@ -656,7 +665,9 @@ impl<'a> SplitPlan<'a> {
         let analysis = &self.analysis;
         let mut written: FastSet<&str> = FastSet::default();
         let mut block = String::new();
-        for &name in analysis.footer.iter().chain(self.published[part].iter()) {
+        // This slice's footer names, bucketed once by `plan_split` in footer order: every slice
+        // filtering the whole file-global footer was ~1,300 samples of a Symfony demo build.
+        for &name in self.footer_by_slice[part].iter().chain(self.published[part].iter()) {
             let Some(&id) = analysis.ids.get(name) else {
                 continue;
             };
