@@ -1117,3 +1117,23 @@ The existing math dispatch and all-five-target AOT intdiv controls also pass.
 Compiler and builtin-exporter builds, the complete generated-docs workflow, the
 architecture audit, assembly alignment and diff hygiene pass. Generated builtin
 artifacts remain identical. No additional public strict guarantee is activated.
+
+
+### Exact eval integer powers without checked overflow
+
+Integer power now has a dependency-neutral pure kernel returning an exact Int or
+an explicitly promoted Float. Constant folding reuses that implementation, and
+Arithmetic/Coercions eval operations select it after their original-kind guards
+when Overflow is disabled. Fitting powers retain their full signed integer width;
+overflow promotion begins at the first overflowing product and follows PHP's
+remaining-factor continuation rather than replacing the calculation with one
+floating pow call. Explicit floating power keeps its existing path. Domain rules
+and overflow rejection remain independent decisions owned by callers.
+
+Two pure contract tests and one walker/VM matrix cover integer kinds above 2^53,
+MIN, extreme exponent identities, checked failures, ordinary promotion and exact
+floating rounding. A native fixture cross-checks Mixed integer powers against
+folding with both numeric domains, both optimizers and clean heaps. The existing
+PHP integer-folding and eval domain controls pass, along with the compiler build,
+prebuilt architecture audit and source/diff hygiene. No serialized syntax, native
+ABI or target emitter changes are needed. Public feature admission is unchanged.

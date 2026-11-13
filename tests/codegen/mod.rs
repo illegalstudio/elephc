@@ -42,6 +42,7 @@ mod strict_eval_modulo;
 mod strict_eval_intdiv;
 mod strict_division_modulo;
 mod strict_numeric_domains;
+mod strict_integer_power;
 mod testing;
 mod testing_command;
 mod testing_generic_functions;

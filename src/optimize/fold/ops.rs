@@ -170,49 +170,11 @@ fn try_fold_int_pow(left: i64, right: i64) -> Option<ExprKind> {
         return elephc_semantics::numeric::checked_integer(elephc_semantics::numeric::IntegerOp::Pow, left, right)
             .ok().map(ExprKind::IntLiteral);
     }
-    if right < 0 {
-        let result = (left as f64).powf(right as f64);
-        return result.is_finite().then_some(ExprKind::FloatLiteral(result));
+    match elephc_semantics::integer_power::php_integer_power(left, right) {
+        elephc_semantics::integer_power::PowerResult::Int(value) => Some(ExprKind::IntLiteral(value)),
+        elephc_semantics::integer_power::PowerResult::Float(value) if value.is_finite() => Some(ExprKind::FloatLiteral(value)),
+        _ => None,
     }
-    if right == 0 {
-        return Some(ExprKind::IntLiteral(1));
-    }
-    if left == 0 {
-        return Some(ExprKind::IntLiteral(0));
-    }
-
-    let (mut accumulated, mut factor, mut exponent) = (1i64, left, right);
-    while exponent >= 1 {
-        if exponent % 2 == 1 {
-            exponent -= 1;
-            match accumulated.checked_mul(factor) {
-                Some(product) => accumulated = product,
-                None => {
-                    let overflowed = accumulated as f64 * factor as f64;
-                    return finite_float_literal(overflowed * (factor as f64).powf(exponent as f64));
-                }
-            }
-        } else {
-            exponent /= 2;
-            match factor.checked_mul(factor) {
-                Some(product) => factor = product,
-                None => {
-                    let overflowed = factor as f64 * factor as f64;
-                    return finite_float_literal(accumulated as f64 * overflowed.powf(exponent as f64));
-                }
-            }
-        }
-        if exponent == 0 {
-            return Some(ExprKind::IntLiteral(accumulated));
-        }
-    }
-    // The loop always returns through the `exponent == 0` check above.
-    None
-}
-
-/// Wraps a computed float in a literal, declining when it is not finite.
-fn finite_float_literal(value: f64) -> Option<ExprKind> {
-    value.is_finite().then_some(ExprKind::FloatLiteral(value))
 }
 
 /// Converts overflowed integer add/sub/mul operations to float to match PHP's numeric coercion.

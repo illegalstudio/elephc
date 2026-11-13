@@ -75,10 +75,18 @@ pub(super) fn bitwise(
     }
 }
 
-/// Keeps ordinary eval hooks safe after noncoercive numeric guards selected concrete scalar inputs.
-pub(super) fn non_overflow_boundary(
-    op: EvalBinOp, right: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+/// Preserves exact result kinds and catchable value failures after noncoercive scalar guards.
+pub(super) fn non_overflow_operation(
+    op: EvalBinOp, left: RuntimeCellHandle, right: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if op == EvalBinOp::Pow && values.type_tag(left)? == EVAL_TAG_INT && values.type_tag(right)? == EVAL_TAG_INT {
+        use elephc_semantics::integer_power::{php_integer_power, PowerResult};
+        return match php_integer_power(values.raw_value_word(left)? as i64, values.raw_value_word(right)? as i64) {
+            PowerResult::Int(value) => values.int(value).map(Some),
+            PowerResult::Float(value) => values.float(value).map(Some),
+        };
+    }
     if !matches!(op, EvalBinOp::Div | EvalBinOp::Mod) { return Ok(None); }
     let tag = values.type_tag(right)?;
     let word = values.raw_value_word(right)?;

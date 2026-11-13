@@ -32,7 +32,7 @@ pub(super) fn binary(
     }
     super::numeric_domains::require_binary(op, left, right, context, values)?;
     if !context.semantic_profile().contains(StrictFeature::Overflow) {
-        return super::numeric_domains::non_overflow_boundary(op, right, context, values);
+        return super::numeric_domains::non_overflow_operation(op, left, right, context, values);
     }
     apply(checked, left, right, context, values).map(Some)
 }
