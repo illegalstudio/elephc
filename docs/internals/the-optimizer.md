@@ -963,6 +963,14 @@ equivalent access in the body, including when its property handle was already
 cached outside the loop. Remaining straight-line descriptors are shared after
 loop resolution.
 
+A packed element-view local qualifies too. `$p = $points[$i]` stores the record's raw
+address, which is neither retained nor released, so the store is on the loop allowlist
+like a store of any scalar local. `buffer_access/element_views.rs` then forwards that
+address to the reads of the non-escaping view slot in the same block, and the view loop
+reaches the instructions of the direct `$points[$i]->x` spelling: one preheader
+descriptor, one record address per iteration and no read of the view slot. A view whose
+slot a by-reference alias can rewrite keeps its reads.
+
 Inside a rewritten loop, packed `buffer_get_resolved` instructions with the same
 descriptor and index compute the same record address, so a dominated access
 reuses its dominator's result. Index operands are compared after seeing through
