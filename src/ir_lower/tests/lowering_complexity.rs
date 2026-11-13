@@ -810,6 +810,18 @@ fn mixed_reads_of_one_name_search_the_program_once() {
     assert_eq!(small, large, "arm searches grew with the sites: {small} vs {large}");
 }
 
+/// A constant string emits no call to the literal identity hook, which records nothing: with
+/// mbstring linked, every constant string of a program paid a `bl` to a `ret`.
+#[test]
+fn constant_strings_do_not_call_the_noop_literal_hook() {
+    let source = "<?php\n$s = 'héllo';\necho mb_strlen($s), mb_strtoupper('abc'), \"\\n\";\n";
+    let module = lower_source(source);
+    assert!(module.required_runtime_features.mbstring, "the fixture no longer links mbstring");
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    assert!(asm.contains("_str_"), "the fixture no longer emits constant strings");
+    assert!(!asm.contains("bl __rt_mbstring_ini_literal"), "a constant string calls the no-op literal hook");
+}
+
 /// Unwind-visible owner registrations in function `name` of the lowered `source`.
 fn owner_pushes_in(source: &str, name: &str) -> usize {
     let module = lower_source(source);

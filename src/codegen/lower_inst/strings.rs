@@ -11,7 +11,7 @@
 //! - Those empty results publish the canonical empty string, not a leftover
 //!   pointer, so they stay distinct from the missing typed-array sentinel.
 //! - Raw pointers stringify through `__rt_ptoa`, the same "0x..." formatter `echo` uses.
-//! - Constant string values register lazy interned origins before native copies can create aliases.
+//! - Constant strings record no identity origin: INI resolves an unrecorded literal as a fresh value.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -32,9 +32,8 @@ pub(super) fn lower_const_str(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
-    if ctx.module.required_runtime_features.mbstring || ctx.module.required_runtime_features.eval_bridge {
-        abi::emit_call_label(ctx.emitter, "__rt_mbstring_ini_literal");
-    }
+    // No `__rt_mbstring_ini_literal` call: that hook records nothing (see `emit_literal_noop`),
+    // and calling it at every constant string was 973,283 `bl`s of the Symfony demo console.
     store_if_result(ctx, inst)
 }
 
