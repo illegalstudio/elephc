@@ -1061,7 +1061,7 @@ fn split_table_routed_read_hash_arms(
     let mut explicit = Vec::new();
     let mut routed = Vec::new();
     for arm in arms {
-        let table_answers = ctx.module.class_infos.get(&arm.class_name).is_some_and(|info| {
+        let table_answers = ctx.module.class_infos.get(&*arm.class_name).is_some_and(|info| {
             info.dynamic_property_hash_is_name_addressable()
                 && !info.properties.iter().any(|(declared, _)| declared == property)
                 && arm.hash_offset
@@ -1174,7 +1174,7 @@ pub(super) struct MixedClassHashArm {
     /// Runtime class id the arm matches on.
     pub(super) class_id: u64,
     /// That class's name, which php reports in its creation notice and its warning.
-    pub(super) class_name: String,
+    pub(super) class_name: std::sync::Arc<str>,
     /// That class's own `8 + slots * 16` hash offset.
     pub(super) hash_offset: usize,
 }
@@ -1205,7 +1205,7 @@ fn read_hash_arms_without_magic(
         .filter(|arm| {
             !ctx.module
                 .class_infos
-                .get(&arm.class_name)
+                .get(&*arm.class_name)
                 .is_some_and(|info| info.methods.contains_key(&get_key))
         })
         .collect()
@@ -1216,29 +1216,25 @@ pub(super) fn mixed_class_hash_arms(
     property: &str,
     declared_class_ids: &[u64],
 ) -> Result<Vec<MixedClassHashArm>> {
-    let mut arms = Vec::new();
     // `dynamic_property_hash_offset_for_class` answers `None` for every class whose hash is not
-    // name-addressable, so only those few are asked (see `Module::name_addressable_hash_classes`).
-    let addressable = ctx.module.name_addressable_hash_classes();
+    // name-addressable, so only those few are arms (see `Module::name_addressable_hash_classes`).
     // A class that does not declare `property` answers from its hash at the offset its slot count
-    // gives (`dynamic_property_hash_offset_for_class` with no slot to resolve), so only the few
-    // that declare it are asked: each ask scanned the class's slots, ~1,900 samples of a sampled
-    // Symfony demo console build.
+    // gives, whatever the scope and the name, so those arms are built once per codegen state; a
+    // site looked every class up and recloned its name again (~1,450 samples of a sampled
+    // Symfony demo console build). Only the few declaring the name are asked about this scope:
+    // each ask scans the class's slots.
+    let base = ctx.shared.mixed_hash_arm_base(|| mixed_hash_arm_base(ctx.module));
     let by_property = ctx.module.classes_by_property();
     let declaring: crate::fast_hash::FastSet<&str> = by_property
         .get(property)
         .map(|classes| classes.iter().map(String::as_str).collect())
         .unwrap_or_default();
-    for class_name in addressable.iter() {
-        let Some(class_info) = ctx.module.class_infos.get(class_name) else {
-            continue;
-        };
-        if crate::types::checker::builtin_stdclass::is_stdclass(class_name)
-            || declared_class_ids.contains(&class_info.class_id)
-        {
+    let mut arms = Vec::with_capacity(base.len());
+    for (class_id, class_name, default_offset) in base.iter() {
+        if declared_class_ids.contains(class_id) {
             continue;
         }
-        let hash_offset = if declaring.contains(class_name.as_str()) {
+        let hash_offset = if declaring.contains(&**class_name) {
             #[cfg(test)]
             HASH_OFFSET_SLOT_SCANS.with(|scans| scans.set(scans.get() + 1));
             let Some(hash_offset) = dynamic_property_hash_offset_for_class(ctx, class_name, property)?
@@ -1247,16 +1243,37 @@ pub(super) fn mixed_class_hash_arms(
             };
             hash_offset
         } else {
-            super::allocation_clone::dynamic_property_hash_offset(class_info.properties.len())
+            *default_offset
         };
         arms.push(MixedClassHashArm {
-            class_id: class_info.class_id,
+            class_id: *class_id,
             class_name: class_name.clone(),
             hash_offset,
         });
     }
-    arms.sort_by_key(|arm| arm.class_id);
     Ok(arms)
+}
+
+/// `(class id, class name, default hash offset)` of every name-addressable class but `stdClass`,
+/// sorted by class id: the scope-independent part of `mixed_class_hash_arms`.
+fn mixed_hash_arm_base(module: &crate::ir::Module) -> Vec<(u64, std::sync::Arc<str>, usize)> {
+    #[cfg(test)]
+    HASH_ARM_BASE_BUILDS.with(|builds| builds.set(builds.get() + 1));
+    let mut base = module
+        .name_addressable_hash_classes()
+        .iter()
+        .filter(|class_name| !crate::types::checker::builtin_stdclass::is_stdclass(class_name))
+        .filter_map(|class_name| {
+            let class_info = module.class_infos.get(class_name)?;
+            Some((
+                class_info.class_id,
+                std::sync::Arc::<str>::from(class_name.as_str()),
+                super::allocation_clone::dynamic_property_hash_offset(class_info.properties.len()),
+            ))
+        })
+        .collect::<Vec<_>>();
+    base.sort_by_key(|(class_id, _, _)| *class_id);
+    base
 }
 
 /// One runtime-class arm of a `Mixed` receiver's reference-cell load.
@@ -1366,6 +1383,8 @@ fn classes_that_may_declare<'a>(
 thread_local! {
     /// Addressable classes `mixed_class_hash_arms` asked to resolve the name against their slots.
     pub(crate) static HASH_OFFSET_SLOT_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Builds of the scope-independent mixed hash arms.
+    pub(crate) static HASH_ARM_BASE_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -1899,6 +1918,37 @@ mod tests {
         let scans = HASH_OFFSET_SLOT_SCANS.with(std::cell::Cell::get);
         eprintln!("HASH_OFFSET_SLOT_SCANS={scans}");
         assert!(scans < 10, "{scans} slot scans for one class declaring `x` among 41");
+    }
+
+    /// The arms of the classes NOT declaring the name are the same at every `$mixed->name`
+    /// site: built once per codegen state, not once per site.
+    #[test]
+    fn hash_arm_base_is_built_once_for_all_sites() {
+        let builds = |sites: usize| {
+            let mut source = String::from("<?php\n");
+            for index in 0..20 {
+                source.push_str(&format!(
+                    "#[\\AllowDynamicProperties]\nclass D{index} {{ public int $p{index} = {index}; }}\n"
+                ));
+            }
+            source.push_str("$items = [$argc > 1 ? new D1() : new D3(), 5];\nforeach ($items as $o) { if (is_object($o)) {\n");
+            for index in 0..sites {
+                source.push_str(&format!("    echo $o->q{index} ?? 'none';\n"));
+            }
+            source.push_str("} }\n");
+            let module = crate::ir_lower::tests::lower_source_at_for_target(
+                &source,
+                std::path::Path::new("main.php"),
+                std::path::Path::new("."),
+                crate::codegen::platform::Target::parse("macos-aarch64").unwrap(),
+            );
+            super::HASH_ARM_BASE_BUILDS.with(|count| count.set(0));
+            crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+            super::HASH_ARM_BASE_BUILDS.with(std::cell::Cell::get)
+        };
+        let (few, many) = (builds(2), builds(24));
+        assert!(few > 0, "the fixture no longer reaches the mixed hash arms");
+        assert_eq!(few, many, "hash arm bases grew with the sites: {few} vs {many}");
     }
 
     /// 300 classes declare unrelated properties and two declare `x`: every `Mixed` read of `->x`

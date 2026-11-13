@@ -70,6 +70,10 @@ pub(crate) struct SharedCodegenState {
     /// Every non-public static method of the module, sorted by class then method: the part of a
     /// scope's visible static cases that does not depend on the scope. Each class scope re-sorted
     /// every class and static method to find them.
+    /// `(class id, class name, default hash offset)` of every name-addressable class but
+    /// `stdClass`, sorted by class id: the arms a `$mixed->name` read takes for every class that
+    /// does not declare the name. Each site rebuilt them, looking every class up again.
+    mixed_hash_arm_base: std::cell::OnceCell<std::sync::Arc<Vec<(u64, std::sync::Arc<str>, usize)>>>,
     non_public_static_base: std::cell::OnceCell<
         std::sync::Arc<Vec<super::lower_inst::callables::NonPublicStaticMethod>>,
     >,
@@ -536,6 +540,16 @@ impl SharedCodegenState {
         built
     }
 
+    /// The scope-independent mixed hash arms, collected once by `build`; see the field.
+    pub(super) fn mixed_hash_arm_base(
+        &self,
+        build: impl FnOnce() -> Vec<(u64, std::sync::Arc<str>, usize)>,
+    ) -> std::sync::Arc<Vec<(u64, std::sync::Arc<str>, usize)>> {
+        self.mixed_hash_arm_base
+            .get_or_init(|| std::sync::Arc::new(build()))
+            .clone()
+    }
+
     /// The non-public static methods of the module, collected once by `build`.
     pub(super) fn non_public_static_base(
         &self,
@@ -607,6 +621,7 @@ impl SharedCodegenState {
             wrapper_module: None,
             instance_method_target_base: std::cell::OnceCell::new(),
             non_public_static_base: std::cell::OnceCell::new(),
+            mixed_hash_arm_base: std::cell::OnceCell::new(),
             instance_method_targets_by_scope: std::cell::RefCell::new(Default::default()),
             mixed_method_candidates: Default::default(),
             base_target_signatures: std::cell::OnceCell::new(),
