@@ -245,6 +245,30 @@ return true;
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Eval-declared `__toString()` methods render implode/join separators and elements in PHP order.
+#[test]
+fn execute_program_implode_converts_eval_stringable_operands() {
+    let program = parse_fragment(br#"
+class JoinEvalStringable {
+    public function __construct(private string $text) {}
+    public function __toString(): string { echo "[", $this->text, "]"; return $this->text; }
+}
+class JoinEvalThrowingStringable { public function __toString(): string { throw new RuntimeException("boom"); } }
+echo implode(",", [new JoinEvalStringable("a"), "x", new JoinEvalStringable("b")]), "\n";
+echo join(new JoinEvalStringable("-"), ["p", new JoinEvalStringable("q")]), "\n";
+echo join([new JoinEvalStringable("j"), 1]), "\n";
+try { echo join(",", ["k", new JoinEvalThrowingStringable()]); } catch (RuntimeException $e) { echo "caught:", $e->getMessage(), "\n"; }
+return true;
+"#).expect("parse eval stringable join fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute stringable join");
+
+    assert_eq!(values.output, "[a][b]a,x,b\n[-][q]p-q\n[j]j1\ncaught:boom\n");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Native argument guards can inspect inherited eval stringability without conversion effects.
 #[test]
 fn implode_object_stringability_probe_does_not_invoke_to_string() {

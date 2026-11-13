@@ -82,8 +82,19 @@ pub(in crate::interpreter) fn eval_implode_result(
         };
         return eval_throw_type_error(&message, context, values);
     }
+    // Objects go through the eval string context so eval-declared `__toString()` methods run
+    // (with their side effects and exceptions) instead of reading the native backing object.
+    // PHP converts the separator before any element.
     let separator = match separator {
-        Some(separator) => values.string_bytes(separator)?,
+        Some(separator) => {
+            let rendered = eval_string_context_value(separator.borrowed(), context, values)?;
+            let mut bytes = Vec::new();
+            with_eval_value_lease(rendered, context, values, |rendered, _, values| {
+                bytes = values.string_bytes(rendered)?;
+                Ok(())
+            })?;
+            bytes
+        }
         None => Vec::new(),
     };
     let len = values.array_len(array)?;
@@ -95,9 +106,12 @@ pub(in crate::interpreter) fn eval_implode_result(
         let key = values.array_iter_key(array, position)?;
         with_eval_value_lease(key, context, values, |key, context, values| {
             let value = values.array_get(array, key)?;
-            with_eval_value_lease(value, context, values, |value, _, values| {
-                output.extend_from_slice(&values.string_bytes(value)?);
-                Ok(())
+            with_eval_value_lease(value, context, values, |value, context, values| {
+                let rendered = eval_string_context_value(value.borrowed(), context, values)?;
+                with_eval_value_lease(rendered, context, values, |rendered, _, values| {
+                    output.extend_from_slice(&values.string_bytes(rendered)?);
+                    Ok(())
+                })
             })
         })?;
     }
