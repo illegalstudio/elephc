@@ -203,8 +203,9 @@ fn reads_any_local(expr: &Expr, locals: &HashSet<String>) -> bool {
         return false;
     }
     let mut found = false;
-    crate::parser::ast::visit::walk_nodes(
-        std::slice::from_ref(&Stmt::new(StmtKind::ExprStmt(expr.clone()), expr.span)),
+    // Walked in place: wrapping the expression in a statement for `walk_nodes` cloned it whole.
+    crate::parser::ast::visit::walk_expr_nodes(
+        expr,
         &mut |node| {
             if let crate::parser::ast::visit::Node::Expr(inner) = node {
                 if matches!(&inner.kind, ExprKind::Variable(name) if locals.contains(name)) {
@@ -219,8 +220,9 @@ fn reads_any_local(expr: &Expr, locals: &HashSet<String>) -> bool {
 /// Whether `expr` reads `static::class` anywhere.
 fn mentions_static_class(expr: &Expr) -> bool {
     let mut found = false;
-    crate::parser::ast::visit::walk_nodes(
-        std::slice::from_ref(&Stmt::new(StmtKind::ExprStmt(expr.clone()), expr.span)),
+    // Walked in place: wrapping the expression in a statement for `walk_nodes` cloned it whole.
+    crate::parser::ast::visit::walk_expr_nodes(
+        expr,
         &mut |node| {
             if let crate::parser::ast::visit::Node::Expr(inner) = node {
                 if matches!(

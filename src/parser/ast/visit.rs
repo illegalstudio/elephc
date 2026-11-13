@@ -43,6 +43,11 @@ pub(crate) fn walk_nodes<'a>(stmts: &'a [Stmt], visit: &mut dyn FnMut(Node<'a>))
     }
 }
 
+/// `walk_nodes` for one expression: `expr` and every node it contains, in pre-order.
+pub(crate) fn walk_expr_nodes<'a>(expr: &'a Expr, visit: &mut dyn FnMut(Node<'a>)) {
+    walk_expr(expr, visit);
+}
+
 fn walk_methods<'a>(methods: &'a [ClassMethod], visit: &mut dyn FnMut(Node<'a>)) {
     for method in methods {
         walk_nodes(&method.body, visit);
@@ -816,5 +821,31 @@ mod tests {
         });
         assert_eq!(includes, 1);
         assert_eq!(returns, 2);
+    }
+
+    /// Walking one expression in place reaches exactly the expression nodes the statement walk
+    /// reaches for that expression (closure bodies included), without wrapping it in a statement.
+    #[test]
+    fn expression_walk_matches_the_statement_walk() {
+        let source = "<?php $x = [static::class, fn() => static::class, function () { return self::K; }];";
+        let tokens = crate::lexer::tokenize(source).unwrap();
+        let program = crate::parser::parse(&tokens).unwrap();
+        let StmtKind::Assign { value, .. } = &program[0].kind else {
+            panic!("expected an assignment");
+        };
+        let mut through_statements = 0;
+        walk_nodes(std::slice::from_ref(&program[0]), &mut |node| {
+            if matches!(node, Node::Expr(_)) {
+                through_statements += 1;
+            }
+        });
+        let mut in_place = 0;
+        walk_expr_nodes(value, &mut |node| {
+            if matches!(node, Node::Expr(_)) {
+                in_place += 1;
+            }
+        });
+        assert!(in_place > 3, "the fixture lost its nested expressions: {in_place}");
+        assert_eq!(in_place, through_statements);
     }
 }
