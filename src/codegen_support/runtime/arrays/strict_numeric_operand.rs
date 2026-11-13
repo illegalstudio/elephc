@@ -2,7 +2,7 @@
 //! Classifies borrowed numeric operands without losing exact integer payloads.
 //!
 //! Called from:
-//! - Checked boxed power before arithmetic and warning dispatch.
+//! - Checked boxed arithmetic before computation and warning dispatch.
 //!
 //! Key details:
 //! - Returns canonical numeric tag, payload and string-prefix status without boxing.

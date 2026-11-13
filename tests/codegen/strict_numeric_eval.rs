@@ -64,3 +64,39 @@ if ($argc < 0) { throw new ArithmeticError('callback metadata'); }
         }
     }
 }
+
+
+/// Checked scalar arithmetic keeps exact strings, kind failures and callback exceptions observable.
+#[test]
+fn test_strict_numeric_operands_staged_values_callbacks_and_exception_owners() {
+    let source = r#"<?php
+function exactNumericAdd(mixed $left, mixed $right): mixed { return $left + $right; }
+function exactNumericSub(mixed $left, mixed $right): mixed { return $left - $right; }
+function exactNumericMul(mixed $left, mixed $right): mixed { return $left * $right; }
+function discardNumericPrefix(mixed $left): void {
+    try { $left + 1.0; } catch (RuntimeException $error) { echo 'Q'; }
+}
+$bad = $argc > 0 ? 'invalid' : 'also invalid';
+try { exactNumericAdd($bad, 1); } catch (TypeError $error) { echo 'A'; }
+try { exactNumericSub($bad, 1); } catch (TypeError $error) { echo 'S'; }
+try { exactNumericMul($bad, 1.0); } catch (TypeError $error) { echo 'M'; }
+echo ':', exactNumericAdd('9007199254740993', 0);
+echo ':', is_float(exactNumericMul('9223372036854775808', 1));
+$prefix = $argc > 0 ? '5x' : '0'; $right = 3;
+set_error_handler(function (int $severity, string $message) use (&$right): bool { $right = 63; echo 'W'; return true; });
+echo ':', exactNumericAdd($prefix, $right), ':', $right;
+$right = 3; echo ':', exactNumericSub($prefix, $right);
+$right = 3; echo ':', exactNumericMul($prefix, $right);
+restore_error_handler();
+set_error_handler(function (int $severity, string $message): bool { throw new RuntimeException('numeric prefix'); });
+echo ':'; discardNumericPrefix($prefix);
+restore_error_handler();
+"#;
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "ASM:9007199254740993:1:W8:63:W2:W15:Q", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

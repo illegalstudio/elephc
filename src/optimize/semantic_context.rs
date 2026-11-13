@@ -77,11 +77,11 @@ pub(super) fn integer_overflow_may_throw(expr: &crate::parser::ast::Expr) -> boo
     }
 }
 
-/// Checked powers may reject numeric operands or invoke a warning handler during conversion.
-pub(super) fn checked_power_conversion_may_dispatch(expr: &crate::parser::ast::Expr) -> bool {
+/// Checked arithmetic may reject numeric operands or invoke a warning handler during conversion.
+pub(super) fn checked_numeric_conversion_may_dispatch(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::{BinOp, ExprKind};
     if !enabled(StrictFeature::Overflow) { return false; }
-    let ExprKind::BinaryOp { left, op: BinOp::Pow, right } = &expr.kind else { return false; };
+    let ExprKind::BinaryOp { left, op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Pow, right } = &expr.kind else { return false; };
     [left, right].into_iter().any(|operand| match &operand.kind {
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::Null => false,
         ExprKind::StringLiteral(value) => !crate::numeric_string::scan_numeric_prefix(value)

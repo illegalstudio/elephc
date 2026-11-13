@@ -28,7 +28,7 @@ use crate::codegen_support::platform::Arch;
 /// Output: boxed Mixed pointer in the integer result register (x0 / rax), holding an
 /// integer when both operands were integers and PHP keeps an int, a double otherwise.
 pub fn emit_mixed_numeric_pow(emitter: &mut Emitter) {
-    super::strict_mixed_pow::emit(emitter);
+    super::strict_mixed_numeric::emit(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_numeric_pow_linux_x86_64(emitter);
         return;

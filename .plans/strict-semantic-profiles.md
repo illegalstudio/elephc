@@ -879,3 +879,25 @@ literal and an unversioned C import; all were corrected before this verified ste
 The public integrated profile mask remains unchanged until numeric/storage/eval parity is
 complete. Remaining checked reductions, updates and general arithmetic operand
 normalization follow alongside the other strict guarantees.
+
+
+### Shared exact operands for checked scalar arithmetic
+
+Checked Add/Sub/Mul now share the power operand classifier, numeric snapshots,
+warning dispatch and result boxing in strict_mixed_numeric. PHP-promoting helper
+entries retain their original kernels; the obsolete checked selector bit inside
+those PHP kernels is removed. Checked integer operations retain hardware overflow
+guards on both architectures. Invalid numeric kinds throw TypeError; numeric
+prefixes invoke their warning handler after both operand payloads are captured.
+AST effects and exception-flow summaries cover these conversion callbacks even
+when a float operand excludes integer overflow, preserving discarded operations,
+global invalidation and catch clauses.
+
+A new native regression failed on872d1c3749 with missing TypeError and warning
+markers, then passes both optimizer modes with a clean heap. The new all-five-
+target graph unit and existing power unit pass. Existing boxed arithmetic/power,
+checked array reductions and callback fusions, numeric-string powers and native
+eval callback status/ownership matrices also pass. The compiler build, assembly
+comment checks and diff hygiene pass. No builtin contract or documentation
+metadata changed in this step. Remaining eval reductions/updates and other strict
+features continue before exposing the complete profile family.
