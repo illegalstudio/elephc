@@ -203,7 +203,11 @@ fn rewrite_property_ref_args(
             PhpType::Array(_) | PhpType::AssocArray { .. }
         );
         let promoted = variadic_tail
-            || matches!(expected_ty, PhpType::Mixed)
+            // A whole scalar/container property bound to `mixed &` travels as a boxed cell.
+            // A typed CONTAINER element keeps its own layout instead: main's write-back
+            // validates every nested entry before assigning it back.
+            || (matches!(expected_ty, PhpType::Mixed)
+                && !(typed_element && container_element))
             || (typed_element && !container_element)
             || matches!(
                 value_type.codegen_repr(),
