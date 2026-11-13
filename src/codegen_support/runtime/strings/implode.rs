@@ -375,6 +375,11 @@ pub fn emit_implode(emitter: &mut Emitter) {
     emitter.label("__rt_implode_raw_float_elem");
     emit_aarch64_scalar_reserve(emitter, "raw_float");
     emitter.instruction("ldr d0, [x12]");                                       // load the raw double element into the FP argument register
+    // A warning handler may concatenate into scratch before the reserved formatter runs.
+    // Publish the completed prefix so that callback cannot overwrite earlier elements.
+    if crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+        emit_implode_publish_offset_aarch64(emitter, "raw_float_warning");
+    }
     crate::codegen_support::runtime::emit_nan_string_coercion_probe(emitter, "__rt_implode_raw_float_no_nan");
     emit_aarch64_scalar_format_into(emitter, "__rt_ftoa_into");
     emitter.instruction("b __rt_implode_copy_value");                           // the text already sits at the destination cursor
@@ -706,6 +711,10 @@ fn emit_implode_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_implode_raw_float_elem");
     emit_x86_64_scalar_reserve(emitter, "raw_float");
     emitter.instruction("movsd xmm0, QWORD PTR [rcx]");                         // load the raw double element into the FP argument register
+    // Mirror the AArch64 prefix reservation before entering a user warning handler.
+    if crate::codegen_support::runtime::nan_bool_coercion_warning_enabled() {
+        emit_implode_publish_offset_x86_64(emitter, "raw_float_warning");
+    }
     crate::codegen_support::runtime::emit_nan_string_coercion_probe(emitter, "__rt_implode_raw_float_no_nan_linux_x86_64");
     emitter.instruction("mov rsi, r10");                                        // format directly in the reserved implode destination window
     emitter.instruction("call __rt_ftoa_into");                                 // write PHP's precision=14 text → rax=ptr, rdx=len
@@ -778,6 +787,28 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::{Arch, Platform, Target};
 
+    /// Warning callbacks must see the live join cursor before formatting a raw NaN element.
+    #[test]
+    fn test_nan_string_implode_publishes_before_warning_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let (publish, warning, format) = if target.arch == Arch::AArch64 {
+                ("str x14, [x13]", "bl __rt_warn_nan_coerced_string", "bl __rt_ftoa_into")
+            } else {
+                ("mov QWORD PTR [r8], r9", "call __rt_warn_nan_coerced_string", "call __rt_ftoa_into")
+            };
+            let mut emitter = Emitter::new(target);
+            emit_implode(&mut emitter);
+            let assembly = emitter.output();
+            let float = assembly.split("__rt_implode_raw_float_elem:\n").nth(1).unwrap()
+                .split("__rt_implode_raw_bool_elem:\n").next().unwrap();
+            let published = float.find(publish).expect("reserve the live prefix before calling a handler");
+            let warned = float.find(warning).expect("raw float elements need the NaN diagnostic");
+            let formatted = float.find(format).expect("raw floats format into the reserved window");
+            assert!(published < warned && warned < formatted, "{name}: {float}");
+        }
+    }
+
     /// Arbitrary Mixed conversion lengths pass the full copy-capacity guard on every target.
     #[test]
     fn test_implode_mixed_cast_checks_full_size_on_all_targets() {
@@ -835,10 +866,9 @@ mod tests {
         assert_eq!(asm.matches("add rsp, 112").count(), 1);
     }
 
-    /// The element arms that format through concat scratch: only boxed Mixed. Raw int, raw
-    /// float, true bool and tagged nullable ints format directly into the reserved result
-    /// destination, so they publish nothing.
-    const FORMATTING_ARMS: usize = 1;
+    /// Mixed casts use concat scratch, and raw-float warnings may invoke concatenating handlers.
+    /// Both publish the live cursor; the raw formatter itself writes into its reserved window.
+    const FORMATTING_ARMS: usize = 2;
 
     /// The owned mixed-cast slot must be cleared at the TOP of every element iteration, so a
     /// borrowed (typed-array) element can never inherit the previous iteration's owned pointer
@@ -859,8 +889,8 @@ mod tests {
     }
 
     /// Pins the ARM64 cursor discipline: the LIVE destination cursor is published as
-    /// `_concat_off` before the nested Mixed cast (so the cast formats past the bytes already
-    /// joined), and the finalizer stamps the ABSOLUTE end offset instead of adding the
+    /// `_concat_off` before the nested Mixed cast and raw-float warning (so callbacks format
+    /// past the bytes already joined), and the finalizer stamps the ABSOLUTE end offset instead of adding the
     /// result length to whatever `_concat_off` the nested cast left behind.
     ///
     /// Every site branches on where the destination lives. A scratch destination publishes
@@ -880,7 +910,7 @@ mod tests {
         assert_eq!(
             asm.matches("sub x14, x9, x14").count(),
             FORMATTING_ARMS + 1,
-            "the live cursor offset is published at every cast and at the finalizer"
+            "the live cursor offset is published before casts, warning callbacks and finalization"
         );
         assert_eq!(
             asm.matches("ldr x14, [sp, #88]").count(),
@@ -972,7 +1002,7 @@ mod tests {
     /// cursor out of the destination spill slot, and the finalizer converts the final cursor to
     /// an absolute offset rather than adding the joined length to the stored offset.
     ///
-    /// Both sites branch on where the destination lives, exactly as on ARM64: the live cursor
+    /// All sites branch on where the destination lives, exactly as on ARM64: the live cursor
     /// for a scratch destination, the entry offset for a grown one.
     #[test]
     fn test_implode_x86_64_publishes_live_cursor_across_mixed_cast() {
@@ -982,7 +1012,7 @@ mod tests {
         assert_eq!(
             asm.matches("mov r9, r10").count(),
             FORMATTING_ARMS + 1,
-            "the live cursor is published at every cast and at the finalizer"
+            "the live cursor is published before casts, warning callbacks and finalization"
         );
         assert_eq!(
             asm.matches("sub r9, r8").count(),

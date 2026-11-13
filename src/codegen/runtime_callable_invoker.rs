@@ -2768,7 +2768,11 @@ fn coerce_to_string(
 ) {
     match ty.codegen_repr() {
         PhpType::Int => abi::emit_call_label(emitter, "__rt_itoa"),
-        PhpType::Float => abi::emit_call_label(emitter, "__rt_ftoa"),
+        PhpType::Float => {
+            let skip = ctx.next_label("nan_string_warn_skip");
+            crate::codegen_support::runtime::emit_nan_string_coercion_probe(emitter, &skip);
+            abi::emit_call_label(emitter, "__rt_ftoa");
+        }
         PhpType::Bool => emit_bool_to_string(emitter, ctx),
         PhpType::Void | PhpType::Never => emit_empty_string_result(emitter),
         PhpType::Mixed | PhpType::Union(_) => {

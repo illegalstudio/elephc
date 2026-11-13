@@ -557,6 +557,7 @@ fn load_json_source_string(
         }
         PhpType::Float => {
             ctx.load_value_to_result(value)?;
+            crate::codegen::lower_inst::predicates::emit_nan_string_coercion_probe(ctx);
             abi::emit_call_label(ctx.emitter, "__rt_ftoa");
             Ok(())
         }

@@ -1,9 +1,8 @@
 //! Purpose:
-//! End-to-end tests for PHP 8.5's `unexpected NAN value was coerced to bool` E_WARNING — the
-//! `__rt_warn_nan_coerced_bool` runtime helper and the inline NAN probe that guards it
-//! (`src/codegen_support/runtime/arrays/nan_bool_coercion_warning.rs`), reached from the three
-//! float-truthiness lowering sites in `src/codegen/lower_inst` and from the two boxed-Mixed
-//! runtime helpers (`__rt_mixed_cast_bool`, `__rt_mixed_is_empty`).
+//! End-to-end tests for PHP 8.5's NaN-to-bool and NaN-to-string coercion warnings.
+//! The runtime helpers and inline probes live in
+//! `src/codegen_support/runtime/arrays/nan_bool_coercion_warning.rs` and are reached from
+//! native coercion lowering, boxed-Mixed helpers, runtime callables and eval casts.
 //!
 //! The diagnostic is NEW IN PHP 8.5 (RFC `warnings-php-8-5`, "Coercing NAN to other types");
 //! 8.2/8.3/8.4 coerce NAN to `true` silently. Before the fix elephc coerced silently on every
@@ -19,9 +18,9 @@
 //! - Every expected line was captured from reference PHP 8.5.6 (`php -d xdebug.mode=off`); the
 //!   host `php` loads Xdebug, which overloads `var_dump`, so that flag is mandatory when
 //!   re-deriving these fixtures.
-//! - EVERY NAN reaches its coercion site through a FUNCTION RETURN, a PARAMETER or an array
-//!   element, never as a literal. `NAN` in literal position is const-folded, so a literal probe
-//!   would measure the constant folder and pass even with the runtime path deleted.
+//! - Native NAN coercions use function returns, parameters or array elements to avoid AOT
+//!   constant folding. The eval fixture instead supplies its source at runtime, so its NaN
+//!   literal reaches the interpreter's native cast bridge.
 //! - Stdout and stderr are asserted SEPARATELY. The warning is a runtime diagnostic written by
 //!   the COMPILED PROGRAM to its own stderr, which is a different stream from the compiler's —
 //!   the `elephc_diagnostics` filter used for compile output can therefore never swallow it.
@@ -50,6 +49,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 const NAN_WARNING: &str = "Warning: unexpected NAN value was coerced to bool\n";
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
+
+/// Removes a fixture's directory even when an output assertion panics.
+struct TestDirectory(PathBuf);
+
+impl Drop for TestDirectory {
+    /// Releases only the isolated directory created for this fixture.
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
 fn make_test_dir(prefix: &str) -> PathBuf {
@@ -111,10 +120,12 @@ fn compile(dir: &Path, source: &str, stem: &str, php_version: Option<&str>) -> P
         output.status.success(),
         "elephc compile failed:\n{diagnostics}"
     );
-    assert!(
-        diagnostics.is_empty(),
-        "unexpected elephc diagnostic:\n{diagnostics}"
-    );
+    let expected_diagnostics = if stem.starts_with("nan_string_eval") {
+        "warning: dynamic eval was compiled without optional regex support"
+    } else {
+        ""
+    };
+    assert_eq!(diagnostics, expected_diagnostics, "unexpected elephc diagnostic");
     dir.join(stem)
 }
 
@@ -136,6 +147,7 @@ fn assert_run_for_version(
     expected_stderr: &str,
 ) {
     let dir = make_test_dir(prefix);
+    let _cleanup = TestDirectory(dir.clone());
     let bin = compile(&dir, source, prefix, php_version);
     let output = Command::new(&bin)
         .output()
@@ -156,7 +168,6 @@ fn assert_run_for_version(
         expected_stderr,
         "program stderr diverged"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Returns `NAN_WARNING` repeated `count` times, i.e. the whole stderr of a program that
@@ -509,4 +520,106 @@ echo (string) f(), " ", f(), "\n";
         "NAN NAN\n",
         "",
     );
+}
+
+/// Exercises the IO loader, JSON input loader and typed runtime callable adapter.
+const NAN_STRING_ADDITIONAL_SITES: &str = r#"<?php
+function f(): float { return NAN; }
+echo basename(f()), "\n";
+var_dump(json_decode(f()));
+function accept_nan_string(string $value): string { return $value; }
+$callback = $argc > 0 ? 'accept_nan_string' : 'strrev';
+echo call_user_func_array($callback, [f()]), "\n";
+"#;
+
+/// Each additional AOT coercion warns once, matching PHP 8.5's string parameter handling.
+#[test]
+fn nan_string_additional_aot_sites_warn_once() {
+    assert_run(
+        "nan_string_additional",
+        NAN_STRING_ADDITIONAL_SITES,
+        "NAN\nNULL\nNAN\n",
+        &NAN_STRING_WARNING.repeat(3),
+    );
+}
+
+/// JSON validation coerces its source, while encoding and loose NaN comparisons stay silent.
+#[test]
+fn nan_string_json_validation_and_noncoercing_controls() {
+    assert_run(
+        "nan_string_json",
+        r#"<?php
+function f(): float { return NAN; }
+var_dump(json_validate(f()));
+var_dump(json_encode(f()));
+function comparison_nan(): mixed { return json_decode('[1]', true) ? NAN : 0; }
+var_dump(comparison_nan() == "text", comparison_nan() < "text");
+"#,
+        "bool(false)\nbool(false)\nbool(false)\nbool(false)\n",
+        NAN_STRING_WARNING,
+    );
+}
+
+/// Dynamic eval reaches the boxed cast bridge rather than the AOT float cast lowering.
+#[test]
+fn nan_string_dynamic_eval_cast_warns_once() {
+    let source = r#"<?php
+$code = $argc > 0 ? 'echo (string) NAN, "\n";' : '';
+eval($code);
+"#;
+    assert_run("nan_string_eval", source, "NAN\n", NAN_STRING_WARNING);
+    for version in ["8.2", "8.3", "8.4"] {
+        assert_run_for_version("nan_string_eval_old", source, Some(version), "NAN\n", "");
+    }
+}
+
+/// Both argument and environment float elements use pcntl_exec's scalar string conversion.
+#[test]
+fn nan_string_pcntl_exec_arguments_and_environment_warn_once() {
+    let source = r#"<?php
+function f(): float { return NAN; }
+var_dump(pcntl_exec('/definitely/missing/elephc-nan', [f()], ['VALUE' => f()]));
+"#;
+    let exec_warning = "Warning: pcntl_exec(): Error has occurred: (errno 2) No such file or directory\n";
+    assert_run(
+        "nan_string_exec",
+        source,
+        "bool(false)\n",
+        &(NAN_STRING_WARNING.repeat(2) + exec_warning),
+    );
+    for version in ["8.2", "8.3", "8.4"] {
+        assert_run_for_version("nan_string_exec_old", source, Some(version), "bool(false)\n", exec_warning);
+    }
+}
+
+/// A concatenating warning handler must preserve mixed and raw-float implode results.
+#[test]
+fn nan_string_implode_preserves_output_across_concatenating_handler() {
+    assert_run(
+        "nan_string_implode_handler",
+        r#"<?php
+set_error_handler(function($n, $m) { echo "w:" . $m . "\n"; return $n === E_WARNING; });
+function f(): float { return NAN; }
+echo implode(",", ["a", f(), "b"]), "\n";
+echo implode(",", [f(), f()]), "\n";
+"#,
+        "w:unexpected NAN value was coerced to string\na,NAN,b\n\
+w:unexpected NAN value was coerced to string\n\
+w:unexpected NAN value was coerced to string\nNAN,NAN\n",
+        "",
+    );
+}
+
+/// The newly covered AOT sites retain their values without NaN diagnostics before PHP 8.5.
+#[test]
+fn nan_string_additional_aot_sites_stay_silent_before_php_8_5() {
+    for version in ["8.2", "8.3", "8.4"] {
+        assert_run_for_version(
+            "nan_string_additional_old",
+            NAN_STRING_ADDITIONAL_SITES,
+            Some(version),
+            "NAN\nNULL\nNAN\n",
+            "",
+        );
+    }
 }
