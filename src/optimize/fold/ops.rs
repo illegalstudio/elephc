@@ -147,6 +147,9 @@ fn try_fold_int_div(left: i64, right: i64) -> Option<ExprKind> {
     if right == 0 {
         return None;
     }
+    if super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Arithmetic) {
+        return Some(ExprKind::FloatLiteral(left as f64 / right as f64));
+    }
     match (left.checked_rem(right), left.checked_div(right)) {
         (Some(0), Some(quotient)) => Some(ExprKind::IntLiteral(quotient)),
         _ => Some(ExprKind::FloatLiteral(left as f64 / right as f64)),
@@ -162,6 +165,7 @@ fn try_fold_int_div(left: i64, right: i64) -> Option<ExprKind> {
 /// A negative exponent is plain `pow((double) base, (double) exp)` in PHP. A non-finite result
 /// declines, leaving the operation on the runtime path.
 fn try_fold_int_pow(left: i64, right: i64) -> Option<ExprKind> {
+    if right < 0 && super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Arithmetic) { return None; }
     if right >= 0 && super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Overflow) {
         return elephc_semantics::numeric::checked_integer(elephc_semantics::numeric::IntegerOp::Pow, left, right)
             .ok().map(ExprKind::IntLiteral);
@@ -246,22 +250,8 @@ fn try_fold_int_mod(left: &Expr, right: &Expr) -> Option<ExprKind> {
 /// native `<<` / `>>`.
 fn try_fold_bitwise_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprKind> {
     let (left, right) = (int_literal(left)?, int_literal(right)?);
-    match op {
-        BinOp::BitAnd => Some(ExprKind::IntLiteral(left & right)),
-        BinOp::BitOr => Some(ExprKind::IntLiteral(left | right)),
-        BinOp::BitXor => Some(ExprKind::IntLiteral(left ^ right)),
-        BinOp::ShiftLeft => match u32::try_from(right).ok()? {
-            shift if shift >= i64::BITS => Some(ExprKind::IntLiteral(0)),
-            shift => Some(ExprKind::IntLiteral(left.wrapping_shl(shift))),
-        },
-        BinOp::ShiftRight => match u32::try_from(right).ok()? {
-            shift if shift >= i64::BITS => {
-                Some(ExprKind::IntLiteral(if left < 0 { -1 } else { 0 }))
-            }
-            shift => Some(ExprKind::IntLiteral(left >> shift)),
-        },
-        _ => None,
-    }
+    let operation = crate::semantics::numeric::integer_bit_op(op)?;
+    elephc_semantics::numeric_domains::integer_bitwise(operation, left, right).ok().map(ExprKind::IntLiteral)
 }
 
 /// Evaluates logical AND, OR, and XOR on two scalar operands using PHP truthiness rules.

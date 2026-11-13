@@ -1061,3 +1061,37 @@ prebuilt exporter after an accidental indirect Cargo invocation was detected.
 The next numeric work is shared arithmetic/coercion/cast domain planning and
 stable bindings, followed by the remaining semantic families. The integrated
 public mask remains unchanged until the complete guarantees are enforced.
+
+
+### Shared numeric operand domains
+
+The dependency-neutral numeric-domain catalog selects concrete operand kinds for
+Arithmetic and Coercions independently of Overflow. Numeric arithmetic accepts
+native int/float values; remainder, shifts and binary bit operations require
+integers. Arithmetic also rejects negative integer/integer powers while preserving
+explicit floating power. The compiler adapter owns AST/type mapping, shared EIR
+kind predicates guard original operands, and both originals remain independently
+rooted across exceptions. Native class adapters and typed array unions run first.
+Trusted Internal implementation operations retain their original contracts.
+
+Both eval engines consume the same rules before their scalar hooks. Integer bit
+operations share exact signed shift bounds with source proofs and constant folding;
+negative counts throw, counts beyond 63 saturate, and bit patterns may wrap.
+Non-overflow eval division/remainder boundaries preserve catchable zero failures
+and the MIN modulo -1 result. General eval numeric-result normalization, unary
+operations, updates, builtin invocation domains and binding conversions remain
+separate pending integration work.
+
+Original numeric and nonnumeric string kinds survive constant aliases and early
+validation, including unreachable expressions and literal eval. Every feature
+that requests literal-source auditing supplies its own diagnostic flag. Arithmetic
+constant division stays Float and negative integer power cannot fold past its
+runtime guard. Domain failures participate in both effects and exception-flow
+analysis, preserving discarded operations and catch clauses during optimization.
+
+Six new focused tests pass: two pure contract tables, all-five-target EIR/source
+policy/optimizer coverage, raw source and literal eval evidence, walker/VM kind and
+owner parity, and native failures with both optimizers and clean heaps. Six
+focused compatibility controls, the compiler build, the prebuilt architecture
+audit, assembly-comment alignment and diff hygiene pass. The public integration
+mask is unchanged until the complete feature paths enforce these guarantees.

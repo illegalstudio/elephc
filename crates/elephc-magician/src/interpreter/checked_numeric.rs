@@ -11,12 +11,13 @@
 use super::*;
 use elephc_semantics::{numeric::CheckedNumericOp, StrictFeature};
 
-/// Selects a checked scalar entry only for user-visible operations owned by Overflow.
+/// Preserves native overloads, validates numeric domains and selects explicit checked kernels.
 pub(super) fn binary(
     op: EvalBinOp, left: RuntimeCellHandle, right: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
-    if !context.semantic_profile().contains(StrictFeature::Overflow) { return Ok(None); }
+    if elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(context.semantic_profile()).is_permissive() { return Ok(None); }
+    if let Some(value) = super::numeric_domains::bitwise(op, left, right, context, values)? { return Ok(Some(value)); }
     let (checked, object) = match op {
         EvalBinOp::Add => (CheckedNumericOp::Add, elephc_builtin_contract::ObjectArithmetic::Add),
         EvalBinOp::Sub => (CheckedNumericOp::Sub, elephc_builtin_contract::ObjectArithmetic::Sub),
@@ -28,6 +29,10 @@ pub(super) fn binary(
     };
     if let Some(result) = runtime_ops::object_operators::arithmetic(values, object, left, right)? {
         return Ok(Some(result));
+    }
+    super::numeric_domains::require_binary(op, left, right, context, values)?;
+    if !context.semantic_profile().contains(StrictFeature::Overflow) {
+        return super::numeric_domains::non_overflow_boundary(op, right, context, values);
     }
     apply(checked, left, right, context, values).map(Some)
 }

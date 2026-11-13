@@ -77,6 +77,12 @@ pub(super) fn integer_overflow_may_throw(expr: &crate::parser::ast::Expr) -> boo
     }
 }
 
+/// Domain failures can unwind owned operands and must survive pruning and exception summaries.
+pub(super) fn numeric_domain_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+    let crate::parser::ast::ExprKind::BinaryOp { op, .. } = &expr.kind else { return false; };
+    crate::semantics::numeric::operand_rule(active_profile(), active_source_mode(), op).is_some()
+}
+
 /// Checked arithmetic may reject numeric operands or invoke a warning handler during conversion.
 pub(super) fn checked_numeric_conversion_may_dispatch(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::{BinOp, ExprKind};

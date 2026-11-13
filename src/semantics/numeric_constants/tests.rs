@@ -218,3 +218,33 @@ fn strict_abs_source_constants_validate_known_magnitudes_without_guessing_names(
     internal[0].source_mode = SourceMode::Internal;
     assert!(validate(&internal, profile).is_ok());
 }
+
+
+/// Original operand kinds and constant aliases are checked before folding or unreachable pruning.
+#[test]
+fn strict_numeric_domain_source_evidence_and_literal_eval_feature_independence() {
+    for feature in [StrictFeature::Arithmetic, StrictFeature::Coercions] {
+        let profile = SemanticProfile::PERMISSIVE.with(feature, true);
+        for source in [
+            "<?php if (false) { echo '2' + 1; }",
+            "<?php echo true * 2;", "<?php echo null - 1;", "<?php echo 7.0 % 2;",
+            "<?php echo 'a' & 'b';", "<?php const A = B; const B = '2'; echo A + 1;",
+            "<?php const A = B; const B = 'bad'; if (false) { echo A + 1; }",
+            "<?php const A = 'a'; if (false) { echo A & 'b'; }",
+            "<?php eval('return true + 1;');",
+        ] {
+            let error = super::super::validate_source(&parse(source), profile).expect_err(source);
+            assert!(error.message.contains(feature.flag()), "{source}: {error:?}");
+        }
+        for source in [
+            "<?php echo PHP_INT_MAX + 1;", "<?php echo 2.0 ** -1;", "<?php $union = [1] + [2];",
+            "<?php eval('return 2 + 1;');",
+        ] { assert!(super::super::validate_source(&parse(source), profile).is_ok(), "{source}, {feature:?}"); }
+        for source in ["<?php echo 2 ** -1;", "<?php const E = EXPONENT; const EXPONENT = -1; echo 2 ** E;"] {
+            assert_eq!(super::super::validate_source(&parse(source), profile).is_err(), feature == StrictFeature::Arithmetic,
+                "{source}, {feature:?}");
+        }
+        let internal = crate::parser::parse_with_mode(&crate::lexer::tokenize("<?php echo true + 1; echo 2 ** -1;").unwrap(), SourceMode::Internal).unwrap();
+        assert!(super::super::validate_source(&internal, profile).is_ok());
+    }
+}

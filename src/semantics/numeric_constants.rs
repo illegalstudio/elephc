@@ -22,6 +22,7 @@ enum Number {
     Int(i64), Float(f64), Bool(bool), Null,
     StringInt { value: i64, fully_numeric: bool },
     StringFloat { value: f64, fully_numeric: bool },
+    NonNumericString,
 }
 
 impl Number {
@@ -38,7 +39,8 @@ impl Number {
 
     /// Builtin numeric parameters accept full numeric strings rather than arithmetic prefixes.
     fn valid_numeric_parameter(self, strict_types: bool) -> bool {
-        match self { Self::StringInt { fully_numeric, .. } | Self::StringFloat { fully_numeric, .. } => fully_numeric && !strict_types,
+        match self { Self::NonNumericString => false,
+            Self::StringInt { fully_numeric, .. } | Self::StringFloat { fully_numeric, .. } => fully_numeric && !strict_types,
             Self::Bool(_) | Self::Null => !strict_types, _ => true }
     }
 
@@ -122,7 +124,8 @@ struct Evidence {
 
 /// Checks all syntactic branches without sharing address-based memo entries between source trees.
 pub(super) fn validate(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
-    if !profile.contains(StrictFeature::Overflow) { return Ok(()); }
+    if ![StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions].into_iter()
+        .any(|feature| profile.contains(feature)) { return Ok(()); }
     let mut definitions = Definitions::default();
     definitions.collect(program);
     walk_program(program, &mut FunctionDeclarations(&mut definitions.functions));
@@ -192,7 +195,7 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
         ExprKind::Negate(inner) => match evaluate(inner, checked, class, definitions, evidence)?.map(Number::numeric) {
             Some(Number::Int(value)) => match value.checked_neg() {
                 Some(value) => Some(Number::Int(value)),
-                None if checked => return Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
+                None if checked && evidence.profile.contains(StrictFeature::Overflow) => return Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
                 None => Some(Number::Float(-(value as f64))),
             },
             Some(Number::Float(value)) => Some(Number::Float(-value)),
@@ -202,10 +205,10 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
         ExprKind::FunctionCall { name, args } if !definitions.unresolved_namespaces
             && !definitions.functions.contains(&crate::names::php_symbol_key(name.as_str().trim_start_matches('\\'))) =>
             builtin_number(expr, name.as_str(), args, checked, class, definitions, evidence)?,
-        ExprKind::BinaryOp { left, op, right } if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow) => {
+        ExprKind::BinaryOp { left, op, right } if super::numeric::operator(op).is_some() => {
             let left = evaluate(left, checked, class, definitions, evidence)?;
             let right = evaluate(right, checked, class, definitions, evidence)?;
-            match (left, right) { (Some(left), Some(right)) => binary(expr, op, left, right, checked, evidence.profile)?, _ => None }
+            match (left, right) { (Some(left), Some(right)) => binary(expr, op, left, right, checked, evidence.profile, true)?, _ => None }
         }
         ExprKind::ErrorSuppress(inner) => evaluate(inner, checked, class, definitions, evidence)?,
         _ => None,
@@ -229,7 +232,7 @@ fn constant(key: &ConstantKey, definitions: &Definitions, evidence: &mut Evidenc
 
 /// Classifies PHP numeric strings without changing full-width integer values through float rounding.
 fn string_number(value: &str) -> Option<Number> {
-    let scan = crate::numeric_string::scan_numeric_prefix(value)?;
+    let Some(scan) = crate::numeric_string::scan_numeric_prefix(value) else { return Some(Number::NonNumericString); };
     if !scan.is_float {
         if let Ok(value) = scan.text.parse::<i64>() { return Some(Number::StringInt { value, fully_numeric: scan.is_fully_numeric() }); }
     }
@@ -266,7 +269,7 @@ fn builtin_number(
         let product = operation == RuntimeFnId::ArrayProduct;
         let mut carry = Number::Int(i64::from(product));
         for value in values {
-            let Some(next) = binary(expr, if product { &BinOp::Mul } else { &BinOp::Add }, carry, value, checked, evidence.profile)?
+            let Some(next) = binary(expr, if product { &BinOp::Mul } else { &BinOp::Add }, carry, value, checked, evidence.profile, false)?
                 else { return Ok(None); };
             carry = next;
         }
@@ -280,7 +283,7 @@ fn builtin_number(
             .and_then(|value| value.integer_parameter(evidence.strict_types)) else { return Ok(None); };
         return match checked_integer(IntegerOp::Div, left, right) {
             Ok(value) => Ok(Some(Number::Int(value))),
-            Err(NumericFailure::Overflow) if checked => Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
+            Err(NumericFailure::Overflow) if checked && evidence.profile.contains(StrictFeature::Overflow) => Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
             _ => Ok(None),
         };
     }
@@ -288,9 +291,10 @@ fn builtin_number(
         let [left, right] = normalized.as_slice() else { return Ok(None); };
         let Some(left) = evaluate(left, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
         let Some(right) = evaluate(right, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
+        if matches!(left, Number::NonNumericString) || matches!(right, Number::NonNumericString) { return Ok(None); }
         // Mixed pow parameters follow operator conversion even with PHP strict_types enabled.
         // The existing permissive/Internal builtin implementation always returns a float.
-        return if checked { binary(expr, &BinOp::Pow, left, right, checked, evidence.profile) }
+        return if checked { binary(expr, &BinOp::Pow, left, right, checked, evidence.profile, false) }
             else { Ok(Some(Number::Float(left.as_float().powf(right.as_float())))) };
     }
     let [argument] = normalized.as_slice() else { return Ok(None); };
@@ -299,7 +303,7 @@ fn builtin_number(
     Ok(match value.numeric() {
         Number::Int(value) => match value.checked_abs() {
             Some(value) => Some(Number::Int(value)),
-            None if checked => return Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
+            None if checked && evidence.profile.contains(StrictFeature::Overflow) => return Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
             None => Some(Number::Float((value as f64).abs())),
         },
         Number::Float(value) => Some(Number::Float(value.abs())),
@@ -351,7 +355,37 @@ fn array_numbers(
 }
 
 /// Applies checked integer kernels only when PHP would actually choose integer arithmetic.
-fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, profile: SemanticProfile) -> Result<Option<Number>, CompileError> {
+fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, profile: SemanticProfile, source_operator: bool) -> Result<Option<Number>, CompileError> {
+    if checked && source_operator {
+        if let Some(rule) = super::numeric::operand_rule(profile, SourceMode::Php, op) {
+            let kind = |value| match value {
+                Number::Int(_) => elephc_semantics::conversions::ValueKind::Integer,
+                Number::Float(_) => elephc_semantics::conversions::ValueKind::Float,
+                Number::Bool(_) => elephc_semantics::conversions::ValueKind::Boolean,
+                Number::Null => elephc_semantics::conversions::ValueKind::Null,
+                Number::StringInt { .. } | Number::StringFloat { .. } | Number::NonNumericString => elephc_semantics::conversions::ValueKind::String,
+            };
+            if !rule.domain.allows(kind(left)) || !rule.domain.allows(kind(right)) {
+                return Err(CompileError::new(expr.span, &rule.message()));
+            }
+        }
+        if matches!(op, BinOp::Pow) {
+            if let (Number::Int(_), Number::Int(exponent)) = (left, right) {
+                if elephc_semantics::numeric_domains::rejects_negative_integer_power(profile,
+                    elephc_semantics::conversions::ValueKind::Integer, elephc_semantics::conversions::ValueKind::Integer, exponent) {
+                    return Err(CompileError::new(expr.span, elephc_semantics::numeric_domains::NEGATIVE_INTEGER_POWER_MESSAGE));
+                }
+            }
+        }
+    }
+    if let Some(operation) = super::numeric::integer_bit_op(op) {
+        return Ok(match (left, right) {
+            (Number::Int(left), Number::Int(right)) => elephc_semantics::numeric_domains::integer_bitwise(operation, left, right)
+                .ok().map(Number::Int),
+            _ => None,
+        });
+    }
+    if matches!(left, Number::NonNumericString) || matches!(right, Number::NonNumericString) { return Ok(None); }
     let (left, right) = (left.numeric(), right.numeric());
     if checked && profile.contains(StrictFeature::Arithmetic) && matches!(op, BinOp::Div) {
         let (left, right) = (left.as_float(), right.as_float());
@@ -363,7 +397,7 @@ fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, p
         if let Some(operation) = operation {
             match checked_integer(operation, left, right) {
                 Ok(value) => return Ok(Some(Number::Int(value))),
-                Err(NumericFailure::Overflow) if checked => return Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
+                Err(NumericFailure::Overflow) if checked && profile.contains(StrictFeature::Overflow) => return Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
                 Err(NumericFailure::DivisionByZero) => return Ok(None),
                 // Internal power promotion has an exact PHP continuation, so do not approximate it.
                 Err(_) if matches!(op, BinOp::Pow) => return Ok(None),

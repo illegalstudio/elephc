@@ -12,6 +12,7 @@ mod profile;
 pub mod arithmetic_policy;
 pub mod array_keys;
 pub mod numeric;
+pub mod numeric_domains;
 pub mod numeric_string;
 pub mod integer_literals;
 pub mod conversions;

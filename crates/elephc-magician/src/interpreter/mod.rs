@@ -33,6 +33,7 @@ mod generics;
 mod include_exec;
 mod operands;
 mod checked_numeric;
+mod numeric_domains;
 mod libc_shims;
 mod null_object_boundaries;
 mod reflection;

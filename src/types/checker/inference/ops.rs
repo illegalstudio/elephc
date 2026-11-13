@@ -55,6 +55,12 @@ impl Checker {
         {
             return Ok(PhpType::Mixed);
         }
+        if *op == BinOp::Add && (is_array_like_type(&lt) || is_array_like_type(&rt)) {
+            return self.infer_array_union_type(&lt, &rt, left, right, expr);
+        }
+        if let Some(rule) = crate::semantics::numeric::operand_rule(self.semantic_profile, self.semantic_source_mode, op) {
+            crate::semantics::numeric::validate_binary_types(rule, &lt, &rt, expr.span)?;
+        }
         match op {
             BinOp::Pow => {
                 let lt_ok = is_arithmetic_operand_type(self, &lt);
@@ -88,9 +94,6 @@ impl Checker {
                 }
             }
             BinOp::Add => {
-                if is_array_like_type(&lt) || is_array_like_type(&rt) {
-                    return self.infer_array_union_type(&lt, &rt, left, right, expr);
-                }
                 let lt_ok = is_arithmetic_operand_type(self, &lt);
                 let rt_ok = is_arithmetic_operand_type(self, &rt);
                 if !lt_ok || !rt_ok {

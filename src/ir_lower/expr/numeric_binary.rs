@@ -173,6 +173,7 @@ fn lower_numeric_binary_values(
             return result;
         }
     }
+    crate::ir_lower::numeric_domains::binary(ctx, lhs, op, rhs, expr.span);
     let policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
     if policy.checked_overflow() && lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
         if let Some(operation @ (MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)) = mixed_numeric_op(op) {
@@ -536,7 +537,7 @@ pub(super) fn lower_mixed_numeric_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
-    if policy.checked_overflow() {
+    if !policy.is_permissive() {
         return crate::ir_lower::checked_arithmetic::boxed(ctx, lhs, op, rhs, policy, expr.span);
     }
     ctx.emit_value(

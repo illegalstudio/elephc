@@ -79,7 +79,7 @@ pub(in crate::interpreter) fn arithmetic(
 }
 
 /// Calls a typed bitwise adapter with operands in their original source order.
-pub(super) fn bitwise(
+pub(in crate::interpreter) fn bitwise(
     values: &mut (impl RuntimeValueOps + ?Sized), op: EvalBinOp,
     left: RuntimeCellHandle, right: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
@@ -95,7 +95,7 @@ pub(super) fn bitwise(
 }
 
 /// Calls a typed shift adapter with operands in their original source order.
-pub(super) fn shift(
+pub(in crate::interpreter) fn shift(
     values: &mut (impl RuntimeValueOps + ?Sized), op: EvalBinOp,
     left: RuntimeCellHandle, right: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
