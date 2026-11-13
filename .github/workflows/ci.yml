@@ -618,6 +618,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate archived cargo-nextest
@@ -635,6 +636,7 @@ jobs:
         uses: ./.github/actions/download-test-archive
         with:
           name: nextest-archive-macos-aarch64
+          attempt: ${{ needs.build-archive-macos-aarch64.outputs.artifact-attempt }}
           path: ${{ runner.temp }}
 
       - name: Validate retried cargo-nextest
@@ -661,6 +663,10 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds
 
   web-tests-linux-x86_64:
     name: Web Tests (linux-x86_64 ${{ matrix.shard }}/2)
