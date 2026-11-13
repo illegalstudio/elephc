@@ -519,8 +519,8 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_object_identity(value: *mut RuntimeCell) -> u64;
     /// Returns the PHP object handle (`spl_object_id`) for object-tagged eval values.
     pub(super) fn __elephc_eval_value_object_handle(value: *mut RuntimeCell) -> u64;
-    /// Emits the supplied warning bytes through the native diagnostic path.
-    pub(super) fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);
+    /// Borrows warning bytes and returns protected success or pending-Throwable status.
+    pub(super) fn __elephc_eval_warning_v2(message_ptr: *const u8, message_len: u64) -> u64;
     /// Emits a fatal diagnostic and terminates through the native runtime path.
     pub(super) fn __elephc_eval_fatal(message_ptr: *const u8, message_len: u64);
     /// Mirrors Magician's signal-dispatch region into the generated runtime Fiber guard.

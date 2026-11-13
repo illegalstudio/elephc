@@ -148,7 +148,7 @@ macro_rules! impl_lifecycle_scalar_ops {
         Self::handle(unsafe { __elephc_eval_value_copy(value.as_ptr()) })
     }
 
-    /// Emits one PHP warning through the generated runtime diagnostic helper.
+    /// Contains PHP warning-handler exceptions below Rust before returning their status.
     fn warning(&mut self, message: &str) -> Result<(), EvalStatus> {
         // Magician submits complete diagnostics, unlike native fragment producers.
         let terminated;
@@ -156,10 +156,8 @@ macro_rules! impl_lifecycle_scalar_ops {
             terminated = format!("{message}\n");
             &terminated
         };
-        unsafe {
-            __elephc_eval_warning(message.as_ptr(), message.len() as u64);
-        }
-        Ok(())
+        let status = unsafe { __elephc_eval_warning_v2(message.as_ptr(), message.len() as u64) };
+        self.handle_native_cleanup_status(status)
     }
 
     /// Emits one unsuppressible PHP fatal through the generated runtime and terminates.

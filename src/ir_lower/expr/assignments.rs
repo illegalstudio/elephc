@@ -747,12 +747,12 @@ fn runtime_name_value_needs_boxing(
 
 /// Emits PHP's warning for a decrement that leaves a null local unchanged.
 fn emit_null_decrement_warning(ctx: &mut LoweringContext<'_, '_>, span: Span) {
+    if crate::codegen_support::compile_php_version() < crate::php_version::PhpVersion::Php83 { return; }
     let message = lower_expr(
         ctx,
         &Expr::new(
             ExprKind::StringLiteral(
-                "Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n"
-                    .into(),
+                elephc_semantics::numeric::NULL_DECREMENT_WARNING.into(),
             ),
             span,
         ),

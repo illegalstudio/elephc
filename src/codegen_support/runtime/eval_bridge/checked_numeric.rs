@@ -80,7 +80,8 @@ fn borrowed_update(emitter: &mut Emitter, op: CheckedNumericOp) {
     for (register, offset) in [(result, 0), (low, 8), (high, 16)] {
         abi::emit_store_to_sp(emitter, register, TRY_HANDLER_SLOT_SIZE + offset);
     }
-    if op == CheckedNumericOp::Decrement {
+    if op == CheckedNumericOp::Decrement
+        && crate::codegen_support::compile_php_version() >= crate::php_version::PhpVersion::Php83 {
         let ready = "__rt_eval_checked_numeric_v1_decrement_ready";
         match emitter.target.arch {
             Arch::AArch64 => emitter.instruction("cmp x0, #8"),                 // null decrement diagnoses a no-op without entering Rust
@@ -133,4 +134,51 @@ mod tests {
             }
         }
     }
+
+    /// The checked null update retains the selected PHP version's diagnostic behavior.
+    #[test]
+    fn strict_eval_diagnostics_null_decrement_respects_php_version() {
+        struct Restore(crate::php_version::PhpVersion, bool);
+        impl Drop for Restore {
+            /// Restores this test thread's compilation policy after success or assertion failure.
+            fn drop(&mut self) { crate::codegen_support::set_compile_profile(self.0, self.1); }
+        }
+        let _restore = Restore(crate::codegen_support::compile_php_version(), crate::codegen_support::compile_is_web_sapi());
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for (version, warns) in [(crate::php_version::PhpVersion::Php82, false), (crate::php_version::PhpVersion::Php83, true)] {
+                crate::codegen_support::set_compile_profile(version, false);
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emitter.semantic_profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+                emit(&mut emitter);
+                let asm = emitter.output();
+                assert_eq!(asm.contains("_strict_eval_null_decrement_warning"), warns, "{name}, {version:?}");
+            }
+        }
+    }
+
+    /// AOT known-null updates and eval callbacks agree on the PHP 8.3 warning boundary.
+    #[test]
+    fn strict_eval_diagnostics_aot_null_decrement_respects_php_version() {
+        struct Restore(crate::php_version::PhpVersion, bool);
+        impl Drop for Restore {
+            /// Restores compilation context even if a target/profile assertion fails.
+            fn drop(&mut self) { crate::codegen_support::set_compile_profile(self.0, self.1); }
+        }
+        let _restore = Restore(crate::codegen_support::compile_php_version(), crate::codegen_support::compile_is_web_sapi());
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for (version, warns) in [(crate::php_version::PhpVersion::Php82, false), (crate::php_version::PhpVersion::Php83, true)] {
+                crate::codegen_support::set_compile_profile(version, false);
+                let target = Target::parse(name).unwrap();
+                let program = crate::parser::parse(&crate::lexer::tokenize("<?php $value = null; $value--;").unwrap()).unwrap();
+                let mut checked = crate::types::check_with_target(&program, target).unwrap();
+                checked.semantic_profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+                let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+                let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+                let count = main.instructions.iter().filter(|inst| matches!(inst.immediate,
+                    Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)))).count();
+                assert_eq!(count, usize::from(warns), "{name}, {version:?}");
+            }
+        }
+    }
+
 }

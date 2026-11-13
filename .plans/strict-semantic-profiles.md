@@ -930,8 +930,7 @@ The numeric callback appends Increment/Decrement selectors. Each selected update
 canonicalizes its borrowed input into the protected callback's headerless spills
 before invoking the existing update kernel, preventing its unique-cell fast path
 from mutating the caller's original value. The output pointer keeps its separate
-spill, and no extra retained input can be stranded by a native throw. Null
--decrement warnings execute inside the protected callback. Internal-class update
+spill, and no extra retained input can be stranded by a native throw. Warnings for decrementing null execute inside the protected callback. Internal-class update
 arithmetic retains the reviewed object adapters. Invalid scalar update domains
 throw through the shared TypeError path before replacement.
 
@@ -952,3 +951,18 @@ callback matrices pass. Compiler build, assembly comments and diff hygiene pass.
 Updates use the shared stack-pointer address helper through a crate-local ABI
 re-export. No builtin surface or generated documentation metadata changed. Other
 strict guarantees and remaining boundary audits continue before activation.
+
+
+### Protected eval warnings and PHP version parity
+
+The native warning adapter now uses `__elephc_eval_warning_v2`, a protected
+status-returning boundary. PHP error handlers can return normally or throw
+without jumping across Rust interpreter frames. Existing raw native diagnostic
+entries retain their ABI. Known-null AOT decrement and checked eval decrement
+emit PHP's warning only for PHP 8.3 and later; the message has one shared source.
+
+Three focused units cover all five supported targets and both sides of the
+PHP-version boundary. Two native fixtures pass: direct handled/throwing callback
+status with both optimizer settings, and an ordinary opaque eval read caught by
+its surrounding PHP handler. Both report a clean heap. No additional semantic
+flag is activated by this infrastructure step.
