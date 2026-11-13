@@ -119,6 +119,11 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
     {
         validate_function(function)?;
         for (index, inst) in function.instructions.iter().enumerate() {
+            let required = inst.arithmetic_policy().requirements().bits();
+            if required & !module.semantic_profile.bits() != 0 {
+                return Err(ValidationError::SemanticProfileMismatch { inst: InstId::from_raw(index as u32),
+                    expected: module.semantic_profile.bits(), actual: required });
+            }
             if let Some(Immediate::ProfiledData { profile, .. }) = inst.immediate {
                 if profile.semantics() != module.semantic_profile {
                     return Err(ValidationError::SemanticProfileMismatch {
@@ -423,6 +428,8 @@ fn validate_instruction_effects_with_operand(
         && operand_type.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool));
     let expected = if pure_int_restamp {
         Effects::PURE
+    } else if matches!(inst.immediate, Some(Immediate::NumericOperation { .. })) {
+        inst.op.arithmetic_effects(inst.arithmetic_policy())
     } else if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
     } else if inst.op == Op::FToI
@@ -706,7 +713,14 @@ fn validate_instruction_immediate(
 ) -> Result<(), ValidationError> {
     use Immediate as Imm;
     use Op::*;
+    if matches!(inst.immediate, Some(Imm::NumericOperation { .. }))
+        && !matches!(inst.op, MixedNumericBinop | ICheckedPow)
+    { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
     match inst.op {
+        ICheckedPow => {
+            if inst.immediate.is_none() || matches!(inst.immediate, Some(Imm::NumericOperation { op: crate::ir::MixedNumericOp::Pow, .. })) { Ok(()) }
+            else { Err(ValidationError::UnexpectedImmediate(inst_id)) }
+        }
         ConstI64 => require_immediate(inst_id, inst, "i64", |imm| matches!(imm, Imm::I64(_))),
         ConstF64 => require_immediate(inst_id, inst, "f64", |imm| matches!(imm, Imm::F64(_))),
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
@@ -770,7 +784,7 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::CmpPredicate(_))
         }),
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
-            matches!(imm, Imm::MixedNumericOp(_))
+            matches!(imm, Imm::MixedNumericOp(_) | Imm::NumericOperation { .. })
         }),
         ICheckedNumericChainToInt => {
             require_immediate(inst_id, inst, "checked numeric chain", |imm| {
@@ -961,6 +975,9 @@ fn validate_opcode_rules(
         }
         ICheckedNumericChainToInt => check_checked_numeric_chain(function, inst_id, inst),
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
+        MixedNumericBinop if !inst.arithmetic_policy().is_permissive() => {
+            check_binary(function, inst_id, inst, IrType::Heap(IrHeapKind::Mixed), "boxed Mixed")
+        }
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
         // the arity is pinned here; the backend dispatches on the operand's EIR type.

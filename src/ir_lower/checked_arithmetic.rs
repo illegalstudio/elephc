@@ -27,7 +27,7 @@ pub(super) fn binary(
     let overflow = ctx.emit_value(Op::IOverflows, operands, Some(Immediate::MixedNumericOp(operation)),
         PhpType::Bool, Op::IOverflows.default_effects(), Some(span));
     super::semantic_guards::require_false(ctx, overflow, Op::ThrowArithmeticError,
-        "--strict-overflow: integer arithmetic overflow", Some(span));
+        elephc_semantics::numeric::INTEGER_OVERFLOW_MESSAGE, Some(span));
     result
 }
 
@@ -36,6 +36,36 @@ pub(super) fn negate(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, spa
     let zero = ctx.emit_value(Op::ConstI64, Vec::new(), Some(Immediate::I64(0)), PhpType::Int,
         Op::ConstI64.default_effects(), Some(span));
     binary(ctx, zero, MixedNumericOp::Sub, value, span)
+}
+
+/// Borrows boxed operands with explicit unwind roots, avoiding hidden codegen allocations.
+pub(super) fn boxed(
+    ctx: &mut LoweringContext<'_, '_>, left: LoweredValue, operation: MixedNumericOp,
+    right: LoweredValue, policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy, span: Span,
+) -> LoweredValue {
+    use super::expr::call_operand_owners::{pin_in_flight_owners, unpin_in_flight_owners};
+    let originals = pin_in_flight_owners(ctx, &[left.value, right.value], span);
+    let boxed_left = boxed_operand(ctx, left, span);
+    let left_root = if boxed_left.value != left.value { pin_in_flight_owners(ctx, &[boxed_left.value], span) } else { Vec::new() };
+    let boxed_right = boxed_operand(ctx, right, span);
+    let right_root = if boxed_right.value != right.value { pin_in_flight_owners(ctx, &[boxed_right.value], span) } else { Vec::new() };
+    let result = ctx.emit_value(Op::MixedNumericBinop, vec![boxed_left.value, boxed_right.value],
+        Some(Immediate::NumericOperation { op: operation, policy }), PhpType::Mixed,
+        Op::MixedNumericBinop.arithmetic_effects(policy), Some(span));
+    unpin_in_flight_owners(ctx, right_root, span);
+    if boxed_right.value != right.value { super::ownership::release_if_owned(ctx, boxed_right, Some(span)); }
+    unpin_in_flight_owners(ctx, left_root, span);
+    if boxed_left.value != left.value { super::ownership::release_if_owned(ctx, boxed_left, Some(span)); }
+    unpin_in_flight_owners(ctx, originals, span);
+    result
+}
+
+/// Creates an independent box without consuming the source owner's normal-path release.
+fn boxed_operand(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
+    use crate::ir::{IrHeapKind, IrType};
+    if value.ir_type == IrType::Heap(IrHeapKind::Mixed) { return value; }
+    let op = if value.ir_type == IrType::Heap(IrHeapKind::Union) { Op::MixedClone } else { Op::MixedBox };
+    ctx.emit_value(op, vec![value.value], None, PhpType::Mixed, op.default_effects(), Some(span))
 }
 
 #[cfg(test)]
@@ -80,5 +110,38 @@ mod tests {
         let function = module.functions.iter().find(|function| function.name == "strict_scalar").unwrap();
         assert!(!function.instructions.iter().any(|inst| matches!(inst.op, Op::IOverflows | Op::ThrowArithmeticError)));
         assert!(function.instructions.iter().any(|inst| inst.op == Op::ICheckedAdd));
+    }
+
+    /// Boxed arithmetic and powers retain policy, ownership roots and exceptions through optimization.
+    #[test]
+    fn strict_boxed_overflow_lowering_retains_operation_policy_on_all_targets() {
+        let source = "<?php function strict_boxed(mixed $left, mixed $right): mixed { return ($left + $right) * $right - ($left ** $right); } function strict_power(int $left, int $right): mixed { return $left ** $right; } echo strict_boxed(2, 3); echo strict_power(2, 3);";
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut checked = crate::types::check_with_target(&program, target).unwrap();
+            checked.semantic_profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+            let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            for optimize in [false, true] {
+                let mut module = module.clone();
+                if optimize { crate::ir_passes::optimize_module(&mut module); }
+                crate::ir::validate_module(&module).unwrap();
+                let operations: Vec<_> = module.functions.iter().flat_map(|function| &function.instructions)
+                    .filter(|inst| matches!(inst.immediate, Some(Immediate::NumericOperation { .. }))).collect();
+                assert!(operations.len() >= 5, "{name} opt={optimize}");
+                for inst in operations {
+                    assert!(inst.arithmetic_policy().checked_overflow());
+                    assert!(inst.effects.contains(crate::ir::Effects::MAY_THROW));
+                }
+                let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+                for helper in ["__rt_strict_mixed_numeric_add", "__rt_strict_mixed_numeric_sub",
+                    "__rt_strict_mixed_numeric_mul", "__rt_strict_mixed_numeric_pow", "__rt_int_pow_or_throw"] {
+                    assert!(asm.contains(helper), "{name} opt={optimize}: {helper}");
+                }
+                module.semantic_profile = SemanticProfile::PERMISSIVE;
+                assert!(matches!(crate::ir::validate_module(&module),
+                    Err(crate::ir::ValidationError::SemanticProfileMismatch { .. })), "{name} opt={optimize}");
+            }
+        }
     }
 }

@@ -160,6 +160,7 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
         crate::codegen_support::compile_php_version(),
     ));
     output.push_str(&runtime::semantic_guards::data(semantic_profile));
+    output.push_str(&runtime::strict_numeric::data(semantic_profile));
     // PIC runtime globals are implementation details on every shared-library
     // target. ELF uses hidden visibility; Mach-O uses private extern visibility.
     if library_boundary && !phpext {

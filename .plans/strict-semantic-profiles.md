@@ -578,3 +578,28 @@ Validation: four focused tests passed after recovery from the daemon restart:
 independent neutral policy bits, PHP/LFC scalar guards and emission on every
 supported target, trusted internal PHP operations, and existing boolean guards.
 Compiler build, diff hygiene, module preambles and writing checks passed.
+
+### Checked boxed arithmetic and power core
+
+EIR numeric operations now carry an explicit compact ArithmeticPolicy immediate.
+The validator checks its required module profile, throwing effects and boxed
+operand representation. Legacy PHP frame-cell and chain optimizations refuse
+these checked operations. Lowering creates any needed Mixed boxes explicitly
+and publishes their unwind roots before invoking a throwing arithmetic helper.
+User and trusted PHP helper entries coexist in one runtime, with the selected
+overflow policy saved across operand conversion and square-and-multiply calls.
+
+Checked integer powers and genuine boxed integer powers throw ArithmeticError
+instead of promoting on overflow. Overflow alone continues to permit negative
+integer exponents with their existing float result and ordinary float powers.
+The x86 jump-only failure entry supplies the alignment expected by the shared
+exception allocation sequence. Every target uses explicit failure and shared
+body edges so native section collection retains the necessary helper code.
+
+Validation: two focused EIR/runtime tests passed across all five targets,
+including optimized and unoptimized module checks and profile mismatch
+rejection. A native fixture passed in both optimization modes under heap debug,
+covering add/sub/mul, scalar and boxed power, signed minimum, negative exponents,
+mixed scalar operands and nested owned temporaries. Both runs report a clean
+heap. The public Overflow option remains staged while the remaining source,
+update, builtin and eval boundaries are implemented.

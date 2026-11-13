@@ -8,6 +8,9 @@
 //! - Successful integer operations always retain signed 64-bit integer semantics.
 //! - Failure is typed data; callers decide source diagnostics or exception delivery.
 
+/// Shared text for catchable checked integer arithmetic failures.
+pub const INTEGER_OVERFLOW_MESSAGE: &str = "--strict-overflow: integer arithmetic overflow";
+
 /// Integer arithmetic with an integer result contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntegerOp { Add, Sub, Mul, Div, Mod, Pow }

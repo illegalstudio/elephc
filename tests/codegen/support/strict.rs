@@ -61,6 +61,36 @@ impl StrictFixture {
     pub(crate) fn run(&self, flags: &[&str]) -> String {
         String::from_utf8(self.capture(flags).stdout).unwrap()
     }
+
+    /// Executes unfinished lowering policies without exposing them as accepted CLI guarantees.
+    pub(crate) fn capture_staged_lowering(
+        &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
+    ) -> ProgramOutput {
+        let source = fs::read_to_string(self.directory.join("main.php")).unwrap();
+        let tokens = elephc::lexer::tokenize_with_semantics(&source, elephc::source::SourceMode::Php, 0, profile).unwrap();
+        let program = elephc::parser::parse(&tokens).unwrap();
+        let mut checked = elephc::types::check_with_target(&program, target()).unwrap();
+        checked.semantic_profile = profile;
+        let mut module = elephc::ir_lower::lower_program(&program, &checked, target(), false).unwrap();
+        if optimize { elephc::ir_passes::optimize_module(&mut module); }
+        elephc::ir::validate_module(&module).unwrap();
+        let generated = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(
+            &module, false, false, elephc::codegen::Instrumentation::Off, false, true, false,
+            elephc::codegen::Emit::Executable, &HashMap::new(), true, false,
+            elephc::codegen::WebIsolation::Worker,
+        ).unwrap();
+        let mut features = module.required_runtime_features;
+        features.handler_state |= generated.handler_state;
+        features.object_clone |= generated.object_clone;
+        let runtime = elephc::codegen_support::generate_runtime_with_semantics(
+            8_388_608, target(), features, false, false, profile);
+        let runtime_object = self.directory.join("runtime.o");
+        assemble_from_stdin(&runtime, &runtime_object);
+        let requirements = TestLinkRequirements::new(checked.required_libraries,
+            elephc::codegen::link_requirements_for_runtime_features(features));
+        assemble_and_run_capture(&generated.asm, &runtime_object, &self.directory,
+            &requirements, &default_link_paths(), &[])
+    }
 }
 
 impl Drop for StrictFixture {

@@ -101,6 +101,14 @@ impl PassOrigin {
 }
 
 impl Instruction {
+    /// Returns the explicit operation policy, leaving legacy PHP numeric instructions unchanged.
+    pub fn arithmetic_policy(&self) -> elephc_semantics::arithmetic_policy::ArithmeticPolicy {
+        match self.immediate {
+            Some(Immediate::NumericOperation { policy, .. }) => policy,
+            _ => elephc_semantics::arithmetic_policy::ArithmeticPolicy::PERMISSIVE,
+        }
+    }
+
     /// Creates a new instruction payload with all semantic metadata attached.
     pub fn new(
         op: Op,
@@ -285,6 +293,8 @@ pub enum Immediate {
     MixedTag(u8),
     TypePredicate(PhpTypePredicate),
     MixedNumericOp(MixedNumericOp),
+    /// Source operation semantics that must survive cloning and optimizer specialization.
+    NumericOperation { op: MixedNumericOp, policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy },
     /// Ordered add/sub/mul operations in an unboxed checked numeric chain.
     CheckedNumericChain(Box<CheckedNumericChainImmediate>),
     CmpPredicate(CmpPredicate),
@@ -1371,6 +1381,11 @@ pub enum Op {
 }
 
 impl Op {
+    /// Includes catchable arithmetic failure and unwinding for an explicitly checked operation.
+    pub fn arithmetic_effects(self, policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy) -> Effects {
+        self.default_effects() | if policy.checked_overflow() { Op::ThrowArithmeticError.default_effects() } else { Effects::PURE }
+    }
+
     /// Returns the conservative default effect set for this opcode.
     pub fn default_effects(self) -> Effects {
         use Effects as E;

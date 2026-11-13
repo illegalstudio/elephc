@@ -26,6 +26,7 @@
 
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
+use crate::codegen_support::abi;
 
 /// Emits the checked integer exponentiation helper for both AArch64 and x86_64.
 ///
@@ -41,12 +42,11 @@ pub fn emit_int_pow_checked(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: int_pow_checked ---");
-    emitter.label_global("__rt_int_pow_checked");
-
-    // -- frame slots: l1=[sp,#0] accumulator, l2=[sp,#8] factor, i=[sp,#16] exponent, dval=[sp,#24] --
-    emitter.instruction("sub sp, sp, #64");                                     // allocate the loop state and saved FP/LR area
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish a stable helper frame pointer
+    emit_policy_entry(emitter, "__rt_int_pow_checked", false, "__rt_int_pow_checked_common");
+    if emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow) {
+        emit_policy_entry(emitter, "__rt_int_pow_or_throw", true, "__rt_int_pow_checked_common");
+        emitter.label_shared("__rt_int_pow_checked_common");
+    }
 
     emitter.instruction("cmp x1, #0");                                          // is the exponent negative?
     emitter.instruction("b.lt __rt_int_pow_checked_neg");                       // a negative exponent is always a double result
@@ -96,6 +96,7 @@ pub fn emit_int_pow_checked(emitter: &mut Emitter) {
 
     // -- odd overflow: result = ((double) l1 * (double) l2) * pow((double) l2, (double) i) --
     emitter.label("__rt_int_pow_checked_odd_of");
+    emit_overflow_policy(emitter);
     emitter.instruction("scvtf d0, x4");                                        // (double) accumulator before the overflowing multiply
     emitter.instruction("scvtf d1, x5");                                        // (double) factor
     emitter.instruction("fmul d0, d0, d1");                                     // php-src's ZEND_SIGNED_MULTIPLY_LONG dval
@@ -110,6 +111,7 @@ pub fn emit_int_pow_checked(emitter: &mut Emitter) {
 
     // -- even overflow: result = (double) l1 * pow((double) l2 * (double) l2, (double) i) --
     emitter.label("__rt_int_pow_checked_even_of");
+    emit_overflow_policy(emitter);
     emitter.instruction("scvtf d0, x5");                                        // (double) factor before the overflowing square
     emitter.instruction("fmul d0, d0, d0");                                     // php-src's ZEND_SIGNED_MULTIPLY_LONG dval
     emitter.instruction("ldr x3, [sp, #16]");                                   // remaining exponent after the halving
@@ -165,12 +167,11 @@ pub fn emit_int_pow_checked(emitter: &mut Emitter) {
 fn emit_int_pow_checked_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: int_pow_checked ---");
-    emitter.label_global("__rt_int_pow_checked");
-
-    // -- frame slots: l1=[rbp-8] accumulator, l2=[rbp-16] factor, i=[rbp-24] exponent, dval=[rbp-32] --
-    emitter.instruction("push rbp");                                            // save the caller frame pointer before nested runtime calls
-    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
-    emitter.instruction("sub rsp, 64");                                         // allocate aligned slots for the loop state
+    emit_policy_entry(emitter, "__rt_int_pow_checked", false, "__rt_int_pow_checked_common_x");
+    if emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow) {
+        emit_policy_entry(emitter, "__rt_int_pow_or_throw", true, "__rt_int_pow_checked_common_x");
+        emitter.label_shared("__rt_int_pow_checked_common_x");
+    }
 
     emitter.instruction("test rsi, rsi");                                       // inspect the exponent's sign
     emitter.instruction("js __rt_int_pow_checked_neg_x");                       // a negative exponent is always a double result
@@ -212,6 +213,7 @@ fn emit_int_pow_checked_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_int_pow_checked_loop_x");                     // otherwise keep going
 
     emitter.label("__rt_int_pow_checked_odd_of_x");
+    emit_overflow_policy(emitter);
     emitter.instruction("cvtsi2sd xmm0, QWORD PTR [rbp - 8]");                  // (double) accumulator before the overflowing multiply
     emitter.instruction("cvtsi2sd xmm1, QWORD PTR [rbp - 16]");                 // (double) factor
     emitter.instruction("mulsd xmm0, xmm1");                                    // php-src's ZEND_SIGNED_MULTIPLY_LONG dval
@@ -223,6 +225,7 @@ fn emit_int_pow_checked_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_int_pow_checked_box_double_x");               // box the promoted double
 
     emitter.label("__rt_int_pow_checked_even_of_x");
+    emit_overflow_policy(emitter);
     emitter.instruction("cvtsi2sd xmm0, QWORD PTR [rbp - 16]");                 // (double) factor before the overflowing square
     emitter.instruction("mulsd xmm0, xmm0");                                    // php-src's ZEND_SIGNED_MULTIPLY_LONG dval
     emitter.instruction("cvtsi2sd xmm1, QWORD PTR [rbp - 24]");                 // pow exponent = (double) remaining
@@ -264,6 +267,45 @@ fn emit_int_pow_checked_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 64");                                         // release the helper stack frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to generated code with the boxed Mixed result in rax
+}
+
+/// Establishes one independent PHP or checked entry before their shared power loop.
+fn emit_policy_entry(emitter: &mut Emitter, name: &str, checked: bool, common: &str) {
+    emitter.label_global(name);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #64");                             // allocate loop state and saved frame registers
+            emitter.instruction("stp x29, x30, [sp, #48]");                     // preserve caller frame pointer and return address
+            emitter.instruction("add x29, sp, #48");                            // establish the helper frame pointer
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");                                    // preserve the caller frame pointer
+            emitter.instruction("mov rbp, rsp");                                // establish the helper frame pointer
+            emitter.instruction("sub rsp, 64");                                 // allocate aligned loop state slots
+        }
+    }
+    if emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow) {
+        let flag = if emitter.target.arch == Arch::AArch64 { "x9" } else { "r10" };
+        abi::emit_load_int_immediate(emitter, flag, i64::from(checked));
+        match emitter.target.arch {
+            Arch::AArch64 => emitter.instruction("str x9, [sp, #32]"),          // retain this entry's overflow policy across loop calls
+            Arch::X86_64 => emitter.instruction("mov QWORD PTR [rbp - 40], r10"), // retain this entry's overflow policy across loop calls
+        }
+        abi::emit_jump(emitter, common);
+    }
+}
+
+/// Selects a catchable failure only for checked entries, retaining PHP promotion otherwise.
+fn emit_overflow_policy(emitter: &mut Emitter) {
+    if !emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow) { return; }
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("ldr x9, [sp, #32]");                           // reload the policy selected by the entry point
+            emitter.instruction("cmp x9, #0");                                  // nonzero policy requires a catchable integer failure
+        }
+        Arch::X86_64 => emitter.instruction("cmp QWORD PTR [rbp - 40], 0"),     // nonzero policy requires a catchable integer failure
+    }
+    abi::emit_branch_if_not_equal_wide(emitter, "__rt_strict_integer_overflow_fail");
 }
 
 #[cfg(test)]

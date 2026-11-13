@@ -41,6 +41,12 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emit_aarch64_entry(emitter, "__rt_mixed_numeric_add", 0);
     emit_aarch64_entry(emitter, "__rt_mixed_numeric_sub", 1);
     emit_aarch64_entry(emitter, "__rt_mixed_numeric_mul", 2);
+    let checked = emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow);
+    if checked {
+        emit_aarch64_entry(emitter, "__rt_strict_mixed_numeric_add", 8);
+        emit_aarch64_entry(emitter, "__rt_strict_mixed_numeric_sub", 9);
+        emit_aarch64_entry(emitter, "__rt_strict_mixed_numeric_mul", 10);
+    }
 
     // Shared body reached via `b` from `add`/`sub`/`mul`: `.alt_entry` under macOS
     // dead stripping keeps it a real symbol (so a cross-helper `b` from a live
@@ -48,6 +54,10 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emitter.label_shared("__rt_mixed_numeric_common");
     emitter.instruction("str x0, [sp, #0]");                                    // save the boxed left operand pointer for unboxing and casts
     emitter.instruction("str x1, [sp, #8]");                                    // save the boxed right operand pointer for unboxing and casts
+    if checked {
+        emitter.instruction("str x9, [sp, #56]");                               // preserve the operation policy across payload casts
+        emitter.instruction("and x9, x9, #7");                                  // keep the PHP arithmetic selector separate from the checked bit
+    }
     emitter.instruction("str x9, [sp, #16]");                                   // save the selected arithmetic opcode across helper calls
 
     // -- classify operands so float payloads force floating-point arithmetic --
@@ -117,6 +127,11 @@ pub fn emit_mixed_numeric_binops(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_numeric_done");                           // restore the helper frame and return the boxed result
 
     emitter.label("__rt_mixed_numeric_int_overflow");
+    if checked {
+        emitter.instruction("ldr x9, [sp, #56]");                               // reload the explicit operation policy
+        emitter.instruction("tst x9, #8");                                      // checked entries forbid integer-to-double promotion
+        abi::emit_branch_if_not_equal_wide(emitter, "__rt_strict_integer_overflow_fail");
+    }
     emitter.instruction("scvtf d0, x1");                                        // convert the original left integer to double for PHP overflow promotion
     emitter.instruction("scvtf d1, x2");                                        // convert the original right integer to double for PHP overflow promotion
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the selected arithmetic opcode for the double fallback
@@ -198,10 +213,20 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emit_x86_64_entry(emitter, "__rt_mixed_numeric_add", 0);
     emit_x86_64_entry(emitter, "__rt_mixed_numeric_sub", 1);
     emit_x86_64_entry(emitter, "__rt_mixed_numeric_mul", 2);
+    let checked = emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow);
+    if checked {
+        emit_x86_64_entry(emitter, "__rt_strict_mixed_numeric_add", 8);
+        emit_x86_64_entry(emitter, "__rt_strict_mixed_numeric_sub", 9);
+        emit_x86_64_entry(emitter, "__rt_strict_mixed_numeric_mul", 10);
+    }
 
     emitter.label("__rt_mixed_numeric_common_linux_x86_64");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the boxed left operand pointer for unboxing and casts
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the boxed right operand pointer for unboxing and casts
+    if checked {
+        emitter.instruction("mov QWORD PTR [rbp - 64], r10");                   // preserve the operation policy across payload casts
+        emitter.instruction("and r10, 7");                                      // keep the PHP arithmetic selector separate from the checked bit
+    }
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the selected arithmetic opcode across helper calls
 
     // -- classify operands so float payloads force floating-point arithmetic --
@@ -270,6 +295,10 @@ fn emit_mixed_numeric_binops_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_numeric_done_linux_x86_64");            // restore the helper frame and return the boxed result
 
     emitter.label("__rt_mixed_numeric_int_overflow_linux_x86_64");
+    if checked {
+        emitter.instruction("test QWORD PTR [rbp - 64], 8");                    // checked entries forbid integer-to-double promotion
+        abi::emit_branch_if_not_equal_wide(emitter, "__rt_strict_integer_overflow_fail");
+    }
     emitter.instruction("cvtsi2sd xmm0, r8");                                   // convert the original left integer to double for PHP overflow promotion
     emitter.instruction("cvtsi2sd xmm1, r9");                                   // convert the original right integer to double for PHP overflow promotion
     emitter.instruction("cmp QWORD PTR [rbp - 24], 1");                         // is this overflow fallback for subtraction?

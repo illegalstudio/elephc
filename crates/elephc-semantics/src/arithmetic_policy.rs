@@ -34,6 +34,13 @@ impl ArithmeticPolicy {
     /// Refuses implicit PHP value-kind conversions inside arithmetic.
     pub const fn strict_coercions(self) -> bool { self.0 & 4 != 0 }
 
+    /// Returns the semantic guarantees required by this operation's compact policy.
+    pub const fn requirements(self) -> SemanticProfile {
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, self.checked_overflow())
+            .with(StrictFeature::Arithmetic, self.strict_arithmetic())
+            .with(StrictFeature::Coercions, self.strict_coercions())
+    }
+
     /// Identifies ordinary PHP operations for legacy optimizer specializations.
     pub const fn is_permissive(self) -> bool { self.0 == 0 }
 }

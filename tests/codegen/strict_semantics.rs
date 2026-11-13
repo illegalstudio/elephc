@@ -9,6 +9,38 @@
 
 use crate::support::*;
 
+/// Checked helper entries throw for boxed and scalar integer overflow with balanced native owners.
+#[test]
+fn test_strict_boxed_overflow_staged_native_arithmetic_and_powers() {
+    let source = r#"<?php
+function strict_add(mixed $a, mixed $b): mixed { return $a + $b; }
+function strict_sub(mixed $a, mixed $b): mixed { return $a - $b; }
+function strict_mul(mixed $a, mixed $b): mixed { return $a * $b; }
+function strict_pow(mixed $a, mixed $b): mixed { return $a ** $b; }
+function strict_int_pow(int $a, int $b): mixed { return $a ** $b; }
+function strict_scalar_rhs(mixed $a, int $b): mixed { return $a + $b; }
+function strict_scalar_lhs(int $a, mixed $b): mixed { return $a * $b; }
+try { strict_add(9223372036854775807, 1); } catch (ArithmeticError $e) { echo 'A'; }
+try { strict_sub(-9223372036854775808, 1); } catch (ArithmeticError $e) { echo 'S'; }
+try { strict_mul(9223372036854775807, 2); } catch (ArithmeticError $e) { echo 'M'; }
+try { strict_pow(2, 63); } catch (ArithmeticError $e) { echo 'P'; }
+try { strict_int_pow(2, 63); } catch (ArithmeticError $e) { echo 'I'; }
+try { strict_scalar_rhs(strict_add(9223372036854775807, 0), 1); } catch (ArithmeticError $e) { echo 'R'; }
+try { strict_scalar_lhs(2, strict_add(9223372036854775807, 0)); } catch (ArithmeticError $e) { echo 'L'; }
+try { (strict_add(9223372036854775807, 0) + strict_add(1, 0)) * 2; } catch (ArithmeticError $e) { echo 'T'; }
+echo ':', strict_add(20, 22), ':', strict_sub(-20, 22), ':', strict_mul(-6, 7);
+echo ':', strict_pow(-2, 63), ':', strict_int_pow(-2, 63);
+echo ':', strict_pow(2, -1), ':', strict_int_pow(2, -1), ':', strict_pow(2.0, 3);
+"#;
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE.with(elephc_semantics::StrictFeature::Overflow, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "ASMPIRLT:42:-42:-42:-9223372036854775808:-9223372036854775808:0.5:0.5:8", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
 /// Keeps verified literal eval native with either EIR optimization setting.
 #[test]
 fn test_strict_dynamic_code_literal_eval_optimization_parity() {
