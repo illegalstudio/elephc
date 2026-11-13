@@ -5,7 +5,7 @@
 //! - `crate::interpreter::builtins::hooks`.
 //!
 //! Key details:
-//! - Division by zero and overflowing signed division remain runtime fatals.
+//! - Value-domain failures use the ordinary context-owned Throwable channel.
 
 use super::super::super::*;
 
@@ -26,22 +26,25 @@ pub(in crate::interpreter) fn eval_builtin_intdiv(
     let [left, right] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let left = eval_expr(left, context, scope, values)?;
-    let right = eval_expr(right, context, scope, values)?;
-    eval_intdiv_result(left, right, values)
+    with_eval_operands(&[left, right], context, scope, values,
+        |args, context, _, values| eval_intdiv_result(args[0], args[1], context, values))
 }
 
 /// Applies PHP `intdiv()` to two already evaluated values.
 pub(in crate::interpreter) fn eval_intdiv_result(
     left: RuntimeCellHandle,
     right: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let left = eval_int_value(left, values)?;
     let right = eval_int_value(right, values)?;
     if right == 0 {
-        return Err(EvalStatus::RuntimeFatal);
+        return throwables::eval_throw_builtin_division_by_zero_error("Division by zero", context, values);
     }
-    let result = left.checked_div(right).ok_or(EvalStatus::RuntimeFatal)?;
-    values.int(result)
+    match left.checked_div(right) {
+        Some(result) => values.int(result),
+        None => throwables::eval_throw_builtin_exception("ArithmeticError",
+            elephc_semantics::numeric::INTDIV_OVERFLOW_MESSAGE, context, values),
+    }
 }

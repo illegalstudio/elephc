@@ -515,7 +515,10 @@ impl EvalValuesHook {
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }
-            Self::Intdiv => two_args(evaluated_args, values, eval_intdiv_result),
+            Self::Intdiv => {
+                let [left, right] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
+                eval_intdiv_result(*left, *right, context, values)
+            }
             Self::JsonDecode => eval_json_decode_values_result(evaluated_args, context, values),
             Self::JsonEncode => eval_json_encode_values_result(evaluated_args, context, values),
             Self::JsonLastError => {

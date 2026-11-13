@@ -11,6 +11,9 @@
 /// Shared text for catchable checked integer arithmetic failures.
 pub const INTEGER_OVERFLOW_MESSAGE: &str = "--strict-overflow: integer arithmetic overflow";
 
+/// PHP integer division has no integer result for the signed minimum divided by negative one.
+pub const INTDIV_OVERFLOW_MESSAGE: &str = "Division of PHP_INT_MIN by -1 is not an integer";
+
 /// Version-one checked numeric callback selectors, independent of PHP implementation operations.
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

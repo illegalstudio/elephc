@@ -247,7 +247,7 @@ fn emit_intdiv_overflow_check_x86_64(
 /// Emits a catchable `ArithmeticError` throw for `intdiv(PHP_INT_MIN, -1)`.
 fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
     crate::codegen::lower_inst::exceptions::emit_arithmetic_error(
-        ctx, "Division of PHP_INT_MIN by -1 is not an integer",
+        ctx, elephc_semantics::numeric::INTDIV_OVERFLOW_MESSAGE,
     );
 }
 

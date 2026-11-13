@@ -1095,3 +1095,25 @@ owner parity, and native failures with both optimizers and clean heaps. Six
 focused compatibility controls, the compiler build, the prebuilt architecture
 audit, assembly-comment alignment and diff hygiene pass. The public integration
 mask is unchanged until the complete feature paths enforce these guarantees.
+
+
+### Catchable eval integer division
+
+Eval intdiv now schedules DivisionByZeroError for a zero divisor and ArithmeticError
+for MIN divided by -1. The signed-overflow message is shared with the AOT emitter.
+The direct expression hook uses the common operand-lease helper, including cleanup
+when evaluating a later argument throws. Already-evaluated, named, first-class and
+call_user_func variants use the same context-aware result helper. Failed calls leave
+the destination and borrowed source values unchanged.
+
+Two focused interpreter tests pass for permissive and staged Overflow profiles,
+covering both admitted bytecode calls and the walker, plus direct-hook leases on
+failure. The bytecode slice requires known call shapes: fixtures admit positional
+builtin shapes through unreachable declarations, preserving builtin precedence.
+Named calls, array literals and first-class construction retain the production
+walker fallback. A real opaque-eval native fixture covers all dispatch forms,
+intercepted errors and unchanged assignments with both optimizers and clean heaps.
+The existing math dispatch and all-five-target AOT intdiv controls also pass.
+Compiler and builtin-exporter builds, the complete generated-docs workflow, the
+architecture audit, assembly alignment and diff hygiene pass. Generated builtin
+artifacts remain identical. No additional public strict guarantee is activated.
