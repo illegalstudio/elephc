@@ -6,8 +6,9 @@ name: elephc-edge-nginx
 #   docker compose -f examples/web-edge/deploy/compose.nginx.yml up --build
 #
 # The official nginx image starts as root; that is intentional here because it
-# binds 80/443 and writes its pid/cache files. The origin still runs as uid
-# 10001 and the socket is reachable through the shared volume.
+# binds 80/443 and writes its pid/cache files. The origin runs as uid 10001 and
+# nginx's primary group (GID 101), so the 0660 socket and 0770 runtime directory
+# remain group-private instead of world-readable.
 
 services:
   init:
@@ -17,7 +18,7 @@ services:
       - -c
       - |
         mkdir -p /run/elephc /var/lib/elephc/sessions
-        chown -R 10001:10001 /run/elephc /var/lib/elephc
+        chown -R 10001:101 /run/elephc /var/lib/elephc
         chmod 0770 /run/elephc
     volumes:
       - elephc-run:/run/elephc
@@ -28,7 +29,10 @@ services:
     build:
       context: ../../..
       dockerfile: examples/web-edge/deploy/Dockerfile.app
-    user: "10001:10001"
+    # Join the nginx image's primary group (GID 101). nginx workers are uid/gid
+    # 101 and can traverse the 0770 directory and read the 0660 socket without
+    # making either world-accessible.
+    user: "10001:101"
     environment:
       ELEPHC_SESSION_SAVE_PATH: /var/lib/elephc/sessions
     volumes:
@@ -46,10 +50,7 @@ services:
 
   edge:
     image: nginx:1.27-alpine
-    # nginx workers run as the image's `nginx` user, not uid 10001. The shared
-    # socket directory is 0770 and the origin socket is 0660, both group 10001.
-    group_add:
-      - "10001"
+    # The origin already runs in this image's nginx group (GID 101).
     ports:
       - "80:80"
     volumes:

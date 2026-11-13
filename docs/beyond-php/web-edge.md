@@ -344,9 +344,12 @@ The container files live in
 The stacks use a one-shot init service to make the socket and session volumes
 writable by the shared uid. Adapt the ids to your host policy. The Caddy and
 Ferron variants run both services as `10001:10001`, matching the socket's
-`0660` owner/group; the nginx image runs as root by default, so it reaches the
-socket through the shared volume. Use an unprivileged nginx image with high
-ports behind a load balancer if root is not acceptable.
+`0660` owner/group. In the nginx image only the master runs as root; its workers
+run as uid/gid 101 and open the upstream connections. `compose.nginx.yml`
+therefore runs the origin as `10001:101` and gives the runtime directory GID
+101, so the workers can traverse it and connect without the socket or directory
+becoming world-accessible. Use an unprivileged nginx image with high ports
+behind a load balancer if root is not acceptable.
 
 ## Out of scope
 
