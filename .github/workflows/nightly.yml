@@ -429,7 +429,7 @@ jobs:
         # code authorised to rewrite this repository's releases, tags and
         # published artifacts without any diff to review here. Both publish
         # paths pin the same SHA; bump them together.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           tag_name: ${{ needs.gate.outputs.dated_tag }}
           target_commitish: ${{ needs.gate.outputs.sha }}
@@ -482,7 +482,7 @@ jobs:
         # code authorised to rewrite this repository's releases, tags and
         # published artifacts without any diff to review here. Both publish
         # paths pin the same SHA; bump them together.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3
         with:
           tag_name: nightly
           target_commitish: ${{ needs.gate.outputs.sha }}
