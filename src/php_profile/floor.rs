@@ -8,8 +8,8 @@
 //!
 //! Key details:
 //!
-//! - WHY THIS EXISTS. elephc's lexer, parser and type checker are entirely version-agnostic:
-//!   `rg "php_version" src/parser/ src/types/` finds nothing. The full language is always
+//! - WHY THIS EXISTS. elephc's lexer and parser are entirely version-agnostic, and the type
+//!   checker reads the profile only for Core attribute targets, so the full language is always
 //!   accepted, whatever `--php-version` says. So `--php-version 8.2` over a file using PHP
 //!   8.4 property hooks compiles happily and bakes `PHP_VERSION = "8.2.0"` into a binary
 //!   whose source could not have run on 8.2. Nothing miscompiles — but the version surface

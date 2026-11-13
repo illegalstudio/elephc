@@ -88,6 +88,8 @@ pub(super) fn check_types_impl(
     options: CheckOptions,
     generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
+    super::core_attributes::validate(program)?;
+
     let mut checker = Checker::new(target);
     checker.strict_locals = options.strict_locals;
     // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
