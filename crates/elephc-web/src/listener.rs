@@ -857,8 +857,6 @@ pub(crate) enum Listener {
         receiver: tokio::sync::mpsc::Receiver<std::net::TcpStream>,
         /// The configured server address.
         server: SocketAddr,
-        /// The master PID captured before the worker was forked.
-        master_pid: libc::pid_t,
     },
 }
 
@@ -888,7 +886,6 @@ impl Listener {
                 Ok(Self::TcpPassed {
                     receiver: receiver_channel,
                     server,
-                    master_pid,
                 })
             }
             ListenSource::Unix(listener) => {
@@ -920,11 +917,7 @@ impl Listener {
                 Ok(Some((Stream::Unix(stream), PeerInfo::unix())))
             }
             #[cfg(target_vendor = "apple")]
-            Self::TcpPassed {
-                receiver,
-                server,
-                master_pid: _,
-            } => {
+            Self::TcpPassed { receiver, server } => {
                 let Some(stream) = receiver.recv().await else {
                     return Ok(None);
                 };
