@@ -1,28 +1,25 @@
 //! Purpose:
-//! Emits the `__rt_strpos`, `__rt_strpos_empty` runtime helper assembly for strpos.
-//! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
+//! Emits the `__rt_strpos` runtime helper for PHP byte-string searches.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::strings`.
+//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
+//!   `crate::codegen_support::runtime::strings`.
 //!
 //! Key details:
-//! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - Uses libc `memchr` for the next candidate first byte and `memcmp` to compare
+//!   the full needle; libc owns the vectorized scans on every supported target.
+//! - Empty needles match at offset zero, longer needles report the not-found
+//!   sentinel, and a window that ends before the needle returns -1.
+//! - The helper keeps a small stack frame because the libc calls clobber the
+//!   caller-saved registers and the link register.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Emits the `__rt_strpos` runtime helper for ARM64.
-/// Implements PHP's strpos semantics: scans haystack for needle and returns
-/// the byte offset of the first match, or -1 if not found. An empty needle
-/// always matches at position 0.
+/// Emits the `__rt_strpos` helper for the active target.
 ///
-/// ABI:
-///   Input:  x1=haystack_ptr, x2=haystack_len, x3=needle_ptr, x4=needle_len
-///   Output: x0 = match offset (0-based byte offset), or -1 if not found
-///
-/// Uses a two-level loop: outer loop advances through haystack positions,
-/// inner loop compares needle bytes at each candidate position. Exits early
-/// when needle exceeds haystack length.
+/// AArch64 input: x1/x2 = haystack pointer/length, x3/x4 = needle pointer/length.
+/// Output: x0 = match offset, or -1 when the needle is absent.
 pub fn emit_strpos(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strpos_linux_x86_64(emitter);
@@ -32,104 +29,127 @@ pub fn emit_strpos(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strpos ---");
     emitter.label_global("__rt_strpos");
-
-    // -- edge cases --
-    emitter.instruction("cbz x4, __rt_strpos_empty");                           // empty needle always matches at position 0
-    emitter.instruction("cmp x4, x2");                                          // compare needle length with haystack length
-    emitter.instruction("b.gt __rt_strpos_notfound");                           // needle longer than haystack, can't match
-    emitter.instruction("mov x5, #0");                                          // initialize search position to 0
-
-    // -- outer loop: try matching needle at each position --
-    emitter.label("__rt_strpos_outer");
-    emitter.instruction("sub x9, x2, x4");                                      // last valid start = haystack_len - needle_len
-    emitter.instruction("cmp x5, x9");                                          // check if position exceeds last valid start
-    emitter.instruction("b.gt __rt_strpos_notfound");                           // past end, needle not found
-
-    // -- inner loop: compare needle bytes at current position --
-    emitter.instruction("mov x6, #0");                                          // needle comparison index = 0
-    emitter.label("__rt_strpos_inner");
-    emitter.instruction("cmp x6, x4");                                          // check if all needle bytes matched
-    emitter.instruction("b.ge __rt_strpos_found");                              // all matched, found at position x5
-    emitter.instruction("add x7, x5, x6");                                      // compute haystack index = pos + needle_idx
-    emitter.instruction("ldrb w8, [x1, x7]");                                   // load haystack byte at computed index
-    emitter.instruction("ldrb w9, [x3, x6]");                                   // load needle byte at current index
-    emitter.instruction("cmp w8, w9");                                          // compare haystack and needle bytes
-    emitter.instruction("b.ne __rt_strpos_next");                               // mismatch, try next position
-    emitter.instruction("add x6, x6, #1");                                      // advance needle index
-    emitter.instruction("b __rt_strpos_inner");                                 // continue comparing
-
-    // -- advance to next haystack position --
-    emitter.label("__rt_strpos_next");
-    emitter.instruction("add x5, x5, #1");                                      // increment search position
-    emitter.instruction("b __rt_strpos_outer");                                 // retry from new position
-
-    // -- return results --
+    emitter.instruction("cbz x4, __rt_strpos_empty");                           // an empty needle matches at offset zero
+    emitter.instruction("cmp x4, x2");                                          // reject needles longer than the haystack
+    emitter.instruction("b.gt __rt_strpos_notfound");                           // a long needle cannot fit
+    emitter.instruction("sub sp, sp, #80");                                     // reserve the libc-preserved search state
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // preserve the caller frame and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish a stable frame base
+    emitter.instruction("stp x1, x2, [sp, #16]");                               // save the haystack pointer and length
+    emitter.instruction("stp x3, x4, [sp, #32]");                               // save the needle pointer and length
+    emitter.instruction("sub x9, x2, x4");                                      // last valid candidate start = haystack length - needle length
+    emitter.instruction("str x9, [sp, #0]");                                    // publish the last valid candidate
+    emitter.instruction("mov x9, #0");                                          // start scanning at the window start
+    emitter.instruction("str x9, [sp, #8]");                                    // publish the current candidate offset
+    emitter.instruction("ldrb w9, [x3]");                                       // load the needle's first byte
+    emitter.instruction("str x9, [sp, #48]");                                   // save the first-byte search key
+    emitter.label("__rt_strpos_loop");
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the haystack pointer
+    emitter.instruction("ldr x2, [sp, #24]");                                   // reload the haystack length
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the current candidate offset
+    emitter.instruction("add x0, x1, x9");                                      // search from the next candidate byte
+    emitter.instruction("sub x2, x2, x9");                                      // remaining haystack bytes from the candidate
+    emitter.instruction("ldr w1, [sp, #48]");                                   // pass the cached first needle byte
+    emitter.bl_c("memchr");                                                    // find the next first-byte candidate
+    emitter.instruction("cbz x0, __rt_strpos_frame_notfound");                  // no first-byte candidate remains
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the haystack pointer for the offset
+    emitter.instruction("sub x9, x0, x1");                                      // convert the candidate pointer into an offset
+    emitter.instruction("str x9, [sp, #8]");                                    // publish the candidate offset
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the last valid candidate start
+    emitter.instruction("cmp x9, x10");                                         // does the full needle still fit here?
+    emitter.instruction("b.gt __rt_strpos_frame_notfound");                     // a candidate past the window cannot match
+    emitter.instruction("add x0, x1, x9");                                      // compare the full needle at this candidate
+    emitter.instruction("ldr x1, [sp, #32]");                                   // pass the needle pointer
+    emitter.instruction("ldr x2, [sp, #40]");                                   // pass the needle length
+    emitter.bl_c("memcmp");                                                    // compare the remaining needle bytes
+    emitter.instruction("cbz w0, __rt_strpos_found");                           // a zero result is a full match
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the failed candidate offset
+    emitter.instruction("add x9, x9, #1");                                      // advance to the next candidate
+    emitter.instruction("str x9, [sp, #8]");                                    // publish the advanced candidate
+    emitter.instruction("ldr x10, [sp, #0]");                                   // reload the last valid candidate start
+    emitter.instruction("cmp x9, x10");                                         // is another candidate still in range?
+    emitter.instruction("b.le __rt_strpos_loop");                               // continue while candidates remain
+    emitter.label("__rt_strpos_frame_notfound");
+    emitter.instruction("mov x0, #-1");                                         // return the not-found sentinel
+    emitter.instruction("b __rt_strpos_frame_done");                            // restore the frame before returning
     emitter.label("__rt_strpos_found");
-    emitter.instruction("mov x0, x5");                                          // return match position
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("ldr x0, [sp, #8]");                                    // return the matching candidate offset
+    emitter.label("__rt_strpos_frame_done");
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore the caller frame and return address
+    emitter.instruction("add sp, sp, #80");                                     // release the search frame
+    emitter.instruction("ret");                                                 // return the match offset or -1
     emitter.label("__rt_strpos_empty");
-    emitter.instruction("mov x0, #0");                                          // empty needle found at position 0
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("mov x0, #0");                                          // empty needles match at offset zero
+    emitter.instruction("ret");                                                 // return the empty-needle offset
     emitter.label("__rt_strpos_notfound");
-    emitter.instruction("mov x0, #-1");                                         // return -1 (not found)
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("mov x0, #-1");                                         // return the not-found sentinel
+    emitter.instruction("ret");                                                 // return the not-found sentinel
 }
 
-/// Emits the `__rt_strpos` runtime helper for Linux x86_64.
-/// Implements PHP's strpos semantics: scans haystack for needle and returns
-/// the byte offset of the first match, or -1 if not found. An empty needle
-/// always matches at position 0.
+/// Emits the x86_64 `__rt_strpos` helper.
 ///
-/// ABI:
-///   Input:  rdi=haystack_ptr, rsi=haystack_len, rdx=needle_ptr, rcx=needle_len
-///   Output: rax = match offset (0-based byte offset), or -1 if not found
-///
-/// Uses a two-level loop: outer loop advances through haystack positions,
-/// inner loop compares needle bytes at each candidate position. Exits early
-/// when needle exceeds haystack length.
+/// SysV input: rdi/rsi = haystack pointer/length, rdx/rcx = needle pointer/length.
+/// Output: rax = match offset, or -1 when the needle is absent.
 fn emit_strpos_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strpos ---");
     emitter.label_global("__rt_strpos");
-
-    emitter.instruction("test rcx, rcx");                                       // empty needles match immediately at offset zero
-    emitter.instruction("jz __rt_strpos_empty_linux_x86_64");                   // return zero when strpos() receives an empty needle
-    emitter.instruction("cmp rcx, rsi");                                        // reject searches whose needle is longer than the haystack
-    emitter.instruction("jg __rt_strpos_notfound_linux_x86_64");                // return the not-found sentinel when the needle cannot fit
-    emitter.instruction("mov r10, rsi");                                        // copy the haystack length so the final valid start offset can be computed once
-    emitter.instruction("sub r10, rcx");                                        // compute the last haystack offset where the full needle can still fit
-    emitter.instruction("mov r8, rdi");                                         // seed the current haystack candidate pointer at the start of the haystack
-    emitter.instruction("xor r9d, r9d");                                        // start scanning from haystack offset zero
-
-    emitter.label("__rt_strpos_outer_linux_x86_64");
-    emitter.instruction("cmp r9, r10");                                         // have we advanced beyond the last valid haystack start offset?
-    emitter.instruction("jg __rt_strpos_notfound_linux_x86_64");                // stop once there are no more candidate start offsets to test
-    emitter.instruction("xor r11d, r11d");                                      // start the needle byte comparison from index zero for the current candidate
-
-    emitter.label("__rt_strpos_inner_linux_x86_64");
-    emitter.instruction("cmp r11, rcx");                                        // did every byte in the needle match at the current haystack offset?
-    emitter.instruction("jge __rt_strpos_found_linux_x86_64");                  // return the current haystack offset once the full needle matches
-    emitter.instruction("movzx eax, BYTE PTR [r8 + r11]");                      // load the current haystack byte for the candidate comparison
-    emitter.instruction("movzx esi, BYTE PTR [rdx + r11]");                     // load the current needle byte for the candidate comparison
-    emitter.instruction("cmp eax, esi");                                        // compare the haystack and needle bytes at the current candidate position
-    emitter.instruction("jne __rt_strpos_next_linux_x86_64");                   // abandon this candidate start offset on the first mismatching byte
-    emitter.instruction("add r11, 1");                                          // advance to the next byte within the current needle comparison
-    emitter.instruction("jmp __rt_strpos_inner_linux_x86_64");                  // continue matching bytes against the current candidate start offset
-
-    emitter.label("__rt_strpos_next_linux_x86_64");
-    emitter.instruction("add r8, 1");                                           // advance the haystack candidate pointer to the next possible start offset
-    emitter.instruction("add r9, 1");                                           // advance the logical haystack offset returned on a successful future match
-    emitter.instruction("jmp __rt_strpos_outer_linux_x86_64");                  // retry the needle comparison from the next haystack start offset
-
+    emitter.instruction("test rcx, rcx");                                       // an empty needle matches at offset zero
+    emitter.instruction("jz __rt_strpos_empty_linux_x86_64");                   // return zero for an empty needle
+    emitter.instruction("cmp rcx, rsi");                                        // reject needles longer than the haystack
+    emitter.instruction("jg __rt_strpos_notfound_linux_x86_64");                // a long needle cannot fit
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
+    emitter.instruction("sub rsp, 64");                                         // reserve the libc-preserved search state
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the haystack pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the haystack length
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the needle pointer
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save the needle length
+    emitter.instruction("mov rax, rsi");                                        // copy the haystack length
+    emitter.instruction("sub rax, rcx");                                        // last valid candidate start = haystack length - needle length
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // publish the last valid candidate
+    emitter.instruction("xor eax, eax");                                        // start scanning at the window start
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // publish the current candidate offset
+    emitter.instruction("movzx eax, BYTE PTR [rdx]");                           // load the needle's first byte
+    emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save the first-byte search key
+    emitter.label("__rt_strpos_loop_linux_x86_64");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the haystack pointer
+    emitter.instruction("add rdi, QWORD PTR [rbp - 48]");                       // search from the current candidate byte
+    emitter.instruction("mov esi, DWORD PTR [rbp - 56]");                       // pass the cached first needle byte
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the haystack length
+    emitter.instruction("sub rdx, QWORD PTR [rbp - 48]");                       // remaining haystack bytes from the candidate
+    emitter.bl_c("memchr");                                                    // find the next first-byte candidate
+    emitter.instruction("test rax, rax");                                       // did memchr find another candidate?
+    emitter.instruction("jz __rt_strpos_frame_notfound_linux_x86_64");          // no first-byte candidate remains
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the haystack pointer for the offset
+    emitter.instruction("mov r11, rax");                                        // copy the candidate pointer
+    emitter.instruction("sub r11, r10");                                        // convert the candidate pointer into an offset
+    emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // publish the candidate offset
+    emitter.instruction("cmp r11, QWORD PTR [rbp - 40]");                       // does the full needle still fit here?
+    emitter.instruction("jg __rt_strpos_frame_notfound_linux_x86_64");          // a candidate past the window cannot match
+    emitter.instruction("mov rdi, r10");                                        // compare the full needle at this candidate
+    emitter.instruction("add rdi, r11");                                        // first memcmp argument = candidate bytes
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the needle pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // pass the needle length
+    emitter.bl_c("memcmp");                                                    // compare the remaining needle bytes
+    emitter.instruction("test eax, eax");                                       // did the full needle compare equal?
+    emitter.instruction("jz __rt_strpos_found_linux_x86_64");                   // a zero result is a full match
+    emitter.instruction("add QWORD PTR [rbp - 48], 1");                         // advance to the next candidate
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the advanced candidate
+    emitter.instruction("cmp r11, QWORD PTR [rbp - 40]");                       // is another candidate still in range?
+    emitter.instruction("jle __rt_strpos_loop_linux_x86_64");                   // continue while candidates remain
+    emitter.label("__rt_strpos_frame_notfound_linux_x86_64");
+    emitter.instruction("mov rax, -1");                                         // return the not-found sentinel
+    emitter.instruction("leave");                                               // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the not-found sentinel
     emitter.label("__rt_strpos_found_linux_x86_64");
-    emitter.instruction("mov rax, r9");                                         // return the first haystack offset whose bytes matched the full needle
-    emitter.instruction("ret");                                                 // return the signed match offset to the caller
-
+    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // return the matching candidate offset
+    emitter.instruction("leave");                                               // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the match offset
     emitter.label("__rt_strpos_empty_linux_x86_64");
     emitter.instruction("xor eax, eax");                                        // empty needles match at offset zero
-    emitter.instruction("ret");                                                 // return the empty-needle offset to the caller
-
+    emitter.instruction("ret");                                                 // return the empty-needle offset
     emitter.label("__rt_strpos_notfound_linux_x86_64");
-    emitter.instruction("mov rax, -1");                                         // return the not-found sentinel when no haystack offset matches the needle
-    emitter.instruction("ret");                                                 // return the not-found sentinel to the caller
+    emitter.instruction("mov rax, -1");                                         // return the not-found sentinel
+    emitter.instruction("ret");                                                 // return the not-found sentinel
 }

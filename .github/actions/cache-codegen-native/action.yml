@@ -1,0 +1,32 @@
+name: Restore codegen native packages
+description: Restore the same reviewed native cache keys on original and recovery runners.
+inputs:
+  target:
+    description: Host target
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Cache managed native libxml2
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cache/elephc/native/artifacts/libxml2
+          ~/.cache/elephc/native/artifacts/libmagic
+          ~/.cache/elephc/native/sources
+        key: libxml2-native-${{ inputs.target }}-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
+    - name: Cache managed native gmp
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cache/elephc/native/artifacts/gmp
+          ~/.cache/elephc/native/sources
+        key: gmp-native-${{ inputs.target }}-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+    - name: Cache managed native openssl-crypto/zlib
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cache/elephc/native/artifacts/openssl-crypto
+          ~/.cache/elephc/native/artifacts/zlib
+          ~/.cache/elephc/native/sources
+        key: openssl-crypto-native-${{ inputs.target }}-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}

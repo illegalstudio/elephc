@@ -10,6 +10,7 @@
 //! - Keep this surface small: runtime codegen imports these re-exports instead of reaching into leaf emitters directly.
 
 mod arrays;
+pub(crate) use arrays::emit_native_frame_owners;
 mod buffers;
 mod callables;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.

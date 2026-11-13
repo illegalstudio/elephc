@@ -1,8 +1,6 @@
 ---
 title: "mysqli_multi_query()"
 description: "Runs several semicolon-separated statements in one call."
-sidebar:
-  order: 143
 ---
 
 ## mysqli_multi_query()
@@ -21,8 +19,9 @@ Runs several semicolon-separated statements in one call.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

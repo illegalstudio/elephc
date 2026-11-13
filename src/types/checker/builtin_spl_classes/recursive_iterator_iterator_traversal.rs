@@ -9,7 +9,7 @@
 //! - State arrays track iterators, frame states, and frame depths in parallel.
 //! - Advance logic preserves self-first, child-first, and leaves-only traversal modes.
 
-use crate::parser::ast::{BinOp, Expr, Stmt, TypeExpr};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, TypeExpr};
 
 use super::common::*;
 use super::recursive_array::assume_recursive_iterator_expr;
@@ -122,22 +122,37 @@ pub(super) fn recursive_iterator_iterator_rewind_body() -> Vec<Stmt> {
             "rewind",
             Vec::new(),
         )),
-        if_stmt(
-            method_call(recursive_iterator_iterator_root_expr(), "valid", Vec::new()),
-            vec![
-                property_array_push_stmt(this_expr(), "iterators", recursive_iterator_iterator_root_expr()),
-                property_array_push_stmt(this_expr(), "states", int_expr(0)),
-                property_array_push_stmt(this_expr(), "depths", int_expr(0)),
-                expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
-            ],
-            None,
-        ),
+        property_array_push_stmt(this_expr(), "iterators", recursive_iterator_iterator_root_expr()),
+        property_array_push_stmt(this_expr(), "states", int_expr(0)),
+        property_array_push_stmt(this_expr(), "depths", int_expr(0)),
+        expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
     ]
 }
 
 /// Builds the synthetic method body for recursive iterator iterator valid.
+///
+/// PHP asks the active sub-iterator (`spl_recursive_it_valid_ex`), not a cached flag, so an
+/// overridden `valid()` on the inner iterator runs once more per `foreach` iteration.
 pub(super) fn recursive_iterator_iterator_valid_body() -> Vec<Stmt> {
-    return_body(recursive_iterator_iterator_valid_expr())
+    vec![
+        assign_stmt("slot", recursive_iterator_iterator_slot_expr()),
+        assign_stmt("iterators", recursive_iterator_iterator_iterators_expr()),
+        if_stmt(
+            binary_expr(var_expr("slot"), BinOp::Lt, int_expr(0)),
+            return_body(bool_expr(false)),
+            None,
+        ),
+        if_stmt(
+            binary_expr(var_expr("slot"), BinOp::GtEq, count_expr(var_expr("iterators"))),
+            return_body(bool_expr(false)),
+            None,
+        ),
+        return_stmt(method_call(
+            array_access(var_expr("iterators"), var_expr("slot")),
+            "valid",
+            Vec::new(),
+        )),
+    ]
 }
 
 /// Builds the synthetic method body for recursive iterator iterator current.
@@ -275,15 +290,11 @@ pub(super) fn recursive_iterator_iterator_advance_body() -> Vec<Stmt> {
             recursive_iterator_iterator_depth_at_current_slot(),
         ),
         assign_stmt("iterator", recursive_iterator_iterator_current_iterator_expr()),
-        if_stmt(
-            not_expr(method_call(var_expr("iterator"), "valid", Vec::new())),
-            recursive_iterator_iterator_pop_invalid_frame_body(),
-            None,
-        ),
         assign_stmt(
             "state",
             recursive_iterator_iterator_state_at_current_slot(),
         ),
+        // -- RS_NEXT: advance the inner iterator first; the RS_START pass validates it --
         if_stmt(
             binary_expr(var_expr("state"), BinOp::StrictEq, int_expr(2)),
             vec![
@@ -292,6 +303,16 @@ pub(super) fn recursive_iterator_iterator_advance_body() -> Vec<Stmt> {
                 expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
                 return_void_stmt(),
             ],
+            None,
+        ),
+        // -- RS_START/RS_TEST is the only state that probes the inner iterator --
+        if_stmt(
+            binary_expr(var_expr("state"), BinOp::StrictEq, int_expr(0)),
+            vec![if_stmt(
+                not_expr(method_call(var_expr("iterator"), "valid", Vec::new())),
+                recursive_iterator_iterator_pop_invalid_frame_body(),
+                None,
+            )],
             None,
         ),
         if_stmt(
@@ -341,33 +362,40 @@ fn recursive_iterator_iterator_pop_invalid_frame_body() -> Vec<Stmt> {
 /// Builds the synthetic method body for recursive iterator iterator advance self first.
 fn recursive_iterator_iterator_advance_self_first_body() -> Vec<Stmt> {
     vec![
+        // -- RS_CHILD: the previous `next()` returned the element, descend now --
         if_stmt(
-            binary_expr(var_expr("state"), BinOp::StrictEq, int_expr(0)),
-            vec![
-                property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(1)),
-                property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
-                return_void_stmt(),
-            ],
-            None,
-        ),
-        assign_stmt(
-            "hasChildren",
-            method_call(var_expr("iterator"), "hasChildren", Vec::new()),
-        ),
-        if_stmt(
-            var_expr("hasChildren"),
+            binary_expr(var_expr("state"), BinOp::StrictEq, int_expr(1)),
             vec![
                 assign_stmt("child", method_call(var_expr("iterator"), "getChildren", Vec::new())),
                 if_stmt(
                     not_expr(function_call("is_null", vec![var_expr("child")])),
                     recursive_iterator_iterator_descend_current_child_body(int_expr(2)),
-                    None,
+                    Some(vec![
+                        property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
+                        expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
+                        return_void_stmt(),
+                    ]),
                 ),
+                return_void_stmt(),
             ],
             None,
         ),
-        property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
-        expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
+        // -- RS_START/RS_TEST: one `hasChildren()` decides whether this element recurses --
+        assign_stmt(
+            "hasChildren",
+            method_call(var_expr("iterator"), "hasChildren", Vec::new()),
+        ),
+        property_array_assign_stmt(
+            this_expr(),
+            "states",
+            recursive_iterator_iterator_slot_expr(),
+            expr(ExprKind::Ternary {
+                condition: Box::new(var_expr("hasChildren")),
+                then_expr: Box::new(int_expr(1)),
+                else_expr: Box::new(int_expr(2)),
+            }),
+        ),
+        property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
         return_void_stmt(),
     ]
 }
@@ -375,6 +403,7 @@ fn recursive_iterator_iterator_advance_self_first_body() -> Vec<Stmt> {
 /// Builds the synthetic method body for recursive iterator iterator advance children first or leaves.
 fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<Stmt> {
     vec![
+        // -- RS_SELF (CHILD_FIRST only): children are exhausted, yield the parent --
         if_stmt(
             binary_expr(var_expr("state"), BinOp::StrictEq, int_expr(1)),
             vec![
@@ -395,34 +424,26 @@ fn recursive_iterator_iterator_advance_children_first_or_leaves_body() -> Vec<St
                 if_stmt(
                     not_expr(function_call("is_null", vec![var_expr("child")])),
                     recursive_iterator_iterator_non_self_child_body(),
-                    None,
+                    Some(vec![
+                        property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
+                        property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                        return_void_stmt(),
+                    ]),
                 ),
+                return_void_stmt(),
             ],
-            None,
+            Some(vec![
+                property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
+                property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
+                return_void_stmt(),
+            ]),
         ),
-        property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
-        property_assign_stmt(this_expr(), "currentValid", bool_expr(true)),
-        return_void_stmt(),
     ]
 }
 
 /// Builds the synthetic method body for recursive iterator iterator non self child.
 fn recursive_iterator_iterator_non_self_child_body() -> Vec<Stmt> {
-    let mut body = recursive_iterator_iterator_descend_current_child_body(int_expr(2));
-    body.push(if_stmt(
-        binary_expr(
-            recursive_iterator_iterator_mode_expr(),
-            BinOp::StrictEq,
-            int_expr(0),
-        ),
-        vec![
-            property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(2)),
-            expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
-            return_void_stmt(),
-        ],
-        None,
-    ));
-    body
+    recursive_iterator_iterator_descend_current_child_body(int_expr(2))
 }
 
 /// Builds the synthetic method body for recursive iterator iterator descend current child.
@@ -434,37 +455,31 @@ fn recursive_iterator_iterator_descend_current_child_body(parent_state: Expr) ->
         ),
         expr_stmt(method_call(var_expr("recursiveChild"), "rewind", Vec::new())),
         if_stmt(
-            method_call(var_expr("recursiveChild"), "valid", Vec::new()),
-            vec![
-                if_stmt(
-                    binary_expr(
-                        recursive_iterator_iterator_mode_expr(),
-                        BinOp::StrictEq,
-                        int_expr(2),
-                    ),
-                    vec![property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(1))],
-                    Some(vec![property_array_assign_stmt(
-                        this_expr(),
-                        "states",
-                        recursive_iterator_iterator_slot_expr(),
-                        parent_state,
-                    )]),
-                ),
-                typed_assign_stmt(
-                    "nextDepth",
-                    TypeExpr::Int,
-                    binary_expr(recursive_iterator_iterator_depth_expr(), BinOp::Add, int_expr(1)),
-                ),
-                typed_assign_stmt("nextSlot", TypeExpr::Int, count_expr(recursive_iterator_iterator_iterators_expr())),
-                property_array_push_stmt(this_expr(), "iterators", var_expr("recursiveChild")),
-                property_array_push_stmt(this_expr(), "states", int_expr(0)),
-                property_array_push_stmt(this_expr(), "depths", var_expr("nextDepth")),
-                property_assign_stmt(this_expr(), "depth", var_expr("nextDepth")),
-                property_assign_stmt(this_expr(), "slot", var_expr("nextSlot")),
-                expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
-                return_void_stmt(),
-            ],
-            None,
+            binary_expr(
+                recursive_iterator_iterator_mode_expr(),
+                BinOp::StrictEq,
+                int_expr(2),
+            ),
+            vec![property_array_assign_stmt(this_expr(), "states", recursive_iterator_iterator_slot_expr(), int_expr(1))],
+            Some(vec![property_array_assign_stmt(
+                this_expr(),
+                "states",
+                recursive_iterator_iterator_slot_expr(),
+                parent_state,
+            )]),
         ),
+        typed_assign_stmt(
+            "nextDepth",
+            TypeExpr::Int,
+            binary_expr(recursive_iterator_iterator_depth_expr(), BinOp::Add, int_expr(1)),
+        ),
+        typed_assign_stmt("nextSlot", TypeExpr::Int, count_expr(recursive_iterator_iterator_iterators_expr())),
+        property_array_push_stmt(this_expr(), "iterators", var_expr("recursiveChild")),
+        property_array_push_stmt(this_expr(), "states", int_expr(0)),
+        property_array_push_stmt(this_expr(), "depths", var_expr("nextDepth")),
+        property_assign_stmt(this_expr(), "depth", var_expr("nextDepth")),
+        property_assign_stmt(this_expr(), "slot", var_expr("nextSlot")),
+        expr_stmt(method_call(this_expr(), "__elephcAdvance", Vec::new())),
+        return_void_stmt(),
     ]
 }

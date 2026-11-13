@@ -37,7 +37,7 @@ mod mbstring;
 mod owned_value_args;
 mod public_args;
 mod reference_args;
-mod reference_return;
+pub(super) mod reference_return;
 mod string_return;
 mod tagged_args;
 
@@ -231,6 +231,23 @@ pub(crate) fn emit_runtime_callable_invoker_with_exception_boundary(
     emit_runtime_callable_invoker_impl(emitter, data, invoker, true);
 }
 
+/// Files shared owner callbacks outside invoker bodies that may be renamed or deduplicated.
+pub(super) fn prepare_invoker_owner_visitor(
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    count: usize,
+    label: &str,
+) -> String {
+    let (visitor, fresh) = data.invoker_owner_visitor(count, format!("{label}__gc_argument_owners"));
+    if fresh {
+        let scope = emitter.begin_out_of_line();
+        InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, count)
+            .emit_frame_visitor(emitter, &visitor);
+        emitter.end_out_of_line(scope);
+    }
+    visitor
+}
+
 /// Bounds every invoker's owners; eval receives a pending throw while native callers rethrow it.
 fn emit_runtime_callable_invoker_impl(
     emitter: &mut Emitter,
@@ -242,6 +259,8 @@ fn emit_runtime_callable_invoker_impl(
     let escape_label = format!("{}_eval_escape", local_label_prefix(invoker.label, emitter.target));
     let argument_owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, invoker.sig.params.len());
     let frame_size = argument_owners.frame_size();
+    let owner_visitor = prepare_invoker_owner_visitor(
+        emitter, data, invoker.sig.params.len(), invoker.label);
     let mut ctx = InvokerEmitContext::new(
         invoker.label,
         argument_owners,
@@ -278,6 +297,7 @@ fn emit_runtime_callable_invoker_impl(
         abi::int_arg_reg_name(emitter.target, 2),
         INVOKER_SCOPE_OFFSET,
     );
+    ctx.argument_owners.link_frame(emitter, &owner_visitor);
     emit_invoker_exception_boundary_push(
         emitter,
         INVOKER_BOUNDARY_BASE_OFFSET,
@@ -306,6 +326,7 @@ fn emit_runtime_callable_invoker_impl(
     }
     ctx.argument_owners.finish_return(emitter);
     emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
+    ctx.argument_owners.unlink_frame(emitter);
     // Restore before tearing down the frame (and on the escape path below): the boxed
     // Mixed result travels in return registers, which these loads never touch.
     emit_invoker_callee_saved_restores(emitter);
@@ -314,6 +335,7 @@ fn emit_runtime_callable_invoker_impl(
     emitter.label(&escape_label);
     emit_invoker_exception_boundary_pop(emitter, INVOKER_BOUNDARY_BASE_OFFSET);
     ctx.argument_owners.release_all(emitter);
+    ctx.argument_owners.unlink_frame(emitter);
     if catch_native_throws {
         emit_null_invoker_result(emitter);
     }
@@ -1339,13 +1361,60 @@ fn push_invoker_ref_storage_address(
     ctx: &mut InvokerEmitContext,
 ) {
     let result_reg = abi::int_result_reg(emitter);
+    let matching_layout = ctx.next_label("invoker_ref_tagged_layout_checked");
+    let target_is_tagged = target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {source_tag_reg}, #12"));         // inline nullable integers need matching two-word reference storage
+            emitter.instruction(&format!("{} {matching_layout}", if target_is_tagged { "b.eq" } else { "b.ne" })); // accept exactly the compatible tagged or ordinary source shape
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {source_tag_reg}, 12"));          // inline nullable integers need matching two-word reference storage
+            emitter.instruction(&format!("{} {matching_layout}", if target_is_tagged { "je" } else { "jne" })); // accept exactly the compatible tagged or ordinary source shape
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_tagged_reference_argument_error");
+    emitter.label(&matching_layout);
+    if target_is_tagged {
+        abi::emit_reg_move(emitter, result_reg, storage_reg);
+        abi::emit_push_result_value(emitter, &PhpType::Int);
+        return;
+    }
     let target_is_mixed = target_ty.is_none_or(|ty| {
-        matches!(
-            ty.codegen_repr(),
-            PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
-        )
+        matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
     });
-    if target_is_mixed {
+    let target_is_iterable = target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Iterable);
+    if target_is_mixed || target_is_iterable {
+        let classify = ctx.next_label("invoker_ref_storage_classify");
+        let compatible = ctx.next_label("invoker_ref_storage_compatible");
+        let incompatible = ctx.next_label("invoker_ref_storage_incompatible");
+        match emitter.target.arch {
+            Arch::AArch64 => {
+                emitter.instruction(&format!("cmp {source_tag_reg}, #7"));      // boxed and iterable sources share the legacy descriptor tag
+                emitter.instruction(&format!("b.eq {classify}"));               // distinguish their physical storage before exposing a writable address
+                if target_is_iterable {
+                    emitter.instruction(&format!("cmp {source_tag_reg}, #4"));  // raw containers have the same pointer layout as Iterable
+                    emitter.instruction(&format!("b.lo {incompatible}"));       // reject scalar storage before reading a heap pointer
+                    emitter.instruction(&format!("cmp {source_tag_reg}, #6"));  // permit only arrays, hashes and objects
+                    emitter.instruction(&format!("b.ls {compatible}"));         // preserve compatible concrete container references
+                }
+            }
+            Arch::X86_64 => {
+                emitter.instruction(&format!("cmp {source_tag_reg}, 7"));       // boxed and iterable sources share the legacy descriptor tag
+                emitter.instruction(&format!("je {classify}"));                 // distinguish their physical storage before exposing a writable address
+                if target_is_iterable {
+                    emitter.instruction(&format!("cmp {source_tag_reg}, 4"));   // raw containers have the same pointer layout as Iterable
+                    emitter.instruction(&format!("jb {incompatible}"));         // reject scalar storage before reading a heap pointer
+                    emitter.instruction(&format!("cmp {source_tag_reg}, 6"));   // permit only arrays, hashes and objects
+                    emitter.instruction(&format!("jbe {compatible}"));          // preserve compatible concrete container references
+                }
+            }
+        }
+        emitter.label(&incompatible);
+        abi::emit_call_label(emitter, "__rt_tagged_reference_argument_error");
+        emitter.label(&classify);
+        emit_invoker_ref_heap_layout_guard(storage_reg, source_tag_reg, target_is_iterable, emitter, ctx);
+        emitter.label(&compatible);
         abi::emit_reg_move(emitter, result_reg, storage_reg);
         abi::emit_push_result_value(emitter, &PhpType::Int);
         return;
@@ -1363,6 +1432,14 @@ fn push_invoker_ref_storage_address(
             emitter.instruction(&format!("jne {}", direct_label));              // concrete source storage already has the target ABI shape
         }
     }
+    if boxed_mixed_ref_target_has_incompatible_layout(target_ty) {
+        abi::emit_call_label(emitter, "__rt_tagged_reference_argument_error");
+        abi::emit_reg_move(emitter, result_reg, storage_reg);
+        abi::emit_push_result_value(emitter, &PhpType::Int);
+        abi::emit_jump(emitter, &done_label);
+    }
+    emit_invoker_ref_heap_layout_guard(storage_reg, source_tag_reg, false, emitter, ctx);
+    emit_boxed_mixed_object_ref_layout_guard(storage_reg, target_ty, emitter, ctx);
     abi::emit_load_from_address(emitter, result_reg, storage_reg, 0);
     match emitter.target.arch {
         Arch::AArch64 => emitter.instruction(&format!("add {}, {}, #8", result_reg, result_reg)), // address the mutable payload inside the Mixed cell
@@ -1372,9 +1449,124 @@ fn push_invoker_ref_storage_address(
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&direct_label);
+    emit_direct_object_ref_layout_guard(source_tag_reg, target_ty, emitter, ctx);
     abi::emit_reg_move(emitter, result_reg, storage_reg);
     abi::emit_push_result_value(emitter, &PhpType::Int);
     emitter.label(&done_label);
+}
+
+/// Rejects boxed generic storage when a concrete reference expects a narrower heap layout.
+fn boxed_mixed_ref_target_has_incompatible_layout(target_ty: Option<&PhpType>) -> bool {
+    match target_ty.map(PhpType::codegen_repr) {
+        Some(PhpType::Array(element)) => {
+            !matches!(element.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        }
+        Some(PhpType::AssocArray { key, value }) => {
+            !matches!(key.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+                || !matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        }
+        _ => false,
+    }
+}
+
+/// Validates the boxed payload is physically an object before exposing its mutable slot.
+fn emit_boxed_mixed_object_ref_layout_guard(
+    storage_reg: &str,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+) {
+    if !target_ty.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Object(_))) {
+        return;
+    }
+    let compatible = ctx.next_label("invoker_ref_object_compatible");
+    let incompatible = ctx.next_label("invoker_ref_object_incompatible");
+    let result = abi::int_result_reg(emitter);
+    abi::emit_load_from_address(emitter, result, storage_reg, 0);
+    abi::emit_load_from_address(emitter, result, result, 0);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #6");                                  // a boxed object uses Mixed tag six
+            emitter.instruction(&format!("b.ne {incompatible}"));               // reject non-object payloads before publishing their slot
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 6");                                  // a boxed object uses Mixed tag six
+            emitter.instruction(&format!("jne {incompatible}"));                // reject non-object payloads before publishing their slot
+        }
+    }
+    abi::emit_jump(emitter, &compatible);
+    emitter.label(&incompatible);
+    abi::emit_call_label(emitter, "__rt_tagged_reference_argument_error");
+    emitter.label(&compatible);
+}
+
+/// Rejects direct marker storage whose physical word cannot hold an object pointer.
+fn emit_direct_object_ref_layout_guard(
+    source_tag_reg: &str,
+    target_ty: Option<&PhpType>,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+) {
+    if !target_ty.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Object(_))) {
+        return;
+    }
+    let compatible = ctx.next_label("invoker_ref_direct_object_compatible");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {source_tag_reg}, #6"));          // direct object reference storage carries descriptor tag six
+            emitter.instruction(&format!("b.eq {compatible}"));                 // only an object word matches the callee's raw slot ABI
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {source_tag_reg}, 6"));           // direct object reference storage carries descriptor tag six
+            emitter.instruction(&format!("je {compatible}"));                   // only an object word matches the callee's raw slot ABI
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_tagged_reference_argument_error");
+    emitter.label(&compatible);
+}
+
+/// Distinguishes boxed handles from raw iterable pointers before adapting legacy source tag7.
+fn emit_invoker_ref_heap_layout_guard(
+    storage_reg: &str,
+    source_tag_reg: &str,
+    iterable: bool,
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+) {
+    let compatible = ctx.next_label("invoker_ref_heap_layout_compatible");
+    let incompatible = ctx.next_label("invoker_ref_heap_layout_incompatible");
+    let result = abi::int_result_reg(emitter);
+    abi::emit_push_reg_pair(emitter, storage_reg, source_tag_reg);
+    abi::emit_load_from_address(emitter, result, storage_reg, 0);
+    abi::emit_call_label(emitter, "__rt_heap_kind");
+    abi::emit_pop_reg_pair(emitter, storage_reg, source_tag_reg);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            if iterable {
+                emitter.instruction("cmp x0, #2");                              // Iterable stores a raw indexed-array, hash or object pointer
+                emitter.instruction(&format!("b.lo {incompatible}"));           // reject boxed handles and non-container storage
+                emitter.instruction("cmp x0, #4");                              // the supported iterable heap kinds occupy the range two through four
+                emitter.instruction(&format!("b.ls {compatible}"));             // preserve the raw pointer slot without boxing or rebinding it
+            } else {
+                emitter.instruction("cmp x0, #5");                              // only boxed Mixed handles expose a writable payload at offset eight
+                emitter.instruction(&format!("b.eq {compatible}"));             // leave raw Iterable storage untouched on an incompatible call
+            }
+        }
+        Arch::X86_64 => {
+            if iterable {
+                emitter.instruction("cmp rax, 2");                              // Iterable stores a raw indexed-array, hash or object pointer
+                emitter.instruction(&format!("jb {incompatible}"));             // reject boxed handles and non-container storage
+                emitter.instruction("cmp rax, 4");                              // the supported iterable heap kinds occupy the range two through four
+                emitter.instruction(&format!("jbe {compatible}"));              // preserve the raw pointer slot without boxing or rebinding it
+            } else {
+                emitter.instruction("cmp rax, 5");                              // only boxed Mixed handles expose a writable payload at offset eight
+                emitter.instruction(&format!("je {compatible}"));               // leave raw Iterable storage untouched on an incompatible call
+            }
+        }
+    }
+    emitter.label(&incompatible);
+    abi::emit_call_label(emitter, "__rt_tagged_reference_argument_error");
+    emitter.label(&compatible);
 }
 
 /// Pushes a loaded indexed-array element as a by-value callback argument.
@@ -1452,8 +1644,13 @@ fn emit_materialize_invoker_ref_cell_value_as_mixed(
     let string_hi_label = ctx.next_label("invoker_ref_string_hi");
     let box_label = ctx.next_label("invoker_ref_box");
     let done_label = ctx.next_label("invoker_ref_materialized");
+    let ordinary_label = ctx.next_label("invoker_ref_not_tagged_scalar");
 
     abi::emit_load_from_address(emitter, lo_reg, ref_cell_reg, 0);
+    abi::emit_load_int_immediate(emitter, hi_reg, 0);
+    crate::codegen_support::callable_invoker_args::emit_tagged_scalar_ref_source(
+        emitter, source_tag_reg, ref_cell_reg, &box_label, &ordinary_label,
+    );
     match emitter.target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("cmp {}, #7", source_tag_reg));        // detect an already-boxed Mixed value in the reference cell
@@ -2338,15 +2535,15 @@ fn push_loaded_mixed_hash_value_ref_arg(
 
     emitter.label(&entry_reference_label);
     match emitter.target.arch {
-        Arch::AArch64 => emitter.instruction("ldr x0, [x4, #24]"),              // load the managed reference from its hash entry
-        Arch::X86_64 => emitter.instruction("mov rax, QWORD PTR [r8 + 24]"),    // load the managed reference from its hash entry
+        Arch::AArch64 => emitter.instruction("ldr x1, [x4, #24]"),              // load the managed reference from its hash entry
+        Arch::X86_64 => emitter.instruction("mov rdi, QWORD PTR [r8 + 24]"),    // load the managed reference from its hash entry
     }
-    abi::emit_push_result_value(emitter, &PhpType::Int);
+    abi::emit_load_int_immediate(emitter, raw_hi_reg, 7);                       // hash reference cells own one boxed Mixed payload
+    push_invoker_ref_storage_address(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&direct_marker_label);
-    move_raw_hash_value_lo_to_result(emitter);
-    abi::emit_push_result_value(emitter, &PhpType::Int);
+    push_invoker_ref_storage_address(raw_lo_reg, raw_hi_reg, target_ty, emitter, ctx);
     abi::emit_jump(emitter, &done_label);
 
     emitter.label(&boxed_marker_label);
@@ -2649,6 +2846,15 @@ fn coerce_current_value_to_target(
         owned_value_args::normalize_callable(emitter, ctx, source_ty);
         return (PhpType::Callable, true);
     }
+    if matches!(source_repr, PhpType::Mixed | PhpType::Union(_)) {
+        if let Some(hash_ty) = target_ty
+            .map(PhpType::codegen_repr)
+            .filter(|target| matches!(target, PhpType::AssocArray { .. }))
+        {
+            emit_owned_hash_from_boxed_array(emitter, ctx, &hash_ty);
+            return (hash_ty, true);
+        }
+    }
     let pushed_ty = target_ty
         .filter(|target_ty| can_coerce_result_to_type(source_ty, target_ty))
         .map(PhpType::codegen_repr)
@@ -2667,6 +2873,50 @@ fn coerce_current_value_to_target(
     }
 
     (pushed_ty, boxed_to_mixed)
+}
+
+/// Unboxes the current Mixed argument into an OWNED hash for a declared `array<K, V>` parameter.
+///
+/// The callee is compiled for hash storage, but the boxed value a descriptor call carries is
+/// whatever the caller passed, and a PHP list is a valid keyed array. A plain unbox handed the
+/// callee a packed vector to read as a hash table. A boxed indexed array is therefore rebuilt
+/// as a hash here; a boxed hash (and anything else, which the callee's own checks answer) is
+/// passed through with a reference of its own, so both arms leave one owner for the invoker's
+/// argument cleanup and the caller reports the conversion as owning.
+fn emit_owned_hash_from_boxed_array(
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+    hash_ty: &PhpType,
+) {
+    let convert = ctx.next_label("list_arg_to_hash");
+    let done = ctx.next_label("hash_arg_ready");
+    let list_tag =
+        crate::codegen::runtime_value_tag(&PhpType::Array(Box::new(PhpType::Mixed))) as i64;
+    // -- rebuild a boxed list as the hash the parameter is compiled for --
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp x0, #{list_tag}"));               // is the boxed argument a packed list?
+            emitter.instruction(&format!("b.eq {convert}"));                    // lists are rebuilt as an owned hash
+            emitter.instruction("mov x0, x1");                                  // a hash (or null) passes through as the unboxed payload
+            abi::emit_incref_if_refcounted(emitter, hash_ty);
+            emitter.instruction(&format!("b {done}"));                          // the passed-through payload now carries its own owner
+            emitter.label(&convert);
+            emitter.instruction("mov x0, x1");                                  // pass the packed list to the conversion helper
+            abi::emit_call_label(emitter, "__rt_array_to_hash");
+            emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp rax, {list_tag}"));               // is the boxed argument a packed list?
+            emitter.instruction(&format!("je {convert}"));                      // lists are rebuilt as an owned hash
+            emitter.instruction("mov rax, rdi");                                // a hash (or null) passes through as the unboxed payload
+            abi::emit_incref_if_refcounted(emitter, hash_ty);
+            emitter.instruction(&format!("jmp {done}"));                        // the passed-through payload now carries its own owner
+            emitter.label(&convert);
+            abi::emit_call_label(emitter, "__rt_array_to_hash");
+            emitter.label(&done);
+        }
+    }
 }
 
 /// Emits runtime coercion from one result type to another.
@@ -2881,7 +3131,8 @@ fn push_descriptor_captures_as_hidden_args(
                 capture_ty,
             );
             abi::emit_push_result_value(emitter, capture_ty);
-            arg_types.push(capture_ty.clone());
+            // Hidden arguments use the same physical shape as the captured result pair.
+            arg_types.push(capture_ty.codegen_repr());
         }
     }
 }
@@ -3505,6 +3756,33 @@ mod tests {
     use super::*;
     use crate::codegen::platform::{Platform, Target};
 
+    /// A full eval catalog must not duplicate identical owner visitors for every signature.
+    #[test]
+    fn invokers_share_owner_visitors_by_layout_on_every_target() {
+        let signature = crate::types::first_class_callable_builtin_sig("strlen").unwrap();
+        let defaults = vec![None; signature.params.len()];
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            for label in ["first_owner_invoker", "second_owner_invoker"] {
+                let invoker = RuntimeCallableInvoker {
+                    label, sig: &signature, captures: &[], mbstring_operation: None,
+                    mbstring_variable_ref_warnings: false, owns_string_return: false,
+                    php_return_status: false, defaults: &defaults,
+                };
+                emit_runtime_callable_invoker_impl(&mut emitter, &mut data, &invoker, true);
+            }
+            let assembly = emitter.output();
+            assert_eq!(assembly.matches("first_owner_invoker__gc_argument_owners:").count(), 1,
+                "{name}: emit the shared layout once");
+            assert!(!assembly.contains("second_owner_invoker__gc_argument_owners:"),
+                "{name}: equivalent invokers reuse the first visitor");
+            assert_eq!(assembly.matches("__rt_gc_frame_owner_slot").count(), signature.params.len() + 2,
+                "{name}: the shared visitor covers arguments, result and pending exception");
+        }
+    }
+
     /// Identical signatures cannot share an invoker when their string-result owner contracts differ.
     #[test]
     fn invoker_cache_separates_owned_and_borrowed_string_returns() {
@@ -3691,6 +3969,59 @@ mod tests {
         assert!(!output.contains("ldur x10, [x29, #-3"));
     }
 
+    /// Associative references adapt both managed entries and direct markers for object callees.
+    #[test]
+    fn hash_reference_storage_uses_target_adaptation_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut ctx =
+                InvokerEmitContext::new("hash_ref", owners, false, false, Vec::new(), target);
+            let mut data = DataSection::new();
+            push_loaded_mixed_hash_value_ref_arg(
+                Some(&PhpType::Object("Payload".to_string())),
+                0,
+                &mut emitter,
+                &mut ctx,
+                &mut data,
+            );
+
+            let assembly = emitter.output();
+            let entry_label = assembly
+                .lines()
+                .find(|line| line.contains("hash_invoker_entry_reference") && line.ends_with(':'))
+                .unwrap_or_else(|| panic!("{name}: missing managed-entry label: {assembly}"));
+            let direct_label = assembly
+                .lines()
+                .find(|line| line.contains("hash_invoker_ref_direct") && line.ends_with(':'))
+                .unwrap_or_else(|| panic!("{name}: missing direct-marker label: {assembly}"));
+            let boxed_label = assembly
+                .lines()
+                .find(|line| line.contains("hash_invoker_ref_boxed") && line.ends_with(':'))
+                .unwrap_or_else(|| panic!("{name}: missing boxed-marker label: {assembly}"));
+            let entry_start = assembly.find(entry_label).unwrap();
+            let direct_start = assembly.find(direct_label).unwrap();
+            let boxed_start = assembly.find(boxed_label).unwrap();
+            let entry_path = &assembly[entry_start..direct_start];
+            let direct_path = &assembly[direct_start..boxed_start];
+            let payload_address = match target.arch {
+                Arch::AArch64 => "add x0, x0, #8",
+                Arch::X86_64 => "add rax, 8",
+            };
+            for (path_name, path) in [("managed entry", entry_path), ("direct marker", direct_path)] {
+                assert!(path.contains("__rt_heap_kind"), "{name} {path_name}: {path}");
+                assert!(path.contains(payload_address), "{name} {path_name}: {path}");
+            }
+        }
+    }
+
     /// Ref-cell markers retain source tag 7 directly instead of creating nested Mixed boxes.
     #[test]
     fn invoker_mixed_ref_cell_values_bypass_reboxing_on_all_targets() {
@@ -3724,6 +4055,25 @@ mod tests {
         }
     }
 
+    /// Marker value reads select the nullable-integer slot's runtime tag on every target.
+    #[test]
+    fn invoker_tagged_scalar_reference_values_read_the_dynamic_tag_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut ctx = InvokerEmitContext::new("tagged_ref_value", owners, false, false, Vec::new(), target);
+            let (storage, source_tag, load_tag) = match target.arch {
+                Arch::AArch64 => ("x19", "x20", "ldr x20, [x19, #8]"),
+                Arch::X86_64 => ("r12", "r13", "mov r13, QWORD PTR [r12 + 8]"),
+            };
+            emit_materialize_invoker_ref_cell_value_as_mixed(storage, source_tag, &mut emitter, &mut ctx);
+            let assembly = emitter.output();
+            assert!(assembly.contains(load_tag), "{name}: {assembly}");
+            assert!(assembly.find(load_tag).unwrap() < assembly.find("__rt_mixed_from_value").unwrap(), "{name}");
+        }
+    }
+
     /// Concrete ref targets mutate the payload inside promoted Mixed caller storage in place.
     #[test]
     fn invoker_ref_markers_adapt_promoted_mixed_storage_to_concrete_targets() {
@@ -3754,7 +4104,9 @@ mod tests {
             let concrete_asm = concrete.output();
             assert!(concrete_asm.contains(mixed_compare), "{name}: {concrete_asm}");
             assert!(concrete_asm.contains(payload_address), "{name}: {concrete_asm}");
-            assert!(concrete_asm.contains("concrete_ref_invoker_ref_storage_direct_0"), "{name}: {concrete_asm}");
+            assert!(concrete_asm.contains("concrete_ref_invoker_ref_storage_direct_"), "{name}: {concrete_asm}");
+            assert!(concrete_asm.find("__rt_heap_kind").unwrap() < concrete_asm.find(payload_address).unwrap(),
+                "{name}: only a real Mixed box can expose an interior payload address");
 
             let mut mixed = Emitter::new(target);
             let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
@@ -3767,8 +4119,90 @@ mod tests {
                 &mut mixed_ctx,
             );
             let mixed_asm = mixed.output();
-            assert!(!mixed_asm.contains(mixed_compare), "{name}: {mixed_asm}");
+            assert!(mixed_asm.contains(mixed_compare), "{name}: {mixed_asm}");
+            assert!(mixed_asm.contains("__rt_heap_kind"), "{name}: raw Iterable pointers are not Mixed boxes");
             assert!(!mixed_asm.contains(payload_address), "{name}: {mixed_asm}");
+        }
+    }
+
+    /// Boxed and direct object references validate their physical slot before publication.
+    #[test]
+    fn invoker_object_ref_markers_guard_boxed_and_direct_layouts_on_all_targets() {
+        for name in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let target = Target::parse(name).unwrap();
+            let (storage_reg, source_tag_reg, object_tag, payload_address) = match target.arch {
+                Arch::AArch64 => ("x19", "x20", "cmp x0, #6", "add x0, x0, #8"),
+                Arch::X86_64 => ("r12", "r13", "cmp rax, 6", "add rax, 8"),
+            };
+            let mut emitter = Emitter::new(target);
+            let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+            let mut ctx =
+                InvokerEmitContext::new("object_ref", owners, false, false, Vec::new(), target);
+            push_invoker_ref_storage_address(
+                storage_reg,
+                source_tag_reg,
+                Some(&PhpType::Object("PAYLOAD".to_string())),
+                &mut emitter,
+                &mut ctx,
+            );
+
+            let assembly = emitter.output();
+            let heap_layout = assembly.find("__rt_heap_kind").unwrap();
+            let tag_guard = assembly.find(object_tag).unwrap();
+            let direct_tag = match target.arch {
+                Arch::AArch64 => assembly.find("cmp x20, #6").unwrap(),
+                Arch::X86_64 => assembly.find("cmp r13, 6").unwrap(),
+            };
+            let refusal = assembly.rfind("__rt_tagged_reference_argument_error").unwrap();
+            let publication = assembly.rfind(payload_address).unwrap();
+            assert!(
+                heap_layout < tag_guard
+                    && tag_guard < publication
+                    && publication < direct_tag
+                    && direct_tag < refusal,
+                "{name}: {assembly}",
+            );
+            assert!(!assembly.contains("__rt_exception_matches"), "{name}: {assembly}");
+        }
+    }
+
+    /// Nullable slots require matching two-word storage, while Iterable keeps a raw container slot.
+    #[test]
+    fn invoker_reference_layout_guards_precede_address_publication_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let (storage, source_tag, scalar_compare, lower, upper) = match target.arch {
+                Arch::AArch64 => ("x9", "x10", "cmp x10, #12", "cmp x0, #2", "cmp x0, #4"),
+                Arch::X86_64 => ("r11", "r10", "cmp r10, 12", "cmp rax, 2", "cmp rax, 4"),
+            };
+            for ty in [PhpType::TaggedScalar, PhpType::Iterable] {
+                let mut emitter = Emitter::new(target);
+                let owners = InvokerArgumentOwners::new(INVOKER_BOUNDARY_FRAME_SIZE, 1);
+                let mut ctx = InvokerEmitContext::new("layout_guard", owners, false, false, Vec::new(), target);
+                push_invoker_ref_storage_address(storage, source_tag, Some(&ty), &mut emitter, &mut ctx);
+                let assembly = emitter.output();
+                assert!(assembly.find(scalar_compare).unwrap()
+                    < assembly.find("__rt_tagged_reference_argument_error").unwrap(), "{name}: {ty:?}");
+                if ty == PhpType::TaggedScalar {
+                    assert!(!assembly.contains("__rt_heap_kind"), "{name}: a tagged source is already inline");
+                } else {
+                    let probe = assembly.find("__rt_heap_kind").unwrap();
+                    assert!(probe < assembly.find(lower).unwrap() && probe < assembly.find(upper).unwrap(),
+                        "{name}: classify the pointed-to allocation before accepting raw Iterable storage");
+                }
+                for line in assembly.lines() {
+                    let words = line.split_whitespace().collect::<Vec<_>>();
+                    if words.len() == 2 && words[1] == "__rt_tagged_reference_argument_error" {
+                        assert!(matches!(words[0], "bl" | "call"), "{name}: global conditional branch {line}");
+                    }
+                }
+            }
         }
     }
 

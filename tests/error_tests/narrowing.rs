@@ -10,6 +10,26 @@
 
 use super::*;
 
+/// A nullable local stays nullable when either conditional exit can still carry null.
+#[test]
+fn test_nullable_object_lazy_local_join_rejects_nullable_exits() {
+    for branch in [
+        "if ($service === null) {}",
+        "if ($service === null) { if ($flag) { $service = new Service(); } }",
+        "if ($service === null) { $service = new Service(); } else { $service = null; }",
+        "if ($service === null) { $service = new Service(); } else { $service = new Service(); $service = null; }",
+        "if ($service === null) { $service = new Service(); } else { $service = new Service(); $service = $replacement; }",
+        "if ($service === null) { $service = new Service(); } else { $service = new Service(); if ($flag) { $service = null; } }",
+        "if ($service === null) { $service = $replacement; }",
+        "if ($service === null) { $service = new Service(); $service = null; }",
+        "if ($service === null) { $service = new Service(); } $service = null;",
+    ] {
+        let source = format!("<?php final class Service {{}} function get(?Service $service, ?Service $replacement, bool $flag): Service {{ {branch} return $service; }}");
+        let error = check_source(&source).expect_err(branch);
+        assert!(error.contains("return type expects Service, got Service|null"), "{branch}: {error}");
+    }
+}
+
 /// Keeps guarded union writes within the original contract and isolates contracts between function frames.
 #[test]
 fn test_guarded_union_assignment_preserves_declared_boundaries() {
@@ -278,11 +298,10 @@ fn test_the_guard_stops_governing_after_the_region_stores() {
 fn a_store_in_a_nested_guard_ends_the_enclosing_guards_authority() {
     let source =
         "<?php $a = 1; if (is_string($a)) { if (is_float($a)) { $a = 1.5; } $a = 2; } echo $a;";
-    // The same answer in both modes, and the same one HEAD gave before this feature: the outer
-    // region is not transparent, but its replay from `$a`'s own `int` sees no conflict either,
-    // so `mixed_storage_scan` does not mark the name and the checker reports.
-    expect_error(source, "cannot reassign $a from string to int");
-    expect_error_strict(source, "cannot reassign $a from string to int");
+    // The nested branch can leave either its float store or the enclosing string view.
+    // Neither alternative permits the later integer store, in either locals mode.
+    expect_error(source, "cannot reassign $a from string|float to int");
+    expect_error_strict(source, "cannot reassign $a from string|float to int");
 }
 
 /// Shared classes for the readonly-narrowing fixtures: `Box::$plugin` is readonly, and only

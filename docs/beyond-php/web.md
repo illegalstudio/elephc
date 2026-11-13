@@ -113,6 +113,18 @@ every request and readable inside any function scope (no `global` needed):
   variable-table inspection, and eval retain a fresh copy for every request.
   This detection includes Composer and SPL autoloaded code.
   Calls through computed or escaped callable values conservatively retain the copy.
+  Opaque callback calls in unreferenced helpers do not force a copy. This proof
+  keeps referenced or escaped helper names, magic methods, and methods with
+  inheritance, interface, or trait obligations conservative. Reflection and
+  runtime symbol discovery also disable this exclusion.
+  A callable parameter can also avoid the copy when every possible source call
+  supplies a literal closure, first-class callable, or simple callable name.
+  This proof checks all source callers and isolates local bindings by callable
+  scope. Escaped helper identities, implicit method entries, by-reference
+  parameters, mutations, and unresolved named/spread inputs remain conservative.
+  Captures account for writes throughout their enclosing callable, including loop
+  back edges. Mutating a callable array through dimensions or references also
+  invalidates its proof.
   `getenv()` reads the process environment independently of this copy.
 - **`php://input`** — `file_get_contents('php://input')` returns the raw request
   body (e.g. a JSON payload). An empty body returns `false`.

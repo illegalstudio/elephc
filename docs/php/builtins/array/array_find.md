@@ -1,8 +1,6 @@
 ---
 title: "array_find()"
 description: "Returns the first element satisfying a predicate callback, or null."
-sidebar:
-  order: 13
 ---
 
 ## array_find()
@@ -21,8 +19,9 @@ Returns the first element satisfying a predicate callback, or null.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

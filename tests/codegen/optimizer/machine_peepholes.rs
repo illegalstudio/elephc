@@ -95,6 +95,19 @@ fn function_text<'a>(asm: &'a str, name: &str) -> &'a str {
     &asm[start..end]
 }
 
+/// Returns the `while.cond` block of one function's assembly.
+///
+/// The `$hits++` counter of the float loop has its own integer tests in other blocks.
+fn loop_condition(function: &str) -> &str {
+    function
+        .split("@block name=while.cond")
+        .nth(1)
+        .expect("loop condition block")
+        .split("@block name=")
+        .next()
+        .unwrap()
+}
+
 /// Constants covering every strength-reduction shape plus ones that keep the multiplier.
 const MULTIPLIERS: [i64; 22] = [2, 3, 5, 8, 9, 10, 12, 16, 17, 31, 33, 63, 96, 4096, -1, -2, -7, -8, -31, -33, 11, 1000];
 
@@ -226,12 +239,12 @@ echo float_loop($argc - 2.0, 3.0), "\n";
 "#,
     );
     let arm = fixture.assembly("linux-aarch64");
-    let arm_loop = function_text(&arm, "float_loop");
+    let arm_loop = loop_condition(function_text(&arm, "float_loop"));
     assert!(arm_loop.contains("fcmp d1, d0"), "{arm_loop}");
     assert!(!arm_loop.contains("cset "), "{arm_loop}");
 
     let x86 = fixture.assembly("linux-x86_64");
-    let x86_loop = function_text(&x86, "float_loop");
+    let x86_loop = loop_condition(function_text(&x86, "float_loop"));
     assert!(x86_loop.contains("ucomisd xmm0, xmm1"), "{x86_loop}");
     for materializer in ["setb ", "seta ", "setnp ", "movzx rax, al"] {
         assert!(!x86_loop.contains(materializer), "{materializer}: {x86_loop}");
@@ -330,7 +343,19 @@ fn test_machine_peephole_example_and_target_assembly() {
             assert!(scaled.contains(instruction), "{target_name}: {scaled}");
         }
         assert!(scaled.contains(if arm { "neg x0, x0, lsl #3" } else { "neg rax" }), "{target_name}: {scaled}");
-        assert!(scaled.contains(if arm { "mul x0, " } else { "imul rax, 11" }), "{target_name}: {scaled}");
+        // The result may be written directly into its allocated home; the multiplier
+        // and its two-operand form are the machine-shape contract here.
+        assert!(
+            scaled.lines().any(|line| {
+                let line = line.trim();
+                if arm {
+                    line.starts_with("mul x") && line.contains(", x10")
+                } else {
+                    line.starts_with("imul ") && line.ends_with(", 11")
+                }
+            }),
+            "{target_name}: {scaled}"
+        );
 
         let hash = function_text(&asm, "rolling_hash");
         // The loop test branches on flags: no boolean is materialized for it.
@@ -356,5 +381,44 @@ fn test_machine_peephole_example_and_target_assembly() {
                 assert_ne!(*next, format!("{label}:"), "{target_name}: redundant jump in {hash}");
             }
         }
+    }
+}
+
+/// A canonical counted loop tests its condition at the latch, so the back edge
+/// returns directly to the body instead of jumping through the loop header.
+#[test]
+fn test_machine_peephole_rotates_counted_loop_back_edge() {
+    let fixture = Fixture::new(
+        r#"<?php
+$n = (int) ($argc + 10);
+$acc = 0;
+for ($i = 0; $i < $n; $i++) { $acc ^= $i + 7; }
+echo $acc, "\n";
+"#,
+    );
+    fixture.assert_all_modes(|argc| {
+        let mut acc = 0;
+        for i in 0..argc + 10 {
+            acc ^= i + 7;
+        }
+        format!("{acc}\n")
+    });
+    for target_name in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
+        let asm = fixture.assembly(target_name);
+        let function = function_text(&asm, "main");
+        let body_start = function
+            .find("@block name=for.body")
+            .unwrap_or_else(|| panic!("{target_name}: no for.body block:\n{function}"));
+        let body = &function[body_start..];
+        let body_end = body.find("@block name=for.exit").unwrap_or(body.len());
+        let body = &body[..body_end];
+        assert!(
+            !body.contains("for_cond"),
+            "{target_name}: the back edge still enters the loop header:\n{body}"
+        );
+        assert!(
+            body.lines().any(|line| line.trim().starts_with("cmp ")),
+            "{target_name}: the latch does not emit the duplicated compare:\n{body}"
+        );
     }
 }

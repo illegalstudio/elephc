@@ -1,8 +1,6 @@
 ---
 title: "rad2deg()"
 description: "Converts a radian value to degrees."
-sidebar:
-  order: 658
 ---
 
 ## rad2deg()
@@ -20,8 +18,9 @@ Converts a radian value to degrees.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/rad2deg.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/rad2deg.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

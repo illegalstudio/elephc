@@ -12,6 +12,8 @@ use super::*;
 /// Lowers a plain PHP local assignment.
 pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, span: Span) {
     crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
+    let carries_reference_markers = matches!(&value.kind,
+        ExprKind::Variable(source) if ctx.local_may_contain_reference_markers(source));
     // PHP allows compound assignment on an undefined variable (`$x += 1`),
     // treating the undefined variable as null/0 with a warning. The type
     // checker injects the variable as `Void` and emits a warning. At the
@@ -62,7 +64,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     // shape) still reads the OLD binding. And it is before `contextualize_local_assignment`,
     // whose whole job is to coerce the value into the storage contract the name ALREADY has —
     // the contract of the binding being abandoned, which must not apply to the new one.
-    if ctx.is_recorded_retype_site(span, name) {
+    if ctx.is_recorded_retype_site(span, name) && !closure_captures_local_by_ref(value, name) {
         ctx.rebind_local_for_retype(name, Some(span));
     }
     // The checker's pre-scan marked `$name` as assigned incompatible types across a branch, so its
@@ -135,6 +137,11 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
         php_type
     };
     ctx.store_local(name, lowered, php_type, Some(span));
+    if carries_reference_markers {
+        ctx.mark_reference_marker_array_local(name);
+    } else {
+        ctx.clear_reference_marker_array_local(name);
+    }
     let callable_result = if direct_closure {
         ctx.take_pending_static_callable_result()
     } else {
@@ -180,6 +187,15 @@ pub(super) fn closure_captures_local(value: &Expr, name: &str) -> bool {
     )
 }
 
+/// Returns whether a closure literal captures the assigned local by reference.
+fn closure_captures_local_by_ref(value: &Expr, name: &str) -> bool {
+    matches!(
+        &value.kind,
+        ExprKind::Closure { capture_refs, .. }
+            if capture_refs.iter().any(|capture| capture == name)
+    )
+}
+
 /// Coerces an assignment into the stable storage contract already known for its local.
 ///
 /// Array payload promotion applies to every RHS shape, while indexed-to-associative conversion
@@ -213,6 +229,11 @@ pub(super) fn contextualize_local_assignment(
     let contextual_repr = contextual_ty.codegen_repr();
     if let Some(retyped) = retype_value_for_pointer_local(ctx, name, lowered, span) {
         return retyped;
+    }
+    // Coalescing refines the value but keeps the nullable slot. Later reference calls
+    // must still load its tag and payload using the same representation as the parameter.
+    if let Some(storage) = union_local_storage_type(ctx, name, value, &source_ty) {
+        return (lowered, storage);
     }
     if contextual_ty.is_php_array() {
         let converted = coerce_typed_assign_value(ctx, lowered, &contextual_ty, span);
@@ -298,6 +319,30 @@ pub(super) fn contextualize_local_assignment(
     // local's recorded type feeds `is_resource`/`gettype` and nullable-union lowering, so the
     // collapsed form must stay confined to the storage-contract comparisons above.
     (lowered, source_ty)
+}
+
+/// Keeps compatible union stores in their binding's existing tag or boxed representation.
+pub(in crate::ir_lower) fn union_local_storage_type(
+    ctx: &LoweringContext<'_, '_>, name: &str, value: &Expr, source: &PhpType,
+) -> Option<PhpType> {
+    // Final checker facts do not establish storage before this binding's first store.
+    if !ctx.has_local_slot(name) { return None; }
+    let storage = ctx.local_type(name);
+    let PhpType::Union(members) = &storage else { return None; };
+    // Numeric overflow unions belong to the ordinary numeric storage replay. Only
+    // nullable bindings need this guard against losing their established representation.
+    if !members.contains(&PhpType::Void) { return None; }
+    if storage.codegen_repr() == PhpType::TaggedScalar
+        && !matches!(source.codegen_repr(), PhpType::Int | PhpType::Void | PhpType::TaggedScalar)
+    {
+        return None;
+    }
+    let self_coalesce = members.contains(&PhpType::Void)
+        && matches!(&value.kind, ExprKind::NullCoalesce { value, .. }
+            if matches!(&value.kind, ExprKind::Variable(current) if current == name));
+    let tagged = storage.codegen_repr() == PhpType::TaggedScalar
+        && matches!(source.codegen_repr(), PhpType::Int | PhpType::Void | PhpType::TaggedScalar);
+    (self_coalesce || tagged || members.contains(source) || *source == storage).then_some(storage)
 }
 
 /// Retypes a value stored into a local whose type is a pointer word, or returns `None`.

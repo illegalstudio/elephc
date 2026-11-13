@@ -1,8 +1,6 @@
 ---
 title: "curl_exec() - internals"
 description: "Compiler internals for curl_exec(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 771
 ---
 
 ## `curl_exec()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_curl.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_curl.rs)
-- **Lowering**: [`src/curl_prelude.rs`:1120](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs#L1120) (`curl_exec`)
+- **Lowering**: [`src/curl_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/curl_prelude.rs) (`curl_exec`)
 - **Function symbol**: `curl_exec()`
 
 

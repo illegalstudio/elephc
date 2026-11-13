@@ -1,8 +1,6 @@
 ---
 title: "imagecopy()"
 description: "Copies a rectangle from one image into another."
-sidebar:
-  order: 490
 ---
 
 ## imagecopy()
@@ -27,8 +25,9 @@ Copies a rectangle from one image into another.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

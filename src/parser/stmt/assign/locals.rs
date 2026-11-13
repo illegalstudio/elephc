@@ -88,7 +88,7 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
 /// `PreIncrement`/`PreDecrement` local path.
 fn starts_complex_incdec_target(tokens: &[SpannedToken], pos: usize) -> bool {
     match tokens.get(pos).map(|(token, _)| token) {
-        Some(Token::This) => true,
+        Some(Token::This | Token::Identifier(_) | Token::Backslash | Token::LParen) => true,
         Some(Token::Variable(_)) => matches!(
             tokens.get(pos + 1).map(|(token, _)| token),
             Some(Token::Arrow) | Some(Token::QuestionArrow) | Some(Token::LBracket)

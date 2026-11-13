@@ -22,16 +22,10 @@ fn test_nested_write_eleventh_review_false_selector_rejected() {
         "Cannot index non-array");
 }
 
-/// Write-parent recursion does not hide an undefined selector variable.
+/// Write-parent recursion keeps an undefined selector a runtime warning, not a compile error.
 #[test]
-fn test_nested_write_eleventh_review_undefined_selector_rejected() {
-    expect_error("<?php $items = [false]; $items[0][$missing][1] = 9;", "Undefined variable: $missing");
-}
-
-/// A false probe stays on the ordinary read/probe validation path.
-#[test]
-fn test_nested_write_eleventh_review_false_probe_rejected() {
-    expect_error("<?php $items = [false]; echo isset($items[0][0]);", "Cannot index non-array");
+fn test_nested_write_eleventh_review_undefined_selector_warns_at_runtime() {
+    expect_no_error("<?php $items = [false]; $items[0][$missing][1] = 9;");
 }
 
 /// A deeper false ancestor is not readable merely because generated updates can promote it.

@@ -1,11 +1,11 @@
 //! Purpose:
-//! Preserve checked class/interface views on native interface receiver values.
+//! Preserve checked class/interface views on native object receiver values.
 //!
 //! Called from:
 //! - Property reads, writes, unset probes and method-call lowering.
 //!
 //! Key details:
-//! - Only raw object pointers are refined; boxed receivers keep their existing dispatch.
+//! - Checked non-null interface views may project nullable boxes to raw object pointers.
 //! - The fresh receiver retains its producer, storage representation and ownership.
 
 use super::*;
@@ -39,7 +39,7 @@ pub(super) fn refine_member_receiver(
 }
 
 /// Refines a freshly evaluated receiver using the checked member's source identity.
-fn refine_member_receiver_at_span(
+pub(crate) fn refine_member_receiver_at_span(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
@@ -48,6 +48,9 @@ fn refine_member_receiver_at_span(
     let Some(PhpType::Object(class)) = checked_member_receiver_type_at_span(ctx, &original, span) else {
         return value;
     };
+    if matches!(original, PhpType::Union(_)) {
+        return coerce_value_for_temp(ctx, value, &PhpType::Object(class), span);
+    }
     if original != PhpType::Object(class.clone()) {
         ctx.builder.set_object_value_class(value.value, class);
     }
@@ -69,8 +72,9 @@ fn checked_member_receiver_type_at_span(
     original: &PhpType,
     span: Span,
 ) -> Option<PhpType> {
-    let PhpType::Object(original) = original else { return None; };
-    if !ctx.interfaces.contains_key(original) { return None; }
+    let (original, nullable) = singular_object_class(original)?;
+    // Raw concrete views remain valid; nullable projection requires a checked interface view.
+    if nullable && !ctx.interfaces.contains_key(original) { return None; }
     let Some(Some(PhpType::Object(class))) = ctx.member_receiver_types
         .get(&(ctx.loop_storage_scope.clone(), span))
     else {

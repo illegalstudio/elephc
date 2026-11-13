@@ -23,6 +23,34 @@ fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     );
 }
 
+/// Eval iterator_apply retires aggregate iterators and every method or callback result.
+#[test]
+fn test_iterator_apply_eval_aggregate_owners_bundle() {
+    let body = r#"
+$aggregate = new FreshAgg();
+$count = iterator_apply($aggregate, function(): bool { return true; });
+unset($aggregate); echo $count, '|';
+$aggregate = new FreshAgg();
+$count = iterator_apply($aggregate, function(): bool { return false; });
+unset($aggregate); echo $count, '|';
+$aggregate = new FreshAgg();
+try { iterator_apply($aggregate, function(): bool { throw new RuntimeException('apply-throw'); }); }
+catch (RuntimeException $error) { echo $error->getMessage(); }
+unset($error, $aggregate); echo '|';
+unset($count);
+"#;
+    let native_body = body.replace('\'', "\\'");
+    let eval_prelude = PRELUDE.replace("RangeIter", "EvalApplyRangeIter")
+        .replace("FreshAgg", "EvalApplyFreshAgg").replace("ExistingAgg", "EvalApplyExistingAgg");
+    let eval_body = body.replace("FreshAgg", "EvalApplyFreshAgg");
+    let eval_body = format!("{eval_prelude}{eval_body}").replace('\'', "\\'");
+    let source = format!("<?php {PRELUDE}\n$code = $argc > 0 ? '{native_body}' : ''; eval($code);\n\
+        $code = $argc > 0 ? '{eval_body}' : ''; eval($code);");
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_clean(out, &"IA2|IA1|Iapply-throwA|".repeat(2));
+}
+
 const PRELUDE: &str = r#"
 class RangeIter implements Iterator {
     public static int $d = 0;
@@ -50,6 +78,44 @@ class ExistingAgg implements IteratorAggregate {
 }
 "#;
 
+/// Eval owns fresh and stored iterator results through completion, break, return and throw.
+#[test]
+fn test_foreach_aggregate_eval_iterator_owners_bundle() {
+    let body = r#"
+$aggregate = new FreshAgg();
+foreach ($aggregate as $value) { echo $value; }
+unset($aggregate); echo '|';
+$aggregate = new ExistingAgg();
+foreach ($aggregate as $value) { echo $value; }
+unset($aggregate); echo '|';
+$aggregate = new FreshAgg();
+foreach ($aggregate as $value) { echo $value; break; }
+unset($aggregate); echo '|';
+function aggregateEvalFirst(): int {
+    $aggregate = new FreshAgg();
+    foreach ($aggregate as $value) { return $value; }
+    return 9;
+}
+echo aggregateEvalFirst(), '|';
+$aggregate = new FreshAgg();
+try { foreach ($aggregate as $value) { throw new RuntimeException('caught'); } }
+catch (RuntimeException $error) { echo $error->getMessage(); }
+unset($aggregate); echo '|';
+unset($value, $error);
+"#;
+    let native_body = body.replace('\'', "\\'");
+    let eval_prelude = PRELUDE.replace("RangeIter", "EvalRangeIter")
+        .replace("FreshAgg", "EvalFreshAgg").replace("ExistingAgg", "EvalExistingAgg");
+    let eval_body = body.replace("FreshAgg", "EvalFreshAgg").replace("ExistingAgg", "EvalExistingAgg")
+        .replace("aggregateEvalFirst", "aggregateEvalOnlyFirst");
+    let eval_body = format!("{eval_prelude}{eval_body}").replace('\'', "\\'");
+    let source = format!("<?php {PRELUDE}\n$code = $argc > 0 ? '{native_body}' : ''; eval($code);\n\
+        $code = $argc > 0 ? '{eval_body}' : ''; eval($code);");
+    let out = compile_and_run_with_heap_debug(&source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_clean(out, &"01IA|01AI|0IA|IA0|IcaughtA|".repeat(2));
+}
+
 /// A temporary aggregate that returns a fresh Iterator must not leak.
 #[test]
 fn test_foreach_temporary_aggregate_fresh_iterator_heap_clean() {
@@ -60,6 +126,43 @@ echo "\n";
 "#
     ));
     assert_clean(out, "01IA\n");
+}
+
+/// Borrowed object and array method returns acquire their own foreach value owners.
+#[test]
+fn test_foreach_borrowed_concrete_method_results_heap_clean() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class BorrowedSelfIterator implements Iterator {
+    private int $position = 0;
+    public function __destruct() { echo 'D'; }
+    public function current(): self { return $this; }
+    public function key(): self { return $this; }
+    public function next(): void { $this->position++; }
+    public function rewind(): void { $this->position = 0; }
+    public function valid(): bool { return $this->position < 2; }
+}
+$iterator = new BorrowedSelfIterator();
+foreach ($iterator as $key => $value) { echo (int)($key === $iterator && $value === $iterator); }
+unset($key, $value, $iterator);
+echo '|';
+$sharedRows = [10, 20];
+class BorrowedArrayIterator implements Iterator {
+    private int $position = 0;
+    public function current(): array { global $sharedRows; return $sharedRows; }
+    public function key(): int { return $this->position; }
+    public function next(): void { $this->position++; }
+    public function rewind(): void { $this->position = 0; }
+    public function valid(): bool { return $this->position < 2; }
+}
+foreach (new BorrowedArrayIterator() as $row) {
+    echo $row[0], ':';
+    $row[0] = 30;
+    echo $row[0], ':';
+}
+unset($row);
+echo implode(',', $sharedRows), "\n";
+"#);
+    assert_clean(out, "11D|10:30:10:30:10,20\n");
 }
 
 /// A local aggregate that returns an existing Iterator must not leak.

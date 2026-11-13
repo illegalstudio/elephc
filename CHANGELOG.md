@@ -5,6 +5,77 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.7] - 2026-11-03
+
+- Added `--emit phpext` to export functions, final classes and selected constants as real PHP 8.5 NTS/ZTS extensions on Linux x86_64/ARM64 and macOS ARM64.
+- Added `elephc extension` commands to build and statically link supported PECL, PIE and local C extensions, including their classes, callbacks, constants and INI settings.
+- Added opt-in persistent web applications with `--web-lifecycle=application` in worker isolation, bootstrapping once per worker while preserving application state across fresh requests.
+- Added GMP arbitrary-precision integers, including all 51 functions, operators, casts and serialization in compiled and `eval()` code, backed by the managed `gmp` package.
+- Added PHP fileinfo functions and `finfo` in compiled and `eval()` code, using the managed `libmagic` package with its database embedded in the binary.
+- Added PHP Random engines and `Random\Randomizer`, seeded procedural generators, secure random bytes, and associative and multi-key `array_rand()` support.
+- Added `token_get_all()`, `token_name()`, `PhpToken` and PHP 8.5 token constants in compiled and `eval()` code, with byte-preserving tokens and catchable `TOKEN_PARSE` errors.
+- Added `memory_get_usage()`, `memory_get_peak_usage()` and `memory_reset_peak_usage()`, plus elephc-only allocation/free counters, in compiled and `eval()` code.
+- Added PHP 8.5 `array_first()` and `array_last()` in compiled code, returning values in insertion order without moving the internal pointer.
+- Added `array_push()` support for associative receivers, preserving automatic integer keys, copy-on-write and the updated count.
+- Added string-offset assignment for concrete string locals and boxed storage, including negative offsets, space padding, copy-on-write and assignment-expression results.
+- Added whole packed-record copies between compatible buffer elements, including embedded records and padding.
+- Added nested native pointer types such as `ptr<ptr<u8>>` and typed pointer buffers for C output parameters.
+- Changed native-width generic specializations to accept PHP `int` and `float` values while retaining element widths and conversions in buffer storage.
+- Added assignment expressions inside runtime `eval()` call arguments, conditions and returns.
+- Changed the default runtime heap from 8 MB to 128 MB, with unused pages left untouched.
+- Improved small-block allocation and reuse with exact size classes, splitting and consolidation before reporting heap exhaustion.
+- Improved buffer-heavy code by hoisting stable object-buffer reads across numeric accumulators and inlining checked scalar accessors, packed writers and throwing guards.
+- Improved reused, nested and dynamically bounded numeric loops with guarded integer paths while preserving overflow-to-float behavior.
+- Reduced arithmetic allocations at integer destinations and in numeric comparisons and casts by retaining eligible values in scalar or stack storage.
+- Reduced generated code for short-circuit conditions and runtime `eval()` calls by branching directly and sharing equivalent callable invokers.
+- Reduced per-request overhead by skipping unobservable `$_ENV` copies and reusing mbstring INI string-identity metadata.
+- Reduced unnecessary automatic cycle collection after callback-free array unsets that remove no key.
+- Improved uncaught exception reports with user-frame stack traces and previous exception chains, and corrected backtrace call-site locations.
+- Improved dead-code optimization in generators while preserving generator identity when their last `yield` becomes unreachable.
+- Reduced compilation work for statically known `eval()` callables with literal source.
+- Fixed nullable fallback assignments and compound guards losing proven value types across control flow, including typed returns and property arguments.
+- Fixed catch-variable and global rebinding cleanup, preserving replacement values and reachable outer handlers when displaced owners throw.
+- Fixed `foreach` value/key binding order and ownership across iterator callbacks, reference aliases and throwing destructors.
+- Fixed nullable integer closure captures losing their null flag and guarded local reads misinterpreting nullable or reference storage.
+- Fixed optimization dropping output, exceptions, argument checks or catch-only stores around static calls, including lexical and late-static dispatch.
+- Fixed `array_intersect_key()` and `array_diff_key()` result hashes leaking after use.
+- Fixed callable descriptors and Fiber wrappers losing generator classification, defaults, declared return types, deprecation and by-reference return metadata.
+- Fixed web handlers crashing after successful JSON responses in pool and per-request isolation by preserving host registers through request reset and cleanup.
+- Fixed destructors being skipped for objects retained only by reference cycles at program or web-request shutdown.
+- Fixed calls returning borrowed string parameters or builtin string views freeing the caller's source string.
+- Fixed subclass-only methods and properties after `instanceof` narrowing, preserving dynamic dispatch and ownership of call arguments and results.
+- Fixed `stream_select()` crashing on null descriptor sets, including nullable arrays.
+- Fixed predefined Core attributes on promoted constructor parameters being assigned to unsupported property or parameter targets, including Reflection metadata.
+- Fixed guarded readonly `$this` property types being lost across calls when the property cannot change.
+- Fixed runtime buffer overruns and truncated or corrupted large-output operations, including printing, JSON, serialization, regex replacements, shell output, string transforms and numeric formatting.
+- Fixed ownership tracing through closure captures, native containers and suspended Generator/Fiber frames, including cycle collection and `finally` cleanup of abandoned coroutines.
+- Fixed leaks and premature frees in scalar casts, array probes, method arguments, nullable static objects, stream filters and converted array/hash builtins.
+- Fixed `preg_replace_callback()` leaking private buffers and match owners when callbacks throw, while preserving retained matches and the original exception.
+- Fixed `var_dump()` and `print_r()` ignoring computed `__debugInfo()`, including nested output, invalid returns and exceptions.
+- Fixed JSON handling of malformed UTF-8 and long number tokens, including substitute and ignore recovery.
+- Fixed regex failure return values, invalid `preg_match_all()` flags, capture preservation on failed `preg_match()`, and extended-mode modifiers and leading verbs.
+- Fixed element unsets through supported instance and static array properties, preserving keys, copy-on-write, ArrayAccess callbacks and readonly checks.
+- Fixed captured closures passed to extern C callbacks using the wrong entry point, and released retained callback descriptors at shutdown and request reset.
+- Fixed untyped closure parameters being treated as integers and by-reference variadic writes or named arguments corrupting caller storage.
+- Fixed magic property reads and `isset()`/`empty()`/`??` on boxed receivers, preserving accessor selection and evaluating coalescing receivers once.
+- Fixed heterogeneous hash writes and indexed arrays promoted to hashes, preserving runtime value types, keys and printed or serialized output.
+- Fixed static associative-property element writes being lost when a key or value expression reassigns the property.
+- Fixed Reflection array constants and parameter defaults, preserving nested values, PHP key rules, binary strings and constant names; class array defaults are resolved before typed metadata.
+- Fixed Reflection public property views and supported subclass initialization, keeping compiler backing slots hidden and metadata protected from writes.
+- Fixed guarded interface receivers losing concrete property and method types during reads, writes, probes and unsets.
+- Fixed typed instance and static properties passed to by-reference user calls, including constructors, nullsafe calls and supported variadic arguments.
+- Fixed standalone `null` parameter and return declarations, keeping their return requirements distinct from `void`.
+- Fixed runtime class checks for nullable or false-valued object arguments and preserved eval-declared class names in compiled diagnostics.
+- Fixed generic class and function specializations disappearing behind terminal statements or failing through include dispatch, including `elephc test` suites.
+- Fixed string casts of stored missing typed-array elements, producing real empty strings without losing ownership through loops and calls.
+- Fixed multi-case `switch` statements with `case null` on non-pointer subjects, preserving PHP loose-comparison rules.
+- Fixed ordering and spaceship comparisons between strings and `mixed` values being rejected after type narrowing.
+- Fixed array literals containing method results from dynamically dispatched receivers being stamped with an unrelated integer type.
+- Fixed incomplete-class identity checks and Linux x86_64 dumps of objects created by restricted `unserialize()`.
+- Fixed explicit visibility scopes for runtime-selected `Closure::bind()` and `bindTo()` calls, preserving bound copies and callback operand lifetimes.
+- Fixed `sort()` and `rsort()` on float arrays, including stable signed-zero ordering and PHP-compatible `NAN` placement; inconsistent comparator loops now terminate.
+- Fixed reserved words inside qualified namespace names in compiled and `eval()` code.
+
 ## [0.27.6] - 2026-10-25
 
 - Added C-width integer and floating-point storage for packed fields and `buffer<T>` elements, with natural C alignment and width-preserving reads and writes.
@@ -873,7 +944,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.6...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.7...HEAD
+[0.27.7]: https://github.com/illegalstudio/elephc/compare/v0.27.6...v0.27.7
 [0.27.6]: https://github.com/illegalstudio/elephc/compare/v0.27.5...v0.27.6
 [0.27.5]: https://github.com/illegalstudio/elephc/compare/v0.27.4...v0.27.5
 [0.27.4]: https://github.com/illegalstudio/elephc/compare/v0.27.3...v0.27.4

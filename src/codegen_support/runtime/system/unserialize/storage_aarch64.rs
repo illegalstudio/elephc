@@ -12,7 +12,7 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::runtime::data::UNSER_PROPERTY_ASSIGN_PREFIX;
 use crate::codegen_support::sentinels::{
-    SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG, TAGGED_SCALAR_TAG_INT,
+    SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, TAGGED_SCALAR_PROPERTY_TAG, TAGGED_SCALAR_TAG_INT,
     TAGGED_SCALAR_TAG_NULL,
 };
 
@@ -81,6 +81,15 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [x14, #16]");                                  // property byte offset
     emitter.instruction("ldr x7, [x14, #24]");                                  // property value tag
     emitter.instruction("add x8, x0, x6");                                      // address of the property slot
+    emitter.instruction(&format!("tst x7, #{SERPROP_REFERENCE_PROPERTY_FLAG}")); // select inline storage or the object's native cell
+    emitter.instruction("b.eq __rt_obj_store_prop_inline_slot");                // inline properties already point at their payload
+    emitter.instruction("ldr x8, [x8]");                                        // preserve the object slot and hydrate its native cell
+    emitter.instruction("and x7, x7, #255");                                    // storage flags never participate in value dispatch
+    emitter.instruction("cmp x7, #7");                                          // only Mixed cells may contain a persistent PHP wrapper
+    emitter.instruction("b.ne __rt_obj_store_prop_inline_slot");                // raw typed cells already point at their payload
+    crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+        emitter, "x8", "x9", "x12", "__rt_obj_store_prop_inline_slot",
+    );
     emitter.instruction("stp x3, x7, [sp, #-32]!");                             // preserve box and tag across the previous-value release
     emitter.instruction("stp x8, x30, [sp, #16]");                              // preserve slot and return address across the release
     emitter.instruction("mov x0, x8");                                          // pass the property slot to the previous-value release
@@ -150,6 +159,8 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, x10");                                         // is this Mixed property still uninitialized?
     emitter.instruction("b.eq __rt_obj_store_prop_mixed_new");                  // a fresh slot takes the parsed box directly
     emitter.instruction("ldr x0, [x8]");                                        // existing Mixed value or in-band null sentinel
+    emitter.instruction("cmp x0, x10");                                         // a native cell carries the uninitialized marker in its low word
+    emitter.instruction("b.eq __rt_obj_store_prop_mixed_new");                  // a fresh native cell takes the parsed box directly
     emitter.instruction("cbz x0, __rt_obj_store_prop_mixed_new");               // a zero slot takes the parsed box directly
     crate::codegen_support::abi::emit_load_int_immediate(emitter, "x10", crate::codegen_support::sentinels::NULL_SENTINEL);
     emitter.instruction("cmp x0, x10");                                         // is the slot holding the canonical null sentinel?
@@ -163,7 +174,11 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // property stored in the reused box
     emitter.label("__rt_obj_store_prop_mixed_new");
     emitter.instruction("str x3, [x8]");                                        // store the boxed Mixed cell pointer
+    emitter.instruction("ldr x9, [x14, #24]");                                  // recover the original row's storage flags
+    emitter.instruction(&format!("tst x9, #{SERPROP_REFERENCE_PROPERTY_FLAG}")); // a PHP wrapper's marker is outside its child slot
+    emitter.instruction("b.ne __rt_obj_store_prop_mixed_stored");               // reference writes must preserve adjacent storage metadata
     emitter.instruction("str xzr, [x8, #8]");                                   // the high word marks the typed property initialized
+    emitter.label("__rt_obj_store_prop_mixed_stored");
     emitter.instruction("ret");                                                 // property stored
     // -- declared-type mismatch: compose and throw PHP's hydration TypeError --
     emitter.label("__rt_obj_store_prop_type_error");

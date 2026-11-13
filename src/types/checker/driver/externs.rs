@@ -197,8 +197,8 @@ impl Checker {
             deprecation: None,
             is_generator: false,
         };
-        self.functions.insert(name.to_string(), sig);
-        self.extern_functions.insert(
+        self.publish_function_signature(name.to_string(), sig);
+        self.publish_extern_function(
             name.to_string(),
             ExternFunctionSig {
                 name: name.to_string(),

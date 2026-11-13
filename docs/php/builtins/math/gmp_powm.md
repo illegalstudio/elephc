@@ -1,8 +1,6 @@
 ---
 title: "gmp_powm()"
 description: "Modular exponentiation."
-sidebar:
-  order: 623
 ---
 
 ## gmp_powm()
@@ -22,8 +20,9 @@ Modular exponentiation.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_powm.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_powm.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

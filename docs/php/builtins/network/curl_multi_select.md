@@ -1,8 +1,6 @@
 ---
 title: "curl_multi_select()"
 description: "Waits until there is activity on any cURL multi connection."
-sidebar:
-  order: 783
 ---
 
 ## curl_multi_select()
@@ -21,8 +19,9 @@ Waits until there is activity on any cURL multi connection.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_select.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_multi_select.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

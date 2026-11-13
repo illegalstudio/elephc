@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Fresh constant and default-property maps transfer ownership into their Mixed slots.
 
 use super::*;
 
@@ -123,7 +124,7 @@ pub(super) fn emit_reflection_attrs_property(
 /// Returns PHP's `Attribute::TARGET_*` bitmask for attributes on one Reflection owner type.
 pub(super) fn reflection_attribute_target_for_owner(class_name: &str) -> i64 {
     match class_name {
-        "ReflectionClass" | "ReflectionObject" => {
+        "ReflectionClass" | "ReflectionObject" | "ReflectionEnum" => {
             super::super::super::builtins::attributes::REFLECTION_ATTRIBUTE_TARGET_CLASS
         }
         "ReflectionFunction" => {
@@ -234,13 +235,13 @@ pub(super) fn emit_reflection_constant_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     emit_reflection_constant_array(ctx, members)?;
     let assoc_type = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
@@ -268,42 +269,13 @@ pub(super) fn emit_reflection_default_property_array_property_by_name(
     abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
     emit_reflection_default_property_array(ctx, members);
     let assoc_type = PhpType::AssocArray {
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
-    emit_box_current_value_as_mixed(ctx.emitter, &assoc_type);
-    abi::emit_pop_reg(ctx.emitter, object_reg);
-    abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);
-    abi::emit_push_reg(ctx.emitter, object_reg);
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    Ok(())
-}
-
-/// Replaces a ReflectionClass-like private slot with current static-property values.
-pub(super) fn emit_reflection_static_property_array_property_by_name(
-    ctx: &mut FunctionContext<'_>,
-    owner_class_name: &str,
-    property_name: &str,
-    members: &[ReflectionStaticPropertyMember],
-) -> Result<()> {
-    let class_info = ctx
-        .module
-        .class_infos
-        .get(owner_class_name)
-        .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
-    let low_offset = reflection_property_offset(class_info, property_name)?;
-    let high_offset = low_offset + 8;
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
-    abi::emit_load_from_address(ctx.emitter, result_reg, object_reg, low_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_decref_array");
-    emit_reflection_static_property_array(ctx, members);
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &assoc_type);
     abi::emit_pop_reg(ctx.emitter, object_reg);
     abi::emit_store_to_address(ctx.emitter, result_reg, object_reg, low_offset);
     abi::emit_store_zero_to_address(ctx.emitter, object_reg, high_offset);

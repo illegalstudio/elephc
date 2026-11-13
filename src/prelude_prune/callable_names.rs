@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 
-use crate::parser::ast::{Expr, ExprKind};
+use crate::parser::ast::{CallableTarget, Expr, ExprKind};
 
 /// Whole-program callable bindings used only to prove that environment copying can be omitted.
 #[derive(Clone, Debug, Default)]
@@ -22,6 +22,29 @@ pub(crate) struct CallableNames {
 }
 
 impl CallableNames {
+    /// Seeds a parameter or by-value capture whose callers supply only simple identities.
+    pub(super) fn simple_binding(&mut self, name: &str) {
+        self.assigned.insert(name.to_owned());
+    }
+
+    /// Copies only explicit by-value captures into a fresh callable scope.
+    pub(super) fn captures(&self, captures: &[String]) -> Self {
+        let mut scope = Self::default();
+        for name in captures {
+            if self.assigned.contains(name) && !self.opaque.contains(name) {
+                scope.simple_binding(name);
+            } else { scope.write(name); }
+        }
+        scope
+    }
+
+    /// Defers invoked capture dependencies to the enclosing scope's complete binding summary.
+    pub(super) fn propagate_capture_calls(&self, outer: &mut Self, captures: &[String]) {
+        for name in captures {
+            if self.invoked.contains(name) { outer.variable_call(name); }
+        }
+    }
+
     /// Records a binding, retaining every opaque assignment even if a later one is simple.
     pub(crate) fn assignment(&mut self, name: &str, value: &Expr) {
         if simple_callable(value) {
@@ -71,9 +94,7 @@ impl CallableNames {
             while let ExprKind::NamedArg { value: inner, .. } | ExprKind::Spread(inner) = &value.kind {
                 value = inner;
             }
-            if let ExprKind::Variable(name) = &value.kind {
-                self.write(name);
-            }
+            self.write_target(value);
         }
     }
 
@@ -86,9 +107,21 @@ impl CallableNames {
 }
 
 /// Identifies values whose callable identity cannot be synthesized by string computation.
-fn simple_callable(value: &Expr) -> bool {
-    matches!(value.kind,
-        ExprKind::StringLiteral(_) | ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_)
-        | ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_)
-    )
+pub(super) fn simple_callable(value: &Expr) -> bool {
+    match &value.kind {
+        ExprKind::StringLiteral(name) => crate::names::literal_symbol_name(name)
+            .is_some_and(|name| !super::usage::callable_gateway(&name)),
+        ExprKind::Closure { .. } => true,
+        ExprKind::FirstClassCallable(CallableTarget::Function(name)) => {
+            !super::usage::callable_gateway(name.as_str())
+        }
+        ExprKind::FirstClassCallable(CallableTarget::Method { method, .. }
+            | CallableTarget::StaticMethod { method, .. }) => !method.eq_ignore_ascii_case("fromCallable"),
+        ExprKind::ArrayLiteral(items) => match items.as_slice() {
+            [_, Expr { kind: ExprKind::StringLiteral(name), .. }] => crate::names::literal_symbol_name(name)
+                .is_some_and(|name| !name.eq_ignore_ascii_case("fromCallable")),
+            _ => false,
+        },
+        _ => false,
+    }
 }

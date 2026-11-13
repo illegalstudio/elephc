@@ -16,7 +16,8 @@
 # `elephc --print-capabilities`, which is a projection of the bridge table
 # inside the binary under test — so a bridge added to `BRIDGES` is carried into
 # this check by the edit that declares it, and there is no second catalog for
-# anyone to forget to update.
+# anyone to forget to update. The managed native packages each probe needs come
+# from the same report (`native:<package>` fields), for the same reason.
 #
 # Usage: scripts/verify-release-artifact.sh <tarball>
 #
@@ -86,8 +87,21 @@ if [ -z "$CAPABILITIES" ]; then
 fi
 
 DECLARED=""
-while IFS=$'\t' read -r kind name archives; do
+while IFS=$'\t' read -r kind name fields; do
     [ -n "$name" ] || continue
+
+    # The fields after the name are packed archives, plus one `native:<package>`
+    # per managed native package the capability's link needs.
+    archives=""
+    native_packages=""
+    for field in $fields; do
+        case "$field" in
+            native:*) native_packages="$native_packages ${field#native:}" ;;
+            *) archives="$archives $field" ;;
+        esac
+    done
+    archives="${archives# }"
+    native_packages="${native_packages# }"
 
     # Every archive the binary names must have been packed beside it.
     missing=""
@@ -109,10 +123,10 @@ while IFS=$'\t' read -r kind name archives; do
     # resolves a managed native package and `mysqli` links the `pdo` archive
     # already covered by its own line.
     #
-    # Some packed bridges need managed native packages when force-enabled.
-    # Prepare curl's dependency chain, mbstring's Oniguruma and optional MIME
-    # providers, and XML's libxml2 provider before their probes.
-    # Each bridge must still compile and link once its requirements are present.
+    # Some packed bridges need managed native packages when force-enabled. The
+    # binary names them in its own `native:` fields, so each one is added to the
+    # empty project before the probe and none is listed here. Each bridge must
+    # still compile and link once its requirements are present.
     #
     # The check ends at the link. Producing the executable is what proves the
     # archive was packed and usable, and it is the whole of what packaging can
@@ -128,11 +142,6 @@ while IFS=$'\t' read -r kind name archives; do
 
     CHECKED=$((CHECKED + 1))
     rm -f probe
-    native_packages=""
-    case "$name" in
-        curl) native_packages="curl" ;;
-        mbstring) native_packages="oniguruma pcre2" ;;
-    esac
     native_ready=true
     for native_package in $native_packages; do
         echo "  ...   $kind $name: adding managed native package $native_package before --with-$name"
@@ -147,23 +156,6 @@ while IFS=$'\t' read -r kind name archives; do
     if [ "$native_ready" = false ]; then
         continue
     fi
-    if [ "$name" = "fileinfo" ]; then
-        echo "  ...   $kind $name: adding managed native libmagic"
-        if ! "$ELEPHC" native add libmagic >native-add.log 2>&1; then
-            fail "$kind $name: native add libmagic failed"
-            sed 's/^/          /' native-add.log
-            continue
-        fi
-    fi
-    if [ "$name" = "xml" ]; then
-        echo "  ...   $kind $name: adding managed native package libxml2 before --with-xml"
-        if ! "$ELEPHC" native add libxml2 >native-add.log 2>&1; then
-            fail "$kind $name: native add libxml2 failed"
-            sed 's/^/          /' native-add.log
-            continue
-        fi
-        sed 's/^/          /' native-add.log
-    fi
     if ! "$ELEPHC" "--with-$name" probe.php >compile.log 2>&1; then
         fail "$kind $name: --with-$name did not link"
         sed 's/^/          /' compile.log
@@ -173,7 +165,7 @@ while IFS=$'\t' read -r kind name archives; do
         fail "$kind $name: --with-$name reported success but produced no executable"
         continue
     fi
-    echo "  ok    $kind $name ($(echo "$archives" | tr '\t' ' '))"
+    echo "  ok    $kind $name ($archives)"
 done <<< "$CAPABILITIES"
 
 # The reverse direction: an archive shipped that nothing in the binary asks for

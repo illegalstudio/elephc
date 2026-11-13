@@ -126,6 +126,32 @@ fn run_binary(bin: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+
+/// Removes the runtime diagnostic's leading framing and ` in FILE on line N` suffix.
+///
+/// The compiler now prints PHP's caller location for every displayed diagnostic. These
+/// fixtures pin the message body and warning count, not the temp-directory path.
+fn normalize_runtime_stderr(stderr: &str) -> String {
+    fn strip_location(line: &str) -> &str {
+        let Some(on_line) = line.rfind(" on line ") else { return line; };
+        let suffix = &line[on_line + " on line ".len()..];
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return line;
+        }
+        line[..on_line].rfind(" in ").map_or(line, |in_pos| &line[..in_pos])
+    }
+    let mut normalized = String::new();
+    for line in stderr.lines() {
+        let line = strip_location(line);
+        if line.is_empty() {
+            continue;
+        }
+        normalized.push_str(line);
+        normalized.push('\n');
+    }
+    normalized
+}
+
 /// Compiles `source`, runs it, and asserts stdout equals `expected`.
 fn assert_program_output(prefix: &str, source: &str, expected: &str) {
     let dir = make_test_dir(prefix);
@@ -150,7 +176,7 @@ fn assert_program_output_with_warnings(prefix: &str, source: &str, expected: &st
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        normalize_runtime_stderr(&String::from_utf8_lossy(&output.stderr))
     );
     assert_eq!(combined, expected);
     let _ = fs::remove_dir_all(&dir);
@@ -470,26 +496,23 @@ echo total(["a" => [1, 2]], "zz"), "\n";
     );
 }
 
-/// `??` against a `null` default must NOT widen: the value arm's type is preserved verbatim.
+/// `??` against a `null` default must NOT widen the value arm: a HIT renders exactly as the
+/// stored element, and the merge does not become `mixed` on the way (reference PHP 8.5.6
+/// prints `float(1.5)`).
 ///
-/// `Void` is the identity of the merge, so `$m[$k] ?? null` keeps the value arm's concrete
-/// type instead of becoming `mixed`, and a HIT renders exactly as the stored element.
-/// Reference PHP 8.5.6 prints `float(1.5)`.
-///
-/// NOT pinned here, deliberately: the MISS half of `$m[$k] ?? null`. elephc returns the value
-/// arm's zero (`float(0)`, `int(0)`, `""`) where reference PHP returns `NULL`, for EVERY
-/// element type. That is a third, pre-existing defect — a hint-less function whose `??` merge
-/// resolves to a concrete scalar has nowhere to put PHP null — and it is untouched by this
-/// change. Asserting the miss here would pin the wrong answer.
+/// The MISS half answers `NULL` like PHP since issue #1944: a scalar value arm keeps the null
+/// member beside it (`float|null`), so a hint-less function whose `??` merge resolves to a
+/// scalar has somewhere to put PHP null. Before that, elephc returned the value arm's zero
+/// (`float(0)`, `int(0)`, `""`) for every element type.
 #[test]
 fn coalescing_with_a_null_default_preserves_the_value_arm_type() {
     assert_program_output(
         "coalesce_null_default",
         r#"<?php
 function pick(string $k) { $m = ["a" => 1.5]; return $m[$k] ?? null; }
-var_dump(pick("a"));
+var_dump(pick("a"), pick("zz"));
 "#,
-        "float(1.5)\n",
+        "float(1.5)\nNULL\n",
     );
 }
 

@@ -8,7 +8,7 @@
 //! Key details:
 //! - Phase order controls diagnostics, available declarations, required libraries, and function-local environments.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
@@ -57,8 +57,7 @@ impl Checker {
                     ));
                     continue;
                 }
-                self.function_variant_groups
-                    .insert(name.clone(), variants.clone());
+                self.publish_function_variants(name.clone(), variants.clone());
                 continue;
             }
             if let StmtKind::FunctionDecl {
@@ -123,7 +122,7 @@ impl Checker {
                 if variadic.is_some() {
                     ref_flags.push(*variadic_by_ref);
                 }
-                self.fn_decls.insert(
+                self.publish_function_declaration(
                     name.clone(),
                     FnDecl {
                         type_params: type_params.clone(),
@@ -150,39 +149,20 @@ impl Checker {
     /// Returns true if `name` resolves to any declared function: user declaration, variant group, or
     /// extern. Resolution is case-insensitive via PHP symbol key matching.
     pub(crate) fn has_function_decl_folded(&self, name: &str) -> bool {
-        if self.fn_decls.contains_key(name)
-            || self.function_variant_groups.contains_key(name)
-            || self.extern_functions.contains_key(name)
-        {
-            return true;
-        }
-        let key = php_symbol_key(name);
-        self.fn_decls
-            .keys()
-            .any(|existing| php_symbol_key(existing) == key)
-            || self
-                .function_variant_groups
-                .keys()
-                .any(|existing| php_symbol_key(existing) == key)
-            || self
-                .extern_functions
-                .keys()
-                .any(|existing| php_symbol_key(existing) == key)
+        self.indexed_declared_function_name(name).is_some()
     }
 
     /// Returns the canonical (case-matching) name of a user function identified by `name` by
     /// case-insensitive lookup in `functions`, `function_variant_groups`, and `fn_decls`. Returns
     /// `None` if no matching function exists.
     pub(crate) fn canonical_function_name_folded(&self, name: &str) -> Option<String> {
-        folded_map_key(&self.functions, name)
-            .or_else(|| folded_map_key(&self.function_variant_groups, name))
-            .or_else(|| folded_map_key(&self.fn_decls, name))
+        self.indexed_function_name(name)
     }
 
     /// Returns the canonical (case-matching) name of an extern function identified by `name` by
     /// case-insensitive lookup in `extern_functions`. Returns `None` if no matching extern exists.
     pub(crate) fn canonical_extern_function_name_folded(&self, name: &str) -> Option<String> {
-        folded_map_key(&self.extern_functions, name)
+        self.indexed_extern_function_name(name)
     }
 
     /// Resolves type signatures for all user functions that were not already resolved during the
@@ -217,6 +197,109 @@ impl Checker {
             }
         }
         self.resolve_function_variant_groups(errors);
+        // A promotable decision found while a body was on the resolution stack re-checks it here.
+        if let Err(error) = self.flush_promotable_reresolutions() {
+            errors.extend(error.flatten());
+        }
+    }
+
+    /// Walks again, once method bodies have refined property and return types, every function
+    /// whose failed body raised an initial top-level error the driver may drop as stale, and
+    /// returns each one's errors that still hold.
+    ///
+    /// A function body first walked from a top-level call reports into that statement's
+    /// initial errors, and the driver drops them (`Array index must be integer`, `Cannot index
+    /// non-array`, `Undefined property: ...`) when the final pass of the statement is clean. The
+    /// final pass reuses the provisional signature the failed walk left without walking the
+    /// body, so a real error vanished and the program compiled wrong (`C::$m['k'] = 5` inside a
+    /// function printed `[5]`; `$x = 5; return $x[0];` crashed). Walking the body again here
+    /// lets a stale error vanish, publishing the full signature before the final pass reads
+    /// it. The walk reuses the failed call's parameter types, which can be stale too, so the
+    /// driver keeps the errors of a function only when the final pass did not complete it
+    /// either (`unresolved_rechecked_body_errors`). Only bodies whose index or property errors
+    /// reached such a statement are walked here, and only when every parameter declares its
+    /// type (`declares_every_parameter_type`). An untyped function's parameter types are the
+    /// failed call's argument types, which can be stale placeholders, so it is marked instead
+    /// (`rewalk_failed_body_at_next_call`) and the final pass walks its body again at its next
+    /// direct call, from the argument types that call settles on; an error that walk raises is
+    /// a final-pass error of the calling statement and is reported.
+    pub(super) fn recheck_failed_function_bodies(
+        &mut self,
+        initial_top_level_errors: &[Vec<CompileError>],
+    ) -> Vec<(String, Vec<CompileError>)> {
+        let droppable: Vec<&CompileError> = initial_top_level_errors
+            .iter()
+            .filter(|errors| Self::can_suppress_initial_top_level_errors(errors))
+            .flatten()
+            .filter(|error| Self::is_suppressible_initial_top_level_error(&error.message))
+            .collect();
+        let mut names: Vec<String> = self
+            .failed_function_body_errors
+            .iter()
+            .filter(|(name, recorded)| {
+                !self.completed_function_signatures.contains(*name)
+                    && self.fn_decls.contains_key(*name)
+                    && recorded.iter().any(|error| {
+                        droppable.iter().any(|dropped| {
+                            dropped.span == error.span
+                                && dropped.file == error.file
+                                && dropped.message == error.message
+                        })
+                    })
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        names.sort();
+        let (typed, untyped): (Vec<String>, Vec<String>) = names.into_iter().partition(|name| {
+            self.fn_decls.get(name).is_some_and(Self::declares_every_parameter_type)
+        });
+        self.rewalk_failed_body_at_next_call.extend(untyped);
+        let names = typed;
+        let mut failures = Vec::new();
+        // The failed walk ran from the top level, which checks with the eval barrier off.
+        let saved_eval_barrier_active = std::mem::replace(&mut self.eval_barrier_active, false);
+        let saved_refreshed = self.refreshed_inferred_callees.replace(HashSet::new());
+        for name in names {
+            let (Some(decl), Some(sig)) =
+                (self.fn_decls.get(&name).cloned(), self.functions.get(&name).cloned())
+            else {
+                continue;
+            };
+            if let Err(error) = self.resolve_function_signature(&name, &decl, sig.params) {
+                failures.push((name, error.flatten()));
+            }
+        }
+        self.eval_barrier_active = saved_eval_barrier_active;
+        self.refreshed_inferred_callees = saved_refreshed;
+        failures
+    }
+
+    /// Reports whether every parameter of `decl`, the variadic one included, declares its type.
+    ///
+    /// The re-walk of a failed body reuses the parameter types its failed call specialized. A
+    /// declared parameter is bound to its declared type, which no later pass changes; an
+    /// untyped one carries the argument type the first pass inferred, which can be a stale
+    /// placeholder (`int` for a closure a method returns), so its body is walked again at its
+    /// next direct call instead.
+    fn declares_every_parameter_type(decl: &FnDecl) -> bool {
+        decl.param_types.iter().all(Option::is_some)
+            && (decl.variadic.is_none() || decl.variadic_type.is_some())
+    }
+
+    /// Keeps the re-walk errors of the functions the final top-level pass did not complete.
+    ///
+    /// A call whose argument types changed since the failed walk re-specializes the function
+    /// in the final pass, and a body that checks cleanly then retires the re-walk's errors,
+    /// which came from the stale parameter types.
+    pub(super) fn unresolved_rechecked_body_errors(
+        &self,
+        failures: Vec<(String, Vec<CompileError>)>,
+    ) -> Vec<CompileError> {
+        failures
+            .into_iter()
+            .filter(|(name, _)| !self.completed_function_signatures.contains(name))
+            .flat_map(|(_, errors)| errors)
+            .collect()
     }
 
     /// Reports whether a real call site ever invoked this declaration with an argument list.
@@ -356,7 +439,7 @@ impl Checker {
                     }
                 }
             }
-            self.functions.insert(name.to_string(), provisional);
+            self.publish_function_signature(name.to_string(), provisional);
         }
 
         for variant in &variants {
@@ -412,7 +495,7 @@ impl Checker {
                 ));
             }
         }
-        self.functions.insert(name.to_string(), first);
+        self.publish_function_signature(name.to_string(), first);
         self.completed_function_signatures.insert(name.to_string());
         Ok(())
     }
@@ -472,19 +555,4 @@ impl Checker {
                 || seen.insert((error.span, error.file.clone(), error.message.clone()))
         });
     }
-}
-
-/// Performs a case-insensitive PHP symbol key lookup on `map` and returns the canonical (case-
-/// matching) key if one exists. Used to translate case-insensitive names to their actual declared
-/// spelling.
-fn folded_map_key<T>(map: &HashMap<String, T>, name: &str) -> Option<String> {
-    // A spelling that is itself a key is the canonical one: a case-insensitive symbol table
-    // never holds two spellings of one name, so the scan below could only find this same key.
-    if map.contains_key(name) {
-        return Some(name.to_string());
-    }
-    let key = php_symbol_key(name);
-    map.keys()
-        .find(|existing| php_symbol_key(existing) == key)
-        .cloned()
 }

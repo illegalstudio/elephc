@@ -137,6 +137,17 @@ pub fn parse(tokens: &[SpannedToken]) -> Result<Program, CompileError> {
     parse_with_mode(tokens, crate::source::SourceMode::Php)
 }
 
+/// Parses one PHP fixture under the test harness's ordinary source mode.
+///
+/// A test-only convenience for module tests that need an AST; production code goes through
+/// the pipeline. It lives here rather than in a prelude module so that no prelude owns a
+/// source-parsing entry point of its own.
+#[cfg(test)]
+pub(crate) fn parse_test_source(source: &str) -> Result<Program, CompileError> {
+    let tokens = crate::lexer::tokenize(source)?;
+    parse(&tokens)
+}
+
 /// Parses compiler-generated tagged source without exposing it to user strict-PHP rules.
 ///
 /// No compilation path calls this any more: the synthetic preludes it existed for are BUILT

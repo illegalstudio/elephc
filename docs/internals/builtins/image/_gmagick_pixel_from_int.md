@@ -1,8 +1,6 @@
 ---
 title: "_gmagick_pixel_from_int() - internals"
 description: "Compiler internals for _gmagick_pixel_from_int(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1273
 ---
 
 ## `_gmagick_pixel_from_int()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:10193](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L10193) (`_gmagick_pixel_from_int`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`_gmagick_pixel_from_int`)
 - **Function symbol**: `_gmagick_pixel_from_int()`
 
 

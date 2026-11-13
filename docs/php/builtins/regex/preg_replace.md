@@ -1,8 +1,6 @@
 ---
 title: "preg_replace()"
 description: "Performs a regular expression search and replace."
-sidebar:
-  order: 838
 ---
 
 ## preg_replace()
@@ -22,8 +20,9 @@ Performs a regular expression search and replace.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/regex/preg_replace.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

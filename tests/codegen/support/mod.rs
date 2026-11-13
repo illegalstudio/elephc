@@ -36,15 +36,20 @@ pub(crate) static TEST_TARGET: OnceLock<Target> = OnceLock::new();
 
 mod platform;
 mod runner;
+mod magician_link;
 mod bundle;
 mod c_fixture;
 mod compiler;
+mod diagnostics;
+mod assembly;
+mod phase;
 mod curl_native;
 mod gmp_native;
 mod native_cache;
 pub(crate) mod fileinfo_native;
 mod native_projects;
 mod oniguruma;
+mod openssl_native;
 mod projects;
 pub(crate) mod xml_native;
 
@@ -53,9 +58,15 @@ pub(crate) use runner::*;
 pub(crate) use bundle::*;
 pub(crate) use c_fixture::*;
 pub(crate) use compiler::*;
+pub(crate) use diagnostics::preserve_stdout_mismatches;
+pub(crate) use assembly::*;
+pub(crate) use phase::*;
 pub(crate) use curl_native::*;
 pub(crate) use native_projects::*;
 pub(crate) use oniguruma::*;
+pub(crate) use openssl_native::{
+    openssl_cli_command, openssl_native_packages, skip_without_openssl_native,
+};
 pub(crate) use projects::*;
 pub(crate) use gmp_native::{gmp_native_package, skip_without_gmp_native, GmpNativePackage, GMP_NATIVE_PACKAGE};
 // Named rather than globbed: `xml_native::available()` would otherwise collide with

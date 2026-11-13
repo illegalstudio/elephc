@@ -1,8 +1,6 @@
 ---
 title: "property_exists() - internals"
 description: "Compiler internals for property_exists(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 100
 ---
 
 ## `property_exists()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/property_exists.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/property_exists.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

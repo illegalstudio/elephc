@@ -7,19 +7,20 @@
 //! Key details:
 //! - Offline mode never invokes the downloader and all bytes are size/SHA verified before publication.
 //! - Online requests retry bounded transient transport, throttling, and server failures.
+//! - Exhausted GitHub gateway failures can use the same pinned asset through the anonymous API.
 
-use std::fs::{self, OpenOptions};
-use std::io::{Read, Write};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use ureq::{Agent, Error as UreqError, ResponseExt};
-use sha2::{Digest, Sha256};
+use ureq::Agent;
 
 use super::catalog::SourceArchive;
 use super::error::{NativeError, NativeErrorKind};
 use super::util::{hash_file, unique_sibling};
+
+mod http;
 
 /// Injected source transport used by production and network-free tests.
 pub trait Downloader {
@@ -49,78 +50,15 @@ impl HttpsDownloader {
 impl Downloader for HttpsDownloader {
     /// Streams one HTTPS response to disk and rejects a body beyond the catalog cap.
     fn download_to(&self, source: &SourceArchive, destination: &Path) -> Result<(), NativeError> {
-        if !source.https_url.starts_with("https://") {
-            return Err(NativeError::new(NativeErrorKind::Network, "catalog source URL is not HTTPS"));
-        }
-        let mut attempt = 1_u32;
-        let mut response = loop {
-            match self.agent.get(source.https_url).call() {
-                Ok(response) => break response,
-                Err(error) if attempt < 4 && retryable_download_error(&error) => {
-                    let delay = Duration::from_secs(1_u64 << (attempt - 1));
-                    eprintln!(
-                        "native network warning: download attempt {attempt} failed for trusted source '{}': {error}; retrying in {}s",
-                        source.https_url,
-                        delay.as_secs(),
-                    );
-                    thread::sleep(delay);
-                    attempt += 1;
-                }
-                Err(error) => {
-                    return Err(NativeError::new(
-                        NativeErrorKind::Network,
-                        format!("download failed for trusted source '{}': {error}", source.https_url),
-                    ));
-                }
+        http::download(source, destination, |url, accept| {
+            let mut request = self.agent.get(url);
+            if let Some(accept) = accept {
+                request = request.header("Accept", accept)
+                    .header("User-Agent", "elephc-native")
+                    .header("X-GitHub-Api-Version", "2022-11-28");
             }
-        };
-        if response.get_uri().scheme_str() != Some("https") {
-            return Err(NativeError::new(NativeErrorKind::Network, "native download ended at a non-HTTPS URL"));
-        }
-        if response.headers().get("content-length").and_then(|value| value.to_str().ok()).and_then(|value| value.parse::<u64>().ok()).is_some_and(|length| length > source.body_limit) {
-            return Err(NativeError::new(NativeErrorKind::Integrity, format!("native source body exceeds {} byte limit", source.body_limit)));
-        }
-        let mut output = OpenOptions::new().write(true).create_new(true).open(destination)
-            .map_err(|error| NativeError::io("create unique native download temporary file", destination, error))?;
-        let mut reader = response.body_mut().as_reader();
-        let mut total = 0_u64;
-        let mut digest = Sha256::new();
-        let mut buffer = [0_u8; 64 * 1024];
-        loop {
-            let read = reader.read(&mut buffer).map_err(|error| NativeError::new(NativeErrorKind::Network, format!("read native HTTPS response: {error}")))?;
-            if read == 0 { break; }
-            total = total.checked_add(read as u64).ok_or_else(|| NativeError::new(NativeErrorKind::Integrity, "native source length overflow"))?;
-            if total > source.body_limit {
-                return Err(NativeError::new(NativeErrorKind::Integrity, format!("native source body exceeds {} byte limit", source.body_limit)));
-            }
-            digest.update(&buffer[..read]);
-            output.write_all(&buffer[..read]).map_err(|error| NativeError::io("write native download temporary file", destination, error))?;
-        }
-        let sha256 = format!("{:x}", digest.finalize());
-        if total != source.exact_size || sha256 != source.sha256 {
-            return Err(NativeError::new(
-                NativeErrorKind::Integrity,
-                format!("native source stream checksum/size mismatch: expected {} bytes and {}, got {} bytes and {}", source.exact_size, source.sha256, total, sha256),
-            ));
-        }
-        output.sync_all().map_err(|error| NativeError::io("flush native download temporary file", destination, error))
-    }
-}
-
-/// Returns whether another request can safely recover from a transient transport or server error.
-fn retryable_download_error(error: &UreqError) -> bool {
-    match error {
-        // Public artifact CDNs can answer 403 for a transient edge or rate-limit denial.
-        // Catalog URLs are fixed and trusted, so the existing bounded retry remains safe.
-        UreqError::StatusCode(status) => {
-            *status == 403 || *status == 408 || *status == 429 || (500..=599).contains(status)
-        }
-        UreqError::Protocol(_)
-        | UreqError::Io(_)
-        | UreqError::Timeout(_)
-        | UreqError::HostNotFound
-        | UreqError::ConnectionFailed => true,
-        _ => false,
+            request.call().map(http::HttpResponse::from_response)
+        }, thread::sleep)
     }
 }
 
@@ -233,6 +171,8 @@ fn remove_quarantine(path: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::http::retryable_download_error;
+    use ureq::Error as UreqError;
     use sha2::{Digest, Sha256};
     use std::cell::{Cell, RefCell};
     use std::time::{SystemTime, UNIX_EPOCH};

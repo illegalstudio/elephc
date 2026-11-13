@@ -2428,6 +2428,24 @@ fn test_preg_replace_no_match() {
     assert_eq!(out, "hello world");
 }
 
+/// Verifies `preg_replace` expands the braced `${n}` and `${nn}` backreferences PHP accepts,
+/// keeping a digit after the brace literal and leaving malformed braced forms untouched.
+#[test]
+fn test_preg_replace_braced_backreferences() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_replace('/(a)(b)/', '${2}${1}', 'xaby'), '|';
+echo preg_replace('/(a)/', '${1}0', 'a'), '|';
+echo preg_replace('/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)/', '[${10}]', 'abcdefghij'), '|';
+echo preg_replace('/(a)/', '${x}', 'a'), '|';
+echo preg_replace('/(a)/', '${1', 'a'), '|';
+echo preg_replace('/(a)/', '${123}', 'a'), '|';
+echo preg_replace('/(a)/', '$1${1}\1', 'a');
+"#,
+    );
+    assert_eq!(out, "xbay|a0|[j]|${x}|${1|${123}|aaa");
+}
+
 /// Verifies `preg_replace_callback` invokes the closure for each match and the callback return
 /// value replaces the matched text; captures are accessible via `$matches[0]`.
 #[test]
@@ -2502,6 +2520,35 @@ echo preg_replace_callback("/x/", $callback, "axb");
 "#,
     );
     assert_eq!(out, "()0|()|empty|a[x]b");
+}
+
+/// Verifies the regex functions accept PHP's other delimiters: any punctuation byte, and the
+/// four bracket pairs, with modifiers after the closing delimiter.
+#[test]
+fn test_preg_functions_accept_non_slash_delimiters() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match('~^/a$~', '/a'), preg_match('#^/a$#', '/a'), preg_match('!^/a$!', '/a');
+echo preg_match('{^/a$}', '/a'), preg_match('(^/a$)', '/a'), preg_match('[^/a$]', '/a'), preg_match('<^/a$>', '/a');
+echo preg_match('~^/A$~i', '/a'), preg_match('~^x~', '/a'), "|";
+echo preg_match('~^/([^/]+)$~', '/Ada', $m), $m[1], "|";
+echo preg_replace('~^/([^/]+)$~', '$1', '/Ada'), preg_replace('#a#i', 'b', 'AaA'), "|";
+echo preg_replace_callback('#\d+#', static fn (array $matches): string => '<' . $matches[0] . '>', 'a1b22'), "|";
+echo implode(',', preg_split('~,~', 'x,y,z'));
+"#,
+    );
+    assert_eq!(out, "111111110|1Ada|Adabbb|a<1>b<22>|x,y,z");
+}
+
+/// Verifies a control byte other than whitespace (DEL) and a byte above ASCII delimit a pattern,
+/// as in PHP, which rejects only alphanumerics, backslash, NUL and whitespace.
+#[test]
+fn test_preg_functions_accept_non_printable_delimiters() {
+    let out = compile_and_run(
+        "<?php\necho preg_match(\"\\x7f^a$\\x7f\", 'a'), preg_match(\"\\xa7^a$\\xa7i\", 'A'), \"|\";\n\
+         echo preg_replace(\"\\x01b\\x01\", 'c', 'abc');\n",
+    );
+    assert_eq!(out, "11|acc");
 }
 
 /// Verifies `preg_replace_callback` exposes both complete match `$matches[0]` and numbered

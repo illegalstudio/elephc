@@ -1,8 +1,6 @@
 ---
 title: "get_resource_type()"
 description: "Returns the type of a resource."
-sidebar:
-  order: 1031
 ---
 
 ## get_resource_type()
@@ -20,8 +18,9 @@ Returns the type of a resource.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/get_resource_type.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/get_resource_type.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

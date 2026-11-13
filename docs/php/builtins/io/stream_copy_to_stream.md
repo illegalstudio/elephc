@@ -1,8 +1,6 @@
 ---
 title: "stream_copy_to_stream()"
 description: "Copies data from one stream to another."
-sidebar:
-  order: 376
 ---
 
 ## stream_copy_to_stream()
@@ -23,8 +21,9 @@ Copies data from one stream to another.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_copy_to_stream.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_copy_to_stream.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

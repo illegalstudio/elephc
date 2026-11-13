@@ -410,6 +410,15 @@ impl Checker {
                 &format!("{} expects {}, got null", context, expected),
             ));
         }
+        // Parameter compatibility accepts `Object|null` because PHP only throws when the
+        // value is actually null at run time. A return type is a static contract, though:
+        // a nullable union returned as `W` is exactly the property-hook narrowing bug.
+        if Self::union_contains_void(actual) && !Self::declared_type_accepts_null(expected) {
+            return Err(CompileError::new(
+                span,
+                &format!("{} expects {}, got {}", context, expected, actual),
+            ));
+        }
 
         Self::require_matching_array_element_storage(expected, actual, span, context)?;
 

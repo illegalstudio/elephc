@@ -258,6 +258,15 @@ modules  = ["xml", "xmlwriter"]
 notes    = "ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost"
 
 [[extensions]]
+feature  = "SimpleXML"
+status   = "supported"
+php      = "https://www.php.net/manual/en/book.simplexml.php"
+docs     = "docs/php/xml.md"
+evidence = "tests/codegen/simplexml"
+modules  = ["simplexml"]
+notes    = "Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml."
+
+[[extensions]]
 feature  = "cURL"
 status   = "supported"
 php      = "https://www.php.net/manual/en/book.curl.php"
@@ -309,3 +318,19 @@ docs     = "docs/php/fileinfo.md"
 evidence = "tests/codegen/fileinfo.rs"
 modules  = ["fileinfo"]
 notes    = "Six functions, finfo and eleven constants, backed by pinned static libmagic 5.46 with an embedded database; native and eval use the same declarations. Declare the libmagic native package; --with-fileinfo enables opaque dynamic use."
+
+# How php-src builds each baseline extension, exported as `tier` per module in
+# docs/php/compatibility.json. Read from the PHP_ARG_ENABLE/PHP_ARG_WITH defaults in
+# php-src PHP-8.5 ext/*/config*.m4: `always` has no switch to disable it, `default`
+# is enabled by a plain ./configure (--disable-*/--without-* turns it off). Every
+# other baseline extension is opt-in and exported as "optional". Names must be
+# baseline extensions; revisit both lists when the baseline moves to a new minor.
+[build_tiers]
+always = [
+  "core", "date", "hash", "json", "lexbor", "pcre", "random", "reflection", "spl",
+  "standard", "uri", "zend opcache",
+]
+default = [
+  "ctype", "dom", "fileinfo", "filter", "iconv", "libxml", "pdo", "pdo_sqlite", "phar",
+  "posix", "session", "simplexml", "sqlite3", "tokenizer", "xml", "xmlreader", "xmlwriter",
+]

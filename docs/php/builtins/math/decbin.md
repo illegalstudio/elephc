@@ -1,8 +1,6 @@
 ---
 title: "decbin()"
 description: "Converts an integer to its binary string representation."
-sidebar:
-  order: 580
 ---
 
 ## decbin()
@@ -20,8 +18,9 @@ Converts an integer to its binary string representation.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

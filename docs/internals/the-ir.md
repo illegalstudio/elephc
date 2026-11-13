@@ -534,6 +534,14 @@ leak the nested receiver whenever the source destructor throws; retaining the
 source pin during its release would instead expose the same source to cleanup
 twice.
 
+A write routed to an accessor (`__set` through `DynamicPropSet`, or a set hook
+through its `__propset_<p>` method call) pins the owning source the same way
+for the call, because the accessor can throw: an explicit `throw`, or the
+typed-property guard on the hook's own raw backing write. The pin is detached
+after the call returns and before the source's normal release. The receiver
+lease stays with `PropertyWriteReceiver`, so the accessor call publishes no
+second record for it.
+
 Borrowed receivers and sources keep their existing owners. A source whose
 reference moves into a known slot follows that slot's transfer discipline rather
 than receiving an additional post-store release. These rules live in
@@ -619,15 +627,37 @@ When `php_return_status` is set, `restore_concat_offset_after_nested_call` calls
 Each instruction and terminator carries an `Effects` summary. The builder
 assigns a conservative opcode or semantic-descriptor default; after the complete
 module is lowered, an effect-refinement fixed point may replace the summary on
-explicitly refinable direct calls, named static calls (including inherited
-implementations), instance calls, and property reads. Forwarding static receivers
-and unresolved closure, descriptor, or pipe targets retain conservative defaults
-until their target is proven by a lowering-specific contract. Final
-effects are immutable after validation and remain PHP-observable.
+explicitly refinable direct calls, static calls, instance calls, and property
+reads. Named static receivers include inherited implementations; `self::` and
+`parent::` resolve in the enclosing lexical class. A `static::` call unions all
+concrete implementations in that class's checked descendant hierarchy, including
+callable static bodies declared on abstract classes. Abstract declarations retain
+failure effects and any throwing parameter guards or warning-capable argument
+coercions that run before dispatch, so a discarded call cannot erase them. An opaque
+eval bridge gives late-static calls the full eval-call effects, including
+exceptions, output and global mutation, because it can introduce further
+overrides. Without that barrier, when the lexical class has no static vtable
+slot, such as for a private method, `static::` uses its implementation directly
+and does not union unrelated descendant methods. Unresolved closure, descriptor, pipe,
+function-variant and eval call opcodes retain their defaults, and the validator
+rejects narrower effects for them. Lowering-specific builtin and runtime
+contracts remain refinable. Final effects are immutable after validation and
+remain PHP-observable.
 
-Caller-visible summaries omit `ConcatReset`: it restores frame-private scratch
-bookkeeping rather than PHP state. The instruction itself retains `writes_global`
-so intra-function passes preserve its ordering. Genuine PHP-global writes,
+Call summaries include throwing guards for `false` and `null` parameter
+declarations even when the callee body is pure. Argument-coercion effects use the
+call's operand layout: lexical `self::` and `parent::` calls to instance methods
+omit the implicit receiver from parameter matching, while ordinary instance
+calls include that receiver on both sides.
+Warning-capable argument coercions also retain `may_throw`, because a PHP warning
+handler can throw an exception before the callee runs.
+
+Caller-visible summaries omit `ConcatReset`, `PushCallOperandOwner` and
+`PopCallOperandOwner`: they restore scratch offsets or publish temporary owner
+slots within the current frame rather than changing PHP state. The instructions
+retain their global-state effects so intra-function passes preserve their
+ordering. Actual ownership acquisition and retirement still contribute their
+effects, including possible destructors. Genuine PHP-global writes,
 output, allocation, and exception effects continue to flow into call summaries.
 
 ```rust
@@ -745,7 +775,7 @@ Each instruction has:
 | `StoreStaticLocal(slot, value)` | value | `Void` | `writes_global`, maybe `refcount_op` |
 | `InitStaticLocal(slot, value)` | value | `Void` | `reads_global`, `writes_global`, maybe allocation/refcount effects |
 | `LoadStaticProperty(class, property)` | none | property type | `reads_global`, maybe `may_deopt` for late static |
-| `StoreStaticProperty(class, property, value)` | value | `Void` | `writes_global`, maybe `refcount_op`, `may_deopt` |
+| `StoreStaticProperty(class, property, value, mode?, owner?)` | original value, optional assignment-site Bool and borrowed unwind owner | `Void` | `writes_global`, maybe `refcount_op`, `may_deopt` |
 
 `UnsetLocal` and `ZeroLocalSlot` both clear a slot at its own storage type and
 differ only in the bit pattern, which is what each caller needs. `UnsetLocal`
@@ -782,7 +812,7 @@ preserves PHP exponentiation result rules.
 | `ICmp(predicate)` | `I64`, `I64` | `I64` bool | pure |
 | `FCmp(predicate)` | `F64`, `F64` | `I64` bool | pure |
 | `StrEq`, `StrCmp`, `StrLooseEq` | `Str`, `Str` | `I64` or compare int | `reads_heap` only if non-static bytes require helper reads |
-| `StrictEq`, `StrictNotEq` | typed values | `I64` bool | pure for scalars, `reads_heap` for mixed/refcounted |
+| `StrictEq`, `StrictNotEq` | typed values | `I64` bool | pure for scalars, `reads_heap` for mixed/refcounted; a `Mixed` operand against `null` tests the unwrapped runtime tag without boxing the null |
 | `LooseEq`, `LooseNotEq`, `Spaceship` | typed values | `I64` or compare int | may coerce, `reads_heap`, `may_warn`, `may_deopt` |
 | `IsNull`, `IsTruthy`, `IsEmpty` | typed value | `I64` bool | pure for scalars, `reads_heap` for mixed/containers |
 | `InstanceOf` | value, target metadata | `I64` bool | `reads_heap`, `reads_global`, maybe `may_deopt` |
@@ -804,6 +834,15 @@ preserves PHP exponentiation result rules.
 | `ArrayToMixed`, `HashToMixed` | array/hash | `Heap(Mixed)` | `alloc_heap`, `refcount_op` |
 | `ArrayToPointerWords` | owned array bound to a pointer-array slot | `Heap(Array)` with raw `?ptr<T>` words | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op` |
 | `MixedCastBool`, `MixedCastInt`, `MixedCastFloat`, `MixedCastString` | `Heap(Mixed)` | scalar/string | `reads_heap`, maybe `alloc_concat`, `may_warn` |
+
+A local indexed-array append or offset write emits `ArrayToMixed` only when the
+stored value cannot share the element storage. An object whose class is the
+element class, a subclass of it, or an implementation of the element interface
+is a nominal upcast: every object element is one counted object pointer, so an
+`array<Actor>` builder keeps its object slots when `new Player()` is written.
+The checker's loop-storage fixed point joins element writes with the same
+nominal rule, so a loop does not widen the builder before its header either.
+Wider, sibling and unrelated classes still widen to boxed `mixed` slots.
 
 ### Strings
 
@@ -997,6 +1036,14 @@ reference cell by `$r = &$o->x` — there the container lives inside the cell, s
 split reads and republishes through the cell and every alias of the reference sees
 the result.
 
+Element writes into an indexed array or hash property take the same borrowed
+container: `$o->items[$k] = $v` and `$o->items[] = $v` lower to `PropGetForWrite`
+immediately followed by `HashSet`, `HashAppend`, `ArraySet` or `ArrayPush`, with no
+`Acquire` and no `PropSet` of the container. The backend recognizes the
+`PropGetForWrite` producer behind the write's receiver and publishes the helper's
+returned pointer into the slot only when the write relocated the container; the
+memory model's notes on property element writes give the ownership argument.
+
 The receiver has to outlive the loop, because the borrowed container's only owner
 is the property slot inside it. A receiver that names stable backing storage does
 that by itself: a variable or `$this`, optionally followed by a chain of plain
@@ -1045,6 +1092,13 @@ drifting apart silently.
 | `SplRuntimeCall` | runtime helper, args | typed value | helper effect summary |
 
 `foreach` over arrays/hashes uses container-specific iterator operations.
+Hash iteration yields each entry as a boxed `Mixed`. A by-value loop over a hash
+whose value type is a concrete class asks `IterCurrentValue` for the owned object
+itself, so the loop variable keeps the class type, as it does over an indexed
+object list, and appending it to a typed `array<C>` builder keeps object storage.
+The backend retains a plain object entry directly; only reference entries, nested
+boxes and null containers take the boxed path and are unboxed there, so the usual
+walk allocates no temporary cell.
 `foreach` over objects uses iterator dispatch metadata and may call user code.
 
 ### Objects, Classes, Enums, and Attributes
@@ -1057,6 +1111,7 @@ drifting apart silently.
 | `PropGetForWrite(property)` | object | property type, **borrowed** | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op`, `may_throw`, `may_warn`, `may_deopt` |
 | `PropSet(class_id, property, value)` | object, value | `Void` | `writes_heap`, `refcount_op`, maybe `may_deopt` |
 | `PackedFieldMixedToInt`, `PackedFieldMixedToFloat`, `PackedFieldMixedToBool` | boxed value bound for a packed or extern struct field, `TypeError` message prefix | raw `I64`, `F64` or bool payload: only the field's own runtime type passes (a float field also widens an int), anything else throws | `reads_heap`, `alloc_heap`, `may_throw` |
+| `PropertyBoundaryCheckedToInt` | checked add/sub/mul result bound for a declared `int` property, full `TypeError` message | raw `I64`: an int forwards, an overflowed float inside `[-2^63, 2^63)` truncates, any other float throws `Cannot assign float to property C::$p of type int`; it only reads the cell, so the producer can use a frame cell | `reads_heap`, `alloc_heap`, `may_throw` |
 | `DynamicPropGet`, `DynamicPropSet` | object, property string/value | value or `Void` | `reads_heap`/`writes_heap`, `may_deopt`, maybe `may_warn` |
 | `NullsafePropGet`, `NullsafeMethodCall` | nullable object and metadata | nullable result | branch plus underlying op effects |
 | `MethodLookup` | object, method id | callable entry | `reads_heap`, `reads_global`, `may_deopt` |
@@ -1627,9 +1682,12 @@ the integer range; the store beside it is still typed. Loops of such updates now
 ### Bounded Mixed Counters
 
 `src/ir_passes/bounded_mixed_counter.rs` considers ordinary Mixed locals updated
-by increment/decrement and seeded with concrete PHP integers, or with checked or
-mixed `+`, `-`, `*` of raw integers and of the counters proven with them
-(`$j = $i + 1`). A seed producer becomes the matching `ichecked_*_to_int` on the
+by increment/decrement or by a constant compound step (`$i += c`, `$i -= c`), and
+seeded with concrete PHP integers, or with checked or mixed `+`, `-`, `*` of raw
+integers and of the counters proven with them (`$j = $i + 1`). Private slots in the
+executable main frame take part in the same proof; a runtime `include` (which hands
+the frame to evaluated code) or dynamic `eval` keeps main's counters boxed. A seed
+producer becomes the matching `ichecked_*_to_int` on the
 trial and, like an update, must be rewritten to unchecked arithmetic. A comparison
 of a counter with a checked `+`/`-` of raw integers (`$i < $n - 1`) stays a
 `php_rel_cmp`, since the bound may be an overflowed float; IntegerRange bounds the
@@ -1685,6 +1743,89 @@ CFG still validates. Both
 rewrites operate on EIR and preserve the original AST binding decisions and
 source metadata. See [the optimizer](the-optimizer.md) for the complete eligibility
 and code-growth limits.
+
+### Raw promotable loops
+
+`raw_promotable_loop` runs after guarded counter versioning. It matches an innermost
+straight-line loop whose mixed locals are updated only by add, subtract, multiply, or a
+unit increment, and whose header compares two integer-compatible values. The header test
+is a PHP relational compare, or an integer compare when an earlier pass already proved the
+counter in range. Such a counter is an integer header parameter: the copy keeps it in its
+own slot and recomputes the pure integer arithmetic that feeds the back edge. The other
+side of an update may be an overflow-checked integer temporary such as `$i * $i`, which
+gets its own overflow test. The header test may also be `==` or `!=`, and one side of it may be
+a bound the header recomputes (`$i < 5 + $n`), tested for overflow on every iteration. A
+counter kept in an `I64` local is stored to that same local, which covers top-level code.
+A header parameter read after the loop becomes a parameter of the exit block, filled by
+the mixed header and by every exit of the copy. When every
+carried seed and mixed bound is a PHP int at entry, the fast copy keeps those values in
+raw `I64` slots. Each update is a wrapping integer operation plus `IOverflows` while both
+operands are still integers. A fitting result stays on that copy. Signed overflow converts
+the original operands to `f64` and keeps that local as a raw float; other locals stay
+integers until they overflow. Later iterations of a promoted local use float arithmetic,
+including a float/integer pair, and never return the value to an integer. The original
+mixed loop remains for a seed that is not an int. Each representation is boxed once, at
+its own exit. A call, extra store, or non-straight body leaves the loop unchanged.
+Every update must read its own local (`$x = $x + $y`, not `$x = $y + $z`), which is what
+makes a promoted local stay a float, and a local joins the float set only on the edge where
+its own update stored a float. The fast copy reloads a carried local where the update runs,
+so a read that the mixed loop takes on the other side of that local's store, as in
+`$sum + $i++`, also leaves the loop unchanged. So does a loop with more than four updated
+locals, because the copy needs one block chain per reachable set of promoted locals.
+Codegen fuses each integer overflow test into the following branch when the result has a
+register or a flag-preserving stack slot, so the integer path is one flag-setting
+arithmetic instruction and one not-taken branch per update.
+
+
+### Lazy boxed accumulators
+
+`lazy_boxed_accumulator` runs once after the function passes converged, so
+`raw_promotable_loop` gets every straight-line loop first. It covers the loops that pass
+leaves alone: bodies with array reads, calls, branches, `break`, nested loops, and
+any number of accumulators. It does not copy the loop. A mixed local gets two raw
+companions for the whole function, an `I64` value and a tag. The tag is RAW when the
+companion holds the value and the mixed slot holds a stale but valid int box, and BOXED
+when the mixed slot holds the value. A function starts BOXED.
+
+A modeled update (`$s += x`, `-=`, `*=`, `++`, `--`) takes the fast path when the local and
+`x` are ints and the wrapping operation plus `IOverflows` does not overflow: it stores the
+companion and sets RAW. A modeled compare of a RAW local with an int is an `ICmp`. In
+every other case the code syncs and runs the original instructions on a fresh load, so
+float promotion, warnings, and errors come from the unchanged mixed code. A sync boxes the
+companion into the slot when the tag is RAW. One sits right before every other
+instruction that names the slot, such as a read, a plain store, or an unset. A
+by-reference argument is such a read, so the slot is current while the callee runs.
+Nothing is needed at function exit, because in RAW state the slot still owns a box the
+epilogue releases.
+
+A local is rewritten only when one of its updates sits in a loop that contains no sync for
+it. A local read on every iteration would be boxed again each time, so it stays mixed.
+A function that runs literal `eval` code is skipped, because the fragment reads locals by
+name and no instruction would trigger the sync.
+
+Both loop passes defer to codegen's frame-local numeric cells. That proof needs a read
+and its user in one block, and both rewrites split blocks, so a rewrite could send
+another local back to heap boxes. Each rewrite is therefore tried on a copy of the
+function, and `stack_numeric::FrameCells` is compared before and after, with the
+ownership finalizer applied to both. The lazy pass reloads a boxed slot in the block
+that unboxes its integer payload, keeping each borrowed numeric-cell read beside its
+consumer. Numeric buffer sums, overflow fallback and repeated packed-field loop seeds
+can therefore keep frame cells while retaining the lazy integer fast path. A proven
+numeric slot is still eligible for a companion, including loops with five or more
+accumulators. The loop copy may replace the cells of the mixed
+loop it keeps as a fallback, and the cell of an updated local that no other loop names.
+Any other lost cell rejects that rewrite.
+
+Numeric slot safety and the selected storage of its writers are separate proofs.
+After frame layout assigns producer and scalar-seed cells, codegen checks every
+store to each proven numeric slot. When all writers use that selected frame
+storage, retiring the slot only clears its pointer, regardless of the number of
+cells in the function. This avoids repeated runtime cleanup calls in loops with
+several accumulators. A writer without selected frame storage retains the normal
+numeric cleanup path, including heap decref.
+Process-entry initialization also revokes this EIR-only proof when it publishes
+a heap box for `$argc` or `$argv`, so their first explicit overwrite still
+releases the implicit owner. Unrelated numeric slots retain direct retirement.
 
 ### Boxed Numeric Chain Fusion
 
@@ -1935,7 +2076,9 @@ stack frame's `concat_base_offset`, and `concat_reset` rewinds `_concat_off` to 
 frame base; AST-to-EIR lowering already emits `acquire` / `str_persist` for any string
 that outlives a statement before emitting the original statement-boundary `concat_reset`.
 
-The pass runs two greatest-fixed-point analyses over reachable blocks:
+The pass runs two greatest-fixed-point analyses over reachable blocks; a
+post-fixed-point finalizer then hoists a loop-body reset into a unique preheader
+when the preheader can arrive dirty:
 
 1. **Forward clean-state elimination** tracks whether `_concat_off` is guaranteed
    to equal `concat_base_offset` on entry to each block and across each
@@ -1956,6 +2099,13 @@ The pass runs two greatest-fixed-point analyses over reachable blocks:
    non-inert instruction, `may_throw` / `may_fatal` instruction, or function exit.
    An earlier `concat_reset` whose outgoing paths all hit a later reset without
    intervening observation is neutralized to `nop`.
+3. **Loop preheader hoisting** (`ConcatResetHoist`, a post-fixed-point
+   finalizer) appends one marked reset to a loop's unique preheader when the
+   loop body still contains a reset after the two analyses. The clean state
+   propagates from the preheader through the header, so phase 1 then drops the
+   per-iteration body resets. The mark keeps both analyses from removing the
+   inserted reset, so the finalizer converges; it runs only for non-internal,
+   non-synthetic functions of at most 2,000 instructions with a back edge.
 
 ### Small-Function Inlining
 
@@ -2480,10 +2630,18 @@ The pass has four stages:
 2. **Intervals** (`intervals.rs`): blocks are numbered in reverse postorder and
    each value gets one contiguous `[start, end]` live interval. A value live
    across edges or a loop back-edge spans the intervening positions.
+   A loop-header parameter is then coalesced with one scalar backedge argument:
+   their intervals merge into one group, so the latch copy disappears and both
+   values share the register the scan assigns to the group. Alternate
+   predecessors keep their own edge copies because they can carry different
+   values.
 3. **Scan** (`regalloc.rs`): intervals are walked in start order against an
    active set; a free register from the matching pool is assigned, otherwise the
    use-weighted spill heuristic evicts the cheapest interval. Integer and float
-   values draw from separate pools.
+   values draw from separate pools. When both operands of an integer binary
+   operation already live in registers, the backend writes the result directly
+   into its allocated home instead of computing into the ABI result register and
+   copying it afterward.
 4. **Frame integration** (`codegen/frame.rs`): the allocation is stored in
    the frame layout, each used callee-saved register gets a save slot, and the
    value-access chokepoints (`load_value_to_result`, `load_value_to_reg`,

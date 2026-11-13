@@ -1,8 +1,6 @@
 ---
 title: "srand() - internals"
 description: "Compiler internals for srand(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 666
 ---
 
 ## `srand()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/random_prelude.rs`:181](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs#L181) (`srand`)
+- **Lowering**: [`src/random_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/random_prelude.rs) (`srand`)
 - **Function symbol**: `srand()`
 
 

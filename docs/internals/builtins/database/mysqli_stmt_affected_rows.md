@@ -1,8 +1,6 @@
 ---
 title: "mysqli_stmt_affected_rows() - internals"
 description: "Compiler internals for mysqli_stmt_affected_rows(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 163
 ---
 
 ## `mysqli_stmt_affected_rows()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1353](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1353) (`mysqli_stmt_affected_rows`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_stmt_affected_rows`)
 - **Function symbol**: `mysqli_stmt_affected_rows()`
 
 
@@ -29,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_stmt_affected_rows(mixed $statement): int
+function mysqli_stmt_affected_rows(mixed $statement): mixed
 ```
 
 ## What the type checker enforces

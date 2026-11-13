@@ -1,8 +1,6 @@
 ---
 title: "usleep()"
 description: "Delays execution for a number of microseconds."
-sidebar:
-  order: 834
 ---
 
 ## usleep()
@@ -20,8 +18,9 @@ Delays execution for a number of microseconds.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/time/usleep.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/time/usleep.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "xmlwriter_output_memory()"
 description: "Returns the buffered output of a memory writer."
-sidebar:
-  order: 1119
 ---
 
 ## xmlwriter_output_memory()
@@ -21,8 +19,9 @@ Returns the buffered output of a memory writer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_output_memory.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/xml/xmlwriter_output_memory.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

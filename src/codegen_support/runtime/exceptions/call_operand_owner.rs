@@ -15,6 +15,7 @@ use crate::codegen_support::{abi, emit::Emitter};
 pub fn emit_cleanup_call_operand_owner(emitter: &mut Emitter) {
     emit_owner_cleanup_entry(emitter, "__rt_cleanup_call_operand_owner", "__rt_decref_any");
     emit_owner_cleanup_entry(emitter, "__rt_cleanup_call_operand_descriptor", "__rt_callable_descriptor_release");
+    emit_owner_cleanup_entry(emitter, "__rt_cleanup_call_reference_argument", "__rt_decref_any");
 }
 
 /// Emits one bounded cleanup entry with the release discipline of its owning slot.

@@ -14,7 +14,7 @@
 //!   type as the fix.
 
 use crate::codegen::platform::Target;
-use crate::ir::{Function, Op};
+use crate::ir::{Function, Immediate, LocalKind, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::ir_lower::LoweringError;
 use std::path::Path;
 
@@ -60,6 +60,49 @@ try { unset($holder->value[runtime_offset_key($argc)]); } catch (TypeError $erro
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
     }
 }
+
+/// Erased-property object errors keep the runtime class-name owner live while composing the message.
+fn verify_erased_property_unset_error_borrows_published_class_name(name: &str) {
+    let source = r#"<?php
+$activation = new SimpleXMLElement('<r/>');
+$erased = json_decode('{}');
+$plain = new stdClass();
+$erased->p = $plain;
+try { unset($erased->p[1]); } catch (Error $error) {}
+"#;
+    let module = super::lower_source_at_for_target(
+        source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+    );
+    let function = module.functions.iter().find(|function| function.name == "main").unwrap();
+    let (lookup, class_name) = function.instructions.iter().enumerate().find_map(|(index, inst)| {
+        matches!(inst.immediate, Some(Immediate::RuntimeCall(
+            RuntimeCallTarget::Function(RuntimeFnId::GetClass)
+        ))).then(|| (index, inst.result.unwrap()))
+    }).unwrap_or_else(|| panic!("{name}: missing erased-object class-name lookup"));
+    let acquired = function.instructions[lookup + 1..].iter().find(|inst| {
+        inst.op == Op::Acquire && inst.operands == [class_name]
+    }).and_then(|inst| inst.result).unwrap_or_else(|| panic!("{name}: missing class-name lease"));
+    let store = function.instructions[lookup + 1..].iter().find(|inst| {
+        inst.op == Op::StoreLocal && inst.operands == [acquired]
+    }).unwrap_or_else(|| panic!("{name}: missing class-name owner store"));
+    let Some(Immediate::LocalSlot(slot)) = store.immediate else {
+        panic!("{name}: class-name owner store has no slot");
+    };
+    assert_eq!(function.locals[slot.as_raw() as usize].kind, LocalKind::HiddenTemp,
+        "{name}: published class names need stable owner slots");
+    let loads = function.instructions.iter().filter(|inst| {
+        inst.op == Op::LoadLocal && inst.immediate == Some(Immediate::LocalSlot(slot))
+    }).filter_map(|inst| inst.result).collect::<Vec<_>>();
+    assert!(!loads.is_empty(), "{name}: class-name message must read the published slot");
+    assert!(!function.instructions.iter().any(|inst| {
+        inst.op == Op::Release && inst.operands.first().is_some_and(|value| loads.contains(value))
+    }), "{name}: message concatenation must not consume the published class name");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+}
+
+supported_target_cases!(erased_property_unset_error_borrows_published_class_name,
+    verify_erased_property_unset_error_borrows_published_class_name);
 
 /// Lowers `source` for the host target and returns the refusal message it must produce.
 fn refusal(source: &str) -> crate::errors::CompileError {
@@ -214,3 +257,92 @@ Cache::forget("a");
     );
     assert_eq!(error.span.line, 4, "the refusal names the unset line");
 }
+
+/// XML adapters coexist with upstream property storage removal on all five target ABIs.
+fn verify_property_element_unset_native_xml_protocol(name: &str) {
+    let source = r#"<?php
+class NativeXmlUnsetHolder {
+    public mixed $boxed;
+    public SimpleXMLElement $typed;
+    public readonly mixed $fixed;
+    public function __construct(SimpleXMLElement $xml) {
+        $this->boxed = $xml; $this->typed = $xml; $this->fixed = $xml;
+    }
+}
+class NativeXmlUnsetRefGetter {
+    public mixed $payload;
+    public function &__get(string $name): mixed { return $this->payload; }
+}
+$xml = new SimpleXMLElement('<r a="1" b="2" c="3"/>');
+$holder = new NativeXmlUnsetHolder($xml);
+unset($holder->boxed['a'], $holder->typed['b'], $holder->fixed['c']);
+$factory = simplexml_load_string('<r><a>1</a><a>2</a></r>'); unset($factory->a[0]);
+function removeOpaqueXmlField(object $holder): void { unset($holder->typed['id']); }
+function removeNullableXmlField(?NativeXmlUnsetHolder $holder): void { unset($holder->typed['id']); }
+removeOpaqueXmlField($holder); removeNullableXmlField($holder);
+$getter = new NativeXmlUnsetRefGetter(); $getter->payload = $xml; removeOpaqueXmlField($getter);
+$name = 'a'; unset($xml->{$name}[0], $xml->missing->{$name}[0]);
+function typedNativeXmlUnsetLocal(): void {
+    $value = new SimpleXMLElement('<r><a/></r>');
+    unset($value->a->b[0], $value->absent[1], $value->a[2]->b[0]);
+    $items = [new SimpleXMLElement('<list><b/></list>')];
+    unset($items[3]->a->b[0], $items[3][0]->b[0], $items[0]->b[0]);
+    $bag = new ArrayObject([new SimpleXMLElement('<bag><b/></bag>')]); unset($bag[0]->b[0]);
+}
+typedNativeXmlUnsetLocal();
+$callback = function (): mixed { return []; };
+try { unset($callback()['id']); } catch (Error $error) {}
+"#;
+    let module = super::lower_source_at_for_target(
+        source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+    );
+    let quiet_reads = module.functions.iter().flat_map(|function| &function.instructions)
+        .filter(|inst| inst.immediate == Some(crate::ir::Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::QuietRead)))
+        .collect::<Vec<_>>();
+    assert!(!quiet_reads.is_empty(), "{name}: opaque holder must fetch quietly");
+    for inst in quiet_reads {
+        assert!(inst.effects.contains(crate::ir::Effects::WRITES_HEAP), "{name}: quiet fetch may create a null field");
+    }
+    let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    let table = assembly.split_once("_class_offsetunset_ptrs:\n").expect("offset unset table").1;
+    let table = table.split(".globl").next().unwrap();
+    let class_id = module.class_infos["SimpleXMLElement"].class_id as usize;
+    let entry = table.lines().filter(|line| line.trim_start().starts_with(".quad "))
+        .nth(class_id).expect("native class row");
+    let expected = crate::names::method_symbol("SimpleXMLElement", "__elephc_dimension_unset");
+    assert!(entry.contains(&expected), "{name}: native unset table entry missing: {entry}");
+}
+
+supported_target_cases!(property_element_unset_native_xml_protocol,
+    verify_property_element_unset_native_xml_protocol);
+
+/// A known quiet-read name emits only matching slots while runtime names keep every candidate.
+fn verify_property_element_unset_known_name_bounds_slot_dispatch(target: &str) {
+    for (name, known) in [("'items'", true), ("$name", false)] {
+        let source = format!(r#"<?php
+class QuietCandidateOwner {{
+    public array $items = [];
+    public array $other = [];
+    public array $third = [];
+}}
+function quietCandidateRead(object $owner, string $name): void {{ unset($owner->{{{name}}}['key']); }}
+$xmlCapability = new SimpleXMLElement('<r/>'); unset($xmlCapability);
+quietCandidateRead(new QuietCandidateOwner(), 'items');
+"#);
+        let module = super::lower_source_at_for_target(&source, Path::new("main.php"),
+            Path::new("."), Target::parse(target).unwrap());
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let body = assembly.split_once("@fn name=quietCandidateRead symbol=").unwrap().1
+            .split_once("@endfn name=quietCandidateRead").unwrap().0;
+        let labels = body.lines().filter(|line| line.ends_with(':') && line.contains("unset_prop_slot")).count();
+        if known {
+            assert_eq!(labels, 1, "{target}: literal reads must skip unrelated slots");
+        } else {
+            assert!(labels >= 3, "{target}: runtime names must retain every declared slot");
+        }
+    }
+}
+
+supported_target_cases!(property_element_unset_known_name_bounds_slot_dispatch,
+    verify_property_element_unset_known_name_bounds_slot_dispatch);

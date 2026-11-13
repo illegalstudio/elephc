@@ -35,9 +35,11 @@ Physical source (.php or .lfc)
   -> testing-prelude    inject the Elephc\Testing runtime when used (forced by elephc test)
   -> curl-prelude       inject the curl prelude when used
   -> xml-prelude        inject the XML/XMLWriter prelude when used
+  -> fileinfo-prelude   inject the finfo class prelude when used
   -> dom-html-prelude   inject the DOM HTML fragment-walker prelude when used
   -> web-prelude        inject the web runtime prelude with --web
   -> version-prelude    inject requested PHP version/SAPI surface functions
+  -> extension-prelude inject declarations for the project's hosted PHP extensions
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
   -> (test-discovery)   find test classes and append the runner driver (elephc test)
@@ -87,7 +89,7 @@ Physical source (.php or .lfc)
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   mysqli, timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
-  OPcache, image processing, incremental hash contexts, curl, XML/XMLWriter,
+  OPcache, image processing, incremental hash contexts, curl, XML/XMLWriter, fileinfo,
   the [DOM HTML subset](../php/dom-html.md),
   object-cast `stdClass`, and the PHP version/SAPI surface are injected only
   when referenced. The web runtime
@@ -98,6 +100,10 @@ Physical source (.php or .lfc)
   and autoloaded file is lexed with its own source identity, so statements at
   the same line and column of two files never share a checker result, and a
   diagnostic raised inside such a file names it.
+- **extension-prelude**: reads the project's hosted PHP extension declarations,
+  resolves their built surfaces and injects wrappers before name resolution.
+  Unused wrappers remain eligible for declaration reachability pruning. See
+  [Hosting PHP extensions](../beyond-php/php-extensions.md).
 - **func-args** — rewrites `func_num_args()`, `func_get_args()`, and
   `func_get_arg()` into a hidden variadic parameter plus ordinary PHP operations.
   This happens after autoloading but before manifest baking, optimization, and
@@ -106,14 +112,22 @@ Physical source (.php or .lfc)
   a prelude needed only by an autoloaded file would be missed. When autoload
   rules exist, a probe (`src/autoload/prelude_probe.rs`) first runs name
   resolution and the autoload pass on a copy of the program, checks the PDO,
-  mysqli, timezone, image, hash, curl, XML, and `var_export` detectors against
+  mysqli, timezone, image, hash, curl, XML, `var_export`, Random, BcMath, GMP,
+  and `DateTimeZone::listIdentifiers` detectors against
   the result, and restores the thread-local source IDs
   and anonymous-class counter. Process-global synthetic spans and include
   temporaries stay monotonic, so discarding a probe cannot recycle identities
   allocated by another compilation thread. The real pass injects the detected
   preludes with fresh global identities. Every included and
   autoloaded file gets its own source identity, which is how diagnostics name
-  the file they come from.
+  the file they come from. Detectors recognize rewritten helper names such as
+  `__elephc_array_rand` and `__elephc_list_identifiers`. Public prelude function
+  names also participate in PHP's global namespace fallback through the shared
+  builtin contract, even when an autoloaded file is resolved independently of
+  the injected declarations. Local declarations and explicit imports retain
+  their normal precedence. An unresolved local function candidate is retained
+  until the target-folding pass can choose its fallback using the complete
+  post-autoload declaration inventory.
 - **opcache-manifest-bake** — after autoload insertion and argument-introspection
   desugaring, replaces the placeholder OPcache manifest with the complete
   entry/include/autoload file set before constant folding and emits any preload

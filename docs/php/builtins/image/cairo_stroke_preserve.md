@@ -1,8 +1,6 @@
 ---
 title: "cairo_stroke_preserve()"
 description: "Strokes the current path with the current source and keeps the path."
-sidebar:
-  order: 452
 ---
 
 ## cairo_stroke_preserve()
@@ -20,8 +18,9 @@ Strokes the current path with the current source and keeps the path.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

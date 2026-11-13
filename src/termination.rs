@@ -248,7 +248,10 @@ fn stmt_guarantees_function_exit(
 
 /// Returns true if the given expression guarantees that the current function will exit.
 /// Recognizes `throw`, `exit`/`die` function calls, and expressions wrapping these.
-fn expr_guarantees_function_exit(expr: &Expr) -> bool {
+///
+/// Also answers whether a lazy merge arm (`$v ?? throw ...`, `$v ?: exit(1)`) ever yields a
+/// value: the checker and the EIR lowering both keep the other arm's type for such a default.
+pub(crate) fn expr_guarantees_function_exit(expr: &Expr) -> bool {
     match &expr.kind {
         crate::parser::ast::ExprKind::Throw(_) => true,
         crate::parser::ast::ExprKind::ErrorSuppress(inner) => expr_guarantees_function_exit(inner),
@@ -324,7 +327,7 @@ fn switch_guarantees_function_exit(
 
 /// Returns true if the expression is a truthy literal constant.
 /// Recognizes bool, int, float, and non-empty non-"0" string literals.
-fn expr_is_truthy_literal(expr: &Expr) -> bool {
+pub(crate) fn expr_is_truthy_literal(expr: &Expr) -> bool {
     match &expr.kind {
         crate::parser::ast::ExprKind::BoolLiteral(value) => *value,
         crate::parser::ast::ExprKind::IntLiteral(value) => *value != 0,
@@ -449,6 +452,15 @@ fn stmt_may_break_current_loop(stmt: &Stmt, breakable_depth_to_loop: usize) -> b
         }
         _ => false,
     }
+}
+
+/// Returns true if a loop body may `break` or `continue` that loop or an enclosing one.
+///
+/// EIR lowering uses it to decide whether a loop needs join points for those jumps (see
+/// `ir_lower::stmt::conditionals::LoopJumpJoins`). A `break`/`continue` that only targets a
+/// nested loop or `switch` does not count.
+pub(crate) fn block_may_jump_out_of_current_loop(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| stmt_may_leave_current_switch(stmt, 1))
 }
 
 /// Returns true if the statement may break or continue out of `breakable_depth_to_switch`

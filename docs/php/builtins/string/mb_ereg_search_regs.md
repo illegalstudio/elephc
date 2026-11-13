@@ -1,8 +1,6 @@
 ---
 title: "mb_ereg_search_regs()"
 description: "Returns the next multibyte regex match and captured groups, preserving numeric and named keys."
-sidebar:
-  order: 925
 ---
 
 ## mb_ereg_search_regs()
@@ -21,8 +19,9 @@ Returns the next multibyte regex match and captured groups, preserving numeric a
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_search_regs.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_ereg_search_regs.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

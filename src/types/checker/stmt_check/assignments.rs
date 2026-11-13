@@ -264,6 +264,7 @@ impl Checker {
             _ => unreachable!("non-assignment statement routed to assignment checker"),
         };
         if result.is_ok() {
+            self.record_completed_binding(stmt);
             self.invalidate_property_narrowings_after_assignment(stmt, env);
         }
         result

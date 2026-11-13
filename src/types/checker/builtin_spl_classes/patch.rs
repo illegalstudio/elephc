@@ -29,12 +29,22 @@ pub(super) fn patch_builtin_spl_storage_signatures(checker: &mut Checker) {
             }
         }
     }
-    if let Some(class_info) = checker.classes.get_mut("SplDoublyLinkedList") {
-        if let Some(sig) = class_info.methods.get_mut(&php_symbol_key("__debugInfo")) {
-            sig.return_type = PhpType::AssocArray {
-                key: Box::new(PhpType::Str),
-                value: Box::new(PhpType::Mixed),
-            };
+    // These synthetic snapshot bodies return named entries, including inherited variants.
+    for class_name in ["SplDoublyLinkedList", "SplQueue", "SplStack", "SplHeap",
+        "SplMinHeap", "SplMaxHeap", "SplPriorityQueue", "SplObjectStorage", "MultipleIterator"]
+    {
+        if let Some(class_info) = checker.classes.get_mut(class_name) {
+            let methods: &[&str] = if class_name == "SplObjectStorage" {
+                &["__debugInfo", "__serialize"]
+            } else { &["__debugInfo"] };
+            for method in methods {
+                if let Some(sig) = class_info.methods.get_mut(&php_symbol_key(method)) {
+                    sig.return_type = PhpType::AssocArray {
+                        key: Box::new(PhpType::Str),
+                        value: Box::new(PhpType::Mixed),
+                    };
+                }
+            }
         }
     }
     if let Some(class_info) = checker.classes.get_mut("IteratorIterator") {

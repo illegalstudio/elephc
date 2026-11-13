@@ -34,6 +34,17 @@ pub unsafe extern "C" fn elephc_mbstring_regex_provider_v1(provider: *const MbRe
 #[no_mangle]
 pub extern "C" fn elephc_mbstring_regex_available_v1() -> i32 { i32::from(crate::regex::provider_available()) }
 
+/// Permits ASCII byte-pattern shortcuts only under live UTF-8/default syntax and limits.
+#[no_mangle]
+pub extern "C" fn elephc_mbstring_regex_ascii_defaults_v1() -> i32 {
+    catch_unwind(AssertUnwindSafe(|| {
+        let limits = REQUEST.with(|state| state.borrow().ini_regex_limits());
+        REGEX.with(|session| i32::from(session.encoding().name() == "UTF-8"
+            && session.options() == crate::regex::Options::default()
+            && limits == (100_000, 1_000_000)))
+    })).unwrap_or(0)
+}
+
 /// Executes coerced regex arguments and buffers warnings for the callback-free wire entry.
 pub(super) fn dispatch(operation: RuntimeBuiltinId, args: &Arguments<'_>, state: &State) -> Outcome {
     let (stack, retry) = state.ini_regex_limits();

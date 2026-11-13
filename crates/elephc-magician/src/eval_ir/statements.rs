@@ -23,6 +23,12 @@ pub enum EvalStmt {
         index: EvalExpr,
         value: EvalExpr,
     },
+    DimensionWrite {
+        array: EvalExpr,
+        index: Option<EvalExpr>,
+        op: Option<EvalBinOp>,
+        value: EvalExpr,
+    },
     Break,
     Continue,
     DoWhile {
@@ -226,6 +232,14 @@ pub enum EvalStmt {
     StoreVar {
         name: String,
         value: EvalExpr,
+    },
+    /// `$name++`, `$name--`, `++$name`, or `--$name` as a statement.
+    ///
+    /// Kept distinct from `StoreVar` because PHP leaves a null local unchanged on
+    /// decrement instead of evaluating `null - 1`.
+    IncDecVar {
+        name: String,
+        increment: bool,
     },
     Switch {
         expr: EvalExpr,

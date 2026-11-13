@@ -1,8 +1,6 @@
 ---
 title: "_imagick_pack2() - internals"
 description: "Compiler internals for _imagick_pack2(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1280
 ---
 
 ## `_imagick_pack2()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:4505](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L4505) (`_imagick_pack2`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`_imagick_pack2`)
 - **Function symbol**: `_imagick_pack2()`
 
 

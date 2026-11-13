@@ -1,8 +1,6 @@
 ---
 title: "curl_escape()"
 description: "URL-encodes a string with the given cURL handle."
-sidebar:
-  order: 770
 ---
 
 ## curl_escape()
@@ -21,8 +19,9 @@ URL-encodes a string with the given cURL handle.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_escape.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_escape.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

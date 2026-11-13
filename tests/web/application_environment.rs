@@ -21,15 +21,22 @@ fn application_allocation_responses(binary: &Path, extra_environment: bool) -> V
     }).collect()
 }
 
-/// Application requests allocate independently of unused environment size, including literal calls.
+/// Application allocations ignore unused environment size even with unreferenced callback helpers.
 #[test]
 fn web_application_environment_unused_entries_do_not_allocate() {
     let dir = EnvironmentFixture(make_test_dir("web_application_environment_unused"));
-    for (stem, prefix) in [
-        ("direct", ""),
-        ("literal_callable", "$fn = 'strlen'; $fn('ok');"),
+    for (stem, declarations, prefix) in [
+        ("direct", "", ""),
+        ("literal_callable", "", "$fn = 'strlen'; $fn('ok');"),
+        ("unused_callbacks", r#"
+function unused_callback(callable $callback): string { return $callback('ok'); }
+final class Environment {
+    public function map(callable $callback): string { return $callback('ok'); }
+}
+"#, ""),
     ] {
         let source = format!(r#"<?php
+{declarations}
 class Application implements Elephc\Web\WorkerApplication {{
     private int $previous = 0;
     public function __construct() {{ $this->previous = memory_get_allocations(); }}
@@ -50,6 +57,38 @@ Elephc\Web\Worker::register(new Application());
         assert!(small.iter().all(|response| response.ends_with(":present")), "{small:?}");
         assert_eq!(small, large, "unused environment entries must not allocate per request ({stem})");
     }
+}
+
+/// Literal factories and decoders crossing helper boundaries do not copy unused ENV entries.
+#[test]
+fn web_application_environment_literal_parameter_entries_do_not_allocate() {
+    let dir = EnvironmentFixture(make_test_dir("web_application_environment_parameters"));
+    let binary = compile_web_with_flags(&dir.0, r#"<?php
+function environment_through(callable $factory): string { return $factory(); }
+final class EnvironmentHost {
+    public static function serve(callable $factory): string {
+        return self::dispatch(fn(): string => $factory());
+    }
+    private static function dispatch(callable $factory): string { return $factory(); }
+}
+class ParameterApplication implements Elephc\Web\WorkerApplication {
+    private int $previous = 0;
+    public function __construct() { $this->previous = memory_get_allocations(); }
+    public function handle(Elephc\Web\Request $request): void {
+        $value = environment_through(fn(): string => 'ok');
+        $value = EnvironmentHost::serve(fn(): string => $value);
+        $now = memory_get_allocations();
+        echo $now - $this->previous, ':', $value, ':', getenv('ELEPHC_WEB_TEST_ENV');
+        $this->previous = $now;
+    }
+    public function shutdown(): void {}
+}
+Elephc\Web\Worker::register(new ParameterApplication());
+"#, "parameters", &["--web-lifecycle=application"]);
+    let small = application_allocation_responses(&binary, false);
+    let large = application_allocation_responses(&binary, true);
+    assert!(small.iter().all(|response| response.ends_with(":ok:present")), "{small:?}");
+    assert_eq!(small, large, "literal helper arguments must not add per-request ENV allocation");
 }
 
 /// Bootstrap environment snapshots survive fresh request copies and reset after a throwing request.

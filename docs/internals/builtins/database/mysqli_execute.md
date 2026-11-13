@@ -1,8 +1,6 @@
 ---
 title: "mysqli_execute() - internals"
 description: "Compiler internals for mysqli_execute(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 116
 ---
 
 ## `mysqli_execute()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:1564](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L1564) (`mysqli_execute`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_execute`)
 - **Function symbol**: `mysqli_execute()`
 
 
@@ -29,12 +27,12 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_execute(mixed $statement): bool
+function mysqli_execute(mixed $statement, ?array $params = null): bool
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

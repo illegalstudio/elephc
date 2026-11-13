@@ -18,9 +18,15 @@ pub(super) fn lower_numeric_unary(
     expr: &Expr,
 ) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    if int_op == Op::INeg && crate::types::object_operators::operator_class(&ctx.builder.value_php_type(value.value)).is_some() {
-        let zero = lower_int_literal(ctx, 0, expr);
-        if let Some(result) = object_operators::lower_object_binary_values(ctx, zero, &BinOp::Sub, value, expr) {
+    let operand_type = ctx.builder.value_php_type(value.value);
+    let number_class = crate::types::object_operators::binary_plan_with_classes(
+        &BinOp::Mul, &PhpType::Int, &operand_type, ctx.classes,
+    ).is_some_and(|plan| plan.class.operators.is_some_and(|operators|
+        operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number));
+    if int_op == Op::INeg && (number_class || crate::types::object_operators::operator_class(&operand_type).is_some()) {
+        let factor = lower_int_literal(ctx, if number_class { -1 } else { 0 }, expr);
+        let operation = if number_class { BinOp::Mul } else { BinOp::Sub };
+        if let Some(result) = object_operators::lower_object_binary_values(ctx, factor, &operation, value, expr) {
             return result;
         }
     }
@@ -43,8 +49,8 @@ pub(super) fn lower_numeric_unary(
         }
         _ if int_op == Op::INeg => {
             let zero = lower_int_literal(ctx, 0, expr);
-            if let Some(result) = object_operators::lower_dynamic_object_binary(
-                ctx, zero, &BinOp::Sub, value, expr, true, |ctx| {
+            if let Some(result) = object_operators::lower_dynamic_object_negate(
+                ctx, zero, value, expr, |ctx| {
                     let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
                     release_binary_operand_temporary(ctx, value, expr.span);
                     result
@@ -188,32 +194,65 @@ pub(super) fn lower_logical_binary(
         else_args: Vec::new(),
     });
 
+    // Only one path evaluates the right operand, so an assignment inside it must not leak into
+    // the facts after the merge as though it always ran.
+    let mut join = crate::ir_lower::stmt::ExprBranchJoin::at_split(ctx);
+
     ctx.builder.position_at_end(rhs_block);
+    join.enter_arm(ctx);
     let rhs = lower_expr(ctx, right);
     let rhs = ctx.truthy_consuming(rhs, Some(right.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, rhs, expr.span);
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
     ctx.builder.position_at_end(const_block);
+    join.enter_arm(ctx);
     let const_value = emit_bool_literal(ctx, matches!(op, BinOp::Or), Some(expr.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, const_value, expr.span);
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, merge, expr.span);
     take_owned_temp(ctx, &temp_name, expr.span)
 }
 
-/// Lowers non-short-circuiting PHP logical `xor`.
+/// Lowers eager PHP logical `xor`, preserving native boolean handlers and operand owners.
 pub(super) fn lower_logical_xor(
     ctx: &mut LoweringContext<'_, '_>,
     left: &Expr,
     right: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    let lhs = lower_expr(ctx, left);
-    let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
-    let rhs = lower_expr(ctx, right);
-    let rhs = lower_truthy_bool(ctx, rhs, Some(right.span));
+    let native_boolean = ctx.classes.keys().any(|name|
+        elephc_builtin_contract::lookup_class(name)
+            .and_then(|class| class.operators).and_then(|operators| operators.boolean).is_some());
+    let (lhs, rhs) = if native_boolean {
+        // XOR evaluates both operands before either native conversion can throw.
+        let lhs = lower_expr(ctx, left);
+        let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, right, left.span);
+        let rhs = lower_expr(ctx, right);
+        let (rhs, right_pins) = object_operators::capture_left_operand(ctx, rhs, expr, right.span);
+        let left_input = LoweredValue {
+            value: pinned_transfer_owner(ctx, &left_pins, left.span).unwrap_or(lhs.value),
+            ..lhs
+        };
+        let right_input = LoweredValue {
+            value: pinned_transfer_owner(ctx, &right_pins, right.span).unwrap_or(rhs.value),
+            ..rhs
+        };
+        let lhs = ctx.truthy(left_input, Some(left.span));
+        let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
+        let rhs = ctx.truthy(right_input, Some(right.span));
+        let rhs = lower_truthy_bool(ctx, rhs, Some(right.span));
+        release_pinned_in_flight_owners(ctx, right_pins, right.span);
+        release_pinned_in_flight_owners(ctx, left_pins, left.span);
+        (lhs, rhs)
+    } else {
+        let lhs = lower_expr(ctx, left);
+        let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
+        let rhs = lower_expr(ctx, right);
+        let rhs = lower_truthy_bool(ctx, rhs, Some(right.span));
+        (lhs, rhs)
+    };
     ctx.emit_value(
         Op::ICmp,
         vec![lhs.value, rhs.value],

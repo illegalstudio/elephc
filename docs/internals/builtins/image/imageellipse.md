@@ -1,8 +1,6 @@
 ---
 title: "imageellipse() - internals"
 description: "Compiler internals for imageellipse(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 508
 ---
 
 ## `imageellipse()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/image_prelude.rs`:2716](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs#L2716) (`imageellipse`)
+- **Lowering**: [`src/image_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/image_prelude.rs) (`imageellipse`)
 - **Function symbol**: `imageellipse()`
 
 

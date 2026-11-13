@@ -95,7 +95,7 @@ pub struct Name {
     pub kind: NameKind,
     pub parts: Vec<String>,
     text: String,
-    /// Whether an unqualified call bound to a conditional declaration may try its global basename.
+    /// Whether an unqualified local call may try its global basename after autoloading and folding.
     /// Explicitly qualified names and imported function aliases never carry this fallback.
     /// Keep this flag in the existing alignment padding: names are embedded in large AST builders.
     function_fallback: bool,
@@ -219,7 +219,7 @@ impl Name {
         self
     }
 
-    /// Returns the global candidate retained for rebinding after a polyfill is pruned.
+    /// Returns the global candidate retained until autoloading and polyfill pruning finish.
     pub(crate) fn function_fallback(&self) -> Option<&str> {
         self.function_fallback.then(|| self.last_segment()).flatten()
     }
@@ -876,6 +876,11 @@ pub fn internal_generated_function_name(kind: &str, parts: &[u64]) -> String {
 /// Format: `_fn_<mangled_fqn>`. Used for user-defined function entry points.
 pub fn function_symbol(name: &str) -> String {
     format!("_fn_{}", mangle_fqn(name))
+}
+
+/// Names the EIR validator called before a generator allocates its lazy coroutine.
+pub(crate) fn generator_parameter_guard_name(name: &str) -> String {
+    format!("__eir_generator_parameter_guard{}{}", INTERNAL_SYMBOL_SEPARATOR, name)
 }
 
 /// Returns the variant-active dispatch helper symbol for a given PHP function name.

@@ -59,6 +59,52 @@ pub(in crate::interpreter) fn eval_builtin_trim_like_named(
     }
 }
 
+/// Expands PHP's trim charlist into a 256-byte membership set.
+///
+/// Mirrors `php_charmask`: an increasing `start..end` range contributes every
+/// byte between its endpoints, while an invalid range leaves its bytes literal
+/// instead of consuming the four-byte range syntax. The invalid-range warning
+/// is not emitted yet.
+fn expand_trim_mask(
+    mask: &[u8],
+    name: &str,
+    values: &mut impl RuntimeValueOps,
+) -> Result<[bool; 256], EvalStatus> {
+    let mut set = [false; 256];
+    let mut index = 0;
+    while index < mask.len() {
+        let byte = mask[index];
+        if index + 3 < mask.len() && mask[index + 1] == b'.' && mask[index + 2] == b'.' {
+            let end = mask[index + 3];
+            if end >= byte {
+                for value in byte..=end {
+                    set[value as usize] = true;
+                }
+                index += 4;
+            } else {
+                set[byte as usize] = true;
+                index += 1;
+            }
+        } else if byte == b'.' && index + 1 < mask.len() && mask[index + 1] == b'.' {
+            let message = if index == 0 {
+                "Invalid '..'-range, no character to the left of '..'"
+            } else if index + 2 >= mask.len() {
+                "Invalid '..'-range, no character to the right of '..'"
+            } else if mask[index - 1] > mask[index + 2] {
+                "Invalid '..'-range, '..'-range needs to be incrementing"
+            } else {
+                "Invalid '..'-range"
+            };
+            values.warning(&format!("Warning: {name}(): {message}\n"))?;
+            index += 1;
+        } else {
+            set[byte as usize] = true;
+            index += 1;
+        }
+    }
+    Ok(set)
+}
+
 /// Trims one converted string using PHP's default mask or a caller-provided byte mask.
 pub(in crate::interpreter) fn eval_trim_like_named_result(
     name: &str,
@@ -74,16 +120,17 @@ pub(in crate::interpreter) fn eval_trim_like_named_result(
     } else {
         PHP_DEFAULT_TRIM_MASK
     };
+    let trim_set = expand_trim_mask(trim_mask, name, values)?;
 
     let mut start = 0;
     let mut end = bytes.len();
     if matches!(name, "trim" | "ltrim") {
-        while start < end && trim_mask.contains(&bytes[start]) {
+        while start < end && trim_set[bytes[start] as usize] {
             start += 1;
         }
     }
     if matches!(name, "trim" | "rtrim" | "chop") {
-        while end > start && trim_mask.contains(&bytes[end - 1]) {
+        while end > start && trim_set[bytes[end - 1] as usize] {
             end -= 1;
         }
     }

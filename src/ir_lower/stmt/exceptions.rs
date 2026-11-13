@@ -145,12 +145,22 @@ pub(super) fn lower_try_catch_finally(
         Op::TryPushHandler.default_effects(),
         Some(span),
     );
-    let depth = push_finally_frame(ctx, finally_body, false, Some((handler_token, span)));
+    let depth = push_finally_frame(
+        ctx,
+        finally_body,
+        false,
+        Some((handler_token, span)),
+    );
     // See the twin in `lower_try_catch`: the handler is active for this body only.
     ctx.push_try_loop_depth();
     lower_block(ctx, try_body);
     ctx.pop_try_loop_depth();
     pop_finally_frame_if_active(ctx, depth);
+    // The finalizer is emitted once for the normal edge and again for every exceptional edge.
+    // Preserve the try exit facts before the first copy: an `unset` or retype in that copy must
+    // not change how the handler-side copies lower their earlier statements.
+    let handler_types = ctx.local_types_snapshot();
+    let handler_initialized = ctx.initialized_slots_snapshot();
     if !ctx.builder.insertion_block_is_terminated() {
         emit_try_pop_handler(ctx, handler_token, span);
         lower_block(ctx, finally_body);
@@ -161,6 +171,8 @@ pub(super) fn lower_try_catch_finally(
     }
 
     ctx.builder.position_at_end(handler_block);
+    ctx.restore_local_types(handler_types);
+    ctx.restore_initialized_slots(handler_initialized);
     ctx.clear_static_callable_locals();
     emit_try_pop_handler(ctx, handler_token, span);
     after_reachable |=
@@ -191,7 +203,11 @@ pub(super) fn lower_catch_dispatch(
     span: Span,
 ) -> bool {
     let mut after_reachable = false;
+    let dispatch_types = ctx.local_types_snapshot();
+    let dispatch_initialized = ctx.initialized_slots_snapshot();
     for catch in catches {
+        ctx.restore_local_types(dispatch_types.clone());
+        ctx.restore_initialized_slots(dispatch_initialized.clone());
         let catch_body = ctx.builder.create_named_block("try.catch_body", Vec::new());
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
         lower_catch_match(ctx, catch, catch_body, next_catch, span);
@@ -223,7 +239,11 @@ pub(super) fn lower_catch_dispatch_with_finally(
     span: Span,
 ) -> bool {
     let mut after_reachable = false;
+    let dispatch_types = ctx.local_types_snapshot();
+    let dispatch_initialized = ctx.initialized_slots_snapshot();
     for catch in catches {
+        ctx.restore_local_types(dispatch_types.clone());
+        ctx.restore_initialized_slots(dispatch_initialized.clone());
         let catch_body = ctx.builder.create_named_block("try.catch_body", Vec::new());
         let next_catch = ctx.builder.create_named_block("try.catch_next", Vec::new());
         lower_catch_match(ctx, catch, catch_body, next_catch, span);
@@ -245,11 +265,20 @@ pub(super) fn lower_catch_dispatch_with_finally(
             Op::TryPushHandler.default_effects(),
             Some(span),
         );
-        let depth = push_finally_frame(ctx, finally_body, false, Some((body_token, span)));
+        let depth = push_finally_frame(
+            ctx,
+            finally_body,
+            false,
+            Some((body_token, span)),
+        );
         ctx.push_try_loop_depth();
         lower_block(ctx, &catch.body);
         ctx.pop_try_loop_depth();
         pop_finally_frame_if_active(ctx, depth);
+        // The unwind handler emits a second copy of the same finalizer. Keep the catch-body exit
+        // facts independent from mutations performed by the normal-edge copy below.
+        let unwind_types = ctx.local_types_snapshot();
+        let unwind_initialized = ctx.initialized_slots_snapshot();
         if !ctx.builder.insertion_block_is_terminated() {
             emit_try_pop_handler(ctx, body_token, span);
             lower_block(ctx, finally_body);
@@ -260,6 +289,8 @@ pub(super) fn lower_catch_dispatch_with_finally(
         }
         ctx.clear_static_callable_locals();
         ctx.builder.position_at_end(body_handler);
+        ctx.restore_local_types(unwind_types);
+        ctx.restore_initialized_slots(unwind_initialized);
         emit_try_pop_handler(ctx, body_token, span);
         lower_finally_with_pending_exception(ctx, finally_body, span);
         ctx.clear_static_callable_locals();
@@ -267,6 +298,8 @@ pub(super) fn lower_catch_dispatch_with_finally(
     }
 
     // No catch matched: the finalizer runs with the exception pending, then rethrows it.
+    ctx.restore_local_types(dispatch_types);
+    ctx.restore_initialized_slots(dispatch_initialized);
     lower_finally_with_pending_exception(ctx, finally_body, span);
     after_reachable
 }
@@ -454,6 +487,7 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
         Op::CatchBind.default_effects(),
         Some(span),
     );
+    let incoming_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[caught.value], span);
     // Only a matched user catch consumes a replacement here. Internal CatchBind users rethrow
     // after cleanup and must preserve the pending host predecessor automatically.
     ctx.emit_void(
@@ -465,7 +499,41 @@ pub(super) fn lower_catch_bind(ctx: &mut LoweringContext<'_, '_>, catch: &CatchC
         crate::ir::Effects::all(),
         Some(span),
     );
+    // Keep the old PHP value alive until the replacement is visible. Its last release can
+    // throw, and an outer catch must already observe the newly bound exception at that point.
+    let previous_owner = catch.variable.as_ref().and_then(|name| {
+        if !ctx.has_local_slot(name) {
+            if ctx.loop_stack.is_empty()
+                && !ctx.has_eval_barrier()
+                && !ctx.local_uses_global_storage(name)
+            {
+                return None;
+            }
+            // A first syntactic binding can replace a previous iteration's value, a value
+            // reloaded by eval, or program-global storage populated by another scope. Frame
+            // slots are zero-initialized when absent; global loads use their shared symbol.
+            if !ctx.local_uses_global_storage(name) {
+                ctx.declare_local(name, php_type.clone());
+            }
+        }
+        let previous = ctx.load_local_for_retirement_pin(name, Some(span));
+        crate::ir_lower::expr::root_value_for_later_use(ctx, previous, span).1
+    });
+    // Reorder only owner records, preserving their values: the incoming transfer must be
+    // disarmed before retiring the old value can throw. Owner records are a strict stack.
+    if let Some(owner) = previous_owner {
+        crate::ir_lower::expr::unregister_owned_call_operand(ctx, owner, span);
+    }
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, incoming_pins, span);
+    if let Some(owner) = previous_owner {
+        crate::ir_lower::expr::register_owned_call_operand(ctx, owner, span);
+    }
+    let store_pins = crate::ir_lower::expr::pin_in_flight_owners(ctx, &[caught.value], span);
     ctx.store_local(&variable, caught, php_type, Some(span));
+    crate::ir_lower::expr::unpin_in_flight_owners(ctx, store_pins, span);
+    if let Some(owner) = previous_owner {
+        crate::ir_lower::expr::retire_owned_call_operand(ctx, owner, span);
+    }
 }
 
 /// Returns the local type to use for a catch variable.

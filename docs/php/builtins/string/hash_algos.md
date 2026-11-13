@@ -1,8 +1,6 @@
 ---
 title: "hash_algos()"
 description: "Returns an array of supported hashing algorithm names."
-sidebar:
-  order: 875
 ---
 
 ## hash_algos()
@@ -19,8 +17,9 @@ Returns an array of supported hashing algorithm names.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_algos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_algos.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

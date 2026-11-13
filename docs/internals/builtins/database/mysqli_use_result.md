@@ -1,8 +1,6 @@
 ---
 title: "mysqli_use_result() - internals"
 description: "Compiler internals for mysqli_use_result(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 184
 ---
 
 ## `mysqli_use_result()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:913](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L913) (`mysqli_use_result`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_use_result`)
 - **Function symbol**: `mysqli_use_result()`
 
 

@@ -38,6 +38,7 @@ fn emit_aarch64_eval_scope_runtime(emitter: &mut Emitter) {
     emit_aarch64_eval_scope_free(emitter);
     emit_aarch64_eval_scope_set(emitter);
     emit_aarch64_eval_scope_get(emitter);
+    emit_aarch64_eval_scope_native_type(emitter);
 }
 
 /// Emits the ARM64 scope allocator.
@@ -221,6 +222,17 @@ fn emit_aarch64_eval_scope_get(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the fatal eval status
 }
 
+/// Emits the scope-only native-type validator stub.
+///
+/// Literal AOT eval does not enter Magician, so no interpreter assignment can violate a native
+/// local's declared object type. The shared barrier still calls the bridge ABI, and this stub
+/// keeps that surface link-complete while reporting success.
+fn emit_aarch64_eval_scope_native_type(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_scope_native_type_v1");
+    emitter.instruction(&format!("mov x0, #{}", EVAL_STATUS_OK));               // scope-only barriers have no interpreter write to validate
+    emitter.instruction("ret");                                                 // return the successful eval status
+}
+
 /// Emits x86_64 eval-scope helpers. `__elephc_eval_value_null` comes from the
 /// eval bridge value wrappers, which scope-only programs also emit.
 fn emit_x86_64_eval_scope_runtime(emitter: &mut Emitter) {
@@ -228,6 +240,7 @@ fn emit_x86_64_eval_scope_runtime(emitter: &mut Emitter) {
     emit_x86_64_eval_scope_free(emitter);
     emit_x86_64_eval_scope_set(emitter);
     emit_x86_64_eval_scope_get(emitter);
+    emit_x86_64_eval_scope_native_type(emitter);
 }
 
 /// Emits the x86_64 scope allocator.
@@ -425,6 +438,13 @@ fn emit_x86_64_eval_scope_get(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_scope_get_fatal");
     emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_RUNTIME_FATAL));    // report invalid scope/name inputs
     emitter.instruction("ret");                                                 // return the fatal eval status
+}
+
+/// Emits the x86_64 scope-only native-type validator stub.
+fn emit_x86_64_eval_scope_native_type(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_scope_native_type_v1");
+    emitter.instruction(&format!("mov eax, {}", EVAL_STATUS_OK));               // scope-only barriers have no interpreter write to validate
+    emitter.instruction("ret");                                                 // return the successful eval status
 }
 
 /// Emits a global label with platform C-symbol mangling.

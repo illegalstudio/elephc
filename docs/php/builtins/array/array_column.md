@@ -1,8 +1,6 @@
 ---
 title: "array_column()"
 description: "Returns the values from a single column of an array of arrays."
-sidebar:
-  order: 4
 ---
 
 ## array_column()
@@ -21,8 +19,9 @@ Returns the values from a single column of an array of arrays.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/array/array_column.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/array/array_column.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

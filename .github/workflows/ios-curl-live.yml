@@ -28,6 +28,8 @@ on:
 
 permissions:
   contents: read
+  packages: read
+  actions: read
 
 concurrency:
   group: ios-curl-live
@@ -39,31 +41,41 @@ env:
   RUST_TOOLCHAIN: "1.98"
 
 jobs:
+  build-host:
+    uses: ./.github/workflows/ci-build-host.yml
+    with:
+      target: macos-aarch64
+      scope: compiler
+
+  build-ios:
+    uses: ./.github/workflows/ci-build-ios.yml
+    with:
+      targets: '["ios-sim-arm64"]'
+
   curl-ios-live-transfer:
     name: Curl iOS Live HTTPS (ios-sim-arm64)
+    needs: [build-host, build-ios]
+    env:
+      ELEPHC_CI_PREBUILT_COMPILER: '1'
+      ELEPHC_CI_PREBUILT_IOS_BRIDGES: '1'
     runs-on: macos-15
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust with the iOS Simulator standard library
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - name: Restore shared compiler
+        uses: ./.github/actions/restore-build-artifact
         with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          targets: aarch64-apple-ios-sim
+          target: macos-aarch64
+          kind: compiler
+          attempt: ${{ needs.build-host.outputs.artifact-attempt }}
 
-      - name: Cache Rust build state
-        # Dependencies only (registry, git checkouts, and the dependency
-        # artifacts under target/); the action prunes the workspace crates'
-        # own artifacts before saving. Caching the whole target/ dir put three
-        # 4 GB entries per platform plus every other job's into the repository's
-        # 10 GB allowance, so main's entries were evicted before the next run
-        # and every archive job compiled from scratch.
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+      - name: Restore shared iOS bridges
+        uses: ./.github/actions/restore-build-artifact
         with:
-          prefix-key: rust-deps-curl-ios-sim-arm64
-          cache-bin: false
-          cache-on-failure: true
+          target: ios-sim-arm64
+          kind: ios
+          attempt: ${{ fromJSON(needs.build-ios.outputs.artifact-attempts)['ios-sim-arm64'] }}
 
       - name: Cache managed native curl for iOS
         uses: actions/cache@v6
@@ -83,3 +95,7 @@ jobs:
             iphonesimulator \
             arm64-apple-ios13.0-simulator \
             --run
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds

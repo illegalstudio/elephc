@@ -227,19 +227,10 @@ fn eval_var_dump_append_array(
     output.extend_from_slice(len.to_string().as_bytes());
     output.extend_from_slice(b") {\n");
     for position in 0..len {
-        let key = values.array_iter_key(value, position)?;
-        let element = values.array_get(value, key)?;
-        eval_var_dump_append_array_key(key, values, depth + 1, output)?;
-        eval_var_dump_append_value(
-            element,
-            context,
-            values,
-            depth + 1,
-            false,
-            arrays_seen,
-            objects_seen,
-            output,
-        )?;
+        super::native_debug::with_entry(value, position, context, values, |key, element, context, values| {
+            eval_var_dump_append_array_key(key, values, depth + 1, output)?;
+            eval_var_dump_append_value(element, context, values, depth + 1, false, arrays_seen, objects_seen, output)
+        })?;
     }
     eval_var_dump_append_indent(depth, output);
     output.extend_from_slice(b"}\n");
@@ -260,6 +251,9 @@ fn eval_var_dump_append_object(
 ) -> Result<(), EvalStatus> {
     let identity = eval_debug_object_identity(value, values);
     let object_key = identity.unwrap_or(value.as_ptr() as usize as u64) as usize;
+    if runtime_ops::simplexml_properties::is_native(values, value, "")? {
+        return eval_var_dump_append_native_object(value, identity, object_key, context, values, depth, is_reference, arrays_seen, objects_seen, output);
+    }
     if objects_seen.contains(&object_key) {
         eval_var_dump_append_prefix(depth, is_reference, output);
         output.extend_from_slice(b"*RECURSION*\n");
@@ -294,6 +288,47 @@ fn eval_var_dump_append_object(
     output.extend_from_slice(b"}\n");
     objects_seen.pop();
     Ok(())
+}
+
+/// Renders native debug properties while sharing recursion and streaming with AOT hooks.
+fn eval_var_dump_append_native_object(
+    value: RuntimeCellHandle,
+    identity: Option<u64>,
+    object_key: usize,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+    depth: usize,
+    is_reference: bool,
+    arrays_seen: &mut Vec<usize>,
+    objects_seen: &mut Vec<usize>,
+    output: &mut Vec<u8>,
+) -> Result<(), EvalStatus> {
+    if objects_seen.contains(&object_key) || values.debug_guard_find(value)? {
+        eval_var_dump_append_prefix(depth, is_reference, output);
+        output.extend_from_slice(b"*RECURSION*\n");
+        return Ok(());
+    }
+    let class_name = eval_debug_object_class_name(value, identity, context, values)?;
+    objects_seen.push(object_key);
+    let result = super::native_debug::with_guard(value, context, values, |context, values| {
+        eval_var_dump_append_prefix(depth, is_reference, output);
+        super::native_debug::flush(output, context, values)?;
+        super::native_debug::with_projection(value, context, values, |hash, context, values| {
+            let len = values.array_len(hash)?;
+            output.extend_from_slice(format!("object({class_name})#{object_key} ({len}) {{\n").as_bytes());
+            for position in 0..len {
+                super::native_debug::with_entry(hash, position, context, values, |key, element, context, values| {
+                    eval_var_dump_append_array_key(key, values, depth + 1, output)?;
+                    eval_var_dump_append_value(element, context, values, depth + 1, false, arrays_seen, objects_seen, output)
+                })?;
+            }
+            eval_var_dump_append_indent(depth, output);
+            output.extend_from_slice(b"}\n");
+            Ok(())
+        })
+    });
+    objects_seen.pop();
+    result
 }
 
 /// Appends one array key line for an indexed or associative `var_dump()` entry.

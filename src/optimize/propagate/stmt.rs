@@ -39,6 +39,9 @@ thread_local! {
     /// must never carry a propagated fact. Conservative across the whole program.
     static REFERENCE_VOLATILE: std::cell::RefCell<std::collections::HashSet<String>> =
         std::cell::RefCell::new(std::collections::HashSet::new());
+    /// Reference parameters can alias one another; their names belong only to this body.
+    static REFERENCE_PARAMETERS: std::cell::RefCell<HashSet<String>> =
+        std::cell::RefCell::new(HashSet::new());
 }
 
 /// Clears the reference-volatile set before a fresh constant-propagation run.
@@ -67,6 +70,78 @@ pub(in crate::optimize) fn mark_reference_volatile(name: &str) {
 /// Returns true when `name` is bound by reference and must not carry a propagated constant.
 pub(in crate::optimize) fn is_reference_volatile(name: &str) -> bool {
     REFERENCE_VOLATILE.with(|cell| cell.borrow().contains(name))
+        || REFERENCE_PARAMETERS.with(|cell| cell.borrow().contains(name))
+}
+
+/// Collects reference parameter names without changing declaration or variadic metadata.
+pub(in crate::optimize) fn reference_parameter_names(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    variadic: Option<&str>, variadic_by_ref: bool,
+) -> HashSet<String> {
+    let mut names = params.iter().filter(|(_, _, _, by_ref)| *by_ref)
+        .map(|(name, _, _, _)| name.clone()).collect::<HashSet<_>>();
+    if let Some(name) = variadic.filter(|_| variadic_by_ref) { names.insert(name.to_string()); }
+    names
+}
+
+/// Identifies closure bindings that copy values instead of inheriting an outer reference.
+pub(in crate::optimize) fn closure_value_binding_names(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    captures: &[String], capture_refs: &[String],
+    variadic: Option<&str>, variadic_by_ref: bool,
+) -> HashSet<String> {
+    let mut names = params.iter().filter(|(_, _, _, by_ref)| !*by_ref)
+        .map(|(name, ..)| name.clone()).collect::<HashSet<_>>();
+    names.extend(captures.iter().filter(|name| !capture_refs.contains(name)).cloned());
+    if let Some(name) = variadic.filter(|_| !variadic_by_ref) { names.insert(name.to_string()); }
+    names
+}
+
+/// Restores only the reference flags shadowed by a closure's by-value bindings.
+struct ReferenceValueScope(Vec<(String, bool)>);
+
+impl Drop for ReferenceValueScope {
+    /// Keeps references discovered in unrelated bindings while restoring the enclosing values.
+    fn drop(&mut self) {
+        REFERENCE_VOLATILE.with(|cell| {
+            let mut names = cell.borrow_mut();
+            for (name, present) in &self.0 {
+                if *present { names.insert(name.clone()); } else { names.remove(name); }
+            }
+        });
+    }
+}
+
+/// Isolates by-value closure bindings from same-spelled exposed references in other scopes.
+pub(in crate::optimize) fn with_reference_value_scope<R>(
+    names: HashSet<String>, f: impl FnOnce() -> R,
+) -> R {
+    let _guard = ReferenceValueScope(REFERENCE_VOLATILE.with(|cell| {
+        let mut current = cell.borrow_mut();
+        names.into_iter().map(|name| {
+            let present = current.remove(&name);
+            (name, present)
+        }).collect()
+    }));
+    f()
+}
+
+/// Restores reference parameter names without losing globally exposed aliases discovered in a body.
+struct ReferenceParameterScope(HashSet<String>);
+
+impl Drop for ReferenceParameterScope {
+    /// Restores the enclosing function's parameters even if propagation unwinds.
+    fn drop(&mut self) {
+        REFERENCE_PARAMETERS.with(|cell| { cell.replace(std::mem::take(&mut self.0)); });
+    }
+}
+
+/// Propagates one function-like body while refusing facts about possibly aliased parameters.
+pub(in crate::optimize) fn with_reference_parameter_scope<R>(
+    by_ref_return: bool, parameters: HashSet<String>, f: impl FnOnce() -> R,
+) -> R {
+    let _guard = ReferenceParameterScope(REFERENCE_PARAMETERS.with(|cell| cell.replace(parameters)));
+    with_function_scope_mode(by_ref_return, f)
 }
 
 thread_local! {
@@ -392,29 +467,32 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             variadic_type,
             return_type,
             body,
-        } => (
-            Stmt::new(
-                StmtKind::FunctionDecl {
-                    by_ref_return,
-                    name,
-                    type_params,
-                    params: propagate_params(params),
-                    param_attributes,
-                    variadic,
-                    variadic_by_ref,
-                    variadic_type,
-                    return_type,
-                    body: with_function_scope_mode(by_ref_return, || {
-                        crate::optimize::generator_bodies::rewrite_preserving_yield(
-                            body,
-                            |body| propagate_block(body, HashMap::new()).0,
-                        )
-                    }),
-                },
-                span,
-            ),
-            env,
-        ),
+        } => {
+            let reference_parameters = reference_parameter_names(&params, variadic.as_deref(), variadic_by_ref);
+            (
+                Stmt::new(
+                    StmtKind::FunctionDecl {
+                        by_ref_return,
+                        name,
+                        type_params,
+                        params: propagate_params(params),
+                        param_attributes,
+                        variadic,
+                        variadic_by_ref,
+                        variadic_type,
+                        return_type,
+                        body: with_reference_parameter_scope(by_ref_return, reference_parameters, || {
+                            crate::optimize::generator_bodies::rewrite_preserving_yield(
+                                body,
+                                |body| propagate_block(body, HashMap::new()).0,
+                            )
+                        }),
+                    },
+                    span,
+                ),
+                env,
+            )
+        },
         StmtKind::Return(expr) => {
             let expr = if in_by_ref_return_scope() {
                 expr

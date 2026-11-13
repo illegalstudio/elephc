@@ -15,6 +15,7 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
     for class_name in [
         "ReflectionClass",
         "ReflectionObject",
+        "ReflectionEnum",
         "ReflectionFunction",
         "ReflectionMethod",
         "ReflectionProperty",
@@ -39,11 +40,6 @@ pub(crate) fn patch_builtin_reflection_signatures(checker: &mut Checker) {
             patch_reflection_intersection_type(class_name, class_info);
             patch_reflection_attribute_result(class_info);
         }
-    }
-    // ReflectionEnum is built from a copy of ReflectionClass's members, so its `getAttributes()`
-    // needs the same element type; the owner loop's other patches key on the owner names above.
-    if let Some(class_info) = checker.classes.get_mut("ReflectionEnum") {
-        patch_reflection_attribute_result(class_info);
     }
     patch_final_reflection_overrides(checker);
     propagate_reflection_patches_to_user_subclasses(checker);

@@ -1,8 +1,6 @@
 ---
 title: "imagecropauto()"
 description: "Crops an image automatically by the chosen mode."
-sidebar:
-  order: 505
 ---
 
 ## imagecropauto()
@@ -23,8 +21,9 @@ Crops an image automatically by the chosen mode.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

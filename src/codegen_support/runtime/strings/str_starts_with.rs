@@ -1,19 +1,21 @@
 //! Purpose:
-//! Emits the `__rt_str_starts_with`, `__rt_str_starts_with_no` runtime helper assembly for str starts with.
-//! Keeps PHP byte-string pointer/length behavior and target-specific ABI variants in one focused emitter.
+//! Emits the `__rt_str_starts_with` runtime helper assembly for PHP byte strings.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::strings`.
 //!
 //! Key details:
-//! - String helpers scan or transform byte ranges and return target ABI pointer/length pairs for generated call sites.
+//! - The helper compares the whole prefix with one libc `memcmp`; libc owns the
+//!   vectorized byte comparison on every supported target.
+//! - A prefix longer than the haystack answers false without touching memory.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// str_starts_with: check if haystack starts with needle.
-/// Input: x1/x2=haystack, x3/x4=needle
-/// Output: x0 = 1 if starts with, 0 otherwise
+/// Emits the `__rt_str_starts_with` helper for the active target.
+///
+/// Input (AArch64): x1/x2 = haystack pointer/length, x3/x4 = needle pointer/length.
+/// Output: x0 = 1 when the haystack starts with the needle, 0 otherwise.
 pub fn emit_str_starts_with(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_starts_with_linux_x86_64(emitter);
@@ -23,60 +25,42 @@ pub fn emit_str_starts_with(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_starts_with ---");
     emitter.label_global("__rt_str_starts_with");
-
-    // -- check if needle fits in haystack --
-    emitter.instruction("cmp x4, x2");                                          // compare needle length with haystack length
-    emitter.instruction("b.gt __rt_str_starts_with_no");                        // needle longer than haystack, can't match
-    emitter.instruction("mov x5, #0");                                          // initialize comparison index
-
-    // -- compare prefix bytes --
-    emitter.label("__rt_str_starts_with_loop");
-    emitter.instruction("cmp x5, x4");                                          // check if all needle bytes compared
-    emitter.instruction("b.ge __rt_str_starts_with_yes");                       // all matched, haystack starts with needle
-    emitter.instruction("ldrb w6, [x1, x5]");                                   // load haystack byte at index
-    emitter.instruction("ldrb w7, [x3, x5]");                                   // load needle byte at index
-    emitter.instruction("cmp w6, w7");                                          // compare the two bytes
-    emitter.instruction("b.ne __rt_str_starts_with_no");                        // mismatch, does not start with needle
-    emitter.instruction("add x5, x5, #1");                                      // advance to next byte
-    emitter.instruction("b __rt_str_starts_with_loop");                         // continue comparing
-
-    // -- return results --
-    emitter.label("__rt_str_starts_with_yes");
-    emitter.instruction("mov x0, #1");                                          // return 1 (true: starts with needle)
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("cmp x4, x2");                                          // reject prefixes longer than the haystack
+    emitter.instruction("b.gt __rt_str_starts_with_no");                        // a long prefix cannot match
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the caller frame across libc
+    emitter.instruction("mov x0, x1");                                          // first memcmp argument = haystack bytes
+    emitter.instruction("mov x1, x3");                                          // second memcmp argument = prefix bytes
+    emitter.instruction("mov x2, x4");                                          // memcmp length = prefix length
+    emitter.bl_c("memcmp");                                                     // vectorized whole-prefix comparison
+    emitter.instruction("cmp w0, #0");                                          // did the prefix compare equal?
+    emitter.instruction("cset w0, eq");                                         // return 1 for equality, 0 otherwise
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the caller frame
+    emitter.instruction("ret");                                                 // return the boolean result
     emitter.label("__rt_str_starts_with_no");
-    emitter.instruction("mov x0, #0");                                          // return 0 (false: does not start with)
-    emitter.instruction("ret");                                                 // return to caller
+    emitter.instruction("mov x0, #0");                                          // a long prefix cannot match
+    emitter.instruction("ret");                                                 // return false
 }
 
-/// x86_64 Linux implementation: checks if haystack starts with needle.
-/// Input: rdi=haystack ptr, rdx=needle ptr, rcx=needle length, rsi=haystack length
-/// Output: eax = 1 if haystack starts with needle, 0 otherwise
-/// Called from: `emit_str_starts_with` when target is x86_64
+/// Emits the x86_64 `str_starts_with` helper.
+///
+/// Input: rdi = haystack pointer, rsi = haystack length, rdx = needle pointer,
+/// rcx = needle length. Output: eax = 1 when the prefix matches, 0 otherwise.
 fn emit_str_starts_with_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_starts_with ---");
     emitter.label_global("__rt_str_starts_with");
-
-    emitter.instruction("cmp rcx, rsi");                                        // reject prefixes whose byte length exceeds the haystack length
-    emitter.instruction("jg __rt_str_starts_with_no_linux_x86_64");             // return false when the prefix cannot fit at the start of the haystack
-    emitter.instruction("xor r8d, r8d");                                        // start comparing bytes from offset zero
-
-    emitter.label("__rt_str_starts_with_loop_linux_x86_64");
-    emitter.instruction("cmp r8, rcx");                                         // have all prefix bytes matched so far?
-    emitter.instruction("jge __rt_str_starts_with_yes_linux_x86_64");           // return true once every prefix byte has matched
-    emitter.instruction("movzx eax, BYTE PTR [rdi + r8]");                      // load the haystack byte at the current prefix offset
-    emitter.instruction("movzx r9d, BYTE PTR [rdx + r8]");                      // load the prefix byte at the current prefix offset
-    emitter.instruction("cmp eax, r9d");                                        // compare the haystack and prefix bytes at the current offset
-    emitter.instruction("jne __rt_str_starts_with_no_linux_x86_64");            // return false on the first byte mismatch
-    emitter.instruction("add r8, 1");                                           // advance to the next prefix byte after a successful comparison
-    emitter.instruction("jmp __rt_str_starts_with_loop_linux_x86_64");          // continue checking the remaining prefix bytes
-
-    emitter.label("__rt_str_starts_with_yes_linux_x86_64");
-    emitter.instruction("mov eax, 1");                                          // return true when the haystack begins with the full prefix
-    emitter.instruction("ret");                                                 // return the boolean success result to the caller
-
+    emitter.instruction("cmp rcx, rsi");                                        // reject prefixes longer than the haystack
+    emitter.instruction("jg __rt_str_starts_with_no_linux_x86_64");             // a long prefix cannot match
+    emitter.instruction("sub rsp, 8");                                          // align the stack before the libc call
+    emitter.instruction("mov rsi, rdx");                                        // second memcmp argument = prefix bytes
+    emitter.instruction("mov rdx, rcx");                                        // memcmp length = prefix length
+    emitter.bl_c("memcmp");                                                     // vectorized whole-prefix comparison
+    emitter.instruction("add rsp, 8");                                          // restore the caller stack pointer
+    emitter.instruction("test eax, eax");                                       // did the prefix compare equal?
+    emitter.instruction("sete al");                                             // normalize equality into the low byte
+    emitter.instruction("movzx eax, al");                                       // widen the boolean result
+    emitter.instruction("ret");                                                 // return the boolean result
     emitter.label("__rt_str_starts_with_no_linux_x86_64");
-    emitter.instruction("xor eax, eax");                                        // return false when the prefix does not match the start of the haystack
-    emitter.instruction("ret");                                                 // return the boolean failure result to the caller
+    emitter.instruction("xor eax, eax");                                        // a long prefix cannot match
+    emitter.instruction("ret");                                                 // return false
 }

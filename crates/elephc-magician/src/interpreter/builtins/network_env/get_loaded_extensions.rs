@@ -41,7 +41,7 @@ const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
 /// The extensions the xml bridge contributes, appended when the host linked it.
 ///
 /// KEEP IN SYNC with `src/linker/bridges.rs` (the `elephc_xml` bridge's `php_extensions`).
-const XML_BRIDGE_EXTENSIONS: &[&str] = &["xml", "xmlwriter"];
+const XML_BRIDGE_EXTENSIONS: &[&str] = &["xml", "xmlwriter", "SimpleXML"];
 
 eval_builtin! {
     contract: "get_loaded_extensions",
@@ -109,6 +109,13 @@ pub(in crate::interpreter) fn eval_get_loaded_extensions_result(
     }
     if !zend_extensions && context.native_function("finfo_open").is_some() {
         names = values.string_array_push(names, "fileinfo")?;
+    }
+    if !zend_extensions {
+        for (surface, probe) in super::extension_loaded::EVAL_PRELUDE_SURFACES {
+            if context.native_function(probe).is_some() {
+                names = values.string_array_push(names, surface)?;
+            }
+        }
     }
     if with_xml {
         for name in XML_BRIDGE_EXTENSIONS {

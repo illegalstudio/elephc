@@ -1,14 +1,12 @@
 ---
 title: "mysqli_affected_rows()"
 description: "Returns how many rows the last write affected."
-sidebar:
-  order: 102
 ---
 
 ## mysqli_affected_rows()
 
 ```php
-function mysqli_affected_rows(mixed $mysql): int
+function mysqli_affected_rows(mixed $mysql): mixed
 ```
 
 Returns how many rows the last write affected.
@@ -16,12 +14,13 @@ Returns how many rows the last write affected.
 **Parameters**:
 - `$mysql` (`mixed`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

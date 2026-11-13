@@ -1,8 +1,6 @@
 ---
 title: "mysqli_insert_id() - internals"
 description: "Compiler internals for mysqli_insert_id(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 141
 ---
 
 ## `mysqli_insert_id()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:710](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L710) (`mysqli_insert_id`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_insert_id`)
 - **Function symbol**: `mysqli_insert_id()`
 
 
@@ -29,7 +27,7 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_insert_id(mixed $mysql): int
+function mysqli_insert_id(mixed $mysql): mixed
 ```
 
 ## What the type checker enforces

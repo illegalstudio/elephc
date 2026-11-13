@@ -9,6 +9,30 @@
 //! - Destructor boundaries must finish remaining slots before propagating exceptions.
 //! - Buffer and pointer slots own nothing, so they receive no shutdown cleanup.
 
+/// Concrete object values fit generic-object and ancestor-typed static slots on every ABI.
+#[test]
+fn static_object_subtypes_share_storage_on_all_targets() {
+    let source = r#"<?php
+class StaticObjectParent {}
+class StaticObjectChild extends StaticObjectParent {}
+class StaticObjectSlots {
+    public static object $any;
+    public static StaticObjectParent $base;
+}
+StaticObjectSlots::$any = new stdClass();
+StaticObjectSlots::$base = new StaticObjectChild();
+echo get_class(StaticObjectSlots::$any), ':', get_class(StaticObjectSlots::$base);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."),
+            crate::codegen::platform::Target::parse(name).unwrap(),
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
+}
+
 /// Verifies mixed static roots use storage-aware hash writes and captured prefix results.
 fn assert_mixed_static_update_storage(name: &str) {
     let source = r#"<?php
@@ -217,5 +241,33 @@ echo StaticSlots::$ids[1], StaticSlots::$at->x, ptr_is_null(StaticSlots::$raw) ?
             let symbol = crate::names::static_property_symbol("StaticSlots", property);
             assert!(!asm.contains(&format!("epilogue cleanup static property {symbol}")), "{name}: {property}");
         }
+    }
+}
+
+/// Optimizers preserve the parking-slot identity used by committed boxed static stores.
+#[test]
+fn static_mixed_store_transfers_its_unwind_pin_on_every_target() {
+    let source = "<?php class StaticPinTransfer { public static mixed $value; } \
+        function freshStaticPinValue(): mixed { return new stdClass(); } \
+        function commitStaticPinValue(): void { StaticPinTransfer::$value = freshStaticPinValue(); } \
+        commitStaticPinValue();";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen_support::platform::Target::parse(name).unwrap();
+        let mut module = super::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+        );
+        crate::ir_passes::optimize_module(&mut module);
+        let function = module.functions.iter().find(|function| function.name == "commitStaticPinValue").unwrap();
+        let store = function.instructions.iter().find(|inst| inst.op == crate::ir::Op::StoreStaticProperty).unwrap();
+        assert_eq!(store.operands.len(), 3, "{name}: committing a moved value keeps mode and pin");
+        let owner = function.value(store.operands[2]).unwrap();
+        assert_eq!(owner.ownership, crate::ir::Ownership::Borrowed, "{name}");
+        let crate::ir::ValueDef::Instruction { inst, .. } = owner.def else { panic!("{name}: parking-slot load"); };
+        let load = function.instruction(inst).unwrap();
+        assert_eq!(load.op, crate::ir::Op::LoadLocal, "{name}: never forward the pin's value over its address identity");
+        let Some(crate::ir::Immediate::LocalSlot(slot)) = load.immediate else { panic!("{name}: parking slot"); };
+        assert!(function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PushCallOperandOwner
+            && inst.immediate == Some(crate::ir::Immediate::LocalSlot(slot))), "{name}: pin is published");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

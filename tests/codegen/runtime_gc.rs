@@ -9,15 +9,46 @@
 //! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, by-reference builtin arguments that name a property, static property, or container element, calls that OMIT an optional by-reference argument (whose caller-side cell nothing reads back), the reference a `foreach` loop holds on an object source, and the ownership of an array literal whose element is an array-returning builtin call.
 //! - The `assoc_chunk` submodule checks heap balance when `array_chunk()` copies an associative receiver.
 //! - The `mixed_receiver_property_writes` submodule checks the ownership of a property write whose receiver is statically `mixed`.
+//! - The `property_hook_set_owners` submodule checks that a throwing set-hook accessor releases the caller's owning RHS temporary.
 
+#[path = "runtime_gc/mixed_inc_dec_in_place.rs"]
+mod mixed_inc_dec_in_place;
+#[path = "runtime_gc/case_transform_owners.rs"]
+mod case_transform_owners;
 #[path = "runtime_gc/borrowed_numeric.rs"]
 mod borrowed_numeric;
+#[path = "runtime_gc/print_r_capture.rs"]
+mod print_r_capture;
+#[path = "runtime_gc/owned_tostring.rs"]
+mod owned_tostring;
 #[path = "runtime_gc/borrowed_string_reads.rs"]
 mod borrowed_string_reads;
+mod shared_property_reads;
+mod foreach_hash_scalars;
+mod global_return_owners;
+mod native_raw_property_guards;
+mod late_string_arguments;
+mod native_isset_key_owners;
+mod conditional_indexed_accumulation;
 #[path = "runtime_gc/ref_local_append.rs"]
 mod ref_local_append;
 #[path = "runtime_gc/string_offset_lifetime.rs"]
 mod string_offset_lifetime;
+#[path = "runtime_gc/stream_filter_owners.rs"]
+mod stream_filter_owners;
+mod leaf_array_cycles;
+mod eval_method_adapter_owners;
+mod eval_builtin_argument_operands;
+#[path = "runtime_gc/eval_call_adapter_owners.rs"]
+mod eval_call_adapter_owners;
+mod eval_reflection_factory_owners;
+mod method_receiver_owners;
+mod file_write_owners;
+mod eval_string_split_owners;
+mod eval_persistent_owners;
+#[path = "runtime_gc/static_eval_arrays.rs"]
+mod static_eval_arrays;
+mod scalar_widening_owners;
 #[path = "runtime_gc/json_decode_owners.rs"]
 mod json_decode_owners;
 #[path = "runtime_gc/string_append.rs"]
@@ -28,6 +59,8 @@ mod bcmath_number;
 mod basics;
 #[path = "runtime_gc/branch_conditions.rs"]
 mod branch_conditions;
+#[path = "runtime_gc/conditional_assignment_owners.rs"]
+mod conditional_assignment_owners;
 #[path = "runtime_gc/receiver_parameter_owners.rs"]
 mod receiver_parameter_owners;
 mod guarded_interface_mutations;
@@ -52,8 +85,11 @@ mod object_cast;
 mod array_cast;
 #[path = "runtime_gc/nullable_string_return.rs"]
 mod nullable_string_return;
+mod nullable_flow_slots;
 #[path = "runtime_gc/nullable_array_read_owners.rs"]
 mod nullable_array_read_owners;
+#[path = "runtime_gc/nullable_native_isset.rs"]
+mod nullable_native_isset;
 #[path = "runtime_gc/iconv.rs"]
 mod iconv;
 #[path = "runtime_gc/mbstring.rs"]
@@ -90,6 +126,8 @@ mod putenv;
 mod regressions;
 #[path = "runtime_gc/assoc_rebind_release.rs"]
 mod assoc_rebind_release;
+#[path = "runtime_gc/branch_join_boxing.rs"]
+mod branch_join_boxing;
 #[path = "runtime_gc/by_ref_foreach_reference_cells.rs"]
 mod by_ref_foreach_reference_cells;
 #[path = "runtime_gc/compound_assign_stores.rs"]
@@ -100,6 +138,10 @@ mod assoc_chunk;
 mod literal_builtin_elements;
 #[path = "runtime_gc/mixed_receiver_property_writes.rs"]
 mod mixed_receiver_property_writes;
+mod property_dimension_fetch_modes;
+mod property_magic_dimension_guards;
+mod property_magic_appends;
+mod property_append_storage;
 #[path = "runtime_gc/assoc_literal_spreads.rs"]
 mod assoc_literal_spreads;
 mod nested_nullable_property_compound;
@@ -112,6 +154,8 @@ mod object_supertype_rebind;
 mod boxed_property_defaults;
 #[path = "runtime_gc/by_ref_place_args.rs"]
 mod by_ref_place_args;
+#[path = "runtime_gc/nullable_ref_writeback.rs"]
+mod nullable_ref_writeback;
 #[path = "runtime_gc/by_ref_variadic_writeback.rs"]
 mod by_ref_variadic_writeback;
 #[path = "runtime_gc/variadic_key_writes.rs"]
@@ -146,6 +190,7 @@ mod destructor_catch_cleanup;
 mod callback_argument_cleanup;
 mod argument_evaluation_owners;
 mod codegen_guard_operand_owners;
+mod property_hook_set_owners;
 mod offset_unset_key_guards;
 mod array_edge_type_errors;
 mod call_coercion_owners;
@@ -185,15 +230,35 @@ mod class_name_owners;
 mod handler_registration_owners;
 mod closure_reference_owners;
 mod boxed_array_call_results;
+mod compiled_method_results;
+#[path = "runtime_gc/class_override_results.rs"]
+mod class_override_results;
+mod intrinsic_method_results;
 mod mixed_parameters;
 mod issue_551_ownership;
 mod object_mixed_return_owners;
 mod native_string_arguments;
 mod native_property_unset;
+#[path = "runtime_gc/native_mixed_property_aliases.rs"]
+mod native_mixed_property_aliases;
+#[path = "runtime_gc/native_reference_validation_support.rs"]
+mod native_reference_validation_support;
+#[path = "runtime_gc/native_reference_publication.rs"]
+mod native_reference_publication;
+mod native_static_reference_cells;
+mod native_reference_object_constraints;
+mod native_reference_eval_snapshots;
+mod native_reference_body_views;
+#[path = "runtime_gc/native_reference_validation_pins.rs"]
+mod native_reference_validation_pins;
+#[path = "runtime_gc/native_reference_parameter_leases.rs"]
+mod native_reference_parameter_leases;
+mod shared_return_epilogues;
 mod eval_closure_receivers;
+mod eval_alias_unwind;
+mod eval_call_result_owners;
 mod eval_argument_lifetimes;
 mod eval_array_references;
-mod eval_method_adapter_owners;
 mod eval_operand_owners;
 mod eval_scope_writeback;
 mod unserialize_hydration_data;
@@ -229,7 +294,7 @@ mod string_offset_writes;
 mod gc_incoming_cache;
 #[path = "runtime_gc/unshift_reference_cow.rs"]
 mod unshift_reference_cow;
-
+mod native_callback_results;
 mod entity_slot_owners;
 
 #[path = "runtime_gc/heap_small_bins.rs"]
@@ -256,7 +321,19 @@ mod coroutine_debuginfo;
 mod coroutine_slot_set;
 #[path = "runtime_gc/counter_regions.rs"]
 mod counter_regions;
+#[path = "runtime_gc/numeric_seed_cells.rs"]
+mod numeric_seed_cells;
+#[path = "runtime_gc/settype_foreach.rs"]
+mod settype_foreach;
 #[path = "runtime_gc/static_object_exports.rs"]
 mod static_object_exports;
 #[path = "runtime_gc/gmp_exception_operands.rs"]
 mod gmp_exception_operands;
+
+mod eval_reference_escape;
+mod leaf_unset_collection;
+mod foreach_hash_objects;
+mod property_element_writes;
+mod null_receiver_property_writes;
+mod nullable_identity_guards;
+mod safe_point_budget;

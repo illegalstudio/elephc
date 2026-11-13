@@ -22,7 +22,11 @@ use super::return_ownership;
 use super::{CodegenIrError, Result};
 
 /// Lowers one EIR terminator.
-pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator) -> Result<()> {
+pub(super) fn lower_terminator(
+    ctx: &mut FunctionContext<'_>,
+    source: BlockId,
+    term: &Terminator,
+) -> Result<()> {
     match term {
         Terminator::Return { value: None } => {
             if ctx.is_main {
@@ -52,8 +56,9 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 // is what keeps the acquisition and the returned reference identical when a
                 // fallthrough `finally` rebound that variable in between (PHP snapshots the
                 // same way, with `MAKE_REF` before the finally). The frame's lease slot is the
-                // separate managed OWNER, which a superseding return replaces and cleanup
-                // retires; a borrowed cell leaves it zero while still returning this snapshot.
+                // separate managed OWNER. Each return site keeps its own pending lease, and
+                // cleanup retires every lease except the one belonging to this snapshot.
+                // A borrowed cell leaves its lease zero while still returning this snapshot.
                 if !matches!(ctx.value_php_type(*value)?, PhpType::Pointer(_)) {
                     return Err(CodegenIrError::invalid_module(
                         "by-reference return requires a captured pointer value",
@@ -61,9 +66,12 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 }
                 let int_reg = abi::int_result_reg(ctx.emitter);
                 ctx.load_value_to_reg(*value, int_reg)?;
+                let owner = frame::reference_returns::owner_slot(ctx.function, *value)
+                    .ok_or_else(|| CodegenIrError::invalid_module(
+                        "by-reference return snapshot has no matching reference-cell lease slot"))?;
                 frame::emit_function_return_epilogue(
                     ctx,
-                    None,
+                    Some(owner),
                     return_ownership::ReturnOwnershipStatus::Static(false),
                 );
                 return Ok(());
@@ -100,7 +108,7 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             Ok(())
         }
         Terminator::Br { target, args } => {
-            lower_branch(ctx, *target, args, "br")?;
+            lower_branch(ctx, source, *target, args, "br")?;
             Ok(())
         }
         Terminator::CondBr {
@@ -110,7 +118,13 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             else_target,
             else_args,
         } => {
-            let condition = match ctx.machine_layout.fused_compare {
+            let condition = if let Some((arith, _)) = ctx.machine_layout.fused_overflow {
+                BranchCondition::Overflow {
+                    kind: super::lower_inst::emit_fused_overflow(ctx, arith)?,
+                    inverted: false,
+                }
+            } else {
+                match ctx.machine_layout.fused_compare {
                 Some(compare) => match ctx.function.instruction(compare).map(|inst| inst.op) {
                     Some(Op::ICmp) => BranchCondition::IntegerFlags(
                         super::lower_inst::emit_fused_int_compare(ctx, compare)?,
@@ -128,6 +142,7 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 None => {
                     ctx.load_value_to_result(*cond)?;
                     BranchCondition::ResultNonzero
+                }
                 }
             };
             validate_block_args(ctx, *then_target, then_args, "cond_br then")?;
@@ -252,16 +267,41 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
 /// No jump is emitted when the target block is laid out immediately after this one.
 fn lower_branch(
     ctx: &mut FunctionContext<'_>,
+    source: BlockId,
     target: BlockId,
     args: &[ValueId],
     context: &str,
 ) -> Result<()> {
     materialize_block_args(ctx, target, args, context)?;
+    if try_emit_rotated_loop_branch(ctx, source)? {
+        return Ok(());
+    }
     let label = ctx.block_label_for_id(target)?;
     if ctx.fallthrough_label().as_deref() != Some(label.as_str()) {
         abi::emit_jump(ctx.emitter, &label);
     }
     Ok(())
+}
+
+/// Re-emits an eligible loop header's integer test at a latch and branches to the
+/// header's then/else targets, skipping the header jump on the back edge.
+fn try_emit_rotated_loop_branch(
+    ctx: &mut FunctionContext<'_>,
+    source: BlockId,
+) -> Result<bool> {
+    let Some(plan) = ctx.rotated_loop_branches.get(&source).copied() else {
+        return Ok(false);
+    };
+    let predicate = super::lower_inst::emit_fused_int_compare(ctx, plan.compare)?;
+    let then_label = ctx.block_label_for_id(plan.then_target)?;
+    let else_label = ctx.block_label_for_id(plan.else_target)?;
+    emit_conditional_jump(
+        ctx,
+        BranchCondition::IntegerFlags(predicate),
+        &then_label,
+    )?;
+    abi::emit_jump(ctx.emitter, &else_label);
+    Ok(true)
 }
 
 /// What a lowered `cond_br` tests to select its then-edge.
@@ -278,6 +318,11 @@ enum BranchCondition {
         predicate: CmpPredicate,
         inverted: bool,
     },
+    /// The flags of a fused signed overflow test select the then-edge when overflow occurred.
+    Overflow {
+        kind: super::lower_inst::OverflowBranch,
+        inverted: bool,
+    },
 }
 
 impl BranchCondition {
@@ -292,6 +337,7 @@ impl BranchCondition {
             Self::FloatFlags { predicate, inverted } => {
                 Self::FloatFlags { predicate, inverted: !inverted }
             }
+            Self::Overflow { kind, inverted } => Self::Overflow { kind, inverted: !inverted },
         }
     }
 }
@@ -367,6 +413,43 @@ fn emit_conditional_jump(
                         inverted,
                     )?;
                     ctx.emitter.instruction(&format!("j{taken} {label}"));      // branch on float flags with unordered-aware polarity
+                }
+            }
+        }
+        BranchCondition::Overflow { kind, inverted } => {
+            ctx.emitter.comment("-- branch on signed overflow flags --");
+            match (ctx.emitter.target.arch, kind, inverted) {
+                (Arch::AArch64, super::lower_inst::OverflowBranch::Signed, false) => {
+                    ctx.emitter.instruction("b.vc 1f");                         // skip the far branch when the signed result fits
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by signed overflow
+                    ctx.emitter.label("1");
+                }
+                (Arch::AArch64, super::lower_inst::OverflowBranch::Signed, true) => {
+                    ctx.emitter.instruction("b.vs 1f");                         // skip the far branch when the signed result overflows
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by an in-range signed result
+                    ctx.emitter.label("1");
+                }
+                (Arch::AArch64, super::lower_inst::OverflowBranch::NotEqual, false) => {
+                    ctx.emitter.instruction("b.eq 1f");                         // skip the far branch when the product fits
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by a product that does not fit
+                    ctx.emitter.label("1");
+                }
+                (Arch::AArch64, super::lower_inst::OverflowBranch::NotEqual, true) => {
+                    ctx.emitter.instruction("b.ne 1f");                         // skip the far branch when the product does not fit
+                    ctx.emitter.instruction(&format!("b {label}"));             // take the edge selected by a product that fits
+                    ctx.emitter.label("1");
+                }
+                (Arch::X86_64, super::lower_inst::OverflowBranch::Signed, false) => {
+                    ctx.emitter.instruction(&format!("jo {label}"));            // branch when signed arithmetic sets the overflow flag
+                }
+                (Arch::X86_64, super::lower_inst::OverflowBranch::Signed, true) => {
+                    ctx.emitter.instruction(&format!("jno {label}"));           // branch when signed arithmetic fits in an integer
+                }
+                (Arch::X86_64, super::lower_inst::OverflowBranch::NotEqual, false) => {
+                    ctx.emitter.instruction(&format!("jne {label}"));           // branch when the product high half is not a sign extension
+                }
+                (Arch::X86_64, super::lower_inst::OverflowBranch::NotEqual, true) => {
+                    ctx.emitter.instruction(&format!("je {label}"));            // branch when the product high half is a sign extension
                 }
             }
         }

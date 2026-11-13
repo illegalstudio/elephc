@@ -34,6 +34,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -115,6 +116,20 @@ struct MyDriverOptions {
     ssl_ca_path: Option<PathBuf>,
     ssl_cipher: Option<String>,
     server_public_key: Option<PathBuf>,
+    /// Socket read/write timeout in seconds (mysqli's `MYSQLI_OPT_READ_TIMEOUT`).
+    io_timeout_secs: Option<u64>,
+    /// Whether the handshake requests `CLIENT_MULTI_STATEMENTS`. PDO keeps it; a mysqli link
+    /// connects without it (unless `MYSQLI_CLIENT_MULTI_STATEMENTS`), like mysqlnd, and
+    /// toggles the server option around `multi_query()`.
+    handshake_multi_statements: bool,
+    /// Whether the handshake negotiates MariaDB's extended capabilities (mysqli: no, like
+    /// mysqlnd).
+    mariadb_extensions: bool,
+    /// Whether native prepares go through the client's statement cache. mysqli: no, like
+    /// mysqlnd — every prepare() reaches the server and finalize sends COM_STMT_CLOSE.
+    stmt_cache: bool,
+    /// Whether streaming statements stop at result-set boundaries (mysqli).
+    lazy_rowsets: bool,
 }
 
 impl Default for MyDriverOptions {
@@ -130,6 +145,11 @@ impl Default for MyDriverOptions {
             ssl_ca_path: None,
             ssl_cipher: None,
             server_public_key: None,
+            handshake_multi_statements: true,
+            mariadb_extensions: true,
+            stmt_cache: true,
+            lazy_rowsets: false,
+            io_timeout_secs: None,
         }
     }
 }
@@ -248,10 +268,25 @@ fn native_type_name(t: ColumnType) -> &'static str {
     }
 }
 
+/// Reads wire statistic `which` (an index into `mysql::IO_STAT_NAMES`, mysqlnd's own
+/// statistic keys) from a set of wire traffic counters; `0` for any other selector.
+pub fn io_counter(counters: &mysql::IoCounters, which: i64) -> i64 {
+    usize::try_from(which)
+        .map(|index| i64::try_from(counters.get(index)).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
+
+/// The linked pure-Rust MySQL client's implementation/version string, reported as
+/// PDO's client version and as mysqli's `client_info` / `mysqli_get_client_info()`.
+pub const MYSQL_CLIENT_INFO: &str = "mysql 28.0.4";
+
 /// A live MySQL/MariaDB connection plus the last operation's bookkeeping that PDO
 /// reads back (`rowCount`, `lastInsertId`, `errorCode`/`errorInfo`).
 pub struct MyConn {
     conn: MyClientSlot,
+    /// The client's wire traffic counters (patched `mysql` crate), shared so mysqli's
+    /// `get_connection_stats()` reads them even while an async worker owns the client.
+    io_counters: std::sync::Arc<mysql::IoCounters>,
     /// Transport description returned by `PDO::ATTR_CONNECTION_STATUS`, captured
     /// from the resolved connection options in php-src's `mysql_get_host_info()`
     /// shape (`"host via TCP/IP"` or `"Localhost via UNIX socket"`).
@@ -280,6 +315,10 @@ pub struct MyConn {
     pub buffered_query: bool,
     /// Whether client-side execution accepts more than one SQL statement.
     pub multi_statements: bool,
+    /// Whether streaming statements stop at result-set boundaries (mysqli).
+    pub lazy_rowsets: bool,
+    /// Whether finalizing a native statement sends COM_STMT_CLOSE (no statement cache).
+    pub closes_statements: bool,
     /// Whether an unbuffered statement still has unread rows.
     pub unbuffered_active: bool,
     /// Warning count from the final OK/EOF packet of the last completed operation.
@@ -294,14 +333,26 @@ pub struct MyConn {
     /// multibyte session as utf8mb4 (the pre-fix vulnerability). A pooled
     /// persistent connection carries its last charset, so reuse is correct.
     current_charset: String,
+    /// The charset mysqlnd's own bookkeeping holds: the name `set_charset()` (or
+    /// `MYSQLI_SET_CHARSET_NAME`) last chose, `None` for the handshake's. Unlike
+    /// `current_charset` it ignores raw `SET NAMES` SQL, as mysqlnd does; `change_user()`
+    /// announces its collation so the re-authenticated session keeps it.
+    api_charset: Option<String>,
     /// Handshake version cached while an unbuffered worker temporarily owns `Conn`.
     server_version: (u16, u16, u16),
-    /// Session quoting mode cached before the client moves into a worker.
-    no_backslash_escapes: bool,
     /// Worker currently owning the client for a demand-driven result stream.
     active_stream: Option<MyActiveStream>,
     /// Monotonic identity used to reject stale statement stream handles.
     next_stream_id: u64,
+    /// MYSQLI_ASYNC query in flight on a worker thread, owning the client meanwhile.
+    async_query: Option<MyAsyncQuery>,
+    /// The socket of the client while a stream or async worker owns it, so closing the
+    /// link can shut the transport down instead of waiting for the worker to drain.
+    #[cfg(unix)]
+    worker_socket: Option<std::os::unix::io::RawFd>,
+    /// Whether a transport error (lost connection, read timeout) ended this session: like
+    /// mysqlnd's `CONN_QUIT_SENT`, an async send then fails at once without traffic.
+    lost: bool,
 }
 
 /// A live MySQL prepared statement and its buffered or demand-driven result.
@@ -350,6 +401,15 @@ pub struct MyStmt {
     /// Result sets after the active one, retained in wire order for
     /// `PDOStatement::nextRowset()`.
     remaining_rowsets: Vec<MyRowset>,
+    /// The error of a later statement of a buffered batch (a MYSQLI_ASYNC `CALL` whose
+    /// procedure fails after a first set), reported when `next_rowset()` reaches it.
+    trailing_error: Option<mysql::Error>,
+    /// The error that interrupted reading the active buffered set's rows, reported by
+    /// `step()` once the rows read before it are consumed.
+    pending_row_error: Option<mysql::Error>,
+    /// A mysqli text query (`MyConn::prepare_text`): its SQL is sent exactly as written, with
+    /// no placeholder interpolation.
+    raw_text: bool,
     /// Current 0-based row index; `-1` before the first `step()`.
     cursor: isize,
     /// Whether the query has been executed yet.
@@ -367,12 +427,88 @@ pub struct MyStmt {
     pub buffered: bool,
     /// Connection-owned demand stream used when buffering is disabled.
     stream_id: Option<u64>,
+    /// mysqli: at a set boundary `step()` stops (the next set is read by
+    /// `next_rowset()`), instead of PDO's eager advance.
+    lazy_sets: bool,
+    /// mysqli's `MYSQLI_STMT_ATTR_CURSOR_TYPE` for the next execution (`0` none, `1`
+    /// `CURSOR_TYPE_READ_ONLY`).
+    cursor_type: u8,
+    /// The server-side cursor the last execution opened, if any.
+    server_cursor: Option<MyServerCursor>,
+}
+
+/// A read-only cursor the server opened for a native statement: its rows stay on the
+/// server and every `step()` reads the next one with `COM_STMT_FETCH`, so the link is free
+/// for other commands in between, like mysqlnd's cursor statements.
+struct MyServerCursor {
+    /// The cursor's result metadata, which decodes the fetched binary rows.
+    columns: Arc<[Column]>,
+    /// Set once a fetch came back without a row: the cursor is exhausted.
+    exhausted: bool,
+    /// Set by `fetch_all()`: every remaining row is buffered in `rows` and `step()` walks
+    /// them without further fetches.
+    drained: bool,
 }
 
 impl Drop for MyConn {
     /// Stops any active row worker before the owning PDO connection is released.
     fn drop(&mut self) {
         self.finish_active_stream();
+        self.finish_async();
+    }
+}
+
+/// A MYSQLI_ASYNC query running on its own thread: the worker owns the client until the
+/// result is reaped, and `done` is signalled (with the condvar) once the server answered.
+struct MyAsyncQuery {
+    /// SQL text, kept for transaction-state bookkeeping and the reaped statement.
+    sql: String,
+    /// The worker running the query, in the shape its result mode reads it.
+    work: MyAsyncWork,
+    /// Readiness flag + condvar the poller waits on.
+    done: AsyncReady,
+    /// The worker-owned client's socket, shut down when the connection closes with the
+    /// query still pending so the worker's blocked read returns at once.
+    #[cfg(unix)]
+    socket: std::os::unix::io::RawFd,
+}
+
+/// Shuts down both directions of the socket `fd` without closing the descriptor, which
+/// stays owned by its `Conn`: a read blocked on it returns at once and later writes fail
+/// with an error (the standard library sends with `MSG_NOSIGNAL` / `SO_NOSIGPIPE`).
+#[cfg(unix)]
+fn shutdown_socket(fd: std::os::unix::io::RawFd) {
+    use std::os::unix::io::FromRawFd;
+    // SAFETY: `fd` is an open socket owned by a live `Conn` (the async worker returns it
+    // only through the join below); ManuallyDrop keeps this view from closing it.
+    let view = std::mem::ManuallyDrop::new(unsafe { std::net::TcpStream::from_raw_fd(fd) });
+    let _ = view.shutdown(std::net::Shutdown::Both);
+}
+
+/// Readiness flag + condvar of an async query: set once its result can be reaped.
+type AsyncReady = Arc<(Mutex<bool>, Condvar)>;
+
+/// How a MYSQLI_ASYNC worker delivers its result.
+enum MyAsyncWork {
+    /// A demand-driven text-stream worker, for both result modes. It is ready once the first
+    /// set's metadata (or the query's error) arrived, and reaping hands the live stream to
+    /// the result: a MYSQLI_USE_RESULT result reads every row from the server on fetch, a
+    /// MYSQLI_STORE_RESULT one buffers the current set when it is reaped. Later sets of a
+    /// batch (a `CALL`) are read only by `next_result()`, like mysqlnd.
+    Streaming {
+        commands: mpsc::Sender<MyStreamCommand>,
+        responses: mpsc::Receiver<MyStreamResponse>,
+        worker: JoinHandle<()>,
+    },
+}
+
+/// Marks an async query ready and wakes its pollers; idempotent.
+fn signal_ready(ready: &AsyncReady) {
+    let (flag, condvar) = &**ready;
+    let mut done = flag.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !*done {
+        *done = true;
+        condvar.notify_all();
     }
 }
 
@@ -402,16 +538,24 @@ impl DerefMut for MyClientSlot {
 /// Commands sent to the MySQL worker.
 enum MyStreamCommand {
     Next,
+    /// Advance to the next result set (read its header and metadata).
+    NextSet,
     Close,
 }
 
 /// Responses emitted by a MySQL row-stream worker.
 enum MyStreamResponse {
-    Rowset(MyRowset),
+    /// A result set's header and metadata. For a column-less set (an OK packet) the
+    /// worker also sends whether the server announced more sets and the packet's info
+    /// string, since no row exchange will follow to carry them.
+    Rowset(MyRowset, Option<bool>, String),
     Row(Vec<Cell>),
-    RowsetEnd,
+    /// The current set ended; `true` when the server announced more result sets.
+    RowsetEnd(bool),
     Finished(Conn, u16),
-    Failed(Conn, String, i64, String),
+    /// The command failed; the host records the error (marking the session lost on a
+    /// transport error) and restores the client.
+    Failed(Conn, mysql::Error),
 }
 
 /// Connection-owned control plane for one active MySQL result stream.
@@ -420,6 +564,11 @@ struct MyActiveStream {
     commands: mpsc::Sender<MyStreamCommand>,
     responses: mpsc::Receiver<MyStreamResponse>,
     worker: Option<JoinHandle<()>>,
+    /// Whether the set that last ended announced further result sets.
+    more_sets: bool,
+    /// Info string of the current set's OK packet (empty for a row-returning set),
+    /// readable while the worker owns the client.
+    info: String,
 }
 
 /// One fully materialized MySQL protocol result set.
@@ -444,9 +593,29 @@ struct MyRowset {
     col_precisions: Vec<u8>,
     /// Decoded rows for this result set.
     rows: Vec<Vec<Cell>>,
+    /// The error that interrupted reading this set's rows (a later set of a buffered batch):
+    /// the set is still announced, and the error is reported when its rows are drained.
+    row_error: Option<mysql::Error>,
 }
 
 impl MyRowset {
+    /// An empty, column-less result set (a statement that produced no result at all).
+    fn empty() -> Self {
+        MyRowset {
+            affected: 0,
+            last_id: None,
+            col_names: Vec::new(),
+            col_kinds: Vec::new(),
+            col_types: Vec::new(),
+            col_tables: Vec::new(),
+            col_flags: Vec::new(),
+            col_lengths: Vec::new(),
+            col_precisions: Vec::new(),
+            rows: Vec::new(),
+            row_error: None,
+        }
+    }
+
     /// Returns PDO's row count for this result set: buffered row count for a
     /// SELECT-like set, otherwise the server's affected-row count.
     fn row_count(&self) -> i64 {
@@ -456,6 +625,91 @@ impl MyRowset {
             self.rows.len() as i64
         }
     }
+}
+
+/// Runs a text-protocol statement (or multi-statement batch) and buffers its result sets,
+/// for buffered emulated statements (mysqli's buffered `query()` and PDO's).
+///
+/// The sets read before a failure are kept: a batch (or `CALL`) whose later statement fails
+/// returns its earlier sets plus that error, which mysqlnd reports only when
+/// `next_result()` / `nextRowset()` reaches it. A failure of the first statement returns no
+/// sets.
+fn collect_text_rowsets_until_error(
+    client: &mut Conn,
+    sql: String,
+    fetch_table_names: bool,
+) -> (Vec<MyRowset>, Option<mysql::Error>) {
+    let mut result = match client.query_iter(sql) {
+        Ok(result) => result,
+        Err(error) => return (Vec::new(), Some(error)),
+    };
+    let mut rowsets = Vec::new();
+    while let Some(mut set) = result.iter() {
+        // A statement whose header failed (an errored set) is the batch's error itself:
+        // next_result() fails with it. Only a failure while reading a set's rows keeps
+        // that set (below).
+        if set.is_errored() {
+            if let Some(Err(error)) = set.next() {
+                return (rowsets, Some(error));
+            }
+        }
+        let last_id = set.last_insert_id();
+        let affected = set.affected_rows() as i64;
+        let columns = set.columns();
+        let columns: &[Column] = columns.as_ref();
+        let col_names = columns
+            .iter()
+            .map(|column| column_display_name(column, fetch_table_names))
+            .collect::<Vec<_>>();
+        let col_kinds = columns.iter().map(ColKind::from_column).collect::<Vec<_>>();
+        let col_types = columns
+            .iter()
+            .map(|column| column.column_type())
+            .collect::<Vec<_>>();
+        let col_tables = columns
+            .iter()
+            .map(|column| column.table_str().into_owned())
+            .collect::<Vec<_>>();
+        let col_flags = columns.iter().map(Column::flags).collect::<Vec<_>>();
+        let col_lengths = columns
+            .iter()
+            .map(Column::column_length)
+            .collect::<Vec<_>>();
+        let col_precisions = columns.iter().map(Column::decimals).collect::<Vec<_>>();
+        let mut rows = Vec::new();
+        let mut row_error = None;
+        for row in set.by_ref() {
+            match row {
+                Ok(row) => rows.push(decode_row(row.unwrap(), &col_kinds)),
+                // A failure in the first set fails the whole operation. A later set is
+                // still announced (next_result() advances to it, like mysqlnd) and keeps
+                // the error for the read of its rows; the batch ends there.
+                Err(error) if rowsets.is_empty() => return (rowsets, Some(error)),
+                Err(error) => {
+                    row_error = Some(error);
+                    break;
+                }
+            }
+        }
+        let ended = row_error.is_some();
+        rowsets.push(MyRowset {
+            affected,
+            last_id,
+            col_names,
+            col_kinds,
+            col_types,
+            col_tables,
+            col_flags,
+            col_lengths,
+            col_precisions,
+            rows,
+            row_error,
+        });
+        if ended {
+            break;
+        }
+    }
+    (rowsets, None)
 }
 
 /// Extracts a MySQL server error code from a driver error, or `1` for transport /
@@ -625,8 +879,15 @@ fn parse_driver_options(config: &str) -> Result<MyDriverOptions, String> {
                 options.local_infile_directory = Some(PathBuf::from(value))
             }
             "compress" => options.compress = value == "1",
+            "iotimeout" => {
+                options.io_timeout_secs = value.parse::<u64>().ok().filter(|secs| *secs > 0)
+            }
             "ignore" => options.ignore_space = value == "1",
             "multi" => options.multi_statements = value != "0",
+            "servermulti" => options.handshake_multi_statements = value != "0",
+            "mariadbext" => options.mariadb_extensions = value != "0",
+            "stmtcache" => options.stmt_cache = value != "0",
+            "lazysets" => options.lazy_rowsets = value != "0",
             "buffered" => options.buffered_query = value != "0",
             "capath" if !value.is_empty() => options.ssl_ca_path = Some(PathBuf::from(value)),
             "cipher" if !value.is_empty() => options.ssl_cipher = Some(value),
@@ -911,6 +1172,97 @@ fn sql_is_call_statement(sql: &str) -> bool {
         return false;
     }
     rest.get(4).is_none_or(|&b| !is_ident_byte(b))
+}
+
+/// The client charsets mysqlnd's table (`mysqlnd_charset.c`) knows, each with the collation
+/// number mysqlnd announces for it: its first entry of that name. Measured on php 8.5 against
+/// MySQL 8.4 (every `SHOW CHARACTER SET` name through `set_charset()` then `change_user()`):
+/// `utf8mb3` is unknown to mysqlnd (2019), and `utf8mb4` maps to 45 (`utf8mb4_general_ci`),
+/// not the server's 255 default. The UCS-2/UTF-16/UTF-32 names are known to mysqlnd but the
+/// server refuses them as a client charset (1231).
+const MYSQLND_CHARSETS: &[(&str, u16)] = &[
+    ("big5", 1), ("dec8", 3), ("cp850", 4), ("hp8", 6), ("koi8r", 7), ("latin1", 8),
+    ("latin2", 9), ("swe7", 10), ("ascii", 11), ("ujis", 12), ("sjis", 13), ("hebrew", 16),
+    ("tis620", 18), ("euckr", 19), ("koi8u", 22), ("gb2312", 24), ("greek", 25),
+    ("cp1250", 26), ("gbk", 28), ("latin5", 30), ("armscii8", 32), ("utf8", 33),
+    ("ucs2", 35), ("cp866", 36), ("keybcs2", 37), ("macce", 38), ("macroman", 39),
+    ("cp852", 40), ("latin7", 41), ("utf8mb4", 45), ("cp1251", 51), ("utf16", 54),
+    ("utf16le", 56), ("cp1256", 57), ("cp1257", 59), ("utf32", 60), ("binary", 63),
+    ("geostd8", 92), ("cp932", 95), ("eucjpms", 97), ("gb18030", 248),
+];
+
+/// The canonical (lowercase) name of a charset mysqlnd knows, matched case-insensitively.
+fn mysqlnd_charset_name(name: &str) -> Option<&'static str> {
+    MYSQLND_CHARSETS
+        .iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(name))
+        .map(|(known, _)| *known)
+}
+
+/// The collation number mysqlnd announces for a charset it knows.
+fn mysqlnd_charset_collation(name: &str) -> Option<u16> {
+    MYSQLND_CHARSETS
+        .iter()
+        .find(|(known, _)| known.eq_ignore_ascii_case(name))
+        .map(|(_, collation)| *collation)
+}
+
+/// Returns the exclusive end of a `--` line comment at `bytes[i]` under the server's lexer
+/// rule, which is wider than php-src's client-side one in `scan_my_comment`: the second dash
+/// may be followed by any whitespace or control byte (`my_isspace` / `my_iscntrl`, so LF,
+/// 0x00-0x1f and 0x7f too) or by the end of the query. Only classifiers that predict what the
+/// server runs use it; placeholder translation keeps php's rule.
+fn scan_server_dash_comment(bytes: &[u8], i: usize) -> Option<usize> {
+    if !bytes.get(i..)?.starts_with(b"--") {
+        return None;
+    }
+    match bytes.get(i + 2) {
+        None => Some(i + 2),
+        Some(&b) if b <= b' ' || b == 0x7f => {
+            let mut j = i + 2;
+            while j < bytes.len() && bytes[j] != b'\n' {
+                j += 1;
+            }
+            Some(j)
+        }
+        Some(_) => None,
+    }
+}
+
+/// Whether a mysqli text statement can return several result sets while multi-statements are
+/// off: a `CALL`, or an `EXECUTE` (of an SQL-level prepared `CALL`), behind any leading
+/// whitespace and inert comments. A leading MySQL `/*!` / `/*!NNNNN` or MariaDB `/*M!`
+/// executable comment answers `true` conservatively: whether its body runs depends on the
+/// server version, and what follows it may be the statement. Such a statement streams so that
+/// `query()` buffers only its first set (mysqlnd's `store_result()`); streaming a single-set
+/// statement is still correct.
+fn sql_may_return_several_sets(sql: &str) -> bool {
+    let bytes = sql.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    loop {
+        let start = i;
+        while i < len && is_my_space(bytes[i]) {
+            i += 1;
+        }
+        if let Some(end) = scan_my_comment(bytes, i) {
+            i = end;
+        } else if let Some(end) = scan_server_dash_comment(bytes, i) {
+            i = end;
+        }
+        if bytes[i..].starts_with(b"/*!") || bytes[i..].starts_with(b"/*M!") {
+            return true;
+        }
+        if i == start {
+            break;
+        }
+    }
+    let rest = &bytes[i..];
+    [&b"call"[..], &b"execute"[..]].iter().any(|keyword| {
+        rest.len() >= keyword.len()
+            && rest[..keyword.len()].eq_ignore_ascii_case(keyword)
+            && rest.get(keyword.len()).is_none_or(|&b| !is_ident_byte(b))
+    })
 }
 
 /// Returns whether `sql` contains a second non-empty statement after a real
@@ -1821,6 +2173,19 @@ impl MyConn {
         if driver_options.compress {
             opts = opts.compress(Some(mysql::Compression::default()));
         }
+        opts = opts
+            .multi_statements(driver_options.handshake_multi_statements)
+            .mariadb_extensions(driver_options.mariadb_extensions);
+        if !driver_options.stmt_cache {
+            opts = opts.stmt_cache_size(0);
+        }
+        if let Some(secs) = driver_options.io_timeout_secs {
+            // mysqlnd applies MYSQLI_OPT_READ_TIMEOUT to the socket stream, so a
+            // stalled server fails the read (and a stalled write) instead of hanging.
+            opts = opts
+                .read_timeout(Some(Duration::from_secs(secs)))
+                .write_timeout(Some(Duration::from_secs(secs)));
+        }
         opts = opts.local_infile_handler(Some(local_infile_handler(
             driver_options.local_infile,
             driver_options.local_infile_directory.clone(),
@@ -1849,9 +2214,10 @@ impl MyConn {
         };
         let conn = Conn::new(opts).map_err(|e| e.to_string())?;
         let server_version = conn.server_version();
-        let no_backslash_escapes = conn.no_backslash_escape();
+        let io_counters = conn.io_counters();
         Ok(MyConn {
             conn: MyClientSlot(Some(conn)),
+            io_counters,
             host_info,
             changes: 0,
             errmsg: String::new(),
@@ -1862,14 +2228,20 @@ impl MyConn {
             fetch_table_names: false,
             buffered_query: driver_options.buffered_query,
             multi_statements: driver_options.multi_statements,
+            lazy_rowsets: driver_options.lazy_rowsets,
+            closes_statements: !driver_options.stmt_cache,
             unbuffered_active: false,
             warning_count: 0,
             in_transaction: false,
             current_charset,
+            api_charset: None,
             server_version,
-            no_backslash_escapes,
             active_stream: None,
+            async_query: None,
             next_stream_id: 0,
+            #[cfg(unix)]
+            worker_socket: None,
+            lost: false,
         })
     }
 
@@ -1886,10 +2258,13 @@ impl MyConn {
     }
 
     /// Records mysqlnd's 2014/HY000 connection-busy diagnostic and returns false
-    /// while an unbuffered statement still owns unread rows.
+    /// while an unbuffered statement still owns unread rows, or while a pending
+    /// MYSQLI_ASYNC query's worker owns the client (whose slot must not be
+    /// dereferenced). A reap, which has already taken the async query, still builds its
+    /// statement before the worker's stream is installed, so it passes.
     fn ensure_not_busy(&mut self) -> bool {
         if !self.unbuffered_active {
-            return true;
+            return !(self.async_query.is_some() && self.client_unavailable());
         }
         self.sqlstate = "HY000".to_string();
         self.errcode = 2014;
@@ -1897,13 +2272,29 @@ impl MyConn {
         false
     }
 
+    /// Records mysqlnd's 2014 and returns true while an unbuffered stream or an async
+    /// worker owns the client, so a command that needs the wire (a cursor's
+    /// `COM_STMT_FETCH`) fails instead of dereferencing the empty client slot.
+    fn client_unavailable(&mut self) -> bool {
+        if self.conn.0.is_some() {
+            return false;
+        }
+        self.sqlstate = "HY000".to_string();
+        self.errcode = 2014;
+        self.errmsg = "Commands out of sync; you can't run this command now".to_string();
+        true
+    }
+
     /// Restores a worker-owned client and refreshes connection properties that
     /// may have changed while its statement ran.
     fn restore_stream_client(&mut self, conn: Conn, warnings: u16) {
         self.server_version = conn.server_version();
-        self.no_backslash_escapes = conn.no_backslash_escape();
         self.warning_count = warnings;
         self.conn.0 = Some(conn);
+        #[cfg(unix)]
+        {
+            self.worker_socket = None;
+        }
     }
 
     /// Stops the active worker and recovers its client for close/reset paths.
@@ -1918,17 +2309,15 @@ impl MyConn {
                     self.restore_stream_client(conn, warnings);
                     break;
                 }
-                MyStreamResponse::Failed(conn, sqlstate, errcode, message) => {
+                MyStreamResponse::Failed(conn, error) => {
                     let warnings = conn.warnings();
                     self.restore_stream_client(conn, warnings);
-                    self.sqlstate = sqlstate;
-                    self.errcode = errcode;
-                    self.errmsg = message;
+                    self.record_mysql_error(&error);
                     break;
                 }
-                MyStreamResponse::Rowset(_)
+                MyStreamResponse::Rowset(..)
                 | MyStreamResponse::Row(_)
-                | MyStreamResponse::RowsetEnd => {}
+                | MyStreamResponse::RowsetEnd(_) => {}
             }
         }
         if let Some(worker) = active.worker.take() {
@@ -1958,9 +2347,13 @@ impl MyConn {
             commands,
             responses,
             worker: Some(worker),
+            more_sets: false,
+            info: String::new(),
         };
         match active.responses.recv() {
-            Ok(MyStreamResponse::Rowset(rowset)) => {
+            Ok(MyStreamResponse::Rowset(rowset, more, info)) => {
+                active.more_sets = more.unwrap_or(false);
+                active.info = info;
                 self.active_stream = Some(active);
                 self.unbuffered_active = true;
                 Ok((id, rowset))
@@ -1972,18 +2365,16 @@ impl MyConn {
                 }
                 Err(-1)
             }
-            Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
+            Ok(MyStreamResponse::Failed(conn, error)) => {
                 let warnings = conn.warnings();
                 self.restore_stream_client(conn, warnings);
-                self.sqlstate = sqlstate;
-                self.errcode = errcode;
-                self.errmsg = message;
+                self.record_mysql_error(&error);
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
                 }
                 Err(-1)
             }
-            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd) | Err(_) => {
+            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd(_)) | Err(_) => {
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
                 }
@@ -2004,6 +2395,12 @@ impl MyConn {
         let Some(conn) = self.conn.0.take() else {
             return Err(-1);
         };
+        // Handshake version read while the worker owns the client.
+        self.server_version = conn.server_version();
+        #[cfg(unix)]
+        {
+            self.worker_socket = Some(std::os::unix::io::AsRawFd::as_raw_fd(&conn));
+        }
         let fetch_table_names = self.fetch_table_names;
         let (command_tx, command_rx) = mpsc::channel();
         let (response_tx, response_rx) = mpsc::channel();
@@ -2025,6 +2422,12 @@ impl MyConn {
         let Some(conn) = self.conn.0.take() else {
             return Err(-1);
         };
+        // Handshake version read while the worker owns the client.
+        self.server_version = conn.server_version();
+        #[cfg(unix)]
+        {
+            self.worker_socket = Some(std::os::unix::io::AsRawFd::as_raw_fd(&conn));
+        }
         let fetch_table_names = self.fetch_table_names;
         let (command_tx, command_rx) = mpsc::channel();
         let (response_tx, response_rx) = mpsc::channel();
@@ -2040,6 +2443,13 @@ impl MyConn {
         self.activate_stream(command_tx, response_rx, worker)
     }
 
+    /// Whether the active stream `id`'s last ended set announced more result sets.
+    fn stream_more_sets(&self, id: u64) -> bool {
+        self.active_stream
+            .as_ref()
+            .is_some_and(|active| active.id == id && active.more_sets)
+    }
+
     /// Requests one row from the active result set.
     fn next_stream_row(&mut self, id: u64) -> Result<Option<Vec<Cell>>, i64> {
         let Some(active) = self.active_stream.as_mut() else {
@@ -2053,13 +2463,14 @@ impl MyConn {
         }
         match active.responses.recv() {
             Ok(MyStreamResponse::Row(row)) => Ok(Some(row)),
-            Ok(MyStreamResponse::RowsetEnd) => Ok(None),
-            Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
+            Ok(MyStreamResponse::RowsetEnd(more)) => {
+                active.more_sets = more;
+                Ok(None)
+            }
+            Ok(MyStreamResponse::Failed(conn, error)) => {
                 let warnings = conn.warnings();
                 self.restore_stream_client(conn, warnings);
-                self.sqlstate = sqlstate;
-                self.errcode = errcode;
-                self.errmsg = message;
+                self.record_mysql_error(&error);
                 let mut active = self.active_stream.take().expect("active stream disappeared");
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
@@ -2076,7 +2487,7 @@ impl MyConn {
                 self.unbuffered_active = false;
                 Ok(None)
             }
-            Ok(MyStreamResponse::Rowset(_)) | Err(_) => Err(-1),
+            Ok(MyStreamResponse::Rowset(..)) | Err(_) => Err(-1),
         }
     }
 
@@ -2088,8 +2499,17 @@ impl MyConn {
         if active.id != id {
             return Ok(None);
         }
+        // The worker waits at a set boundary until asked: mysqlnd too reads the next
+        // set's header and metadata only when the client advances.
+        if active.commands.send(MyStreamCommand::NextSet).is_err() {
+            return Err(-1);
+        }
         match active.responses.recv() {
-            Ok(MyStreamResponse::Rowset(rowset)) => Ok(Some(rowset)),
+            Ok(MyStreamResponse::Rowset(rowset, more, info)) => {
+                active.more_sets = more.unwrap_or(false);
+                active.info = info;
+                Ok(Some(rowset))
+            }
             Ok(MyStreamResponse::Finished(conn, warnings)) => {
                 self.restore_stream_client(conn, warnings);
                 let mut active = self.active_stream.take().expect("active stream disappeared");
@@ -2099,12 +2519,10 @@ impl MyConn {
                 self.unbuffered_active = false;
                 Ok(None)
             }
-            Ok(MyStreamResponse::Failed(conn, sqlstate, errcode, message)) => {
+            Ok(MyStreamResponse::Failed(conn, error)) => {
                 let warnings = conn.warnings();
                 self.restore_stream_client(conn, warnings);
-                self.sqlstate = sqlstate;
-                self.errcode = errcode;
-                self.errmsg = message;
+                self.record_mysql_error(&error);
                 let mut active = self.active_stream.take().expect("active stream disappeared");
                 if let Some(worker) = active.worker.take() {
                     let _ = worker.join();
@@ -2112,7 +2530,7 @@ impl MyConn {
                 self.unbuffered_active = false;
                 Err(-1)
             }
-            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd) | Err(_) => Err(-1),
+            Ok(MyStreamResponse::Row(_) | MyStreamResponse::RowsetEnd(_)) | Err(_) => Err(-1),
         }
     }
 
@@ -2196,9 +2614,7 @@ impl MyConn {
                 affected
             }
             Err(e) => {
-                self.sqlstate = err_sqlstate(&e);
-                self.errmsg = e.to_string();
-                self.errcode = err_code(&e);
+                self.record_mysql_error(&e);
                 -1
             }
         }
@@ -2215,9 +2631,7 @@ impl MyConn {
                 1
             }
             Err(e) => {
-                self.sqlstate = err_sqlstate(&e);
-                self.errmsg = e.to_string();
-                self.errcode = err_code(&e);
+                self.record_mysql_error(&e);
                 0
             }
         }
@@ -2248,9 +2662,7 @@ impl MyConn {
                 1
             }
             Err(error) => {
-                self.sqlstate = err_sqlstate(&error);
-                self.errmsg = error.to_string();
-                self.errcode = err_code(&error);
+                self.record_mysql_error(&error);
                 0
             }
         }
@@ -2285,7 +2697,7 @@ impl MyConn {
     /// standalone binary, so reporting the linked client crate is the truthful
     /// equivalent of `mysql_get_client_info()`.
     pub fn client_version(&self) -> String {
-        "mysql 28.0.4".to_string()
+        MYSQL_CLIENT_INFO.to_string()
     }
 
     /// Returns the connection transport description in the same shape as
@@ -2297,7 +2709,30 @@ impl MyConn {
     /// Pings an idle client; an active row worker already proves the connection
     /// is live enough to remain a valid persistent handle.
     pub fn is_alive(&mut self) -> bool {
-        self.active_stream.is_some() || self.conn.ping().is_ok()
+        // A row worker or a MYSQLI_ASYNC worker owns the client: the link is busy for a
+        // live owner, not dead, so it must not be pinged (its client slot is empty) nor
+        // evicted. A link whose last owner closes it with a pending async query is
+        // evicted at release instead (`release_connection`).
+        if self.active_stream.is_some() || self.async_query.is_some() || self.conn.0.is_none() {
+            return true;
+        }
+        self.conn.ping().is_ok()
+    }
+
+    /// Whether a MYSQLI_ASYNC query is still in flight (not reaped) on this link.
+    pub fn has_pending_async(&self) -> bool {
+        self.async_query.is_some()
+    }
+
+    /// Shuts the transport down while a stream or async worker owns the client, as
+    /// mysqlnd closes the socket of a link closed in the middle of a result: the
+    /// worker's pending read (or the drain of the unread rows) fails at once, so the
+    /// close that follows does not wait for the server. No-op on an idle link.
+    pub fn cancel_transport(&mut self) {
+        #[cfg(unix)]
+        if let (Some(fd), None) = (self.worker_socket, self.conn.0.as_ref()) {
+            shutdown_socket(fd);
+        }
     }
 
     /// Updates the live `PDO::ATTR_FETCH_TABLE_NAMES` setting.
@@ -2305,42 +2740,31 @@ impl MyConn {
         self.fetch_table_names = enabled;
     }
 
-    /// Reconstructs MySQL's `COM_STATISTICS` text from live `SHOW STATUS` values.
-    /// The Rust client does not expose the protocol command, but the same server
-    /// counters are available without relying on fabricated constants.
+    /// Sends a real `COM_STATISTICS` and returns the server's status line ("Uptime: …
+    /// Threads: …"), backing mysqli's `stat()` and PDO's `ATTR_SERVER_INFO` like mysqlnd's
+    /// `mysql_stat()`. Empty when the client is busy or the command fails (error recorded).
     pub fn server_info(&mut self) -> String {
         if !self.ensure_not_busy() {
             return String::new();
         }
-        let rows: Vec<(String, String)> = match self.conn.query("SHOW STATUS") {
-            Ok(rows) => rows,
-            Err(_) => return String::new(),
-        };
-        let values: HashMap<String, String> = rows.into_iter().collect();
-        let value = |name: &str| values.get(name).map(String::as_str).unwrap_or("0");
-        let uptime = value("Uptime").parse::<f64>().unwrap_or(0.0);
-        let questions = value("Questions").parse::<f64>().unwrap_or(0.0);
-        let queries_per_second = if uptime > 0.0 {
-            questions / uptime
-        } else {
-            0.0
-        };
-        format!(
-            "Uptime: {}  Threads: {}  Questions: {}  Slow queries: {}  Opens: {}  Flush tables: {}  Open tables: {}  Queries per second avg: {:.3}",
-            value("Uptime"),
-            value("Threads_connected"),
-            value("Questions"),
-            value("Slow_queries"),
-            value("Opened_tables"),
-            value("Flush_commands"),
-            value("Open_tables"),
-            queries_per_second,
-        )
+        match self.conn.statistics() {
+            Ok(line) => line,
+            Err(error) => {
+                self.record_mysql_error(&error);
+                String::new()
+            }
+        }
     }
+
 
     /// Returns the warning count captured from the final OK/EOF packet of the last
     /// completed operation, including SELECT and prepared-statement results.
     pub fn warning_count(&self) -> i64 {
+        if self.conn.0.is_none() {
+            // A streaming worker owns the client (mysqli_stmt rows on the server):
+            // report the warnings of the metadata EOF it already read, like mysqlnd.
+            return self.io_counters.last_warnings() as i64;
+        }
         self.warning_count as i64
     }
 
@@ -2349,13 +2773,15 @@ impl MyConn {
     /// literal, so backslash-escaping a quoted value is unsafe there —
     /// `PDO::quote()`'s MySQL branch falls back to `''`-doubling only in that case,
     /// P1-f). The `mysql` crate already tracks this from the connection's session
-    /// state (`Conn::no_backslash_escape`), so no extra query is needed here.
+    /// state (`Conn::no_backslash_escape`), so no extra query is needed here. While a worker
+    /// owns the client, the status flags of the last OK/EOF packet it read are used, like
+    /// mysqlnd's `upsert_status`: a `SET sql_mode` earlier in a streamed batch counts as soon
+    /// as its OK packet arrived.
     pub fn no_backslash_escape(&self) -> bool {
-        self.conn
-            .0
-            .as_ref()
-            .map(Conn::no_backslash_escape)
-            .unwrap_or(self.no_backslash_escapes)
+        match self.conn.0.as_ref() {
+            Some(client) => client.no_backslash_escape(),
+            None => self.io_counters.last_status() & 0x0200 != 0,
+        }
     }
 
     /// Returns the server's connection (thread) id from the handshake, so
@@ -2368,6 +2794,375 @@ impl MyConn {
             .as_ref()
             .map(|c| i64::from(c.connection_id()))
             .unwrap_or(0)
+    }
+
+    /// Starts a MYSQLI_ASYNC query: the client moves to a worker thread that runs `sql`, so
+    /// the caller returns at once. The worker reads only the first set's metadata and then
+    /// streams on demand in both result modes (`unbuffered` is MYSQLI_USE_RESULT; the prelude
+    /// buffers a MYSQLI_STORE_RESULT set at reap). `1` when sent, `-1` (mysqlnd's 2014
+    /// recorded) when the connection is busy with a stream or another async query.
+    pub fn async_send(&mut self, sql: &str, unbuffered: bool) -> i64 {
+        if self.active_stream.is_some() || self.async_query.is_some() || self.unbuffered_active {
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2014;
+            self.errmsg = "Commands out of sync; you can't run this command now".to_string();
+            return -1;
+        }
+        if self.lost {
+            // mysqlnd refuses a lost session before sending anything.
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2006;
+            self.errmsg = "MySQL server has gone away".to_string();
+            return -2;
+        }
+        let Some(mut client) = self.conn.0.take() else {
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2014;
+            self.errmsg = "Commands out of sync; you can't run this command now".to_string();
+            return -1;
+        };
+        self.server_version = client.server_version();
+        // The command is written here, like mysqlnd's send phase: a write failure is this
+        // call's error and the statistics count it at once; the worker only reads.
+        if let Err(error) = client.send_query(sql) {
+            self.conn.0 = Some(client);
+            self.record_mysql_error(&error);
+            return -1;
+        }
+        #[cfg(unix)]
+        let socket = std::os::unix::io::AsRawFd::as_raw_fd(&client);
+        #[cfg(unix)]
+        {
+            self.worker_socket = Some(socket);
+        }
+        let done: AsyncReady = Arc::new((Mutex::new(false), Condvar::new()));
+        let signal = Arc::clone(&done);
+        let fetch_table_names = self.fetch_table_names;
+        // Both result modes stream: the prelude buffers a MYSQLI_STORE_RESULT set at reap
+        // (`unbuffered` only tells it which result to build).
+        let _ = unbuffered;
+        let (command_tx, command_rx) = mpsc::channel();
+        let (response_tx, response_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            run_mysql_async_text_stream(
+                client,
+                fetch_table_names,
+                command_rx,
+                response_tx,
+                signal,
+            );
+        });
+        let work = MyAsyncWork::Streaming {
+            commands: command_tx,
+            responses: response_rx,
+            worker,
+        };
+        self.async_query = Some(MyAsyncQuery {
+            sql: sql.to_string(),
+            work,
+            done,
+            #[cfg(unix)]
+            socket,
+        });
+        self.errcode = 0;
+        self.sqlstate = "00000".to_string();
+        1
+    }
+
+    /// Returns the completion signal of the in-flight async query, if any, so a poller can
+    /// wait on it WITHOUT holding the connection registry lock.
+    pub fn async_signal(&self) -> Option<AsyncReady> {
+        self.async_query.as_ref().map(|query| Arc::clone(&query.done))
+    }
+
+    /// Collects the async query's outcome into a fresh executed text statement: the worker
+    /// becomes the connection's active stream, so the statement reads rows (and later sets)
+    /// from the server on demand and the link stays busy until it is consumed or freed.
+    /// `Err(())` (error recorded on the connection) when the query failed or none was in
+    /// flight.
+    pub fn async_reap(&mut self) -> Result<MyStmt, ()> {
+        let Some(query) = self.async_query.take() else {
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2014;
+            self.errmsg = "Commands out of sync; you can't run this command now".to_string();
+            return Err(());
+        };
+        let MyAsyncWork::Streaming {
+            commands,
+            responses,
+            worker,
+        } = query.work;
+        self.reap_async_stream(&query.sql, commands, responses, worker)
+    }
+
+    /// Installs a reaped MYSQLI_ASYNC worker as the active stream of a fresh unbuffered
+    /// text statement. A failed query restores the client and records its error.
+    fn reap_async_stream(
+        &mut self,
+        sql: &str,
+        commands: mpsc::Sender<MyStreamCommand>,
+        responses: mpsc::Receiver<MyStreamResponse>,
+        worker: JoinHandle<()>,
+    ) -> Result<MyStmt, ()> {
+        // Built before the stream is installed: a raw text statement runs no command and
+        // parses no placeholders (the server already answered the query as written), and
+        // the busy guard must not see the stream this statement is about to own.
+        let mut stmt = match self.prepare_text(sql) {
+            Ok(stmt) => stmt,
+            Err(_) => {
+                // Never strand the worker-owned client: take the stream over and finish it.
+                if self.activate_stream(commands, responses, worker).is_ok() {
+                    self.finish_active_stream();
+                }
+                return Err(());
+            }
+        };
+        let (stream_id, rowset) = self.activate_stream(commands, responses, worker).map_err(|_| ())?;
+        stmt.buffered = false;
+        stmt.stream_id = Some(stream_id);
+        stmt.remaining_rowsets.clear();
+        stmt.install_rowset(self, rowset);
+        self.note_transaction_sql(sql);
+        self.errcode = 0;
+        self.sqlstate = "00000".to_string();
+        Ok(stmt)
+    }
+
+    /// Discards an in-flight async query when the connection closes, so the client is never
+    /// stranded on the worker thread. Like mysqlnd, which closes the socket of a link with a
+    /// pending query, the socket is shut down first: the worker's read fails at once instead
+    /// of waiting for the server to finish the query.
+    fn finish_async(&mut self) {
+        let Some(query) = self.async_query.take() else {
+            return;
+        };
+        #[cfg(unix)]
+        shutdown_socket(query.socket);
+        match query.work {
+            MyAsyncWork::Streaming {
+                commands,
+                responses,
+                worker,
+            } => {
+                if self.activate_stream(commands, responses, worker).is_ok() {
+                    self.finish_active_stream();
+                }
+            }
+        }
+    }
+
+    /// Returns wire statistic `which` (an index into `mysql::IO_STAT_NAMES`) of this
+    /// connection.
+    pub fn io_stat(&self, which: i64) -> i64 {
+        io_counter(&self.io_counters, which)
+    }
+
+    /// Returns the server status flags of the last OK/EOF packet (mysqli's
+    /// `MYSQLI_REPORT_INDEX` reads `SERVER_QUERY_NO_[GOOD_]INDEX_USED` from them); `0` while a
+    /// worker owns the client.
+    pub fn server_status(&self) -> i64 {
+        match self.conn.0.as_ref() {
+            Some(c) => i64::from(c.status_flags().bits()),
+            // A streaming worker owns the client: the last OK/EOF it read (a
+            // result set's metadata EOF) still carries the flags.
+            None => self.io_counters.last_status() as i64,
+        }
+    }
+
+    /// Sends `COM_REFRESH` with the `REFRESH_*` bitmask, backing `mysqli::refresh()`.
+    /// `1` on success, `-1` with the error recorded.
+    pub fn refresh(&mut self, options: i64) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.refresh(options as u8) {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Sends `COM_INIT_DB`, backing `mysqli::select_db()` (mysqlnd changes the default
+    /// schema with the protocol command, not a `USE` statement). `1` on success, `-1` with
+    /// the error recorded.
+    pub fn init_db(&mut self, schema: &str) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.select_db(schema) {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Sends `COM_PROCESS_KILL` for connection `id`, backing `mysqli::kill()`. A connection
+    /// killing itself does not wait for the reply (the server drops the link), like mysqlnd.
+    /// `1` on success, `-1` with the error recorded (MySQL 8.4 removed the command and
+    /// answers "Unknown command").
+    pub fn process_kill(&mut self, id: i64) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        let Ok(target) = u32::try_from(id) else {
+            return -1;
+        };
+        let own = u64::from(target) == u64::from(self.conn.connection_id());
+        match self.conn.process_kill(target, !own) {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Sends `COM_SET_OPTION` (`0` multi-statements on, `1` off), the toggle mysqli wraps
+    /// around `multi_query()` / `query()` like mysqlnd. `1` on success, `-1` with the error
+    /// recorded.
+    pub fn set_server_option(&mut self, option: i64) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.set_server_option(option as u16) {
+            Ok(()) => 1,
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Sends `COM_DEBUG`, backing `mysqli::dump_debug_info()`. `1` on success, `-1` with the
+    /// error recorded (the server requires the SUPER privilege).
+    pub fn dump_debug_info(&mut self) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.dump_debug_info() {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Returns the info string of the last OK packet ("Records: 3  Duplicates: 0
+    /// Warnings: 0", "Rows matched: …"), backing `mysqli::$info` / `mysqli_info()`.
+    /// Empty when the server sent none. While a stream worker owns the client, the
+    /// current set's OK-packet info that worker reported.
+    pub fn info(&self) -> String {
+        match self.conn.0.as_ref() {
+            Some(client) => client.info_str().into_owned(),
+            None => self
+                .active_stream
+                .as_ref()
+                .map(|active| active.info.clone())
+                .unwrap_or_default(),
+        }
+    }
+
+    /// Records a client error from the `mysql` crate as the connection's last error; a
+    /// transport error also marks the session lost.
+    fn record_mysql_error(&mut self, error: &mysql::Error) {
+        self.sqlstate = err_sqlstate(error);
+        self.errmsg = error.to_string();
+        self.errcode = err_code(error);
+        if matches!(error, mysql::Error::IoError(_) | mysql::Error::CodecError(_)) {
+            self.lost = true;
+        }
+    }
+
+    /// Sends a real `COM_PING`, backing `mysqli::ping()`. Returns `1` on success
+    /// and `-1` (error recorded) when the server is gone or the client is busy.
+    pub fn ping(&mut self) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        match self.conn.ping() {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// Backs `mysqli::set_charset()`: a name mysqlnd's charset table does not know fails with
+    /// its 2019 "Invalid character set was provided" without contacting the server; a known
+    /// one runs `SET NAMES <name>` and becomes the charset `change_user()` keeps. Returns `1`
+    /// on success and `-1` with the error recorded.
+    pub fn set_charset(&mut self, name: &str) -> i64 {
+        let Some(canonical) = mysqlnd_charset_name(name) else {
+            self.sqlstate = "HY000".to_string();
+            self.errcode = 2019;
+            self.errmsg = "Invalid character set was provided".to_string();
+            return -1;
+        };
+        if self.exec(&format!("SET NAMES {canonical}")) < 0 {
+            return -1;
+        }
+        self.api_charset = Some(canonical.to_string());
+        1
+    }
+
+    /// Sends `COM_CHANGE_USER`, backing `mysqli::change_user()`: re-authenticates
+    /// the same connection, which resets the session (open transactions rolled back,
+    /// temporary tables dropped, session variables and charset reset). Returns `1` on
+    /// success and `-1` with the error recorded on failure.
+    pub fn change_user(&mut self, user: &str, pass: &str, db_name: Option<&str>) -> i64 {
+        if !self.ensure_not_busy() {
+            return -1;
+        }
+        let opts = mysql::ChangeUserOpts::default()
+            .with_user(Some(user.to_string()))
+            .with_pass(Some(pass.to_string()))
+            .with_db_name(db_name.map(str::to_string));
+        let collation = self.api_charset.as_deref().and_then(mysqlnd_charset_collation);
+        let result = match collation {
+            Some(collation) => self.conn.change_user_with_collation(opts, collation),
+            None => self.conn.change_user(opts),
+        };
+        match result {
+            Ok(()) => {
+                self.errcode = 0;
+                self.sqlstate = "00000".to_string();
+                self.in_transaction = false;
+                self.autocommit = true;
+                self.current_charset =
+                    self.api_charset.clone().unwrap_or_else(|| "utf8mb4".to_string());
+                1
+            }
+            Err(error) => {
+                self.record_mysql_error(&error);
+                -1
+            }
+        }
     }
 
     /// Prepares a statement: translates placeholders and prepares it server-side
@@ -2385,6 +3180,19 @@ impl MyConn {
     /// how many placeholders the statement has. This is the only place the flag can
     /// be read: `translate_placeholders` is a free function with no connection.
     pub fn prepare(&mut self, sql: &str, emulated: bool) -> Result<MyStmt, String> {
+        self.prepare_inner(sql, emulated, false)
+    }
+
+    /// Builds a text statement that sends `sql` exactly as written, without PDO placeholder
+    /// parsing: mysqli's `query()` / `real_query()` / `multi_query()` and an async reap, where
+    /// `?` and `:name` reach the server untouched (and a misuse is the server's syntax error).
+    pub fn prepare_text(&mut self, sql: &str) -> Result<MyStmt, String> {
+        self.prepare_inner(sql, true, true)
+    }
+
+    /// Shared body of [`MyConn::prepare`] and [`MyConn::prepare_text`]; `raw` skips the
+    /// placeholder translation and implies the emulated (text-protocol) path.
+    fn prepare_inner(&mut self, sql: &str, emulated: bool, raw: bool) -> Result<MyStmt, String> {
         if !self.ensure_not_busy() {
             return Err(self.errmsg.clone());
         }
@@ -2395,8 +3203,11 @@ impl MyConn {
             self.errmsg = "Multiple statements are disabled for this connection".to_string();
             return Err(self.errmsg.clone());
         }
-        let (translated, named_map, order, mixed) =
-            translate_placeholders(sql, no_backslash_escape);
+        let (translated, named_map, order, mixed) = if raw {
+            (sql.to_string(), HashMap::new(), Vec::new(), false)
+        } else {
+            translate_placeholders(sql, no_backslash_escape)
+        };
         if mixed {
             // Nonzero native code like every other error path here, and `1`
             // specifically to match pg's identical HY093 branch (`pg.rs`,
@@ -2432,11 +3243,22 @@ impl MyConn {
                 col_precisions: Vec::new(),
                 rows: Vec::new(),
                 remaining_rowsets: Vec::new(),
+                trailing_error: None,
+                pending_row_error: None,
+                raw_text: raw,
                 cursor: -1,
                 executed: false,
                 is_call: sql_is_call_statement(sql),
-                buffered: self.buffered_query,
+                // A stored mysqli query() buffers only the CURRENT set, like mysqlnd's
+                // store_result(): later sets stay on the server until next_result(). With
+                // multi-statements off only a CALL (or an EXECUTE of one) returns several sets,
+                // so such a raw statement streams (the prelude buffers its first set) and
+                // everything else is read at once.
+                buffered: self.buffered_query && !(raw && sql_may_return_several_sets(sql)),
                 stream_id: None,
+                lazy_sets: self.lazy_rowsets,
+                cursor_type: 0,
+                server_cursor: None,
             });
         }
         match self.conn.prep(&translated) {
@@ -2502,17 +3324,21 @@ impl MyConn {
                     col_precisions,
                     rows: Vec::new(),
                     remaining_rowsets: Vec::new(),
+                    trailing_error: None,
+                    pending_row_error: None,
+                    raw_text: false,
                     cursor: -1,
                     executed: false,
                     is_call: sql_is_call_statement(sql),
                     buffered: self.buffered_query,
                     stream_id: None,
+                    lazy_sets: self.lazy_rowsets,
+                    cursor_type: 0,
+                    server_cursor: None,
                 })
             }
             Err(e) => {
-                self.sqlstate = err_sqlstate(&e);
-                self.errmsg = e.to_string();
-                self.errcode = err_code(&e);
+                self.record_mysql_error(&e);
                 Err(e.to_string())
             }
         }
@@ -2645,18 +3471,40 @@ fn mysql_stream_rowset(
         col_lengths: columns.iter().map(Column::column_length).collect(),
         col_precisions: columns.iter().map(Column::decimals).collect(),
         rows: Vec::new(),
+        row_error: None,
     }
 }
 
 /// Drives an already-started MySQL query one row per `Next` command, preserving
 /// protocol result-set boundaries for `PDOStatement::nextRowset()`.
 fn drive_mysql_stream<T: mysql::prelude::Protocol>(
-    mut result: QueryResult<'_, '_, '_, T>,
+    result: QueryResult<'_, '_, '_, T>,
     fetch_table_names: bool,
+    counters: &mysql::IoCounters,
     commands: &mpsc::Receiver<MyStreamCommand>,
     responses: &mpsc::Sender<MyStreamResponse>,
 ) -> Result<(), mysql::Error> {
+    drive_mysql_stream_signalled(result, fetch_table_names, counters, commands, responses, None)
+}
+
+/// [`drive_mysql_stream`], signalling `ready` (an async query's readiness) once the first
+/// set's metadata has been sent.
+fn drive_mysql_stream_signalled<T: mysql::prelude::Protocol>(
+    mut result: QueryResult<'_, '_, '_, T>,
+    fetch_table_names: bool,
+    counters: &mysql::IoCounters,
+    commands: &mpsc::Receiver<MyStreamCommand>,
+    responses: &mpsc::Sender<MyStreamResponse>,
+    ready: Option<&AsyncReady>,
+) -> Result<(), mysql::Error> {
     while let Some(mut set) = result.iter() {
+        // A later statement of the batch failed: report its error now (mysqlnd's
+        // next_result() fails with it) instead of announcing an empty successful set.
+        if set.is_errored() {
+            if let Some(Err(error)) = set.next() {
+                return Err(error);
+            }
+        }
         let columns = set.columns();
         let columns: &[Column] = columns.as_ref();
         let kinds = columns.iter().map(ColKind::from_column).collect::<Vec<_>>();
@@ -2666,11 +3514,31 @@ fn drive_mysql_stream<T: mysql::prelude::Protocol>(
             set.last_insert_id(),
             fetch_table_names,
         );
-        if responses.send(MyStreamResponse::Rowset(rowset)).is_err() {
+        // The last packet read carries the set's status flags: a column-less set's OK packet
+        // (its info too), or a row set's metadata EOF (the client never negotiates
+        // CLIENT_DEPRECATE_EOF). mysqlnd's more_results() reads that status at once, before
+        // the set is consumed; its next_result() still waits for the set's own end.
+        let more = Some(counters.last_status() & 0x0008 != 0);
+        let info = if columns.is_empty() {
+            set.info_str().into_owned()
+        } else {
+            String::new()
+        };
+        if responses.send(MyStreamResponse::Rowset(rowset, more, info)).is_err() {
             return Ok(());
         }
+        if let Some(ready) = ready {
+            signal_ready(ready);
+        }
+        let mut ended = false;
         while let Ok(command) = commands.recv() {
             match command {
+                MyStreamCommand::Next if ended => {
+                    let more = counters.last_status() & 0x0008 != 0;
+                    if responses.send(MyStreamResponse::RowsetEnd(more)).is_err() {
+                        return Ok(());
+                    }
+                }
                 MyStreamCommand::Next => match set.next() {
                     Some(row) => {
                         let decoded = decode_row(row?.unwrap(), &kinds);
@@ -2679,10 +3547,23 @@ fn drive_mysql_stream<T: mysql::prelude::Protocol>(
                         }
                     }
                     None => {
-                        let _ = responses.send(MyStreamResponse::RowsetEnd);
-                        break;
+                        ended = true;
+                        // SERVER_MORE_RESULTS_EXISTS of the set's closing EOF / OK.
+                        let more = counters.last_status() & 0x0008 != 0;
+                        if responses.send(MyStreamResponse::RowsetEnd(more)).is_err() {
+                            return Ok(());
+                        }
                     }
                 },
+                MyStreamCommand::NextSet => {
+                    // Skip whatever rows are left, then read the next set.
+                    if !ended {
+                        for row in set.by_ref() {
+                            row?;
+                        }
+                    }
+                    break;
+                }
                 MyStreamCommand::Close => return Ok(()),
             }
         }
@@ -2700,8 +3581,9 @@ fn run_mysql_native_stream(
     commands: mpsc::Receiver<MyStreamCommand>,
     responses: mpsc::Sender<MyStreamResponse>,
 ) {
+    let counters = conn.io_counters();
     let result = match conn.exec_iter(&statement, values) {
-        Ok(result) => drive_mysql_stream(result, fetch_table_names, &commands, &responses),
+        Ok(result) => drive_mysql_stream(result, fetch_table_names, &counters, &commands, &responses),
         Err(error) => Err(error),
     };
     finish_mysql_stream_worker(conn, result, &responses);
@@ -2715,11 +3597,40 @@ fn run_mysql_text_stream(
     commands: mpsc::Receiver<MyStreamCommand>,
     responses: mpsc::Sender<MyStreamResponse>,
 ) {
+    let counters = conn.io_counters();
     let result = match conn.query_iter(sql) {
-        Ok(result) => drive_mysql_stream(result, fetch_table_names, &commands, &responses),
+        Ok(result) => drive_mysql_stream(result, fetch_table_names, &counters, &commands, &responses),
         Err(error) => Err(error),
     };
     finish_mysql_stream_worker(conn, result, &responses);
+}
+
+/// Reads a MYSQLI_ASYNC query's response on its own worker (`MyConn::async_send` already
+/// wrote the command): like [`run_mysql_text_stream`], and `ready` is signalled once the
+/// first set's metadata (or the query's outcome) has been sent, which is when mysqlnd's poll
+/// sees the link readable.
+fn run_mysql_async_text_stream(
+    mut conn: Conn,
+    fetch_table_names: bool,
+    commands: mpsc::Receiver<MyStreamCommand>,
+    responses: mpsc::Sender<MyStreamResponse>,
+    ready: AsyncReady,
+) {
+    let counters = conn.io_counters();
+    // The query was already written by `MyConn::async_send`.
+    let result = match conn.read_query_result() {
+        Ok(result) => drive_mysql_stream_signalled(
+            result,
+            fetch_table_names,
+            &counters,
+            &commands,
+            &responses,
+            Some(&ready),
+        ),
+        Err(error) => Err(error),
+    };
+    finish_mysql_stream_worker(conn, result, &responses);
+    signal_ready(&ready);
 }
 
 /// Sends a worker's recovered connection plus final warning/error state.
@@ -2734,12 +3645,7 @@ fn finish_mysql_stream_worker(
             let _ = responses.send(MyStreamResponse::Finished(conn, warnings));
         }
         Err(error) => {
-            let sqlstate = err_sqlstate(&error);
-            let errcode = err_code(&error);
-            let message = error.to_string();
-            let _ = responses.send(MyStreamResponse::Failed(
-                conn, sqlstate, errcode, message,
-            ));
+            let _ = responses.send(MyStreamResponse::Failed(conn, error));
         }
     }
 }
@@ -2750,6 +3656,15 @@ impl MyStmt {
     /// `mysqli_stmt::$param_count`), so no client-side `?`-scanning is needed.
     pub fn param_count(&self) -> i64 {
         self.binds.len() as i64
+    }
+
+    /// Returns the server-side statement id of a native prepare (mysqli's
+    /// `mysqli_stmt::$id`), or `0` for an emulated (client-side) statement.
+    pub fn server_statement_id(&self) -> i64 {
+        self.statement
+            .as_ref()
+            .map(|statement| i64::from(statement.id()))
+            .unwrap_or(0)
     }
 
     /// Resolves a named placeholder to its 1-based slot (0 if unknown). The
@@ -2769,17 +3684,81 @@ impl MyStmt {
         1
     }
 
+    /// Releases the server-side statement when the connection keeps no statement cache
+    /// (mysqli), sending COM_STMT_CLOSE like mysqlnd's mysqli_stmt_close().
+    pub fn close_native(&mut self, conn: &mut MyConn) {
+        if !conn.closes_statements || conn.conn.0.is_none() {
+            return;
+        }
+        if let Some(statement) = self.statement.take() {
+            let _ = conn.conn.close(statement);
+        }
+    }
+
     /// Resets the cursor and execution state, keeping the bound values.
     pub fn reset(&mut self, conn: &mut MyConn) -> i64 {
         if let Some(stream_id) = self.stream_id {
             conn.finish_stream(stream_id);
         }
+        // An open server cursor needs no wire traffic here: the server closes it on the
+        // statement's next execution or close.
+        self.server_cursor = None;
         self.cursor = -1;
         self.executed = false;
         self.rows.clear();
         self.remaining_rowsets.clear();
+        self.trailing_error = None;
         self.stream_id = None;
         1
+    }
+
+    /// mysqli_stmt::send_long_data(): sends one `COM_STMT_SEND_LONG_DATA` chunk of parameter
+    /// `index` (0-based) right away, like mysqlnd; the connection remembers it so the next
+    /// execution leaves that value out. `1` when sent, `0` without traffic when the link is not
+    /// ready (an unbuffered or async result owns the client, or the statement is not native),
+    /// `-1` with the connection's error recorded when the command fails.
+    pub fn send_long_data(&mut self, conn: &mut MyConn, index: i64, data: &[u8]) -> i64 {
+        let Some(statement) = self.statement.as_ref() else {
+            return 0;
+        };
+        let Ok(index) = u16::try_from(index) else {
+            return 0;
+        };
+        if conn.unbuffered_active || conn.conn.0.is_none() {
+            return 0;
+        }
+        match conn.conn.stmt_send_long_data(statement.id(), index, data) {
+            Ok(()) => 1,
+            Err(error) => {
+                conn.record_mysql_error(&error);
+                -1
+            }
+        }
+    }
+
+    /// mysqli_stmt::reset(): the local [`MyStmt::reset`] (which finishes this statement's own
+    /// unread stream), then `COM_STMT_RESET` for a native statement. `1` on success, `-1`
+    /// with the connection's error recorded when the command fails (a lost connection).
+    pub fn server_reset(&mut self, conn: &mut MyConn) -> i64 {
+        self.reset(conn);
+        let Some(statement) = self.statement.as_ref() else {
+            return 1;
+        };
+        if !conn.ensure_not_busy() {
+            return -1;
+        }
+        match conn.conn.stmt_reset(statement.id()) {
+            Ok(()) => {
+                conn.errcode = 0;
+                conn.sqlstate = "00000".to_string();
+                conn.errmsg.clear();
+                1
+            }
+            Err(error) => {
+                conn.record_mysql_error(&error);
+                -1
+            }
+        }
     }
 
     /// Makes one materialized result set active and updates connection-level
@@ -2799,6 +3778,7 @@ impl MyStmt {
         self.col_lengths = rowset.col_lengths;
         self.col_precisions = rowset.col_precisions;
         self.rows = rowset.rows;
+        self.pending_row_error = rowset.row_error;
         self.cursor = -1;
         self.executed = true;
         conn.unbuffered_active = !self.buffered
@@ -2829,6 +3809,10 @@ impl MyStmt {
         if self.remaining_rowsets.is_empty() {
             if self.stream_id.is_none() {
                 conn.unbuffered_active = false;
+            }
+            if let Some(error) = self.trailing_error.take() {
+                conn.record_mysql_error(&error);
+                return -1;
             }
             return 0;
         }
@@ -2901,6 +3885,13 @@ impl MyStmt {
     /// `is_call` placeholder (see its doc comment), the prelude picks the
     /// throwaway branch and discards this method's very first materialized row.
     fn execute(&mut self, conn: &mut MyConn) -> Result<(), i64> {
+        // Every MySQL execution, PDO's and mysqli's (query(), real_query(), multi_query(),
+        // a prepared execute()), passes here exactly once: count it, with its SQL, for the
+        // exact profiler (an async query counts at its send instead).
+        crate::instr_io::note();
+        if crate::instr_io::query_active() {
+            crate::instr_io::note_query(&self.query_string);
+        }
         if self.emulated_sql.is_some() {
             return self.execute_emulated(conn);
         }
@@ -2910,10 +3901,15 @@ impl MyStmt {
             .as_ref()
             .expect("native MySQL statement missing its prepared handle")
             .clone();
+        self.server_cursor = None;
+        if !self.buffered && self.cursor_type != 0 {
+            return self.execute_with_cursor(conn, statement, values);
+        }
         if !self.buffered {
             let (stream_id, rowset) = conn.start_native_stream(statement, values)?;
             self.stream_id = Some(stream_id);
             self.remaining_rowsets.clear();
+            self.trailing_error = None;
             self.install_rowset(conn, rowset);
             conn.note_transaction_sql(&self.query_string);
             return Ok(());
@@ -2957,6 +3953,7 @@ impl MyStmt {
                     col_lengths,
                     col_precisions,
                     rows,
+                    row_error: None,
                 });
             }
             Ok(rowsets)
@@ -2979,6 +3976,7 @@ impl MyStmt {
                         col_lengths: self.col_lengths.clone(),
                         col_precisions: self.col_precisions.clone(),
                         rows: Vec::new(),
+                        row_error: None,
                     }
                 } else {
                     rowsets.remove(0)
@@ -2989,12 +3987,218 @@ impl MyStmt {
                 Ok(())
             }
             Err(e) => {
-                conn.sqlstate = err_sqlstate(&e);
-                conn.errmsg = e.to_string();
-                conn.errcode = err_code(&e);
+                conn.record_mysql_error(&e);
                 Err(-1)
             }
         }
+    }
+
+    /// Executes a native statement asking the server for a read-only cursor
+    /// (mysqli's `MYSQLI_CURSOR_TYPE_READ_ONLY`). When the server opens one, only the
+    /// metadata is read and `step()` fetches the rows one `COM_STMT_FETCH` at a time; a
+    /// statement the server runs without a cursor (no result set, or a `CALL`) is
+    /// materialized like a buffered execution, keeping a later set's error for
+    /// `next_result()`.
+    fn execute_with_cursor(
+        &mut self,
+        conn: &mut MyConn,
+        statement: Statement,
+        values: Vec<Value>,
+    ) -> Result<(), i64> {
+        let fetch_table_names = conn.fetch_table_names;
+        let cursor_type = self.cursor_type;
+        type CursorOutcome = (Vec<MyRowset>, Option<Arc<[Column]>>, Option<mysql::Error>);
+        let outcome: Result<CursorOutcome, mysql::Error> = (|| {
+            let mut res = conn.conn.exec_iter_with_cursor(
+                &statement,
+                mysql::Params::Positional(values),
+                cursor_type,
+            )?;
+            let mut rowsets = Vec::new();
+            let mut first_columns = None;
+            // Without a granted cursor (a CALL) every set is buffered here, but like
+            // collect_text_rowsets_until_error a later statement's failure keeps the sets
+            // before it: execute() succeeds and next_result() reports that error (mysqlnd
+            // reads further sets only on demand). A failing first set fails execute().
+            while let Some(mut set) = res.iter() {
+                if set.is_errored() {
+                    if let Some(Err(error)) = set.next() {
+                        if rowsets.is_empty() {
+                            return Err(error);
+                        }
+                        return Ok((rowsets, first_columns, Some(error)));
+                    }
+                }
+                let live = set.columns();
+                let cols: &[Column] = live.as_ref();
+                if first_columns.is_none() && !cols.is_empty() {
+                    first_columns = Some(Arc::<[Column]>::from(cols.to_vec()));
+                }
+                let kinds = cols.iter().map(ColKind::from_column).collect::<Vec<_>>();
+                let mut rowset = mysql_stream_rowset(
+                    cols,
+                    set.affected_rows() as i64,
+                    set.last_insert_id(),
+                    fetch_table_names,
+                );
+                let mut ended = false;
+                for row in set.by_ref() {
+                    match row {
+                        Ok(row) => rowset.rows.push(decode_row(row.unwrap(), &kinds)),
+                        Err(error) if rowsets.is_empty() => return Err(error),
+                        // A later set is still announced and fails when its rows are read.
+                        Err(error) => {
+                            rowset.row_error = Some(error);
+                            ended = true;
+                            break;
+                        }
+                    }
+                }
+                rowsets.push(rowset);
+                if ended {
+                    break;
+                }
+            }
+            Ok((rowsets, first_columns, None))
+        })();
+        let warnings = conn.conn.warnings();
+        let cursor_open = conn
+            .conn
+            .status_flags()
+            .contains(mysql::consts::StatusFlags::SERVER_STATUS_CURSOR_EXISTS);
+        match outcome {
+            Ok((mut rowsets, columns, trailing_error)) => {
+                conn.errcode = 0;
+                conn.sqlstate = "00000".to_string();
+                conn.warning_count = warnings;
+                let first = if rowsets.is_empty() {
+                    MyRowset::empty()
+                } else {
+                    rowsets.remove(0)
+                };
+                self.remaining_rowsets = rowsets;
+                self.trailing_error = trailing_error;
+                self.install_rowset(conn, first);
+                if let (true, Some(columns)) = (cursor_open, columns) {
+                    self.server_cursor = Some(MyServerCursor {
+                        columns,
+                        exhausted: false,
+                        drained: false,
+                    });
+                }
+                conn.note_transaction_sql(&self.query_string);
+                Ok(())
+            }
+            Err(e) => {
+                conn.record_mysql_error(&e);
+                Err(-1)
+            }
+        }
+    }
+
+    /// Advances an open server cursor: the next buffered row after `fetch_all()`, otherwise
+    /// one `COM_STMT_FETCH` of a single row (mysqlnd's default prefetch). `1` with the row
+    /// active, `0` once the cursor is exhausted, `-1` with the error recorded.
+    fn step_server_cursor(&mut self, conn: &mut MyConn) -> i64 {
+        let Some(cursor) = self.server_cursor.as_mut() else {
+            return 0;
+        };
+        if cursor.drained || cursor.exhausted {
+            self.cursor += 1;
+            return if (self.cursor as usize) < self.rows.len() { 1 } else { 0 };
+        }
+        let stmt_id = self
+            .statement
+            .as_ref()
+            .map(Statement::id)
+            .expect("cursor statement missing its prepared handle");
+        if conn.client_unavailable() {
+            return -1;
+        }
+        match conn.conn.stmt_fetch(stmt_id, 1, Arc::clone(&cursor.columns)) {
+            Ok((rows, _)) => {
+                self.rows.clear();
+                self.cursor = 0;
+                match rows.into_iter().next() {
+                    Some(row) => {
+                        self.rows.push(decode_row(row.unwrap(), &self.col_kinds));
+                        1
+                    }
+                    None => {
+                        cursor.exhausted = true;
+                        0
+                    }
+                }
+            }
+            Err(e) => {
+                conn.record_mysql_error(&e);
+                -1
+            }
+        }
+    }
+
+    /// mysqli_stmt::fetch() past an exhausted read-only cursor: mysqlnd sends one more
+    /// `COM_STMT_FETCH`, which the server answers with an error (the cursor is closed), and
+    /// fails without recording or reporting that error. The command goes on the wire so the
+    /// statistics count it; its answer is consumed and dropped. The exhausted set's local
+    /// cursor state is already reset, and the error answer carries no row, so the fetch
+    /// needs only the prepared statement's id. Always `0`.
+    pub fn fetch_past_cursor_end(&mut self, conn: &mut MyConn) -> i64 {
+        let Some(statement) = self.statement.as_ref() else {
+            return 0;
+        };
+        if conn.client_unavailable() {
+            return 0;
+        }
+        let no_columns: Arc<[Column]> = Arc::from(Vec::new());
+        let _ = conn.conn.stmt_fetch(statement.id(), 1, no_columns);
+        0
+    }
+
+    /// Reads every remaining row of an open server cursor with one `COM_STMT_FETCH`
+    /// (mysqlnd's `get_result()` / `store_result()` on a cursor statement); `step()` then
+    /// walks them. Returns the number of rows read, `0` without an open cursor, or `-1`
+    /// with the error recorded.
+    pub fn cursor_fetch_all(&mut self, conn: &mut MyConn) -> i64 {
+        let Some(cursor) = self.server_cursor.as_mut() else {
+            return 0;
+        };
+        if cursor.drained || cursor.exhausted {
+            return 0;
+        }
+        let stmt_id = self
+            .statement
+            .as_ref()
+            .map(Statement::id)
+            .expect("cursor statement missing its prepared handle");
+        if conn.client_unavailable() {
+            return -1;
+        }
+        match conn.conn.stmt_fetch(stmt_id, u32::MAX, Arc::clone(&cursor.columns)) {
+            Ok((rows, _)) => {
+                cursor.drained = true;
+                self.rows = rows
+                    .into_iter()
+                    .map(|row| decode_row(row.unwrap(), &self.col_kinds))
+                    .collect();
+                self.cursor = -1;
+                self.rows.len() as i64
+            }
+            Err(e) => {
+                conn.record_mysql_error(&e);
+                -1
+            }
+        }
+    }
+
+    /// Sets mysqli's cursor type for the next execution (`0` none, `1` read-only).
+    pub fn set_cursor_type(&mut self, cursor_type: i64) {
+        self.cursor_type = u8::try_from(cursor_type).unwrap_or(0);
+    }
+
+    /// Whether the last execution left an open server cursor (mysqlnd's `cursor_exists`).
+    pub fn cursor_open(&self) -> bool {
+        self.server_cursor.is_some()
     }
 
     /// Executes an emulated MySQL statement through the text protocol after
@@ -3006,22 +4210,23 @@ impl MyStmt {
             conn.errmsg = "Invalid parameter number: number of bound variables does not match number of tokens".to_string();
             return Err(-1);
         }
-        let values = self.build_values();
-        let national = self.build_national_flags();
-        let sql = match interpolate_emulated_sql(
-            self.emulated_sql
-                .as_deref()
-                .expect("emulated MySQL statement missing SQL"),
-            &values,
-            &national,
-            self.no_backslash_escape,
-        ) {
-            Ok(sql) => sql,
-            Err(message) => {
-                conn.sqlstate = "HY093".to_string();
-                conn.errcode = 1;
-                conn.errmsg = message;
-                return Err(-1);
+        let emulated_sql = self
+            .emulated_sql
+            .as_deref()
+            .expect("emulated MySQL statement missing SQL");
+        let sql = if self.raw_text {
+            emulated_sql.to_string()
+        } else {
+            let values = self.build_values();
+            let national = self.build_national_flags();
+            match interpolate_emulated_sql(emulated_sql, &values, &national, self.no_backslash_escape) {
+                Ok(sql) => sql,
+                Err(message) => {
+                    conn.sqlstate = "HY093".to_string();
+                    conn.errcode = 1;
+                    conn.errmsg = message;
+                    return Err(-1);
+                }
             }
         };
         self.sent_sql = sql.clone();
@@ -3029,56 +4234,23 @@ impl MyStmt {
             let (stream_id, rowset) = conn.start_text_stream(sql)?;
             self.stream_id = Some(stream_id);
             self.remaining_rowsets.clear();
+            self.trailing_error = None;
             self.install_rowset(conn, rowset);
             conn.note_transaction_sql(&self.query_string);
             return Ok(());
         }
-        let outcome = (|| {
-            let mut result = conn.conn.query_iter(sql)?;
-            let mut rowsets = Vec::new();
-            while let Some(mut set) = result.iter() {
-                let last_id = set.last_insert_id();
-                let affected = set.affected_rows() as i64;
-                let columns = set.columns();
-                let columns: &[Column] = columns.as_ref();
-                let col_names = columns
-                    .iter()
-                    .map(|column| column_display_name(column, conn.fetch_table_names))
-                    .collect::<Vec<_>>();
-                let col_kinds = columns.iter().map(ColKind::from_column).collect::<Vec<_>>();
-                let col_types = columns
-                    .iter()
-                    .map(|column| column.column_type())
-                    .collect::<Vec<_>>();
-                let col_tables = columns
-                    .iter()
-                    .map(|column| column.table_str().into_owned())
-                    .collect::<Vec<_>>();
-                let col_flags = columns.iter().map(Column::flags).collect::<Vec<_>>();
-                let col_lengths = columns
-                    .iter()
-                    .map(Column::column_length)
-                    .collect::<Vec<_>>();
-                let col_precisions = columns.iter().map(Column::decimals).collect::<Vec<_>>();
-                let mut rows = Vec::new();
-                for row in set.by_ref() {
-                    rows.push(decode_row(row?.unwrap(), &col_kinds));
-                }
-                rowsets.push(MyRowset {
-                    affected,
-                    last_id,
-                    col_names,
-                    col_kinds,
-                    col_types,
-                    col_tables,
-                    col_flags,
-                    col_lengths,
-                    col_precisions,
-                    rows,
-                });
+        let fetch_table_names = conn.fetch_table_names;
+        // A later statement's failure (a `CALL` whose procedure fails after a first set) is
+        // kept for next_rowset(), like mysqlnd, which reads further sets only on demand.
+        let (rowsets, trailing_error) =
+            collect_text_rowsets_until_error(&mut conn.conn, sql, fetch_table_names);
+        let outcome = match trailing_error {
+            Some(error) if rowsets.is_empty() => Err(error),
+            trailing_error => {
+                self.trailing_error = trailing_error;
+                Ok(rowsets)
             }
-            Ok::<_, mysql::Error>(rowsets)
-        })();
+        };
         let warnings = conn.conn.warnings();
         match outcome {
             Ok(mut rowsets) => {
@@ -3097,6 +4269,7 @@ impl MyStmt {
                         col_lengths: Vec::new(),
                         col_precisions: Vec::new(),
                         rows: Vec::new(),
+                        row_error: None,
                     }
                 } else {
                     rowsets.remove(0)
@@ -3107,12 +4280,31 @@ impl MyStmt {
                 Ok(())
             }
             Err(error) => {
-                conn.sqlstate = err_sqlstate(&error);
-                conn.errmsg = error.to_string();
-                conn.errcode = err_code(&error);
+                conn.record_mysql_error(&error);
                 Err(-1)
             }
         }
+    }
+
+    /// Whether the current result set is followed by another one, without reading it:
+    /// a streaming set's closing EOF/OK flag, or a buffered statement's remaining sets.
+    pub fn more_results(&self, conn: &MyConn) -> bool {
+        match self.stream_id {
+            Some(stream_id) => conn.stream_more_sets(stream_id),
+            None => !self.remaining_rowsets.is_empty() || self.trailing_error.is_some(),
+        }
+    }
+
+    /// Executes the statement without reading a row: mysqli_stmt::execute(), which leaves
+    /// a result set's rows on the server until they are stored or fetched (mysqlnd). `0` on
+    /// success, the negative error code `step()` would return otherwise.
+    pub fn execute_only(&mut self, conn: &mut MyConn) -> i64 {
+        if !self.executed {
+            if let Err(code) = self.execute(conn) {
+                return code;
+            }
+        }
+        0
     }
 
     /// Advances to the next row: `1` for a row, `0` when exhausted, `-1` on error.
@@ -3122,6 +4314,9 @@ impl MyStmt {
             if let Err(code) = self.execute(conn) {
                 return code;
             }
+        }
+        if self.server_cursor.is_some() {
+            return self.step_server_cursor(conn);
         }
         if let Some(stream_id) = self.stream_id {
             return match conn.next_stream_row(stream_id) {
@@ -3134,6 +4329,10 @@ impl MyStmt {
                 Ok(None) => {
                     self.rows.clear();
                     self.cursor = 0;
+                    if self.lazy_sets {
+                        // mysqli advances explicitly (next_result()).
+                        return 0;
+                    }
                     match conn.next_stream_rowset(stream_id) {
                         Ok(Some(rowset)) => self.remaining_rowsets.push(rowset),
                         Ok(None) => self.stream_id = None,
@@ -3149,6 +4348,10 @@ impl MyStmt {
             1
         } else {
             conn.unbuffered_active = false;
+            if let Some(error) = self.pending_row_error.take() {
+                conn.record_mysql_error(&error);
+                return -1;
+            }
             0
         }
     }
@@ -3470,6 +4673,47 @@ mod tests {
         assert_eq!(ColKind::from_column(&varchar_utf8mb4), ColKind::Other);
     }
 
+    /// mysqlnd's charset table: names match case-insensitively to their canonical spelling,
+    /// `utf8mb3` and non-identifiers are unknown, and `utf8mb4` announces collation 45.
+    #[test]
+    fn mysqlnd_charset_table_matches_php() {
+        assert_eq!(mysqlnd_charset_name("LATIN1"), Some("latin1"));
+        assert_eq!(mysqlnd_charset_name("utf8"), Some("utf8"));
+        assert_eq!(mysqlnd_charset_name("utf8mb3"), None);
+        assert_eq!(mysqlnd_charset_name("utf-8"), None);
+        assert_eq!(mysqlnd_charset_collation("utf8mb4"), Some(45));
+        assert_eq!(mysqlnd_charset_collation("Latin1"), Some(8));
+        assert_eq!(mysqlnd_charset_collation("gb18030"), Some(248));
+    }
+
+    /// `sql_may_return_several_sets` finds `CALL` and `EXECUTE` behind whitespace and inert
+    /// comments, answers `true` for any leading MySQL / MariaDB executable comment (active or
+    /// not, empty or not), and nothing else: an identifier that merely starts with the keyword
+    /// and a keyword inside an inert comment are rejected.
+    #[test]
+    fn sql_may_return_several_sets_sees_through_executable_comments() {
+        assert!(sql_may_return_several_sets("CALL p()"));
+        assert!(sql_may_return_several_sets(" /* hint */ call p()"));
+        assert!(sql_may_return_several_sets("/*!50000 CALL p() */"));
+        assert!(sql_may_return_several_sets("/*! CALL p() */"));
+        assert!(sql_may_return_several_sets("/*M!100100 CALL p() */"));
+        assert!(sql_may_return_several_sets("-- x\n/*!50000 CALL p() */"));
+        assert!(sql_may_return_several_sets("EXECUTE s"));
+        assert!(sql_may_return_several_sets("/*!50000 execute s */"));
+        assert!(!sql_may_return_several_sets("CALLBACK()"));
+        assert!(!sql_may_return_several_sets("EXECUTED()"));
+        assert!(!sql_may_return_several_sets("/* CALL p() */ SELECT 1"));
+        assert!(sql_may_return_several_sets("--\nCALL p()"));
+        assert!(sql_may_return_several_sets("--\x01\nCALL p()"));
+        assert!(sql_may_return_several_sets("--\x7f x\nCALL p()"));
+        assert!(!sql_may_return_several_sets("--x\nCALL p()"));
+        assert!(sql_may_return_several_sets("/*! */ CALL p()"));
+        assert!(sql_may_return_several_sets("/*!99999 SELECT 1 */ CALL p()"));
+        assert!(sql_may_return_several_sets("/*!50000 SELECT 1 */"));
+        assert!(!sql_may_return_several_sets("SELECT 1"));
+        assert!(!sql_may_return_several_sets(""));
+    }
+
     /// P0-C (mandatory unit test, no server needed): `sql_is_call_statement`
     /// recognizes `CALL` case-insensitively and with leading whitespace, but
     /// rejects a bare `CALLBACK(...)`-style identifier that merely starts with
@@ -3545,6 +4789,18 @@ mod tests {
     }
 
     /// Packed PDO driver options preserve supported TLS selections and validate
+    /// mysqli's `MYSQLI_OPT_READ_TIMEOUT` travels as `iotimeout=<secs>`; zero or a
+    /// malformed value means "no timeout", like mysqlnd's default.
+    #[test]
+    fn driver_options_parse_the_socket_io_timeout() {
+        let options = parse_driver_options("iotimeout=7;").expect("iotimeout parses");
+        assert_eq!(options.io_timeout_secs, Some(7));
+        let options = parse_driver_options("iotimeout=0;").expect("zero parses");
+        assert_eq!(options.io_timeout_secs, None);
+        let options = parse_driver_options("iotimeout=x;").expect("junk is ignored");
+        assert_eq!(options.io_timeout_secs, None);
+    }
+
     /// a caller-supplied authentication key path before the handshake.
     #[test]
     fn driver_options_parse_supported_flags_and_security_paths() {

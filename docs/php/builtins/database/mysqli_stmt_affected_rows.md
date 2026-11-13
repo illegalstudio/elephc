@@ -1,14 +1,12 @@
 ---
 title: "mysqli_stmt_affected_rows()"
 description: "Returns how many rows a prepared write affected."
-sidebar:
-  order: 163
 ---
 
 ## mysqli_stmt_affected_rows()
 
 ```php
-function mysqli_stmt_affected_rows(mixed $statement): int
+function mysqli_stmt_affected_rows(mixed $statement): mixed
 ```
 
 Returns how many rows a prepared write affected.
@@ -16,12 +14,13 @@ Returns how many rows a prepared write affected.
 **Parameters**:
 - `$statement` (`mixed`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

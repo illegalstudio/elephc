@@ -65,6 +65,8 @@ struct Data {
     position: usize,
     pattern: Option<Rc<Regex>>,
     matched: Option<Match>,
+    /// The progressive pattern is the dedicated `[0-9]+` form initialized by the fast ABI.
+    simple_pattern: bool,
 }
 
 /// One thread-confined mbregex session shared by every operation in a request.
@@ -79,7 +81,9 @@ impl Session {
     pub fn set_encoding(&self, name: &[u8]) -> MbResult<()> {
         let encoding = RegexEncoding::lookup(name).ok_or_else(||
             MbError::argument_value("mb_regex_encoding", 1, "encoding", "must be a valid encoding, ", name, " given"))?;
-        self.data.borrow_mut().encoding = encoding;
+        let mut data = self.data.borrow_mut();
+        data.encoding = encoding;
+        data.simple_pattern = false;
         Ok(())
     }
 
@@ -89,6 +93,7 @@ impl Session {
         let mut data = self.data.borrow_mut();
         data.default_encoding = RegexEncoding::default_for_ini(name).unwrap_or_default();
         if let Some(encoding) = RegexEncoding::lookup(name) { data.encoding = encoding; }
+        data.simple_pattern = false;
     }
 
     /// Returns the current default options without changing cached or progressive patterns.
@@ -97,7 +102,9 @@ impl Session {
     /// Publishes validated options and returns the previous default, as mb_regex_set_options does.
     pub fn set_options(&self, input: &[u8]) -> MbResult<Options> {
         let options = Options::parse(input, false)?;
-        Ok(std::mem::replace(&mut self.data.borrow_mut().options, options))
+        let mut data = self.data.borrow_mut();
+        data.simple_pattern = false;
+        Ok(std::mem::replace(&mut data.options, options))
     }
 
     /// Releases request-owned patterns, captures, and subjects while retaining PHP's worker option defaults.
@@ -109,6 +116,39 @@ impl Session {
 
     /// Returns the progressive byte position even before a subject has been initialized.
     pub fn position(&self) -> usize { self.data.borrow().position }
+
+    /// Reports whether both a progressive pattern and subject are ready for a search step.
+    ///
+    /// Dedicated ABI step paths return their unavailable sentinel when this is false so the
+    /// generic bridge can emit PHP's exact "no pattern/subject" diagnostics.
+    pub fn progressive_ready(&self) -> bool {
+        let data = self.data.borrow();
+        data.pattern.is_some() && data.subject.is_some()
+    }
+
+    /// Reports whether the dedicated one-group `[0-9]+` fast path owns the live
+    /// progressive pattern and subject. Other patterns must use the generic
+    /// register materializer so named/numbered groups are preserved.
+    pub fn simple_ready(&self) -> bool {
+        let data = self.data.borrow();
+        data.simple_pattern && data.pattern.is_some() && data.subject.is_some()
+    }
+
+    /// Returns the retained match's start and length, if a search has matched.
+    pub fn match_position(&self) -> Option<(usize, usize)> {
+        self.data.borrow().matched.as_ref().map(Match::position)
+    }
+
+    /// Borrows the retained match's complete group-0 byte range.
+    ///
+    /// The returned pointer points into the session-owned subject copy. Callers must copy it
+    /// before any operation that can replace the retained match.
+    pub fn match_group0(&self) -> Option<(*const u8, usize)> {
+        let data = self.data.borrow();
+        let matched = data.matched.as_ref()?;
+        let range = matched.captures.groups.first()?.as_ref()?.clone();
+        Some((matched.subject[range.clone()].as_ptr(), range.len()))
+    }
 
     /// Sets a byte position, resolving negatives only when an initialized subject supplies its length.
     pub fn set_position(&self, position: i64) -> MbResult<()> {
@@ -147,6 +187,7 @@ impl Session {
                     }
                 }
                 data.cache.insert(pattern.to_vec(), Cached { encoding: encoding.id, options, regex: regex.clone() });
+                data.simple_pattern = false;
                 Ok(Some(regex))
             }
             Err(RegexError::Pattern(message)) => { warning(function, &message, emit); Ok(None) }

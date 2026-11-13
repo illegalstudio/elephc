@@ -1,8 +1,6 @@
 ---
 title: "gmp_perfect_power()"
 description: "Checks whether a GMP number is a perfect power."
-sidebar:
-  order: 619
 ---
 
 ## gmp_perfect_power()
@@ -20,8 +18,9 @@ Checks whether a GMP number is a perfect power.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_perfect_power.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_perfect_power.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

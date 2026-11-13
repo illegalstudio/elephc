@@ -186,8 +186,8 @@ echo gmp_strval($power, 16), "\n";
 A complete runnable example lives in `examples/gmp/main.php`.
 
 Very large values are bounded by the compiler's fixed heap. The default is
-8 MiB; a workload such as `1000!` needs php-src's usual 128 MiB headroom, so
-compile it with `--heap-size=134217728` (or larger).
+128 MiB (`134217728` bytes), matching PHP's default `memory_limit`. Use
+`--heap-size=BYTES` to select a different budget for the workload.
 
 ## Compatibility notes
 

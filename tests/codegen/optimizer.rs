@@ -11,8 +11,46 @@
 
 use crate::support::*;
 
+#[path = "optimizer/abs_int_sink.rs"]
+mod abs_int_sink;
+#[path = "optimizer/sqrt_add_int_sink.rs"]
+mod sqrt_add_int_sink;
+#[path = "optimizer/sqrt_sum_loop.rs"]
+mod sqrt_sum_loop;
+#[path = "optimizer/strpos_int_sink.rs"]
+mod strpos_int_sink;
+#[path = "optimizer/strstr_len_sink.rs"]
+mod strstr_len_sink;
+#[path = "optimizer/base64_decode_len_sink.rs"]
+mod base64_decode_len_sink;
+#[path = "optimizer/parse_url_count_sink.rs"]
+mod parse_url_count_sink;
+#[path = "optimizer/count_chars_count_sink.rs"]
+mod count_chars_count_sink;
+#[path = "optimizer/strip_tags_len_sink.rs"]
+mod strip_tags_len_sink;
+#[path = "optimizer/inet_pton_len_sink.rs"]
+mod inet_pton_len_sink;
+#[path = "optimizer/ip2long_int_sink.rs"]
+mod ip2long_int_sink;
+#[path = "optimizer/string_len_sink.rs"]
+mod string_len_sink;
+#[path = "optimizer/str_split_count_sink.rs"]
+mod str_split_count_sink;
+#[path = "optimizer/json_decode_count_sink.rs"]
+mod json_decode_count_sink;
+#[path = "optimizer/json_decode_count_hoist.rs"]
+mod json_decode_count_hoist;
+#[path = "optimizer/array_sum_int_sink.rs"]
+mod array_sum_int_sink;
+#[path = "optimizer/array_map_sum_add_int_sink.rs"]
+mod array_map_sum_add_int_sink;
+#[path = "optimizer/array_filter_count_hoist.rs"]
+mod array_filter_count_hoist;
 #[path = "optimizer/array_read_match.rs"]
 mod array_read_match;
+#[path = "optimizer/leaf_runtime_calls.rs"]
+mod leaf_runtime_calls;
 #[path = "optimizer/switch_fallthrough.rs"]
 mod switch_fallthrough;
 #[path = "optimizer/bcmath_number.rs"]
@@ -22,7 +60,9 @@ mod bcmath_number;
 mod boxed_array_snapshots;
 mod implode_effects;
 mod spread_effects;
+mod call_effect_followups;
 mod strip_tags_effects;
+mod str_replace_search;
 
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
@@ -44,13 +84,19 @@ mod checked_int_sink;
 mod buffer_element_incdec;
 #[path = "optimizer/bounded_mixed_counter.rs"]
 mod bounded_mixed_counter;
+#[path = "optimizer/raw_promotable_loop.rs"]
+mod raw_promotable_loop;
+#[path = "optimizer/lazy_boxed_accumulator.rs"]
+mod lazy_boxed_accumulator;
 #[path = "optimizer/method_loop_counters.rs"]
 mod method_loop_counters;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
 mod integer_destinations;
+mod numeric_consumers;
 mod counter_fast_paths;
 mod counter_region_comparisons;
+mod integer_property_updates;
 #[path = "optimizer/concat_reset.rs"]
 mod concat_reset;
 #[path = "optimizer/eir_common_subexpression.rs"]

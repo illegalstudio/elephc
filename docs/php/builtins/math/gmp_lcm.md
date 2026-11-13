@@ -1,8 +1,6 @@
 ---
 title: "gmp_lcm()"
 description: "Least common multiple."
-sidebar:
-  order: 612
 ---
 
 ## gmp_lcm()
@@ -21,8 +19,9 @@ Least common multiple.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_lcm.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_lcm.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -1,8 +1,6 @@
 ---
 title: "cal_from_jd()"
 description: "Converts a Julian Day count into a date array for the given calendar."
-sidebar:
-  order: 188
 ---
 
 ## cal_from_jd()
@@ -21,8 +19,9 @@ Converts a Julian Day count into a date array for the given calendar.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the Elephc compiler.
-- **`eval()` (magician interpreter)**: supported through the procedural date/time alias dispatcher.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

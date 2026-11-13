@@ -1,8 +1,6 @@
 ---
 title: "cairo_set_line_join()"
 description: "Selects how corners between stroked segments are drawn."
-sidebar:
-  order: 445
 ---
 
 ## cairo_set_line_join()
@@ -21,8 +19,9 @@ Selects how corners between stroked segments are drawn.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

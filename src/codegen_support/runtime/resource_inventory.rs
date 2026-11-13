@@ -732,6 +732,8 @@ mod tests {
             let mut emitter = Emitter::new(target);
             emit_resource_inventory(&mut emitter, RuntimeFeatures::none());
             let asm = emitter.output();
+            assert!(!asm.contains("__rt_stream_registry_cleanup"),
+                "{target:?}: single-node application pruning must preserve stream registrations");
             for symbol in [
                 "__rt_resource_inventory_register:",
                 "__rt_resource_inventory_retire:",

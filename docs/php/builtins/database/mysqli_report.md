@@ -1,8 +1,6 @@
 ---
 title: "mysqli_report()"
 description: "Selects which mysqli conditions raise exceptions or warnings."
-sidebar:
-  order: 155
 ---
 
 ## mysqli_report()
@@ -20,8 +18,9 @@ Selects which mysqli conditions raise exceptions or warnings.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

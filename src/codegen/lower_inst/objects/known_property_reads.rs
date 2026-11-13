@@ -311,6 +311,7 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell(
     if slot.is_declared {
         emit_uninitialized_owned_ref_property_guard(ctx, &slot, int_reg);
     }
+    promote_mixed_property_reference(ctx, &slot);
     store_ref_cell_pointer_result(ctx, inst)
 }
 
@@ -357,6 +358,7 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell_checked(
     ctx.load_value_to_reg(object, base_reg)?;
     let int_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset); // load the reference-cell pointer from the property slot (no deref)
+    promote_mixed_property_reference(ctx, &slot);
     store_ref_cell_pointer_result(ctx, inst)
 }
 
@@ -425,6 +427,7 @@ fn lower_mixed_load_prop_ref_cell_checked(
         let slot = &candidate.candidate.slot;
         if slot.php_type.reference_payload_compatible(expected) {
             abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, slot.offset); // load the reference-cell pointer from the matched class's property slot
+            promote_mixed_property_reference(ctx, slot);
         } else {
             any_mismatch = true;
             abi::emit_jump(ctx.emitter, &mismatch_label);
@@ -467,6 +470,16 @@ pub(super) fn store_ref_cell_pointer_result(ctx: &mut FunctionContext<'_>, inst:
         ctx.store_int_result_value(result)?;
     }
     Ok(())
+}
+
+/// Gives an owned Mixed property's native and eval aliases one persistent value identity.
+fn promote_mixed_property_reference(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
+    if slot.php_type == PhpType::Mixed
+        && ctx.module.class_infos.get(&slot.class_name)
+            .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16))
+    {
+        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_promote_mixed");
+    }
 }
 
 /// Lowers `LoadPropRefCell` when the receiver is a `Mixed` object (e.g. a closure's `$this`
@@ -528,6 +541,7 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
                 int_reg,
             );
         }
+        promote_mixed_property_reference(ctx, &candidate.candidate.slot);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 
@@ -559,6 +573,29 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     }
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_))
+        && !object_is_this_receiver(ctx, object)?
+    {
+        // A class-typed receiver can still be the null sentinel of a missed element read.
+        // There is no slot to inspect then, so the probe answers false without dereferencing
+        // the sentinel, exactly as the boxed nullable probe answers for a non-object: `isset`,
+        // `empty` and `??` stay silent, and a store goes on to meet the null receiver itself.
+        let null_label = ctx.next_label("prop_initialized_null_receiver");
+        let done_label = ctx.next_label("prop_initialized_done");
+        let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+        crate::codegen::sentinels::emit_branch_if_null_container(
+            ctx.emitter,
+            base_reg,
+            scratch_reg,
+            &null_label,
+        );
+        emit_typed_property_initialized_bool(ctx, &slot, base_reg);
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        ctx.emitter.label(&done_label);
+        return store_if_result(ctx, inst);
+    }
     emit_typed_property_initialized_bool(ctx, &slot, base_reg);
     store_if_result(ctx, inst)
 }

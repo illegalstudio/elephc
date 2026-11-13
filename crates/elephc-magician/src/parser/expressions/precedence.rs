@@ -121,26 +121,34 @@ impl Parser {
     /// Parses PHP's right-associative assignment expression.
     ///
     /// PHP places assignment below the ternary operators and above `and`/`xor`/`or`.
-    /// Only a simple variable target is accepted in expression position; mutating property,
-    /// array-element, and static-property forms remain statement-only, matching the parser
-    /// before this form existed.
+    /// Variable assignments and property compound updates yield values in expression position.
+    /// Plain property, array-element and static-property stores keep their statement forms.
     pub(in crate::parser) fn parse_assignment(&mut self) -> Result<EvalExpr, EvalParseError> {
         let left = self.parse_ternary()?;
         let Some(op) = assignment_op(self.current()) else {
             return Ok(left);
         };
-        // Statement parsing reuses `parse_expr` for the write target, then reads the operator
-        // itself. Leave a non-variable target untouched so `$this->x += 2` and property/array
-        // writes keep lowering to their dedicated statement forms.
-        let EvalExpr::LoadVar(name) = left else {
+        if !matches!(left, EvalExpr::LoadVar(_))
+            && (op.is_none() || !matches!(left,
+                EvalExpr::PropertyGet { .. } | EvalExpr::DynamicPropertyGet { .. }))
+        {
             return Ok(left);
-        };
+        }
         self.advance();
         let value = self.parse_assignment()?;
-        let value = assignment_value(&name, op, value);
-        Ok(EvalExpr::Assign {
-            name,
-            value: Box::new(value),
+        Ok(match left {
+            EvalExpr::LoadVar(name) => EvalExpr::Assign {
+                value: Box::new(assignment_value(&name, op, value)), name,
+            },
+            EvalExpr::PropertyGet { object, property } => EvalExpr::PropertyCompoundAssign {
+                object, property: Box::new(EvalExpr::Const(EvalConst::String(property))),
+                dynamic: false,
+                op: op.expect("compound property operator"), value: Box::new(value),
+            },
+            EvalExpr::DynamicPropertyGet { object, property } => EvalExpr::PropertyCompoundAssign {
+                object, property, dynamic: true, op: op.expect("compound property operator"), value: Box::new(value),
+            },
+            _ => unreachable!("validated expression assignment target"),
         })
     }
 
@@ -429,6 +437,19 @@ impl Parser {
         self.parse_instanceof()
     }
 
+    /// Captures the property place represented by a prefix or postfix expression.
+    pub(in crate::parser) fn property_inc_dec_expression(
+        target: EvalExpr, increment: bool, prefix: bool,
+    ) -> Result<EvalExpr, EvalParseError> {
+        let (object, property, dynamic) = match target {
+            EvalExpr::PropertyGet { object, property } =>
+                (object, Box::new(EvalExpr::Const(EvalConst::String(property))), false),
+            EvalExpr::DynamicPropertyGet { object, property } => (object, property, true),
+            _ => return Err(EvalParseError::UnsupportedConstruct),
+        };
+        Ok(EvalExpr::PropertyIncDec { object, property, dynamic, increment, prefix })
+    }
+
     /// Returns the scalar cast target represented by the current `(type)` token window.
     pub(super) fn peek_scalar_cast_type(&self) -> Option<EvalCastType> {
         if !matches!(self.current(), TokenKind::LParen) {
@@ -440,7 +461,9 @@ impl Parser {
         if !matches!(self.tokens.get(self.pos + 2), Some(TokenKind::RParen)) {
             return None;
         }
-        if ident_eq(name, "int") || ident_eq(name, "integer") {
+        if ident_eq(name, "array") {
+            Some(EvalCastType::Array)
+        } else if ident_eq(name, "int") || ident_eq(name, "integer") {
             Some(EvalCastType::Int)
         } else if ident_eq(name, "float") || ident_eq(name, "double") || ident_eq(name, "real") {
             Some(EvalCastType::Float)

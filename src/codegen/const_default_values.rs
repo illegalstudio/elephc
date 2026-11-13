@@ -5,15 +5,16 @@
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::eval` default registration.
 //! - `crate::codegen::runtime_callable_invoker::defaults` descriptor invoker metadata.
-//! - Reflection property-default metadata folding.
+//! - Reflection property-default metadata folding and ReflectionClass constant metadata.
+//! - Static property initialization and runtime class-name retention for static defaults.
 //!
 //! Key details:
 //! - Resolution is PURE. Global constants come from `Module::global_constants`, which already
 //!   holds the builtin catalog, and class-like constants follow PHP class, interface and trait
 //!   ancestry. Executable-path defaults retain a runtime marker rather than a host path.
-//! - The resolved tree is target-neutral and carries no ABI encoding beyond the compact scalar
-//!   `kind`/`payload` pair the eval bridge already registers, so both consumers read one shape:
-//!   the eval registration path encodes it, and the descriptor invoker materializes it.
+//! - The resolved tree is target-neutral. Enum results retain evaluated singleton reads when
+//!   a projection or branch fold discards its source; property consumers preserve their order.
+//!   Compact callable metadata excludes those reads because its ABI has no enum value tag.
 //! - Constant recursion is bounded by `MAX_CONST_DEFAULT_DEPTH`, so a self-referential constant
 //!   declines instead of recursing forever.
 //! - Numeric values reuse the PHP-equivalent AST arithmetic folder, including integer division and power.
@@ -56,11 +57,21 @@ pub(in crate::codegen) enum ConstDefaultValue {
         payload: i64,
     },
     String(String),
+    EnumCase { enum_name: String, case_name: String },
+    Evaluated { value: Box<ConstDefaultValue>, enum_cases: Vec<(String, String)> },
     Array(Vec<ConstDefaultArrayElement>),
     Object {
         class_name: String,
         args: Vec<ConstDefaultObjectArg>,
     },
+}
+
+/// A selected enum singleton and the ordered case reads required to evaluate its default.
+#[derive(Clone)]
+pub(in crate::codegen) struct EnumCaseDefault {
+    pub(in crate::codegen) enum_name: String,
+    pub(in crate::codegen) case_name: String,
+    pub(in crate::codegen) evaluated: Vec<(String, String)>,
 }
 
 /// One element of an array-valued resolved default.
@@ -109,6 +120,84 @@ pub(in crate::codegen) fn resolve_const_default(
     resolve_const_default_at(expr, context, 0)
 }
 
+/// Resolves an enum singleton default through bounded aliases in their declaration scope.
+pub(in crate::codegen) fn resolve_enum_case_default(
+    expr: &Expr, context: &ConstDefaultContext<'_>,
+) -> Option<EnumCaseDefault> {
+    let value = resolve_const_default(expr, context)?;
+    let mut evaluated = Vec::new();
+    collect_enum_reads(&value, &mut evaluated);
+    match without_enum_effects(value) {
+        ConstDefaultValue::EnumCase { enum_name, case_name } => {
+            let selected = (enum_name.clone(), case_name.clone());
+            if evaluated.last() != Some(&selected) { evaluated.push(selected); }
+            Some(EnumCaseDefault { enum_name, case_name, evaluated })
+        }
+        _ => None,
+    }
+}
+
+/// Resolves a scalar default whose evaluation reads enum singletons it then discards.
+///
+/// `E::A ? 1 : 2` folds to `1`, but PHP still materializes `E::A` first. Reflection keeps the
+/// ordered reads beside the scalar literal; defaults without such reads return `None`.
+pub(in crate::codegen) fn resolve_enum_read_scalar_default(
+    expr: &Expr, context: &ConstDefaultContext<'_>,
+) -> Option<(ExprKind, Vec<(String, String)>)> {
+    let value = resolve_const_default(expr, context)?;
+    let mut evaluated = Vec::new();
+    collect_enum_reads(&value, &mut evaluated);
+    if evaluated.is_empty() { return None; }
+    resolved_scalar_literal(without_enum_effects(value)).map(|literal| (literal, evaluated))
+}
+
+/// Records first singleton accesses in PHP order; later cached reads have no creation effects.
+fn collect_enum_reads(value: &ConstDefaultValue, reads: &mut Vec<(String, String)>) {
+    match value {
+        ConstDefaultValue::EnumCase { enum_name, case_name } => {
+            let case = (enum_name.clone(), case_name.clone());
+            if !reads.contains(&case) { reads.push(case); }
+        }
+        ConstDefaultValue::Evaluated { value, enum_cases } => {
+            for case in enum_cases {
+                if !reads.contains(case) { reads.push(case.clone()); }
+            }
+            collect_enum_reads(value, reads);
+        }
+        ConstDefaultValue::Array(elements) => {
+            for element in elements { collect_enum_reads(&element.default, reads); }
+        }
+        ConstDefaultValue::Object { args, .. } => {
+            for arg in args { collect_enum_reads(&arg.default, reads); }
+        }
+        _ => {}
+    }
+}
+
+/// Retains evaluated enum reads when a fold discards their original expression tree.
+fn with_enum_reads(value: ConstDefaultValue, enum_cases: Vec<(String, String)>) -> ConstDefaultValue {
+    if enum_cases.is_empty() { value }
+    else { ConstDefaultValue::Evaluated { value: Box::new(value), enum_cases } }
+}
+
+/// Extracts a folded value after its enum reads have been retained by the caller.
+fn without_enum_effects(value: ConstDefaultValue) -> ConstDefaultValue {
+    match value {
+        ConstDefaultValue::Evaluated { value, .. } => without_enum_effects(*value),
+        value => value,
+    }
+}
+
+/// Keeps singleton lookups outside compact callable metadata that has no enum value tag.
+pub(in crate::codegen) fn const_default_contains_enum(value: &ConstDefaultValue) -> bool {
+    match value {
+        ConstDefaultValue::EnumCase { .. } | ConstDefaultValue::Evaluated { .. } => true,
+        ConstDefaultValue::Array(elements) => elements.iter().any(|element| const_default_contains_enum(&element.default)),
+        ConstDefaultValue::Object { args, .. } => args.iter().any(|arg| const_default_contains_enum(&arg.default)),
+        _ => false,
+    }
+}
+
 /// Converts a resolved scalar to its PHP literal without changing its numeric type.
 pub(in crate::codegen) fn resolved_scalar_literal(value: ConstDefaultValue) -> Option<ExprKind> {
     match value {
@@ -127,6 +216,11 @@ pub(in crate::codegen) fn resolved_scalar_literal(value: ConstDefaultValue) -> O
 /// Restores resolved scalar and array trees for literal property storage without eager branches.
 pub(in crate::codegen) fn resolved_literal_default(value: ConstDefaultValue) -> Option<ExprKind> {
     let elements = match value {
+        ConstDefaultValue::Evaluated { .. } => return None,
+        ConstDefaultValue::EnumCase { enum_name, case_name } =>
+            return Some(ExprKind::ScopedConstantAccess {
+                receiver: StaticReceiver::Named(enum_name.into()), name: case_name,
+            }),
         ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EMPTY_ARRAY, .. } =>
             return Some(ExprKind::ArrayLiteral(Vec::new())),
         ConstDefaultValue::Array(elements) => elements,
@@ -180,12 +274,17 @@ fn resolve_constant_expression_const_default(
         ExprKind::ScopedConstantAccess { receiver, name } => {
             resolve_scoped_constant_default(context, receiver, name, depth + 1)
         }
+        ExprKind::ArrayAccess { array, index } => {
+            arrays::resolve_array_offset_default(array, index, context, depth + 1)
+        }
         ExprKind::BinaryOp { left, op, right } => {
             resolve_binary_expression_default(left, op, right, context, depth + 1)
         }
         ExprKind::Not(inner) => {
-            const_default_truthy(&resolve_const_default_at(inner, context, depth + 1)?)
-                .map(|value| const_default_bool(!value))
+            let value = resolve_const_default_at(inner, context, depth + 1)?;
+            let mut reads = Vec::new();
+            collect_enum_reads(&value, &mut reads);
+            Some(with_enum_reads(const_default_bool(!const_default_truthy(&value)?), reads))
         }
         ExprKind::BitNot(inner) => {
             const_default_int(inner, context, depth + 1).map(|value| const_default_int_value(!value))
@@ -193,7 +292,9 @@ fn resolve_constant_expression_const_default(
         ExprKind::NullCoalesce { value, default } => {
             let value = resolve_const_default_at(value, context, depth + 1)?;
             if const_default_is_null(&value) {
-                resolve_const_default_at(default, context, depth + 1)
+                let mut reads = Vec::new();
+                collect_enum_reads(&value, &mut reads);
+                Some(with_enum_reads(resolve_const_default_at(default, context, depth + 1)?, reads))
             } else {
                 Some(value)
             }
@@ -203,18 +304,20 @@ fn resolve_constant_expression_const_default(
             then_expr,
             else_expr,
         } => {
-            if const_default_truthy(&resolve_const_default_at(condition, context, depth + 1)?)? {
-                resolve_const_default_at(then_expr, context, depth + 1)
-            } else {
-                resolve_const_default_at(else_expr, context, depth + 1)
-            }
+            let condition = resolve_const_default_at(condition, context, depth + 1)?;
+            let mut reads = Vec::new();
+            collect_enum_reads(&condition, &mut reads);
+            let branch = if const_default_truthy(&condition)? { then_expr } else { else_expr };
+            Some(with_enum_reads(resolve_const_default_at(branch, context, depth + 1)?, reads))
         }
         ExprKind::ShortTernary { value, default } => {
             let value = resolve_const_default_at(value, context, depth + 1)?;
             if const_default_truthy(&value)? {
                 Some(value)
             } else {
-                resolve_const_default_at(default, context, depth + 1)
+                let mut reads = Vec::new();
+                collect_enum_reads(&value, &mut reads);
+                Some(with_enum_reads(resolve_const_default_at(default, context, depth + 1)?, reads))
             }
         }
         _ => None,
@@ -260,22 +363,30 @@ fn resolve_binary_expression_default(
             Some(const_default_int_value(value))
         }
         BinOp::And | BinOp::Or | BinOp::Xor => {
-            let left =
-                const_default_truthy(&resolve_const_default_at(left, context, depth + 1)?)?;
-            let right =
-                const_default_truthy(&resolve_const_default_at(right, context, depth + 1)?)?;
+            let left_value = resolve_const_default_at(left, context, depth + 1)?;
+            let left = const_default_truthy(&left_value)?;
+            let mut reads = Vec::new();
+            collect_enum_reads(&left_value, &mut reads);
+            if matches!(op, BinOp::And) && !left || matches!(op, BinOp::Or) && left {
+                return Some(with_enum_reads(const_default_bool(left), reads));
+            }
+            let right_value = resolve_const_default_at(right, context, depth + 1)?;
+            let right = const_default_truthy(&right_value)?;
+            collect_enum_reads(&right_value, &mut reads);
             let value = match op {
                 BinOp::And => left && right,
                 BinOp::Or => left || right,
                 BinOp::Xor => left ^ right,
                 _ => unreachable!("logical default operator was prefiltered"),
             };
-            Some(const_default_bool(value))
+            Some(with_enum_reads(const_default_bool(value), reads))
         }
         BinOp::NullCoalesce => {
             let left = resolve_const_default_at(left, context, depth + 1)?;
             if const_default_is_null(&left) {
-                resolve_const_default_at(right, context, depth + 1)
+                let mut reads = Vec::new();
+                collect_enum_reads(&left, &mut reads);
+                Some(with_enum_reads(resolve_const_default_at(right, context, depth + 1)?, reads))
             } else {
                 Some(left)
             }
@@ -341,6 +452,9 @@ pub(in crate::codegen) fn const_default_null() -> ConstDefaultValue {
 
 /// Returns true when one resolved constant value is PHP `null`.
 pub(in crate::codegen) fn const_default_is_null(default: &ConstDefaultValue) -> bool {
+    if let ConstDefaultValue::Evaluated { value, .. } = default {
+        return const_default_is_null(value);
+    }
     matches!(
         default,
         ConstDefaultValue::Scalar {
@@ -374,6 +488,8 @@ pub(in crate::codegen) fn const_default_truthy(default: &ConstDefaultValue) -> O
             ..
         } => Some(false),
         ConstDefaultValue::String(value) => Some(!value.is_empty() && value != "0"),
+        ConstDefaultValue::EnumCase { .. } => Some(true),
+        ConstDefaultValue::Evaluated { value, .. } => const_default_truthy(value),
         ConstDefaultValue::Array(_) | ConstDefaultValue::Object { .. } => None,
         ConstDefaultValue::Scalar { .. } => None,
     }
@@ -520,6 +636,14 @@ fn resolve_scoped_constant_default(
     depth: usize,
 ) -> Option<ConstDefaultValue> {
     let class_name = resolve_static_receiver_name(context, receiver)?;
+    if let Some((enum_name, _)) = context.module.enum_infos.iter().find(|(candidate, info)|
+        php_symbol_key(candidate) == php_symbol_key(&class_name)
+            && info.cases.iter().any(|case| case.name == constant_name))
+    {
+        return Some(ConstDefaultValue::EnumCase {
+            enum_name: enum_name.clone(), case_name: constant_name.to_string(),
+        });
+    }
     if let Some((declaring_name, value)) =
         const_default_class_constant_expr(context.module, &class_name, constant_name)
     {
@@ -605,7 +729,9 @@ fn const_default_interface_constant_expr<'a>(
             continue;
         }
         if let Some(value) = interface_info.constants.get(constant_name) {
-            return Some((resolved_name, value));
+            let owner = interface_info.constant_declaring_interfaces.get(constant_name)
+                .map(String::as_str).unwrap_or(resolved_name);
+            return Some((owner, value));
         }
         queue.extend(interface_info.parents.iter().cloned());
     }

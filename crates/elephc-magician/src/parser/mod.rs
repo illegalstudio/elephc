@@ -11,6 +11,7 @@
 //! - PHP eval fragments are statement fragments and must not include opening
 //!   `<?` / `<?php` tags.
 //! - File and directory metadata are supplied by the eval context at execution time.
+//! - Parsing runs on a dedicated temporary stack before any PHP execution can suspend.
 
 pub(crate) mod generics;
 mod docblocks;
@@ -31,6 +32,9 @@ use state::Parser;
 
 pub(crate) use cursor::is_reserved_class_like_name as is_reserved_word;
 
+/// Parser frames must fit independently of the caller's native Fiber or host-thread stack.
+const PARSER_STACK_BYTES: usize = 16 * 1024 * 1024;
+
 /// Parses an eval fragment into by-name EvalIR statements.
 ///
 /// A fragment used to be refused outright when it contained `<?` ANYWHERE, a string
@@ -39,9 +43,11 @@ pub(crate) use cursor::is_reserved_class_like_name as is_reserved_word;
 /// `<?php` met in code lexes as `<` then `?`, which the grammar refuses as PHP does
 /// (`eval('<?php echo 1;')` is a parse error there too).
 pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
-    let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
-    let tokens = tokenize(source)?;
-    Parser::new(tokens, code.len()).parse_program()
+    with_parser_stack(|| {
+        let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
+        let tokens = tokenize(source)?;
+        Parser::new(tokens, code.len()).parse_program()
+    })
 }
 
 /// Parses a token stream assembled by the caller, ending in an EOF token.
@@ -53,5 +59,11 @@ pub(crate) fn parse_tokens(
     tokens: Vec<crate::lexer::Token>,
     source_len: usize,
 ) -> Result<EvalProgram, EvalParseError> {
-    Parser::new(tokens, source_len).parse_program()
+    with_parser_stack(|| Parser::new(tokens, source_len).parse_program())
+}
+
+/// Uses an explicit stack because native coroutine switches do not update OS-thread stack bounds.
+/// Parsing invokes no PHP callbacks; the temporary stack ends before interpreter execution begins.
+fn with_parser_stack<R>(parse: impl FnOnce() -> R) -> R {
+    stacker::grow(PARSER_STACK_BYTES, parse)
 }

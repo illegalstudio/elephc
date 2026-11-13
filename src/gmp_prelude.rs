@@ -21,12 +21,17 @@ mod dsl;
 mod functions;
 mod validators;
 
+pub(crate) use detect::program_uses_gmp;
+
 use crate::parser::ast::{CType, Program, Stmt};
 #[cfg(test)]
 use crate::parser::ast::{StmtKind, TypeExpr};
 use crate::synthetic_class::{e_int, e_str, extern_fn, s_const};
 
-/// Injects the GMP surface when the program references it or `--with-gmp` forces it.
+/// Injects the GMP surface when the program references it or `force` is set.
+///
+/// Callers set `force` for `--with-gmp` and for an autoload-probe hit. A program
+/// that never names the surface does not declare `GMP` and does not link the bridge.
 pub fn inject_if_used(
     mut program: Program,
     force: bool,

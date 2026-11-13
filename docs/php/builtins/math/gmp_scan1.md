@@ -1,8 +1,6 @@
 ---
 title: "gmp_scan1()"
 description: "Finds the first set bit."
-sidebar:
-  order: 631
 ---
 
 ## gmp_scan1()
@@ -21,8 +19,9 @@ Finds the first set bit.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_scan1.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_scan1.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

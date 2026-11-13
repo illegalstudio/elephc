@@ -322,7 +322,7 @@ fn callee_contains_a_loop(callee: &Function) -> bool {
 /// `receiver` is true for a statically bound method body, whose `$this` parameter is the
 /// one object `callee_is_inline_safe` accepts.
 fn is_eligible_callee(callee: &Function, recursive: &HashSet<String>, receiver: bool) -> bool {
-    if callee.flags.is_generator || callee.flags.is_fiber_wrapper {
+    if callee.flags.is_generator || callee.flags.is_fiber_wrapper || callee.flags.by_ref_return {
         return false;
     }
     // A by-value container parameter is privatized on entry into an owning shadow slot
@@ -606,13 +606,19 @@ fn call_string_args_are_stable(host: &Function, call_inst: &Instruction, callee:
         if param.ir_type != IrType::Str {
             continue;
         }
-        let stable = host
-            .value(*operand)
-            .and_then(|value| match value.def {
+        let mut source = *operand;
+        let stable = loop {
+            let Some(def) = host.value(source).and_then(|value| match value.def {
                 ValueDef::Instruction { inst, .. } => host.instruction(inst),
                 _ => None,
-            })
-            .is_some_and(|def| matches!(def.op, Op::ConstStr | Op::LoadLocal));
+            }) else { break false; };
+            match def.op {
+                Op::ConstStr | Op::LoadLocal => break true,
+                // Argument lifetime pins preserve the same stable storage source.
+                Op::Acquire | Op::Borrow if def.operands.len() == 1 => source = def.operands[0],
+                _ => break false,
+            }
+        };
         if !stable {
             return false;
         }
@@ -864,6 +870,11 @@ fn transplant_callee_body(
             host.no_epilogue_cleanup_slots.insert(new_id);
         }
         local_map.insert(local.id, new_id);
+    }
+    for local in &callee.locals {
+        host.locals[local_map[&local.id].as_raw() as usize].is_reference_argument_owner = local.is_reference_argument_owner;
+        host.locals[local_map[&local.id].as_raw() as usize].ref_cell_owner =
+            local.ref_cell_owner.map(|owner| local_map[&owner]);
     }
 
     // Create blocks + their param values (defs use final block ids).
@@ -1531,6 +1542,10 @@ fn callee_has_by_value_container_param(callee: &Function) -> bool {
         crate::types::FunctionSig::parameter_needs_owned_shadow(&param.php_type, param.by_ref)
     })
 }
+
+#[cfg(test)]
+#[path = "tests/inline_string_stability_test.rs"]
+mod string_stability_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1,8 +1,6 @@
 ---
 title: "array_intersect_assoc()"
 description: "Computes the intersection of arrays with additional index check."
-sidebar:
-  order: 17
 ---
 
 ## array_intersect_assoc()
@@ -21,8 +19,9 @@ Computes the intersection of arrays with additional index check.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

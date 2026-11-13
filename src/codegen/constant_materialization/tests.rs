@@ -73,27 +73,28 @@ fn rematerialize_integer_assembly_all_targets() {
         let arm = target.arch == Arch::AArch64;
         for left in [false, true] {
             let asm = operation_asm(target, Op::IAdd, 4096, left);
-            assert!(if arm { has_instruction(&asm, "add x0, x*, #1, lsl #12") } else { asm.contains("add rax, 4096") }, "{name}: {asm}");
+            assert!(has_instruction(&asm, if arm { "add x*, x*, #1, lsl #12" } else { "add r*, 4096" }), "{name}: {asm}");
             assert!(!asm.contains(if arm { "mov x0, #4096" } else { "mov rax, 4096" }), "{asm}");
             let asm = operation_asm(target, Op::IBitAnd, 255, left);
-            assert!(if arm { has_instruction(&asm, "and x0, x*, #0xff") } else { asm.contains("and rax, 255") }, "{name}: {asm}");
+            assert!(has_instruction(&asm, if arm { "and x*, x*, #0xff" } else { "and r*, 255" }), "{name}: {asm}");
         }
         for (op, arm_form, x86_form) in [
             (Op::ISub, "add x0, x*, #7", "sub rax, -7"),
             (Op::IBitOr, "orr x0, x*, #0xfffffffffffffff9", "or rax, -7"),
         ] {
             let asm = operation_asm(target, op, -7, false);
-            assert!(if arm { has_instruction(&asm, arm_form) } else { asm.contains(x86_form) }, "{asm}");
+            let pattern = if arm { arm_form.replace("x0", "x*") } else { x86_form.replace("rax", "r*") };
+            assert!(has_instruction(&asm, &pattern), "{asm}");
         }
         let asm = operation_asm(target, Op::IBitXor, 0x00ff_00ff_00ff_00ff, false);
-        assert!(if arm { has_instruction(&asm, "eor x0, x*, #0xff00ff00ff00ff") } else { asm.contains("xor rax, r10") }, "{name}: {asm}");
+        assert!(has_instruction(&asm, if arm { "eor x*, x*, #0xff00ff00ff00ff" } else { "xor r*, r10" }), "{name}: {asm}");
         let asm = operation_asm(target, Op::IAdd, i64::MAX, false);
-        assert!(if arm { has_instruction(&asm, "add x0, x*, x10") } else { asm.contains("add rax, r10") }, "{name}: {asm}");
+        assert!(has_instruction(&asm, if arm { "add x*, x*, x10" } else { "add r*, r10" }), "{name}: {asm}");
         // Profitable constant multiplies are strength-reduced; the rest keep the multiplier.
         let asm = operation_asm(target, Op::IMul, 3, false);
-        assert!(asm.contains(if arm { "add x0, x0, x0, lsl #1" } else { "lea rax, [rax + rax*2]" }), "{name}: {asm}");
+        assert!(has_instruction(&asm, if arm { "add x*, x*, x*, lsl #1" } else { "lea r*, [r* + r**2]" }), "{name}: {asm}");
         let asm = operation_asm(target, Op::IMul, 11, false);
-        assert!(if arm { has_instruction(&asm, "mul x0, x*, x10") } else { asm.contains("imul rax, 11") }, "{name}: {asm}");
+        assert!(has_instruction(&asm, if arm { "mul x*, x*, x10" } else { "imul r*, 11" }), "{name}: {asm}");
     }
 }
 

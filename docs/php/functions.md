@@ -432,6 +432,130 @@ type dispatch the rewrite does not implement (`iterable`, pointers, buffers) sti
 returns; if the callee throws after mutating the reference, the property keeps its previous
 value (PHP would already have applied the mutation).
 
+A local passed to a **nullable typed** by-reference parameter (`?array &$items`,
+`?Item &$item`, `?float &$f`) takes the parameter's boxed storage, like PHP: the callee may
+store `null`, an array of any shape, or any object the parameter admits, and the local holds it
+after the call. A local that only ever holds `null` gets the same boxed storage.
+
+A local declared with an explicit type (`array<Item> $items = ...`, `Item $item = ...`,
+`float $f = ...`) keeps its declared storage instead: the parameter's boxed cell is written
+back into the typed variable when the call returns. An array the callee built from `mixed`
+values is converted into the declared element layout on the way back. A callee that leaves a
+value the declaration cannot hold (`null`, elements of another kind, an object or object
+element of another class, or a nested array of another element kind) stops the program with a
+diagnostic, as a direct assignment of that value would be rejected; PHP has no declared local
+types. While the declared local keeps its typed slot, the write-back runs when the call
+returns: if the callee throws after writing through the reference, the local keeps its
+previous value (PHP would already have applied the write), and nothing leaks. A closure
+the callee returns with the reference captured (`use (&$x)`) keeps working on that reference
+after the call, but no longer reaches the declared local once the call has written it back. Two references to the same declared local (`f($v, $v)`) share one cell. A `mixed`
+local bound to a by-reference union of `null`, arrays and objects is checked against that
+union when the callee starts, after every argument was evaluated, and anything else raises
+`TypeError` like PHP.
+
+Known gaps against PHP for these nullable by-reference parameters:
+
+- A `global` variable passed by reference to an `array`, `mixed` or nullable parameter does
+  not receive the callee's write: the variable keeps its previous value.
+- A `static` local passed to `?float &$f` or `?array &$a` is rejected at compile time
+  ("requires a variable with mixed/union/nullable storage when passed by reference").
+- A `?Item` property passed to `?Item &$item` is rejected at compile time with the same
+  message. An `array`-typed property given `null` raises PHP's `TypeError`, as in PHP.
+
+An element of a **typed array** can be passed to a wider by-reference parameter such as
+`mixed &$slot`. For a plain local (`array<int, int> $ids`), the array's entries are widened
+to `mixed` before the element binds, so whatever the callee stores reads back unchanged,
+exactly as for an untyped array. An element of a typed instance or static property
+(`$holder->items[0]`, `Holder::$shared[0]`), or of a typed local that is itself a reference
+(a by-reference parameter or a `&` alias, whose array another scope keeps reading with the
+declared type), keeps the declared element type, the way PHP keeps a typed property's type on
+a reference to it. A compatible value is converted
+like a weak-mode assignment (`"7"` becomes `7` in an `int` element), and anything else raises
+a catchable `TypeError` (`Cannot assign Node to reference held by property Holder::$items
+element of type int`) and leaves the element unchanged:
+
+```php
+<?php
+final class Holder { public array<int, int> $items = [1, 2]; }
+function seven(mixed &$slot): void { $slot = "7"; }
+$h = new Holder();
+seven($h->items[0]);
+echo $h->items[0] + 1; // 8
+```
+
+The element travels through a hidden boxed cell and is written back when the call returns, so
+the callee does not see its own writes through `$h->items[0]` until then.
+
+An element that is itself a typed array is written back the way a declared typed local is.
+An indexed element (`array<array<int>>`) accepts an array of the declared layout, and one the
+callee built from `mixed` values is converted. A typed hash element (`array<array<string,
+int>>`) accepts a hash whose entries already carry the declared scalar kind; entries that are
+boxed `mixed` values (`$slot = ["k" => $n]` with a `mixed` `$n`) are not converted. A value of
+another kind stops the program with `a by-reference argument was replaced by a value its typed
+variable cannot hold`, and an array or hash with entries of another kind with `a by-reference
+argument was replaced by an array whose elements its typed variable cannot hold`. An indexed
+array of such hashes is checked the same way, entry by entry inside each hash. A plain local
+hash of raw pointers, buffers or packed records is never widened (that would turn every
+pointer into an integer), so its element is rejected at compile time like the other shapes
+below. An element holding raw
+pointers, or a hash (at any indexed nesting depth) whose own values are arrays, objects or
+pointers, cannot be validated that way, so passing it to a wider by-reference parameter is
+rejected at compile time; declare the
+parameter with the element's exact type instead.
+
+### Lists passed to `array<K, V>` parameters
+
+A list (`[4, 5]`, or a variable holding one) is a valid value for a declared keyed-array
+parameter such as `array<int, int> $map`, even though a list is stored as a packed vector and
+the parameter as a hash table.
+
+**By value**, the argument is rebuilt as an independent hash for the callee, in functions,
+methods, constructors (promoted properties included), closures, default values and variadic
+collectors. The caller's list is not changed. The elements must have the parameter's value
+storage, or the parameter's values must be `mixed`; anything else (an `int` list for
+`array<int, float>`, a list of lists for `array<int, array<int, int>>`) is rejected at compile
+time with `the element storage differs`.
+
+**By reference**, the callee writes a hash through the caller's own variable, so the variable
+itself becomes that keyed array before the call, exactly as `unset($list[$k])` turns a list
+into one, and stays one afterwards:
+
+```php
+<?php
+function put(array<int, int> &$map, int $key): void { $map[$key] = 7; }
+function run(): void
+{
+    $ids = [4, 5];
+    put($ids, 9);
+    echo count($ids), " ", $ids[9]; // 3 7
+}
+run();
+```
+
+A list first bound this way inside a loop is converted once, at the loop entry. One variable
+may fill two reference slots of the same call; both then name the converted variable.
+
+Only an ordinary local can change representation in place. A variable declared as a list
+(`array<int> $ids`), a property, an array element, a `global` or `static` variable, a variable
+with a `&` alias, and a variable an earlier `mixed &` slot of the same call is boxing are
+rejected at compile time (`a by-reference parameter uses the caller's own storage, and this
+list cannot be converted to the parameter's layout there`). Declare the variable with the
+parameter's type, or declare the parameter as the list or as plain `array`.
+
+A written `array<mixed> &$items` parameter follows the same rule: it is a storage contract (a
+list of boxed values), not a hint that is specialized per caller. A typed list local
+(`[4, 5]`, a list of objects, of strings) bound to it has its elements boxed in place before
+the call and reads back whatever the callee stored; a variable declared `array<int>` or a
+typed list property is rejected with the diagnostic above. Plain `array &$items` accepts every
+array without any of this.
+
+Calls made through a callable (`call_user_func()`, a callable array, a first-class callable
+chosen at run time) pass their arguments boxed, and a boxed list is rebuilt as the hash the
+`array<K, V>` parameter expects in the same way.
+
+Assigning a list to a typed keyed-array property, static property or declared local converts a
+copy in the same way and leaves the source list as it was.
+
 ## References to array elements
 
 A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through
@@ -581,6 +705,12 @@ semantics:
 - Returning a place that is neither a variable nor a property, such as an array element
   read or the result of another call. PHP returns a reference to those places; this
   lowering has no cell to transfer for them.
+- Coercing a fresh local from a different storage representation while returning it by
+  reference inside `try`/`finally`, such as a `mixed` local returned as `int` or `string`.
+  These conversions can throw before the reference exists, so their handlers need a
+  recovery path. Nullable-object staging is the narrow exception: the function must have
+  no `catch`, and every `finally` must first rebind the staged local from an independent,
+  call-free expression before any other use. Other protected coercion shapes are rejected.
 - Outside the native enum interface dispatch described above, capturing a reference with
   `$x = &f()` from a call the compiler cannot resolve to a by-reference return. A named
   function, a method, a static method, and a closure whose
@@ -661,6 +791,28 @@ try {
 Both the compile-time rejection and the run-time `Error` are compiler subset limits, not
 PHP restrictions on reference returns: PHP's references are untyped and have no equivalent
 condition.
+
+Runtime-selected callable reference arguments must also match the selected parameter's
+physical storage. Fresh local arguments use boxed storage so an untyped reference can change
+their value type. A selected inline `?int` reference parameter cannot alias that box and raises
+a catchable `Error`: `Unsupported reference argument: caller storage does not match the
+selected parameter layout`. Compatible existing nullable-integer aliases remain usable.
+The same refusal applies to a runtime-selected `iterable &$items` parameter when its argument
+is a fresh array or object local boxed for unknown-signature dispatch, including a runtime-named
+method call. An existing alias whose storage is already raw `Iterable` remains supported. This
+limit belongs to calls whose signature is unknown at compile time.
+Class-typed object reference parameters adapt boxed unknown-signature locals that contain
+objects, and callable descriptors that preserve a raw object slot, including closures, also
+accept existing object aliases. The callee validates the declared class or interface, including
+`self`, `parent`, subclasses, interface implementations and eval-declared objects. A mismatched
+object raises the ordinary catchable argument `TypeError` before the function body runs. A
+direct alias whose storage does not match the selected descriptor, or a boxed non-object payload
+selected into a raw object slot, is refused earlier with the physical-layout `Error`, because it
+cannot safely enter that reference slot.
+When such an alias reaches a by-reference variadic parameter, writes of `int` and `null` succeed;
+other writes raise `Unsupported assignment through a nullable integer reference: value must be
+int or null` before changing the slot. These diagnostics describe compiler limits, including
+when PHP would allow an ordinary local reference to change type.
 
 ## Variadic functions
 

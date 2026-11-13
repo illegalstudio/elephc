@@ -32,7 +32,8 @@ pub(super) fn static_callable_call_lowers_directly(
     match target {
         StaticCallableBinding::InstanceMethod { direct_call, .. } => *direct_call,
         StaticCallableBinding::Closure { captures, .. } => !captures.iter().any(|capture| {
-            ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
+            capture.by_ref_local.is_some()
+                || ctx.builder.value_defining_op(capture.value) == Some(Op::LoadRefCell)
         }),
         _ => true,
     }
@@ -65,7 +66,9 @@ pub(super) fn lower_static_callable_call(
                 ctx, sig.as_ref(), &return_alias, &php_type, expr.span,
             );
             begin_call_argument_evaluation(ctx);
+            let previous_description = ctx.call_description.replace(function_name.clone());
             let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
+            ctx.call_description = previous_description;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             let roots = root_user_call_operands(
                 ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
@@ -158,13 +161,15 @@ pub(super) fn lower_static_callable_call(
                 expr.span,
             );
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
+            // Keep literal eval demand instead of requesting the full runtime catalog.
+            let eval_literal = eval_literal_fragment(&function_name, callback_args);
             let call = emit_builtin_call_value(
                 ctx,
                 &function_name,
                 operands,
                 php_type,
                 expr.span,
-                None,
+                eval_literal,
             );
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
             Some(call)
@@ -188,7 +193,13 @@ pub(super) fn lower_static_callable_call(
                 expr.span,
             );
             begin_call_argument_evaluation(ctx);
+            let label = ctx.closure_function(&name).and_then(|function| function.display_name.clone())
+                .or_else(|| (ctx.builder.function().name == name)
+                    .then(|| ctx.builder.function().display_name.clone()).flatten())
+                .unwrap_or_else(|| "{closure}".to_string());
+            let previous_description = ctx.call_description.replace(label);
             let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
+            ctx.call_description = previous_description;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
             let roots = root_user_call_operands(
                 ctx, &mut arg_values, Some(&signature), &return_alias, &php_type, expr.span,
@@ -702,6 +713,10 @@ pub(super) fn instance_callable_object_class_and_nullability(
         } => {
             let result = assignment_result_expr(value, result_target.as_deref(), prelude);
             return instance_callable_object_class_and_nullability(ctx, result);
+        }
+        // `(clone $block)->component()` has the same receiver class as `$block`.
+        ExprKind::Clone(inner) => {
+            return instance_callable_object_class_and_nullability(ctx, inner);
         }
         _ => infer_expr_type_syntactic(object),
     };

@@ -1,8 +1,6 @@
 ---
 title: "get_extension_funcs()"
 description: "Returns functions exported by a loaded extension or false."
-sidebar:
-  order: 692
 ---
 
 ## get_extension_funcs()
@@ -20,8 +18,9 @@ Returns functions exported by a loaded extension or false.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/core/get_extension_funcs.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/get_extension_funcs.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

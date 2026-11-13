@@ -53,11 +53,19 @@ pub(super) fn lower_boxed_usort(
         }
         _ => return None,
     };
-    if ref_place_args::static_place_type(ctx, array)?.codegen_repr() != PhpType::Mixed
-        || !supported_place(ctx, array)
+    let boxed_local = if let ExprKind::Variable(name) = &array.kind {
+        ctx.local_slots.get(name).filter(|slot|
+            ctx.builder.local_php_type(**slot).codegen_repr() == PhpType::Mixed)
+            .map(|_| name)
+    } else { None };
+    if (ref_place_args::static_place_type(ctx, array)?.codegen_repr() != PhpType::Mixed
+        && boxed_local.is_none()) || !supported_place(ctx, array)
     {
         return None;
     }
+    // Eval can have fixed boxed storage while a subsequent literal restored a narrower
+    // logical array view. Capture the actual cell before callback construction mutates it.
+    if let Some(name) = boxed_local { ctx.set_local_logical_type(name, PhpType::Mixed); }
     let callback_binding = static_callable_binding_for_expr(ctx, callback);
 
     let handler = ctx.builder.create_named_block("usort.catch", Vec::new());

@@ -188,6 +188,71 @@ pub(in crate::codegen::lower_inst) fn emit_float_result_fits_i64_or_jump(
     }
 }
 
+/// Lowers `Op::PropertyBoundaryCheckedToInt`: narrows a checked add/sub/mul result stored
+/// into a DECLARED `int` property. The operand only ever holds an int or the float its
+/// overflow promoted, so an int forwards, a float inside `[-2^63, 2^63)` truncates (such a
+/// float is always integral, so PHP emits no precision deprecation), and every other float
+/// throws the property `TypeError` the backend's weak typed-property guard would raise.
+/// Any other runtime tag cannot reach this op; it fails closed through the same throw.
+///
+/// Unlike the guard on a boxed store, this op only READS the cell and forwards a raw word, so
+/// the frame-cell planner may keep the checked producer out of the heap entirely.
+pub(in crate::codegen::lower_inst) fn lower_property_boundary_checked_to_int(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let input = *inst.operands.first().ok_or_else(|| {
+        CodegenIrError::unsupported("property_boundary_checked_to_int without operand".to_string())
+    })?;
+    let Some(crate::ir::Immediate::Data(data_id)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(
+            "property_boundary_checked_to_int without a TypeError message".to_string(),
+        ));
+    };
+    let message = ctx
+        .module
+        .data
+        .strings
+        .get(data_id.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("data string", data_id.as_raw()))?;
+    let done = ctx.next_label("prop_boundary_int_done");
+    let l_fail = ctx.next_label("prop_boundary_int_fail");
+    let loaded_ty = ctx.load_value_to_result(input)?.codegen_repr();
+    match loaded_ty {
+        // Constant folding can leave the raw integer word behind; nothing to verify.
+        PhpType::Int | PhpType::Bool => return store_if_result(ctx, inst),
+        // A folded overflow leaves a raw F64 in the float-result register.
+        PhpType::Float => emit_float_result_fits_i64_or_jump(ctx, &l_fail),
+        _ => {
+            // `__rt_mixed_unbox` returns the tag in the int-result register and the payload
+            // in a target-specific register (AArch64: x1; x86_64: rdi).
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let tag_reg = abi::int_result_reg(ctx.emitter);
+            let lo_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x1",
+                Arch::X86_64 => "rdi",
+            };
+            let l_int = ctx.next_label("prop_boundary_int_int");
+            let l_float = ctx.next_label("prop_boundary_int_float");
+            emit_mixed_tag_branch(ctx, tag_reg, 0, &l_int);
+            emit_mixed_tag_branch(ctx, tag_reg, 2, &l_float);
+            abi::emit_jump(ctx.emitter, &l_fail);
+            ctx.emitter.label(&l_int);
+            emit_move_reg(ctx, tag_reg, lo_reg);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&l_float);
+            emit_float_bits_to_float_result(ctx, lo_reg);
+            emit_float_result_fits_i64_or_jump(ctx, &l_fail);
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&l_fail);
+    super::exceptions::emit_type_error(ctx, &message);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
 /// The scalar a fixed-layout field narrowing produces from a boxed `Mixed` value.
 ///
 /// Packed class fields and extern struct fields reached through `ptr<T>` store raw bits, so a

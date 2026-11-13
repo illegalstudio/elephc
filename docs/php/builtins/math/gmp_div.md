@@ -1,8 +1,6 @@
 ---
 title: "gmp_div()"
 description: "Alias of gmp_div_q()."
-sidebar:
-  order: 596
 ---
 
 ## gmp_div()
@@ -22,8 +20,9 @@ Alias of gmp_div_q().
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_div.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_div.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

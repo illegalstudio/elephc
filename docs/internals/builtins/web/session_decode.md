@@ -1,8 +1,6 @@
 ---
 title: "session_decode() - internals"
 description: "Compiler internals for session_decode(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1063
 ---
 
 ## `session_decode()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/web_prelude/build.rs`:3107](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs#L3107) (`session_decode`)
+- **Lowering**: [`src/web_prelude/build.rs`](https://github.com/illegalstudio/elephc/blob/main/src/web_prelude/build.rs) (`session_decode`)
 - **Function symbol**: `session_decode()`
 
 

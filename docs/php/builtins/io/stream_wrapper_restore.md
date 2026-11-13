@@ -1,8 +1,6 @@
 ---
 title: "stream_wrapper_restore()"
 description: "Restores a previously unregistered built-in wrapper."
-sidebar:
-  order: 405
 ---
 
 ## stream_wrapper_restore()
@@ -20,8 +18,9 @@ Restores a previously unregistered built-in wrapper.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_restore.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_wrapper_restore.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

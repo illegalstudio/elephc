@@ -1,14 +1,12 @@
 ---
 title: "mysqli_fetch_lengths()"
 description: "Returns the byte lengths of the columns in the current row."
-sidebar:
-  order: 125
 ---
 
 ## mysqli_fetch_lengths()
 
 ```php
-function mysqli_fetch_lengths(mixed $result): ?array
+function mysqli_fetch_lengths(mixed $result): mixed
 ```
 
 Returns the byte lengths of the columns in the current row.
@@ -16,12 +14,13 @@ Returns the byte lengths of the columns in the current row.
 **Parameters**:
 - `$result` (`mixed`)
 
-**Returns**: `?array`
+**Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

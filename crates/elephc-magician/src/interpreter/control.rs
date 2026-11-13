@@ -11,6 +11,7 @@
 
 use crate::context::{pcntl_runtime::EvalPcntlContextLease, EvalReferenceTarget};
 use crate::value::RuntimeCellHandle;
+use super::argument_value_owners::ArgumentValueOwner;
 
 /// Internal statement-control result used to propagate eval returns and loops.
 pub(super) enum EvalControl {
@@ -31,6 +32,8 @@ pub enum EvalOutcome {
 /// One already evaluated function-like call argument.
 #[derive(Clone)]
 pub(super) struct EvaluatedCallArg {
+    /// Exact source-evaluation lease, preserved through binding without copying its owner.
+    pub(super) evaluation_owner: Option<ArgumentValueOwner>,
     pub(super) name: Option<String>,
     pub(super) value: RuntimeCellHandle,
     pub(super) ref_target: Option<EvalReferenceTarget>,
@@ -47,6 +50,8 @@ pub(super) struct BoundMethodArg {
 /// One native function argument list prepared for the descriptor invoker ABI.
 #[derive(Default)]
 pub(super) struct BoundNativeFunctionArgs {
+    /// Source argument leases can become invisible only after staging and coercion finish.
+    pub(super) evaluation_owners: Vec<ArgumentValueOwner>,
     pub(super) values: Vec<RuntimeCellHandle>,
     pub(super) ref_slots: Vec<BoundNativeFunctionRefSlot>,
     /// Container key of each staged value: `None` is its own position, `Some(name)` a string key.
@@ -60,6 +65,13 @@ pub(super) struct BoundNativeFunctionArgs {
 
 /// One staged by-reference slot passed to a native function invoker.
 pub(super) enum BoundNativeFunctionRefSlot {
+    /// One managed native slot owns the live PHP reference shared with the caller.
+    ManagedMixed {
+        original: RuntimeCellHandle,
+        cell: u64,
+        /// Stable foreign-mutable record remains allocated until native pin retirement completes.
+        pin: Box<std::cell::UnsafeCell<[u64; 4]>>,
+    },
     Mixed {
         original: RuntimeCellHandle,
         slot: Box<*mut crate::value::RuntimeCell>,
@@ -68,17 +80,24 @@ pub(super) enum BoundNativeFunctionRefSlot {
     RawWord {
         tag: u64,
         original: u64,
-        slot: Box<u64>,
+        slot: Box<[u64; 2]>,
         target: Option<EvalReferenceTarget>,
+        force_writeback: bool,
     },
     RawString {
+        original: [u64; 2],
+        slot: Box<[u64; 2]>,
+        target: Option<EvalReferenceTarget>,
+        force_writeback: bool,
+    },
+    TaggedScalar {
         original: [u64; 2],
         slot: Box<[u64; 2]>,
         target: Option<EvalReferenceTarget>,
     },
     OwnedRawWord {
         original: u64,
-        slot: Box<u64>,
+        slot: Box<[u64; 2]>,
         target: Option<EvalReferenceTarget>,
     },
 }
@@ -97,6 +116,10 @@ pub(super) enum EvaluatedCallable {
     ForeignContext {
         callback: Box<EvaluatedCallable>,
         owner: EvalPcntlContextLease,
+    },
+    NativeDescriptor {
+        callback: RuntimeCellHandle,
+        display_name: String,
     },
     Named {
         name: String,

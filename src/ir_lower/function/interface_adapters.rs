@@ -107,8 +107,11 @@ fn lower_interface_adapter(
         &module.extern_class_infos,
         &Default::default(), // throw access sites
         &Default::default(), // builtin call types
+        &Default::default(), // source generator closure spans
         &Default::default(), // array_push property plans
         &Default::default(), // checked member receiver types
+        &Default::default(), // checked declared-array append elements
+        &Default::default(), // checked integer read sites
         &Default::default(), // boxed reference promotions
         &Default::default(), // first-class builtin call types
         &Default::default(), // synthesized calls have no written generic arguments
@@ -118,6 +121,8 @@ fn lower_interface_adapter(
         &Default::default(), // detached reference sites
         &Default::default(), // retyped binding sites
         &Default::default(), // mixed storage store sites
+        &Default::default(), // sparse key write sites
+        &Default::default(), // promotable arrays
         name.to_string(), &module.global_constants,
         Some(owner.to_string()), return_type, signature.declared_return,
         &signature.params, None, false, Default::default(), None,

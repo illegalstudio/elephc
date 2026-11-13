@@ -32,11 +32,32 @@ impl Checker {
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
-            ExprKind::Variable(name) => self.variable_type_or_eval_dynamic(name, expr.span, env),
+            // `$GLOBALS` is the program's global symbol table projected as an array. It is
+            // not an ordinary variable, so it never produces the undefined-variable warning.
+            ExprKind::Variable(name) if name == "GLOBALS" => Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }),
+            ExprKind::Variable(name) => {
+                let ty = match self.variable_type_or_eval_dynamic(name, expr.span, env) {
+                    Ok(ty) => ty,
+                    // PHP 8 reads an undefined variable as `null` and raises E_WARNING. The
+                    // warning is emitted by EIR lowering at the read site so it carries the
+                    // caller's file/line and participates in `@` suppression and handlers.
+                    Err(error) if !self.strict_locals
+                        && error.message.starts_with("Undefined variable: $") => PhpType::Void,
+                    Err(error) => return Err(error),
+                };
+                let ty = self.promotable_array_value_view(name, expr.span, ty);
+                self.record_local_value_read(name, expr.span, &ty, env);
+                Ok(ty)
+            }
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
-                    return Ok(ty);
+                if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty, &self.classes,
+                ) {
+                    return Ok(plan.result_type(&crate::parser::ast::BinOp::Sub));
                 }
                 match ty {
                     PhpType::Int => {
@@ -70,8 +91,22 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
-                Some(PhpType::Int) => Ok(PhpType::Mixed),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    let result = plan.result_type(&crate::parser::ast::BinOp::Add);
+                    if result.is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
+                        self.record_string_incdec_local(name);
+                    }
+                    Ok(result)
+                },
+                Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env) {
+                    PhpType::Int
+                } else { PhpType::Mixed }),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
                 // PHP's string increment can change the value's type (`"9"++` is
                 // `int(10)`), so the pre-form's value is dynamically tagged. EIR lowering
@@ -100,7 +135,18 @@ impl Checker {
                 )),
             },
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    if plan.result_type(&crate::parser::ast::BinOp::Add).is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
+                        self.record_string_incdec_local(name);
+                    }
+                    Ok(ty.clone())
+                },
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
                 | Some(PhpType::False)
@@ -293,23 +339,15 @@ impl Checker {
                 // recognized guards) narrow `$x` — or a simple `$x->prop` — in the then/else
                 // branches. A ternary is a single expression (no intervening writes), so the
                 // narrowing is safe to scope to each branch's inference.
-                let (then_ty, else_ty) = if let Some(guard) =
-                    self.guard_narrowing(condition, env)?
-                {
-                    let mut then_env = env.clone();
-                    then_env.insert(guard.var.clone(), guard.then_ty);
-                    let mut else_env = env.clone();
-                    else_env.insert(guard.var, guard.else_ty);
-                    (
-                        self.match_arm_result_type(then_expr, &then_env)?,
-                        self.match_arm_result_type(else_expr, &else_env)?,
-                    )
-                } else {
-                    (
-                        self.match_arm_result_type(then_expr, env)?,
-                        self.match_arm_result_type(else_expr, env)?,
-                    )
-                };
+                let mut then_env = env.clone();
+                let mut else_env = env.clone();
+                let guards = self.guard_narrowings(condition, env)?;
+                let then_ty = self.with_preserved_binding_flow(|checker|
+                    checker.with_flow_narrowings(&guards, true, &mut then_env,
+                        |checker, env| checker.match_arm_result_type(then_expr, env)))?;
+                let else_ty = self.with_preserved_binding_flow(|checker|
+                    checker.with_flow_narrowings(&guards, false, &mut else_env,
+                        |checker, env| checker.match_arm_result_type(else_expr, env)))?;
                 let arms = [(&**then_expr, then_ty), (&**else_expr, else_ty)];
                 if let Some(buffer) = buffer_merge_result_type("a ternary", &arms, expr.span)? {
                     return Ok(buffer);
@@ -327,27 +365,12 @@ impl Checker {
                     return Ok(buffer);
                 }
                 let [(_, value_ty), (_, default_ty)] = arms;
-                Ok(merge_match_arm_result_type(self, value_ty, default_ty))
+                Ok(merge_match_arm_result_type(self, super::truthy_short_ternary_type(self, value_ty), default_ty))
             }
             ExprKind::Throw(inner) => {
                 let thrown_ty = self.infer_type(inner, env)?;
-                match thrown_ty {
-                    PhpType::Object(type_name)
-                        if self.object_type_implements_throwable(&type_name)
-                            || self.object_type_may_be_eval_declared(&type_name) =>
-                    {
-                        Ok(PhpType::Void)
-                    }
-                    PhpType::Mixed if self.eval_barrier_active => Ok(PhpType::Void),
-                    PhpType::Object(_) => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object implementing Throwable",
-                    )),
-                    _ => Err(CompileError::new(
-                        expr.span,
-                        "Type error: throw requires an object value",
-                    )),
-                }
+                self.validate_finally_throw_type(&thrown_ty, expr.span)?;
+                Ok(PhpType::Void)
             }
             ExprKind::Cast { target, expr } => {
                 let source_ty = self.infer_type(expr, env)?;

@@ -44,24 +44,65 @@ pub(super) fn lower_load_local(ctx: &mut FunctionContext<'_>, inst: &Instruction
     // The slot's box type, so a `?ptr<T>` slot boxed for a `mixed` result reads null for 0.
     let source_ty = ctx.local_mixed_box_type(slot)?;
     let result_ty = ctx.value_php_type(result)?;
+    if pointer_slot_read_as_null(&source_ty, &result_ty)
+        && ctx.current_load_reads_stored_null(slot)
+    {
+        // A pointer slot keeps its storage when `null` is stored into it, so it now holds a zero
+        // pointer: `$o = new C; if ($c) { $o = null; }` followed by a tail DCE copied into both
+        // arms reads it back typed `null`. The null store provably reaches this load, so it
+        // materializes PHP's null sentinel. Without that proof the `null` view may be a stale
+        // fact over a live pointer, and the coercion below keeps refusing it.
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            crate::codegen::NULL_SENTINEL,
+        );
+        return ctx.store_result_value(result);
+    }
     coerce_loaded_local_to_result_type(ctx, &source_ty, &result_ty)?;
     ctx.store_result_value(result)
 }
 
+/// Returns whether a load reads pointer storage that can hold a zero pointer through a `null` view.
+fn pointer_slot_read_as_null(source_ty: &PhpType, result_ty: &PhpType) -> bool {
+    result_ty.codegen_repr() == PhpType::Void
+        && matches!(
+            source_ty.codegen_repr(),
+            PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+                | PhpType::Callable
+                | PhpType::Iterable
+                | PhpType::Packed(_)
+                | PhpType::Buffer(_)
+        )
+}
+
 /// Lowers an explicit local ref-cell load into the result register and SSA slot.
 pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_reference_read(ctx, inst, false)
+}
+
+/// Copies a reference value into owned Mixed storage without retyping its native payload ABI.
+pub(super) fn lower_load_ref_cell_value(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    lower_reference_read(ctx, inst, true)
+}
+
+/// Selects raw versus attached local storage and preserves the instruction's ownership contract.
+fn lower_reference_read(ctx: &mut FunctionContext<'_>, inst: &Instruction, owned: bool) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let result = inst
         .result
         .ok_or_else(|| CodegenIrError::invalid_module("load_ref_cell missing result value"))?;
     let result_ty = ctx.value_php_type(result)?;
     if ctx.local_ref_cell_representation_is_definite(slot) {
-        load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+        load_reference_value(ctx, slot, &result_ty, owned)?;
         return ctx.store_result_value(result);
     }
     if !ctx.local_ref_cell_representation_is_dynamic(slot) {
         let source_ty = ctx.load_raw_local_to_result(slot)?;
         coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
+        clone_raw_mixed_read(ctx, &source_ty, owned);
         return ctx.store_result_value(result);
     }
     let state_offset = ctx.ref_cell_state_offset(slot).ok_or_else(|| {
@@ -89,11 +130,31 @@ pub(super) fn lower_load_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruct
     }
     let source_ty = ctx.load_raw_local_to_result(slot)?;
     coerce_borrowed_ref_cell_local(ctx, &source_ty, &result_ty)?;
+    clone_raw_mixed_read(ctx, &source_ty, owned);
     ctx.emit_branch(&done);
     ctx.emitter.label(&ref_cell);
-    load_ref_cell_local_to_result_as(ctx, slot, &result_ty)?;
+    load_reference_value(ctx, slot, &result_ty, owned)?;
     ctx.emitter.label(&done);
     ctx.store_result_value(result)
+}
+
+/// Concrete-to-Mixed boxing already owns its box; raw Mixed storage needs a detached copy.
+fn clone_raw_mixed_read(ctx: &mut FunctionContext<'_>, source_ty: &PhpType, owned: bool) {
+    if owned && source_ty.codegen_repr() == PhpType::Mixed {
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    }
+}
+
+/// Reads an attached reference with either borrowed projection or independent value semantics.
+fn load_reference_value(
+    ctx: &mut FunctionContext<'_>, slot: LocalSlotId, ty: &PhpType, owned: bool,
+) -> Result<()> {
+    if !owned { return load_ref_cell_local_to_result_as(ctx, slot, ty).map(|_| ()); }
+    let payload_ty = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+    let offset = ctx.local_offset(slot)?;
+    let pointer = abi::symbol_scratch_reg(ctx.emitter);
+    abi::load_at_offset(ctx.emitter, pointer, offset);
+    super::reference_payloads::load_owned_mixed(ctx, pointer, &payload_ty)
 }
 
 /// Keeps a ref-cell read borrowed on the raw side of a conditional promotion.
@@ -116,55 +177,20 @@ pub(super) fn coerce_borrowed_ref_cell_local(
     coerce_loaded_local_to_result_type(ctx, source_ty, result_ty)
 }
 
-/// Loads the value pointed to by a local ref-cell slot using the supplied alias type.
+/// Loads a ref-cell's physical payload before exposing the requested borrowed logical view.
 pub(super) fn load_ref_cell_local_to_result_as(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     ty: &PhpType,
 ) -> Result<PhpType> {
-    let ty = ty.codegen_repr();
-    reject_multiword_ref_param_local(&ty, "load")?;
+    let result_ty = ty.codegen_repr();
+    let payload_ty = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+    reject_multiword_ref_param_local(&payload_ty, "load")?;
     let offset = ctx.local_offset(slot)?;
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
-    match ty {
-        PhpType::Str => {
-            let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, ptr_reg, pointer_reg, 0);
-            abi::emit_load_from_address(ctx.emitter, len_reg, pointer_reg, 8);
-        }
-        PhpType::Float => {
-            abi::emit_load_from_address(
-                ctx.emitter,
-                abi::float_result_reg(ctx.emitter),
-                pointer_reg,
-                0,
-            );
-        }
-        PhpType::TaggedScalar => {
-            abi::emit_load_from_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                pointer_reg,
-                0,
-            );
-            abi::emit_load_from_address(
-                ctx.emitter,
-                crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
-                pointer_reg,
-                8,
-            );
-        }
-        _ => {
-            abi::emit_load_from_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                pointer_reg,
-                0,
-            );
-        }
-    }
-    Ok(ty)
+    super::reference_payloads::load_as(ctx, pointer_reg, &payload_ty, &result_ty)?;
+    Ok(result_ty)
 }
 
 /// Converts a loaded local slot value to the SSA result representation requested by EIR.
@@ -213,17 +239,11 @@ pub(in crate::codegen) fn coerce_loaded_local_to_result_type(
             emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
             Ok(())
         }
-        (PhpType::Mixed, PhpType::Void) => {
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-            Ok(())
-        }
-        // A pointer-word local that lowering knows holds `null` here (address 0 in the slot)
-        // reads as the ordinary null value every `null` consumer expects.
-        (PhpType::Pointer(_), PhpType::Void) => {
+        // Flow typing can prove null while the frame retains its earlier container or
+        // pointer representation. Materialize PHP null instead of exposing its zero word.
+        (PhpType::Mixed | PhpType::Pointer(_) | PhpType::Packed(_)
+            | PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_)
+            | PhpType::Iterable | PhpType::Buffer(_) | PhpType::Callable, PhpType::Void) => {
             abi::emit_load_int_immediate(
                 ctx.emitter,
                 abi::int_result_reg(ctx.emitter),

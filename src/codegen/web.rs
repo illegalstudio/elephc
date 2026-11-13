@@ -23,8 +23,8 @@
 //!   the static's init marker / typed-property sentinel so an uninitialized slot
 //!   (all-zero `.comm`) or a sentinel-as-pointer is never released.
 //! - Function statics are zeroed (value + marker) so their initializers re-run.
-//!   Static properties are NOT zeroed: the handler body re-runs their
-//!   initializers after the reset, which rewrites both value and sentinel.
+//!   Raw static properties retain their old words until their initializers re-run.
+//!   Optional managed Mixed bindings detach their cell and restore the uninitialized marker.
 
 use crate::codegen::abi;
 use crate::codegen::data_section::{DataSection, StaticLocalRecord};
@@ -67,7 +67,7 @@ impl LabelGen {
 ///
 /// Always emitted in `--web` builds, even without statics, to reset shared request state.
 /// Runs before the handler body's static-property/enum initializers, so it must
-/// only RELEASE the previous refcounted property value, not rewrite it.
+/// release previous owners; managed bindings also detach their cell before PHP cleanup.
 pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &DataSection) {
     if emitter.target.arch == Arch::AArch64 {
         emitter.raw(".align 2");
@@ -77,10 +77,11 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emitter.label_global("__rt_web_reset");
     abi::emit_frame_prologue(emitter, RESET_FRAME_SIZE);
 
-    // A request cannot legitimately finish inside a boxed array callback. Clear the
-    // stack-backed borrow chain before any reset cleanup can run user destructors, so a
-    // failed request never leaves them scanning an address in its retired native stack.
+    // A request cannot legitimately finish inside a boxed-array callback or reference validation.
+    // Clear both stack-backed registries before reset cleanup can run user destructors, so a
+    // failed request never leaves readers scanning its retired native stack.
     abi::emit_store_zero_to_symbol(emitter, "_rt_unmanaged_ref_borrow_top", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_rt_reference_validation_pins_top", 0);
     // A normal or throwing `__set` call unlinks its stack-backed recursion node locally. The web
     // reset is the final backstop for non-Throwable request escapes, before the retired request
     // stack can be reused and before any reset destructor performs another property write.
@@ -101,7 +102,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     }
     let (static_properties, hosting_tables) = static_properties_hosting_last(module);
     for (symbol, php_type) in static_properties {
-        emit_static_property_release(emitter, &symbol, &php_type, &mut labels);
+        emit_static_property_release(emitter, &symbol, &php_type, &mut labels,
+            module.required_runtime_features.native_reference_validation);
     }
     for name in &module.data.global_names {
         if !superglobals::is_superglobal(name) && !module.extern_globals.contains_key(name) {
@@ -122,7 +124,8 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
         abi::emit_call_label(emitter, &symbol);
     }
     for (symbol, php_type) in hosting_tables {
-        emit_static_property_release(emitter, &symbol, &php_type, &mut labels);
+        emit_static_property_release(emitter, &symbol, &php_type, &mut labels,
+            module.required_runtime_features.native_reference_validation);
     }
     // Last owner teardown, as in the main epilogue: a destructor above, or an engine object a
     // hosting table released, may still reach C code that calls a saved callback.
@@ -149,6 +152,7 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_concat_offset_reset(emitter);
     emit_core_handler_reset(emitter);
     abi::emit_call_label(emitter, "__rt_resource_inventory_reset");
+    abi::emit_call_label(emitter, "__rt_stream_registry_cleanup");
     abi::emit_call_label(emitter, "__rt_diag_reset");
     emit_gc_state_reset(emitter);
 
@@ -172,6 +176,11 @@ pub(super) fn emit_web_reset(emitter: &mut Emitter, module: &Module, data: &Data
     emit_transient_pointer_reset(emitter);
     emit_extension_request_state_reset(emitter);
     emit_cstr_buffer_reset(emitter);
+    if module.required_runtime_features.native_reference_validation {
+        let entry = emitter.target.extern_symbol("__elephc_reference_sources_reset_v1");
+        abi::emit_call_label(emitter, &entry);
+        abi::emit_branch_if_int_result_nonzero(emitter, "__rt_reference_sources_failure");
+    }
     emit_heap_arena_reset(emitter);
     if module.web_application {
         abi::emit_store_imm_to_symbol(emitter, "_gc_candidates_enabled", 0, 1);
@@ -207,20 +216,18 @@ fn emit_output_buffer_reset(emitter: &mut Emitter) {
     }
 }
 
-/// Restores the `print_r($value, true)` capture state to its process-start defaults.
+/// Restores print_r capture state to its process-start defaults.
 ///
-/// Return-mode rendering sets `_print_r_mode` and accumulates bytes into the static
-/// `_print_r_buf` through `_print_r_off`. A render interrupted before `__rt_pr_finish` would
+/// Rendering sets `_print_r_mode` and accumulates bytes in the raw heap buffer
+/// `_print_r_ptr`. A render interrupted before `__rt_pr_finish` would
 /// otherwise leave the mode set, so the next request's ordinary output would be captured into
 /// that stale buffer instead of reaching its response.
 fn emit_print_r_capture_reset(emitter: &mut Emitter) {
-    emitter.comment("reset any print_r return-mode capture abandoned by the previous request");
+    emitter.comment("reset any print_r capture abandoned by the previous request");
     abi::emit_store_zero_to_symbol(emitter, "_print_r_mode", 0);
     abi::emit_store_zero_to_symbol(emitter, "_print_r_off", 0);
-    let scratch = abi::symbol_scratch_reg(emitter);
-    abi::emit_symbol_address(emitter, scratch, "_print_r_buf");
-    abi::emit_store_reg_to_symbol(emitter, scratch, "_print_r_base", 0);
-    abi::emit_store_imm_to_symbol(emitter, "_print_r_cap", 0, 65536);
+    abi::emit_store_zero_to_symbol(emitter, "_print_r_ptr", 0);
+    abi::emit_store_zero_to_symbol(emitter, "_print_r_cap", 0);
 }
 
 /// Clears transient request-owned pointers and counters that are not owned by static locals,
@@ -389,6 +396,8 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
         "_gc_release_suppressed",
         "_gc_runs",
         "_gc_collected",
+        "_gc_safe_point_credit",
+        "_gc_safe_point_live_limit",
         "_gc_destructor_depth",
     ] {
         abi::emit_store_zero_to_symbol(emitter, symbol, 0);
@@ -422,6 +431,27 @@ fn emit_heap_arena_reset(emitter: &mut Emitter) {
 mod handler_reset_tests {
     use super::*;
     use crate::codegen::platform::{AppleVariant, Platform, Target};
+
+    /// Weak type sources expire only after PHP shutdown callbacks and before arena addresses recycle.
+    #[test]
+    fn web_native_reference_sources_reset_after_callbacks_before_arena() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut module = Module::new(target);
+            module.required_runtime_features.native_reference_validation = true;
+            let mut emitter = Emitter::new(target);
+            emit_web_reset(&mut emitter, &module, &DataSection::new());
+            let assembly = emitter.output();
+            let callbacks = assembly.find("__rt_resource_inventory_reset").unwrap();
+            let reset = assembly.find("__elephc_reference_sources_reset_v1").unwrap();
+            let heap = assembly.find("__rt_heap_bins_clear").unwrap();
+            assert!(callbacks < reset && reset < heap, "{name}");
+            module.required_runtime_features.native_reference_validation = false;
+            let mut emitter = Emitter::new(target);
+            emit_web_reset(&mut emitter, &module, &DataSection::new());
+            assert!(!emitter.output().contains("__elephc_reference_sources_reset_v1"), "{name}");
+        }
+    }
 
     /// Full arena reclamation accounts for outstanding blocks only after retiring the old heap.
     #[test]
@@ -487,25 +517,28 @@ mod handler_reset_tests {
             emit_web_reset(&mut emitter, &Module::new(target), &DataSection::new());
             let asm = emitter.output();
             let borrowed_refs = asm.find("_rt_unmanaged_ref_borrow_top").unwrap();
+            let validation_pins = asm.find("_rt_reference_validation_pins_top").unwrap();
             let magic_set_guards = asm.find("_magic_set_guard_head").unwrap();
             let saved_magic_set_guards = asm.find("_fiber_main_saved_magic_set_guard").unwrap();
             let output_level = asm.find("_ob_level").unwrap();
             let print_r_mode = asm.find("_print_r_mode").unwrap();
-            let print_r_base = asm.find("_print_r_base").unwrap();
+            let print_r_ptr = asm.find("_print_r_ptr").unwrap();
             let print_r_cap = asm.find("_print_r_cap").unwrap();
             let stream_context = asm.find("_stream_context_options").unwrap();
             let final_output_level = asm.rfind("_ob_level").unwrap();
             let final_print_r_mode = asm.rfind("_print_r_mode").unwrap();
-            let final_print_r_base = asm.rfind("_print_r_base").unwrap();
+            let final_print_r_ptr = asm.rfind("_print_r_ptr").unwrap();
             let final_print_r_cap = asm.rfind("_print_r_cap").unwrap();
             let final_stream_context = asm.rfind("_stream_context_options").unwrap();
             let inventory = asm.find("__rt_resource_inventory_reset").unwrap();
+            let registrations = asm.find("__rt_stream_registry_cleanup").unwrap();
             let wrapper_table = asm.find("_user_wrappers").unwrap();
             let heap = asm.find("_heap_off").unwrap();
             for symbol in ["__rt_core_error_handler_pop", "__rt_core_exception_handler_pop", "_php_error_reporting"] {
                 assert!(asm.find(symbol).unwrap() < inventory, "{target:?}: {symbol}");
             }
             assert!(borrowed_refs < inventory, "{target:?}: stale borrow state must clear first");
+            assert!(validation_pins < inventory, "{target:?}: stale validation records must clear first");
             assert!(
                 magic_set_guards < inventory,
                 "{target:?}: stale magic-set guard state must clear first"
@@ -517,7 +550,7 @@ mod handler_reset_tests {
             for (label, position) in [
                 ("_ob_level", output_level),
                 ("_print_r_mode", print_r_mode),
-                ("_print_r_base", print_r_base),
+                ("_print_r_ptr", print_r_ptr),
                 ("_print_r_cap", print_r_cap),
                 ("_stream_context_options", stream_context),
             ] {
@@ -527,13 +560,13 @@ mod handler_reset_tests {
                 );
             }
             assert!(
-                inventory < wrapper_table && wrapper_table < heap,
+                inventory < registrations && registrations < wrapper_table && wrapper_table < heap,
                 "{target:?}: fd-keyed tables must clear after inventory cleanup and before the heap reset"
             );
             for (label, position) in [
                 ("_ob_level", final_output_level),
                 ("_print_r_mode", final_print_r_mode),
-                ("_print_r_base", final_print_r_base),
+                ("_print_r_ptr", final_print_r_ptr),
                 ("_print_r_cap", final_print_r_cap),
                 ("_stream_context_options", final_stream_context),
             ] {
@@ -549,6 +582,36 @@ mod handler_reset_tests {
             assert!(inventory < heap, "{target:?}: handlers need the live request heap");
         }
     }
+
+    /// Request and application shutdown retire managed static cells before resetting their heap.
+    #[test]
+    fn web_static_reference_bindings_retire_on_every_target() {
+        let source = "<?php class WebStaticCellOwner { public static mixed $value = 41; } echo WebStaticCellOwner::$value;";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            for application in [false, true] {
+                let mut module = crate::ir_lower::tests::lower_source_at_for_target(
+                    source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+                );
+                module.required_runtime_features.native_reference_validation = true;
+                module.web_application = application;
+                let mut emitter = Emitter::new(target);
+                emit_web_reset(&mut emitter, &module, &DataSection::new());
+                let assembly = emitter.output();
+                let reset_release = assembly.find("__rt_reference_static_mixed_release").unwrap();
+                let registry_reset = assembly.find("__elephc_reference_sources_reset_v1").unwrap();
+                assert!(reset_release < registry_reset, "{name}: detach bindings before registry and arena reset");
+                if application {
+                    let shutdown = target.extern_symbol("elephc_web_application_shutdown_cleanup");
+                    let body = assembly.split_once(&format!("{shutdown}:")).unwrap().1;
+                    assert!(body.contains("__rt_reference_static_mixed_release"),
+                        "{name}: final application cleanup owns the managed static cell");
+                    assert!(body.contains("__rt_cleanup_call"), "{name}: contain each child destructor");
+                }
+            }
+        }
+    }
+
 }
 
 /// Resets one function static local: skips uninitialized slots, releases any
@@ -577,14 +640,21 @@ fn emit_static_local_reset(emitter: &mut Emitter, record: &StaticLocalRecord, la
 /// zeroing it: the handler body's re-run initializer overwrites both the value
 /// and the typed-property sentinel after this reset, so only the old owner needs
 /// releasing to avoid a per-request leak. Skips the uninitialized sentinel so a
-/// sentinel is never released as if it were a heap pointer.
+/// sentinel is never released as if it were a heap pointer. Optional managed Mixed
+/// bindings instead detach their cell and restore the marker before its child cleanup.
 fn emit_static_property_release(
     emitter: &mut Emitter,
     symbol: &str,
     php_type: &PhpType,
     labels: &mut LabelGen,
+    native_validation: bool,
 ) {
     let ty = php_type.codegen_repr();
+    if native_validation && ty == PhpType::Mixed {
+        abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), symbol);
+        abi::emit_call_label(emitter, "__rt_reference_static_mixed_release");
+        return;
+    }
     let skip_label = labels.next("skip_prop");
     emitter.comment(&format!("release previous static property value {}", symbol));
     // Typed static properties carry an uninitialized sentinel in the high word

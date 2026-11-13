@@ -46,6 +46,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
+name = "allthehashes"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa1701fd1eeee3c44bd3367549108facd8ad7e72ff90ed078e3915fd78c18c83"
+dependencies = [
+ "adler2",
+ "crc",
+ "des",
+ "digest 0.10.7",
+ "gost94",
+ "hex",
+ "hmac 0.12.1",
+ "md-5 0.10.6",
+ "md2",
+ "md4",
+ "ripemd",
+ "sha1",
+ "sha2 0.10.9",
+ "sha3",
+ "whirlpool",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -725,6 +748,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "des"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffdd80ce8ce993de27e9f063a444a4d53ce8e8db4c1f00cc03af5ad5a9867a1e"
+dependencies = [
+ "cipher 0.4.4",
+]
+
+[[package]]
 name = "digest"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -742,6 +774,7 @@ dependencies = [
  "block-buffer 0.10.4",
  "const-oid 0.9.6",
  "crypto-common 0.1.7",
+ "subtle",
 ]
 
 [[package]]
@@ -781,7 +814,7 @@ checksum = "91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e"
 
 [[package]]
 name = "elephc"
-version = "0.27.6"
+version = "0.27.7"
 dependencies = [
  "bitflags 2.13.0",
  "bzip2-rs",
@@ -801,6 +834,7 @@ dependencies = [
  "elephc-phar",
  "elephc-probe",
  "elephc-random",
+ "elephc-reference",
  "elephc-tls",
  "elephc-tz",
  "elephc-web",
@@ -843,6 +877,7 @@ version = "0.1.0"
 dependencies = [
  "adler2",
  "aes",
+ "allthehashes",
  "cipher 0.4.4",
  "crc",
  "crc32fast",
@@ -852,12 +887,14 @@ dependencies = [
  "md-5 0.10.6",
  "md2",
  "md4",
+ "murmur3",
  "ripemd",
  "sha1",
  "sha2 0.10.9",
  "sha3",
  "subtle",
  "whirlpool",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -926,6 +963,7 @@ dependencies = [
  "rustyline",
  "serde",
  "serde_json",
+ "stacker",
  "unicode-segmentation",
 ]
 
@@ -941,6 +979,10 @@ dependencies = [
 
 [[package]]
 name = "elephc-monitoring-contract"
+version = "0.1.0"
+
+[[package]]
+name = "elephc-openssl"
 version = "0.1.0"
 
 [[package]]
@@ -1007,6 +1049,10 @@ dependencies = [
 
 [[package]]
 name = "elephc-random"
+version = "0.1.0"
+
+[[package]]
+name = "elephc-reference"
 version = "0.1.0"
 
 [[package]]
@@ -1412,6 +1458,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gost94"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f960e0ba8eb5e47a7d45097dc4159b5ef63d82e62dc85894bfcfd8e6b85526c"
+dependencies = [
+ "digest 0.10.7",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1460,6 +1515,15 @@ checksum = "c1441c6b1e930e2817404b5046f1f989899143a12bf92de603b69f4e0aee1e15"
 dependencies = [
  "crypto-mac",
  "digest 0.9.0",
+]
+
+[[package]]
+name = "hmac"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
+dependencies = [
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -1946,9 +2010,9 @@ dependencies = [
 
 [[package]]
 name = "libsqlite3-sys"
-version = "0.30.1"
+version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
+checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
 dependencies = [
  "cc",
  "pkg-config",
@@ -2214,6 +2278,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "murmur3"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9252111cf132ba0929b6f8e030cac2a24b507f3a4d6db6fb2896f27b354c714b"
+
+[[package]]
 name = "mutate_once"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2222,8 +2292,6 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 [[package]]
 name = "mysql"
 version = "28.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca3de8a73b7c70f76dbcdd4b6abc9b53bbb6c4f7bd6c79d8e8a7ea2157c02487"
 dependencies = [
  "arc-swap",
  "bufstream",
@@ -4730,6 +4798,12 @@ dependencies = [
  "libc",
  "rustix 1.1.4",
 ]
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "550a2b930b62486a393c52d5c3b84bff264b28aa437ed64694d31e93b1757af7"
 
 [[package]]
 name = "yansi"

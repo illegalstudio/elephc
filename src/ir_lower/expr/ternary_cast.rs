@@ -54,21 +54,25 @@ pub(super) fn lower_ternary_with_destination(
     let split_initialized = ctx.initialized_slots_snapshot();
     let merge = ctx.builder.create_named_block("ternary.merge", Vec::new());
 
+    let mut join = crate::ir_lower::stmt::ExprBranchJoin::at_split(ctx);
+
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_arm(ctx);
     store_branch_into_temp(ctx, &temp_name, result_type.clone(), then_expr, expr.span, destination);
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     let then_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_arm(ctx);
     store_branch_into_temp(ctx, &temp_name, result_type, else_expr, expr.span, destination);
     let else_reachable = !ctx.builder.insertion_block_is_terminated();
     let else_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, merge, expr.span);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
         &split_initialized,
         then_initialized,
@@ -110,13 +114,45 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return lower_array_cast(ctx, inner, expr);
     }
     let value = lower_expr(ctx, inner);
+    lower_scalar_cast_value(ctx, target, value, expr)
+}
+
+/// Converts an already evaluated scalar or object and retires its temporary owner.
+pub(super) fn lower_scalar_cast_value(
+    ctx: &mut LoweringContext<'_, '_>, target: &CastType, value: LoweredValue, expr: &Expr,
+) -> LoweredValue {
+    let source_type = ctx.builder.value_php_type(value.value);
+    let source_repr = source_type.codegen_repr();
     if matches!(target, CastType::Int | CastType::Float) {
         if let Some(result) = object_operators::lower_object_cast(ctx, value, target, expr) {
-            if ctx.value_is_owning_temporary(value) {
-                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
-            }
+            release_binary_operand_temporary(ctx, value, expr.span);
             return result;
         }
+    }
+    // `(int)` over an integer is the identity: both are already I64 and the explicit cast
+    // cannot warn or fail. A resource also has an Int codegen representation, but its PHP
+    // cast is the display id, so it must keep the runtime conversion. `(int)` over a boolean
+    // shares the storage word but NOT the PHP type: `echo (int)false` prints "0" while
+    // `echo false` prints nothing. Re-stamp that result as an int through a pure no-op cast
+    // so every later observation sees PHP's type.
+    if matches!(target, CastType::Int)
+        && matches!(source_type, PhpType::Int | PhpType::Narrow(_))
+    {
+        return value;
+    }
+    if matches!(target, CastType::Int) && source_repr == PhpType::Bool {
+        return ctx.emit_value(
+            Op::Cast,
+            vec![value.value],
+            Some(Immediate::CastTarget(IrType::I64)),
+            PhpType::Int,
+            Effects::PURE,
+            Some(expr.span),
+        );
+    }
+    // `(bool)` over a boolean is likewise the identity at the representation level.
+    if matches!(target, CastType::Bool) && source_repr == PhpType::Bool {
+        return value;
     }
     if matches!(target, CastType::Bool) {
         if let Some(result) = object_operators::lower_object_truthy(ctx, value, Some(expr.span)) {
@@ -137,7 +173,6 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         }
         return normalize_missing_string_value(ctx, value, expr);
     }
-    let source_type = ctx.builder.value_php_type(value.value);
     let php_type = cast_php_type(target, &source_type);
     let result = ctx.emit_value(
         Op::Cast,

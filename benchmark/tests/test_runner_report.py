@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from support import record
 from cases import discover
-from common import ROOT, SUITES, atomic_json, measure, require_baselines
+from common import PHP_FLAGS, PHP_MODE, ROOT, SUITES, atomic_json, measure, php_command, php_jit_problem, require_baselines
 from dashboard import build_page
 from history import empty_history, merge
 from report import epoch, render_svg
@@ -32,7 +32,8 @@ class RunnerReportTests(unittest.TestCase):
                                 capture_output=True, text=True, check=True)
         self.assertEqual(result.stdout, "native/sum_loop\n")
 
-    def test_ci_requires_php_and_c_but_hot_path_has_no_external_baselines(self):
+    @patch("common.php_jit_problem", return_value=None)
+    def test_ci_requires_php_and_c_but_hot_path_has_no_external_baselines(self, _jit):
         suites = discover(list(SUITES), [])
         with patch("common.shutil.which", return_value=None):
             with self.assertRaisesRegex(ValueError, "PHP interpreter"):
@@ -43,6 +44,41 @@ class RunnerReportTests(unittest.TestCase):
                 require_baselines(suites)
         with patch("common.shutil.which", side_effect=lambda name: f"/usr/bin/{name}" if name in {"php", "clang"} else None):
             require_baselines(suites)
+
+    def test_ci_rejects_php_whose_jit_is_not_running(self):
+        suites = discover(["native"], [])
+        with patch("common.shutil.which", side_effect=lambda name: f"/usr/bin/{name}" if name in {"php", "cc"} else None), \
+                patch("common.php_jit_problem", return_value="OPcache tracing JIT inactive for /usr/bin/php (JIT off)") as probe:
+            with self.assertRaisesRegex(ValueError, "JIT inactive"):
+                require_baselines(suites)
+        probe.assert_called_once_with("/usr/bin/php")
+
+    def test_php_baseline_command_pins_opcache_and_tracing_jit(self):
+        command = php_command("/usr/bin/php", "main.php", "1")
+        self.assertEqual(command, ["/usr/bin/php", *PHP_FLAGS, "main.php", "1"])
+        for setting in ("opcache.enable_cli=1", "opcache.jit=tracing", "opcache.jit_buffer_size=128M",
+                        "opcache.file_update_protection=0"):
+            self.assertIn(setting, command)
+        self.assertEqual(php_command("php", "-v", isolated=True)[:2], ["php", "-n"])
+
+    def test_jit_probe_accepts_only_an_active_jit(self):
+        with tempfile.TemporaryDirectory(prefix="elephc-benchmark-test-") as directory:
+            php = Path(directory) / "php"
+            # A stand-in interpreter echoing a fixed probe answer, checking it got the pinned flags.
+            for answer, warning, expected in (("on", "", None), ("JIT off", "", "JIT off"),
+                                              ("OPcache off", "", "OPcache off"),
+                                              ("on", "Warning: JIT disabled", "Warning: JIT disabled")):
+                php.write_text("#!/bin/sh\n"
+                               '[ "$4" = opcache.enable_cli=1 ] && [ "$6" = opcache.jit=tracing ] || exit 3\n'
+                               f"printf '%s' '{answer}'\n" + (f"echo '{warning}' >&2\n" if warning else ""))
+                php.chmod(0o755)
+                with self.subTest(answer=answer, warning=warning):
+                    problem = php_jit_problem(str(php))
+                    if expected is None:
+                        self.assertIsNone(problem)
+                    else:
+                        self.assertIn("JIT inactive", problem)
+                        self.assertIn(expected, problem)
 
     def test_missing_required_baseline_fails_before_build_or_output(self):
         with tempfile.TemporaryDirectory(prefix="elephc-benchmark-test-") as directory:
@@ -76,6 +112,16 @@ class RunnerReportTests(unittest.TestCase):
                 self.assertNotIn("nan", svg.lower())
                 self.assertNotIn("inf", svg.lower())
         ET.fromstring(render_svg(empty_history("hot-path")))
+
+    def test_reports_name_the_php_mode_of_the_latest_sample(self):
+        for suite in ("native", "magician"):
+            sample = record(suite)
+            sample["environment"]["php_mode"] = PHP_MODE
+            self.assertIn(f"PHP: {PHP_MODE}", render_svg(merge(empty_history(suite), [sample])))
+        sample = record("hot-path")
+        sample["environment"]["php_mode"] = PHP_MODE
+        self.assertNotIn("PHP:", render_svg(merge(empty_history("hot-path"), [sample])))
+        self.assertNotIn("PHP:", render_svg(merge(empty_history("native"), [record()])))
 
     def test_reports_skip_unavailable_baselines_and_split_changed_epochs(self):
         a = record()

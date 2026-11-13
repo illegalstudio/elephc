@@ -207,8 +207,17 @@ pub(super) fn try_lower_array_access_runtime_call(
     };
     match dispatch {
         ArrayAccessRuntimeDispatch::Concrete(class_name) => {
+            let native_operation = match method_name {
+                "offsetGet" => Some(elephc_builtin_contract::ObjectDimension::Get),
+                "offsetSet" => Some(elephc_builtin_contract::ObjectDimension::Set),
+                "append" => Some(elephc_builtin_contract::ObjectDimension::Append),
+                _ => None,
+            };
+            let native_method = native_operation.and_then(|op|
+                crate::types::builtin_classes::native_dimension_method(&class_name, op, &ctx.module.class_infos));
             let concrete_method =
-                if method_name == "append" && is_spl_doubly_linked_list_family(&class_name) {
+                if let Some(method) = native_method { method }
+                else if method_name == "append" && is_spl_doubly_linked_list_family(&class_name) {
                     "push"
                 } else {
                     method_name
@@ -258,7 +267,8 @@ pub(super) fn array_access_runtime_dispatch(
                     boxed_receiver: false,
                 });
             }
-            if class_implements_interface(ctx, normalized, "ArrayAccess") {
+            if class_implements_interface(ctx, normalized, "ArrayAccess")
+                || crate::types::builtin_classes::has_native_dimensions(normalized, &ctx.module.class_infos) {
                 return Some(ArrayAccessRuntimeDispatch::Concrete(normalized.to_string()));
             }
             None
@@ -338,10 +348,10 @@ pub(super) fn lower_boxed_array_access_interface_call(
         iterators::emit_interface_dispatch_call(ctx, &interface_name, &method_key, None)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &return_ty)?;
+    store_compiled_call_result(ctx, inst, &return_ty, callee_sig.by_ref_return)?;
     // Interface implementations use ordinary PHP parameter shadows, not argument-owner transfer.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Emits the concrete method body backing a PHP object runtime fallback.
@@ -374,7 +384,7 @@ pub(in crate::codegen) fn lower_runtime_object_method_call(
     store_runtime_object_call_result(ctx, inst, &target.return_ty)?;
     // The concrete PHP method owns any Mixed parameter that can flow into its return value.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Stores an object fallback call result, casting boxed Mixed values when the access type is known.
@@ -384,7 +394,7 @@ pub(super) fn store_runtime_object_call_result(
     return_ty: &PhpType,
 ) -> Result<()> {
     if return_ty.codegen_repr() != PhpType::Mixed {
-        return store_call_result(ctx, inst, return_ty);
+        return store_compiled_call_result(ctx, inst, return_ty, false);
     }
     let Some(result) = inst.result else {
         return Ok(());
@@ -407,6 +417,14 @@ pub(super) fn class_implements_interface(
     let interface_key = php_symbol_key(interface_name.trim_start_matches('\\'));
     let mut current = Some(class_name.trim_start_matches('\\'));
     while let Some(candidate) = current {
+        // The XML prelude's SimpleXMLElement implements these interfaces in source, but a
+        // prelude class's interface list is not copied into every EIR class-info clone. The
+        // class name is internal and cannot be redeclared, so answer before the info lookup.
+        if candidate.trim_start_matches('\\').eq_ignore_ascii_case("SimpleXMLElement")
+            && matches!(interface_key.as_str(), "countable" | "recursiveiterator" | "stringable")
+        {
+            return true;
+        }
         let Some(info) = ctx.module.class_infos.get(candidate) else {
             return false;
         };
@@ -448,22 +466,41 @@ pub(super) fn interface_satisfies_interface(
 }
 
 /// Converts an untyped boxed Mixed payload into indexed-array storage with Mixed slots.
+///
+/// A boxed array a skipping integer key promoted at run time (`__rt_mixed_array_set`) is a
+/// kind-3 hash: it is already the `array<mixed>` representation a promoted indexed array has
+/// (per-entry tagged values), so it is kept as is instead of being walked as packed slots.
 pub(super) fn lower_mixed_to_mixed_indexed_array(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let keep_hash = ctx.next_label("mixed_to_indexed_keep_hash");
+    let done = ctx.next_label("mixed_to_indexed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, x1");                              // pass the unboxed indexed-array payload to the Mixed conversion helper
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load indexed-array metadata before Mixed-slot conversion
+            ctx.emitter.instruction("and x9, x1, #0xff");                       // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp x9, #3");                              // kind 3 = a hash promoted by a skipping key
+            ctx.emitter.instruction(&format!("b.eq {keep_hash}"));              // a promoted hash already holds tagged values
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the indexed-array value_type tag
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load indexed-array metadata before Mixed-slot conversion
+            ctx.emitter.instruction("mov r10, rsi");                            // copy the header to test the storage kind
+            ctx.emitter.instruction("and r10, 0xff");                           // isolate the runtime storage kind
+            ctx.emitter.instruction("cmp r10, 3");                              // kind 3 = a hash promoted by a skipping key
+            ctx.emitter.instruction(&format!("je {keep_hash}"));                // a promoted hash already holds tagged values
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type tag into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the indexed-array value_type tag
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&keep_hash);
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rax, rdi");                                // the promoted hash is the result payload
+    }
+    ctx.emitter.label(&done);
     abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
     Ok(())
 }

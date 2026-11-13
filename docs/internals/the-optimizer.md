@@ -212,50 +212,31 @@ Current pruning coverage includes:
   - `??`
   - short-circuit `&&` / `||`
 
-### A pass must not delete a body's last `yield`
+### Generator identity survives body optimization
 
-PHP decides generator-ness **syntactically, at declaration**. The checker records
-that on `FunctionSig::is_generator` from the source body, before any later pass
-runs. Named functions and methods pass that checker bit to lowering; closures
-rebuild it from the optimized body in `closure_signature_from_ast`. A declared `: Generator` return is not a
-substitute: `function factory(): Generator { return inner(); }` declares the type
-without containing `yield`, and it is an ordinary function (issue #1086). A body
-that held a `yield` is still a generator when no `yield` can run, so
-`function g(): iterable { while (false) { yield 1; } }` returns an empty
-`Generator`.
+PHP classifies generators syntactically, including unreachable `yield` and `yield from`
+expressions. Folding, propagation, pruning, and dead-code elimination rewrite callable bodies
+through `optimize::generator_bodies::rewrite_preserving_yield`. If a rewrite removes the final
+yield, the helper keeps the rewritten body and appends `if (false) { yield; }`. The marker
+preserves classification before type checking without restoring dead branches or undoing other
+optimizations. This applies to functions, methods, enum methods, traits, and closures.
 
-The bit does not replace the token in the body. Generator source and the body-scan
-fallback still look for a `yield`, and a pass that removes every one of them changes
-the body the coroutine is lowered from. When constant folding took the dead branch
-with the token, the function returned a boxed `null`, `valid()` answered `true`
-forever, and `foreach` never terminated (issues #673 and #1085). Pre-check target
-folding is earlier still: it runs before the checker records the bit, so deleting
-the last `yield` there would make the declaration look ordinary.
+The checker records `FunctionSig::is_generator` for named callables and
+`CheckResult::closure_generator_spans` for closure literals. EIR lowering consumes these source
+classifications even when an optimized body no longer contains a yield. A remaining yield may
+also establish generator identity when source metadata is unavailable. Declaring a `Generator`
+return type alone never makes a callable a generator: a factory can return another generator.
 
-`optimize::generator_bodies::rewrite_preserving_yield` keeps the original body when
-a rewrite would leave it with no `yield` at all. Only a body whose yields are all
-removed gives up that pass. The walk is paid by every body; the clone only by
-bodies that contain a yield.
+For example, both declarations below remain generators that immediately finish when resumed:
 
-The rewrites that delete a yield do it for different reasons, so each has its own call:
+```php
+function g() { if (false) { yield 1; } return; }
+function h() { return 7; yield; }
+```
 
-- **Pre-check target folding** (`fold_callable_body`) can fold a target-availability
-  condition such as `PHP_OS_FAMILY === "Windows"` and take a `yield` with that
-  branch, before `is_generator` exists.
-- **Pass 3, pruning** (which Pass 4 runs again over the same bodies) folds a
-  condition it can read as a literal — `while (false)`, `if (false)`. Named
-  functions and methods reach the guard through `prune_function_body()`, closures
-  through the `Closure` arm of `prune_expr()`.
-- **Pass 5, dead-code elimination** rewrites an `if` chain as a whole.
-  `if (false) { ... } elseif (false) { yield 1; }` leaves pruning with the guard
-  engaged and the body restored; DCE then collapses the chain and takes the token
-  with it. Named functions reach the guard in `dce_stmt_in_source_mode`, methods
-  through `dce_method()` and `dce_method_without_context()`.
-
-Checking for a yield after a pass is not enough: `prune_function_body()`'s own
-trailing-`return` guard did exactly that and was defeated the same way. A `yield`
-after `return` in the same block is kept by the same helper on the propagation
-boundary, which stops rewriting at the first terminator.
+Constant `match` and `?:` expressions can discard unreachable yield expressions while keeping
+this minimal marker. A generator's observable body effects still run only when it is resumed,
+and `getReturn()` reports its terminal return value.
 
 ## Pass 4: Control-flow normalization
 
@@ -290,55 +271,6 @@ The second generation of the pass (control-flow normalization v2) adds shell can
 - leading `if (g) { break; } [else { E }]` guards folded into the loop test: `while (c) { if (g) break; rest }` becomes `while (c && !g) { rest }` (`while (true)` / `for (;;)` become plain `while (!g)`), with the guard's `else` body leading the remaining body; the fold repeats while the body still starts with such a guard, and `for` loops with an update clause receive the same test without changing shape
 - an endless loop that ends in `if (g) { break; }` rotated into `do { body } while (!g)`, refused when the body carries a `continue` targeting that loop (it skips the guard today but would reach the rotated test); nested loops and `switch` bodies raise the `continue` level the check looks for
 - trailing terminators that transfer exactly where falling off the block would are dropped: a `continue` ending a loop body, the `break` ending the body that runs last in a `switch` (the `default` body when it is written last, else the last case; a `default` written between cases keeps its `break`, since EIR lowering places it at its source position), and a bare `return;` ending a function or method body. The walk follows only the tail path — the last statement, then recursively the last statement of each `if` / `ifdef` / `try` branch — and never enters loops, `switch` bodies, or `finally` blocks; a shell whose branch was emptied is re-pruned so it collapses like fresh input. By-reference-returning functions and generators keep their `return;`, and a `break`-only last case is kept when a `default` follows it
-
-### A generator must still look like one
-
-Constant propagation, pruning, and dead-code elimination rewrite callable bodies through
-`optimize::generator_bodies::rewrite_preserving_yield`, which keeps the original body when a
-rewrite would leave it with NO `yield` at all. Pruning's call sites are described under Pass 3;
-dead-code elimination uses the same helper because it runs later and can delete a yield the
-prune guard has just restored.
-
-Named functions and methods keep the checker's `FunctionSig::is_generator` bit from the source
-body. Lowering also scans their rewritten bodies and can classify them as generators when that
-bit is false or unavailable. Closures take a different path: `closure_signature_from_ast`
-rechecks the optimized body with `body_contains_yield` during EIR lowering. Preserving a `yield`
-therefore also preserves their generator classification.
-
-PHP decides whether a declaration is a **generator** syntactically, before any folding, and the
-type checker does the same — it types `g()` as `Generator` from the `yield` it can see. These
-passes run *after* checking, and both the propagation and pruning walks stop at a block's first
-terminator, so an unreachable `yield` was deleted. The two classifications then disagreed: the
-caller still drove a `Generator` while EIR lowering saw an ordinary function, and the driving
-`foreach` spun forever on a boxed null (issue #673).
-
-Both of PHP's ways to spell an immediately-complete generator hit it, and they are destroyed by
-different passes:
-
-```php
-function g() { if (false) { yield 1; } return; }   // constant-branch pruning
-function g() { return; yield; }                     // the stop-at-terminator rule
-```
-
-Keeping the un-rewritten body is the conservative answer: the retained `yield` is unreachable by
-construction, so the cost is one unexecuted statement in a body that is now lowered as the
-coroutine it is — and only a body whose every `yield` is dead pays it.
-
-It is also whole-body: one dead `yield` blocks propagation, pruning, and dead-code elimination
-in that callable. A surgical "keep one yield, apply the rest" would be tighter (issue #1325).
-
-Dead-code elimination is wrapped by the same helper. The checker bit preserves generator
-classification for named callables, and the body scan can add it; closure classification is
-derived from the optimized body. The coroutine body still has to contain a `yield`. DCE runs after
-pruning and collapses shapes the
-prune guard has just put back: a constant `elseif` chain is the case that still deleted the
-last `yield` with the pruning guard alone (issue #1085). Reverting that pass's whole body is
-the same trade propagation and pruning already make, and only a callable whose every `yield`
-is dead pays it.
-
-The invariant covers both paths: named callables retain their check-time classification with an
-additive body scan, closures are classified again from the optimized body, and a pass that
-rewrites either body must not delete its last `yield`.
 
 ### Example
 
@@ -603,9 +535,9 @@ the trial replaces the original function.
 The proof preserves the physical ABI of eligible by-value, nonvariadic `mixed`
 call parameters by rematerializing their integer arguments at the existing call
 boundary. It does not authorize a different closure call or change dispatch.
-Executable main, parameter slots, references, dynamic `eval`, suspension,
-exception handlers, escaping values and uncertain integer/type facts are
-excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
+Private executable main frames are eligible when runtime includes cannot expose
+their locals. Parameter slots, references, dynamic `eval`, suspension, exception
+handlers, escaping values and uncertain integer/type facts are excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
 
 The backend's [frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells)
 are a separate storage optimization and do not require this pass to run.
@@ -636,12 +568,19 @@ ordinary lowering again, including with IR optimization disabled, rather than
 installing speculative trial instructions in the executable function. Integer
 storage and buffer bounds remain independent proofs.
 
+The validator keeps dominator membership in dense bitsets throughout each check.
+Precomputed singleton flags retain the existing unreachable-continuation rules.
+This avoids materializing a hash set for every block during storage trials and
+debug pass checks, while preserving same-block ordering and dominance diagnostics.
+
 For a canonical counter that lacks a static overflow proof,
 `bounded_mixed_counter/versioning.rs` can retain the original loop and add a
 guarded integer copy. Both the seed and the invariant bound must have integer
 tags. Inclusive ascending bounds must differ from `PHP_INT_MAX`, and descending
 ones from `PHP_INT_MIN`. The copied counter uses private scalar storage, and each
-normal exit publishes its final integer into the original boxed slot. Float
+normal exit publishes its final integer into the original boxed slot. The entry
+test copies the seed payload beside its tag check, so a numeric seed and that exit
+box can use the backend's frame cells instead of heap boxes. Float
 bounds, overflowing seeds and unsafe inclusive bounds follow the original loop.
 Mutable bounds, escaping SSA values, references, dynamic scopes, handlers and
 suspension are excluded. Only innermost loops of at most 256 instructions qualify,
@@ -662,6 +601,240 @@ while its fast copy eliminates an otherwise unobserved numeric store. A suffix s
 float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
 before that suffix would change PHP's answer after overflow, so the pass fuses the
 complete expression at each cast and removes the now-unobserved boxed storage.
+
+## Loop-invariant array caches
+
+`src/ir_passes/array_sum_int_bounds.rs` proves a raw `array_sum()` receiver is a
+non-escaping PHP local that is neither written, unset nor observed by another in-loop
+load, then inserts `ArraySumProbeSmall` in the loop preheader. The probe returns the
+exact non-negative 32-bit sum or `PHP_INT_MIN`; the loop call becomes
+`ArraySumIntCached`, which returns the cached sum on success and keeps the exact guarded
+reducer (including warned float-to-int casts) on the sentinel path. Dynamic eval,
+generators and fibers keep the per-iteration call.
+
+`src/ir_passes/array_filter_count_hoist.rs` applies the same immutability proof to the pure
+fused `count(array_filter($ints, fn($x) => $x % C === 0))` kernel and moves the call to the
+preheader. `src/ir_passes/array_map_sum_cache.rs` inserts `ArrayMapSumProbeInt`, which
+performs the map and running sum with PHP's checked additions and returns `PHP_INT_MIN`
+when either step would promote. The loop call becomes `ArrayMapSumAddIntCached`, returning
+the cached integer or falling back to the raw kernel for warned float-to-int promotion.
+
+## EIR cast-observed integer sinks
+
+`src/ir_passes/array_sum_int_sink.rs` handles a builtin `array_sum()` over a
+statically packed `array<int>` when its boxed result is observed only through
+one `(int)` cast (plus ordinary release scaffolding). The pass retargets the
+call to `ArraySumInt`, changes the result to a raw `I64`/`int`/`NonHeap` value,
+replaces the cast result with the call result, and neutralizes the cast and
+releases. The raw reducer keeps the same NEON/SSE2 positive-int gate and scalar
+promotion sequence; a promoted sum terminates in PHP's warned float-to-int
+conversion. Any other observer — echo, a store, a second cast, a call, or a
+terminator — keeps the boxed `array_sum()` call.
+
+`src/ir_passes/array_sum_int_direct.rs` then removes the temporary-owner scaffold
+around an `ArraySumInt` call when its receiver is a stable, non-address-escaping PHP
+local. The source load becomes the reducer operand and the acquire, hidden-temporary
+store, call-operand owner push/pop and both temporary-slot releases are neutralized;
+the hidden slot is reclassified as a borrowed temp. A reference alias, an intervening
+source write or any foreign temporary-slot use keeps the original scaffold.
+
+`src/ir_passes/array_map_sum_add_int_sink.rs` applies the cast-observed rule to the
+frozen `array_sum(array_map(fn($x) => $x + C, $packedInts))` lowering. The boxed
+`ArrayMapSumAdd` call becomes `ArrayMapSumAddInt`, the cast result replaces the call
+result, and the cast/release scaffolding is retired. The raw kernel shares the
+existing vector/scalar body but skips the Mixed box; a promoted map or running sum
+terminates in PHP's warned float-to-int conversion.
+
+`src/ir_passes/abs_int_sink.rs` applies the same cast-observed rule to `abs()`.
+When the operand is a concrete int, bool, or null-capable tagged scalar and the
+boxed result is observed only through one `(int)` cast, the call becomes
+`AbsInt`: in-range values return the raw magnitude, while `INT_MIN` still
+promotes to the float `2^63` and terminates in PHP's warned float-to-int
+conversion. Floats and general Mixed operands keep the boxed `abs()` call.
+
+`src/ir_passes/sqrt_add_int_sink.rs` fuses `(int)sqrt($a + $b)` when both addends are
+concrete PHP ints, the boxed `ichecked_add` result is observed only by the `sqrt()`
+call, and the square root keeps the cast-only observation rule. The call becomes
+`SqrtAddInt` over the two raw addends, which reproduces PHP's checked-add overflow
+promotion, the NAN warning for a negative sum, and truncation toward zero. A float
+addend, another observer of the sum, or a non-cast observer of the root keeps the
+boxed graph.
+
+`src/ir_passes/sqrt_sum_loop.rs` recognizes the whole scalar reduction
+`for ($i = start; $i < bound; $i++) { $sum += sqrt($i + c); }` when the body is
+exactly the checked-add/sqrt/release/float-add/unit-latch scaffold. The preheader
+calls `__rt_sqrt_sum_range` once with the initial accumulator, start, bound and
+constant addend, then branches straight to the loop exit. The helper adds every
+square root in source order, so PHP's exact float result is preserved, and it
+reproduces the checked-add overflow promotion for `$i + c`. An observed counter,
+an accumulator used outside the exit block, a dynamic bound inside the loop, or
+any extra body effect keeps the original loop.
+
+`src/ir_passes/json_decode_count_sink.rs` folds `count(json_decode($s, true))` into
+`JsonDecodeCount` when the decoded Mixed graph has no other observer. The decode
+must have exactly two operands with an associative flag constant `true`; the decode
+result may be observed only by the count call, one temporary-slot store, one release
+and that slot's owner/unset scaffolding. The decode call itself is retargeted to
+`JsonDecodeCount` with the same source and assoc operands; every use of the count
+result is replaced by the decoder result, and the separate count call, decoded store,
+owner pushes/pops, unset and pre-store retirement are retired. Because the count runs
+at the decode call site, both stable locals and temporary sources are safe. When the
+source is a `Mixed` local cast to string, the sink also follows the cast/acquire chain
+back to the original load, so the helper's boxed-source loader borrows the string
+payload instead of materializing a per-call cast copy. The runtime
+validates the whole document, counts a top-level array by skipping values or a
+top-level object by deduplicating plain non-numeric keys, raises PHP's exact
+`count()` TypeError for scalar/invalid roots, and falls back to the full decoder for
+numeric roots and escaped/numeric keys.
+
+`src/ir_passes/json_decode_count_hoist.rs` then hoists that loop-invariant count
+out of a loop. The loop must execute at least once (a positive constant bound or
+an `$argc + positive constant` bound), the decode must be the first observable
+effect in the body, and the source must be a stable PHP local that is neither
+written nor address-escaping in the loop. The pass duplicates a body `load_local`
+in the preheader, runs one `JsonDecodeCount` probe there, replaces every use of
+the body call result with the probe result, and neutralizes the body call. The
+probe keeps the existing count lowering, so invalid JSON, scalar roots and
+numeric/escaped-key fallbacks retain their exact errors and JSON state. A
+zero-iteration loop, an earlier body effect, a nested loop, dynamic eval,
+generators, fibers and exception handlers reject the rewrite.
+
+`src/ir_passes/strpos_int_sink.rs` does the same for `strpos()`, `stripos()`,
+`strrpos()` and `strripos()`. The search keeps its original arguments, offsets,
+coercion and `ValueError` behavior; only the result representation changes from
+the boxed `int|false` cell to a raw `I64` `int`, where the not-found sentinel
+becomes `0` exactly like PHP's `(int)false`. A strict-false comparison, echo,
+store or any other observer keeps the boxed call.
+
+`src/ir_passes/strstr_len_sink.rs` folds `strlen(strstr(...))` into the
+allocation-free `StrstrLen` helper. The boxed result may be observed only by one
+`Cast` to `Str`, that cast by one `str_len`, plus release scaffolding. The
+helper runs the same search, returns the prefix or suffix byte count, and maps a
+missing needle to `strlen(false) == 0`. The pass also retires the haystack
+lifetime pin and hidden temporary slot that the boxed call needed, so the loop
+does not copy or refcount the subject per iteration. A `=== false` check or any
+string use keeps the boxed call.
+
+`src/ir_passes/json_encode_len_sink.rs` removes the Mixed boxing and string-cast
+copies from `strlen((string) json_encode($value))`. The encoder still runs with its
+original flags, depth, `json_last_error` state and throws; only the result becomes
+the encoder's raw string, which one `str_len` consumes immediately and one release
+frees (a scratch-backed result is a no-op). A JSON error without
+`JSON_PARTIAL_OUTPUT_ON_ERROR` becomes the empty string, exactly like
+`(string) false`, so the observed length stays zero. Any other observer keeps the
+boxed call.
+
+`src/ir_passes/strpos_int_sink.rs` also folds an `(int)ip2long(...)` observation into
+the raw integer parser; an invalid address becomes zero, matching PHP's `(int)false`.
+A value observation keeps the boxed `int|false` result.
+
+`src/ir_passes/inet_pton_len_sink.rs` folds `strlen(inet_pton(...))` into the
+length-only mode of `__rt_inet_pton`: the address is still validated and IPv4/IPv6
+return 4/16, while an invalid address returns zero for `strlen(false)`. A value
+observation, including an `=== false` check, keeps the boxed helper.
+
+`src/ir_passes/strip_tags_len_sink.rs` folds `strlen(strip_tags(...))` into the
+count mode of `__rt_strip_tags`. The scanner still evaluates the subject and the
+allow-list exactly once, including array/Mixed coercion and strict `TypeError`s,
+but returns the retained byte count instead of publishing and persisting the
+output. A one-argument call now selects `__rt_strip_tags_count`, which counts text
+and skips ordinary tags without reserving any output storage; comments, PHP/ASP
+tags, declarations and nested angle brackets tail-call the full scanner in count
+mode. Any non-length observer keeps the allocating helper.
+
+`src/ir_passes/count_chars_count_sink.rs` folds `count(count_chars($s, 1))` into
+`CountCharsDistinct`, which scans the subject into a 256-bit presence map and
+returns the distinct byte count without building the tally hash.
+
+`src/ir_passes/parse_url_count_sink.rs` folds `count(parse_url(...))` into
+`ParseUrlCount`. Only the full-array form is eligible: the runtime parser runs in a
+count-only mode that returns the component bit count, and an invalid URL returns
+status zero so the lowering raises PHP's count `TypeError`. Component-selector
+calls keep the ordinary parser because their result is a scalar or null.
+
+`src/ir_passes/base64_decode_len_sink.rs` folds `strlen(base64_decode(...))` into
+`Base64DecodedLen`. The helper counts accepted sextets, ignores whitespace and lax
+invalid bytes, and reproduces strict-mode padding rejection; a rejected decode answers
+zero like `strlen(false)`. The encoded-string lifetime pin and hidden slot are retired.
+
+`src/ir_passes/str_split_count_sink.rs` folds `count(str_split(...))` into the
+allocation-free `StrSplitCount` helper when the temporary array is observed only by
+`count()` and release scaffolding. The helper keeps the same source/chunk operands
+and `$length >= 1` guard, and returns `ceil(len / chunk_len)` (zero for an empty
+source). The source lifetime pin and hidden array slot are retired.
+
+`src/ir_passes/string_len_sink.rs` removes a hash/encoding/case conversion whose
+bytes are never observed. When a one-argument `md5()`, `base64_encode()`,
+`strtolower()` or `strtoupper()` call receives an already-materialized PHP string
+and its result feeds only one `str_len` (plus release scaffolding), the length
+observer becomes the constant `32` for md5, `4 * ceil(len / 3)` via
+`Base64EncodedLen` for base64, or the source `str_len` for ASCII case conversion
+(byte length is unchanged). The same fold covers `ucfirst()`, `lcfirst()`,
+`ucwords()` and the three-argument `strtr()`: their byte length is invariant, so
+the subject's `str_len` replaces the transform and the transform's argument pin
+and hidden slot are retired. `chunk_split()` uses `ChunkSplitLen`, which computes
+`subject_len + max(1, ceil(subject_len / chunk_len)) * separator_len` and reports
+the same allocation-overflow fatal as the allocating helper. `bin2hex()` folds to
+`Bin2HexLen`, which returns `2 * subject_len` with the same overflow guard.
+`count(str_split(...))` uses `StrSplitCount`, which returns
+`ceil(subject_len / chunk_len)` without allocating the chunk array. The source
+lifetime pin and hidden slot are retired for both sinks. The operand
+evaluation and its side effects remain; the binary `md5(..., true)` form,
+non-string operands, the replacement-pair `strtr()` form and any other observer
+keep the real call.
+
+For explicit UTF-8 ASCII mbstring calls, a length fold must also prove that
+argument validation cannot fail. `mb_convert_case()` requires a constant mode in
+`0..=7`; `mb_str_pad()` requires a nonempty ASCII pad and a constant pad type in
+`0..=2`. Other modes and dynamic mode expressions retain the producer, including
+its exceptions and source-order argument effects. Multibyte trim length folds use
+literal character membership, without byte-trim range syntax. Literal mbstring
+regex and MIME decode calls retain their runtime calls: regex results depend on
+`mb_regex_encoding()`, and MIME output bytes depend on `mb_internal_encoding()`.
+Literal arguments alone cannot prove those request settings. Regex length/count
+shortcuts additionally check live UTF-8/default options and limits, plus ASCII subjects, before
+using byte scans; other states retain the full regex bridge. Explicit UTF-8 iconv
+position and MIME length folds retain their encoding proof. MIME words with interior
+Base64 padding keep the runtime decoder, whose lenient decoding differs from
+independent padded-quantum decoding. Progressive regex sessions and implicit iconv
+encoding getters also retain runtime calls: a function-local absence of setters
+cannot prove caller state or make session mutations unobservable to its caller.
+Likewise, an unobserved `mb_convert_variables()` array does not hide its updates
+to the request's illegal-character counter.
+
+The `count(explode($literal_separator, $subject))` fusion accepts only proven scalar
+string coercions. Other subjects keep the original `explode()` path and diagnostic;
+the decision happens before lowering the subject so fallback evaluates it once.
+
+## Borrowed string reads
+
+`src/ir_lower/expr/borrowed_string_args.rs` admits read-only string subjects for
+`substr()`, `substr_count()`, `strpos()`, `stripos()`, `strrpos()`, `strripos()`,
+`str_contains()`, `str_starts_with()` and `str_ends_with()` when every argument is
+an exact scalar and cannot run user code. Those calls borrow the subject directly
+instead of acquiring and releasing a per-call owner, which is why the reverse and
+case-insensitive searches now run at the same speed as `strpos()` and no longer
+carry a hidden string copy into the loop. Property receivers and named arguments
+use the same planner and remain eligible; a spread, default expression or
+user-code argument falls back to the ordinary owner ledger.
+
+## Performance regression guards
+
+The optimized string paths are pinned by deterministic IR assertions rather than
+wall-clock thresholds: `tests/codegen/optimizer/strpos_int_sink.rs` checks the raw
+integer variants for all four searches, `strstr_len_sink.rs` checks the length helper
+and the absence of the haystack owner pin, and `string_len_sink.rs` checks the
+length-only folds for `strtr`, `chunk_split`, the case transforms and `ucwords`;
+`standard_trim_len_sink.rs` covers literal `ltrim`/`rtrim`/`trim` subjects and
+masks without a `..` range.
+These tests run in the normal suite, so a lost sink or a reintroduced boxing
+temporary fails CI even when functional output stays correct.
+
+`tests/codegen/perf_regressions.rs` adds opt-in wall-clock ceilings for the same
+paths. It is ignored by default because runner speed varies; run it explicitly with
+`cargo test --test codegen_tests perf_regressions -- --ignored` (use a release
+build locally for the closest numbers). The ceilings are deliberately loose and
+catch order-of-magnitude regressions rather than small timing noise.
 
 ## EIR buffer resolution hoisting
 
@@ -1213,10 +1386,11 @@ acquire/release cancellation, string-literal concat folding, redundant
 `move`/`borrow` cleanup), then scalar local promotion into SSA values with block
 parameters at joins and loop back edges, then immutable concrete numeric-local
 classification and integer-sink specialization for checked add/subtract/multiply.
-Immutable-load classification also covers concrete float locals. It refines integer
-loads only in functions with checked integer arithmetic and float loads only in
-functions with float arithmetic, so identical generic bodies stay identical for
-shape merging. It accepts an
+Immutable-load classification also covers concrete float and string locals. It
+refines integer loads only in functions with checked integer arithmetic, float
+loads only in functions with float arithmetic, and string loads only in functions
+with a whitelisted explicit-UTF-8 mbstring call, so identical generic bodies stay
+identical for shape merging. It accepts an
 unwritten by-value parameter or one entry-block store that dominates every load,
 and rejects by-reference aliases, dynamic `eval`, other storage representations,
 and any unrecognized slot operation. Those passes make proven-stable integer and
@@ -1236,8 +1410,22 @@ is shared with canonical loop optimization, which exposes invariant header value
 coalesces counters with identical overflow semantics, and simplifies integer tests.
 LICM moves invariant bounds and step materializations from blocks that dominate
 every loop latch. Conditional constants stay near varying uses unless they
-accompany an invariant computation. Branch cleanup composes SSA forwarding
-arguments and merges single-predecessor loop update blocks. See
+accompany an invariant computation. LICM also moves a reviewed set of
+explicit-UTF-8 mbstring reads — `mb_strlen`, `mb_strwidth`,
+`mb_check_encoding`, `mb_substr_count`, `mb_ord`, the position searches, and the
+allocation-free length/count variants produced by the length sinks — when their
+arguments make them total and deterministic. It requires a literal `UTF-8`
+encoding, a literal zero offset where the function validates a range, a
+non-empty literal needle or `mb_ord` subject where an empty argument would
+throw, and a loop with no other global writer except the concatenation scratch
+reset. An owned `mb_substr`/`mb_strcut` result observed only by `strlen` moves
+as one group with its length observer and single release, so the loop body reads
+only the scalar length and no per-iteration allocation survives. An extra
+observer keeps the producer and release in the loop. A numeric-entity length call
+whose map operand is the literal full decimal packed array
+`[0x80, 0x10FFFF, 0, 0x1FFFFF]` moves with the subject and map loads; the proof
+follows the load, store, and four array-push chain and rejects any other map. Branch cleanup composes SSA
+forwarding arguments and merges single-predecessor loop update blocks. See
 [Canonical Loop Optimization](the-ir.md#canonical-loop-optimization).
 
 CFG states store only nonredundant path facts. Immutable scalar literals are read
@@ -1299,6 +1487,17 @@ operation, the final integer cast, and removable `Release` instructions into
 `ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the
 first signed overflow promotes the exact accumulator and operand, finishes the
 remaining suffix in double, and then uses the existing PHP float-to-int conversion.
+
+Before that range proof, `RawPromotableLoop` copies a straight-line loop whose
+accumulators and counters are still mixed only because add, subtract, or multiply may
+overflow. The copy keeps those locals in `I64` until a signed overflow, then keeps each
+promoted local as a raw float for the rest of the loop. A float is boxed only at the
+exit. The original mixed loop remains for a seed that is not an integer.
+
+`LazyBoxedAccumulator` then handles accumulators in loops of any other shape. It keeps a
+raw integer companion and a tag next to the mixed local, runs updates and compares on the
+companion while every operand is an int, and boxes the value only before something else
+reads the local.
 Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's
@@ -1316,7 +1515,9 @@ concat scratch-state optimization (`src/ir_passes/concat_reset.rs`), which
 removes or coalesces statement-boundary `concat_reset` operations when CFG
 dataflow proves `_concat_off` is already at the frame base or post-dominated by
 another reset before any scratch allocation, call, output, exception, or `eval`
-path can observe it. These
+path can observe it. A post-fixed-point finalizer also inserts a marked one-time
+reset in a loop preheader when that lets the clean-state analysis drop a
+per-iteration body reset; the mark makes the insertion idempotent. These
 are rewrites the AST optimizer cannot express well because they need value
 identity, basic blocks, liveness, or dominance; see
 [Optimization Passes](the-ir.md#optimization-passes).

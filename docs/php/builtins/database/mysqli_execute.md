@@ -1,27 +1,27 @@
 ---
 title: "mysqli_execute()"
 description: "Alias of mysqli_stmt_execute()."
-sidebar:
-  order: 116
 ---
 
 ## mysqli_execute()
 
 ```php
-function mysqli_execute(mixed $statement): bool
+function mysqli_execute(mixed $statement, ?array $params = null): bool
 ```
 
 Alias of mysqli_stmt_execute().
 
 **Parameters**:
 - `$statement` (`mixed`)
+- `$params` (`?array`), default `null`, optional
 
 **Returns**: `bool`
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -34,14 +34,19 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if matches!(op, BinOp::And | BinOp::Or) {
+            return self.infer_short_circuit_type(expr, &mut env.clone(), false);
+        }
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
-        if let Some(plan) = crate::types::object_operators::binary_plan(op, &lt, &rt) {
+        if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(op, &lt, &rt, &self.classes) {
             return Ok(plan.result_type(op));
         }
         if matches!(op, BinOp::Div | BinOp::Mod)
             && (matches!(lt.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
                 || matches!(rt.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
+            && supports_dynamic_arithmetic_operand(self, &lt, op)
+            && supports_dynamic_arithmetic_operand(self, &rt, op)
             && self.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some()))
         {
             return Ok(PhpType::Mixed);
@@ -484,6 +489,29 @@ impl Checker {
         env: &TypeEnv,
         param_hints: &[PhpType],
     ) -> Result<PhpType, CompileError> {
+        let mut capture_storage = Vec::new();
+        for capture in captures {
+            let read = env.get(capture).map(|ty| self.binding_read_type(capture, ty, env));
+            let projected = !capture_refs.contains(capture) && read.as_ref()
+                .is_some_and(|ty| self.record_local_value_read(capture, expr.span, ty, env));
+            let variable = Expr::new(ExprKind::Variable(capture.clone()), expr.span);
+            let physical = self.guarded_local_storage_type(&variable, env).cloned();
+            let boxed_snapshot = !capture_refs.contains(capture) && !projected && read == Some(PhpType::Int)
+                && physical.as_ref().is_some_and(|ty| ty.codegen_repr() == PhpType::TaggedScalar);
+            if boxed_snapshot { self.record_local_value_read(capture, expr.span, &PhpType::Mixed, env); }
+            let captured = if capture_refs.contains(capture) { physical }
+                else if boxed_snapshot { Some(PhpType::Mixed) } else { read };
+            if let Some(captured) = captured {
+                if env.get(capture) != Some(&captured) { capture_storage.push((capture.clone(), captured)); }
+            }
+        }
+        // Reference captures keep their cell ABI; uncertain value snapshots use checked boxed values.
+        let capture_env = (!capture_storage.is_empty()).then(|| {
+            let mut captured = env.clone();
+            captured.extend(capture_storage);
+            captured
+        });
+        let env = capture_env.as_ref().unwrap_or(env);
         let mut closure_sig = self.prepare_closure_signature_context_with_param_hints(
             params,
             variadic,
@@ -513,7 +541,9 @@ impl Checker {
         // on. Recorded before entering the closure scope, which saves and restores the
         // enclosing set.
         for capture in capture_refs {
+            self.pending_ref_capture_invalidations.insert(capture.clone());
             self.ref_aliased_locals.insert(capture.clone());
+            self.by_ref_captured_locals.insert(capture.clone());
             self.non_builtin_ref_aliased_locals.insert(capture.clone());
             if expr.span.identifies_a_node() {
                 self.array_push_capture_sites.entry(capture.clone())
@@ -543,6 +573,7 @@ impl Checker {
             expr.span,
         );
         self.clear_loop_storage_scope(&loop_storage_scope);
+        self.begin_promotable_walk(&loop_storage_scope);
         self.current_loop_storage_scope = loop_storage_scope;
         // The storage this closure's frame ALREADY holds on entry: its by-VALUE captures, each
         // with the type it arrives with, read from the ENCLOSING environment. Deliberately not
@@ -556,7 +587,9 @@ impl Checker {
             .chain(params.iter().map(|(name, _, _, _)| name))
             .filter_map(|name| env.get(name).map(|ty| (name.clone(), ty.clone())))
             .collect();
-        let body_result = self.with_local_storage_context(
+        let return_facts = crate::optimize::ReturnBoundaryFacts::new(return_type.as_ref(),
+            params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
+        let body_result = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
             closure_ref_params,
             closure_param_names,
             pre_bound_own_storage,
@@ -566,12 +599,16 @@ impl Checker {
                     .filter(|(_, annotation, _, _)| annotation.is_none())
                     .map(|(name, _, _, _)| name.clone()));
                 checker.ref_assign_aliased_locals.extend(ref_assign_captures);
+                checker.seed_parameter_value_proofs(&closure_sig.env);
                 for stmt in body {
                     checker.check_stmt(stmt, &mut closure_sig.env)?;
                 }
                 Ok(())
             },
-        );
+        ));
+        // The enclosing body's walk repeats when this closure denies a view.
+        let closure_scope = self.current_loop_storage_scope.clone();
+        self.end_promotable_walk(&closure_scope);
         self.current_loop_storage_scope = previous_loop_storage_scope;
         self.current_by_ref_return = prev_by_ref_return;
         self.closure_depth -= 1;
@@ -601,7 +638,7 @@ impl Checker {
                 // A boxed array read can carry any runtime callable shape.
                 // The callee is only known at runtime, but PHP rejects
                 // unpacking after named arguments while compiling the call.
-                self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
+                self.require_valid_unresolved_call_argument_order(args, &format!("callable ${}", var))?;
                 self.record_unresolved_callee_argument_aliases(args);
                 for arg in args {
                     self.infer_descriptor_call_arg_type(arg, env)?;
@@ -707,7 +744,7 @@ impl Checker {
         }
         // No signature is known for this callable, so the planner never runs;
         // still apply PHP's syntactic unpack-after-named rule.
-        self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
+        self.require_valid_unresolved_call_argument_order(args, &format!("callable ${}", var))?;
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
@@ -800,7 +837,7 @@ impl Checker {
                 ExprKind::Variable(var_name) => format!("callable ${}", var_name),
                 _ => "callable expression".to_string(),
             };
-            self.require_no_spread_after_named_args(args, &callee_desc)?;
+            self.require_valid_unresolved_call_argument_order(args, &callee_desc)?;
             self.record_unresolved_callee_argument_aliases(args);
             for arg in args {
                 self.infer_descriptor_call_arg_type(arg, env)?;
@@ -979,6 +1016,7 @@ impl Checker {
         }
         // Everything below this point failed to produce a signature: the return type may still be
         // recoverable from a recorded closure shape, but the PARAMETER binding modes are not.
+        self.require_valid_unresolved_call_argument_order(args, "callable expression")?;
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
@@ -1015,6 +1053,7 @@ impl Checker {
         args: &[Expr],
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        self.require_valid_unresolved_call_argument_order(args, "callable array")?;
         self.record_unresolved_callee_argument_aliases(args);
         for arg in args {
             self.infer_descriptor_call_arg_type(arg, env)?;
@@ -1658,6 +1697,18 @@ fn is_arithmetic_operand_type(checker: &Checker, ty: &PhpType) -> bool {
     is_numeric_operand_type(checker, ty) || matches!(ty, PhpType::Str)
 }
 
+/// Keeps boxed division/modulo dispatch for numeric scalars and internal operator objects.
+fn supports_dynamic_arithmetic_operand(checker: &Checker, ty: &PhpType, op: &BinOp) -> bool {
+    match ty {
+        PhpType::Union(members) => members.iter().all(|member| supports_dynamic_arithmetic_operand(checker, member, op)),
+        PhpType::Void => true,
+        PhpType::Object(_) => crate::types::object_operators::binary_plan_with_classes(
+            op, ty, &PhpType::Mixed, &checker.classes,
+        ).is_some(),
+        _ => is_arithmetic_operand_type(checker, ty),
+    }
+}
+
 /// PHP's `is_numeric_string` classification of a string literal used in arithmetic.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum NumericStringClass {
@@ -1714,6 +1765,9 @@ fn is_integer_operand_type(checker: &Checker, ty: &PhpType) -> bool {
         // here rather than admitted there, where it would widen ordering too.
         || ty.is_int_float_union()
         || checker.is_union_with_mixed_int_dispatch(ty)
+        || crate::types::object_operators::supports_cast_with_classes(ty,
+            elephc_builtin_contract::ObjectCast::Int, &checker.classes)
+        || matches!(ty, PhpType::Union(members) if members.iter().all(|member| is_integer_operand_type(checker, member)))
 }
 
 /// Returns `true` if `ty` uses mixed numeric dispatch — i.e., the result type

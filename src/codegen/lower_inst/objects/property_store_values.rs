@@ -21,6 +21,15 @@ pub(super) fn load_property_store_value_to_result(
 ) -> Result<()> {
     let slot_ty = &slot.php_type;
     let value_ty = ctx.value_php_type(value)?;
+    if slot.is_declared {
+        let message = if let Some(prefix) = &slot.abstract_setter_type_error_prefix {
+            format!("{prefix}null given")
+        } else {
+            format!("Cannot assign null to property {}::${} of type {}", slot.class_name, slot.property,
+                crate::types::diagnostic_names::php_type_name(slot_ty))
+        };
+        property_values::emit_nonnull_object_store_guard(ctx, value, slot_ty, &message)?;
+    }
     // A `false`-declared slot accepts ONLY the exact false bool: route a boxed mixed/union
     // source through the false-slot guard instead of the bool truthiness cast, which would
     // coerce `0`, `""` and `[]` into `false` where php throws. The nullable `?false` shape is
@@ -205,7 +214,9 @@ const ITERABLE_MIXED_TAGS: [u8; 3] = [4, 5, 6];
 /// The weak-mode guard already refused every tag this slot cannot hold, so the fallback only
 /// normalizes to a null pointer rather than republishing an unrelated payload as a heap pointer,
 /// which both `__rt_incref` and the slot's later `__rt_decref_any` already ignore.
-fn emit_mixed_iterable_for_property_store(ctx: &mut FunctionContext<'_>) {
+pub(in crate::codegen::lower_inst) fn emit_mixed_iterable_for_property_store(
+    ctx: &mut FunctionContext<'_>,
+) {
     let payload_label = ctx.next_label("prop_store_mixed_iterable_payload");
     let done = ctx.next_label("prop_store_mixed_iterable_done");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");

@@ -1,8 +1,6 @@
 ---
 title: "mysqli_real_connect() - internals"
 description: "Compiler internals for mysqli_real_connect(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 151
 ---
 
 ## `mysqli_real_connect()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:107](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L107) (`mysqli_real_connect`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_real_connect`)
 - **Function symbol**: `mysqli_real_connect()`
 
 

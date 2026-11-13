@@ -1,8 +1,6 @@
 ---
 title: "mb_convert_case()"
 description: "Converts case using one of the eight Unicode case modes."
-sidebar:
-  order: 906
 ---
 
 ## mb_convert_case()
@@ -22,8 +20,9 @@ Converts case using one of the eight Unicode case modes.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_convert_case.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_convert_case.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

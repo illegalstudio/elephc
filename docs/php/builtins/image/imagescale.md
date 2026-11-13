@@ -1,8 +1,6 @@
 ---
 title: "imagescale()"
 description: "Returns a copy of an image scaled to a new size."
-sidebar:
-  order: 536
 ---
 
 ## imagescale()
@@ -23,8 +21,9 @@ Returns a copy of an image scaled to a new size.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

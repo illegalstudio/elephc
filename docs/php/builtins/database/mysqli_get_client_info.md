@@ -1,27 +1,26 @@
 ---
 title: "mysqli_get_client_info()"
 description: "Returns the client library version as a string."
-sidebar:
-  order: 133
 ---
 
 ## mysqli_get_client_info()
 
 ```php
-function mysqli_get_client_info(mixed $mysql): string
+function mysqli_get_client_info(mixed $mysql = null): string
 ```
 
 Returns the client library version as a string.
 
 **Parameters**:
-- `$mysql` (`mixed`)
+- `$mysql` (`mixed`), default `null`, optional
 
 **Returns**: `string`
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

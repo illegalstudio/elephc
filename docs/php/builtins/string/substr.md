@@ -1,8 +1,6 @@
 ---
 title: "substr()"
 description: "Returns a portion of a string specified by the offset and length."
-sidebar:
-  order: 1011
 ---
 
 ## substr()
@@ -22,8 +20,9 @@ Returns a portion of a string specified by the offset and length.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/substr.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/substr.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

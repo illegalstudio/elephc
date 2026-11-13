@@ -10,7 +10,8 @@
 //! Key details:
 //! - The generated eval bridge writes back through the original eval `Mixed`
 //!   cells after native AOT methods mutate by-reference argument storage.
-//! - Boxed `Mixed`/union references use a pointer slot; supported typed scalar,
+//! - Persistent `Mixed` references stay live in the pointer slot and need no payload copyback.
+//! - Legacy boxed values use copyback; supported typed scalar,
 //!   string, array, iterable, and object references use raw ABI storage that is
 //!   boxed again during writeback.
 
@@ -163,7 +164,7 @@ pub(crate) fn emit_x86_64_write_back_ref_args(
     }
 }
 
-/// Writes one ARM64 boxed `Mixed` ref slot back when native code replaced the cell pointer.
+/// Retires an ARM64 live-reference lease, or copies legacy replacements into the original value.
 fn emit_aarch64_write_back_mixed_ref_arg(
     emitter: &mut Emitter,
     slot: &EvalRefArgSlot,
@@ -172,6 +173,9 @@ fn emit_aarch64_write_back_mixed_ref_arg(
 ) {
     let done_label = format!("{}_ref_{}_done", label_prefix, slot.param_index);
     let unchanged_label = format!("{}_ref_{}_unchanged", label_prefix, slot.param_index);
+    abi::emit_load_temporary_stack_slot(emitter, "x0", stack_offset + slot.original_offset);
+    abi::emit_call_label(emitter, "__rt_reference_is");
+    abi::emit_branch_if_int_result_nonzero(emitter, &unchanged_label);
     abi::emit_load_temporary_stack_slot(emitter, "x9", stack_offset + slot.original_offset);
     abi::emit_load_temporary_stack_slot(emitter, "x10", stack_offset + slot.raw_offset);
     emitter.instruction("cmp x9, x10");                                         // skip writeback when the native call kept the same Mixed cell
@@ -184,7 +188,7 @@ fn emit_aarch64_write_back_mixed_ref_arg(
     emitter.label(&done_label);
 }
 
-/// Writes one x86_64 boxed `Mixed` ref slot back when native code replaced the cell pointer.
+/// Retires an x86_64 live-reference lease, or copies legacy replacements into the original value.
 fn emit_x86_64_write_back_mixed_ref_arg(
     emitter: &mut Emitter,
     slot: &EvalRefArgSlot,
@@ -193,6 +197,9 @@ fn emit_x86_64_write_back_mixed_ref_arg(
 ) {
     let done_label = format!("{}_ref_{}_done_x", label_prefix, slot.param_index);
     let unchanged_label = format!("{}_ref_{}_unchanged_x", label_prefix, slot.param_index);
+    abi::emit_load_temporary_stack_slot(emitter, "rax", stack_offset + slot.original_offset);
+    abi::emit_call_label(emitter, "__rt_reference_is");
+    abi::emit_branch_if_int_result_nonzero(emitter, &unchanged_label);
     abi::emit_load_temporary_stack_slot(emitter, "r10", stack_offset + slot.original_offset);
     abi::emit_load_temporary_stack_slot(emitter, "r11", stack_offset + slot.raw_offset);
     emitter.instruction("cmp r10, r11");                                        // skip writeback when the native call kept the same Mixed cell
@@ -757,6 +764,10 @@ mod tests {
                 Arch::X86_64 => emit_x86_64_write_back_ref_args(&mut emitter, &slots, 0, "refs"),
             }
             let writeback = emitter.output();
+            let reference_probe = writeback.find("__rt_reference_is").unwrap();
+            let legacy_copyback = writeback.find("refs_ref_0_release_string").unwrap();
+            assert!(reference_probe < legacy_copyback,
+                "{name}: live references must bypass legacy payload replacement");
             let unchanged = writeback.find("refs_ref_0_unchanged").unwrap();
             assert!(writeback[unchanged..].contains("__rt_decref_mixed"), "{name}");
         }

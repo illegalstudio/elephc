@@ -14,6 +14,100 @@ Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
 user assembly for the selected target.
 
+Dynamic operators with boxed operands share a synthetic EIR function per operator
+when internal object handlers are available. Scalar counterparts use the ordinary
+boxing conversion; source expressions are evaluated before the call and their
+owners remain rooted until it returns. Each helper lowers the existing native
+handler precedence and scalar fallback once. This prevents an opaque eval catalog
+from copying the same operator graph into every prelude function. Typed scalar
+operations and statically selected object handlers retain their direct paths.
+The helpers use compiler-only names and are excluded from PHP function and
+callable inventories. They pass through the same normalization, effect analysis,
+optimization and target-aware codegen as other EIR functions.
+Increment and decrement have separate helpers so PHP's string, boolean and null
+update rules remain distinct from arithmetic. Post-increment and post-decrement
+keep selecting the original value in the caller.
+
+Callable wrapper lowering reuses private module snapshots within one codegen run.
+Wrapper construction extends their literal pools while preserving the source
+functions and class metadata. An active snapshot stays outside the reusable pool
+until its wrapper has finished emitting, so nested wrappers have independent data
+IDs. This avoids cloning all source EIR bodies for every builtin wrapper.
+
+Runtime-selected native methods that need distinct argument plans select their
+concrete class in EIR before evaluating the arguments. This includes variadic
+collectors, surplus user-method arguments and missing methods handled by `__call`.
+Magic hooks receive the original method name and a boxed PHP array built through
+the shared argument-container lowering, preserving named and unpacked keys.
+Their array ABI stays generic even when a known call supplies homogeneous values.
+Receiver, argument-container and result owners participate in ordinary EIR
+unwind cleanup. A possible magic fallback also prevents inferring a common native
+return representation from explicitly declared methods alone.
+
+An explicitly declared indexed-array builder keeps its element contract when
+an append receives a physically boxed value with an exact checker proof. The
+checker records the declaration, current receiver element, and stable RHS variable
+type agreeing at that source point; conflicting visits disable the proof.
+The RHS must be definitely bound and free of global, static, reference, or eval
+aliasing that could invalidate its checked type.
+Lowering extracts proven scalar or callable values before
+array representation discovery considers widening the builder. Scalar casts
+produce the integer, float, boolean, or independent string result; callable
+unboxing retains its descriptor. Temporary source owners retire after extraction,
+while borrowed loop-local cells retain their existing lifetime.
+
+This matters for scalar hash `foreach` bindings, which remain boxed `Mixed` so
+the loop variable preserves each entry's runtime tag. Builtins such as
+`array_flip()` can produce integer values from keys that were statically typed
+as strings before a reindexing sort. The append converts only at the declared
+`array<T>` sink, keeping the builder's storage suitable for typed property stores
+and returns. Inferred builders and unknown, nullable, or differently typed append
+values keep their existing widening behavior.
+
+Literal scalar `settype()` updates on boxed locals use the ordinary EIR cast and
+assignment path, including hash `foreach` bindings. That path publishes the write
+to storage discovery and ownership cleanup, so loop backedges retain the actual
+runtime tag and replacing a string retires its previous owner. It also preserves
+boxed storage after a conversion narrows the logical value type, so consecutive
+`settype()` calls use the same cleanup path. The assignment path preserves
+the boxed value contract for static and reference-bound cells before conversion,
+and returns `true` after a
+successful conversion.
+
+Switch dispatch uses integer comparisons only for PHP integer subjects and labels.
+Other PHP values use loose equality, preserving boolean conversion, array comparison
+rules and object-to-number warnings. Float comparisons with null test numeric zero
+without the NAN warning emitted by an explicit boolean conversion.
+Owned operands and temporary comparison boxes publish exception cleanup records
+until normal retirement, including when a warning handler throws into a local catch.
+The checker records a switch comparison's exception state after evaluating its label
+and before entering an arm, so catch bindings and pre-arm values join correctly.
+Recursive array/property comparisons use the same ABI guard builder for their owned
+cells. A scalar fallback publishes each source owner once. Simple variable switch
+subjects reload their storage between labels so callbacks can update later matches.
+Dynamic variable subjects have no unused initial load. Each reload retires its own
+converted value, with provisional local guards protecting owned unboxed views if
+a comparison callback throws; finalization removes cleanup for borrowed views.
+The same local-view guards protect direct equality operands and evaluated case labels.
+Pending operands publish those guards before later expressions that can unwind, then
+detach them before the consuming comparison takes over their cleanup.
+Boxed reference operands also pass their stable storage address to
+`__rt_mixed_loose_eq_refs`. An object conversion warning selects its wording from
+the original numeric tag, then reloads the current box after the handler returns.
+Assignments through the reference can retire the original box, so retaining or
+casting that saved box would preserve a stale value or read freed storage.
+The converted object becomes a borrowed stack cell containing integer or float one;
+the complete equality table then compares it with the updated operand. This also
+handles new strings, arrays, objects and Closure descriptors, including a second
+conversion warning or throw. Scalar conversion keeps the structural recursion depth.
+Closure descriptors use the shared warning helper's fixed class spelling in both
+the generic table and specialized Mixed/number comparisons. Implicit string and
+array callables use `CallableValueNew` instead of `FirstClassCallableNew`, retaining
+the same invocation descriptor and captures without PHP object identity. Numeric
+comparison checks the descriptor's object handle before selecting Closure conversion;
+invocation target kinds alone do not distinguish these PHP value forms. Each global runtime
+entry explicitly branches to its shared body so linker section collection retains it.
+
 ## Pipeline Position
 
 Internal value classes can declare operator adapters in their shared
@@ -71,6 +165,7 @@ and link the resulting user object against the cached runtime object.
 | `src/codegen/frame.rs` | Stack-frame sizing, local slots, register allocation integration |
 | `src/codegen/stack_numeric.rs` | Escape and lifetime proofs for frame-local checked numeric results |
 | `src/codegen/value_placement.rs` | Stack/register placement for EIR values |
+| `src/codegen/callable_signatures.rs` | Shared EIR signature reconstruction for callable descriptors, native registration, and Fiber wrappers |
 | `src/codegen/runtime_callable_invoker.rs` | Generated uniform `(descriptor, argument array) -> Mixed` invoker trampolines |
 | `src/codegen_support/abi/` | Target ABI helpers for registers, calls, stack slots, symbols, and frame mechanics |
 | `src/codegen_support/arrays.rs` | Shared array metadata helpers used by EIR and runtime support |
@@ -85,6 +180,13 @@ and link the resulting user object against the cached runtime object.
 
 The active backend must remain target-aware. New lowering paths should use the
 ABI helpers instead of hardcoding AArch64 or x86_64 register and stack details.
+
+Callable signature reconstruction keeps stored declaration metadata when hidden EIR parameters
+change the parameter count. Declared parameter names map defaults, type expressions, attributes,
+and declaration flags onto the rebuilt signature; hidden captures receive no source metadata.
+Generator classification, declared return type, deprecation, and reference returns remain those
+of the declaration. Without a stored signature, EIR generator and reference-return flags provide
+the fallback; the coroutine's internal `Mixed` return storage is published as `Generator`.
 
 ## Scalar Constants and Immediate Operands
 
@@ -126,7 +228,9 @@ checked arithmetic follows its runtime call ABI unless its entire lifetime is
 proven eligible for a frame-local cell.
 
 Loop-carried numeric locals must preserve an overflow-promoted float on later
-iterations. Lowering discovers integer reads of a final Mixed slot inside a
+iterations. `raw_promotable_loop` keeps eligible accumulators and counters in raw
+integers, then continues a promoted local as a raw float so later iterations observe
+that float. Lowering discovers integer reads of a final Mixed slot inside a
 cyclic region, then replays the body with Mixed storage from its first store.
 Constraints belong to individual storage bindings, so a name reused after
 `unset` retains its new representation. This decision is separate from the
@@ -137,7 +241,9 @@ add/subtract/multiply or numeric increment can reuse a 24-byte frame cell: two i
 checked integer arithmetic, while an existing float remains a float. Both input
 payloads are read before the output cell changes. Proven numeric relational
 comparisons avoid temporary boxes, compare integer pairs exactly and reject
-unordered NaN predicates. Unknown tags, calls, references
+unordered NaN predicates. Proven numeric `===` and `!==` compare tags inline:
+an integer is never identical to a float, integers compare exactly and floats
+use IEEE equality. Unknown tags, calls, references
 and escaping pointers keep ordinary heap-backed operations.
 
 `examples/constant-rematerialization/main.php` demonstrates bounded sample
@@ -148,7 +254,8 @@ accumulation with immediate masks, scaling, increments, and a fixed loop bound.
 Integer destinations expose checked arithmetic conversion in EIR before assigning
 call-operand owners. Direct, method, static and statically known callable arguments,
 including named and static spread arguments, can therefore use the existing checked
-integer sinks. Explicit `int` local declarations apply the same conversion to their
+integer sinks. Exact `float` parameters expose the same tree's float cast, so an
+in-range integer converts once and an overflowed tree passes its promoted double. Explicit `int` local declarations apply the same conversion to their
 initializer and later arithmetic assignments. Inferred locals retain PHP's dynamic
 integer or float result. Only add/subtract/multiply trees with concrete integer
 leaves take this path; unknown Mixed sources keep the ordinary boundary conversion.
@@ -167,14 +274,24 @@ cells described below, without allocating heap cells.
 add/subtract/multiply results from checked integer or proven numeric Mixed
 operations, plus numeric increments or decrements, whose complete pointer lifetime
 remains in the current activation. Numeric observations and one ordinary local
-are permitted, including a declared integer return check whose result copies the
-payload and preserves its TypeError guard. A checked result may also feed another
+are permitted, including a declared integer return check or a declared `int`
+property narrowing (`PropertyBoundaryCheckedToInt`), whose result copies the payload
+and preserves its TypeError guard. That narrowing is why `$this->count++` on a
+declared `int` property stores a raw word without a heap cell. A checked result may also feed another
 closed numeric add/subtract/multiply or increment; every input must be proven
 integer or float, including all local writers. A float tag remains floating point
 on subsequent operations. A same-block ordered comparison may consume the result
 directly when both operands have proven numeric origins, as in the trial-division
-condition `$divisor * $divisor <= $candidate`. The product retains overflow-to-float
+condition `$divisor * $divisor <= $candidate`. Strict identity against a proven
+numeric partner is admitted on the same terms, including reads of the owning local
+as in `$value = $i * 4; if ($value !== 20)`. The product retains overflow-to-float
 semantics; this does not require or imply an integer range proof for either counter.
+An array or hash key is also a numeric observation: `$arr[$j + 1]` and
+`$arr[$j]` with an `int|float` counter `$j` read the cell's tag and payload into
+the key registers inline (a float key keeps PHP's truncation and deprecation),
+and a key never counts as a by-reference escape of its slot
+(`ir_passes::by_ref_alias`). An operand temporary that pins such a key may be
+retired by `unset_local`, which only zeroes the slot.
 Integer casts of selected frame cells or reads of proven numeric locals inspect
 the runtime tag and load an integer payload directly. A float keeps the existing
 boxed conversion on a cold path, including PHP's out-of-range integer value.
@@ -183,9 +300,22 @@ it only when the complete function region proves the conditional jump in range.
 Unknown values, references and warning-sensitive string-offset or implicit casts
 keep their existing lowering. This reuses frame proofs without adding graph scans
 or changing the representation of a loop counter.
+A proven numeric local also owns one seed cell when an integer or float value is
+stored into it directly, as `$row = $bounds[$box]->first` stores a packed field. The
+store writes the tag and payload into that cell instead of boxing on the heap.
+Re-entering the loop rewrites the same cell, because every read of the slot copies its
+payload before the next store. An explicit `mixed_box` of a raw integer or float,
+such as a guarded counter's exit publication, is a cell producer when the local is
+its only owner. So is an `acquire` that boxes a raw scalar, which appears when range
+analysis narrows a checked producer it retained (`$j = $i - 1` into an `int|float`
+counter). A guarded entry's tag test reads its seed in the same block as the
+payload copy. Nested loops with field-seeded counters therefore allocate nothing
+per loop entry.
 Private slots in the executable main frame use the same lifetime proof; globals
-retain heap storage. Delayed reads, escaping consumers, aliases, references,
-`eval` and suspension fail the proof.
+retain heap storage. A string cast of the final value is an observation, not an
+escape: the formatter reads the tag and payload and numeric tags render into concat
+scratch without adopting the cell. Delayed reads, escaping consumers, aliases,
+references, `eval` and suspension fail the proof.
 
 Independent frame cells do not invalidate each other's borrowed reads. A same-block
 read must be consumed before its owning slot is stored or released, or before any
@@ -201,6 +331,11 @@ cleanup; neither the catch boundary nor the cleanup records are removed.
 Selected values use 24-byte `mixed` cells in the frame, without heap headers.
 `stack_numeric::placement` shares storage only between same-block temporaries
 whose payload observations do not overlap, following transparent retains/borrows.
+Retiring a proven numeric local compares the stored pointer with the selected
+frame cells: a frame-cell hit skips the heap refcount helper because the cell
+owns no child allocation, while a heap seed or any other pointer keeps the
+ordinary `__rt_decref_mixed` path. The comparison is bounded to four cells; a
+function with more numeric cells keeps the helper call.
 The last numeric consumer reads both inputs before writing, so its output may
 reuse an input cell at that boundary. Any value stored in a local, including a
 scoped operand owner, keeps dedicated storage. Groups never share across blocks.
@@ -334,6 +469,65 @@ Packed indexed arrays apply the same float-key conversion before `ArrayGet`,
 `ArraySet`, and existence probes. Compound writes reuse the read's diagnosis,
 including when a key becomes boxed `Mixed` or the array is promoted to hash
 storage at runtime. Integral float keys convert without a deprecation.
+
+### Append dispatch and raw-int fast path
+
+Every indexed append reads the receiver's low metadata byte inline to select
+promoted hash storage instead of calling `__rt_heap_kind`. For a raw-int value,
+the append lowering then emits the helper's unique/int-shaped/capacity fast path
+inline: one refcount check, the length/capacity pair, the value-type nibble and a
+direct slot store. Null receivers, shared arrays, the first append into an empty
+array, full arrays and non-int value types jump to `__rt_array_push_int`, which
+keeps the existing COW split, shape specialization and growth behavior. The
+result remains the container pointer, so the ordinary local/global writeback is
+unchanged.
+
+### Typed-array reduction helper
+
+`ArraySumInt` lowers to `__rt_array_sum_int(array, start, end, seed)`. The helper
+walks the packed int payload once, starts from the borrowed seed cell's int or
+float payload, and mirrors PHP's left-to-right addition. The first `adds`
+overflow converts the running integer and the overflowing element to doubles;
+later elements are added as doubles. The final int or float is boxed into a fresh
+Mixed cell, while an empty range retains the seed cell. The helper runs no user
+code and does not warn.
+
+The `array_sum()` builtin keeps its generic boxed fold for associative, Mixed and
+float storage. Before installing its warning boundary it checks the source header:
+an indexed, 8-byte, int-valued packed array jumps to the raw-seed
+`__rt_array_sum_int_i64` entry and returns the boxed sum directly. Every other
+shape falls through to the iterator-based fold unchanged.
+
+### Leaf runtime calls
+
+A runtime call whose effect summary excludes throw, warn, fatal, output, refcount
+retirement and blocking/network I/O, and whose operands are neither callables nor
+objects, cannot re-enter PHP code. The block emitter therefore skips the
+diagnostic file/line publication and the backtrace frame setup for those calls.
+String search/transform helpers and typed array probes take this path; warning-
+or callback-capable helpers keep the existing publication.
+
+### Reserved typed-array append
+
+`ArrayPushReserved` is emitted only after the fill-loop pass sizes the receiver's
+initial `array_new` to the exact final element count. The receiver is unique,
+non-null, int-shaped and has spare capacity by construction, so lowering stores
+one payload word, advances the header length and returns without COW, growth,
+metadata checks or a source-local writeback. The generic `ArrayPush` path stays
+in place for runtime bounds, shared arrays, non-int values and every unproven
+fill loop.
+
+### Unchecked typed-array reads
+
+`ArrayGetUnchecked` carries the array-bounds proof from
+[the optimizer](the-optimizer.md#eir-typed-array-bounds-proof). It reads one raw
+int word from the packed payload at a fixed 24-byte header offset and stores the
+result as a plain PHP `int`. The op has no null sentinel, storage-kind dispatch,
+bounds branch, missing-key warning, or TaggedScalar materialization; the producer
+proved the receiver is a private, non-null, int-shaped indexed array and that the
+index is in `[0, length)` on every path that reaches the read. Inclusive bounds,
+mutable receivers, parameters and any non-cast consumer keep the guarded
+`ArrayGet` lowering.
 
 String indexing returns a null sentinel for a missing offset when lowered for
 `isset()`, `empty()`, or `??`, allowing null coalescing to select its fallback
@@ -682,7 +876,8 @@ Function `static` locals are `.comm` symbols (`_static_<fn>_<name>`, 16 bytes)
 paired with a one-time init-marker symbol (`<symbol>_init`); the `--web` reset
 generator walks these records to release and re-arm persistent statics between
 requests. Static properties live behind per-class user-data symbols
-(`crate::names::static_property_symbol`), with late-bound `static::` receivers
+(`crate::names::static_property_symbol`), reserving 24 bytes for the value,
+initialization marker and optional reference-layout word. Late-bound `static::` receivers are
 resolved through native class-id branches. `global` variables load and store
 through `_eir_global_<mangled_fqn>` symbols emitted for the EIR `LoadGlobal` /
 `StoreGlobal` instructions.
@@ -814,13 +1009,39 @@ trips `heap debug detected bad refcount`.
 
 ### Reflection constant values
 
+Enum case property defaults use the bounded `resolve_enum_case_default` lookup in
+`src/codegen/const_default_values.rs`. It follows class, interface and trait constant
+aliases in each constant's declaration scope and returns the canonical enum/case names.
+Instance and static initialization retain the lazy singleton; nullable, union and
+mixed slots box that borrowed object. Reflection uses the same lookup, and eval
+registers an owned constant-fetch expression so reading a default preserves singleton
+identity without constructing another enum object. Constant array projections and
+branch selectors retain evaluated enum reads in `ConstDefaultValue::Evaluated`, even
+when the selected value is scalar. Property metadata emits these reads in first-access
+order and reloads the selected case last; enum reads inside array keys and offsets
+(`self::ALL[E::A ? 1 : 0]`) join the same ordered list. A scalar selected by an enum
+condition (`public int $n = E::A ? 1 : 2`) keeps its reads too, as
+`ReflectionParameterDefaultValue::Evaluated` and before a static slot's store.
+Static defaults are stored outside EIR, so `runtime_referenced_class_names` keeps
+every enum they read in the class-name tables. EIR merge temps type an enum case as
+its singleton object and a class constant as its declaration-scoped initializer, so
+`$flag ? E::A : E::B` lowers to an object merge rather than a string one. Eval represents multiple reads as an owned
+array expression followed by a final-element read. Compact callable-default codecs
+decline such trees rather than silently erase their observable materialization.
+
 Static Reflection metadata folds constant expressions at compile time in
 `reflection_constant_value` (`src/codegen/lower_inst/objects/reflection/names_constants.rs`),
 which is distinct from the pure `resolve_const_default` resolver in
 `src/codegen/const_default_values.rs`: the reflection folder returns the recursive
 `ReflectionConstantValue` metadata enum, while the pure resolver returns the
 target-neutral `ConstDefaultValue` consumed by eval-bridge default registration
-and descriptor invokers. The two are not interchangeable.
+and descriptor invokers. The two are not interchangeable: the reflection folder
+handles the forms below itself and hands every other expression (constant array
+offsets such as `self::ALL[0]`, ternary and short-ternary selectors, `??`, `!`,
+`~`, logical and bitwise operators) to the pure resolver, converting the result
+through `src/codegen/lower_inst/objects/reflection/constant_resolved.rs`. Enum
+reads that a selector or projection discards stay ordered in
+`ReflectionConstantValue::Evaluated` and are materialized before the value.
 
 Supported forms: scalar literals, `self::`/`parent::`/`ClassName::` scoped
 access with ancestry, global `const` references, `::class`, negation, the

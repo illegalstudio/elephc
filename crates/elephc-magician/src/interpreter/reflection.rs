@@ -26,6 +26,7 @@ mod member_api;
 mod member_construction;
 mod member_metadata;
 mod owner_materialization;
+pub(super) mod owned_collections;
 mod parameter_construction;
 mod parameter_lazy_defaults;
 mod parameter_metadata;
@@ -56,6 +57,7 @@ pub(in crate::interpreter) use member_api::*;
 pub(in crate::interpreter) use member_construction::*;
 use member_metadata::*;
 use owner_materialization::*;
+pub(in crate::interpreter) use owner_materialization::eval_reflection_full_class_object_result;
 use parameter_construction::*;
 use parameter_lazy_defaults::*;
 use parameter_metadata::*;
@@ -64,7 +66,7 @@ use property_helpers::*;
 pub(in crate::interpreter) use public_mirror_writes::validate_reflection_public_mirror_direct_write;
 
 const EVAL_REFLECTION_CLASS_FLAG_FINAL: u64 = 1;
-const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
+pub(super) const EVAL_REFLECTION_CLASS_FLAG_ABSTRACT: u64 = 2;
 const EVAL_REFLECTION_CLASS_FLAG_INTERFACE: u64 = 4;
 const EVAL_REFLECTION_CLASS_FLAG_TRAIT: u64 = 8;
 const EVAL_REFLECTION_CLASS_FLAG_ENUM: u64 = 16;
@@ -98,7 +100,7 @@ pub(in crate::interpreter) const EVAL_REFLECTION_MEMBER_FLAG_VIRTUAL: u64 = 1024
 pub(in crate::interpreter) const EVAL_REFLECTION_METHOD_FLAG_PROPERTY_HOOK: u64 = 32768;
 /// Generated AOT method rows set this bit for a `function &m()` declaration (or an `&get` hook);
 /// it is property-only (private(set)) in the member-flag space, so a method row cannot confuse it.
-const EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE: u64 = 4096;
+pub(in crate::interpreter) const EVAL_REFLECTION_METHOD_FLAG_RETURNS_REFERENCE: u64 = 4096;
 const EVAL_REFLECTION_MEMBER_FLAG_PROTECTED_SET: u64 = 2048;
 const EVAL_REFLECTION_MEMBER_FLAG_PRIVATE_SET: u64 = 4096;
 const EVAL_REFLECTION_MEMBER_FLAG_DYNAMIC: u64 = 8192;

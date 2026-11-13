@@ -589,6 +589,14 @@ fn mysql_charset_cell() -> &'static LocalKey<RefCell<CString>> {
     &C
 }
 
+/// Per-thread buffer for the most recent `elephc_pdo_mysql_info` result.
+fn mysql_info_cell() -> &'static LocalKey<RefCell<CString>> {
+    thread_local! {
+        static C: RefCell<CString> = RefCell::new(CString::default());
+    }
+    &C
+}
+
 /// Per-thread buffer for the most recent `elephc_pdo_connection_status` result.
 fn connection_status_cell() -> &'static LocalKey<RefCell<CString>> {
     thread_local! {
@@ -850,7 +858,10 @@ fn open_persistent_dsn(
 ) -> i64 {
     let _checkout = lock_recover(persistent_checkout_lock());
     let pool_key = (dsn.to_string(), persistent_key.to_string());
-    if let Some(id) = lock_recover(persistent_conns()).get(&pool_key).copied() {
+    // Read the pooled id into a local first: an `if let` scrutinee keeps its MutexGuard
+    // alive for the whole block, and the eviction below locks the same pool again.
+    let pooled = lock_recover(persistent_conns()).get(&pool_key).copied();
+    if let Some(id) = pooled {
         if persistent_connection_is_live(id) {
             let mut owners = lock_recover(persistent_owner_counts());
             *owners.entry(id).or_insert(0) += 1;
@@ -1257,6 +1268,16 @@ fn release_connection(conn_id: i64, reset_pgsql_session: bool) {
                 *count == 0
             }
         };
+        // A persistent MySQL link closed with an unreaped MYSQLI_ASYNC query is
+        // evicted (its drop shuts the worker's socket down), like mysqlnd closing
+        // such a link, instead of being pooled with its client still on the worker.
+        let pending_async = became_idle
+            && matches!(lock_recover(conns()).get(&conn_id),
+                Some(Conn::Mysql(connection)) if connection.has_pending_async());
+        if pending_async {
+            evict_persistent_connection(conn_id);
+            return;
+        }
         if became_idle && reset_pgsql_session {
             lock_recover(stmts()).retain(|_, statement| match statement {
                 Stmt::Postgres(statement) => statement.conn_id != conn_id,
@@ -2854,6 +2875,313 @@ pub extern "C" fn elephc_pdo_mysql_charset(conn_id: i64) -> *const c_char {
     })
 }
 
+/// Returns the info string of the connection's last OK packet ("Records: 3
+/// Duplicates: 0  Warnings: 0", "Rows matched: 1  Changed: 1  Warnings: 0"), backing
+/// the mysqli surface's `$info` / `mysqli_info()`. Empty for a non-MySQL or unknown
+/// handle, or when the server sent no info.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_info(conn_id: i64) -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => store_cstr(mysql_info_cell(), &c.info()),
+            _ => static_cstr(b"\0"),
+        }
+    })
+}
+
+/// Returns the linked MySQL client's implementation/version string with no
+/// connection, backing `mysqli_get_client_info()`, `mysqli::$client_info`, and
+/// `mysqli_driver::$client_info` (php reports the client library, not a server).
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_client_info() -> *const c_char {
+    ffi_guard(static_cstr(b"\0"), || store_cstr(mysql_info_cell(), my::MYSQL_CLIENT_INFO))
+}
+
+/// Sends a real `COM_PING` on a MySQL connection, backing `mysqli::ping()`.
+/// `1` on success, `-1` on failure (error state recorded on the connection) or for
+/// a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_ping(conn_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.ping(),
+            _ => -1,
+        }
+    })
+}
+
+/// Sets a MySQL connection's charset, backing `mysqli::set_charset()`: a name mysqlnd's
+/// charset table does not know fails with 2019 without a round trip, a known one runs
+/// `SET NAMES` and is the charset a later `change_user()` keeps. `1` on success, `-1` on
+/// failure (error state recorded) or for a non-MySQL or unknown handle.
+///
+/// # Safety
+/// `name` must point to a NUL-terminated string valid for the duration of the call (or be
+/// null, read as `""`).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_set_charset(conn_id: i64, name: *const c_char) -> i64 {
+    ffi_guard(-1, || {
+        let name = cstr_arg(name).unwrap_or("");
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.set_charset(name),
+            _ => -1,
+        }
+    })
+}
+
+/// Sends `COM_CHANGE_USER` on a MySQL connection, backing `mysqli::change_user()`.
+/// `has_db` is `0` for a `null` database (keep none selected) and non-zero to select
+/// `db`. `1` on success, `-1` on failure (error state recorded) or for a non-MySQL
+/// or unknown handle.
+///
+/// # Safety
+/// `user`, `pass`, and `db` must each point to a NUL-terminated string valid for the
+/// duration of the call (or be null, read as `""`).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_change_user(
+    conn_id: i64,
+    user: *const c_char,
+    pass: *const c_char,
+    db: *const c_char,
+    has_db: i64,
+) -> i64 {
+    ffi_guard(-1, || {
+        let user = cstr_arg(user).unwrap_or("");
+        let pass = cstr_arg(pass).unwrap_or("");
+        let db = if has_db != 0 { Some(cstr_arg(db).unwrap_or("")) } else { None };
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.change_user(user, pass, db),
+            _ => -1,
+        }
+    })
+}
+
+/// Sends a MYSQLI_ASYNC query on a MySQL connection: a worker thread runs it while the
+/// caller continues, buffering the result, or with `unbuffered != 0` (MYSQLI_USE_RESULT)
+/// reading only the first set's metadata and streaming rows on demand after the reap.
+/// `1` when sent, `-1` (mysqlnd's 2014 recorded on
+/// the connection) when the link is busy, or for a non-MySQL / unknown handle.
+///
+/// # Safety
+/// `sql` must point to a NUL-terminated string valid for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_async_send(
+    conn_id: i64,
+    sql: *const c_char,
+    unbuffered: i64,
+) -> i64 {
+    // One statement execution, like elephc_pdo_exec / a statement's reset: the async query
+    // counts once, with its SQL text, when it is sent.
+    instr_io::note();
+    if instr_io::query_active() {
+        if let Some(text) = cstr_arg(sql) {
+            instr_io::note_query(text);
+        }
+    }
+    ffi_guard(-1, || {
+        let Some(sql) = cstr_arg(sql) else {
+            return -1;
+        };
+        let mut guard = lock_recover(conns());
+        // The COM_QUERY write is synchronous database work; the map lock is taken outside
+        // the timed span, as on the other driver calls.
+        instr_io::timed(|| match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.async_send(sql, unbuffered != 0),
+            _ => -1,
+        })
+    })
+}
+
+/// Waits up to `timeout_us` microseconds for the connection's async query to finish:
+/// `1` once its result is ready to reap, `0` on timeout, `-1` when none is in flight. The
+/// connection registry lock is NOT held while waiting, so other links keep working.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_async_wait(conn_id: i64, timeout_us: i64) -> i64 {
+    ffi_guard(-1, || {
+        let signal = {
+            let guard = lock_recover(conns());
+            match guard.get(&conn_id) {
+                Some(Conn::Mysql(c)) => c.async_signal(),
+                _ => None,
+            }
+        };
+        let Some(signal) = signal else {
+            return -1;
+        };
+        let (flag, condvar) = &*signal;
+        let timeout = std::time::Duration::from_micros(timeout_us.max(0) as u64);
+        // Blocking on the server's answer is database wait (mysqli_poll's).
+        instr_io::timed(|| {
+            let done = lock_recover(flag);
+            let (done, _) = condvar
+                .wait_timeout_while(done, timeout, |finished| !*finished)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if *done {
+                1
+            } else {
+                0
+            }
+        })
+    })
+}
+
+/// Reaps the connection's async query (blocking until it finishes): its buffered result
+/// is installed into a new executed statement walked with `elephc_pdo_step`. Returns the
+/// statement handle, or `-1` with the query's error recorded on the connection.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_async_reap(conn_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let reaped = {
+            let mut guard = lock_recover(conns());
+            // Reaping blocks until the worker has the answer: database wait.
+            instr_io::timed(|| match guard.get_mut(&conn_id) {
+                Some(Conn::Mysql(c)) => c.async_reap(),
+                _ => Err(()),
+            })
+        };
+        match reaped {
+            Ok(mut stmt) => {
+                stmt.conn_id = conn_id;
+                let id = next_id();
+                lock_recover(stmts()).insert(id, Stmt::Mysql(stmt));
+                id
+            }
+            Err(()) => -1,
+        }
+    })
+}
+
+/// Returns wire traffic counter `which` (0 bytes sent, 1 bytes received, 2 packets sent,
+/// 3 packets received) of one MySQL connection, or with `conn_id < 0` the process-wide
+/// total of every MySQL connection (mysqli's client statistics). `0` for a non-MySQL or
+/// unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_io_stat(conn_id: i64, which: i64) -> i64 {
+    ffi_guard(0, || {
+        if conn_id < 0 {
+            return my::io_counter(&mysql::GLOBAL_IO_COUNTERS, which);
+        }
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => c.io_stat(which),
+            _ => 0,
+        }
+    })
+}
+
+/// Returns the server status flags of the MySQL connection's last OK/EOF packet, backing
+/// mysqli's `MYSQLI_REPORT_INDEX`. `0` for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_server_status(conn_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let guard = lock_recover(conns());
+        match guard.get(&conn_id) {
+            Some(Conn::Mysql(c)) => c.server_status(),
+            _ => 0,
+        }
+    })
+}
+
+/// Sends `COM_REFRESH` with the `REFRESH_*` bitmask on a MySQL connection, backing
+/// `mysqli::refresh()`. `1` on success, `-1` (error recorded) on failure or for a
+/// non-MySQL / unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_refresh(conn_id: i64, options: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.refresh(options),
+            _ => -1,
+        }
+    })
+}
+
+/// Sends `COM_SET_OPTION` on a MySQL connection (`0` multi-statements on, `1` off). `1` on
+/// success, `-1` (error recorded) on failure or for a non-MySQL / unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_set_server_option(conn_id: i64, option: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.set_server_option(option),
+            _ => -1,
+        }
+    })
+}
+
+/// Sends `COM_INIT_DB` on a MySQL connection, backing `mysqli::select_db()`. `1` on
+/// success, `-1` (error recorded) on failure, invalid UTF-8, or a non-MySQL / unknown
+/// handle.
+///
+/// # Safety
+/// `schema` must point to `schema_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_init_db(conn_id: i64, schema: *const u8, schema_len: i64) -> i64 {
+    ffi_guard(-1, || {
+        if schema.is_null() && schema_len != 0 {
+            return -1;
+        }
+        let bytes = if schema_len <= 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(schema, schema_len as usize) }
+        };
+        let Ok(schema) = std::str::from_utf8(bytes) else {
+            return -1;
+        };
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.init_db(schema),
+            _ => -1,
+        }
+    })
+}
+
+/// Sends `COM_PROCESS_KILL` for connection `id` on a MySQL connection, backing
+/// `mysqli::kill()`. `1` on success, `-1` (error recorded) on failure or for a non-MySQL /
+/// unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_process_kill(conn_id: i64, id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.process_kill(id),
+            _ => -1,
+        }
+    })
+}
+
+/// Sends `COM_DEBUG` on a MySQL connection, backing `mysqli::dump_debug_info()`. `1` on
+/// success, `-1` (error recorded) on failure or for a non-MySQL / unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_dump_debug_info(conn_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut guard = lock_recover(conns());
+        match guard.get_mut(&conn_id) {
+            Some(Conn::Mysql(c)) => c.dump_debug_info(),
+            _ => -1,
+        }
+    })
+}
+
+/// Returns the server-side id of a natively prepared MySQL statement, backing
+/// `mysqli_stmt::$id`. `0` for an emulated statement, `-1` for a non-MySQL or
+/// unknown statement handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_stmt_id(stmt_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let guard = lock_recover(stmts());
+        match guard.get(&stmt_id) {
+            Some(Stmt::Mysql(s)) => s.server_statement_id(),
+            _ => -1,
+        }
+    })
+}
+
 /// Returns `1` when `sql` contains a second non-empty statement after a
 /// top-level `;` (quoted regions, backtick identifiers, and comments skipped,
 /// with `/*! … */` executable comments correctly treated as live SQL), honoring
@@ -3486,7 +3814,8 @@ pub unsafe extern "C" fn elephc_pdo_prepare(
                     None => Err(()),
                 },
                 Some(Conn::Mysql(c)) => match cstr_arg(sql) {
-                    Some(s) => match c.prepare(s, emulated != 0) {
+                    // `emulated == 2`: mysqli's raw text query, sent without placeholder parsing.
+                    Some(s) => match if emulated == 2 { c.prepare_text(s) } else { c.prepare(s, emulated != 0) } {
                         Ok(mut st) => {
                             st.conn_id = conn_id;
                             Ok(Stmt::Mysql(st))
@@ -4019,19 +4348,26 @@ fn stmt_query_text(guard: &HashMap<i64, Stmt>, stmt_id: i64) -> Option<String> {
 /// panic reports the `0` failure sentinel.
 #[no_mangle]
 pub extern "C" fn elephc_pdo_reset(stmt_id: i64) -> i64 {
-    // execute() resets before each run, so one reset ~ one statement execution.
-    instr_io::note();
-    // Report the statement's SQL text (once per execution) so the exact
-    // profiler can aggregate distinct queries — the N+1 view. Recovered in a
-    // short scoped lock so the reset below re-locks cleanly.
-    if instr_io::query_active() {
-        let text = {
-            let guard = lock_recover(stmts());
+    // execute() resets before each run, so one reset ~ one statement execution. A MySQL
+    // statement is counted where it actually executes instead (`MyStmt::execute`), since
+    // mysqli runs statements without a reset before each one. Its SQL text is reported once
+    // per execution so the exact profiler can aggregate distinct queries (the N+1 view),
+    // recovered in a short scoped lock so the reset below re-locks cleanly.
+    let (counted_here, text) = {
+        let guard = lock_recover(stmts());
+        let counted_here = !matches!(guard.get(&stmt_id), Some(Stmt::Mysql(_)));
+        let text = if counted_here && instr_io::query_active() {
             stmt_query_text(&guard, stmt_id)
+        } else {
+            None
         };
-        if let Some(t) = text {
-            instr_io::note_query(&t);
-        }
+        (counted_here, text)
+    };
+    if counted_here {
+        instr_io::note();
+    }
+    if let Some(t) = text {
+        instr_io::note_query(&t);
     }
     ffi_guard(0, || {
         let mut guard = lock_recover(stmts());
@@ -4284,6 +4620,188 @@ pub extern "C" fn elephc_pdo_step(stmt_id: i64) -> i64 {
             Some(Stmt::Sqlite(_)) | None => -1,
         }
         })
+    })
+}
+
+/// Returns `1` when a MySQL statement's current result set is followed by another
+/// one (without reading it), backing mysqli's more_results(); `0` otherwise.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_more_results(stmt_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let sguard = lock_recover(stmts());
+        match sguard.get(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let cguard = lock_recover(conns());
+                match cguard.get(&s.conn_id) {
+                    Some(Conn::Mysql(c)) => i64::from(s.more_results(c)),
+                    _ => 0,
+                }
+            }
+            _ => 0,
+        }
+    })
+}
+
+/// Executes a MySQL statement without reading its first row, backing
+/// mysqli_stmt::execute(): a streaming statement's rows stay on the server until
+/// `elephc_pdo_step` fetches them. `0` on success, the negative `step` error code on
+/// failure, `-1` for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_execute(stmt_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => instr_io::timed(|| s.execute_only(c)),
+                    _ => -1,
+                }
+            }
+            _ => -1,
+        }
+    })
+}
+
+/// mysqli_stmt::send_long_data(): sends one chunk (`data`, `len` bytes) of parameter `index`
+/// (0-based) as `COM_STMT_SEND_LONG_DATA` (see `MyStmt::send_long_data`). `1` when sent, `0`
+/// when the link is not ready, `-1` on failure (the error is the connection's) or for a
+/// non-MySQL or unknown handle.
+///
+/// # Safety
+/// `data` must point to `len` readable bytes (or be null when `len` is 0).
+#[no_mangle]
+pub unsafe extern "C" fn elephc_pdo_mysql_send_long_data(
+    stmt_id: i64,
+    index: i64,
+    data: *const c_char,
+    len: i64,
+) -> i64 {
+    // SAFETY: the caller passes a live buffer of `len` bytes (the PHP string payload).
+    let bytes = bytes_arg(data, len);
+    ffi_guard(-1, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => instr_io::timed(|| s.send_long_data(c, index, &bytes)),
+                    _ => -1,
+                }
+            }
+            _ => -1,
+        }
+    })
+}
+
+/// mysqli_stmt::reset(): resets the statement locally and sends `COM_STMT_RESET` (see
+/// `MyStmt::server_reset`). `1` on success, `-1` on failure (the error is the connection's) or
+/// for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_stmt_reset(stmt_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => instr_io::timed(|| s.server_reset(c)),
+                    _ => -1,
+                }
+            }
+            _ => -1,
+        }
+    })
+}
+
+/// mysqli_stmt::fetch() past an exhausted read-only cursor: sends the extra
+/// `COM_STMT_FETCH` mysqlnd sends and drops the server's error (see
+/// `MyStmt::fetch_past_cursor_end`). Always `0`.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_stmt_fetch_past_end(stmt_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => instr_io::timed(|| s.fetch_past_cursor_end(c)),
+                    _ => 0,
+                }
+            }
+            _ => 0,
+        }
+    })
+}
+
+/// Sets a MySQL statement's cursor type for its next execution (mysqli's
+/// `MYSQLI_STMT_ATTR_CURSOR_TYPE`: `0` none, `1` `MYSQLI_CURSOR_TYPE_READ_ONLY`). `1` on
+/// success, `0` for a non-MySQL or unknown handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_set_cursor_type(stmt_id: i64, cursor_type: i64) -> i64 {
+    ffi_guard(0, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                s.set_cursor_type(cursor_type);
+                1
+            }
+            _ => 0,
+        }
+    })
+}
+
+/// Shuts down the transport of a MySQL link whose client a stream or MYSQLI_ASYNC worker
+/// owns (mysqli's close / reconnect of a link in the middle of a result), so releasing it
+/// does not wait for the unread rows. No-op on an idle link or a non-MySQL handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_cancel(conn_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let mut guard = lock_recover(conns());
+        if let Some(Conn::Mysql(c)) = guard.get_mut(&conn_id) {
+            c.cancel_transport();
+        }
+        0
+    })
+}
+
+/// Returns `1` when a MySQL statement's last execution opened a server-side read-only
+/// cursor (its rows are fetched with `COM_STMT_FETCH` and the link stays free), `0`
+/// otherwise.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_cursor_open(stmt_id: i64) -> i64 {
+    ffi_guard(0, || {
+        let sguard = lock_recover(stmts());
+        match sguard.get(&stmt_id) {
+            Some(Stmt::Mysql(s)) => i64::from(s.cursor_open()),
+            _ => 0,
+        }
+    })
+}
+
+/// Reads every remaining row of a MySQL statement's open cursor with one
+/// `COM_STMT_FETCH` (mysqli's `get_result()` / `store_result()` on a cursor statement);
+/// `elephc_pdo_step` then walks them. Returns the row count, `0` without an open cursor,
+/// `-1` on failure (error recorded on the connection) or for a non-MySQL handle.
+#[no_mangle]
+pub extern "C" fn elephc_pdo_mysql_cursor_fetch_all(stmt_id: i64) -> i64 {
+    ffi_guard(-1, || {
+        let mut sguard = lock_recover(stmts());
+        match sguard.get_mut(&stmt_id) {
+            Some(Stmt::Mysql(s)) => {
+                let conn_id = s.conn_id;
+                let mut cguard = lock_recover(conns());
+                match cguard.get_mut(&conn_id) {
+                    Some(Conn::Mysql(c)) => instr_io::timed(|| s.cursor_fetch_all(c)),
+                    _ => -1,
+                }
+            }
+            _ => -1,
+        }
     })
 }
 
@@ -5276,6 +5794,7 @@ pub extern "C" fn elephc_pdo_finalize(stmt_id: i64) -> i64 {
                     lock_recover(conns()).get_mut(&statement.conn_id)
                 {
                     statement.reset(connection);
+                    statement.close_native(connection);
                 }
                 1
             }

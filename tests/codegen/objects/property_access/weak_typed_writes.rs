@@ -13,6 +13,53 @@
 
 use super::*;
 
+/// Numeric union candidates retain bool fallback and distinguish a literal false member.
+#[test]
+fn test_mixed_numeric_union_boolean_fallback_and_false_member_ownership() {
+    let source = r#"<?php
+class NumericBooleanUnion {
+    public int|bool $integer = 0;
+    public float|bool $floating = 0.0;
+    public int|float|bool $numeric = 0;
+    public int|false $literal = 0;
+    public ?false $optional = null;
+}
+function boxedNumericBooleanUnion(mixed $value): mixed { return $value; }
+function showNumericBooleanUnion(mixed $value): void {
+    $type = is_int($value) ? 'int' : (is_float($value) ? 'float' : (is_bool($value) ? 'bool' : gettype($value)));
+    echo $type, ':', (string)$value, '|';
+}
+set_error_handler(function (int $code, string $message): bool { echo 'dep|'; return true; });
+$box = new NumericBooleanUnion();
+foreach (['abc', '5abc', '12', '1.5', '1e400'] as $text) {
+    $value = boxedNumericBooleanUnion($text);
+    $box->integer = $value;
+    $box->floating = $value;
+    $box->numeric = $value;
+    showNumericBooleanUnion($box->integer);
+    showNumericBooleanUnion($box->floating);
+    showNumericBooleanUnion($box->numeric);
+}
+try { $box->integer = boxedNumericBooleanUnion([]); }
+catch (TypeError $error) { echo 'reject|'; }
+try { $box->literal = boxedNumericBooleanUnion('abc'); }
+catch (TypeError $error) { echo 'literal-reject|'; }
+$box->literal = boxedNumericBooleanUnion(true);
+showNumericBooleanUnion($box->literal);
+$box->literal = boxedNumericBooleanUnion(false);
+showNumericBooleanUnion($box->literal);
+$box->optional = boxedNumericBooleanUnion(false);
+showNumericBooleanUnion($box->optional);
+try { $box->optional = boxedNumericBooleanUnion(true); }
+catch (TypeError $error) { echo 'optional-reject|'; }
+restore_error_handler();
+"#;
+    let output = crate::support::compile_and_run_with_heap_debug(source);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "bool:1|bool:1|bool:1|bool:1|bool:1|bool:1|int:12|float:12|int:12|dep|int:1|float:1.5|float:1.5|bool:1|float:INF|float:INF|reject|literal-reject|int:1|bool:|bool:|optional-reject|");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Verifies the scalar coercions PHP performs for a typed property write.
 #[test]
 fn test_mixed_value_coerces_into_scalar_typed_properties() {
@@ -617,9 +664,7 @@ Cannot assign float to property Box::$n of type int\n\
 Cannot assign float to property Box::$n of type int\n\
 Cannot assign float to property Box::$n of type int\n6"
     );
-    assert_eq!(
-        out.stderr,
-        "Deprecated: Implicit conversion from float 3.7 to int loses precision\n\
+    assert_eq!(normalize_diagnostic_text(&out.stderr), "Deprecated: Implicit conversion from float 3.7 to int loses precision\n\
 Deprecated: Implicit conversion from float -2.5 to int loses precision\n\
 Deprecated: Implicit conversion from float-string \"2.5\" to int loses precision\n"
     );

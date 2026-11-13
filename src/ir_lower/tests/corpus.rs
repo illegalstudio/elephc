@@ -10,10 +10,17 @@
 
 use std::path::{Path, PathBuf};
 
+/// Uses nextest's remapped checkout when archived tests move between runner layouts.
+fn fixture_root() -> PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
 /// Lowers the tokenizer example through the shared prelude pipeline for all supported targets.
 #[test]
 fn lowers_tokenizer_example_on_every_target() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/tokenizer/main.php");
+    let path = fixture_root().join("examples/tokenizer/main.php");
     let source = std::fs::read_to_string(&path).expect("tokenizer example");
     let parent = path.parent().expect("example directory");
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -31,7 +38,7 @@ fn lowers_tokenizer_example_on_every_target() {
 /// Lowers the PCNTL example for each desktop target without requiring cross-target linking.
 #[test]
 fn lowers_pcntl_example_on_every_desktop_target() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/pcntl/main.php");
+    let path = fixture_root().join("examples/pcntl/main.php");
     let source = std::fs::read_to_string(&path).expect("PCNTL example");
     let parent = path.parent().expect("example directory");
     for target in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
@@ -75,20 +82,37 @@ echo pcntl_getcpu();
     }
 }
 
-/// Verifies every checked example program lowers to validated printable EIR.
+/// Checks the first deterministic quarter of the complete example corpus.
+#[test]
+fn lowers_examples_corpus_part_0() { verify_examples_corpus(0); }
+
+/// Checks the second deterministic quarter of the complete example corpus.
+#[test]
+fn lowers_examples_corpus_part_1() { verify_examples_corpus(1); }
+
+/// Checks the third deterministic quarter of the complete example corpus.
+#[test]
+fn lowers_examples_corpus_part_2() { verify_examples_corpus(2); }
+
+/// Checks the fourth deterministic quarter of the complete example corpus.
+#[test]
+fn lowers_examples_corpus_part_3() { verify_examples_corpus(3); }
+
+/// Verifies one disjoint part of the example corpus without changing its fixture coverage.
 ///
 /// The `strict-php` example is lowered with strict-PHP mode enabled, matching
 /// its documented `elephc --strict-php` invocation: it deliberately declares a
 /// user function named after an extension builtin, which only PHP-compatible
 /// (strict) resolution accepts.
-#[test]
-fn lowers_examples_corpus() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut fixtures = example_main_files(root);
+fn verify_examples_corpus(part: usize) {
+    let root = fixture_root();
+    let mut fixtures = example_main_files(&root);
     fixtures.sort();
     assert!(!fixtures.is_empty(), "expected example PHP fixtures");
 
-    for fixture in fixtures {
+    for (index, fixture) in fixtures.into_iter().enumerate() {
+        if index % 4 != part { continue; }
+        eprintln!("lowering example {}", fixture.display());
         let strict = fixture
             .parent()
             .and_then(|dir| dir.file_name())

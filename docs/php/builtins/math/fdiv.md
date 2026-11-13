@@ -1,8 +1,6 @@
 ---
 title: "fdiv()"
 description: "Divides two numbers, according to IEEE 754."
-sidebar:
-  order: 585
 ---
 
 ## fdiv()
@@ -21,8 +19,9 @@ Divides two numbers, according to IEEE 754.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/math/fdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/math/fdiv.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

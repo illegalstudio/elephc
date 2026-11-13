@@ -17,7 +17,7 @@
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
-use crate::ir::{Instruction, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::names::static_property_symbol;
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
@@ -150,20 +150,22 @@ pub(super) fn lower_store_static_property(
     let value_ty = ctx.value_php_type(value)?;
     ensure_static_property_value_supported(&slot, &value_ty, inst)?;
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
+    let transfer_owner = static_transfer_owner_offset(ctx, inst, &slot, &value_ty)?;
     let eval_done_label =
         emit_eval_native_frame_static_property_set_if_needed(ctx, inst, value, &slot)?;
+    guard_static_object_store(ctx, value, &slot)?;
     load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
     if slot.late_bound && !slot.branches.is_empty() {
         let class_id_reg = class_id_work_reg(ctx.emitter);
         if emit_called_class_id_to_reg(ctx, class_id_reg)? {
-            emit_dynamic_store_static_property_result(ctx, &slot, class_id_reg, release_previous);
+            emit_dynamic_store_static_property_result(ctx, inst, &slot, class_id_reg, release_previous, transfer_owner)?;
             if let Some(done_label) = eval_done_label {
                 ctx.emitter.label(&done_label);
             }
             return Ok(());
         }
     }
-    emit_direct_store_static_property_result(ctx, &slot, release_previous);
+    emit_direct_store_static_property_result(ctx, inst, &slot, release_previous, transfer_owner)?;
     if let Some(done_label) = eval_done_label {
         ctx.emitter.label(&done_label);
     }
@@ -217,10 +219,55 @@ pub(super) fn lower_store_reflection_static_property(
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_static_property_value_supported(&slot, &value_ty, inst)?;
+    guard_static_object_store(ctx, value, &slot)?;
     load_static_property_store_value_to_result(ctx, value, &slot.php_type)?;
     let release_previous = !value_is_same_static_property_load(ctx, value, &slot)?;
-    emit_direct_store_static_property_result(ctx, &slot, release_previous);
+    let transfer_owner = static_transfer_owner_offset(ctx, inst, &slot, &value_ty)?;
+    emit_direct_store_static_property_result(ctx, inst, &slot, release_previous, transfer_owner)?;
     Ok(())
+}
+
+/// Checks a declared static object slot before materializing or replacing its old value.
+fn guard_static_object_store(
+    ctx: &mut FunctionContext<'_>, value: ValueId, slot: &StaticPropertySlot,
+) -> Result<()> {
+    if !slot.is_declared || !crate::types::builtin_classes::native_object_sink_needs_null_guard(
+        &slot.php_type, &ctx.module.class_infos, &ctx.module.interface_infos,
+    ) { return Ok(()); }
+    if !slot.late_bound || slot.branches.is_empty() {
+        return property_values::emit_nonnull_object_store_guard(ctx, value, &slot.php_type,
+            &static_object_null_message(slot));
+    }
+    super::predicates::emit_is_null_result(ctx, value)?;
+    let accepted = ctx.next_label("static_object_property_nonnull");
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &accepted);
+    let class_id_reg = class_id_work_reg(ctx.emitter);
+    let mut labels = Vec::new();
+    if emit_called_class_id_to_reg(ctx, class_id_reg)? {
+        for branch in &slot.branches {
+            let label = ctx.next_label("static_object_property_null_branch");
+            emit_branch_if_class_id_matches(ctx, class_id_reg, branch.class_id, &label);
+            labels.push((label, branch));
+        }
+    }
+    super::exceptions::emit_type_error(ctx, &static_object_null_message(slot));
+    for (label, branch) in labels {
+        ctx.emitter.label(&label);
+        if branch.private_inaccessible {
+            emit_private_static_property_access_fatal(ctx);
+        } else {
+            let branch_slot = branch_static_property_slot(ctx, slot, branch);
+            super::exceptions::emit_type_error(ctx, &static_object_null_message(&branch_slot));
+        }
+    }
+    ctx.emitter.label(&accepted);
+    Ok(())
+}
+
+/// Names the property owner selected for a rejected null static-property write.
+fn static_object_null_message(slot: &StaticPropertySlot) -> String {
+    format!("Cannot assign null to property {}::${} of type {}", slot.declaring_class, slot.property,
+        crate::types::diagnostic_names::php_type_name(&slot.php_type))
 }
 
 /// Returns true when a store writes back the same static slot it just loaded.
@@ -335,7 +382,13 @@ fn emit_direct_load_static_property_result(
     if slot.is_declared {
         emit_uninitialized_static_property_guard(ctx, slot);
     }
-    abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
+    if slot.php_type.codegen_repr() == PhpType::Mixed {
+        crate::codegen_support::runtime::reference_cells::load_mixed_static_value(
+            ctx.emitter, &slot.symbol, ctx.module.required_runtime_features.native_reference_validation,
+        );
+    } else {
+        abi::emit_load_symbol_to_result(ctx.emitter, &slot.symbol, &slot.php_type);
+    }
 }
 
 /// Emits `true` when the static-property slot is initialized.
@@ -350,14 +403,53 @@ fn emit_direct_static_property_initialized_result(
     emit_static_property_initialized_bool(ctx, slot);
 }
 
+/// Locates the optional unwind parking slot whose boxed owner this store transfers.
+fn static_transfer_owner_offset(
+    ctx: &FunctionContext<'_>, inst: &Instruction, slot: &StaticPropertySlot, source_ty: &PhpType,
+) -> Result<Option<usize>> {
+    if slot.php_type.codegen_repr() != PhpType::Mixed || source_ty.codegen_repr() != PhpType::Mixed {
+        return Ok(None);
+    }
+    let Some(owner) = inst.operands.get(2) else { return Ok(None); };
+    let Some(value) = ctx.function.value(*owner) else {
+        return Err(CodegenIrError::invalid_module("static transfer owner is missing"));
+    };
+    let ValueDef::Instruction { inst, .. } = value.def else {
+        return Err(CodegenIrError::invalid_module("static transfer owner must load its parking slot"));
+    };
+    let instruction = ctx.function.instruction(inst).unwrap();
+    if instruction.op != Op::LoadLocal {
+        return Err(CodegenIrError::invalid_module("static transfer owner must load its parking slot"));
+    }
+    let Some(Immediate::LocalSlot(slot)) = instruction.immediate else {
+        return Err(CodegenIrError::invalid_module("static transfer owner needs a parking slot"));
+    };
+    if ctx.local_kind(slot)? != crate::ir::LocalKind::OwnedTemp {
+        return Err(CodegenIrError::invalid_module("static transfer owner must be an unwind parking slot"));
+    }
+    ctx.local_offset(slot).map(Some)
+}
+
 /// Emits a direct static property store into the fallback declaring-class symbol.
 fn emit_direct_store_static_property_result(
     ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
     slot: &StaticPropertySlot,
     release_previous: bool,
-) {
+    transfer_owner: Option<usize>,
+) -> Result<()> {
+    if slot.php_type.codegen_repr() == PhpType::Mixed {
+        let done = super::local_stores::emit_static_if_managed(ctx, inst, &slot.symbol, transfer_owner)?;
+        let prefix = ctx.next_label("static_mixed_reference_store");
+        crate::codegen_support::runtime::reference_cells::publish_mixed_symbol(
+            ctx.emitter, &slot.symbol, release_previous, transfer_owner, &prefix,
+        );
+        if let Some(done) = done { ctx.emitter.label(&done); }
+        return Ok(());
+    }
     abi::emit_store_result_to_symbol(ctx.emitter, &slot.symbol, &slot.php_type, release_previous);
     clear_uninitialized_marker_after_static_store(ctx, &slot.symbol, &slot.php_type);
+    Ok(())
 }
 
 /// Compares a typed static-property marker with the uninitialized sentinel.
@@ -517,10 +609,12 @@ fn emit_dynamic_static_property_ref_cell_result(
 /// Emits a late-bound static property store selected by the runtime called-class id.
 fn emit_dynamic_store_static_property_result(
     ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
     slot: &StaticPropertySlot,
     class_id_reg: &str,
     release_previous: bool,
-) {
+    transfer_owner: Option<usize>,
+) -> Result<()> {
     let done = ctx.next_label("static_prop_store_done");
     let mut labels = Vec::new();
     for branch in &slot.branches {
@@ -528,7 +622,7 @@ fn emit_dynamic_store_static_property_result(
         emit_branch_if_class_id_matches(ctx, class_id_reg, branch.class_id, &label);
         labels.push((label, branch));
     }
-    emit_direct_store_static_property_result(ctx, slot, release_previous);
+    emit_direct_store_static_property_result(ctx, inst, slot, release_previous, transfer_owner)?;
     abi::emit_jump(ctx.emitter, &done);
     for (label, branch) in labels {
         ctx.emitter.label(&label);
@@ -537,10 +631,11 @@ fn emit_dynamic_store_static_property_result(
             continue;
         }
         let branch_slot = branch_static_property_slot(ctx, slot, branch);
-        emit_direct_store_static_property_result(ctx, &branch_slot, release_previous);
+        emit_direct_store_static_property_result(ctx, inst, &branch_slot, release_previous, transfer_owner)?;
         abi::emit_jump(ctx.emitter, &done);
     }
     ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Builds direct symbol metadata for one redeclared late-bound static property branch.
@@ -785,6 +880,7 @@ fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction)
         | PhpType::Buffer(_)
         | PhpType::Pointer(_)
         | PhpType::Callable
+        | PhpType::Iterable
         | PhpType::Object(_) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "{} for static property PHP type {:?}",
@@ -803,10 +899,27 @@ fn ensure_static_property_value_supported(
     if value_ty == &slot.php_type {
         return Ok(());
     }
+    if matches!((value_ty.codegen_repr(), slot.php_type.codegen_repr()),
+        (PhpType::Object(_), PhpType::Object(_))) {
+        return Ok(());
+    }
     if can_store_value_as_tagged_scalar_static_property(value_ty, &slot.php_type) {
         return Ok(());
     }
     if matches!(slot.php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(());
+    }
+    if slot.php_type.codegen_repr() == PhpType::Iterable
+        && matches!(
+            value_ty.codegen_repr(),
+            PhpType::Mixed
+                | PhpType::Union(_)
+                | PhpType::Iterable
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_)
+        )
+    {
         return Ok(());
     }
     // A `?ptr<T>` slot is one raw pointer word (null is address 0), and any pointer fits any
@@ -961,6 +1074,12 @@ fn load_static_property_store_value_to_result(
             PhpType::Object(_) => {
                 property_values::emit_mixed_object_for_property_store(ctx);
                 objects::release_adopted_mixed_source(ctx, value, &PhpType::Object(String::new()))?;
+            }
+            // An iterable symbol owns the unboxed array or Traversable payload, never the
+            // transient Mixed cell that carried it across the typed-property boundary.
+            PhpType::Iterable => {
+                objects::emit_mixed_iterable_for_property_store(ctx);
+                objects::release_adopted_mixed_source(ctx, value, &PhpType::Iterable)?;
             }
             _ => {}
         }

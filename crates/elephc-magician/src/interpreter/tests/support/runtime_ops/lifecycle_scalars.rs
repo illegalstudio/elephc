@@ -88,17 +88,28 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     fn is_reference(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
         Ok(self.references.contains_key(&(value.as_ptr() as usize)))
     }
+    /// Counts physical owners from activation leases and live container storage.
+    fn reference_is_shared(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus> {
+        Ok(self.references.contains_key(&(value.as_ptr() as usize)) && self.reference_owner_count(value) > 1)
+    }
     /// Creates a stable fake reference holding one detached value.
     fn reference_new(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         let value = self.copy_value(value)?;
         let reference = self.alloc(FakeValue::Null);
         self.references.insert(reference.as_ptr() as usize, value);
+        self.transfer_reference_value_owner(value);
         Ok(reference)
     }
     /// Replaces the fake current value and returns its previous owner for explicit release.
     fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         let value = self.copy_value(value)?;
-        self.references.insert(reference.as_ptr() as usize, value).ok_or(EvalStatus::RuntimeFatal)
+        let Some(previous) = self.references.insert(reference.as_ptr() as usize, value) else {
+            self.release(value)?;
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        self.transfer_reference_value_owner(value);
+        *self.cell_owners.entry(previous.as_ptr() as usize).or_default() += 1;
+        Ok(previous)
     }
     /// Copies scalar and array values while preserving fake object and resource identity.
     fn copy_value(&mut self, mut value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {

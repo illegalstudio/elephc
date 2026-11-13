@@ -1,8 +1,6 @@
 ---
 title: "array_last()"
 description: "Returns the last value of an array in insertion order, or null when it is empty."
-sidebar:
-  order: 24
 ---
 
 ## array_last()
@@ -20,8 +18,9 @@ Returns the last value of an array in insertion order, or null when it is empty.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

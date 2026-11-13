@@ -1,8 +1,6 @@
 ---
 title: "mysqli_get_client_info() - internals"
 description: "Compiler internals for mysqli_get_client_info(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 133
 ---
 
 ## `mysqli_get_client_info()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:454](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L454) (`mysqli_get_client_info`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_get_client_info`)
 - **Function symbol**: `mysqli_get_client_info()`
 
 
@@ -29,12 +27,12 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_get_client_info(mixed $mysql): string
+function mysqli_get_client_info(mixed $mysql = null): string
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 0–1 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

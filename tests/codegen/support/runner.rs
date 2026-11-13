@@ -99,6 +99,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &["hash"],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_openssl",
+        package: "elephc-openssl",
+        php_extensions: &["openssl"],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_bcmath",
         package: "elephc-bcmath",
         php_extensions: &["bcmath"],
@@ -149,6 +154,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &[],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_reference",
+        package: "elephc-reference",
+        php_extensions: &[],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_curl",
         package: "elephc-curl",
         php_extensions: &["curl"],
@@ -161,7 +171,7 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
     TestBridgeStaticlib {
         lib_name: "elephc_xml",
         package: "elephc-xml",
-        php_extensions: &["xml", "xmlwriter"],
+        php_extensions: &["xml", "xmlwriter", "SimpleXML"],
     },
 ];
 
@@ -213,6 +223,8 @@ impl std::ops::Deref for TestLinkRequirements {
 /// Assemble `asm` to `obj_path` by piping the source through `as`'s stdin so
 /// no intermediate `.s` file is created.
 pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
+    let _phase = fixture_phase_timing("assemble");
+    if let Some(phase) = &_phase { phase.assembly_input(asm); }
     let mut cmd = Command::new(assembler_cmd());
     if target().platform == Platform::MacOS {
         cmd.args(["-arch", target().darwin_arch_name()]);
@@ -220,13 +232,17 @@ pub(crate) fn assemble_from_stdin(asm: &str, obj_path: &Path) {
     cmd.arg("-o").arg(obj_path).arg("-");
     cmd.stdin(Stdio::piped());
     let mut child = cmd.spawn().expect("failed to spawn assembler");
-    child
+    let written = child
         .stdin
         .as_mut()
         .expect("assembler stdin missing")
-        .write_all(asm.as_bytes())
-        .expect("failed to feed assembler");
+        .write_all(asm.as_bytes());
+    if let Err(error) = written {
+        super::diagnostics::preserve_assembler_failure(asm);
+        panic!("failed to feed assembler: {error}");
+    }
     let status = child.wait().expect("failed to wait for assembler");
+    if !status.success() { super::diagnostics::preserve_assembler_failure(asm); }
     assert!(status.success(), "assembler failed");
 }
 
@@ -304,6 +320,7 @@ pub(crate) fn get_runtime_obj() -> &'static Path {
 /// shared on-disk cache behind it answers them across processes, which is what nextest's
 /// process-per-test model needs for the cache to pay off at all.
 pub(crate) fn runtime_obj_for_asm(runtime_asm: &str) -> std::path::PathBuf {
+    let _phase = fixture_phase_timing("runtime-obj");
     let hash = runtime_asm_hash(runtime_asm);
     let cache = RUNTIME_OBJS_BY_ASM.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let mut cache = cache.lock().expect("runtime asm cache poisoned");
@@ -442,6 +459,19 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
     let _guard = lock_bridge_staticlib_build();
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path = bridge_staticlib_dir.join(format!("lib{}.a", bridge.lib_name));
+        if prebuilt_bridge_staticlibs_are_trusted() {
+            assert!(archive_path.is_file(),
+                "missing prebuilt bridge {}; restore the matching CI build artifact", archive_path.display());
+            if bridge.lib_name == "elephc_pdo" {
+                let required = requested_pdo_features();
+                let marker = bridge_staticlib_dir.join("elephc-pdo-features.txt");
+                let advertised = std::fs::read_to_string(&marker)
+                    .expect("prebuilt PDO archive requires its validated feature manifest");
+                assert!(prebuilt_pdo_features_match(&required, &advertised),
+                    "prebuilt PDO features do not match {:?}; restore the matching CI variant", required);
+            }
+            continue;
+        }
         let requires_libpq_profile = bridge.lib_name == "elephc_pdo"
             && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
             && LIBPQ_BRIDGE_BUILT.get().is_none();
@@ -550,6 +580,52 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
     }
 }
 
+/// Computes the optional driver configuration required by this test executable.
+fn requested_pdo_features() -> Vec<&'static str> {
+    let enabled = [
+        (std::env::var_os("ELEPHC_PDO_LIBPQ").is_some(), "libpq-gss"),
+        (pdo_dblib_enabled(), "dblib"),
+        (pdo_firebird_enabled(), "firebird"),
+        (pdo_odbc_enabled(), "odbc"),
+        (pdo_informix_enabled(), "informix"),
+        (pdo_ibm_enabled(), "ibm"),
+        (pdo_sqlsrv_enabled(), "sqlsrv"),
+        (pdo_oci_enabled(), "oci"),
+        (pdo_cubrid_enabled(), "cubrid"),
+    ];
+    enabled.into_iter().filter_map(|(enabled, name)| enabled.then_some(name)).collect()
+}
+
+/// Requires an exact driver set, independent of the feature declaration order.
+fn prebuilt_pdo_features_match(required: &[&str], advertised: &str) -> bool {
+    let required: std::collections::BTreeSet<_> = required.iter().copied().collect();
+    let advertised: std::collections::BTreeSet<_> = advertised.trim().split(',')
+        .filter(|feature| !feature.is_empty()).collect();
+    required == advertised
+}
+
+#[cfg(test)]
+mod prebuilt_pdo_feature_tests {
+    use super::prebuilt_pdo_features_match;
+
+    /// Default builds must not accidentally link an optional system driver.
+    #[test]
+    fn prebuilt_pdo_rejects_missing_and_extra_driver_features() {
+        assert!(prebuilt_pdo_features_match(&[], "\n"));
+        assert!(!prebuilt_pdo_features_match(&["libpq-gss"], "\n"));
+        assert!(!prebuilt_pdo_features_match(&[], "libpq-gss\n"));
+        assert!(!prebuilt_pdo_features_match(&["oci"], "odbc\n"));
+    }
+
+    /// Identical feature sets can be serialized in either order.
+    #[test]
+    fn prebuilt_pdo_accepts_only_the_requested_driver_set() {
+        assert!(prebuilt_pdo_features_match(&["libpq-gss"], "libpq-gss\n"));
+        assert!(prebuilt_pdo_features_match(&["oci", "odbc"], "odbc,oci\n"));
+        assert!(!prebuilt_pdo_features_match(&["oci", "odbc"], "oci\n"));
+    }
+}
+
 /// Builds bridge archives needed by CLI-based fixtures before invoking the compiler binary.
 pub(crate) fn ensure_cli_bridge_staticlibs(actual_link_libs: &[&str]) {
     ensure_bridge_staticlibs(actual_link_libs, &bridge_staticlib_dir());
@@ -565,7 +641,28 @@ pub(crate) fn configure_prebuilt_cli_bridges(command: &mut Command) {
     let directory = bridge_staticlib_dir().canonicalize()
         .expect("resolve prebuilt CLI bridge directory");
     for bridge in TEST_BRIDGE_STATICLIBS {
-        command.env(format!("{}_LIB_DIR", bridge.lib_name.to_ascii_uppercase()), &directory);
+        command.env(prebuilt_cli_bridge_variable(bridge.lib_name), &directory);
+    }
+}
+
+/// Uses the production OpenSSL bridge override, distinct from the native package path.
+fn prebuilt_cli_bridge_variable(lib_name: &str) -> String {
+    if lib_name == "elephc_openssl" {
+        "ELEPHC_OPENSSL_BRIDGE_LIB_DIR".to_string()
+    } else {
+        format!("{}_LIB_DIR", lib_name.to_ascii_uppercase())
+    }
+}
+
+#[cfg(test)]
+mod prebuilt_cli_bridge_variable_tests {
+    use super::prebuilt_cli_bridge_variable;
+
+    /// The OpenSSL exception must not trigger a hidden rebuild in archived CLI fixtures.
+    #[test]
+    fn prebuilt_cli_openssl_uses_the_bridge_override() {
+        assert_eq!(prebuilt_cli_bridge_variable("elephc_openssl"), "ELEPHC_OPENSSL_BRIDGE_LIB_DIR");
+        assert_eq!(prebuilt_cli_bridge_variable("elephc_crypto"), "ELEPHC_CRYPTO_LIB_DIR");
     }
 }
 
@@ -1094,6 +1191,7 @@ pub(crate) fn link_binary(
     extra_link_paths: &[String],
     extra_frameworks: &[String],
 ) {
+    let _phase = fixture_phase_timing("link");
     let plan = test_link_plan(requirements, extra_link_paths, extra_frameworks);
     let actual_link_libs = named_libraries(&plan);
 
@@ -1338,6 +1436,22 @@ fn test_link_plan(
     if named.contains("elephc_xml") && !xml_pushed {
         push_xml_native_if_available(&mut plan);
     }
+    // The cipher bridge declares libcrypto's provider/EVP symbols without linking
+    // them. The production path resolves `openssl-crypto` (and its `zlib`
+    // dependency) through `pipeline::backend`; the harness reads the same durable
+    // cache structurally. A fixture whose artifacts are missing skips before this.
+    if named.contains("elephc_openssl") {
+        if let Some(packages) = openssl_native_packages() {
+            for package in packages {
+                plan.push(LinkItem::SearchPath(package.library_dir.clone()));
+            }
+            for package in packages {
+                for archive in &package.archives {
+                    plan.push(LinkItem::managed_archive(archive.clone(), package.name));
+                }
+            }
+        }
+    }
     // The gmp bridge declares libgmp's `__gmpz_*` symbols without linking them; the
     // managed `gmp` package supplies the single `libgmp.a` archive at final link time.
     // The harness reads the same durable cache structurally (see `super::gmp_native`).
@@ -1352,7 +1466,8 @@ fn test_link_plan(
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
     }
-    plan.without_redundant_embedded_bridges()
+    super::magician_link::with_apple_libraries(plan, target().platform)
+        .without_redundant_embedded_bridges()
 }
 
 /// Appends the managed native curl chain as EXACT ARCHIVES, in catalog dependency order.
@@ -1568,6 +1683,7 @@ fn run_binary_with_env_and_args(
     env: &[(&str, &std::ffi::OsStr)],
     args: &[&str],
 ) -> Output {
+    let _phase = fixture_phase_timing("run");
     let mut output = if target().platform == Platform::Linux
         && target().arch == Arch::AArch64
         && cfg!(target_arch = "x86_64")
@@ -1584,7 +1700,45 @@ fn run_binary_with_env_and_args(
         run_command_with_timeout(cmd)
     };
     append_macos_signal_diagnostics(&mut output, bin_path, dir, env, args);
+    #[cfg(target_os = "linux")]
+    append_linux_property_signal_diagnostics(&mut output, bin_path, dir, env, args);
     output
+}
+
+/// Replays focused property and Fiber bridge regressions after a native Linux signal.
+#[cfg(target_os = "linux")]
+fn append_linux_property_signal_diagnostics(
+    output: &mut Output,
+    bin_path: &Path,
+    dir: &Path,
+    env: &[(&str, &std::ffi::OsStr)],
+    args: &[&str],
+) {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    if target().platform != Platform::Linux || target().arch != Arch::X86_64
+        || output.status.signal().is_none()
+        || !std::thread::current().name().is_some_and(|name|
+            name.contains("test_shared_property_read_owners_bundle")
+            || name.contains("test_eval_callable_argument_owners_retire_abandoned_bridge_frames_bundle")
+            || name.contains("test_eval_callable_argument_owner_fiber_cycle_is_collected"))
+    { return; }
+    let available = std::env::var_os("PATH").is_some_and(|paths|
+        std::env::split_paths(&paths).any(|path| path.join("gdb").is_file()));
+    if !available {
+        output.stderr.extend_from_slice(b"\nGDB replay unavailable: gdb is not installed.\n");
+        return;
+    }
+    let mut command = Command::new("gdb");
+    command.current_dir(dir).envs(env.iter().copied()).args([
+        "--batch", "-ex", "set pagination off", "-ex", "run", "-ex", "bt",
+        "-ex", "info registers", "-ex", "x/32gx $rsp", "-ex", "x/16i $pc",
+        "-ex", "disassemble __rt_throw_current", "--args",
+    ]).arg(bin_path).args(args);
+    let diagnostic = run_command_with_timeout(command);
+    output.stderr.extend_from_slice(b"\nGDB replay after signal:\n");
+    output.stderr.extend_from_slice(&diagnostic.stdout);
+    output.stderr.extend_from_slice(&diagnostic.stderr);
 }
 
 /// Replays a signalled native macOS fixture under LLDB and appends its crash context.
@@ -1602,7 +1756,44 @@ fn append_macos_signal_diagnostics(
         return;
     }
 
+    // A damaged frame pointer can hide the native caller from LLDB's ordinary unwinder.
+    // Resolve at most 32 executable addresses from a bounded stack snapshot in that case.
+    let stack_symbols = concat!(
+        "script t = lldb.debugger.GetSelectedTarget(); p = t.GetProcess(); ",
+        "f = p.GetSelectedThread().GetFrameAtIndex(0); ",
+        "s = f.FindRegister('sp').GetValueAsUnsigned(); e = lldb.SBError(); ",
+        "b = p.ReadMemory(s, 16384, e) or b''; ",
+        "a = [(i, int.from_bytes(b[i:i+8], 'little')) for i in range(0, len(b)-7, 8)]; ",
+        "v = [(i, w, t.ResolveLoadAddress(w)) for i, w in a]; ",
+        "v = [(i, w, x.GetSymbol().GetName() or x.GetFunction().GetName() or '?') ",
+        "for i, w, x in v if x.GetModule().IsValid() ",
+        "and x.GetModule().GetFileSpec().GetFilename() == t.GetExecutable().GetFilename()]; ",
+        "print('Bounded executable stack candidates (may include stale values):'); ",
+        "[print('sp+%04x 0x%x %s' % (i, w, n[:240])) for i, w, n in v[:32]]"
+    );
     let mut cmd = Command::new("lldb");
+    let trace_spl_boundary = std::thread::current().name().is_some_and(|name|
+        name.ends_with("test_opaque_eval_spl_nested_write_keeps_attached_storage_through_reentry")
+            || name.ends_with("test_simplexml_eval_indirect_dimension_copies_bundle"));
+    if trace_spl_boundary {
+        // Inspect the linked runtime, since the user assembly artifact omits cached helpers.
+        // Bound each disassembly and the raw stack dump even when the frame chain is damaged.
+        cmd.args([
+            "-o", "breakpoint set --skip-prologue false --name __elephc_eval_spl_storage_write_v1",
+            "-k", "thread backtrace all",
+            "-k", "register read",
+            "-k", stack_symbols,
+            "-k", "memory read --format x --size 8 --count 64 $sp",
+            "-k", "disassemble --name __elephc_eval_spl_storage_write_v1 --count 128",
+            "-k", "disassemble --name _rt_mixed_array_get_for_write --count 64",
+            "-k", "disassemble --name _rt_mixed_array_get --count 32",
+            "-k", "disassemble --name _rt_mixed_array_get_php_offset_get --count 80",
+            "-k", "disassemble --name _rt_array_get_mixed_key --count 48",
+            "-k", "disassemble --name _rt_array_get_mixed_key_detach_indexed --count 48",
+            "-k", "disassemble --name _rt_array_ensure_unique --count 32",
+            "-k", "disassemble --name _rt_mixed_clone --count 16",
+        ]);
+    }
     cmd.args([
         "--batch",
         "-o",
@@ -1611,6 +1802,8 @@ fn append_macos_signal_diagnostics(
         "thread backtrace all",
         "-k",
         "register read",
+        "-k",
+        stack_symbols,
         "-k",
         "disassemble --frame",
         "-k",
@@ -1631,9 +1824,30 @@ fn append_macos_signal_diagnostics(
         "disassemble --name _rt_gc_request_start",
         "-k",
         "disassemble --name _rt_gc_collector_begin",
-        "--",
-    ])
-    .arg(bin_path)
+    ]);
+    if trace_spl_boundary {
+        // Stop at the exact return PC rather than trusting an already damaged frame chain.
+        cmd.args([
+            "-o", concat!(
+                "script spl_frame = lldb.debugger.GetSelectedTarget().GetProcess().GetSelectedThread().GetFrameAtIndex(0); ",
+                "spl_names = ['sp'] + ['x%d' % i for i in range(19, 30)]; ",
+                "spl_before = {n: spl_frame.FindRegister(n).GetValueAsUnsigned() for n in spl_names}; ",
+                "print('SPL C ABI entry:', spl_before); ",
+                "spl_return = spl_frame.FindRegister('lr').GetValueAsUnsigned(); ",
+                "lldb.debugger.HandleCommand('breakpoint disable'); ",
+                "lldb.debugger.HandleCommand('breakpoint set --one-shot true --address 0x%x' % spl_return)",
+            ),
+            "-o", "continue",
+            "-o", concat!(
+                "script spl_frame = lldb.debugger.GetSelectedTarget().GetProcess().GetSelectedThread().GetFrameAtIndex(0); ",
+                "spl_after = {n: spl_frame.FindRegister(n).GetValueAsUnsigned() for n in spl_names}; ",
+                "print('SPL C ABI return mismatches:', [(n, hex(spl_before[n]), hex(spl_after[n])) ",
+                "for n in spl_names if spl_before[n] != spl_after[n]])",
+            ),
+            "-o", "continue",
+        ]);
+    }
+    cmd.arg("--").arg(bin_path)
     .args(args)
     .current_dir(dir)
     .envs(env.iter().copied());
@@ -1657,61 +1871,66 @@ fn append_macos_signal_diagnostics(
 ) {
 }
 
-/// Runs a child command with a timeout and captures stdout/stderr.
-fn run_command_with_timeout(mut cmd: Command) -> Output {
-    let label = format!("{:?}", cmd);
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .unwrap_or_else(|err| panic!("failed to run compiled binary {label}: {err}"));
-    let mut stdout_pipe = child.stdout.take().expect("compiled binary stdout missing");
-    let mut stderr_pipe = child.stderr.take().expect("compiled binary stderr missing");
-    let stdout_reader = std::thread::spawn(move || {
-        let mut stdout = Vec::new();
-        stdout_pipe
-            .read_to_end(&mut stdout)
-            .expect("failed to read compiled binary stdout");
-        stdout
-    });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut stderr = Vec::new();
-        stderr_pipe
-            .read_to_end(&mut stderr)
-            .expect("failed to read compiled binary stderr");
-        stderr
-    });
+/// Runs a child command with a timeout and captures stdout/stderr separately.
+fn run_command_with_timeout(cmd: Command) -> Output {
+    run_command_with_capture(cmd, None)
+}
 
+/// Uses the ordinary executable watchdog while preserving merged stdout/stderr ordering.
+pub(crate) fn run_command_with_merged_output(cmd: Command, log: &Path) -> Output {
+    run_command_with_capture(cmd, Some(log))
+}
+
+/// Captures a command with either pipes or one shared log and the same deadline.
+fn run_command_with_capture(mut cmd: Command, merged_log: Option<&Path>) -> Output {
+    let label = format!("{:?}", cmd);
+    if let Some(path) = merged_log {
+        let log = fs::File::create(path).expect("merged command log");
+        cmd.stdout(Stdio::from(log.try_clone().expect("merged log handle")));
+        cmd.stderr(Stdio::from(log));
+    } else {
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+    }
+    let mut child = cmd.spawn()
+        .unwrap_or_else(|err| panic!("failed to run compiled binary {label}: {err}"));
+    let stdout_reader = child.stdout.take().map(|mut pipe| std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).expect("compiled binary stdout");
+        bytes
+    }));
+    let stderr_reader = child.stderr.take().map(|mut pipe| std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).expect("compiled binary stderr");
+        bytes
+    }));
     let timeout = codegen_binary_timeout();
     let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(status) = child
-            .try_wait()
+    let status = loop {
+        if let Some(status) = child.try_wait()
             .unwrap_or_else(|err| panic!("failed to wait for compiled binary {label}: {err}"))
         {
-            let stdout = stdout_reader.join().expect("stdout reader panicked");
-            let stderr = stderr_reader.join().expect("stderr reader panicked");
-            return Output {
-                status,
-                stdout,
-                stderr,
-            };
+            break Some(status);
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            let stdout = stdout_reader.join().expect("stdout reader panicked");
-            let stderr = stderr_reader.join().expect("stderr reader panicked");
-            panic!(
-                "compiled binary timed out after {}s: {}\nstdout:\n{}\nstderr:\n{}",
-                timeout.as_secs(),
-                label,
-                String::from_utf8_lossy(&stdout),
-                String::from_utf8_lossy(&stderr)
-            );
+            break None;
         }
         std::thread::sleep(Duration::from_millis(10));
-    }
+    };
+    let stdout = match merged_log {
+        Some(path) => fs::read(path).expect("merged command output"),
+        None => stdout_reader.expect("stdout reader").join().expect("stdout reader panicked"),
+    };
+    let stderr = stderr_reader.map(|reader| reader.join().expect("stderr reader panicked"))
+        .unwrap_or_default();
+    let status = status.unwrap_or_else(|| panic!(
+        "compiled binary timed out after {}s: {}\nstdout:\n{}\nstderr:\n{}",
+        timeout.as_secs(), label,
+        String::from_utf8_lossy(&stdout), String::from_utf8_lossy(&stderr),
+    ));
+    Output { status, stdout, stderr }
 }
 
 /// Returns the per-binary timeout for codegen fixtures.
@@ -1749,6 +1968,7 @@ pub(crate) fn assemble_and_run(
     );
 
     let output = run_binary(&bin_path, dir);
+    super::diagnostics::preserve_native_fixture_failure(user_asm, &output);
     assert!(
         output.status.success(),
         "binary exited with status {}\nstdout: {}\nstderr: {}",
@@ -1832,6 +2052,9 @@ pub(crate) fn assemble_and_run_capture(
 
     let output = run_binary(&bin_path, dir);
 
+    if std::str::from_utf8(&output.stdout).is_err() || std::str::from_utf8(&output.stderr).is_err() {
+        super::diagnostics::preserve_invalid_utf8_output(user_asm, &output);
+    }
     ProgramOutput {
         stdout: String::from_utf8(output.stdout).unwrap(),
         stderr: String::from_utf8(output.stderr).unwrap(),

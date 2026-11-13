@@ -24,10 +24,29 @@ impl Checker {
     /// declarations across the entire program. Each statement is checked in a fresh `top_level_env`
     /// cloned from the current global state. Returns the final `TypeEnv` and a vector of error
     /// vectors (one per statement) for structured diagnostics.
+    ///
+    /// The pass is repeated while it denies a top-level local the promotable `?int` read view
+    /// (`Checker::end_promotable_walk`), so its environment and errors come from the walk whose
+    /// views match its promotions. Denials only grow, which bounds the repetition.
     pub(super) fn check_top_level_program(
         &mut self,
         program: &Program,
     ) -> (TypeEnv, Vec<Vec<CompileError>>) {
+        loop {
+            let denials = self.promotable_view_denials_within(crate::types::TOP_LEVEL_SCOPE);
+            let result = self.check_top_level_program_walk(program);
+            if self.promotable_view_denials_within(crate::types::TOP_LEVEL_SCOPE) == denials {
+                return result;
+            }
+        }
+    }
+
+    /// Walks the top-level program once for `check_top_level_program`.
+    fn check_top_level_program_walk(
+        &mut self,
+        program: &Program,
+    ) -> (TypeEnv, Vec<Vec<CompileError>>) {
+        self.begin_promotable_walk(crate::types::TOP_LEVEL_SCOPE);
         let saved_eval_barrier_active = self.eval_barrier_active;
         self.eval_barrier_active = false;
         let saved_null_probe_scope = self.null_probe_scope_is_top_level;
@@ -48,6 +67,7 @@ impl Checker {
         let saved_external_ref_bindings =
             std::mem::take(&mut self.active_external_ref_bindings);
         let mut global_env = self.seed_global_env();
+        self.definitely_bound_locals.extend(global_env.keys().cloned());
         // The pre-scan has to decide before the first statement is checked: a marked local binds
         // boxed `Mixed` at its FIRST store. Top level has no parameters, so the by-reference and
         // declared-type exclusion sets the scan consults are empty — `enter_local_binding_scope`
@@ -56,6 +76,11 @@ impl Checker {
         // globals all live in program storage, and `name_is_seeded_program_storage` keeps the
         // marking off them outright.
         self.run_mixed_storage_scan(program, &std::collections::HashMap::new());
+        // A top-level local named by a `global` statement anywhere in the program is program
+        // storage another scope reaches, so it cannot carry a per-body promotion decision.
+        let mut candidates = super::super::promotable_arrays::find_candidates(self, program);
+        candidates.disqualify(self.program_global_names.iter());
+        self.promotable_array_candidates = candidates;
         let mut all_errors = Vec::with_capacity(program.len());
         // `(statement index, name, span)` for every null probe this pass tolerated, so the
         // deferred diagnostic lands on the statement that contains the probe.
@@ -81,6 +106,7 @@ impl Checker {
         self.active_ref_params = saved_ref_params;
         self.active_external_ref_bindings = saved_external_ref_bindings;
         self.exit_local_binding_scope(saved_local_binding_scope);
+        self.end_promotable_walk(crate::types::TOP_LEVEL_SCOPE);
         (global_env, all_errors)
     }
 
@@ -180,7 +206,7 @@ impl Checker {
     /// Suppressible messages include array-index, property-access, and callable-related diagnostics
     /// that arise before method bodies refine property and return types. A parameter mismatch
     /// caused by provisional null metadata is discarded only when the final statement has no errors.
-    fn is_suppressible_initial_top_level_error(message: &str) -> bool {
+    pub(super) fn is_suppressible_initial_top_level_error(message: &str) -> bool {
         matches!(
             message,
             "Array index must be integer"

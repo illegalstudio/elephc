@@ -1,8 +1,6 @@
 ---
 title: "mb_encoding_aliases()"
 description: "Lists the public aliases of an encoding in PHP order."
-sidebar:
-  order: 916
 ---
 
 ## mb_encoding_aliases()
@@ -20,8 +18,9 @@ Lists the public aliases of an encoding in PHP order.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/mb_encoding_aliases.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/mb_encoding_aliases.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

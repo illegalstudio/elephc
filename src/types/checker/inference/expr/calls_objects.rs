@@ -8,7 +8,8 @@
 //! - Retains constructor, visibility, eval-barrier, callable, and late-static-binding checks.
 
 use super::null_coalesce::{
-    null_coalesce_buffer_merge_type, null_coalesce_result_type, operand_is_never_null,
+    coalesce_default_type, null_coalesce_buffer_merge_type, null_coalesce_result_type,
+    operand_is_never_null,
 };
 use super::{body_must_not_use_this, Checker};
 use crate::errors::CompileError;
@@ -55,7 +56,25 @@ impl Checker {
                     self.builtin_call_types.insert(expr.span, ty.clone());
                     return Ok(ty);
                 }
-                self.check_function_call(name.as_str(), &args, expr.span, env)
+                // A direct user call can hand promotable `array<int>` arguments on raw, and its
+                // promotable result reads as the `array<mixed>` view unless a sink takes it raw.
+                let callee = self
+                    .canonical_function_name_folded(name.as_str())
+                    .unwrap_or_else(|| name.as_str().to_string());
+                // A call redirected to a typed clone still checks against the original first:
+                // the original keeps the specialization (and the diagnostics) this call gives it,
+                // and the clone, checked last, owns the call-site records lowering reads.
+                let clone = self.prepare_promotable_call_args(&callee, &args, env, expr.span)?;
+                let mut ty = self.check_function_call(name.as_str(), &args, expr.span, env)?;
+                if let Some(clone) = &clone {
+                    let warnings = self.warnings.len();
+                    ty = self.check_function_call(clone, &args, expr.span, env)?;
+                    self.warnings.truncate(warnings);
+                }
+                self.confirm_promotable_call_args(env)?;
+                self.flush_promotable_reresolutions()?;
+                let target = clone.as_deref().unwrap_or(&callee);
+                Ok(self.promotable_call_result_view(target, expr.span, ty))
             }
             ExprKind::BufferNew { element_type, len } => {
                 let len_ty = self.infer_type(len, env)?;
@@ -80,7 +99,15 @@ impl Checker {
             }
             ExprKind::BitNot(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if let Some(class) = crate::types::object_operators::operator_class(&ty) {
+                if let Some(class) = crate::types::object_operators::operator_class(&ty)
+                    .or_else(|| crate::types::object_operators::cast_class_with_classes(&ty, &self.classes)) {
+                    if class.operators.is_some_and(|ops| ops.bit_not.is_some()) {
+                        return Ok(PhpType::Mixed);
+                    }
+                    if class.operators.is_some_and(|ops| ops.operand_dispatch
+                        == elephc_builtin_contract::ObjectOperandDispatch::NumericConversion) {
+                        return Err(CompileError::new(expr.span, "Bitwise NOT requires integer operand"));
+                    }
                     return Ok(PhpType::Object(class.name.to_string()));
                 }
                 if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
@@ -104,7 +131,7 @@ impl Checker {
                 let operand_env = probed_env.as_ref().unwrap_or(env);
                 let vt = self.infer_null_probe_operand(value, operand_env)?;
                 let value_is_never_null = operand_is_never_null(self, value, &vt, operand_env);
-                let dt = self.infer_type(default, env)?;
+                let dt = coalesce_default_type(default, self.infer_type(default, env)?);
                 if let Some(buffer) = null_coalesce_buffer_merge_type(
                     self,
                     value,
@@ -129,14 +156,14 @@ impl Checker {
                 ..
             } => {
                 let mut scoped_env = env.clone();
-                self.check_assignment_expression(
+                self.with_preserved_binding_flow(|checker| checker.check_assignment_expression(
                     target,
                     value,
                     result_target.as_deref(),
                     prelude,
                     expr.span,
                     &mut scoped_env,
-                )
+                ))
             }
             ExprKind::ConstRef(name) => {
                 let constant_name = name.as_str().trim_start_matches('\\');
@@ -251,7 +278,7 @@ impl Checker {
                 // return Mixed.
                 // The unpack-after-named shape is syntactic in
                 // PHP, so it is still rejected without a known constructor.
-                self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
+                self.require_valid_unresolved_call_argument_order(args, "Dynamic constructor")?;
                 for arg in args {
                     let value = match &arg.kind {
                         ExprKind::NamedArg { value, .. } => value.as_ref(),
@@ -464,6 +491,9 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // Descriptor dispatch can select a reference parameter at runtime. Preserve the
+        // checked XML receiver before whole-program alias storage widens its local slot.
+        self.is_native_selection_reference_argument(expr, env)?;
         self.infer_runtime_iterated_call_arg_type(expr, env)
     }
 

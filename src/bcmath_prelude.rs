@@ -142,20 +142,37 @@ pub(crate) fn bcmath_declarations() -> Program {
     })
 }
 
+/// Returns whether `program` names `BcMath\Number`, `RoundingMode`, or a reflection
+/// probe that can observe them.
+///
+/// The autoload prelude probe uses this on the loaded closure. `inject_if_used`
+/// uses the same check for entry programs.
+pub(crate) fn program_uses_bcmath(program: &[crate::parser::ast::Stmt]) -> bool {
+    let usage = crate::prelude_prune::usage::collect(program);
+    let reflected = ["get_declared_classes", "get_declared_interfaces", "get_declared_traits"]
+        .iter()
+        .any(|name| usage.functions.contains(*name));
+    let named_in_source = usage
+        .literals
+        .iter()
+        .any(|literal| literal.contains("bcmath\\number"));
+    reflected
+        || named_in_source
+        || usage.classes.iter().any(|name| {
+            name.rsplit('\\').next() == Some("number") || name == "roundingmode"
+        })
+}
+
 /// Injects Number when referenced, reflected, evaluated, or explicitly enabled.
+///
+/// `force` is `--with-bcmath` or an autoload-probe hit.
 pub fn inject_if_used(
     program: Program,
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
-        let usage = crate::prelude_prune::usage::collect(&program);
-        let reflected = ["get_declared_classes", "get_declared_interfaces", "get_declared_traits"]
-            .iter().any(|name| usage.functions.contains(*name));
-        let named_in_source = usage.literals.iter().any(|literal| literal.contains("bcmath\\number"));
-        if !force && !reflected && !named_in_source
-            && !usage.classes.iter().any(|name| name.rsplit('\\').next() == Some("number") || name == "roundingmode")
-        {
+        if !force && !program_uses_bcmath(&program) {
             return program;
         }
         let mut declarations = bcmath_declarations();

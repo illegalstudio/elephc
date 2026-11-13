@@ -109,14 +109,17 @@ impl FakeOps {
         let right = self.fake_numeric(&self.get(right));
         self.float(left % right)
     }
-    /// Adds fake numeric cells for interpreter tests.
+    /// Adds fake numeric cells, promoting overflowing integers to floats like PHP.
     pub(super) fn runtime_add(
         &mut self,
         left: RuntimeCellHandle,
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match (self.get(left), self.get(right)) {
-            (FakeValue::Int(left), FakeValue::Int(right)) => self.int(left + right),
+            (FakeValue::Int(left), FakeValue::Int(right)) => match left.checked_add(right) {
+                Some(sum) => self.int(sum),
+                None => self.float(left as f64 + right as f64),
+            },
             (left, right) => self.float(self.fake_numeric(&left) + self.fake_numeric(&right)),
         }
     }

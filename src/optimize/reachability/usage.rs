@@ -136,6 +136,7 @@ pub(super) fn scan_function(stmt: &Stmt, call_signatures: &CallSignatureIndex) -
     };
     scanner.scan_attributes(&stmt.attributes);
     if let StmtKind::FunctionDecl {
+        name,
         params,
         param_attributes,
         variadic_type,
@@ -144,6 +145,7 @@ pub(super) fn scan_function(stmt: &Stmt, call_signatures: &CallSignatureIndex) -
         ..
     } = &stmt.kind
     {
+        scanner.current_function = Some(name.clone());
         scanner.scan_parameter_attributes(param_attributes);
         scanner.scan_params(params, variadic_type.as_ref(), return_type.as_ref());
         scanner.scan_nested(body, false);
@@ -259,6 +261,7 @@ struct Scanner<'a> {
     invalidated_variables: HashSet<String>,
     current_class: Option<String>,
     current_method: Option<String>,
+    current_function: Option<String>,
     parent_class: Option<String>,
     call_signatures: Option<&'a CallSignatureIndex>,
     /// True while scanning the parsed source of a literal `eval`, where an `include` is a
@@ -616,9 +619,11 @@ impl Scanner<'_> {
                     self.record_callable(name);
                 }
                 // Parameter attributes name classes like `scan_function` records them inline.
+                let prior_function = self.current_function.replace(name.clone());
                 self.scan_parameter_attributes(param_attributes);
                 self.scan_params(params, variadic_type.as_ref(), return_type.as_ref());
                 self.scan_nested(body, true);
+                self.current_function = prior_function;
             }
             StmtKind::ClassDecl { name, methods, .. }
             | StmtKind::EnumDecl { name, methods, .. }

@@ -468,6 +468,64 @@ pub(crate) fn is_nullable_pointer_type(php_type: &PhpType) -> bool {
     matches!(php_type, PhpType::Union(members) if nullable_pointer_union_member(members).is_some())
 }
 
+/// Returns whether a type is held as one unboxed scalar with no null of its own: `int`,
+/// `float`, `string`, `bool` or `false`, or a union of only those (`int|string`).
+///
+/// Such storage cannot carry PHP null beside its value: under the tagged null representation
+/// an `int` slot never holds null at all, and the in-band marker a `float`, `string` or `bool`
+/// slot can carry is a real `0.0`, `""` or `true` to every consumer that does not probe for it.
+/// A merge that may answer null beside one of these therefore keeps the null member in its
+/// type, which selects the null-capable storage (the inline tagged scalar for `int|null`, a boxed
+/// cell otherwise). Containers, objects and pointers are not scalars here: their pointer word
+/// carries PHP null, so they keep their own type beside a null arm.
+pub(crate) fn is_unboxed_scalar_type(php_type: &PhpType) -> bool {
+    match php_type {
+        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::False => true,
+        PhpType::Union(members) => {
+            !members.is_empty() && members.iter().all(is_unboxed_scalar_type)
+        }
+        _ => false,
+    }
+}
+
+/// Boxes an array element or hash value whose storage is the inline tagged scalar as `mixed`.
+///
+/// An untyped property slot (`public $items = []`, `public static $bag = []`) adopts the type
+/// of the first write, and the backend builds the slot's `[]` default, its reads and its writes
+/// from that type. The tagged scalar (`int|null`) has no entry in those paths: the 16-byte
+/// tagged indexed array is an append-only specialization that `foreach`, `json_encode` and
+/// `array_shift` refuse, and a hash has no tagged value at all. A slot that would hold such an
+/// element therefore stores boxed `mixed` cells, as a local array or a literal does, so
+/// `$c->items[0] = $n ?? null`, `$c->items["k"] = $n` and `C::$bag[] = $n ?: null` read the int
+/// or the null back (#1944). Nested arrays are walked, so `$h->rows[] = $row` over an
+/// `array<int|null>` row stores `array<array<mixed>>` and `$h->rows[0]` iterates. Under the
+/// sentinel null representation `int|null` is already `mixed`, and every other type is
+/// returned unchanged.
+pub(crate) fn box_tagged_scalar_array_elements(php_type: PhpType) -> PhpType {
+    match php_type {
+        PhpType::Array(element) => {
+            PhpType::Array(Box::new(box_tagged_scalar_element_type(*element)))
+        }
+        PhpType::AssocArray { key, value } => PhpType::AssocArray {
+            key,
+            value: Box::new(box_tagged_scalar_element_type(*value)),
+        },
+        other => other,
+    }
+}
+
+/// Boxes one array element type for `box_tagged_scalar_array_elements`.
+///
+/// A tagged scalar becomes `mixed`; a nested array or hash is walked in turn; anything else
+/// keeps its type, so `array<int>` and `array<Foo>` slots are untouched.
+fn box_tagged_scalar_element_type(element: PhpType) -> PhpType {
+    if element.codegen_repr() == PhpType::TaggedScalar {
+        PhpType::Mixed
+    } else {
+        box_tagged_scalar_array_elements(element)
+    }
+}
+
 /// Returns whether `ty` is an indexed array whose elements are stored as raw pointer words
 /// (`array<ptr<T>>` or `array<ptr<T>|null>`), as opposed to boxed Mixed cells.
 pub(crate) fn is_pointer_element_indexed_array(ty: &PhpType) -> bool {

@@ -7,19 +7,21 @@
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
-//! - The destination is reserved through `__rt_concat_reserve` first; reversing straight into
-//!   `_concat_buf + _concat_off` overwrote the adjacent globals once the string was longer than
-//!   the free scratch.
+//! - The reversed payload is reserved through `__rt_concat_reserve` and published through
+//!   `__rt_concat_publish`, so a string larger than the 64 KiB concat scratch takes owned heap
+//!   storage instead of overwriting `_concat_off` and the adjacent heap.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Emits `__rt_strrev` which reverses a PHP byte-string into fresh storage.
+/// Emits `__rt_strrev` which reverses a PHP byte-string into fresh mutable storage.
 ///
 /// Input (ARM64 ABI): `x1` = string ptr, `x2` = string length.
 /// Output (ARM64 ABI): `x1` = pointer to reversed string start, `x2` = unchanged length.
-/// The result lives in the concat scratch (advancing `_concat_off`) when it fits, otherwise in an
-/// owned heap string. Clobbers every caller-saved register.
+/// The destination comes from `__rt_concat_reserve` (concat scratch while the result fits,
+/// owned heap storage otherwise) and is finished through `__rt_concat_publish`.
+///
+/// Falls through to `emit_strrev_linux_x86_64` on x86_64; otherwise emits portable ARM64 assembly.
 pub fn emit_strrev(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_strrev_linux_x86_64(emitter);
@@ -30,20 +32,41 @@ pub fn emit_strrev(emitter: &mut Emitter) {
     emitter.comment("--- runtime: strrev ---");
     emitter.label_global("__rt_strrev");
 
-    // -- reserve the destination --
-    emitter.instruction("sub sp, sp, #32");                                     // allocate slots for the source slice
-    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #16");                                    // establish new frame pointer
-    emitter.instruction("stp x1, x2, [sp]");                                    // keep the source slice across the reservation
-    emitter.instruction("mov x0, x2");                                          // the result needs exactly the source length
-    emitter.instruction("bl __rt_concat_reserve");                              // x0 = destination with room for the result
-    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the source slice
+    // -- preserve the source pair across the reservation call --
+    emitter.instruction("sub sp, sp, #48");                                     // allocate spill space for the source pair and result start
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the strrev frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length
+
+    // -- reserve exactly the source length before writing anything --
+    emitter.instruction("mov x0, x2");                                          // the reversed result has exactly the source length
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage
+    emitter.instruction("str x0, [sp, #16]");                                   // save the result start for the published pointer
     emitter.instruction("mov x9, x0");                                          // destination cursor
-    emitter.instruction("mov x10, x0");                                         // save destination start for return value
+
+    // -- copy bytes in reverse order sixteen at a time --
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the source pointer and length
     emitter.instruction("add x11, x1, x2");                                     // x11 = pointer to end of source string
     emitter.instruction("mov x12, x2");                                         // copy length as loop counter
-
-    // -- copy bytes in reverse order (last-to-first) --
+    emitter.instruction("cmp x12, #16");                                        // can the reversal move a full vector pair?
+    emitter.instruction("b.lt __rt_strrev_tail");                               // short strings use the word and byte tails
+    emitter.label("__rt_strrev_loop16");
+    emitter.instruction("sub x11, x11, #16");                                   // address the next sixteen source bytes from the end
+    emitter.instruction("ldp x3, x4, [x11]");                                   // load the last two source words
+    emitter.instruction("rev x3, x3");                                          // reverse the first word's bytes
+    emitter.instruction("rev x4, x4");                                          // reverse the second word's bytes
+    emitter.instruction("stp x4, x3, [x9], #16");                               // store the reversed words in reverse order
+    emitter.instruction("sub x12, x12, #16");                                   // account for the sixteen copied bytes
+    emitter.instruction("cmp x12, #16");                                        // is another full vector pair available?
+    emitter.instruction("b.ge __rt_strrev_loop16");                             // continue reversing full vector pairs
+    emitter.label("__rt_strrev_tail");
+    emitter.instruction("cmp x12, #8");                                         // can the tail move a full word?
+    emitter.instruction("b.lt __rt_strrev_loop");                               // short tails use the byte loop
+    emitter.instruction("sub x11, x11, #8");                                    // address the next eight source bytes from the end
+    emitter.instruction("ldr x3, [x11]");                                       // load the next source word
+    emitter.instruction("rev x3, x3");                                          // reverse the word's bytes
+    emitter.instruction("str x3, [x9], #8");                                    // store the reversed word
+    emitter.instruction("sub x12, x12, #8");                                    // account for the eight copied bytes
     emitter.label("__rt_strrev_loop");
     emitter.instruction("cbz x12, __rt_strrev_done");                           // if no bytes remain, done reversing
     emitter.instruction("sub x11, x11, #1");                                    // move source pointer backward (from end)
@@ -52,12 +75,13 @@ pub fn emit_strrev(emitter: &mut Emitter) {
     emitter.instruction("sub x12, x12, #1");                                    // decrement remaining byte count
     emitter.instruction("b __rt_strrev_loop");                                  // continue reversing
 
-    // -- publish the scratch offset and return --
+    // -- publish the result and return --
     emitter.label("__rt_strrev_done");
-    emitter.instruction("mov x1, x10");                                         // return pointer to reversed string
-    emitter.instruction("bl __rt_concat_publish");                              // advance _concat_off past a scratch-backed result (x1/x2 preserved)
-    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #32");                                     // deallocate stack frame
+    emitter.instruction("ldr x1, [sp, #16]");                                   // return pointer to reversed string
+    emitter.instruction("ldr x2, [sp, #8]");                                    // return the unchanged string length
+    emitter.instruction("bl __rt_concat_publish");                              // advance the scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the strrev frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -65,24 +89,44 @@ pub fn emit_strrev(emitter: &mut Emitter) {
 ///
 /// Input (x86_64 System V ABI): `rax` = string ptr, `rdx` = string length.
 /// Output (x86_64 System V ABI): `rax` = pointer to reversed string, `rdx` = length.
-/// Same storage rules as the ARM64 path.
+/// The destination is reserved through `__rt_concat_reserve` and published through
+/// `__rt_concat_publish`, matching the AArch64 variant.
 fn emit_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: strrev ---");
     emitter.label_global("__rt_strrev");
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer and realign the stack
-    emitter.instruction("mov rbp, rsp");                                        // establish the strrev frame
-    emitter.instruction("sub rsp, 16");                                         // reserve aligned slots for the source slice
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // keep the source pointer across the reservation
-    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // keep the source length across the reservation
-    emitter.instruction("mov rax, rdx");                                        // the result needs exactly the source length
-    emitter.instruction("call __rt_concat_reserve");                            // rax = destination with room for the result
+
+    // -- preserve the source pair across the reservation call --
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer before reserving the strrev spill slots
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved source pair and result start
+    emitter.instruction("sub rsp, 48");                                         // reserve aligned spill slots for the source pointer, length, and result start
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the source string pointer across the reservation call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the source string length across the reservation call
+
+    // -- reserve exactly the source length before writing anything --
+    emitter.instruction("mov rax, rdx");                                        // the reversed result has exactly the source length
+    emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the result start for the published pointer
     emitter.instruction("mov r11, rax");                                        // destination cursor
-    emitter.instruction("mov r10, rax");                                        // preserve the reversed-string start pointer for the return pair
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the source string length
-    emitter.instruction("mov rcx, rsi");                                        // remaining-byte counter for the reverse-copy loop
-    emitter.instruction("mov r8, QWORD PTR [rbp - 8]");                         // reload the source pointer
-    emitter.instruction("add r8, rsi");                                         // seed the reverse source cursor one byte past the end of the source string
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the source string pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source string length
+    emitter.instruction("lea r8, [rsi + rdx]");                                 // seed the reverse source cursor one byte past the end of the source string
+    emitter.instruction("mov rcx, rdx");                                        // copy the source length into the remaining-byte counter
+    emitter.instruction("cmp rcx, 16");                                         // can the reversal move two full words?
+    emitter.instruction("jl __rt_strrev_loop_linux_x86_64");                    // short strings use the byte loop
+
+    emitter.label("__rt_strrev_loop16_linux_x86_64");
+    emitter.instruction("sub r8, 16");                                          // address the next sixteen source bytes from the end
+    emitter.instruction("mov rax, QWORD PTR [r8]");                             // load the first source word
+    emitter.instruction("mov rdx, QWORD PTR [r8 + 8]");                         // load the second source word
+    emitter.instruction("bswap rax");                                           // reverse the first word's bytes
+    emitter.instruction("bswap rdx");                                           // reverse the second word's bytes
+    emitter.instruction("mov QWORD PTR [r11], rdx");                            // store the reversed second word first
+    emitter.instruction("mov QWORD PTR [r11 + 8], rax");                        // store the reversed first word second
+    emitter.instruction("add r11, 16");                                         // advance the destination by two words
+    emitter.instruction("sub rcx, 16");                                         // account for the sixteen copied bytes
+    emitter.instruction("cmp rcx, 16");                                         // is another full pair available?
+    emitter.instruction("jge __rt_strrev_loop16_linux_x86_64");                 // continue reversing full word pairs
 
     emitter.label("__rt_strrev_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // have all source bytes been copied in reverse order?
@@ -91,14 +135,14 @@ fn emit_strrev_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov dl, BYTE PTR [r8]");                               // load the next source byte in reverse order
     emitter.instruction("mov BYTE PTR [r11], dl");                              // store the reversed source byte into the destination
     emitter.instruction("add r11, 1");                                          // advance the destination after storing one reversed byte
-    emitter.instruction("sub rcx, 1");                                          // decrement the remaining reverse-copy byte count after storing one byte
+    emitter.instruction("sub rcx, 1");                                          // decrement the remaining reverse-copy byte count
     emitter.instruction("jmp __rt_strrev_loop_linux_x86_64");                   // continue reversing bytes until the full source string has been emitted
 
     emitter.label("__rt_strrev_done_linux_x86_64");
-    emitter.instruction("mov rax, r10");                                        // return the reversed-string start pointer
-    emitter.instruction("mov rdx, rsi");                                        // return the original source-string length
-    emitter.instruction("call __rt_concat_publish");                            // advance _concat_off past a scratch-backed result (rax/rdx preserved)
-    emitter.instruction("add rsp, 16");                                         // release the source slots
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the reversed-string start pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // restore the original source-string length into the result-length register
+    emitter.instruction("call __rt_concat_publish");                            // advance the scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 48");                                         // release the strrev spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the reversed string in the standard x86_64 string result registers
 }

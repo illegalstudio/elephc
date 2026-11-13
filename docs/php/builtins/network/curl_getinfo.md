@@ -1,8 +1,6 @@
 ---
 title: "curl_getinfo()"
 description: "Gets information about the last transfer."
-sidebar:
-  order: 772
 ---
 
 ## curl_getinfo()
@@ -21,8 +19,9 @@ Gets information about the last transfer.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected curl prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/curl/curl_getinfo.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/curl/curl_getinfo.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

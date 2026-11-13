@@ -714,7 +714,9 @@ pub(super) fn release_value_after_retaining_insert(
     ) {
         return;
     }
-    if ctx.value_is_owning_temporary(value) {
+    let detached_string = ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Str
+        && ctx.value_needs_release_after_use(value);
+    if ctx.value_is_owning_temporary(value) || detached_string {
         crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
     }
 }
@@ -766,16 +768,21 @@ pub(crate) fn array_literal_type_for_ir(
             None => array_literal_element_type_for_ir(ctx, item),
         })
         .collect();
-    let probe_types: Vec<Option<PhpType>> = item_types
-        .iter()
-        .zip(&spread_storage)
-        .map(|(item_ty, storage)| match storage {
-            Some(storage) => Some(spread_storage_probe_element_type(storage)),
-            None => Some(item_ty.clone()),
-        })
-        .collect();
-    if let Some(pointer) = pointer_literal_element_type(ctx, items, &probe_types) {
-        return PhpType::Array(Box::new(pointer));
+    // A nested literal is a container, never a pointer element. Reject that shape before
+    // cloning its recursively nested type just to let the pointer probe reject it again.
+    if !items.iter().any(|item| matches!(item.kind,
+        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_))) {
+        let probe_types: Vec<Option<PhpType>> = item_types
+            .iter()
+            .zip(&spread_storage)
+            .map(|(item_ty, storage)| match storage {
+                Some(storage) => Some(spread_storage_probe_element_type(storage)),
+                None => Some(item_ty.clone()),
+            })
+            .collect();
+        if let Some(pointer) = pointer_literal_element_type(ctx, items, &probe_types) {
+            return PhpType::Array(Box::new(pointer));
+        }
     }
     let mut item_types = item_types.into_iter();
     let mut elem_ty = item_types.next().expect("a non-empty literal has a first item");
@@ -986,6 +993,34 @@ pub(super) fn array_literal_element_type_for_ir(
     ctx: &LoweringContext<'_, '_>,
     item: &Expr,
 ) -> PhpType {
+    box_tagged_scalar_element(array_literal_element_type_for_ir_unboxed(ctx, item))
+}
+
+/// Boxes an element whose own storage is the inline tagged scalar (`int|null`) as `mixed`.
+///
+/// An indexed array of 16-byte `{payload, tag}` slots exists only as the append specialization
+/// of `lower_array_push_tagged_scalar_*`: `foreach`, `json_encode` and the value walkers do not
+/// read it, so `[$n]` with `?int $n` iterated as an unsupported element type and encoded `[6]`
+/// as `[null]`, and a hash has no tagged entry at all (`hash_new` had no static tag for it).
+/// A literal item, the first write into an empty array (`$a[] = $n ?? null`, `$a[0] = $n`) and
+/// a string-key write that promotes an indexed array to a hash therefore keep such a value as a
+/// boxed `mixed` cell, which carries the tag and reads back as the int or the null it holds,
+/// the way `[$c ? $n : null]` was built before the merge kept its tag word (#1944).
+pub(in crate::ir_lower) fn box_tagged_scalar_element(element: PhpType) -> PhpType {
+    // Other kinds cannot become tagged scalars. Inspect them without cloning nested metadata.
+    if matches!(element, PhpType::TaggedScalar | PhpType::Union(_))
+        && element.codegen_repr() == PhpType::TaggedScalar {
+        PhpType::Mixed
+    } else {
+        element
+    }
+}
+
+/// Types one literal item by its own storage, before `box_tagged_scalar_element`.
+fn array_literal_element_type_for_ir_unboxed(
+    ctx: &LoweringContext<'_, '_>,
+    item: &Expr,
+) -> PhpType {
     if let Some(storage) = nullsafe_chain::result_storage_type(item) {
         return storage;
     }
@@ -1007,7 +1042,8 @@ pub(super) fn array_literal_element_type_for_ir(
         ExprKind::Spread(inner) => {
             spread_storage_element_type(&spread_source_storage_type_for_ir(ctx, inner).codegen_repr())
         }
-        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item).codegen_repr(),
+        // Literal inference already returns materializable container storage.
+        ExprKind::ArrayLiteral(items) => array_literal_type_for_ir(ctx, items, item),
         ExprKind::ArrayLiteralAssoc(pairs) => assoc_array_literal_type_for_ir(ctx, pairs, item),
         ExprKind::ConstRef(name) => ctx
             .constant_value(name.as_str())
@@ -1017,15 +1053,15 @@ pub(super) fn array_literal_element_type_for_ir(
             scoped_constant_value_type_for_ir(ctx, receiver, name, item)
         }
         ExprKind::Variable(name) => ir_array_storage_type(
-            ctx.local_types
+            local_values::projected_local_value_type(ctx, name, item.span).or_else(|| ctx.local_types
                 .get(name)
-                .cloned()
+                .cloned())
                 .unwrap_or_else(|| infer_expr_type_syntactic(item)),
         ),
         ExprKind::FunctionCall { name, .. } => {
             let canonical = name.as_str();
             if let Some(sig) = ctx.functions.get(canonical) {
-                return ir_array_storage_type(eir_user_function_return_type(sig));
+                return materializable_array_element_type(eir_user_function_return_type(sig));
             }
             if let Some(sig) = ctx.extern_functions.get(canonical) {
                 return ir_array_storage_type(sig.return_type.clone());
@@ -1043,12 +1079,12 @@ pub(super) fn array_literal_element_type_for_ir(
         // or an object result is cast into an incorrectly stamped scalar array.
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
-                .and_then(materializable_array_element_type)
+                .map(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
-                .and_then(materializable_array_element_type)
+                .map(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
@@ -1145,16 +1181,15 @@ pub(super) fn spread_source_storage_type_for_ir(
     source_ty
 }
 
-/// Returns the EIR array storage type for a resolved element type, or `None` when the type
-/// cannot be an array element. A `Void`/`Never` method return (a value-less call whose result
-/// is nonetheless collected into a literal) has no array-element representation — stamping it
-/// would emit an unsupported `array_push for PHP type Void` — so the caller keeps its syntactic
-/// fallback for that degenerate case, exactly as before this arm existed (no regression).
-pub(super) fn materializable_array_element_type(return_type: PhpType) -> Option<PhpType> {
+/// Returns the EIR array storage type for a resolved element type.
+///
+/// A `Void` or `Never` call result is PHP `null` when a literal collects it. Stamping
+/// `mixed` makes the push box that null instead of falling back to a syntactic integer slot.
+pub(super) fn materializable_array_element_type(return_type: PhpType) -> PhpType {
     let stored = ir_array_storage_type(return_type);
     match stored.codegen_repr() {
-        PhpType::Void | PhpType::Never => None,
-        _ => Some(stored),
+        PhpType::Void | PhpType::Never => PhpType::Mixed,
+        _ => stored,
     }
 }
 
@@ -1208,7 +1243,7 @@ pub(super) fn builtin_call_result_type_for_ir(
     {
         return Some(checked.codegen_repr());
     }
-    match materializable_array_element_type(checked)? {
+    match materializable_array_element_type(checked) {
         scalar @ (PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str) => Some(scalar),
         _ => Some(PhpType::Mixed),
     }

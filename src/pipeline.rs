@@ -290,7 +290,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     // The preludes below are decided on the entry program, but the autoload pass that loads the
     // Composer class files runs after name resolution, much later. Probe that closure now, so a
-    // vendor file that uses PDO or curl gets its prelude as if the entry file used it.
+    // vendor file that uses PDO, curl, Random, BcMath, GMP, or DateTimeZone::listIdentifiers
+    // gets its prelude as if the entry file used it.
     crate::progress::phase("autoload-prelude-probe");
     let phase_started = Instant::now();
     let autoloaded_preludes = if entry.is_repl_host() {
@@ -305,6 +306,14 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     };
     timings.record_since("autoload-prelude-probe", phase_started);
     let autoloaded = |group: &str| autoloaded_preludes.contains(group);
+
+    // Decide XML usage while the AST still contains only user and resolved-include code.
+    // Opaque eval pulls in the large core prelude below; running XML's namespace-aware DOM
+    // receiver analysis after that injection needlessly rescans thousands of declarations for
+    // every eval program, even though compiler preludes cannot introduce user XML usage.
+    let xml_used = with_crates.contains("xml")
+        || autoloaded("xml")
+        || crate::xml_prelude::program_uses_surface(&ast);
 
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
@@ -406,7 +415,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // is detected, and before name resolution, which desugars both call forms to it.
     crate::progress::phase("list-id-prelude");
     let phase_started = Instant::now();
-    let ast = list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = list_id_prelude::inject_if_used(
+        ast,
+        autoloaded("list_id"),
+        &mut prelude_inventory,
+    );
     timings.record_since("list-id-prelude", phase_started);
 
     // Inject the var_export prelude (a pure elephc-PHP function) only when the program
@@ -531,9 +544,21 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         &mut prelude_inventory,
     );
     let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
-    let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
-    let ast = crate::gmp_prelude::inject_if_used(ast, with_crates.contains("gmp"), &mut prelude_inventory);
-    let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
+    let ast = crate::bcmath_prelude::inject_if_used(
+        ast,
+        with_crates.contains("bcmath") || autoloaded("bcmath"),
+        &mut prelude_inventory,
+    );
+    let ast = crate::gmp_prelude::inject_if_used(
+        ast,
+        with_crates.contains("gmp") || autoloaded("gmp"),
+        &mut prelude_inventory,
+    );
+    let ast = crate::random_prelude::inject_if_used(
+        ast,
+        with_crates.contains("random") || autoloaded("random"),
+        &mut prelude_inventory,
+    );
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the testing runtime (`Elephc\Testing\TestCase`, `Runner`, the PHPUnit alias)
@@ -577,11 +602,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // preludes; `--with-xml` forces the injection for opaque dynamic use.
     crate::progress::phase("xml-prelude");
     let phase_started = Instant::now();
-    let ast = crate::xml_prelude::inject_if_used(
-        ast,
-        with_crates.contains("xml") || autoloaded("xml"),
-        &mut prelude_inventory,
-    );
+    let ast = if xml_used {
+        crate::xml_prelude::inject_if_used(ast, true, &mut prelude_inventory)
+    } else {
+        ast
+    };
     timings.record_since("xml-prelude", phase_started);
     let phase_started = Instant::now();
     let fileinfo_force = with_crates.contains("fileinfo") || autoloaded("fileinfo");
@@ -1039,6 +1064,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // instantiation as unreferenced and lowering finds nothing to call.
     exported_function_names.extend(crate::generics::instantiation_roots(
         &check_result.requested_instantiations,
+    ));
+    // A promotable clone is reachable the same way: only lowering's redirect names it.
+    exported_function_names.extend(crate::generics::promotable_clones::promotable_clone_roots(
+        &check_result.requested_promotable_clones,
     ));
     let exported_function_names = exported_function_names;
     let ast = optimize::prune_unreachable_declarations(

@@ -12,11 +12,12 @@ use crate::errors::CompileError;
 use crate::parser::ast::{BinOp, Expr, ExprKind, NESTED_APPEND_TEMP_PREFIX};
 use crate::span::Span;
 use crate::types::{
-    array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
+    array_key_contiguity_is_unproven, merge_array_key_types, nonempty_array_key_forces_hash_storage,
+    nonempty_array_key_stays_in_range, normalized_array_key_type,
     static_array_key_forces_hash_storage, PhpType, TypeEnv,
 };
 
-use super::super::super::Checker;
+use super::super::super::{Checker, GuardedLocalStorage};
 
 /// Validates and updates the type environment for `$array[$index] = $value` assignments.
 ///
@@ -40,7 +41,7 @@ pub(super) fn check_array_assign(
     // PHP auto-vivifies an undefined variable on `$a[$k] = ...`: the write creates an
     // array (associative for a string key, indexed for an integer key). Mirror that
     // instead of rejecting the target, exactly as the append form already does.
-    let Some(arr_ty) = env.get(array).cloned() else {
+    if !env.contains_key(array) {
         let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
         let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
         let key_ty = normalized_array_key_type(index, idx_ty);
@@ -54,10 +55,18 @@ pub(super) fn check_array_assign(
         };
         env.insert(array.to_string(), created);
         return Ok(());
-    };
+    }
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    // The write selects its container after index/RHS effects, which may rebind it.
+    let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
+        .or_else(|| env.get(array).cloned());
+    let current = env.get(array).cloned().unwrap_or(PhpType::Mixed);
+    let nullable = nullable_array_write_view(&current);
+    let had_nullable_read = nullable.is_some();
+    let arr_ty = nullable.unwrap_or(current);
+    if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() { env.insert(array.to_string(), arr_ty.clone()); }
     if arr_ty == PhpType::Str {
         return check_string_offset_assign(array, index, &idx_ty, value, span);
     }
@@ -93,7 +102,53 @@ pub(super) fn check_array_assign(
                         && !index_is_foreach_key
                         && !checker.index_is_packed_loop_counter(array, index)
                         && array_key_contiguity_is_unproven(index))));
-        if forces_hash {
+        // The same gap exists past the end of a NON-empty packed array: `$a = [1, 2]; $a[5] = 3;`
+        // zero-filled slots 2..4 where php has `{"0":1,"1":2,"5":3}`, and a negative key cannot
+        // live in packed storage at all. A literal key is decided below (only `0` and `1` are
+        // always in range). A non-literal key the checker cannot bound takes hash storage here
+        // too, and the site is recorded so lowering promotes the packed value it holds there.
+        // Boxed `Mixed` elements are left out: `Op::ArraySetMixedKey` already promotes an
+        // out-of-range integer key at run time. A foreach key or a boxed key (`Mixed`, or the
+        // `int|float` every `$i++` counter carries) keeps the existing runtime-tagged route, which
+        // reaches that same helper, so loop counters need no range proof here. The bare
+        // packed-counter exemption above is not reused: an existing array can shrink under it
+        // (`array_pop($a)` in the body), and its counter is boxed anyway.
+        // A candidate `array<int>` local written under a key nothing bounds stays typed instead:
+        // codegen keeps the packed write for a key in range and promotes the storage to a hash
+        // only when the key really skips a slot, so the loop keeps raw integer slots where
+        // widening to `Array(Mixed)` would box every one of them.
+        let promotable = !forces_hash
+            && checker.promotable_array_write(
+                array, index, elem_ty, &idx_ty, &normalized_idx_ty, index_is_foreach_key, &val_ty,
+            );
+        // A literal key past `1` may skip a slot of any non-empty packed array, and a negative one
+        // never fits packed storage: the static type moves to a hash, unless the local is a
+        // promotable candidate, whose codegen decides at run time whether the key really skips.
+        let forces_hash = forces_hash
+            || (!promotable
+                && !matches!(elem_ty.as_ref(), PhpType::Never)
+                && nonempty_array_key_forces_hash_storage(index));
+        if promotable {
+            checker.record_promotable_array_local(array);
+        }
+        let skips_nonempty_slot = !forces_hash
+            && !promotable
+            && !matches!(elem_ty.as_ref(), PhpType::Never)
+            && elem_ty.codegen_repr() != PhpType::Mixed
+            && matches!(normalized_idx_ty, PhpType::Int)
+            && !index_is_foreach_key
+            && !matches!(idx_ty, PhpType::Mixed | PhpType::Union(_))
+            && !nonempty_array_key_stays_in_range(index);
+        if skips_nonempty_slot {
+            checker
+                .sparse_key_write_sites
+                .entry(span)
+                .or_default()
+                .insert(array.to_string());
+        }
+        if promotable {
+            // The local keeps its `array<int>` storage; nothing in its static type changes.
+        } else if forces_hash || skips_nonempty_slot {
             let merged_key = if matches!(elem_ty.as_ref(), PhpType::Never) {
                 normalized_idx_ty
             } else {
@@ -170,13 +225,14 @@ pub(super) fn check_array_assign(
     } else if let PhpType::Buffer(elem_ty) = &arr_ty {
         validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
     } else if let PhpType::Object(class_name) = &arr_ty {
-        if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if !checker.object_type_supports_dimensions(class_name) {
             return Err(CompileError::new(
                 span,
                 "Object array assignment requires ArrayAccess",
             ));
         }
     }
+    finish_array_write_view(checker, array, &arr_ty, had_nullable_read, storage.as_ref(), env);
     Ok(())
 }
 
@@ -363,12 +419,17 @@ pub(super) fn check_nested_array_assign(
             if matches!(array.kind, ExprKind::ArrayAccess { .. })
                 && members.iter().all(|member| matches!(member,
                     PhpType::Bool | PhpType::False | PhpType::Void)) => Ok(()),
+        PhpType::Union(members) if members.iter().all(|member| match member {
+            PhpType::Void => true,
+            PhpType::Object(name) => crate::types::builtin_classes::has_native_dimensions(name, &checker.classes),
+            _ => false,
+        }) => Ok(()),
         PhpType::Str => Err(CompileError::new(
             span,
             "String offset assignment is not supported",
         )),
         PhpType::Object(class_name)
-            if checker.object_type_implements_interface(&class_name, "ArrayAccess") =>
+            if checker.object_type_supports_dimensions(&class_name) =>
         {
             Ok(())
         }
@@ -472,17 +533,26 @@ pub(super) fn check_array_push(
     // PHP 8 auto-vivifies an undefined variable on `$a[] = ...`: the append creates an
     // empty array and stores the value. Mirror that here instead of rejecting the write;
     // the generic Mixed element keeps subsequent pushes of other types representable.
-    let Some(arr_ty) = env.get(array).cloned() else {
+    if !env.contains_key(array) {
         let _ = checker.infer_type_with_assignment_effects(value, env)?;
         env.insert(array.to_string(), PhpType::Array(Box::new(PhpType::Mixed)));
         return Ok(());
-    };
+    }
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     super::locals::update_callable_assignment_metadata(checker, array, value, &val_ty, env)?;
+    // The write selects its container after index/RHS effects, which may rebind it.
+    let storage = checker.guarded_local_storage_type(&Expr::var(array), env).cloned()
+        .or_else(|| env.get(array).cloned());
+    let current = env.get(array).cloned().unwrap_or(PhpType::Mixed);
+    let nullable = nullable_array_write_view(&current);
+    let had_nullable_read = nullable.is_some();
+    let arr_ty = nullable.unwrap_or(current);
+    if matches!(arr_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) || arr_ty.is_php_array() { env.insert(array.to_string(), arr_ty.clone()); }
     // Nested appends retain their catchable runtime Error through the generated temporary.
     if arr_ty == PhpType::Str && !array.starts_with(NESTED_APPEND_TEMP_PREFIX) {
         return Err(CompileError::new(span, "[] operator not supported for strings"));
     }
+    record_array_append_element_type(checker, array, &arr_ty, value, &val_ty, span, env);
     if let PhpType::Array(elem_ty) = &arr_ty {
         if **elem_ty != val_ty {
             let merged_ty = checker
@@ -515,14 +585,45 @@ pub(super) fn check_array_push(
             "buffer<T> does not support push; allocate with buffer_new<T>(len)",
         ));
     } else if let PhpType::Object(class_name) = &arr_ty {
-        if !checker.object_type_implements_interface(class_name, "ArrayAccess") {
+        if !checker.object_type_supports_dimensions(class_name) {
             return Err(CompileError::new(
                 span,
                 "Object array push requires ArrayAccess",
             ));
         }
     }
+    finish_array_write_view(checker, array, &arr_ty, had_nullable_read, storage.as_ref(), env);
     Ok(())
+}
+
+/// Records an exact append contract without changing existing widening or diagnostics.
+///
+/// Only a stable variable storage type proves a boxed scalar's representation. Narrowed
+/// mixed/nullable views, arbitrary expressions and conflicting authoritative visits do not.
+fn record_array_append_element_type(
+    checker: &mut Checker, array: &str, receiver: &PhpType, value: &Expr,
+    value_ty: &PhpType, span: Span, env: &TypeEnv,
+) {
+    if !span.identifies_a_node() || checker.member_receiver_analysis_scopes.iter().any(|(function, scope)| {
+        function == &checker.current_function
+            && crate::types::loop_storage_scope_is_within(&checker.current_loop_storage_scope, scope)
+    }) { return; }
+    let proof = match (checker.typed_local_names.get(array), receiver, &value.kind) {
+        (Some(PhpType::Array(declared)), PhpType::Array(current), ExprKind::Variable(name))
+            if declared.as_ref() == current.as_ref() && declared.as_ref() == value_ty
+                && matches!(value_ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str | PhpType::Callable)
+                && checker.local_flow_read_is_stable(name)
+                && checker.definitely_bound_locals.contains(name)
+                && checker.guarded_local_storage_type(value, env).or_else(|| env.get(name)) == Some(value_ty) =>
+        {
+            Some(value_ty.clone())
+        }
+        _ => None,
+    };
+    let key = (checker.current_loop_storage_scope.clone(), span);
+    checker.array_append_element_types.entry(key)
+        .and_modify(|previous| { if *previous != proof { *previous = None; } })
+        .or_insert(proof);
 }
 
 /// Rejects an element write that would widen a local's DECLARED element type.
@@ -557,4 +658,36 @@ fn reject_declared_element_widening(
             val_ty, array, declared
         ),
     ))
+}
+
+/// Removes only null from a concrete array or the shared PHP array contract before a write.
+fn nullable_array_write_view(ty: &PhpType) -> Option<PhpType> {
+    let PhpType::Union(members) = ty else { return None; };
+    if !members.contains(&PhpType::Void) { return None; }
+    let mut arrays: Vec<_> = members.iter().filter(|member| **member != PhpType::Void)
+        .cloned().collect();
+    let array = if arrays.len() == 1 { arrays.pop()? } else { PhpType::Union(arrays) };
+    (matches!(array, PhpType::Array(_) | PhpType::AssocArray { .. }) || array.is_php_array())
+        .then_some(array)
+}
+
+/// Publishes the updated element view while preserving the nullable container's boxed slot.
+fn finish_array_write_view(
+    checker: &mut Checker, array: &str, target: &PhpType, had_nullable_read: bool,
+    previous_storage: Option<&PhpType>, env: &mut TypeEnv,
+) {
+    if !matches!(target, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && !target.is_php_array() { return; }
+    let Some(view) = env.get(array).cloned() else { return; };
+    let nullable_storage = previous_storage.is_some_and(|ty| nullable_array_write_view(ty).is_some());
+    checker.record_local_storage_effect(array, &view);
+    if nullable_storage {
+        let storage = checker.normalize_union_type(vec![view.clone(), PhpType::Void]);
+        checker.guarded_union_types.insert(array.to_string(),
+            GuardedLocalStorage { ty: storage.clone(), coalesced: false });
+        // A mutation has not introduced an EIR unbox for a formerly nullable read.
+        if had_nullable_read || !checker.local_flow_read_is_stable(array) {
+            env.insert(array.to_string(), storage);
+        }
+    }
 }

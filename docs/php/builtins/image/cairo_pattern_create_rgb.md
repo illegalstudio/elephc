@@ -1,8 +1,6 @@
 ---
 title: "cairo_pattern_create_rgb()"
 description: "Creates a solid opaque color pattern."
-sidebar:
-  order: 436
 ---
 
 ## cairo_pattern_create_rgb()
@@ -22,8 +20,9 @@ Creates a solid opaque color pattern.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

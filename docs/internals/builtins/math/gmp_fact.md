@@ -1,8 +1,6 @@
 ---
 title: "gmp_fact() - internals"
 description: "Compiler internals for gmp_fact(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 602
 ---
 
 ## `gmp_fact()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/gmp/gmp_fact.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/gmp/gmp_fact.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:714](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L714) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

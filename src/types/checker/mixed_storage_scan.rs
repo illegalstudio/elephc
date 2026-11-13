@@ -90,6 +90,11 @@ struct NameFacts {
     assigns: Vec<AssignSite>,
     /// Set by any write or aliasing shape that is not a plain statement-form assignment.
     disqualified: bool,
+    /// Set when the bare local is an argument of a call that may bind it BY REFERENCE. Such a
+    /// name is never marked for branch divergence, but a local that only ever holds `null` gets
+    /// boxed storage so the callee can write any value through the reference (see
+    /// [`Checker::mark_null_reference_outputs`]).
+    passed_by_ref: bool,
 }
 
 /// Everything one scan of one body collects.
@@ -274,6 +279,7 @@ impl Checker {
                 warns,
             ));
         }
+        self.mark_null_reference_outputs(&facts);
         // `sort_by` rather than `sort_by_key`: a key closure would have to CLONE the name to own
         // the tuple it returns, once per comparison.
         marks.sort_by(|(left_span, left_name, ..), (right_span, right_name, ..)| {
@@ -303,6 +309,34 @@ impl Checker {
                     .insert(name.clone());
             }
             self.mixed_storage_locals.insert(name);
+        }
+    }
+
+    /// Gives boxed `Mixed` storage to every local that only ever holds `null` (each of its
+    /// assignments is the `null` literal) and is passed bare to a call that may bind it by
+    /// reference: `$read = null; mysqli_poll($read, …)`. Its natural storage is `void`, which no
+    /// value written through the reference fits; the boxed slot is the callee's own cell, so the
+    /// write needs no conversion. Marked silently — nothing about the program is incompatible.
+    fn mark_null_reference_outputs(&mut self, facts: &Facts) {
+        for (name, name_facts) in &facts.names {
+            if !name_facts.passed_by_ref
+                || name_facts.disqualified
+                || name_facts.assigns.is_empty()
+                || !name_facts.assigns.iter().all(|site| matches!(site.ty, PhpType::Void))
+                || !name_facts.assigns.iter().all(|site| site.span.identifies_a_node())
+                || self.active_ref_params.contains(name)
+                || self.local_binding_depth.contains_key(name)
+                || self.name_is_seeded_program_storage(name)
+            {
+                continue;
+            }
+            for site in &name_facts.assigns {
+                self.mixed_storage_store_sites
+                    .entry(site.span)
+                    .or_default()
+                    .insert(name.clone());
+            }
+            self.mixed_storage_locals.insert(name.clone());
         }
     }
 
@@ -339,7 +373,7 @@ impl Checker {
     /// Separated from the replay so the caller can answer it BEFORE building the per-name
     /// transparency vector, which walks every guard region in the body.
     fn name_is_markable(&self, name: &str, facts: &NameFacts) -> bool {
-        if facts.disqualified || facts.assigns.len() < 2 {
+        if facts.disqualified || facts.passed_by_ref || facts.assigns.len() < 2 {
             return false;
         }
         // A reference-aliased name is NEVER markable: the mark gives the local one boxed `Mixed`
@@ -1066,6 +1100,25 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
                 for arg in args {
                     disqualify_root(facts, arg);
                 }
+            } else if callee_binds_pointer_by_ref(checker, name) {
+                // `?ptr<T> &$p` gives a null local POINTER storage instead (see
+                // `record_boxed_reference_output`), so such a local is never boxed here.
+                for arg in args {
+                    disqualify_root(facts, arg);
+                }
+            } else if let Some(promotable) = declared_by_ref_null_promotion(checker, name, args) {
+                // A user / prelude function whose by-reference positions are known: only a
+                // by-reference parameter that admits `null` can take a null-only local as
+                // boxed storage. One that rejects it (`int &$n`) keeps the local's `null`
+                // storage, so the binding check reports php's TypeError at compile time, and
+                // a by-value position (a `?ptr<T> $p` included) keeps its natural storage.
+                for (arg, promotable) in args.iter().zip(promotable) {
+                    if promotable {
+                        disqualify_call_arguments(facts, std::slice::from_ref(arg));
+                    } else {
+                        disqualify_root(facts, arg);
+                    }
+                }
             } else if callee_may_bind_arguments_by_ref(checker, name) {
                 disqualify_call_arguments(facts, args);
             }
@@ -1073,39 +1126,48 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         }
         // Every other call shape resolves its callee from a value, not from a name the scan can
         // look up, so its arguments are disqualified conservatively: a by-reference parameter
-        // anywhere behind them would alias the local for the rest of the body.
-        ExprKind::MethodCall { object, method: _, args }
-        | ExprKind::NullsafeMethodCall { object, method: _, args } => {
-            disqualify_call_arguments(facts, args);
+        // anywhere behind them would alias the local for the rest of the body. A named method
+        // may still take a null-only local as boxed storage (`mysqli::poll($links, $errors, …)`),
+        // unless some class declares that method with a `?ptr<T> &` parameter, whose null local
+        // needs pointer storage instead (see `record_boxed_reference_output`).
+        ExprKind::MethodCall { object, method, args }
+        | ExprKind::NullsafeMethodCall { object, method, args } => {
+            disqualify_named_method_arguments(checker, method, facts, args);
             collect_expr(checker, object, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
+        ExprKind::StaticMethodCall { receiver: _, method, args } => {
+            disqualify_named_method_arguments(checker, method, facts, args);
+            collect_exprs(checker, args, depth, facts);
+        }
+        // A callee resolved from a value (a closure, a dynamic method or class name, a
+        // constructor) can declare any parameter type, a `?ptr<T> &` one included, so a
+        // null-only local passed to it keeps its natural storage.
         ExprKind::NullsafeDynamicMethodCall { object, method, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_expr(checker, object, depth, facts);
             collect_expr(checker, method, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
-        ExprKind::StaticMethodCall { receiver: _, method: _, args }
-        | ExprKind::NewScopedObject { receiver: _, args }
+        ExprKind::NewScopedObject { receiver: _, args }
         | ExprKind::NewObject { class_name: _, args }
         | ExprKind::NewGeneric { class_type: _, args }
         | ExprKind::ClosureCall { var: _, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_exprs(checker, args, depth, facts);
         }
         ExprKind::ExprCall { callee, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_expr(checker, callee, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
         ExprKind::NewDynamic { name_expr, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_expr(checker, name_expr, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
         ExprKind::NewDynamicObject { class_name, fallback_class: _, required_parent: _, args } => {
-            disqualify_call_arguments(facts, args);
+            disqualify_args(facts, args);
             collect_expr(checker, class_name, depth, facts);
             collect_exprs(checker, args, depth, facts);
         }
@@ -1263,6 +1325,14 @@ fn collect_exprs(checker: &Checker, exprs: &[Expr], depth: u32, facts: &mut Fact
 /// its callee declares a by-reference parameter at all (or cannot be resolved), which is rare.
 fn disqualify_call_arguments(facts: &mut Facts, args: &[Expr]) {
     for arg in args {
+        let mut bare = arg;
+        while let ExprKind::NamedArg { value, .. } = &bare.kind {
+            bare = value;
+        }
+        if let ExprKind::Variable(name) = &bare.kind {
+            facts.names.entry(name.clone()).or_default().passed_by_ref = true;
+            continue;
+        }
         disqualify_root(facts, arg);
     }
 }
@@ -1298,6 +1368,185 @@ fn callee_may_bind_arguments_by_ref(checker: &Checker, name: &Name) -> bool {
         return def.ref_params.iter().any(|by_ref| *by_ref);
     }
     true
+}
+
+/// Disqualifies every argument root, with no null-only promotion: the arguments of a call
+/// whose callee, and so its parameter storage, the scan cannot resolve.
+fn disqualify_args(facts: &mut Facts, args: &[Expr]) {
+    for arg in args {
+        disqualify_root(facts, arg);
+    }
+}
+
+/// Handles the arguments of a call to a method named `method` on a receiver the scan cannot
+/// resolve, against every class method (instance or static, case-insensitive) of that name.
+/// Per positional argument, a null-only local may take boxed storage only where some
+/// candidate binds that position by reference and none declares a pointer type there (a
+/// `?ptr<T>` parameter, by reference or by value, needs the local's own null/pointer storage);
+/// every other position is disqualified plainly. A method no class declares keeps the generic
+/// by-reference handling, and named or spread arguments fall back to the whole-call rule.
+fn disqualify_named_method_arguments(checker: &Checker, method: &str, facts: &mut Facts, args: &[Expr]) {
+    let sigs: Vec<&crate::types::FunctionSig> = checker
+        .classes
+        .values()
+        .flat_map(|class| class.methods.iter().chain(class.static_methods.iter()))
+        .filter(|(name, _)| name.eq_ignore_ascii_case(method))
+        .map(|(_, sig)| sig)
+        .collect();
+    if sigs.is_empty() {
+        disqualify_call_arguments(facts, args);
+        return;
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
+    {
+        if sigs.iter().any(|sig| (0..sig.params.len()).any(|index| sig_param_mentions_pointer(sig, index))) {
+            disqualify_args(facts, args);
+        } else {
+            disqualify_call_arguments(facts, args);
+        }
+        return;
+    }
+    for (index, arg) in args.iter().enumerate() {
+        let by_ref = sigs.iter().any(|sig| sig_param_is_by_ref(sig, index));
+        let pointer = sigs.iter().any(|sig| sig_param_mentions_pointer(sig, index));
+        if by_ref && !pointer {
+            disqualify_call_arguments(facts, std::slice::from_ref(arg));
+        } else {
+            disqualify_root(facts, arg);
+        }
+    }
+}
+
+/// The declared parameter a positional argument `index` binds: its own, or the trailing
+/// variadic one past the end.
+fn sig_param_index(sig: &crate::types::FunctionSig, index: usize) -> Option<usize> {
+    if index < sig.params.len() {
+        Some(index)
+    } else if sig.variadic.is_some() && !sig.params.is_empty() {
+        Some(sig.params.len() - 1)
+    } else {
+        None
+    }
+}
+
+/// Whether positional argument `index` binds a by-reference parameter of `sig`.
+fn sig_param_is_by_ref(sig: &crate::types::FunctionSig, index: usize) -> bool {
+    sig_param_index(sig, index).is_some_and(|param| sig.ref_params.get(param).copied().unwrap_or(false))
+}
+
+/// Whether positional argument `index` binds a parameter of `sig` whose type is, or contains,
+/// a pointer (by reference or by value).
+fn sig_param_mentions_pointer(sig: &crate::types::FunctionSig, index: usize) -> bool {
+    sig_param_index(sig, index).is_some_and(|param| {
+        sig.param_type_exprs
+            .get(param)
+            .and_then(|ty| ty.as_ref())
+            .is_some_and(type_expr_mentions_pointer)
+            || sig.params.get(param).is_some_and(|(_, ty)| php_type_mentions_pointer(ty))
+    })
+}
+
+/// Whether a resolved parameter type is, or contains, a pointer.
+fn php_type_mentions_pointer(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Pointer(_) => true,
+        PhpType::Union(members) => members.iter().any(php_type_mentions_pointer),
+        _ => false,
+    }
+}
+
+/// For a call to a declared function, returns per argument whether a null-only local there
+/// may take boxed storage: it binds (positionally, by name, or through the variadic tail) a
+/// BY-REFERENCE parameter whose declared type admits `null` (`?array &$a`, `mixed &...$rest`;
+/// not `int &$n`, nor any by-value parameter such as `?ptr<T> $p`). A spread argument, or a
+/// name the function does not declare, is never promotable. `None` for an unknown callee or
+/// one without any by-reference parameter, leaving the caller's generic handling.
+fn declared_by_ref_null_promotion(checker: &Checker, name: &Name, args: &[Expr]) -> Option<Vec<bool>> {
+    let raw = name.as_str();
+    let trimmed = raw.trim_start_matches('\\');
+    let decl = checker
+        .fn_decls
+        .get(raw)
+        .or_else(|| checker.fn_decls.get(trimmed))?;
+    if !decl.variadic_by_ref && !decl.ref_params.iter().any(|by_ref| *by_ref) {
+        return None;
+    }
+    let admits_null = |ty: Option<&crate::parser::ast::TypeExpr>| ty.is_none_or(type_expr_admits_null);
+    let param = |index: usize| {
+        decl.ref_params.get(index).copied().unwrap_or(false)
+            && admits_null(decl.param_types.get(index).and_then(|ty| ty.as_ref()))
+    };
+    let variadic = || decl.variadic.is_some() && decl.variadic_by_ref && admits_null(decl.variadic_type.as_ref());
+    let mut positional = 0usize;
+    Some(
+        args.iter()
+            .map(|arg| match &arg.kind {
+                ExprKind::NamedArg { name, .. } => {
+                    let name = name.trim_start_matches('$');
+                    match decl.params.iter().position(|param| param.trim_start_matches('$') == name) {
+                        Some(index) => param(index),
+                        // An unknown name lands in the variadic tail (php collects it there).
+                        None => variadic(),
+                    }
+                }
+                ExprKind::Spread(_) => false,
+                _ => {
+                    let index = positional;
+                    positional += 1;
+                    if index < decl.params.len() {
+                        param(index)
+                    } else {
+                        variadic()
+                    }
+                }
+            })
+            .collect(),
+    )
+}
+
+/// Whether a declared parameter type admits `null` (nullable, a union with `null`, `mixed`).
+fn type_expr_admits_null(ty: &crate::parser::ast::TypeExpr) -> bool {
+    use crate::parser::ast::TypeExpr;
+    match ty {
+        TypeExpr::Nullable(_) => true,
+        TypeExpr::Union(members) => members.iter().any(type_expr_admits_null),
+        TypeExpr::Named(name) => {
+            let name = name.as_str().trim_start_matches('\\');
+            name.eq_ignore_ascii_case("mixed") || name.eq_ignore_ascii_case("null")
+        }
+        _ => false,
+    }
+}
+
+/// Returns whether a called NAME declares a by-reference parameter of pointer type
+/// (`?ptr<T> &$p`), whose null locals take pointer storage rather than boxed Mixed storage.
+fn callee_binds_pointer_by_ref(checker: &Checker, name: &Name) -> bool {
+    let raw = name.as_str();
+    let trimmed = raw.trim_start_matches('\\');
+    let Some(decl) = checker
+        .fn_decls
+        .get(raw)
+        .or_else(|| checker.fn_decls.get(trimmed))
+    else {
+        return false;
+    };
+    decl.param_types
+        .iter()
+        .zip(decl.ref_params.iter())
+        .any(|(ty, by_ref)| *by_ref && ty.as_ref().is_some_and(type_expr_mentions_pointer))
+}
+
+/// Whether a declared parameter type is, or contains, a `ptr<T>` member.
+fn type_expr_mentions_pointer(ty: &crate::parser::ast::TypeExpr) -> bool {
+    use crate::parser::ast::TypeExpr;
+    match ty {
+        TypeExpr::Ptr(_) => true,
+        TypeExpr::Nullable(inner) => type_expr_mentions_pointer(inner),
+        TypeExpr::Union(members) => members.iter().any(type_expr_mentions_pointer),
+        _ => false,
+    }
 }
 
 /// Returns whether a called name is PHP's `eval`.

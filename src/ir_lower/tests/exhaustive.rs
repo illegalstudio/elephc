@@ -124,6 +124,7 @@ fn dummy_check_result() -> CheckResult {
 
     CheckResult {
         requested_instantiations: Vec::new(),
+        requested_promotable_clones: Vec::new(),
         requested_class_instantiations: Vec::new(),
         requested_method_instantiations: Vec::new(),
         generic_method_sites: std::collections::HashMap::new(),
@@ -137,6 +138,7 @@ fn dummy_check_result() -> CheckResult {
         return_alias_summaries: Default::default(),
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),
+        closure_param_hints: HashMap::new(),
         interfaces: HashMap::new(),
         classes,
         enums,
@@ -148,8 +150,11 @@ fn dummy_check_result() -> CheckResult {
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
         builtin_call_types: HashMap::new(),
+        closure_generator_spans: Default::default(),
         array_push_property_plans: HashMap::new(),
         member_receiver_types: HashMap::new(),
+        array_append_element_types: HashMap::new(),
+        local_value_read_types: HashMap::new(),
         boxed_reference_promotion_sites: HashMap::new(),
         buffer_read_sites: Default::default(),
         first_class_builtin_call_types: HashMap::new(),
@@ -159,6 +164,8 @@ fn dummy_check_result() -> CheckResult {
         local_ref_detach_sites: Default::default(),
         local_retype_sites: Default::default(),
         mixed_storage_store_sites: Default::default(),
+        sparse_key_write_sites: Default::default(),
+        promotable_arrays: Default::default(),
     }
 }
 
@@ -223,6 +230,7 @@ fn class_info(_class_name: &str) -> ClassInfo {
         readonly_properties: Default::default(),
         reference_properties: Default::default(),
         owned_reference_properties: Default::default(),
+        owned_reference_property_slots: Default::default(),
         promoted_properties: Default::default(),
         property_reference_slots: Vec::new(),
         abstract_properties: Default::default(),

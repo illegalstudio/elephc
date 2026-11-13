@@ -1,8 +1,6 @@
 ---
 title: "token_get_all() - internals"
 description: "Compiler internals for token_get_all(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 1014
 ---
 
 ## `token_get_all()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/tokenizer_prelude.rs`:48](https://github.com/illegalstudio/elephc/blob/main/src/tokenizer_prelude.rs#L48) (`token_get_all`)
+- **Lowering**: [`src/tokenizer_prelude.rs`](https://github.com/illegalstudio/elephc/blob/main/src/tokenizer_prelude.rs) (`token_get_all`)
 - **Function symbol**: `token_get_all()`
 
 

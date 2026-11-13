@@ -13,6 +13,7 @@ use super::*;
 use super::binding::bind_builtin_arguments;
 use crate::interpreter::dynamic_functions::builtin_arguments;
 use elephc_builtin_contract::BuiltinContract;
+use crate::runtime_hooks::owner_frames::with_runtime_owners;
 
 /// Evaluates call_user_func inputs by value before adapting required references into temporary cells.
 pub(in crate::interpreter) fn eval_builtin_call_by_value(
@@ -145,9 +146,11 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
                 argument.value = argument.value.borrowed();
                 argument
             }).collect();
-            return eval_call_user_func_with_call_args_from_scope(
-                borrowed, lexical_scope.as_deref(), context, values,
-            ).and_then(|result| promote_borrowed_result(result, values));
+            return with_runtime_owners(&owners, || {
+                eval_call_user_func_with_call_args_from_scope(
+                    borrowed, lexical_scope.as_deref(), context, values,
+                ).and_then(|result| promote_borrowed_result(result, values))
+            });
         }
         ordered = bind_builtin_arguments(name, evaluated.clone(), values, Some(&mut owners))?;
         if callback {
@@ -165,14 +168,16 @@ fn with_owned_builtin_arguments<V: RuntimeValueOps>(
             .copied()
             .map(RuntimeCellHandle::borrowed)
             .collect::<Vec<_>>();
-        let result = eval_builtin_with_values_from_scope(
-            name,
-            &borrowed,
-            lexical_scope.as_deref(),
-            context,
-            values,
-        )?.ok_or(EvalStatus::UnsupportedConstruct)?;
-        promote_borrowed_result(result, values)
+        with_runtime_owners(&owners, || {
+            let result = eval_builtin_with_values_from_scope(
+                name,
+                &borrowed,
+                lexical_scope.as_deref(),
+                context,
+                values,
+            )?.ok_or(EvalStatus::UnsupportedConstruct)?;
+            promote_borrowed_result(result, values)
+        })
     })();
     let preserved = result.as_ref().ok().copied();
     for reference in callback_reference_metadata {

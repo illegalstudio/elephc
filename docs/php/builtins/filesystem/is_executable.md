@@ -1,8 +1,6 @@
 ---
 title: "is_executable()"
 description: "Tells whether the filename is executable."
-sidebar:
-  order: 282
 ---
 
 ## is_executable()
@@ -20,8 +18,9 @@ Tells whether the filename is executable.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/is_executable.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/is_executable.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

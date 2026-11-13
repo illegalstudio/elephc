@@ -1,8 +1,6 @@
 ---
 title: "gmp_random_seed()"
 description: "Seeds PHP's GMP random generator."
-sidebar:
-  order: 627
 ---
 
 ## gmp_random_seed()
@@ -20,8 +18,9 @@ Seeds PHP's GMP random generator.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/gmp/gmp_random_seed.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/gmp/gmp_random_seed.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

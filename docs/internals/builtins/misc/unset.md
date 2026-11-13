@@ -1,8 +1,6 @@
 ---
 title: "unset() - internals"
 description: "Compiler internals for unset(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 762
 ---
 
 ## `unset()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:146](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L146) (`lower_unset_builtin`)
+- **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs) (`lower_unset_builtin`)
 - **Function symbol**: `lower_unset_builtin()`
 
 
@@ -23,7 +21,7 @@ sidebar:
 - directly and then names the one shape users hit most.
 - Fixed untyped slots selected by reachable property `unset()` operations are widened to
 - boxed `Mixed` and lowered through `PropUnset`, so they do not reach this fallback. Packed
-- fields, by-reference property slots, and dynamic shapes whose magic behavior depends on
+- fields, borrowed or untyped reference-property slots, and dynamic shapes whose magic behavior depends on
 - runtime state remain deliberately unsupported.
 - A BY-REFERENCE INDEXED ARRAY is the shape named here. `unset()` removes a key without
 - renumbering, so a packed list has to become a hash — and a callee cannot retype the

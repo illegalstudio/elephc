@@ -1,8 +1,6 @@
 ---
 title: "lcg_value()"
 description: "Combined linear congruential generator."
-sidebar:
-  order: 646
 ---
 
 ## lcg_value()
@@ -19,8 +17,9 @@ Combined linear congruential generator.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected random prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

@@ -52,10 +52,13 @@ const BUILTIN_REFLECTION_CLASS_NAMES: &[&str] = &[
 /// `ReflectionEnum::getBackingType()` has no such path; its row lowers the type classes, but the
 /// object that getter returns is unusable for a separate reason — it crashes even when nothing
 /// stringifies it — so no test can exercise that row until that is fixed.
+///
+/// A class builder answers with a `ReflectionEnum` when the class is an enum (php's class
+/// factory does the same), so the class getters list it too.
 const MATERIALIZED_REFLECTION_SLOTS: &[(&str, &str, &[&str])] = &[
     ("getdeclaringfunction", "__declaring_function", &["ReflectionFunction", "ReflectionMethod"]),
-    ("getdeclaringclass", "__declaring_class", &["ReflectionClass"]),
-    ("getclass", "__class", &["ReflectionClass"]),
+    ("getdeclaringclass", "__declaring_class", &["ReflectionClass", "ReflectionEnum"]),
+    ("getclass", "__class", &["ReflectionClass", "ReflectionEnum"]),
     ("getparentclass", "__parent_class", &["ReflectionClass"]),
     ("getinterfaces", "__interfaces", &["ReflectionClass"]),
     ("gettraits", "__traits", &["ReflectionClass"]),

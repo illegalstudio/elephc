@@ -1,27 +1,25 @@
 ---
 title: "mysqli_get_client_version()"
 description: "Returns the client library version as an integer."
-sidebar:
-  order: 134
 ---
 
 ## mysqli_get_client_version()
 
 ```php
-function mysqli_get_client_version(mixed $mysql): int
+function mysqli_get_client_version(): int
 ```
 
 Returns the client library version as an integer.
 
-**Parameters**:
-- `$mysql` (`mixed`)
+**Parameters**: none.
 
 **Returns**: `int`
 
 ## Availability
 
-- **Compiled (AOT)**: supported through an injected elephc-PHP prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

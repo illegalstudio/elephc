@@ -164,10 +164,36 @@ fn assert_run_for_version(
         "program stdout diverged"
     );
     assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
+        normalize_runtime_stderr(&String::from_utf8_lossy(&output.stderr)),
         expected_stderr,
         "program stderr diverged"
     );
+}
+
+
+/// Removes the runtime diagnostic's leading framing and ` in FILE on line N` suffix.
+///
+/// The compiler now prints PHP's caller location for every displayed diagnostic. These
+/// fixtures pin the message body and warning count, not the temp-directory path.
+fn normalize_runtime_stderr(stderr: &str) -> String {
+    fn strip_location(line: &str) -> &str {
+        let Some(on_line) = line.rfind(" on line ") else { return line; };
+        let suffix = &line[on_line + " on line ".len()..];
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return line;
+        }
+        line[..on_line].rfind(" in ").map_or(line, |in_pos| &line[..in_pos])
+    }
+    let mut normalized = String::new();
+    for line in stderr.lines() {
+        let line = strip_location(line);
+        if line.is_empty() {
+            continue;
+        }
+        normalized.push_str(line);
+        normalized.push('\n');
+    }
+    normalized
 }
 
 /// Returns `NAN_WARNING` repeated `count` times, i.e. the whole stderr of a program that

@@ -1,8 +1,6 @@
 ---
 title: "cairo_set_line_cap()"
 description: "Selects how the ends of a stroked line are drawn."
-sidebar:
-  order: 444
 ---
 
 ## cairo_set_line_cap()
@@ -21,8 +19,9 @@ Selects how the ends of a stroked line are drawn.
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected image prelude.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

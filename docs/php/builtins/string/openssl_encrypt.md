@@ -1,8 +1,6 @@
 ---
 title: "openssl_encrypt()"
-description: "Encrypts data with a supported AES cipher."
-sidebar:
-  order: 973
+description: "Encrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog."
 ---
 
 ## openssl_encrypt()
@@ -11,7 +9,7 @@ sidebar:
 function openssl_encrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed
 ```
 
-Encrypts data with a supported AES cipher.
+Encrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog.
 
 **Parameters**:
 - `$data` (`string`)
@@ -27,8 +25,9 @@ Encrypts data with a supported AES cipher.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/openssl_encrypt.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/openssl_encrypt.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

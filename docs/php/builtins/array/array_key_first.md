@@ -1,8 +1,6 @@
 ---
 title: "array_key_first()"
 description: "Gets the first key of an array."
-sidebar:
-  order: 21
 ---
 
 ## array_key_first()
@@ -20,8 +18,9 @@ Gets the first key of an array.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Not available yet |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

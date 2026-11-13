@@ -1,8 +1,6 @@
 ---
 title: "mysqli_character_set_name() - internals"
 description: "Compiler internals for mysqli_character_set_name(): lowering path, type checks, and runtime helpers."
-sidebar:
-  order: 105
 ---
 
 ## `mysqli_character_set_name()` - internals
@@ -10,7 +8,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_data.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_data.rs)
-- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`:211](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs#L211) (`mysqli_character_set_name`)
+- **Lowering**: [`src/mysqli_prelude/build/procedural.rs`](https://github.com/illegalstudio/elephc/blob/main/src/mysqli_prelude/build/procedural.rs) (`mysqli_character_set_name`)
 - **Function symbol**: `mysqli_character_set_name()`
 
 

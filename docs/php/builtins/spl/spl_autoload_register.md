@@ -1,8 +1,6 @@
 ---
 title: "spl_autoload_register()"
 description: "Register given function as __autoload() implementation."
-sidebar:
-  order: 848
 ---
 
 ## spl_autoload_register()
@@ -22,8 +20,9 @@ Register given function as __autoload() implementation.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_register.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/spl_autoload_register.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

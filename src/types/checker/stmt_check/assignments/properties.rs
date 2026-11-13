@@ -13,8 +13,8 @@ use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_m
 use crate::parser::ast::{is_compound_property_assignment_self_read, Expr};
 use crate::span::Span;
 use crate::types::{
-    merge_array_key_types, normalized_array_key_type, static_array_key_forces_hash_storage,
-    PhpType, TypeEnv,
+    array_key_contiguity_is_unproven, merge_array_key_types, normalized_array_key_type,
+    static_array_key_forces_hash_storage, PhpType, TypeEnv,
 };
 
 use super::super::super::scope_dynamic_storage;
@@ -79,14 +79,20 @@ pub(super) fn check_property_array_push(
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let obj_ty = checker.union_single_object_class(&obj_ty)
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
-            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
+            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::False))))
         .map(PhpType::Object).unwrap_or(obj_ty);
+    if matches!(&obj_ty, PhpType::Object(name) if name.is_empty()
+        || checker.interfaces.contains_key(name)
+        || crate::types::checker::builtin_stdclass::is_stdclass(name)) {
+        return Ok(());
+    }
     match &obj_ty {
+        PhpType::Mixed => Ok(()),
         PhpType::Object(class_name) => {
             refuse_scope_dynamic_element_write(checker, class_name, property, span)?;
             let (prop_ty, property_has_declared_type) =
                 resolve_object_array_property(checker, class_name, property, span)?;
-            if matches!(&prop_ty, PhpType::Object(name) if name.eq_ignore_ascii_case("WeakMap")) {
+            if property_supports_object_dimensions(checker, &prop_ty) {
                 return Ok(());
             }
             let updated_prop_ty = updated_array_property_push_type(
@@ -182,6 +188,9 @@ fn refuse_scope_dynamic_element_write(
     property: &str,
     span: Span,
 ) -> Result<(), CompileError> {
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Get, &checker.classes).is_some()
+    { return Ok(()); }
     if !scope_dynamic_storage::mutation_targets_scope_dynamic_name(checker, class_name, property) {
         return Ok(());
     }
@@ -212,13 +221,17 @@ pub(super) fn check_property_array_assign(
 ) -> Result<(), CompileError> {
     let obj_ty = checker.infer_type_with_assignment_effects(object, env)?;
     let idx_ty = checker.infer_type_with_assignment_effects(index, env)?;
-    let normalized_idx_ty = normalized_array_key_type(index, idx_ty.clone());
+    let normalized_idx_ty = property_write_key_type(normalized_array_key_type(index, idx_ty.clone()));
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let obj_ty = checker.union_single_object_class(&obj_ty)
         .filter(|_| matches!(&obj_ty, PhpType::Union(members)
-            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void))))
+            if members.iter().all(|ty| matches!(ty, PhpType::Object(_) | PhpType::Void | PhpType::False))))
         .map(PhpType::Object).unwrap_or(obj_ty);
-    if matches!(obj_ty, PhpType::Mixed) {
+    if matches!(obj_ty, PhpType::Mixed)
+        || matches!(&obj_ty, PhpType::Object(name) if name.is_empty()
+            || checker.interfaces.contains_key(name)
+            || crate::types::checker::builtin_stdclass::is_stdclass(name))
+    {
         if !is_php_array_key_type(&normalized_idx_ty) {
             return Err(CompileError::new(span, "Array index must be integer"));
         }
@@ -235,10 +248,8 @@ pub(super) fn check_property_array_assign(
                     super::arrays::STRING_OFFSET_ON_PROPERTY_UNSUPPORTED,
                 ));
             }
-            if let PhpType::Object(prop_class_name) = &prop_ty {
-                if checker.object_type_implements_interface(prop_class_name, "ArrayAccess") {
-                    return Ok(());
-                }
+            if property_supports_object_dimensions(checker, &prop_ty) {
+                return Ok(());
             }
             if let PhpType::Buffer(elem_ty) = &prop_ty {
                 super::arrays::validate_buffer_element_write(elem_ty, &idx_ty, &val_ty, span)?;
@@ -252,8 +263,8 @@ pub(super) fn check_property_array_assign(
                 checker,
                 &prop_ty,
                 property_has_declared_type,
-                class_name,
-                property,
+                true,
+                &format!("Property {}::${}[]", class_name, property),
                 index,
                 &normalized_idx_ty,
                 &val_ty,
@@ -318,6 +329,9 @@ fn check_object_property_write(
     if crate::types::checker::builtin_stdclass::is_stdclass(class_name) {
         return Ok(());
     }
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Set, &checker.classes).is_some()
+    { return Ok(()); }
     // php 7.4 removed shadow properties. A strict ancestor's `private $p` lives under a mangled
     // key and the child's by-name table does not contain it at all, so a write outside the
     // declaring class CREATES a distinct dynamic property rather than being an access error.
@@ -450,9 +464,9 @@ fn check_object_property_write(
             );
             if initialization_denied { return Ok(()); }
         }
-        // A property with a `get` hook but no `set` hook is read-only: external writes are an error
-        // (PHP rejects writing a virtual/get-only hooked property). Writes from inside the property's
-        // own accessor target the raw backing slot and are allowed.
+        // A virtual getter without a setter is read-only. A backed getter still has PHP's
+        // ordinary storage write when no setter is declared. Accessor-internal writes use
+        // the backing slot directly.
         let has_get_hook = class_info
             .methods
             .contains_key(&php_symbol_key(&property_hook_get_method(property)));
@@ -467,7 +481,9 @@ fn check_object_property_write(
                 method == php_symbol_key(&property_hook_get_method(property))
                     || method == php_symbol_key(&property_hook_set_method(property))
             });
-        if has_get_hook && !has_set_hook && !in_own_accessor {
+        let virtual_property = class_info.property_hooks.get(property)
+            .is_some_and(|hooks| hooks.is_virtual());
+        if virtual_property && has_get_hook && !has_set_hook && !in_own_accessor {
             return Err(CompileError::new(
                 span,
                 &format!(
@@ -579,6 +595,8 @@ fn untyped_property_value_needs_nullable_storage(val_ty: &PhpType) -> bool {
 
 /// Computes the refined stored type for an untyped property after a write, shared by the
 /// instance and static property refinement paths. Returns `None` when the type is unchanged.
+/// Other incompatible writes widen the slot to `Mixed`, preserving both earlier and later
+/// values without imposing the first inferred PHP type on the property.
 ///
 /// Untyped properties start as `Void` (their default is null, implicit or explicit), so a
 /// scalar/array value — whose native slot cannot also represent null — is stored as the
@@ -587,12 +605,13 @@ fn untyped_property_value_needs_nullable_storage(val_ty: &PhpType) -> bool {
 /// their slots already encode null. A later write outside an existing nullable union widens
 /// to `Mixed` (PHP untyped properties accept anything). Untyped non-null defaults keep the
 /// historical rebind, and array-typed slots keep `[]`-placeholder adoption and generic-array
-/// element specialization.
+/// element specialization, except that an empty `[]` never narrows an `array<mixed>` slot.
 pub(super) fn refined_untyped_property_assignment_type(
     checker: &Checker,
     current: &PhpType,
     val_ty: &PhpType,
     definitely_initialized: bool,
+    already_refined_in_pass: bool,
 ) -> Option<PhpType> {
     match current {
         PhpType::Void => {
@@ -634,8 +653,23 @@ pub(super) fn refined_untyped_property_assignment_type(
                 // the element type stays `Never` and codegen mis-emits later reads.
                 return Some(val_ty.clone());
             }
+            // `[]` fits any indexed storage: an `array<mixed>` slot keeps its boxed cells
+            // instead of narrowing back to the `array<never>` placeholder, whose next write
+            // of `$n ?? null` would meet a tagged scalar the backend cannot store (#1944).
+            if is_empty_array_placeholder(val_ty) && Checker::is_generic_array_hint(current) {
+                return None;
+            }
             let refined_ty = Checker::specialize_generic_array_hint(current, val_ty);
-            (refined_ty != *current).then_some(refined_ty)
+            if refined_ty != *current {
+                return Some(refined_ty);
+            }
+            if *val_ty == PhpType::Void && !untyped_property_value_needs_nullable_storage(current) {
+                return None;
+            }
+            if definitely_initialized && *val_ty == PhpType::Int && !already_refined_in_pass {
+                return None;
+            }
+            (!checker.type_accepts(current, val_ty)).then_some(PhpType::Mixed)
         }
     }
 }
@@ -651,6 +685,9 @@ fn refine_object_property_type(
     property: &str,
     val_ty: &PhpType,
 ) {
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Set, &checker.classes).is_some()
+    { return; }
     // A name php resolves to a DYNAMIC property never reaches the physical slot
     // `visible_property_index` finds for it, so widening that slot would restamp an ancestor's
     // private storage from a write that only ever creates a distinct dynamic property. The
@@ -679,6 +716,8 @@ fn refine_object_property_type(
             &class_info.properties[slot].1,
             val_ty,
             definitely_initialized,
+            checker.method_property_refinements.as_ref().is_none_or(|slots|
+                slots.contains(&(class_name.to_string(), slot))),
         ) else {
             return;
         };
@@ -696,12 +735,17 @@ fn refine_object_property_type(
 /// name lookup points at a separate slot. A non-private array redeclaration also shares the
 /// slot, even when its default has already given it a different element type. All views of an
 /// associative slot need one hash representation that can hold every redeclared default.
+///
+/// An element whose storage is the inline tagged scalar (`int|null`, as `$n ?? null` over a
+/// `?int $n` is) is stored boxed: the slot type drives the backend's `[]` default, reads and
+/// writes, none of which has a tagged entry (`box_tagged_scalar_array_elements`).
 fn update_inherited_property_slot_type(
     checker: &mut Checker,
     class_name: &str,
     property: &str,
     ty: PhpType,
 ) {
+    let ty = crate::types::box_tagged_scalar_array_elements(ty);
     let Some(class_info) = checker.classes.get(class_name) else {
         return;
     };
@@ -747,6 +791,9 @@ fn update_inherited_property_slot_type(
     for name in inheritors {
         if let Some(info) = checker.classes.get_mut(&name) {
             info.properties[slot].1 = shared_ty.clone();
+            if let Some(refined) = &mut checker.method_property_refinements {
+                refined.insert((name.clone(), slot));
+            }
         }
     }
 }
@@ -906,11 +953,33 @@ fn resolve_object_array_property(
     property: &str,
     span: Span,
 ) -> Result<(PhpType, bool), CompileError> {
+    if class_name.is_empty() || checker.interfaces.contains_key(class_name) {
+        return Ok((PhpType::Mixed, false));
+    }
     let class_info = checker
         .classes
         .get(class_name)
         .ok_or_else(|| CompileError::new(span, &format!("Undefined class: {}", class_name)))?;
+    if crate::types::builtin_classes::native_property_method(class_name, property,
+        elephc_builtin_contract::ObjectProperty::Get, &checker.classes).is_some()
+    { return Ok((PhpType::Object(class_name.to_string()), true)); }
+    let inaccessible_read = class_info.property_visibilities.get(property).is_some_and(|visibility| {
+        let declaring = class_info.property_declaring_classes.get(property)
+            .map(String::as_str).unwrap_or(class_name);
+        !checker.can_access_member(declaring, visibility)
+    });
+    if inaccessible_read {
+        if let Some(getter) = class_info.methods.get("__get") {
+            // The selected value belongs to the accessor, never to the inaccessible slot.
+            return Ok((getter.return_type.clone(), true));
+        }
+    }
     if class_info.visible_property(property).is_none() {
+        if crate::types::builtin_classes::has_native_dimensions(class_name, &checker.classes) {
+            if let Some(sig) = class_info.methods.get("__get") {
+                return Ok((sig.return_type.clone(), true));
+            }
+        }
         return Err(CompileError::new(
             span,
             &format!("Undefined property: {}::{}", class_name, property),
@@ -942,7 +1011,14 @@ fn updated_array_property_push_type(
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if prop_ty.is_php_array() {
+    if property_has_declared_type {
+        if let Some(nonnull) = nullable_dimension_property_type(prop_ty) {
+            updated_array_property_push_type(checker, &nonnull, true,
+                class_name, property, val_ty, span)?;
+            return Ok(prop_ty.clone());
+        }
+    }
+    if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());
     }
     match prop_ty {
@@ -964,6 +1040,19 @@ fn updated_array_property_push_type(
                 Ok(PhpType::Array(Box::new(merged_ty)))
             }
         }
+        // An untyped slot a skipping key promoted to hash storage keeps accepting appends: PHP
+        // appends at the next integer key, which `HashAppend` computes from the hash itself.
+        PhpType::AssocArray { key, value } if !property_has_declared_type => {
+            let merged_value = if value.as_ref() == val_ty {
+                *value.clone()
+            } else {
+                checker.merge_array_element_type(value, val_ty).unwrap_or(PhpType::Mixed)
+            };
+            Ok(PhpType::AssocArray {
+                key: Box::new(merge_array_key_types(*key.clone(), PhpType::Int)),
+                value: Box::new(merged_value),
+            })
+        }
         PhpType::Int | PhpType::Void if !property_has_declared_type => {
             Ok(PhpType::Array(Box::new(val_ty.clone())))
         }
@@ -978,26 +1067,77 @@ fn updated_array_property_push_type(
     }
 }
 
+/// Recognizes native or ArrayAccess object storage without discarding its nullable branches.
+fn property_supports_object_dimensions(checker: &Checker, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(name) => checker.object_type_supports_dimensions(name),
+        PhpType::Union(members) => members.iter().any(|member| *member != PhpType::Void)
+            && members.iter().all(|member| *member == PhpType::Void
+                || property_supports_object_dimensions(checker, member)),
+        _ => false,
+    }
+}
+
+/// Removes only a union's null alternative for container validation, preserving the stored type.
+fn nullable_dimension_property_type(ty: &PhpType) -> Option<PhpType> {
+    let PhpType::Union(members) = ty else { return None; };
+    if !members.contains(&PhpType::Void) { return None; }
+    let mut nonnull: Vec<_> = members.iter().filter(|member| **member != PhpType::Void).cloned().collect();
+    match nonnull.len() {
+        0 => None,
+        1 => nonnull.pop(),
+        _ => Some(PhpType::Union(nonnull)),
+    }
+}
+
 /// Computes the updated type of an array property after an indexed write (`$prop[$index] = value`).
 ///
 /// Handles `PhpType::Array` and `PhpType::AssocArray` storage:
 /// - For `Array`: validates element type compatibility, handles `Never`-element arrays specially
-///   (converts to `AssocArray` when a static key forces hash storage), and merges element types
-///   for untyped properties.
+///   (converts to `AssocArray` when a static key forces hash storage), converts an untyped
+///   instance property to `AssocArray` for any integer key that may skip a slot, and merges element
+///   types for untyped properties.
 /// - For `AssocArray`: merges the key type with the index type and merges the value type with
 ///   the assigned value, preserving declared-type constraints.
-fn updated_array_property_assign_type(
+/// - A `Mixed` slot keeps its representation and validates its runtime payload when writing.
+///
+/// `element_label` names the written element in compatibility diagnostics (`Property C::$p[]`,
+/// `Static property C::$p[]`): static properties share this promotion so a string key on an
+/// untyped `[]` slot stores a hash instead of an indexed array that drops the key. A key that
+/// is not provably an integer on a declared packed `array<T>` is refused, since that slot
+/// keeps its packed storage and the write would coerce the key into an index.
+///
+/// `instance_slot` limits the skipping-key promotion to instance properties: a static slot keeps
+/// its packed storage under an integer key, because its compound writes (`C::$p[$k] ??= v`) store
+/// the promoted hash with boxed values, which the typed static slot does not accept.
+pub(super) fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
     property_has_declared_type: bool,
-    class_name: &str,
-    property: &str,
+    instance_slot: bool,
+    element_label: &str,
     index: &Expr,
     normalized_idx_ty: &PhpType,
     val_ty: &PhpType,
     span: Span,
 ) -> Result<PhpType, CompileError> {
-    if prop_ty.is_php_array() {
+    if property_has_declared_type {
+        if let Some(nonnull) = nullable_dimension_property_type(prop_ty) {
+            updated_array_property_assign_type(
+                checker,
+                &nonnull,
+                true,
+                instance_slot,
+                element_label,
+                index,
+                normalized_idx_ty,
+                val_ty,
+                span,
+            )?;
+            return Ok(prop_ty.clone());
+        }
+    }
+    if prop_ty.is_php_array() || matches!(prop_ty, PhpType::Mixed | PhpType::Iterable) {
         return Ok(prop_ty.clone());
     }
     match prop_ty {
@@ -1005,13 +1145,30 @@ fn updated_array_property_assign_type(
             if !matches!(normalized_idx_ty, PhpType::Int)
                 || (matches!(elem_ty.as_ref(), PhpType::Never)
                     && static_array_key_forces_hash_storage(index))
+                || (instance_slot
+                    && !property_has_declared_type
+                    && untyped_property_key_may_skip(index))
             {
+                // A declared `array<T>` is a packed vector that keeps its storage, so a key
+                // that is not provably an integer would be coerced into an index and a string
+                // key would overwrite element 0 in silence. Only `array<mixed>` switches to
+                // hash storage (`declared_generic_array_can_use_assoc_storage`).
+                if property_has_declared_type && !matches!(elem_ty.as_ref(), PhpType::Mixed) {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "Array index must be integer: {} is a packed array<{}>; cast the key with (int) or declare it array<K, V>",
+                            element_label.trim_end_matches("[]"),
+                            elem_ty
+                        ),
+                    ));
+                }
                 if property_has_declared_type {
                     checker.require_compatible_arg_type(
                         elem_ty.as_ref(),
                         val_ty,
                         span,
-                        &format!("Property {}::${}[]", class_name, property),
+                        element_label,
                     )?;
                 }
                 return Ok(assoc_property_type_after_keyed_write(
@@ -1027,7 +1184,7 @@ fn updated_array_property_assign_type(
                     elem_ty.as_ref(),
                     val_ty,
                     span,
-                    &format!("Property {}::${}[]", class_name, property),
+                    element_label,
                 )?;
                 Ok(PhpType::Array(elem_ty.clone()))
             } else if elem_ty.as_ref() == val_ty {
@@ -1048,7 +1205,7 @@ fn updated_array_property_assign_type(
                     existing_value.as_ref(),
                     val_ty,
                     span,
-                    &format!("Property {}::${}[]", class_name, property),
+                    element_label,
                 )?;
             }
             let merged_key = merge_array_key_types(*key.clone(), normalized_idx_ty.clone());
@@ -1074,8 +1231,57 @@ fn updated_array_property_assign_type(
     }
 }
 
+/// Widens a scalar key union such as `int|string` or `?int` to the `Mixed` key of a property
+/// element write.
+///
+/// A variable `string` key already normalizes to `Mixed` (it may be an integer string), and
+/// a union of string, bool, null and int-castable members is the same runtime key: the boxed
+/// value the hash store converts with PHP's key rules (null becomes `""`, a bool its integer).
+/// Left whole, the union failed the key check, and inside a function body that refusal was
+/// dropped with the stale initial errors, so the write compiled as an indexed `array_set` and
+/// lost every string key. A plain `int|float` union keeps its refusal.
+pub(super) fn property_write_key_type(key: PhpType) -> PhpType {
+    match &key {
+        PhpType::Union(members)
+            if members.iter().any(|member| {
+                matches!(
+                    member,
+                    PhpType::Str | PhpType::Bool | PhpType::False | PhpType::Void
+                )
+            }) && members.iter().all(|member| {
+                matches!(
+                    member,
+                    PhpType::Int
+                        | PhpType::Str
+                        | PhpType::Bool
+                        | PhpType::False
+                        | PhpType::Float
+                        | PhpType::Void
+                )
+            }) =>
+        {
+            PhpType::Mixed
+        }
+        _ => key,
+    }
+}
+
+/// Returns whether an integer key written into an untyped array property may skip a slot.
+///
+/// Packed storage has no keys: slot `n` is key `n`, so a write past the logical end zero-fills
+/// the gap where PHP promotes the array to a hash (`$h->items[1] = 6` on a fresh object is
+/// `{"1":6}`). A local decides this from its flow-sensitive type, which is still empty at its
+/// first write. A property slot is typed from every write in the class instead, so an earlier
+/// `$h->items[0] = 5` elsewhere says nothing about the object a later write reaches: only a key
+/// that is provably `0` is always in range. Every other integer key takes hash storage, where a
+/// gap costs nothing, exactly as `array_key_contiguity_is_unproven` decides for an empty local.
+/// No loop-counter exception applies, because any call in the loop may reset the property.
+fn untyped_property_key_may_skip(index: &Expr) -> bool {
+    static_array_key_forces_hash_storage(index) || array_key_contiguity_is_unproven(index)
+}
+
 /// Returns true if `ty` is a valid PHP array key type (Int, Str, or Mixed).
-fn is_php_array_key_type(ty: &PhpType) -> bool {
+pub(super) fn is_php_array_key_type(ty: &PhpType) -> bool {
     // `int|float` stays out, unlike the plain-local subscript which accepts it: an element write
     // through a PROPERTY lowers to `array_set` with a boxed index, and the backend has no arm
     // for one — `array_set index PHP type Mixed`, the same answer a `mixed` index gets. Letting

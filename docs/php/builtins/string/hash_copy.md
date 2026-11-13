@@ -1,8 +1,6 @@
 ---
 title: "hash_copy()"
 description: "Clones an incremental hashing context into an independent HashContext object. Provided by the compiler-injected hash prelude in compiled code."
-sidebar:
-  order: 876
 ---
 
 ## hash_copy()
@@ -20,8 +18,9 @@ Clones an incremental hashing context into an independent HashContext object. Pr
 
 ## Availability
 
-- **Compiled (AOT)**: supported through the compiler-injected hash prelude.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_copy.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_copy.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

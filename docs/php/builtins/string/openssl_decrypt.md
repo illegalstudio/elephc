@@ -1,8 +1,6 @@
 ---
 title: "openssl_decrypt()"
-description: "Decrypts data with a supported AES cipher."
-sidebar:
-  order: 972
+description: "Decrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog."
 ---
 
 ## openssl_decrypt()
@@ -11,7 +9,7 @@ sidebar:
 function openssl_decrypt(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = ''): mixed
 ```
 
-Decrypts data with a supported AES cipher.
+Decrypts data with a cipher from the OpenSSL 3.6.4 default-provider catalog.
 
 **Parameters**:
 - `$data` (`string`)
@@ -26,8 +24,9 @@ Decrypts data with a supported AES cipher.
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: supported through a declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/openssl_decrypt.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/openssl_decrypt.rs)).
+| Compiled (AOT) | Magician (eval) |
+|---|---|
+| Available | Available |
 
 _No examples yet. Check `examples/` and `showcases/` for usage patterns._
 

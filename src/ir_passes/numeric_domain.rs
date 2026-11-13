@@ -33,6 +33,11 @@ pub(crate) fn comparison(inst: &crate::ir::Instruction) -> bool {
     inst.op == Op::PhpRelCmp && matches!(inst.immediate, Some(Immediate::CmpPredicate(Slt | Sle | Sgt | Sge)))
 }
 
+/// Recognizes strict identity, which compares numeric tags and then their exact payloads.
+pub(crate) fn identity(inst: &crate::ir::Instruction) -> bool {
+    matches!(inst.op, Op::StrictEq | Op::StrictNotEq) && inst.operands.len() == 2
+}
+
 /// Checks a closed numeric graph, constructing dominance only for otherwise numeric private slots.
 /// Local cycles are accepted inductively only after every writer and dominating seed passes.
 pub(crate) fn inputs(function: &Function, values: &[ValueId]) -> bool {
