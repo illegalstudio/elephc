@@ -534,7 +534,10 @@ pub(super) fn lower_str_inc_dec(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return super::arithmetic::stack_cell::lower_increment(ctx, inst, offset);
     }
     let value = expect_operand(inst, 0)?;
-    let delta = super::expect_i64(inst)?;
+    let delta = match inst.immediate {
+        Some(Immediate::NumericUpdate { increment, .. }) => if increment { 1 } else { -1 },
+        _ => super::expect_i64(inst)?,
+    };
     let operand_ty = ctx.value_php_type(value)?.codegen_repr();
     ctx.load_value_to_result(value)?;
     let delta_reg = match (ctx.emitter.target.arch, &operand_ty) {
@@ -544,10 +547,9 @@ pub(super) fn lower_str_inc_dec(ctx: &mut FunctionContext<'_>, inst: &Instructio
         (Arch::X86_64, _) => "rdi",
     };
     abi::emit_load_int_immediate(ctx.emitter, delta_reg, delta);
-    let helper = if matches!(operand_ty, PhpType::Str) {
-        "__rt_str_inc_dec"
-    } else {
-        "__rt_mixed_inc_dec"
+    let helper = match (matches!(operand_ty, PhpType::Str), inst.arithmetic_policy().checked_overflow()) {
+        (true, true) => "__rt_strict_str_inc_dec", (false, true) => "__rt_strict_mixed_inc_dec",
+        (true, false) => "__rt_str_inc_dec", (false, false) => "__rt_mixed_inc_dec",
     };
     abi::emit_call_label(ctx.emitter, helper);
     store_if_result(ctx, inst)

@@ -281,6 +281,9 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::NumericOperation { op, policy } => {
             let _ = write!(out, " {} numeric-policy={:016x}", op.as_eir(), policy.requirements().bits());
         }
+        Immediate::NumericUpdate { increment, policy } => {
+            let _ = write!(out, " {} numeric-policy={:016x}", if *increment { 1 } else { -1 }, policy.requirements().bits());
+        }
         Immediate::MixedNumericOp(op) => {
             let _ = write!(out, " {}", op.as_eir());
         }

@@ -48,6 +48,56 @@ echo ':', strict_pow(2, -1), ':', strict_int_pow(2, -1), ':', strict_pow(2.0, 3)
     }
 }
 
+/// Failed increments leave locals, references, properties, array elements and buffers unchanged.
+#[test]
+fn test_strict_overflow_staged_updates_preserve_storage_and_owners() {
+    let source = r#"<?php
+function strict_post(mixed &$value): mixed { return $value++; }
+function strict_pre(mixed &$value): mixed { return --$value; }
+function strict_int_post(int &$value): mixed { return $value++; }
+function strict_buffer_post(buffer<int> $values, int $index): mixed { return $values[$index]++; }
+class StrictUpdateCell { public int $value = 9223372036854775807; }
+$value = 9223372036854775807;
+try { strict_post($value); } catch (ArithmeticError $e) { echo 'M'; }
+echo $value, ':';
+$value = -9223372036854775808;
+try { strict_pre($value); } catch (ArithmeticError $e) { echo 'D'; }
+echo $value, ':';
+$integer = 9223372036854775807;
+try { strict_int_post($integer); } catch (ArithmeticError $e) { echo 'R'; }
+echo $integer, ':';
+$text = '9223372036854775807';
+try { strict_post($text); } catch (ArithmeticError $e) { echo 'S'; }
+echo $text, ':';
+$text = '-9223372036854775808';
+try { strict_pre($text); } catch (ArithmeticError $e) { echo 'N'; }
+echo $text, ':';
+$cell = new StrictUpdateCell();
+try { $cell->value++; } catch (ArithmeticError $e) { echo 'P'; }
+echo $cell->value, ':';
+$array = [9223372036854775807];
+try { $array[0]++; } catch (ArithmeticError $e) { echo 'A'; }
+echo $array[0], ':';
+try { $array[0] += 1; } catch (ArithmeticError $e) { echo 'C'; }
+echo $array[0], ':';
+$buffer = buffer_new<int>(1); $buffer[0] = 9223372036854775807;
+try { strict_buffer_post($buffer, 0); } catch (ArithmeticError $e) { echo 'B'; }
+echo $buffer[0], ':'; buffer_free($buffer);
+$small = 4; echo strict_post($small), ':', $small, ':';
+$letters = 'az'; echo strict_post($letters), ':', $letters;
+$wide = '9223372036854775808'; strict_post($wide); echo ':', gettype($wide);
+$prefix = '9223372036854775807foo'; strict_post($prefix); echo ':', $prefix;
+$decimal = 1.5; strict_post($decimal); echo ':', $decimal;
+"#;
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE.with(elephc_semantics::StrictFeature::Overflow, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "M9223372036854775807:D-9223372036854775808:R9223372036854775807:S9223372036854775807:N-9223372036854775808:P9223372036854775807:A9223372036854775807:C9223372036854775807:B9223372036854775807:4:5:az:ba:double:9223372036854775807fop:2.5", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
 /// Keeps verified literal eval native with either EIR optimization setting.
 #[test]
 fn test_strict_dynamic_code_literal_eval_optimization_parity() {

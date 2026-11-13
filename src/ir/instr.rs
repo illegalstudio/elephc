@@ -104,7 +104,7 @@ impl Instruction {
     /// Returns the explicit operation policy, leaving legacy PHP numeric instructions unchanged.
     pub fn arithmetic_policy(&self) -> elephc_semantics::arithmetic_policy::ArithmeticPolicy {
         match self.immediate {
-            Some(Immediate::NumericOperation { policy, .. }) => policy,
+            Some(Immediate::NumericOperation { policy, .. } | Immediate::NumericUpdate { policy, .. }) => policy,
             _ => elephc_semantics::arithmetic_policy::ArithmeticPolicy::PERMISSIVE,
         }
     }
@@ -295,6 +295,8 @@ pub enum Immediate {
     MixedNumericOp(MixedNumericOp),
     /// Source operation semantics that must survive cloning and optimizer specialization.
     NumericOperation { op: MixedNumericOp, policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy },
+    /// PHP increment/decrement with explicit source arithmetic semantics.
+    NumericUpdate { increment: bool, policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy },
     /// Ordered add/sub/mul operations in an unboxed checked numeric chain.
     CheckedNumericChain(Box<CheckedNumericChainImmediate>),
     CmpPredicate(CmpPredicate),

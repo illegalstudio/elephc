@@ -428,7 +428,7 @@ fn validate_instruction_effects_with_operand(
         && operand_type.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool));
     let expected = if pure_int_restamp {
         Effects::PURE
-    } else if matches!(inst.immediate, Some(Immediate::NumericOperation { .. })) {
+    } else if matches!(inst.immediate, Some(Immediate::NumericOperation { .. } | Immediate::NumericUpdate { .. })) {
         inst.op.arithmetic_effects(inst.arithmetic_policy())
     } else if inst.op == Op::MixedUnbox {
         Op::mixed_unbox_effects(&inst.result_php_type)
@@ -713,6 +713,9 @@ fn validate_instruction_immediate(
 ) -> Result<(), ValidationError> {
     use Immediate as Imm;
     use Op::*;
+    if matches!(inst.immediate, Some(Imm::NumericUpdate { .. })) && inst.op != StrIncDec {
+        return Err(ValidationError::UnexpectedImmediate(inst_id));
+    }
     if matches!(inst.immediate, Some(Imm::NumericOperation { .. }))
         && !matches!(inst.op, MixedNumericBinop | ICheckedPow)
     { return Err(ValidationError::UnexpectedImmediate(inst_id)); }
@@ -794,7 +797,7 @@ fn validate_instruction_immediate(
             })
         }
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
-            matches!(imm, Imm::I64(1) | Imm::I64(-1))
+            matches!(imm, Imm::I64(1) | Imm::I64(-1) | Imm::NumericUpdate { .. })
         }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_) | Imm::StringOffsetCast | Imm::ImplicitIntCast)
@@ -981,6 +984,8 @@ fn validate_opcode_rules(
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
         // the arity is pinned here; the backend dispatches on the operand's EIR type.
+        StrIncDec if !inst.arithmetic_policy().is_permissive() => check_unary_any(function, inst_id, inst,
+            &[IrType::Str, IrType::Heap(IrHeapKind::Mixed)], "Str or boxed Mixed"),
         StrIncDec => check_count(inst_id, inst, 1, "1"),
         INeg | IBitNot => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),

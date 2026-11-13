@@ -643,3 +643,28 @@ eval and declaration expression positions. The additional resolved namespace
 and imported-alias cases pass. The pre-existing eager predefined-constant token
 binding issue is tracked separately as Code Journal task d0932767; this adapter
 does not infer a replacement value for names the parser has already erased.
+
+### Checked updates and storage
+
+Integer local/reference updates and typed integer buffer steps now use the shared
+checked scalar kernel before storing. Boxed/string updates carry NumericUpdate
+policy metadata with throwing effects; legacy PHP counter specializations refuse
+that metadata. Explicit operand roots and separately acquired postfix snapshots
+remain published through the update and store so an exception cannot lose them.
+
+The strict boxed runtime entry checks genuine integer payloads before the PHP
+helper can mutate a unique cell. String payloads share the existing exact numeric
+scanner and integer parser through a separate checked entry. Only overflow of an
+actual integer step throws: out-of-range numeric strings retain their PHP float
+classification, alphabetic strings retain carry semantics, and float updates
+retain their ordinary behavior. Trusted Internal updates still select PHP
+entries. The overflow transfer uses a reusable wide conditional ABI helper.
+
+Validation: two focused EIR/runtime tests pass across all five targets; the
+lowering test also covers PHP/LFC/Internal statements with EIR optimization on
+and off. A native fixture passes with AST/EIR optimizers enabled and disabled,
+covering prefix/postfix updates, mixed and typed references, numeric strings,
+properties, array elements, compound stores and typed buffers. Failed operations
+leave values unchanged, successful updates preserve their expected results, and
+both runs report a clean heap. Compiler build, assembly-comment alignment and
+diff hygiene pass. Builtin numeric contracts and eval parity remain next.

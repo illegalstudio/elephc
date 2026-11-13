@@ -68,6 +68,23 @@ fn boxed_operand(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: S
     ctx.emit_value(op, vec![value.value], None, PhpType::Mixed, op.default_effects(), Some(span))
 }
 
+/// Roots a checked PHP update operand without hidden backend boxing or ownership transfers.
+pub(super) fn update(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, increment: bool,
+    policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy, span: Span,
+) -> LoweredValue {
+    use super::expr::call_operand_owners::{pin_in_flight_owners, unpin_in_flight_owners};
+    let originals = pin_in_flight_owners(ctx, &[value.value], span);
+    let operand = if value.ir_type == crate::ir::IrType::Str { value } else { boxed_operand(ctx, value, span) };
+    let boxed_root = if operand.value != value.value { pin_in_flight_owners(ctx, &[operand.value], span) } else { Vec::new() };
+    let result = ctx.emit_value(Op::StrIncDec, vec![operand.value], Some(Immediate::NumericUpdate { increment, policy }),
+        PhpType::Mixed, Op::StrIncDec.arithmetic_effects(policy), Some(span));
+    unpin_in_flight_owners(ctx, boxed_root, span);
+    if operand.value != value.value { super::ownership::release_if_owned(ctx, operand, Some(span)); }
+    unpin_in_flight_owners(ctx, originals, span);
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +158,35 @@ mod tests {
                 module.semantic_profile = SemanticProfile::PERMISSIVE;
                 assert!(matches!(crate::ir::validate_module(&module),
                     Err(crate::ir::ValidationError::SemanticProfileMismatch { .. })), "{name} opt={optimize}");
+            }
+        }
+    }
+
+    /// Updates and typed buffer steps retain checked effects and policy through the EIR optimizer.
+    #[test]
+    fn strict_overflow_update_lowering_checks_storage_on_all_targets() {
+        let source = "<?php function strict_update(int $index, mixed $value, buffer<int> $buffer): mixed { $index++; $value++; return ++$buffer[$index]; }";
+        let tokens = crate::lexer::tokenize(source).unwrap();
+        for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
+            let program = crate::parser::parse_with_mode(&tokens, mode).unwrap();
+            for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+                let target = Target::parse(name).unwrap();
+                let mut checked = crate::types::check_with_target(&program, target).unwrap();
+                checked.semantic_profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+                let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+                for optimize in [false, true] {
+                    let mut module = module.clone();
+                    if optimize { crate::ir_passes::optimize_module(&mut module); }
+                    crate::ir::validate_module(&module).unwrap();
+                    let function = module.functions.iter().find(|function| function.name == "strict_update").unwrap();
+                    let user = mode != SourceMode::Internal;
+                    assert_eq!(function.instructions.iter().any(|inst| matches!(inst.immediate,
+                        Some(Immediate::NumericUpdate { .. })) && inst.effects.contains(crate::ir::Effects::MAY_THROW)), user, "{name} {optimize} {mode:?}");
+                    assert_eq!(function.instructions.iter().any(|inst| inst.op == Op::IOverflows), user, "{name} {optimize} {mode:?}");
+                    assert_eq!(function.instructions.iter().any(|inst| matches!(inst.op, Op::ICheckedAddToInt | Op::ICheckedSubToInt)), !user, "{name} {optimize} {mode:?}");
+                    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+                    assert_eq!(asm.contains("__rt_strict_mixed_inc_dec"), user, "{name} {optimize} {mode:?}");
+                }
             }
         }
     }

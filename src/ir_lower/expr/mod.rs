@@ -583,6 +583,10 @@ fn lower_str_inc_dec(
     increment: bool,
     expr: &Expr,
 ) -> LoweredValue {
+    let policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
+    if policy.checked_overflow() {
+        return crate::ir_lower::checked_arithmetic::update(ctx, value, increment, policy, expr.span);
+    }
     ctx.emit_value(
         Op::StrIncDec,
         vec![value.value],
