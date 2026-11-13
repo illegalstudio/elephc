@@ -71,6 +71,7 @@ mod strict_semantics;
 mod strict_modulo;
 mod strict_numeric_domains;
 mod strict_numeric_parameters;
+mod strict_numeric_aggregate_domains;
 mod strict_intdiv;
 mod strict_integer_power;
 mod strict_unary_domains;

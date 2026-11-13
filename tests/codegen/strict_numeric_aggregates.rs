@@ -107,3 +107,55 @@ foreach ($fractional as $key => $value) { echo '|', $key, '=', $value; }
     assert_eq!(output.stdout, "abcd|integer:1=20|string:01=30|integer:2=40|1=10|2=20");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+
+/// Original element kinds, callbacks and independent overflow policies retain balanced native owners.
+#[test]
+fn test_strict_numeric_aggregate_domains_native_calls_failures_and_owners() {
+    use elephc_semantics::{SemanticProfile, StrictFeature};
+    let source = r#"<?php
+class BadAggregateElement {}
+function domainSum(mixed $items): mixed { return array_sum($items); }
+function domainProduct(mixed $items): mixed { return array_product($items); }
+function domainElement(mixed $items): mixed { return $items[0]; }
+function discardDomainSum(mixed $items): void { try { array_sum($items); } catch (TypeError $error) { echo 'V'; } }
+echo domainSum([]), ':', domainProduct([]), ':', domainSum([2, 3]), ':', domainProduct([2, 3]), '|';
+echo domainSum([2.0, 3]), ':', is_float(domainProduct([2.0, 3])) ? 'F' : 'I', '|';
+$sum = array_sum(...); $product = array_product(...);
+echo $sum([2, 3]), ':', $product([2, 3]), ':', call_user_func('array_sum', [2, 3]), ':', call_user_func_array('array_product', [[2, 3]]), '|';
+$result = 23;
+try { $result = domainSum([1, '2']); } catch (TypeError $error) { echo 'S'; }
+try { domainProduct([true]); } catch (TypeError $error) { echo 'B'; }
+try { domainSum([null]); } catch (TypeError $error) { echo 'N'; }
+try { domainProduct([[]]); } catch (TypeError $error) { echo 'A'; }
+try { domainSum([new BadAggregateElement()]); } catch (TypeError $error) { echo 'O'; }
+try { domainSum(1); } catch (TypeError $error) { echo 'T'; }
+try { $sum([1, '2']); } catch (TypeError $error) { echo 'P'; }
+try { call_user_func('array_product', [2, '3']); } catch (TypeError $error) { echo 'C'; }
+discardDomainSum([1, '2']);
+$items = [$argc, 2];
+try { array_sum(array_map(fn($value) => '2', $items)); } catch (TypeError $error) { echo 'M'; }
+try { array_reduce([1, '2'], fn($carry, $value) => $carry + $value, 0); } catch (TypeError $error) { echo 'R'; }
+echo ':', $result, '|';
+$maximum = $argc > 0 ? PHP_INT_MAX : 0;
+try { echo is_float(domainSum([$maximum, 1])) ? 'F' : 'X'; } catch (ArithmeticError $error) { echo 'S'; }
+try { echo is_float(domainProduct([$maximum, 2])) ? 'F' : 'X'; } catch (ArithmeticError $error) { echo 'P'; }
+try { domainSum([$maximum, 1, 'bad']); } catch (ArithmeticError $error) { echo 'O'; } catch (TypeError $error) { echo 'T'; }
+echo '|';
+$original = ['2']; $copy = $original;
+try { domainSum($original); } catch (TypeError $error) {}
+echo is_string(domainElement($original)) && is_string(domainElement($copy)) ? 'Y' : 'X';
+"#;
+    for feature in [StrictFeature::Arithmetic, StrictFeature::Coercions] {
+        for overflow in [false, true] {
+            let profile = SemanticProfile::PERMISSIVE.with(feature, true).with(StrictFeature::Overflow, overflow);
+            let expected = format!("0:1:5:6|5:F|5:6:5:6|SBNAOTPCVMR:23|{}|Y", if overflow { "SPO" } else { "FFT" });
+            for optimize in [false, true] {
+                let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+                assert!(output.success, "{feature:?}, overflow={overflow}, opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+                assert_eq!(output.stdout, expected, "{feature:?}, overflow={overflow}, opt={optimize}");
+                assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{feature:?}, overflow={overflow}, opt={optimize}: {}", output.stderr);
+            }
+        }
+    }
+}

@@ -57,6 +57,7 @@ mod krsort;
 mod ksort;
 mod mutating_dispatch;
 mod mutation;
+mod numeric_domain_aggregate;
 mod natcasesort;
 mod natsort;
 mod next;

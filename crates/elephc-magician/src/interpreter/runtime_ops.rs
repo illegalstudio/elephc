@@ -472,7 +472,16 @@ pub trait RuntimeValueOps {
     /// Providers with distinct numeric string keys must override the normalized-key fallback.
     fn array_iter_value(&mut self, array: RuntimeCellHandle, position: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         let key = self.array_iter_key(array, position)?;
-        self.array_get(array, key)
+        let value = self.array_get(array, key);
+        let released = if key.is_borrowed() { Ok(()) } else { self.release(key) };
+        match (value, released) {
+            (Err(error), _) => Err(error),
+            (Ok(value), Err(error)) => {
+                if !value.is_borrowed() { let _ = self.release(value); }
+                Err(error)
+            }
+            (Ok(value), Ok(())) => Ok(value),
+        }
     }
 
     /// Creates an independent PHP array value for a by-value variable assignment.

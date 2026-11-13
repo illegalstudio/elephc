@@ -146,7 +146,9 @@ impl FakeOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match (self.get(left), self.get(right)) {
-            (FakeValue::Int(left), FakeValue::Int(right)) => self.int(left * right),
+            (FakeValue::Int(left), FakeValue::Int(right)) => match left.checked_mul(right) {
+                Some(value) => self.int(value), None => self.float(left as f64 * right as f64),
+            },
             (left, right) => self.float(self.fake_numeric(&left) * self.fake_numeric(&right)),
         }
     }

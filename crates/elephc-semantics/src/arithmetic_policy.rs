@@ -34,6 +34,9 @@ impl ArithmeticPolicy {
     /// Refuses implicit PHP value-kind conversions inside arithmetic.
     pub const fn strict_coercions(self) -> bool { self.0 & 4 != 0 }
 
+    /// Requires original numeric operand kinds before any PHP scalar normalization.
+    pub const fn has_numeric_domain(self) -> bool { self.0 & 6 != 0 }
+
     /// Returns the semantic guarantees required by this operation's compact policy.
     pub const fn requirements(self) -> SemanticProfile {
         SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, self.checked_overflow())
@@ -56,6 +59,7 @@ mod tests {
             (StrictFeature::Arithmetic, (false, true, false)), (StrictFeature::Coercions, (false, false, true))] {
             let policy = ArithmeticPolicy::from_profile(SemanticProfile::PERMISSIVE.with(feature, true));
             assert_eq!((policy.checked_overflow(), policy.strict_arithmetic(), policy.strict_coercions()), expected);
+            assert_eq!(policy.has_numeric_domain(), feature != StrictFeature::Overflow);
         }
         assert!(ArithmeticPolicy::from_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Bools, true)).is_permissive());
         assert_eq!(std::mem::size_of::<ArithmeticPolicy>(), 1);

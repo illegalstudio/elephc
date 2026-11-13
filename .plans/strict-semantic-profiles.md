@@ -1332,3 +1332,41 @@ assembly comments, example PHP syntax and diff hygiene pass. Generated internal
 abs/intdiv pages and registry metadata are included. Public feature admission is
 unchanged. Numeric aggregate domains, conversion/binding guarantees and all
 remaining strict families continue before full umbrella admission.
+
+### Numeric aggregate element domains and explicit runtime policy
+
+Array sum/product now carry Arithmetic or Coercions domains in typed NumericFunction
+EIR independently of Overflow. Their new profiled runtime entries receive numeric
+bits as a third internal ABI argument, saved in a checked free frame slot128.
+Original numeric tags and explicit native to_number adapters precede scalar folds.
+The passed policy selects diagnostic ownership and checked versus PHP-promoting
+combination. The emitter profile determines capabilities. Existing PHP and
+Overflow-only entry ABIs remain intact, sharing the same source snapshot and
+resumable cleanup loop. Normal call-entry TypeError helpers preserve target stack
+alignment; numeric-domain data is emitted even when Overflow is absent.
+
+Checker hooks validate known element contracts and reviewed Number casts rather
+than treating every object arithmetic handler as an aggregate conversion. Source
+proofs retain partial final-entry evidence, diagnose known invalid elements beside
+unknown values and preserve last-write/key planning, including constant aliases.
+Invocation domains remain separate from trusted constant evaluation semantics.
+
+The strict eval fold uses existing value-copy, insertion-order read, native Number
+cast and protected arithmetic hooks. Source, element, numeric view and prior carry
+have rooted cleanup obligations on success and failure. Identity Number views are
+borrowed; fresh cast results are independent owners. The default insertion-order
+read retires its temporary key. Fake fixtures explicitly retire manually seeded
+child leases, and fake multiplication now models PHP overflow promotion.
+
+New verification passes: three frontend/source/native-Number units and one runtime
+emitter unit across all five targets and both optimizers, a walker/VM unit covering
+ordered failures and every owner, and eight native profile/optimizer executions
+covering direct/FCC/callback calls, map/reduce fallbacks, rejected elements, failed
+destinations, promotion, checked overflow and unchanged sources with clean heaps.
+The neutral policy test and six relevant compatibility controls pass. Compiler
+and curl exporter builds, the complete prebuilt generated-doc workflow, target
+architecture gate, assembly comment checks, example PHP syntax and diff hygiene
+pass. Generated builtin pages and registries have no content changes. Public
+feature admission remains unchanged. Next audit the protected checked-aggregate
+invalid-source result boundary, then finish conversions, stable bindings and every
+remaining strict family before full umbrella admission.

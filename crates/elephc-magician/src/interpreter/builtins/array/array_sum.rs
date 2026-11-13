@@ -58,6 +58,9 @@ pub(in crate::interpreter) fn eval_array_aggregate_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(context.semantic_profile()).has_numeric_domain() {
+        return super::numeric_domain_aggregate::evaluate(name, array, context, values);
+    }
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Overflow) {
         use elephc_semantics::numeric::CheckedNumericOp;
         let op = match name {

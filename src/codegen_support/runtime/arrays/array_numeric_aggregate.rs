@@ -29,6 +29,11 @@ const NEXT: usize = 96;
 const BORROWED: usize = 104;
 const ORIGINAL_TAG: usize = 112;
 const ESCAPED: usize = 120;
+const _: () = assert!(super::array_numeric_policy::POLICY + 8 <= HANDLER + 8 - TRY_HANDLER_SLOT_SIZE);
+
+/// Distinguishes PHP normalization, checked PHP arithmetic and explicit numeric operand domains.
+#[derive(Clone, Copy)]
+enum AggregateMode { Php, Overflow, Profiled }
 
 /// Static diagnostic fragments shared with runtime data emission.
 pub const ARRAY_AGGREGATE_MESSAGES: &[(&str, &str)] = &[
@@ -46,20 +51,28 @@ pub const ARRAY_AGGREGATE_MESSAGES: &[(&str, &str)] = &[
 /// Emits numeric aggregation entries taking a borrowed C ABI source cell and a warning-profile flag.
 pub fn emit_array_numeric_aggregate(emitter: &mut Emitter) {
     for product in [false, true] {
-        emit_aggregate(emitter, product, false);
+        emit_aggregate(emitter, product, AggregateMode::Php);
         if emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow) {
-            emit_aggregate(emitter, product, true);
+            emit_aggregate(emitter, product, AggregateMode::Overflow);
+        }
+        if elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(emitter.semantic_profile).has_numeric_domain() {
+            emit_aggregate(emitter, product, AggregateMode::Profiled);
         }
     }
+    super::array_numeric_policy::emit_error_entries(emitter);
 }
 
 /// Emits one storage-neutral fold returning an owned numeric cell or zero for an invalid source.
-fn emit_aggregate(emitter: &mut Emitter, product: bool, checked: bool) {
-    let prefix = match (product, checked) {
-        (false, false) => "__rt_array_sum_boxed",
-        (true, false) => "__rt_array_product_boxed",
-        (false, true) => "__rt_strict_array_sum_boxed",
-        (true, true) => "__rt_strict_array_product_boxed",
+fn emit_aggregate(emitter: &mut Emitter, product: bool, mode: AggregateMode) {
+    let checked = matches!(mode, AggregateMode::Overflow);
+    let profiled = matches!(mode, AggregateMode::Profiled);
+    let prefix = match (product, mode) {
+        (false, AggregateMode::Php) => "__rt_array_sum_boxed",
+        (true, AggregateMode::Php) => "__rt_array_product_boxed",
+        (false, AggregateMode::Overflow) => "__rt_strict_array_sum_boxed",
+        (true, AggregateMode::Overflow) => "__rt_strict_array_product_boxed",
+        (false, AggregateMode::Profiled) => "__rt_profiled_array_sum_boxed",
+        (true, AggregateMode::Profiled) => "__rt_profiled_array_product_boxed",
     };
     let result = abi::int_result_reg(emitter);
     let low = low_reg(emitter);
@@ -69,6 +82,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool, checked: bool) {
     emitter.blank();
     emitter.label_global(prefix);
     abi::emit_frame_prologue(emitter, FRAME);
+    if profiled { super::array_numeric_policy::save_argument(emitter); }
     abi::store_at_offset(emitter, arg0, BORROWED);
     abi::store_at_offset(emitter, arg1, WARNINGS);
     abi::emit_reg_move(emitter, result, arg0);
@@ -79,7 +93,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool, checked: bool) {
     sentinels::emit_branch_if_null_container(emitter, low, abi::secondary_scratch_reg(emitter), &format!("{prefix}_invalid"));
     abi::store_at_offset(emitter, low, PAYLOAD);
     for slot in [SOURCE, CARRY, CURSOR, PENDING, NEXT, ESCAPED] { clear_slot(emitter, slot); }
-    if !product && !checked {
+    if !product && !checked && !profiled {
         emit_packed_int_sum_fast_path(emitter, prefix);
     }
     install_boundary(emitter, prefix);
@@ -114,6 +128,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool, checked: bool) {
         abi::store_at_offset(emitter, reg, slot);
     }
     abi::emit_branch_if_int_result_zero(emitter, &format!("{prefix}_combine"));
+    if profiled { super::array_numeric_policy::dispatch(emitter, prefix); }
     for (tag, suffix) in [(1, "string"), (2, "combine"), (3, "scalar"), (8, "scalar"), (9, "resource")] {
         ins(emitter, &format!("cmp x0, #{tag}"), &format!("cmp rax, {tag}"));
         branch(emitter, "eq", "e", &format!("{prefix}_{suffix}"));
@@ -189,15 +204,16 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool, checked: bool) {
     emit_message(emitter, 2, true);
 
     emitter.label(&format!("{prefix}_combine"));
-    abi::load_at_offset(emitter, result, CARRY);
-    abi::emit_frame_slot_address(emitter, low, ENTRY);
-    let combine = match (product, checked) {
-        (false, false) => "__rt_mixed_numeric_add",
-        (true, false) => "__rt_mixed_numeric_mul",
-        (false, true) => "__rt_strict_mixed_numeric_add",
-        (true, true) => "__rt_strict_mixed_numeric_mul",
-    };
-    abi::emit_call_label(emitter, combine);
+    if profiled && emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow) {
+        let checked_label = format!("{prefix}_checked_combine");
+        let combined = format!("{prefix}_combined");
+        super::array_numeric_policy::branch_if_feature(emitter, elephc_semantics::StrictFeature::Overflow, &checked_label);
+        emit_combine(emitter, product, false);
+        abi::emit_jump(emitter, &combined);
+        emitter.label(&checked_label);
+        emit_combine(emitter, product, true);
+        emitter.label(&combined);
+    } else { emit_combine(emitter, product, checked); }
     abi::store_at_offset(emitter, result, NEXT);
     release_slot(emitter, CARRY);
     abi::load_at_offset(emitter, result, NEXT);
@@ -207,11 +223,26 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool, checked: bool) {
     ins(emitter, "cmp x0, #2", "cmp rax, 2");
     branch(emitter, "ne", "ne", &format!("{prefix}_loop"));
     emitter.label(&format!("{prefix}_unsupported"));
+    if profiled { abi::emit_jump(emitter, &format!("{prefix}_domain_error")); }
     abi::load_at_offset(emitter, result, WARNINGS);
     abi::emit_branch_if_int_result_zero(emitter, &format!("{prefix}_loop"));
     emit_unsupported_warning(emitter, prefix, product);
     abi::emit_jump(emitter, &format!("{prefix}_loop"));
+    if profiled { super::array_numeric_policy::emit_failure(emitter, prefix); }
     emit_cleanup(emitter, prefix);
+}
+
+/// Combines borrowed numeric values while keeping overflow policy explicit at the call site.
+fn emit_combine(emitter: &mut Emitter, product: bool, checked: bool) {
+    abi::load_at_offset(emitter, abi::int_result_reg(emitter), CARRY);
+    abi::emit_frame_slot_address(emitter, low_reg(emitter), ENTRY);
+    let combine = match (product, checked) {
+        (false, false) => "__rt_mixed_numeric_add",
+        (true, false) => "__rt_mixed_numeric_mul",
+        (false, true) => "__rt_strict_mixed_numeric_add",
+        (true, true) => "__rt_strict_mixed_numeric_mul",
+    };
+    abi::emit_call_label(emitter, combine);
 }
 
 /// Emits the packed int-array fast path for `array_sum` before the generic fold.
@@ -450,7 +481,7 @@ mod tests {
                 let mut emitter = Emitter::new(Target::parse(name).unwrap());
                 emitter.semantic_profile = elephc_semantics::SemanticProfile::PERMISSIVE
                     .with(elephc_semantics::StrictFeature::Overflow, true);
-                emit_aggregate(&mut emitter, product, true);
+                emit_aggregate(&mut emitter, product, AggregateMode::Overflow);
                 let asm = emitter.output();
                 let operation = if product { "__rt_strict_mixed_numeric_mul" } else { "__rt_strict_mixed_numeric_add" };
                 assert!(asm.contains(operation), "{name}");
@@ -468,7 +499,7 @@ mod tests {
             let target = Target::parse(name).unwrap();
             for product in [false, true] {
                 let mut emitter = Emitter::new(target);
-                emit_aggregate(&mut emitter, product, false);
+                emit_aggregate(&mut emitter, product, AggregateMode::Php);
                 let asm = emitter.output();
                 let prefix = if product { "__rt_array_product_boxed" } else { "__rt_array_sum_boxed" };
                 let boundary = asm.find(&target.extern_symbol("_setjmp")).unwrap();

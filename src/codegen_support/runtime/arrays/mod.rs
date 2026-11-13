@@ -76,6 +76,7 @@ mod array_pad;
 mod array_pad_refcounted;
 mod array_product;
 mod array_numeric_aggregate;
+pub(in crate::codegen_support::runtime) mod array_numeric_policy;
 mod array_map_sum_probe;
 mod array_sum_probe_small;
 mod array_sum_int;

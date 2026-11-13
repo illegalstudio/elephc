@@ -300,7 +300,9 @@ fn builtin_number(
     let mut call_evidence = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
     if matches!(operation, RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) {
         let [argument] = normalized.as_slice() else { return Ok(None); };
-        let Some(values) = array_numbers(argument, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
+        let rule = if checked { super::numeric::operator_rule(evidence.profile, SourceMode::Php,
+            elephc_semantics::numeric_domains::NumericOperator::Arithmetic) } else { None };
+        let Some(values) = array_numbers(argument, checked, class, definitions, &mut call_evidence, rule)? else { return Ok(None); };
         let product = operation == RuntimeFnId::ArrayProduct;
         let mut carry = Number::Int(i64::from(product));
         for value in values {
@@ -366,21 +368,27 @@ fn validate_numeric_parameter(expr: &Expr, value: Number,
 /// Retains source evaluation, first-insertion order and last-write values through shared key planning.
 fn array_numbers(
     expr: &Expr, checked: bool, class: Option<&str>, definitions: &Definitions, evidence: &mut Evidence,
+    rule: Option<elephc_semantics::numeric_domains::NumericDomainRule>,
 ) -> Result<Option<Vec<Number>>, CompileError> {
     let profile = if checked { evidence.profile } else { SemanticProfile::PERMISSIVE };
     if let Some(entries) = crate::types::plan_literal_array_entries(&expr.kind,
         crate::codegen_support::compile_php_version(), profile) {
-        let mut result: Vec<Number> = Vec::with_capacity(entries.len());
+        let mut result: Vec<Option<Number>> = Vec::with_capacity(entries.len());
         let mut positions = HashMap::new();
         for entry in entries {
-            let Some(value) = evaluate(entry.value, checked, class, definitions, evidence)? else { return Ok(None); };
+            let value = evaluate(entry.value, checked, class, definitions, evidence)?;
             if let Some(position) = positions.get(&entry.key).copied() { result[position] = value; }
             else {
                 positions.insert(entry.key, result.len());
                 result.push(value);
             }
         }
-        return Ok(Some(result));
+        if let Some(rule) = rule {
+            for value in result.iter().flatten() {
+                if !rule.domain.allows(value.value_kind()) { return Err(CompileError::new(expr.span, &rule.message())); }
+            }
+        }
+        return Ok(result.into_iter().collect());
     }
     if definitions.unresolved_namespaces { return Ok(None); }
     let key = match &expr.kind {
@@ -400,7 +408,7 @@ fn array_numbers(
     let class = match &key { ConstantKey::Class(class, _) => Some(class.as_str()), _ => None };
     let previous = evidence.strict_types;
     evidence.strict_types = definition.strict_types;
-    let result = array_numbers(&definition.value, definition.mode != SourceMode::Internal, class, definitions, evidence);
+    let result = array_numbers(&definition.value, definition.mode != SourceMode::Internal, class, definitions, evidence, rule);
     evidence.strict_types = previous;
     evidence.active.remove(&key);
     result
