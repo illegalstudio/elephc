@@ -20,6 +20,8 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &expr.kind {
+            ExprKind::FloatLiteral(value) if value.is_nan() => ThrownTypes::unknown(),
+            ExprKind::ConstRef(name) if name.eq_ignore_ascii_case("NAN") => ThrownTypes::unknown(),
             ExprKind::StringLiteral(_)
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
@@ -137,13 +139,13 @@ impl ExceptionFlowAnalysis {
                 },
             ),
             PhpType::Mixed
+            | PhpType::Float
             | PhpType::Iterable
             | PhpType::Callable
             | PhpType::Buffer(_)
             | PhpType::Packed(_)
             | PhpType::Pointer(_) => ThrownTypes::unknown(),
             PhpType::Int
-            | PhpType::Float
             | PhpType::Narrow(_)
             | PhpType::Str
             | PhpType::Bool

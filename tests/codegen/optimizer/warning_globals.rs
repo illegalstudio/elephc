@@ -1,5 +1,5 @@
 //! Purpose:
-//! Covers propagation across array reads that can dispatch PHP warning handlers.
+//! Covers propagation across array reads and string casts that dispatch PHP warning handlers.
 //!
 //! Called from:
 //! - The codegen integration test harness through the optimizer module.
@@ -9,6 +9,25 @@
 //!   pre-mark the variable volatile and hide an invalidation regression.
 
 use crate::support::*;
+
+/// A discarded runtime-NaN cast must invalidate facts changed by its warning handler.
+#[test]
+fn test_discarded_nan_string_cast_invalidates_warning_globals() {
+    let source = r#"<?php
+set_error_handler('changeNanStringWarningGlobal');
+$nanStringWarningScalar = 5;
+$value = $argc > 0 ? NAN : 0.0;
+(string) $value;
+echo $nanStringWarningScalar + 1;
+function changeNanStringWarningGlobal(int $level, string $message): bool {
+    global $nanStringWarningScalar;
+    $nanStringWarningScalar = $level === E_WARNING && $message !== '' ? 9 : 7;
+    return true;
+}
+"#;
+    assert_eq!(compile_and_run(source), "10");
+    assert_eq!(compile_and_run_tagged(source), "10");
+}
 
 /// A missing-key handler invalidates a top-level scalar fact created after registration.
 #[test]

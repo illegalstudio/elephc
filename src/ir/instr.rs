@@ -1476,14 +1476,16 @@ impl Op {
             | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            IToStr | FToStr | ResourceToStr | StrConcat | StrInterpolate
-            | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
+            IToStr | ResourceToStr | StrConcat | StrInterpolate
+            | VarDump | PrintR => E::ALLOC_CONCAT,
+            // NaN diagnostics and Mixed conversion callbacks may enter PHP handlers.
+            FToStr | MixedCastString => E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_THROW,
             StrCharAt => E::ALLOC_CONCAT | E::MAY_WARN,
             StrAppend => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
-                E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
+                E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL | E::MAY_THROW
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             // Rewrites the (possibly split) array's slots and releases the boxed cells it replaces.

@@ -649,3 +649,27 @@ fn nan_string_additional_aot_sites_stay_silent_before_php_8_5() {
         );
     }
 }
+
+/// Unused casts still warn and preserve handler calls, including exceptions across a callee.
+#[test]
+fn nan_string_discarded_casts_keep_warnings_and_handler_throws() {
+    assert_run(
+        "nan_string_discarded",
+        r#"<?php
+(string) NAN;
+function nan_for_discard(): float { return NAN; }
+$value = nan_for_discard();
+(string) $value;
+set_error_handler(function($n, $m) { echo "handled:" . $m . "\n"; return $n === E_WARNING; });
+(string) nan_for_discard();
+restore_error_handler();
+set_error_handler(function($n, $m) { throw new RuntimeException($m . ":" . $n); });
+function discard_nan_string(): void { (string) NAN; }
+try { discard_nan_string(); echo "missed\n"; }
+catch (RuntimeException $e) { echo "caught:" . $e->getMessage() . "\n"; }
+"#,
+        "handled:unexpected NAN value was coerced to string\n\
+caught:unexpected NAN value was coerced to string:2\n",
+        &NAN_STRING_WARNING.repeat(2),
+    );
+}

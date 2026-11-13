@@ -79,6 +79,20 @@ fn condition_effect(expr: &Expr) -> Effect {
     if internal_conversion_may_throw(expr) { effect.with_may_throw() } else { effect }
 }
 
+/// Unknown string-cast operands may be NaN or dispatch a PHP conversion callback.
+fn string_cast_effect(expr: &Expr) -> Effect {
+    let effect = expr_effect(expr);
+    let can_warn = match &expr.kind {
+        ExprKind::FloatLiteral(value) => value.is_nan(),
+        ExprKind::StringLiteral(_) | ExprKind::IntLiteral(_)
+        | ExprKind::BoolLiteral(_) | ExprKind::Null => false,
+        _ => true,
+    };
+    if can_warn {
+        effect.with_side_effects().with_may_throw().with_writes_globals()
+    } else { effect }
+}
+
 /// Returns true if any statement in `stmts` may throw, including implicit destruction.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
     block_effect(stmts).may_throw
@@ -304,6 +318,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         }
         ExprKind::Not(inner)
         | ExprKind::Cast { target: CastType::Bool | CastType::Array, expr: inner } => condition_effect(inner),
+        ExprKind::Cast { target: CastType::String, expr: inner } => string_cast_effect(inner),
         ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => expr_effect(inner),
