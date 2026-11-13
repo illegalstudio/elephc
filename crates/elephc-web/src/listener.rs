@@ -61,6 +61,7 @@ const LISTEN_BACKLOG: i32 = 1024;
 
 /// Maximum accepted sockets handed to one worker before its channel applies
 /// backpressure to the master.
+#[cfg(target_vendor = "apple")]
 const TCP_PASS_QUEUE: usize = 64;
 
 /// Serializes descriptor-map mutation against `fork()`.
@@ -158,6 +159,8 @@ pub(crate) struct SharedTcp {
     #[cfg(target_vendor = "apple")]
     pending: Mutex<HashMap<u64, (usize, std::net::TcpStream)>>,
     #[cfg(target_vendor = "apple")]
+    master_pid: libc::pid_t,
+    #[cfg(target_vendor = "apple")]
     stop: AtomicBool,
     /// False in a forked worker after it closed the master-only descriptors.
     #[cfg(target_vendor = "apple")]
@@ -211,6 +214,7 @@ pub(crate) fn install_shared(
         next_worker: AtomicUsize::new(0),
         next_id: AtomicU64::new(0),
         pending: Mutex::new(HashMap::with_capacity(workers)),
+        master_pid: std::process::id() as libc::pid_t,
         stop: AtomicBool::new(false),
         owns_descriptors: AtomicBool::new(true),
     })))
@@ -676,15 +680,15 @@ fn set_no_sigpipe(fd: RawFd) -> io::Result<()> {
 fn receive_tcp_connections(
     socket: UnixDatagram,
     sender: tokio::sync::mpsc::Sender<std::net::TcpStream>,
+    master_pid: libc::pid_t,
 ) {
-    let parent = unsafe { libc::getppid() };
     loop {
         let (fd, id) = match recv_fd(&socket) {
             Ok(descriptor) => descriptor,
             Err(error) if error.kind() == io::ErrorKind::TimedOut => {
                 // A datagram socket has no EOF. The timeout is how an orphaned
                 // worker notices that its master was killed and exits.
-                if unsafe { libc::getppid() } != parent {
+                if unsafe { libc::getppid() } != master_pid {
                     break;
                 }
                 continue;
@@ -707,7 +711,7 @@ fn receive_tcp_connections(
                 Ok(()) => break,
                 Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
                     pending = returned;
-                    if unsafe { libc::getppid() } != parent {
+                    if unsafe { libc::getppid() } != master_pid {
                         return;
                     }
                     std::thread::sleep(Duration::from_millis(10));
@@ -789,7 +793,7 @@ pub(crate) enum ListenSource {
     Tcp(SocketAddr),
     /// Receive master-accepted TCP descriptors on Apple targets.
     #[cfg(target_vendor = "apple")]
-    TcpPassed(UnixDatagram, SocketAddr),
+    TcpPassed(UnixDatagram, SocketAddr, libc::pid_t),
     /// Wrap the inherited master Unix listener in this worker.
     Unix(std::os::unix::net::UnixListener),
 }
@@ -809,6 +813,7 @@ impl ListenSource {
                     return Ok(Self::TcpPassed(
                         shared.worker_receiver(worker_index)?,
                         *addr,
+                        shared.master_pid,
                     ));
                 }
                 let _ = (shared_tcp, worker_index);
@@ -852,6 +857,8 @@ pub(crate) enum Listener {
         receiver: tokio::sync::mpsc::Receiver<std::net::TcpStream>,
         /// The configured server address.
         server: SocketAddr,
+        /// The master PID captured before the worker was forked.
+        master_pid: libc::pid_t,
     },
 }
 
@@ -871,16 +878,17 @@ impl Listener {
                 })
             }
             #[cfg(target_vendor = "apple")]
-            ListenSource::TcpPassed(receiver, server) => {
+            ListenSource::TcpPassed(receiver, server, master_pid) => {
                 let (sender, receiver_channel) =
                     tokio::sync::mpsc::channel::<std::net::TcpStream>(TCP_PASS_QUEUE);
                 std::thread::Builder::new()
                     .name("elephc-tcp-receive".to_string())
-                    .spawn(move || receive_tcp_connections(receiver, sender))
+                    .spawn(move || receive_tcp_connections(receiver, sender, master_pid))
                     .expect("failed to spawn the TCP descriptor receiver");
                 Ok(Self::TcpPassed {
                     receiver: receiver_channel,
                     server,
+                    master_pid,
                 })
             }
             ListenSource::Unix(listener) => {
@@ -912,7 +920,11 @@ impl Listener {
                 Ok(Some((Stream::Unix(stream), PeerInfo::unix())))
             }
             #[cfg(target_vendor = "apple")]
-            Self::TcpPassed { receiver, server } => {
+            Self::TcpPassed {
+                receiver,
+                server,
+                master_pid: _,
+            } => {
                 let Some(stream) = receiver.recv().await else {
                     return Ok(None);
                 };
@@ -1452,7 +1464,7 @@ mod tests {
             ListenSource::Unix(listener) => listener,
             ListenSource::Tcp(_) => panic!("a Unix listen target must produce a Unix source"),
             #[cfg(target_vendor = "apple")]
-            ListenSource::TcpPassed(_, _) => {
+            ListenSource::TcpPassed(_, _, _) => {
                 panic!("a Unix listen target must produce a Unix source")
             }
         };

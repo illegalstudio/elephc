@@ -183,7 +183,7 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
     let (server_addr, server_port) = match &source {
         ListenSource::Tcp(addr) => (addr.ip().to_string(), addr.port()),
         #[cfg(target_vendor = "apple")]
-        ListenSource::TcpPassed(_, addr) => (addr.ip().to_string(), addr.port()),
+        ListenSource::TcpPassed(_, addr, _) => (addr.ip().to_string(), addr.port()),
         ListenSource::Unix(_) => (String::new(), 0),
     };
     request_state::set_server_addr(&server_addr, server_port);

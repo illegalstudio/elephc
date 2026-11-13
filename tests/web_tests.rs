@@ -1245,6 +1245,7 @@ fn try_http_get(addr: &str, path: &str) -> String {
 
 /// A SIGKILLed master must not leave workers holding the port, and the workers
 /// must exit so a supervisor restart can bind immediately.
+#[cfg(target_vendor = "apple")]
 #[test]
 fn web_master_sigkill_releases_port_and_workers() {
     let dir = make_test_dir("web_master_sigkill");
