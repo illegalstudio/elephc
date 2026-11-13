@@ -554,11 +554,8 @@ impl Debugger {
                 Some((filter.to_string(), class))
             })
             .collect();
-        self.exception_filters = if options.is_empty() {
-            super::ExceptionFilters::from_names(&filters)
-        } else {
-            super::ExceptionFilters::from_options(&options)
-        };
+        self.exception_filters = super::ExceptionFilters::from_names(&filters)
+            .with_options(&options);
         super::EXCEPTION_BREAKS_ACTIVE.store(
             !self.exception_filters.is_empty(),
             std::sync::atomic::Ordering::Relaxed,

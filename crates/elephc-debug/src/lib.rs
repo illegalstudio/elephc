@@ -654,25 +654,28 @@ impl ExceptionFilters {
         filters
     }
 
-    /// Builds class-aware filters from DAP `filterOptions`.
-    fn from_options(options: &[(String, Option<String>)]) -> Self {
-        let mut filters = Self::default();
+    /// Adds class-aware filters from DAP `filterOptions`.
+    ///
+    /// DAP defines `filters` and `filterOptions` as additive: start from the
+    /// plain selection, then narrow or add each filter option. Repeating an
+    /// option without a class restores that category's unconditional stop.
+    fn with_options(mut self, options: &[(String, Option<String>)]) -> Self {
         for (name, class) in options {
             let (enabled, filtered, classes) = match name.as_str() {
                 "caught" => (
-                    &mut filters.caught,
-                    &mut filters.caught_filtered,
-                    &mut filters.caught_classes,
+                    &mut self.caught,
+                    &mut self.caught_filtered,
+                    &mut self.caught_classes,
                 ),
                 "uncaught" => (
-                    &mut filters.uncaught,
-                    &mut filters.uncaught_filtered,
-                    &mut filters.uncaught_classes,
+                    &mut self.uncaught,
+                    &mut self.uncaught_filtered,
+                    &mut self.uncaught_classes,
                 ),
                 "throw" | "all" => (
-                    &mut filters.throw_all,
-                    &mut filters.throw_filtered,
-                    &mut filters.throw_classes,
+                    &mut self.throw_all,
+                    &mut self.throw_filtered,
+                    &mut self.throw_classes,
                 ),
                 _ => continue,
             };
@@ -695,7 +698,12 @@ impl ExceptionFilters {
                 }
             }
         }
-        filters
+        self
+    }
+
+    /// Builds class-aware filters from DAP `filterOptions` alone.
+    fn from_options(options: &[(String, Option<String>)]) -> Self {
+        Self::default().with_options(options)
     }
 
     /// Returns whether no exception category is selected.
@@ -2691,6 +2699,20 @@ mod tests {
             ("uncaught".to_string(), None),
         ]);
         assert!(reset.should_stop_exception(false, Some("LogicException"), &classes));
+
+        // DAP defines `filters` and `filterOptions` as additive: the plain
+        // caught selection stays unconditional while uncaught is narrowed.
+        let additive = ExceptionFilters::from_names(&[
+            "caught".to_string(),
+            "uncaught".to_string(),
+        ])
+        .with_options(&[(
+            "uncaught".to_string(),
+            Some("RuntimeException".to_string()),
+        )]);
+        assert!(additive.should_stop_exception(true, Some("LogicException"), &classes));
+        assert!(additive.should_stop_exception(false, Some("RuntimeException"), &classes));
+        assert!(!additive.should_stop_exception(false, Some("LogicException"), &classes));
     }
 
     /// Verifies include-variant symbols display as their PHP-level function names.
