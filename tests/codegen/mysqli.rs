@@ -16,8 +16,8 @@ use crate::support::*;
 
 /// A bare `MYSQLI_*` constant is enough to inject the surface (issue: a config
 /// array or helper that only forwards the constant must not fail with
-/// "undefined constant"), and `mysqli_sql_exception::getSqlState()` (php 8.1+)
-/// reads the SQLSTATE.
+/// "undefined constant"), and `mysqli_sql_exception::getSqlState()` reads the
+/// protected SQLSTATE (php's default "00000" for a hand-built exception).
 #[test]
 fn test_mysqli_bare_constant_and_getsqlstate() {
     let out = compile_and_run(
@@ -25,13 +25,12 @@ fn test_mysqli_bare_constant_and_getsqlstate() {
 $cfg = ['mode' => MYSQLI_ASSOC, 'flags' => MYSQLI_REPORT_STRICT];
 echo $cfg['mode'], $cfg['flags'];
 $e = new mysqli_sql_exception("boom");
-$e->sqlstate = "42S02";
 $previous = new Exception("root");
 $chained = new mysqli_sql_exception("outer", 0, $previous);
 echo "|", $e->getSqlState(), "|", $chained->getPrevious()->getMessage();
 "#,
     );
-    assert_eq!(out, "12|42S02|root");
+    assert_eq!(out, "12|00000|root");
 }
 
 /// The completed procedural surface is declared: the savepoint API, the
@@ -65,16 +64,16 @@ echo "|", mysqli_thread_safe() === false ? "not-ts" : "ts";
 /// The `__elephc*` instance internals are compiler plumbing, not part of PHP's
 /// mysqli surface: user code calling them hits normal private-member
 /// visibility (a catchable `Error` at runtime), exactly like the PDO prelude's
-/// factories. (The static `__elephcInit` factory is rejected at compile time —
-/// see `error_tests/mysqli.rs`.)
+/// factories. (The static factories are rejected at compile time — see
+/// `error_tests/mysqli.rs`.)
 #[test]
 fn test_mysqli_internal_helpers_are_private() {
     let out = compile_and_run(
         r#"<?php
 mysqli_report(MYSQLI_REPORT_OFF);
-$stmt = new mysqli_stmt();
+$db = new mysqli();
 try {
-    $stmt->__elephcBindParamValues("i", [1]);
+    $db->__elephcConn();
     echo "callable";
 } catch (Error $e) {
     echo "blocked";
@@ -218,7 +217,7 @@ try {
     echo "no-throw";
 } catch (mysqli_sql_exception $e) {
     echo "caught|", strlen($e->getMessage()) > 0 ? "msg" : "empty";
-    echo "|", $e->sqlstate !== "" ? "state" : "none";
+    echo "|", $e->getSqlState() !== "" ? "state" : "none";
 }
 "#,
     );
@@ -304,44 +303,33 @@ try {
     assert_eq!(out, "te-result|te-link");
 }
 
-/// `bind_param` validates offline: a type character outside `i`/`d`/`s`/`b`
-/// throws `ValueError`; a types-vs-variables count mismatch reports and
-/// returns `false` under REPORT_OFF; execute on an unprepared statement fails
-/// with `errno` set.
+/// A statement or result needs a connected link, exactly like php: building
+/// either on a `mysqli_init()` object raises `Error: mysqli object is not fully
+/// initialized` (both constructors are public, as in php), and so do the
+/// procedural `mysqli_stmt_init()` and `mysqli_prepare()`.
 #[test]
-fn test_mysqli_stmt_bind_param_validation() {
-    // The statement comes from a `mysqli_stmt|false`-typed helper, the same
-    // union shape `mysqli::prepare` returns: statement method calls dispatch
-    // dynamically on the union receiver (a concretely-typed receiver would
-    // instead hit the checker's by-ref storage rule at compile time — loud,
-    // and documented).
+fn test_mysqli_stmt_and_result_constructors_need_a_connection() {
     let out = compile_and_run(
         r#"<?php
 mysqli_report(MYSQLI_REPORT_OFF);
-function make_stmt(): mysqli_stmt|false {
-    return new mysqli_stmt();
-}
-$stmt = make_stmt();
-$v = 1;
-$w = 2;
-try {
-    $stmt->bind_param("x", $v);
-    echo "no";
-} catch (ValueError $e) {
-    echo "ve";
-}
-echo "|", $stmt->bind_param("is", $v) ? "T" : "F";
-echo "|", $stmt->bind_param("i", $v, $w) ? "T" : "F";
-echo "|", $stmt->execute() ? "T" : "F";
-echo "|", $stmt->errno;
+$db = new mysqli();
+$probe = function(callable $fn): string {
+    try { $fn(); return "no-err"; }
+    catch (Error $e) { return $e->getMessage() === "mysqli object is not fully initialized" ? "err" : "err?"; }
+};
+echo $probe(fn() => new mysqli_stmt($db));
+echo "|", $probe(fn() => new mysqli_stmt($db, "SELECT 1"));
+echo "|", $probe(fn() => mysqli_stmt_init($db));
+echo "|", $probe(fn() => mysqli_prepare($db, "SELECT 1"));
+echo "|", $probe(fn() => new mysqli_result($db));
 "#,
     );
-    assert_eq!(out, "ve|F|F|F|2006");
+    assert_eq!(out, "err|err|err|err|err");
 }
 
 /// The mysqli exception hierarchy is mysqli's own: `mysqli_sql_exception`
-/// extends `RuntimeException`, and the locked `MYSQLI_*` constants carry
-/// php-src's values.
+/// extends `RuntimeException`, and the `MYSQLI_*` constants carry php-src's
+/// values.
 #[test]
 fn test_mysqli_exception_and_constants() {
     let out = compile_and_run(
@@ -351,8 +339,400 @@ echo $e instanceof RuntimeException ? 'rt' : 'no';
 echo '|', MYSQLI_ASSOC, MYSQLI_NUM, MYSQLI_BOTH;
 echo '|', MYSQLI_REPORT_OFF, MYSQLI_REPORT_ERROR, MYSQLI_REPORT_STRICT;
 echo '|', MYSQLI_CLIENT_SSL;
-echo '|', $e->sqlstate;
+echo '|', $e->getSqlState();
 "#,
     );
     assert_eq!(out, "rt|123|012|2048|00000");
+}
+
+/// Every procedural function php 8.5's mysqli declares exists (106 of them),
+/// every class exists with php's method set, and the methods elephc used to add
+/// on top of php (`get_host_info`, `field_tell`, …) are gone, so `method_exists`
+/// answers exactly like php.
+#[test]
+fn test_mysqli_full_php_surface_exists() {
+    let out = compile_and_run(
+        r#"<?php
+// A bare constant injects the surface (string probes alone never do).
+$probe = MYSQLI_ASSOC;
+$fns = [
+    'mysqli_affected_rows', 'mysqli_autocommit', 'mysqli_begin_transaction',
+    'mysqli_change_user', 'mysqli_character_set_name', 'mysqli_close', 'mysqli_commit',
+    'mysqli_connect', 'mysqli_connect_errno', 'mysqli_connect_error', 'mysqli_data_seek',
+    'mysqli_dump_debug_info', 'mysqli_debug', 'mysqli_errno', 'mysqli_error',
+    'mysqli_error_list', 'mysqli_stmt_execute', 'mysqli_execute', 'mysqli_execute_query',
+    'mysqli_fetch_field', 'mysqli_fetch_fields', 'mysqli_fetch_field_direct',
+    'mysqli_fetch_lengths', 'mysqli_fetch_all', 'mysqli_fetch_array', 'mysqli_fetch_assoc',
+    'mysqli_fetch_object', 'mysqli_fetch_row', 'mysqli_fetch_column', 'mysqli_field_count',
+    'mysqli_field_seek', 'mysqli_field_tell', 'mysqli_free_result',
+    'mysqli_get_connection_stats', 'mysqli_get_client_stats', 'mysqli_get_charset',
+    'mysqli_get_client_info', 'mysqli_get_client_version', 'mysqli_get_links_stats',
+    'mysqli_get_host_info', 'mysqli_get_proto_info', 'mysqli_get_server_info',
+    'mysqli_get_server_version', 'mysqli_get_warnings', 'mysqli_init', 'mysqli_info',
+    'mysqli_insert_id', 'mysqli_kill', 'mysqli_more_results', 'mysqli_multi_query',
+    'mysqli_next_result', 'mysqli_num_fields', 'mysqli_num_rows', 'mysqli_options',
+    'mysqli_set_opt', 'mysqli_ping', 'mysqli_poll', 'mysqli_prepare', 'mysqli_report',
+    'mysqli_query', 'mysqli_real_connect', 'mysqli_real_escape_string',
+    'mysqli_escape_string', 'mysqli_real_query', 'mysqli_reap_async_query',
+    'mysqli_release_savepoint', 'mysqli_rollback', 'mysqli_savepoint', 'mysqli_select_db',
+    'mysqli_set_charset', 'mysqli_stmt_affected_rows', 'mysqli_stmt_attr_get',
+    'mysqli_stmt_attr_set', 'mysqli_stmt_bind_param', 'mysqli_stmt_bind_result',
+    'mysqli_stmt_close', 'mysqli_stmt_data_seek', 'mysqli_stmt_errno', 'mysqli_stmt_error',
+    'mysqli_stmt_error_list', 'mysqli_stmt_fetch', 'mysqli_stmt_field_count',
+    'mysqli_stmt_free_result', 'mysqli_stmt_get_result', 'mysqli_stmt_get_warnings',
+    'mysqli_stmt_init', 'mysqli_stmt_insert_id', 'mysqli_stmt_more_results',
+    'mysqli_stmt_next_result', 'mysqli_stmt_num_rows', 'mysqli_stmt_param_count',
+    'mysqli_stmt_prepare', 'mysqli_stmt_reset', 'mysqli_stmt_result_metadata',
+    'mysqli_stmt_send_long_data', 'mysqli_stmt_store_result', 'mysqli_stmt_sqlstate',
+    'mysqli_sqlstate', 'mysqli_ssl_set', 'mysqli_stat', 'mysqli_store_result',
+    'mysqli_thread_id', 'mysqli_thread_safe', 'mysqli_use_result', 'mysqli_warning_count',
+    'mysqli_refresh',
+];
+$missing = [];
+foreach ($fns as $f) { if (!function_exists($f)) { $missing[] = $f; } }
+echo count($fns), ":", count($missing) === 0 ? "all-fns" : implode(",", $missing);
+$classes = class_exists('mysqli') && class_exists('mysqli_result') && class_exists('mysqli_stmt')
+    && class_exists('mysqli_driver') && class_exists('mysqli_warning') && class_exists('mysqli_sql_exception');
+echo "|classes:", $classes ? 0 : 1;
+// method_exists() needs literal names in AOT mode, so each probe is spelled out.
+$absentMethods = 0;
+if (!method_exists('mysqli', 'autocommit')) { $absentMethods++; }
+if (!method_exists('mysqli', 'begin_transaction')) { $absentMethods++; }
+if (!method_exists('mysqli', 'change_user')) { $absentMethods++; }
+if (!method_exists('mysqli', 'character_set_name')) { $absentMethods++; }
+if (!method_exists('mysqli', 'close')) { $absentMethods++; }
+if (!method_exists('mysqli', 'commit')) { $absentMethods++; }
+if (!method_exists('mysqli', 'connect')) { $absentMethods++; }
+if (!method_exists('mysqli', 'dump_debug_info')) { $absentMethods++; }
+if (!method_exists('mysqli', 'debug')) { $absentMethods++; }
+if (!method_exists('mysqli', 'get_charset')) { $absentMethods++; }
+if (!method_exists('mysqli', 'execute_query')) { $absentMethods++; }
+if (!method_exists('mysqli', 'get_client_info')) { $absentMethods++; }
+if (!method_exists('mysqli', 'get_connection_stats')) { $absentMethods++; }
+if (!method_exists('mysqli', 'get_server_info')) { $absentMethods++; }
+if (!method_exists('mysqli', 'get_warnings')) { $absentMethods++; }
+if (!method_exists('mysqli', 'init')) { $absentMethods++; }
+if (!method_exists('mysqli', 'kill')) { $absentMethods++; }
+if (!method_exists('mysqli', 'multi_query')) { $absentMethods++; }
+if (!method_exists('mysqli', 'more_results')) { $absentMethods++; }
+if (!method_exists('mysqli', 'next_result')) { $absentMethods++; }
+if (!method_exists('mysqli', 'ping')) { $absentMethods++; }
+if (!method_exists('mysqli', 'poll')) { $absentMethods++; }
+if (!method_exists('mysqli', 'prepare')) { $absentMethods++; }
+if (!method_exists('mysqli', 'query')) { $absentMethods++; }
+if (!method_exists('mysqli', 'real_connect')) { $absentMethods++; }
+if (!method_exists('mysqli', 'real_escape_string')) { $absentMethods++; }
+if (!method_exists('mysqli', 'reap_async_query')) { $absentMethods++; }
+if (!method_exists('mysqli', 'escape_string')) { $absentMethods++; }
+if (!method_exists('mysqli', 'real_query')) { $absentMethods++; }
+if (!method_exists('mysqli', 'release_savepoint')) { $absentMethods++; }
+if (!method_exists('mysqli', 'rollback')) { $absentMethods++; }
+if (!method_exists('mysqli', 'savepoint')) { $absentMethods++; }
+if (!method_exists('mysqli', 'select_db')) { $absentMethods++; }
+if (!method_exists('mysqli', 'set_charset')) { $absentMethods++; }
+if (!method_exists('mysqli', 'options')) { $absentMethods++; }
+if (!method_exists('mysqli', 'set_opt')) { $absentMethods++; }
+if (!method_exists('mysqli', 'ssl_set')) { $absentMethods++; }
+if (!method_exists('mysqli', 'stat')) { $absentMethods++; }
+if (!method_exists('mysqli', 'stmt_init')) { $absentMethods++; }
+if (!method_exists('mysqli', 'store_result')) { $absentMethods++; }
+if (!method_exists('mysqli', 'thread_safe')) { $absentMethods++; }
+if (!method_exists('mysqli', 'use_result')) { $absentMethods++; }
+if (!method_exists('mysqli', 'refresh')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'close')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'free')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'data_seek')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'fetch_field')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'fetch_fields')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'fetch_field_direct')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'fetch_all')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'fetch_array')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'fetch_assoc')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'fetch_object')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'fetch_row')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'fetch_column')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'field_seek')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'free_result')) { $absentMethods++; }
+if (!method_exists('mysqli_result', 'getIterator')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'attr_get')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'attr_set')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'bind_param')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'bind_result')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'close')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'data_seek')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'execute')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'fetch')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'get_warnings')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'result_metadata')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'more_results')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'next_result')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'num_rows')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'send_long_data')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'free_result')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'reset')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'prepare')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'store_result')) { $absentMethods++; }
+if (!method_exists('mysqli_stmt', 'get_result')) { $absentMethods++; }
+if (!method_exists('mysqli_warning', 'next')) { $absentMethods++; }
+if (!method_exists('mysqli_sql_exception', 'getSqlState')) { $absentMethods++; }
+echo "|methods:", $absentMethods === 0 ? "all" : $absentMethods;
+$extra = 0;
+if (method_exists('mysqli', 'get_host_info')) { $extra++; }
+if (method_exists('mysqli', 'get_proto_info')) { $extra++; }
+if (method_exists('mysqli', 'get_server_version')) { $extra++; }
+if (method_exists('mysqli', 'get_client_version')) { $extra++; }
+if (method_exists('mysqli_result', 'field_tell')) { $extra++; }
+echo "|extra:", $extra;
+"#,
+    );
+    assert_eq!(out, "106:all-fns|classes:0|methods:all|extra:0");
+}
+
+/// The constant surface carries php-src's exact values across the families
+/// (options, client flags, field flags, field types, refresh, statement
+/// attributes, async), and `MYSQLI_IS_MARIADB` is the always-false bool.
+#[test]
+fn test_mysqli_constant_values_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+echo MYSQLI_READ_DEFAULT_GROUP, ",", MYSQLI_READ_DEFAULT_FILE, ",", MYSQLI_OPT_LOCAL_INFILE, ",",
+    MYSQLI_OPT_LOAD_DATA_LOCAL_DIR, ",", MYSQLI_OPT_READ_TIMEOUT, ",", MYSQLI_OPT_NET_CMD_BUFFER_SIZE, ",",
+    MYSQLI_OPT_NET_READ_BUFFER_SIZE, ",", MYSQLI_OPT_INT_AND_FLOAT_NATIVE, ",", MYSQLI_OPT_SSL_VERIFY_SERVER_CERT, ",",
+    MYSQLI_SERVER_PUBLIC_KEY, ",", MYSQLI_OPT_CAN_HANDLE_EXPIRED_PASSWORDS, "\n";
+echo MYSQLI_CLIENT_NO_SCHEMA, ",", MYSQLI_CLIENT_SSL_VERIFY_SERVER_CERT, ",", MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT, ",",
+    MYSQLI_CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS, ",", MYSQLI_ASYNC, ",", MYSQLI_STORE_RESULT_COPY_DATA, "\n";
+echo MYSQLI_NOT_NULL_FLAG, ",", MYSQLI_PRI_KEY_FLAG, ",", MYSQLI_UNIQUE_KEY_FLAG, ",", MYSQLI_MULTIPLE_KEY_FLAG, ",",
+    MYSQLI_BLOB_FLAG, ",", MYSQLI_UNSIGNED_FLAG, ",", MYSQLI_ZEROFILL_FLAG, ",", MYSQLI_BINARY_FLAG, ",", MYSQLI_ENUM_FLAG, ",",
+    MYSQLI_AUTO_INCREMENT_FLAG, ",", MYSQLI_TIMESTAMP_FLAG, ",", MYSQLI_SET_FLAG, ",", MYSQLI_NO_DEFAULT_VALUE_FLAG, ",",
+    MYSQLI_ON_UPDATE_NOW_FLAG, ",", MYSQLI_PART_KEY_FLAG, ",", MYSQLI_GROUP_FLAG, ",", MYSQLI_NUM_FLAG, "\n";
+echo MYSQLI_TYPE_CHAR, ",", MYSQLI_TYPE_VECTOR, ",", MYSQLI_NO_DATA, ",", MYSQLI_DATA_TRUNCATED, ",", MYSQLI_DEBUG_TRACE_ENABLED, ",",
+    MYSQLI_SERVER_QUERY_NO_GOOD_INDEX_USED, ",", MYSQLI_SERVER_QUERY_NO_INDEX_USED, ",", MYSQLI_SERVER_QUERY_WAS_SLOW, ",",
+    MYSQLI_SERVER_PS_OUT_PARAMS, "\n";
+echo MYSQLI_REFRESH_GRANT, ",", MYSQLI_REFRESH_LOG, ",", MYSQLI_REFRESH_TABLES, ",", MYSQLI_REFRESH_HOSTS, ",",
+    MYSQLI_REFRESH_STATUS, ",", MYSQLI_REFRESH_THREADS, ",", MYSQLI_REFRESH_REPLICA, ",", MYSQLI_REFRESH_SLAVE, ",",
+    MYSQLI_REFRESH_MASTER, ",", MYSQLI_REFRESH_BACKUP_LOG, "\n";
+echo MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH, ",", MYSQLI_STMT_ATTR_CURSOR_TYPE, ",", MYSQLI_CURSOR_TYPE_NO_CURSOR, ",",
+    MYSQLI_CURSOR_TYPE_READ_ONLY, "\n";
+var_dump(MYSQLI_IS_MARIADB);
+"#,
+    );
+    assert_eq!(
+        out,
+        "5,4,8,43,11,202,203,201,21,35,37\n16,1073741824,64,4194304,8,16\n1,2,4,8,16,32,64,128,256,512,1024,2048,4096,8192,16384,32768,32768\n1,242,100,101,0,16,32,2048,4096\n1,2,4,8,16,32,64,64,128,2097152\n0,1,0,1\nbool(false)\n"
+    );
+}
+
+/// The surface follows `--php-version`: PHP 8.0 has no `MYSQLI_IS_MARIADB`,
+/// PHP 8.3 still has the five constants 8.4 removed (and no
+/// `MYSQLI_TYPE_VECTOR`), and only PHP 8.6 has `mysqli_quote_string` /
+/// `MYSQLI_OPT_COMPRESS`.
+#[test]
+fn test_mysqli_surface_follows_php_version() {
+    let probe = r#"<?php
+$probe = MYSQLI_ASSOC;
+echo defined('MYSQLI_IS_MARIADB') ? "M" : "-";
+echo defined('MYSQLI_TYPE_INTERVAL') && defined('MYSQLI_CURSOR_TYPE_SCROLLABLE') && defined('MYSQLI_STMT_ATTR_PREFETCH_ROWS') && defined('MYSQLI_SET_CHARSET_DIR') && defined('MYSQLI_CURSOR_TYPE_FOR_UPDATE') ? "L" : "-";
+echo defined('MYSQLI_TYPE_VECTOR') ? "V" : "-";
+echo function_exists('mysqli_quote_string') && defined('MYSQLI_OPT_COMPRESS') ? "Q" : "-";
+"#;
+    let php80 = compile_and_run_with_php_version(probe, elephc::php_version::PhpVersion::Php80);
+    let php83 = compile_and_run_with_php_version(probe, elephc::php_version::PhpVersion::Php83);
+    let php85 = compile_and_run_with_php_version(probe, elephc::php_version::PhpVersion::Php85);
+    let php86 = compile_and_run_with_php_version(probe, elephc::php_version::PhpVersion::Php86);
+    assert_eq!(
+        [php80.as_str(), php83.as_str(), php85.as_str(), php86.as_str()],
+        ["-L--", "ML--", "M-V-", "M-VQ"]
+    );
+}
+
+/// `mysqli_driver`'s properties are live views like php's property handlers:
+/// `report_mode` reads and WRITES the same mode `mysqli_report()` sets, and the
+/// client fields describe the linked client library.
+#[test]
+fn test_mysqli_driver_report_mode_is_live() {
+    let out = compile_and_run(
+        r#"<?php
+$driver = new mysqli_driver();
+mysqli_report(MYSQLI_REPORT_ERROR);
+echo $driver->report_mode;
+$driver->report_mode = MYSQLI_REPORT_OFF;
+$db = mysqli_init();
+// OFF now: a failing connect returns false instead of throwing.
+echo "|", $db->real_connect("127.0.0.1", "u", "p", "d", 1) ? "connected" : "quiet-false";
+$driver->report_mode = MYSQLI_REPORT_STRICT;
+try {
+    $db->real_connect("127.0.0.1", "u", "p", "d", 1);
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|strict-throw";
+}
+echo "|", $driver->client_version === mysqli_get_client_version() ? "cv" : "cv?";
+echo "|", $driver->client_info === mysqli_get_client_info() ? "ci" : "ci?";
+echo "|", $driver->driver_version;
+"#,
+    );
+    assert_eq!(out, "1|quiet-false|strict-throw|cv|ci|101009");
+}
+
+/// Every mysqlnd option id the surface honors or accepts returns `true` from
+/// `options()` before connecting (MYSQLI_OPT_READ_TIMEOUT included), and an
+/// unknown id returns `false`, like php.
+#[test]
+fn test_mysqli_options_accept_mysqlnd_ids() {
+    let out = compile_and_run(
+        r#"<?php
+$db = mysqli_init();
+$ids = [MYSQLI_OPT_CONNECT_TIMEOUT, MYSQLI_OPT_READ_TIMEOUT, MYSQLI_INIT_COMMAND, MYSQLI_SET_CHARSET_NAME,
+    MYSQLI_OPT_LOCAL_INFILE, MYSQLI_OPT_LOAD_DATA_LOCAL_DIR, MYSQLI_OPT_SSL_VERIFY_SERVER_CERT,
+    MYSQLI_OPT_INT_AND_FLOAT_NATIVE, MYSQLI_OPT_NET_CMD_BUFFER_SIZE, MYSQLI_OPT_NET_READ_BUFFER_SIZE];
+$ok = 0;
+foreach ($ids as $id) { if ($db->options($id, 1)) { $ok++; } }
+echo $ok, "/", count($ids), "|", $db->options(9999, 1) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, "10/10|F");
+}
+
+/// The raw protocol commands still guard the link like php: `refresh()` and
+/// `dump_debug_info()` on an unconnected object raise the not-fully-initialized
+/// `Error` before any COM_REFRESH / COM_DEBUG is sent, and `MYSQLI_REPORT_INDEX`
+/// stays part of `MYSQLI_REPORT_ALL`.
+#[test]
+fn test_mysqli_raw_protocol_commands_need_a_connection() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = mysqli_init();
+$probe = function(callable $fn): string {
+    try { $fn(); return "no-err"; }
+    catch (Error $e) {
+        return $e->getMessage() === "mysqli object is not fully initialized" ? "err" : "err?";
+    }
+};
+echo $probe(fn() => $db->refresh(MYSQLI_REFRESH_TABLES));
+echo "|", $probe(fn() => $db->dump_debug_info());
+echo "|", $probe(fn() => mysqli_refresh($db, MYSQLI_REFRESH_GRANT));
+echo "|", (MYSQLI_REPORT_ALL & MYSQLI_REPORT_INDEX) === MYSQLI_REPORT_INDEX ? "all" : "?";
+"#,
+    );
+    assert_eq!(out, "err|err|err|all");
+}
+
+/// php frees mysqli objects in C, so `mysqli`, `mysqli_stmt`, and `mysqli_result`
+/// expose no `__destruct` (nor elephc's private helpers) to `method_exists()`,
+/// `get_class_methods()`, or reflection — also through a user subclass — and the
+/// method lists match php-src's.
+#[test]
+fn test_mysqli_implementation_methods_are_hidden() {
+    let out = compile_and_run(
+        r#"<?php
+$mode = MYSQLI_ASSOC;
+class AppDb extends mysqli {}
+echo method_exists("mysqli", "__destruct") ? "D" : "-";
+echo method_exists("mysqli_stmt", "__destruct") ? "D" : "-";
+echo method_exists("mysqli_result", "__destruct") ? "D" : "-";
+echo method_exists("AppDb", "__destruct") ? "D" : "-";
+echo method_exists("mysqli", "__elephcReportIndex") ? "H" : "-";
+$db = mysqli_init();
+echo method_exists($db, "__destruct") ? "D" : "-";
+foreach (["mysqli", "mysqli_stmt", "mysqli_result", "AppDb"] as $class) {
+    echo in_array("__destruct", get_class_methods($class)) ? "D" : "-";
+}
+echo "|";
+echo (new ReflectionClass("mysqli"))->hasMethod("__destruct") ? "D" : "-";
+echo (new ReflectionClass("mysqli_stmt"))->hasMethod("__destruct") ? "D" : "-";
+echo (new ReflectionClass("AppDb"))->hasMethod("__destruct") ? "D" : "-";
+echo "|", count(get_class_methods("mysqli_stmt")), ",", count(get_class_methods("mysqli_result"));
+echo ",", method_exists("AppDb", "query") ? "q" : "?";
+"#,
+    );
+    assert_eq!(out, "----------|---|20,16,q");
+}
+
+/// The counters php declares `int|string` (`insert_id`, `affected_rows`, `num_rows`)
+/// keep that type on the properties and through the procedural aliases.
+#[test]
+fn test_mysqli_counters_are_int_or_numeric_string() {
+    let out = compile_and_run(
+        r#"<?php
+$mode = MYSQLI_ASSOC;
+echo (new ReflectionProperty("mysqli", "insert_id"))->getType();
+echo "|", (new ReflectionProperty("mysqli_stmt", "num_rows"))->getType();
+echo "|", (new ReflectionFunction("mysqli_affected_rows"))->getReturnType();
+"#,
+    );
+    assert_eq!(out, "string|int|string|int|string|int");
+}
+
+/// One `ReflectionClass` per mysqli class (and a user subclass) fits the 8 MB test heap:
+/// every method, parameter, and property reflector stores only the address of its declaring
+/// class's `ReflectionClass` builder instead of a reflector carrying a copy of mysqli's
+/// default/static property arrays per member (about 3.7 MB for `mysqli` alone before).
+#[test]
+fn test_mysqli_reflection_fits_a_small_heap() {
+    let out = compile_and_run(
+        r#"<?php
+$mode = MYSQLI_ASSOC;
+class AppDb extends mysqli {}
+$before = memory_get_usage();
+$classes = [
+    new ReflectionClass("mysqli"),
+    new ReflectionClass("mysqli_stmt"),
+    new ReflectionClass("mysqli_result"),
+    new ReflectionClass("AppDb"),
+];
+$used = memory_get_usage() - $before;
+$query = $classes[3]->getMethod("query");
+echo $query->getDeclaringClass()->getName(), "|", $query->getParameters()[0]->getDeclaringClass()->getName();
+echo "|", $used < 2000000 ? "small" : "big:" . $used;
+"#,
+    );
+    assert_eq!(out, "mysqli|mysqli|small");
+}
+
+/// `eval()` sees the mysqli surface the compiled program linked: the classes, methods and
+/// procedural functions resolve inside it, and `extension_loaded('mysqli')`,
+/// `phpversion('mysqli')` and `get_loaded_extensions()` answer exactly like compiled code.
+#[test]
+fn test_mysqli_is_visible_inside_eval() {
+    let out = compile_and_run(
+        r#"<?php
+$mode = MYSQLI_ASSOC;
+eval('echo extension_loaded("mysqli") ? "loaded" : "absent", "|";
+echo phpversion("mysqli") === PHP_VERSION ? "version" : "no-version", "|";
+echo in_array("mysqli", get_loaded_extensions()) ? "listed" : "unlisted", "|";
+echo class_exists("mysqli") ? "class" : "no-class", "|";
+echo function_exists("mysqli_query") ? "func" : "no-func", "|";
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = mysqli_init();
+echo get_class($db), "|", MYSQLI_NUM;');
+"#,
+    );
+    assert_eq!(out, "loaded|version|listed|class|func|mysqli|2");
+}
+
+/// `MYSQLI_REPORT_ERROR` without STRICT raises a real `E_WARNING`, like php-src's
+/// `php_error_docref()`: `set_error_handler()` receives it, its message carries the
+/// PHP-visible entry point the program called (`mysqli::__construct(): ` or
+/// `mysqli_connect(): `) before `(SQLSTATE/errno): message`, and it is reported at the
+/// user's call-site line, not inside the prelude.
+#[test]
+fn test_mysqli_report_error_raises_e_warning() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_ERROR);
+set_error_handler(function (int $no, string $str, string $file, int $line): bool {
+    $head = substr($str, 0, strpos($str, "/2002)") + 6);
+    echo $no === E_WARNING ? "W" : $no, ":", $head, ":", $line, "|";
+    return true;
+});
+$db = new mysqli("127.0.0.1", "u", "p", "d", 1);
+$link = mysqli_connect("127.0.0.1", "u", "p", "d", 1);
+echo $db->connect_errno, "|", $link === false ? "false" : "link";
+"#,
+    );
+    assert_eq!(
+        out,
+        "W:mysqli::__construct(): (HY000/2002):8|W:mysqli_connect(): (HY000/2002):9|2002|false"
+    );
 }

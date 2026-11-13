@@ -218,6 +218,7 @@ pub(super) fn ensure_dynamic_property_plan_results_supported(
 pub(super) fn declared_mixed_property_get_candidates(
     ctx: &FunctionContext<'_>,
     mode: PropertyFetchMode,
+    known_name: Option<&str>,
     inst: &Instruction,
 ) -> Result<Vec<MixedPropertyReadCandidate>> {
     let mut candidates = Vec::new();
@@ -228,6 +229,9 @@ pub(super) fn declared_mixed_property_get_candidates(
             continue;
         }
         for (property, _) in &class_info.properties {
+            if known_name.is_some_and(|name| name != property) {
+                continue;
+            }
             let (slot, kind) =
                 match resolve_property_read_arm(ctx, class_name, property, mode, inst) {
                     Ok(Some(PropertyNameArm::Slot(slot))) => (slot, MixedPropertyReadKind::Slot),

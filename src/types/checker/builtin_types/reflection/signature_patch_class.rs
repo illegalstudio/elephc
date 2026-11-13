@@ -1,5 +1,5 @@
 //! Purpose:
-//! Patches ReflectionClass and ReflectionObject collection and construction signatures.
+//! Patches class, object, and enum reflector collection and construction signatures.
 //!
 //! Called from:
 //! - patch_builtin_reflection_signatures() through the Reflection checker facade.
@@ -9,9 +9,9 @@
 
 use super::*;
 
-/// Applies ReflectionClass and ReflectionObject specific signature overrides.
+/// Applies class, object, and enum reflector signature overrides.
 pub(super) fn patch_reflection_class_object(class_name: &str, class_info: &mut ClassInfo) {
-            if matches!(class_name, "ReflectionClass" | "ReflectionObject") {
+            if matches!(class_name, "ReflectionClass" | "ReflectionObject" | "ReflectionEnum") {
                 for (property_name, property_type) in &mut class_info.properties {
                     match property_name.as_str() {
                         "__interfaces" | "__traits" => {

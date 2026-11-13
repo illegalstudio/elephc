@@ -427,6 +427,9 @@ pub(super) fn lower_const_null(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers explicit Mixed boxing for scalar, string, object, and existing Mixed operands.
 pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if let Some(cell) = inst.result.and_then(|value| ctx.numeric_cell_offsets.get(&value).copied()) {
+        return super::arithmetic::stack_cell::lower_box(ctx, inst, cell);
+    }
     let value = expect_operand(inst, 0)?;
     let source_ty = ctx.load_value_to_result(value)?;
     let raw_source_ty = ctx.raw_value_php_type(value)?;
@@ -510,7 +513,9 @@ pub(super) fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instru
     abi::emit_load_int_immediate(
         ctx.emitter,
         source_tag_reg,
-        crate::codegen::runtime_value_tag(&source_ty) as i64,
+        if matches!(source_ty, PhpType::TaggedScalar) {
+            callable_invoker_args::INVOKER_ARG_TAGGED_SCALAR_SOURCE
+        } else { crate::codegen::runtime_value_tag(&source_ty) as i64 },
     );
     ctx.emitter.comment("cufa_invoker_ref_cell");
     emit_box_runtime_payload_as_mixed(ctx.emitter, marker_tag_reg, ref_cell_reg, source_tag_reg);

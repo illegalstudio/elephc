@@ -47,6 +47,7 @@ libc = "0.2"
 # behind `Arc`, which serde only (de)serializes with that feature on.
 serde = { version = "1", features = ["derive", "rc"] }
 bincode = "1"
+stacker = "0.1"
 unicode-segmentation = "1"
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]

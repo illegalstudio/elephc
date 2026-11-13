@@ -157,9 +157,17 @@ fn test_resource_truthiness_does_not_use_raw_descriptor_zero() {
 echo (bool)STDIN ? "truthy" : "falsy";
 echo "|";
 echo empty(STDIN) ? "empty" : "not-empty";
+echo "|";
+// A resource that crossed a mixed boundary is still truthy: descriptor 0 must not
+// be mistaken for integer 0 by the boxed-Mixed empty() probe.
+function mixedResource(): mixed { return STDIN; }
+function mixedCallable(): mixed { return fn() => 1; }
+echo empty(mixedResource()) ? "empty" : "not-empty";
+echo "|";
+echo empty(mixedCallable()) ? "empty" : "not-empty";
 "#,
     );
-    assert_eq!(out, "truthy|not-empty");
+    assert_eq!(out, "truthy|not-empty|not-empty|not-empty");
 }
 
 /// Verifies var_dump() emits the correct resource shape: "resource(N) of type (stream)".
@@ -7516,13 +7524,16 @@ echo $n === 0 ? "ok" : "bad:$n";
 fn test_stream_select_warns_and_returns_false_above_fd_setsize() {
     let out = compile_and_run_capture(
         r#"<?php
-$files = [];
-for ($i = 0; $i < 1100; $i++) { $files[] = fopen("/dev/null", "r"); }
-$read = [$files[1099]];
+$pairs = [];
+for ($i = 0; $i < 520; $i++) {
+    [$reader, $writer] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+    $pairs[] = $reader;
+    $pairs[] = $writer;
+}
+$read = [$pairs[count($pairs) - 1]];
 $write = null;
 $except = null;
 var_dump(stream_select($read, $write, $except, 0));
-foreach ($files as $handle) { fclose($handle); }
 "#,
     );
     assert!(out.success, "program failed: {}", out.stderr);
@@ -8542,4 +8553,122 @@ echo "done\n";
         "expected a clean heap, got: {}",
         output.stderr
     );
+}
+
+/// Wrapper discovery snapshots live registrations and keeps names after unregister frees them.
+#[test]
+fn test_stream_get_wrappers_includes_registered_protocols() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class WrapperDiscovery {}
+stream_wrapper_register('discoveryone', 'WrapperDiscovery');
+stream_wrapper_register('discoverytwo', 'WrapperDiscovery');
+$list = stream_get_wrappers();
+var_dump(in_array('discoveryone', $list, true), in_array('discoverytwo', $list, true));
+stream_wrapper_unregister('discoveryone');
+stream_wrapper_unregister('discoverytwo');
+var_dump(in_array('discoveryone', stream_get_wrappers(), true), in_array('discoveryone', $list, true));
+unset($list);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\nbool(false)\nbool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Filter discovery includes userspace names and wildcard patterns as independent string copies.
+#[test]
+fn test_stream_get_filters_includes_registered_patterns() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class FilterDiscovery extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int { return PSFS_PASS_ON; }
+}
+
+stream_filter_register('discoveryfilter', 'FilterDiscovery');
+stream_filter_register('discoveryfilter.*', 'FilterDiscovery');
+$filters = stream_get_filters();
+var_dump(in_array('discoveryfilter', $filters, true), in_array('discoveryfilter.*', $filters, true));
+unset($filters);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Runtime filter names use the same builtin transforms as literal append and prepend calls.
+#[test]
+fn test_stream_filter_dynamic_builtin_names() {
+    let out = compile_and_run(r#"<?php
+function readDynamicBuiltinFilter(string $name, bool $prepend): void {
+    $stream = fopen('php://temp', 'w+');
+    fwrite($stream, 'AbC'); rewind($stream);
+    if ($prepend) { stream_filter_prepend($stream, $name, STREAM_FILTER_READ); }
+    else { stream_filter_append($stream, $name, STREAM_FILTER_READ); }
+    echo stream_get_contents($stream), '|';
+    fclose($stream);
+}
+readDynamicBuiltinFilter('string.tolower', false);
+readDynamicBuiltinFilter('string.toupper', true);
+readDynamicBuiltinFilter('string.rot13', false);
+"#);
+    assert_eq!(out, "abc|ABC|NoP|");
+}
+
+/// PHP standard-stream wrappers own duplicates, so closing them preserves the process streams.
+#[test]
+fn test_php_standard_stream_handles_close_independently() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$input = fopen('php://stdin', 'rb');
+echo (int)(get_resource_id($input) !== get_resource_id(STDIN)), '|';
+fclose($input);
+$output = fopen('php://stdout', 'wb');
+fclose($output);
+$error = fopen('php://stderr', 'wb');
+fclose($error);
+echo get_resource_type(STDIN), ':', get_resource_type(STDOUT), ':', get_resource_type(STDERR);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1|stream:stream:stream");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+/// Stream creation and reads retire fresh filename and handle argument copies independently.
+#[test]
+fn test_stream_fresh_arguments_do_not_alias_results() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$path = tempnam(sys_get_temp_dir(), 'stream-owner-');
+try {
+    for ($i = 0; $i < 4; $i++) {
+        $stream = fopen(substr('x' . $path, 1), 'w+');
+        fwrite($stream, 'value');
+        rewind($stream);
+        echo stream_get_contents($stream), '|';
+        fclose($stream);
+    }
+} finally { unlink($path); }
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "value|".repeat(4));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies `file_get_contents()` drains a registered user wrapper instead of only opening it.
+#[test]
+fn test_file_get_contents_user_wrapper_reads_content() {
+    let out = compile_and_run(
+        r#"<?php
+class FgcContentWrapper {
+    public string $data = "wrapper-content";
+    public int $pos = 0;
+    public function stream_open($path, $mode, $options, &$opened): bool { return true; }
+    public function stream_read(int $count): string {
+        $chunk = substr($this->data, $this->pos, $count);
+        $this->pos += strlen($chunk);
+        return $chunk;
+    }
+    public function stream_eof(): bool { return $this->pos >= strlen($this->data); }
+    public function stream_close(): void {}
+}
+stream_wrapper_register("fgccontent", "FgcContentWrapper");
+echo file_get_contents("fgccontent://x"), "|";
+"#,
+    );
+    assert_eq!(out, "wrapper-content|");
 }

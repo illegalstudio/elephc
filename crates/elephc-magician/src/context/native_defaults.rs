@@ -473,6 +473,11 @@ impl NativeCallableSignature {
         NativeCallableFrameShape::new(self.param_count, self.variadic_index, self.shape)
     }
 
+    /// Returns whether generated code registered an explicit source/physical signature shape.
+    pub fn has_explicit_shape(&self) -> bool {
+        self.shape.is_some()
+    }
+
     /// Returns the minimum number of arguments this callable requires.
     ///
     /// The registered shape is authoritative. Only a registration that emitted no shape falls

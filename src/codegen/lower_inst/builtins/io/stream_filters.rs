@@ -72,7 +72,7 @@ pub(crate) fn lower_stream_filter_attach(
     }
     let done_label = ctx.next_label("filter_dyn_done");
     lower_dynamic_iconv_filter_attach(ctx, inst, filter, &done_label)?;
-    lower_user_stream_filter_attach(ctx, inst)?;
+    super::filter_dispatch::lower_dynamic_filter_attach(ctx, inst)?;
     ctx.emitter.label(&done_label);
     Ok(())
 }

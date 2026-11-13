@@ -1,0 +1,312 @@
+name: Managed native package checks
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      artifact-attempt:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.98"
+  RUST_MIN_STACK: "33554432"
+
+jobs:
+  managed-native-smoke:
+    name: Managed Native Packages (${{ inputs.target }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure isolated native cache
+        # `runner.temp` is unavailable while GitHub validates job-level `env`;
+        # publish the runner-local path once the job is executing instead.
+        shell: bash
+        run: echo "ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/elephc-managed-native-cache" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Install Linux source-build tools
+        if: startsWith(inputs.target, 'linux-')
+        # Deliberately omit system PCRE2 packages: this smoke must use only the
+        # exact shim/POSIX/8-bit archives materialized by `elephc native`.
+        # libbz2/zlib are the runtime's own stream-layer libraries (`-lz -lbz2`,
+        # src/codegen_support/runtime_features.rs), not catalog packages: every
+        # program linking the xml bridge carries them, even a parser-only one,
+        # because the bridge's prelude calls `fopen()` and that enables the
+        # runtime's phar stream feature.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
+
+      - name: Restore shared compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ inputs.target }}
+          kind: compiler
+          attempt: ${{ inputs.artifact-attempt }}
+
+      - name: Restore shared bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ inputs.target }}
+          kind: bridges
+          attempt: ${{ inputs.artifact-attempt }}
+
+
+      - name: Verify isolated native cache starts empty
+        shell: bash
+        run: test ! -e "$ELEPHC_NATIVE_CACHE"
+
+      - name: Materialize catalog PCRE2 from verified source
+        shell: bash
+        run: |
+          for example in date-json-regex eval_regex hello-preg; do
+            ./target/debug/elephc native add pcre2 \
+              --target "${{ inputs.target }}" \
+              --manifest-path "examples/$example/elephc.toml"
+          done
+          git diff --exit-code -- \
+            examples/date-json-regex/elephc.toml \
+            examples/date-json-regex/elephc.lock \
+            examples/eval_regex/elephc.toml \
+            examples/eval_regex/elephc.lock \
+            examples/hello-preg/elephc.toml \
+            examples/hello-preg/elephc.lock
+
+      - name: Materialize catalog zlib and verify locked offline reuse
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/zlib-project"
+          ./target/debug/elephc native add zlib \
+            --target "${{ inputs.target }}" \
+            --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ inputs.target }}" \
+            --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
+
+      - name: Materialize Oniguruma and verify locked offline reuse
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/oniguruma-project"
+          ./target/debug/elephc native add oniguruma \
+            --target "${{ inputs.target }}" \
+            --manifest-path "$RUNNER_TEMP/oniguruma-project/elephc.toml"
+          ./target/debug/elephc native install --locked --offline \
+            --target "${{ inputs.target }}" \
+            --manifest-path "$RUNNER_TEMP/oniguruma-project/elephc.toml"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          root = Path(os.environ["ELEPHC_NATIVE_CACHE"]) / "artifacts/oniguruma"
+          archives = list(root.rglob("libelephc_oniguruma_shim.a"))
+          assert len(archives) == 1, archives
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"ELEPHC_ONIGURUMA_TEST_PREFIX={archives[0].parent.parent}\n")
+          PY
+
+      - name: Restore shared Rust tests
+        uses: ./.github/actions/restore-test-build
+        with:
+          target: ${{ inputs.target }}
+          attempt: ${{ inputs.artifact-attempt }}
+
+      - name: Compare the managed mbregex provider with the PHP oracle
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-mbstring) and (binary(=regex) or binary(=regex_request) or binary(=regex_ini_abi) or binary(=invoke)) and test(regex)' --run-ignored all
+
+      - name: Build Oniguruma providers for iOS device and Simulator
+        if: inputs.target == 'macos-aarch64'
+        shell: bash
+        run: |
+          for target in ios-arm64 ios-sim-arm64; do
+            source scripts/ci/configure_ios_native_toolchain.sh "$target"
+            mkdir -p "$RUNNER_TEMP/oniguruma-$target"
+            ./target/debug/elephc native add oniguruma \
+              --target "$target" \
+              --manifest-path "$RUNNER_TEMP/oniguruma-$target/elephc.toml"
+          done
+
+      - name: Materialize catalog curl (and its libssh2/nghttp2/openssl/zlib dependencies) from verified source
+        # curl's recipe declares libssh2, nghttp2, openssl and zlib as
+        # dependencies, and libssh2 declares openssl and zlib in turn (see
+        # src/native_deps/catalog.rs), so this one `native add` also
+        # materializes all four from verified source. A cold build of the whole
+        # chain measured ~6 minutes on a fast local machine, comfortably inside
+        # this job's timeout; see `crates/elephc-curl/build.rs` for why the
+        # elephc_curl BRIDGE staticlib (built via BRIDGE_CRATES elsewhere)
+        # still needs these raw libcurl/libssh2/libssl/libcrypto/libz/libnghttp2
+        # archives at PHP-program link time even though `cargo build -p
+        # elephc-curl` itself does not.
+        shell: bash
+        run: |
+          ./target/debug/elephc native add curl \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/curl-get/elephc.toml
+          git diff --exit-code -- \
+            examples/curl-get/elephc.toml \
+            examples/curl-get/elephc.lock
+
+      - name: Materialize catalog libxml2 from verified source
+        # The xml bridge's parser is libxml2 itself: `elephc_xml` calls the
+        # Elephc-owned shim (src/native_deps/recipes/libxml2_shim.c) that the
+        # recipe compiles against the freshly built libxml2 headers and archives
+        # as libelephc_libxml2_shim.a next to libxml2.a. libxml2 has no catalog
+        # dependencies, so this one `native add` materializes the whole package
+        # (~1 minute from source). See crates/elephc-xml/build.rs for why the
+        # elephc_xml BRIDGE staticlib (built via BRIDGE_CRATES elsewhere) still
+        # needs these two archives at PHP-program link time even though `cargo
+        # build -p elephc-xml` itself does not.
+        shell: bash
+        run: |
+          ./target/debug/elephc native add libxml2 \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/xml/elephc.toml
+          git diff --exit-code -- \
+            examples/xml/elephc.toml \
+            examples/xml/elephc.lock
+
+      - name: Compile and run regex through the production resolver
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --keep-symbols \
+            --target "${{ inputs.target }}" \
+            examples/date-json-regex/main.php
+          if ./examples/date-json-regex/main > "$RUNNER_TEMP/date-json-regex.out"; then
+            cat "$RUNNER_TEMP/date-json-regex.out"
+          else
+            smoke_status=$?
+            cat "$RUNNER_TEMP/date-json-regex.out"
+            if [[ "${{ runner.os }}" == "Linux" ]]; then
+              if ! command -v gdb >/dev/null; then
+                sudo apt-get update && sudo apt-get install -y gdb
+              fi
+              gdb --batch -ex run -ex bt -ex 'x/12i $pc-16' -ex 'info registers' -ex 'x/16gx $sp' \
+                -ex up -ex 'x/20i $pc-48' \
+                --args ./examples/date-json-regex/main || true
+            else
+              lldb --batch -o run -o bt -o 'register read' \
+                -o 'memory read --count 16 --format x --size 8 $sp' \
+                -o 'frame select 1' -o 'disassemble --frame --count 24' \
+                -- ./examples/date-json-regex/main || true
+            fi
+            exit "$smoke_status"
+          fi
+          grep -F "Valid email pattern" "$RUNNER_TEMP/date-json-regex.out"
+          grep -F "Unicode letters detected" "$RUNNER_TEMP/date-json-regex.out"
+
+      - name: Preserve regex crash assembly
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: regex-crash-assembly-${{ inputs.target }}
+          path: examples/date-json-regex/main.s
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Compile and run curl through the production resolver
+        # Exercises the full chain the 194 curl codegen fixtures also need but
+        # cannot assume in ordinary CI (see tests/codegen/support/curl_native.rs):
+        # the elephc_curl bridge staticlib linked against a real, managed
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2. The GET to
+        # example.com may or may not reach the network on a given runner, so
+        # only network-independent output is asserted — the compiled binary
+        # always reaches real curl_exec()/curl_errno()/curl_error() either way.
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ inputs.target }}" \
+            examples/curl-get/main.php
+          ./examples/curl-get/main > "$RUNNER_TEMP/curl-get.out"
+          grep -F "GET http://example.com/" "$RUNNER_TEMP/curl-get.out"
+          grep -F "handle still usable after curl_close()" "$RUNNER_TEMP/curl-get.out"
+          grep -F "connection refused, as expected" "$RUNNER_TEMP/curl-get.out"
+
+      - name: Compile and run fileinfo through the production resolver
+        run: |
+          ./target/debug/elephc native install --locked --target "${{ inputs.target }}" --manifest-path examples/fileinfo/elephc.toml
+          ./target/debug/elephc --target "${{ inputs.target }}" examples/fileinfo/main.php
+          ./examples/fileinfo/main > "$RUNNER_TEMP/fileinfo.out"
+          grep -Fx "text/plain; charset=us-ascii" "$RUNNER_TEMP/fileinfo.out"
+
+      - name: Compile and run xml through the production resolver
+        # Exercises the chain every tests/codegen/xml fixture also needs (see
+        # tests/codegen/support/xml_native.rs) end to end through the real
+        # resolver: the elephc_xml bridge staticlib linked against the managed
+        # libelephc_libxml2_shim.a + libxml2.a from the project's lock. The example
+        # writes a document with XMLWriter and parses it back with the SAX API,
+        # so every asserted line proves both halves reached real libxml2. The
+        # lines are PHP 8.5's own output for the same program -- including the
+        # `titles:` one, where libxml2 splits the character data of
+        # `Design Patterns &amp; Friends` at the entity reference into three
+        # handler calls, exactly as PHP's ext/xml does.
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ inputs.target }}" \
+            examples/xml/main.php
+          ./examples/xml/main > "$RUNNER_TEMP/xml.out"
+          grep -F '<?xml version="1.0" encoding="UTF-8"?>' "$RUNNER_TEMP/xml.out"
+          grep -F '  <title>Design Patterns &amp; Friends</title>' "$RUNNER_TEMP/xml.out"
+          grep -F 'book 978-0-13-468599-1' "$RUNNER_TEMP/xml.out"
+          grep -F 'titles: The Pragmatic Programmer / Design Patterns  / & /  Friends' "$RUNNER_TEMP/xml.out"
+          grep -F 'tags: 10, price entries at 3,7' "$RUNNER_TEMP/xml.out" || {
+            cat "$RUNNER_TEMP/xml.out"
+            exit 1
+          }
+
+      - name: Compile and run SimpleXML through the production resolver
+        shell: bash
+        run: |
+          ./target/debug/elephc \
+            --target "${{ inputs.target }}" \
+            examples/simplexml/main.php
+          ./examples/simplexml/main > "$RUNNER_TEMP/simplexml.out"
+          grep -F 'A1: Notebook EUR 4.50' "$RUNNER_TEMP/simplexml.out"
+          grep -F 'B2: Pencil EUR 1.20' "$RUNNER_TEMP/simplexml.out"
+          grep -F 'Under EUR 2: Pencil' "$RUNNER_TEMP/simplexml.out"
+
+      - name: Reinstall locked state offline
+        shell: bash
+        run: |
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/date-json-regex/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/curl-get/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/xml/elephc.toml
+          ./target/debug/elephc native install \
+            --locked \
+            --offline \
+            --target "${{ inputs.target }}" \
+            --manifest-path examples/simplexml/elephc.toml
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds

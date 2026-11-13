@@ -103,6 +103,10 @@ pub(in crate::interpreter) fn execute_stmt(
             eval_array_set_var_stmt(name, index, value, context, scope, values)?;
             Ok(EvalControl::None)
         }
+        EvalStmt::DimensionWrite { array, index, op, value } => {
+            super::dimension_writes::eval_dimension_write(array, index.as_ref(), *op, value, context, scope, values)?;
+            Ok(EvalControl::None)
+        }
         EvalStmt::Break => Ok(EvalControl::Break),
         EvalStmt::Continue => Ok(EvalControl::Continue),
         EvalStmt::DoWhile { body, condition } => {
@@ -276,6 +280,32 @@ pub(in crate::interpreter) fn execute_stmt(
         }
         EvalStmt::StoreVar { name, value } => {
             let value = eval_owned_expr(value, context, scope, values)?;
+            for replaced in set_owned_scope_cell(
+                context,
+                scope,
+                name.clone(),
+                value,
+                values,
+            )? {
+                eval_release_value(context, values, replaced)?;
+            }
+            Ok(EvalControl::None)
+        }
+        EvalStmt::IncDecVar { name, increment } => {
+            let current = eval_owned_expr(
+                &EvalExpr::LoadVar(name.clone()),
+                context,
+                scope,
+                values,
+            )?;
+            let value = match eval_inc_dec_value(current, *increment, values) {
+                Ok(value) => value,
+                Err(status) => {
+                    let _ = eval_release_value(context, values, current);
+                    return Err(status);
+                }
+            };
+            eval_release_value(context, values, current)?;
             for replaced in set_owned_scope_cell(
                 context,
                 scope,

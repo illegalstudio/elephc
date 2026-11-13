@@ -234,3 +234,98 @@ for ($i = 0; $i < 3; $i++) {
         out.stderr,
     );
 }
+
+/// Alias-returning calls keep evaluated string snapshots reachable when the callee throws.
+#[test]
+fn test_alias_returning_calls_release_string_evaluation_pins_on_throw() {
+    let args: Vec<_> = (0..8).map(|count| vec!["x"; count]).collect();
+    let argvs: Vec<_> = args.iter().map(Vec::as_slice).collect();
+    let (runs, assembly) = compile_and_run_with_heap_debug_and_asm_per_argv(r#"<?php
+function maybeReturnString(string $value, bool $fail): string {
+    if ($fail) { throw new RuntimeException('caught'); }
+    return $value;
+}
+function maybeReturnBoxedString(string $value, bool $fail): string|false {
+    if ($fail) { throw new RuntimeException('boxed'); }
+    return $value;
+}
+function maybeReturnAny(mixed $value, bool $fail): mixed {
+    if ($fail) { throw new RuntimeException('mixed'); }
+    return $value;
+}
+$mode = $argc - 1;
+for ($index = 0; $index < 3; $index++) {
+    $value = str_repeat('x', $argc + 8);
+    $items = [$value];
+    if ($mode === 0 || $mode === 1) {
+        echo strlen(maybeReturnString($value, false)), $mode === 0 ? ':' : '|';
+    }
+    if ($mode === 0 || $mode === 3) {
+        echo strlen(maybeReturnBoxedString($value, false)), $mode === 0 ? ':' : '|';
+    }
+    if ($mode === 0 || $mode === 5) { echo count(maybeReturnAny($items, false)), '|'; }
+    if ($mode === 0 || $mode === 2) {
+        try { maybeReturnString($value, true); }
+        catch (RuntimeException $error) { echo $error->getMessage(), $mode === 0 ? ':' : '|'; }
+    }
+    if ($mode === 0 || $mode === 4) {
+        try { maybeReturnBoxedString($value, true); }
+        catch (RuntimeException $error) { echo $error->getMessage(), $mode === 0 ? ':' : '|'; }
+    }
+    if ($mode === 0 || $mode === 6) {
+        try { maybeReturnAny($items, true); }
+        catch (RuntimeException $error) { echo $error->getMessage(), ':', strlen($items[0]), '|'; }
+    }
+    if ($mode === 7) { echo strlen($value), ':', count($items), '|'; }
+}
+unset($value, $items, $error);
+"#, &argvs);
+    let expected = ["9:9:1|caught:boxed:mixed:9|", "10|", "caught|", "12|", "boxed|", "1|", "mixed:15|", "16:1|"];
+    assert_eq!(runs.len(), expected.len());
+    let mut failures = Vec::new();
+    for (mode, (out, expected)) in runs.iter().zip(expected).enumerate() {
+        let expected = expected.repeat(3);
+        if !out.success || out.stdout != expected || !out.stderr.contains("HEAP DEBUG: leak summary: clean") {
+            failures.push(format!("mode={mode} success={} stdout={:?} expected={expected:?}\n{}", out.success, out.stdout, out.stderr));
+        }
+    }
+    let symbols = ["_main".into(), elephc::names::function_symbol("maybeReturnString"),
+        elephc::names::function_symbol("maybeReturnBoxedString"), elephc::names::function_symbol("maybeReturnAny")];
+    assert!(failures.is_empty(), "{}\nAlias call owner assembly:\n{}", failures.join("\n"), selected_function_assembly(&assembly, &symbols));
+}
+
+/// The exceptional alias-call lease is independent of EIR optimization.
+#[test]
+fn test_alias_returning_calls_release_string_evaluation_pins_on_throw_no_ir_opt() {
+    without_ir_opt(test_alias_returning_calls_release_string_evaluation_pins_on_throw);
+}
+
+/// A single owned string cast retires on both the normal alias-returning path and a caught throw.
+#[test]
+fn test_alias_returning_calls_release_owned_string_casts_on_throw() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function returnOrThrowOwnedString(string $text): mixed {
+    if (str_starts_with($text, 'x')) { throw new RuntimeException('caught'); }
+    return $text;
+}
+function invokeOwnedStringArgument(mixed $text): void {
+    try {
+        $result = returnOrThrowOwnedString((string)$text);
+        echo strlen((string)$result), '|';
+    } catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+for ($index = 0; $index < 3; $index++) {
+    invokeOwnedStringArgument(str_repeat('k', 17));
+    invokeOwnedStringArgument(str_repeat('x', 19));
+}
+"#);
+    assert!(out.success, "stdout={:?}\n{}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "17|caught|".repeat(3), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Owned string cast pins also survive exceptional calls without EIR optimization.
+#[test]
+fn test_alias_returning_calls_release_owned_string_casts_on_throw_no_ir_opt() {
+    without_ir_opt(test_alias_returning_calls_release_owned_string_casts_on_throw);
+}

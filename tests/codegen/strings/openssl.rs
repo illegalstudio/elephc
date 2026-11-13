@@ -7,12 +7,16 @@
 //! Key details:
 //! - Ciphertext expectations come from the checked-in PHP 8.4/OpenSSL 3.6 fixtures.
 //! - GCM cases pin by-reference tags, AAD authentication, non-default IVs, and failures.
+//! - Catalog checks compare every name and account for the provider's native CPU gates.
 
 use super::*;
 
 /// Verifies raw CBC, CTR, and ECB encryption matches the locked PHP ciphertexts.
 #[test]
 fn test_openssl_encrypt_non_aead_php_goldens() {
+    if skip_without_openssl_native("test_openssl_encrypt_non_aead_php_goldens") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $pt = "The quick brown fox jumps over the lazy dog";
@@ -44,6 +48,9 @@ echo bin2hex(openssl_encrypt($pt, "aes-256-ctr", str_repeat("k", 32), OPENSSL_RA
 /// Verifies default base64 output and raw/default decrypt round trips.
 #[test]
 fn test_openssl_non_aead_base64_and_raw_roundtrip() {
+    if skip_without_openssl_native("test_openssl_non_aead_base64_and_raw_roundtrip") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $pt = "The quick brown fox jumps over the lazy dog";
@@ -69,6 +76,9 @@ echo openssl_decrypt($raw, "AES-256-CTR", $key, OPENSSL_RAW_DATA, $iv);
 /// Verifies zero padding succeeds for aligned plaintext and rejects partial blocks.
 #[test]
 fn test_openssl_zero_padding_non_aead() {
+    if skip_without_openssl_native("test_openssl_zero_padding_non_aead") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $key = str_repeat("k", 32);
@@ -89,25 +99,56 @@ echo openssl_encrypt("short", "aes-256-cbc", $key, OPENSSL_RAW_DATA | OPENSSL_ZE
     );
 }
 
-/// Verifies constants, IV lengths, unknown-cipher false, and the exact 12-name inventory.
+/// Verifies constants, IV lengths, and the exact catalog with native capability gates.
 #[test]
 fn test_openssl_constants_and_cipher_helpers() {
-    let out = compile_and_run(
-        r#"<?php
+    if skip_without_openssl_native("test_openssl_constants_and_cipher_helpers") {
+        return;
+    }
+    let golden: Vec<_> = include_str!("../../../crates/elephc-openssl/tests/php_ciphers.txt")
+        .lines().collect();
+    assert_eq!(golden.len(), 135);
+    // OpenSSL 3.6.4's default provider gates these CBC-HMAC implementations on
+    // native capabilities. The checked-in PHP fixture includes ARM64's nine ETM
+    // names; x86_64 normally offers the four older MAC-then-encrypt names instead.
+    let mut optional = vec!["aes-128-cbc-hmac-sha1", "aes-128-cbc-hmac-sha256",
+        "aes-256-cbc-hmac-sha1", "aes-256-cbc-hmac-sha256"];
+    optional.extend(golden.iter().copied().filter(|name| name.ends_with("-etm")));
+    assert_eq!(optional.len(), 13);
+    let source = r#"<?php
 namespace CryptoFixture;
 $methods = openssl_get_cipher_methods();
 echo OPENSSL_RAW_DATA, ":", OPENSSL_ZERO_PADDING, ":", OPENSSL_DONT_ZERO_PAD_KEY, "|";
 echo OpEnSsL_CiPhEr_Iv_LeNgTh("aes-128-cbc"), ":", openssl_cipher_iv_length("AES-256-GCM"), ":", openssl_cipher_iv_length("aes-192-ecb"), "|";
 echo openssl_cipher_iv_length("not-a-cipher") === false ? "false" : "bad", "|";
-echo count($methods), ":", in_array("aes-128-cbc", $methods) ? "yes" : "no", ":", in_array("aes-256-gcm", $methods) ? "yes" : "no";
-"#,
-    );
-    assert_eq!(out, "1:2:4|16:12:0|false|12:yes:yes");
+echo count($methods), ":", in_array("aes-128-cbc", $methods) ? "yes" : "no", ":", in_array("aes-256-gcm", $methods) ? "yes" : "no", ":", in_array("aria-128-cbc", $methods) ? "yes" : "no", ":", in_array("aes-128-wrap", $methods) ? "yes" : "no";
+echo "\n", implode("|", $methods), "\n";
+foreach (explode("|", "__OPTIONAL_CIPHERS__") as $name) {
+    if (openssl_cipher_iv_length($name) !== false) { echo $name, "|"; }
+}
+"#.replace("__OPTIONAL_CIPHERS__", &optional.join("|"));
+    let out = compile_and_run(&source);
+    let parts: Vec<_> = out.splitn(3, '\n').collect();
+    assert_eq!(parts.len(), 3, "missing complete cipher catalog: {out}");
+    let available: Vec<_> = parts[2].split('|').filter(|name| !name.is_empty()).collect();
+    assert_eq!(available.len(), available.iter().copied().collect::<std::collections::BTreeSet<_>>().len(),
+        "duplicate capability probes: {out}");
+    assert!(available.iter().all(|name| optional.contains(name)), "unexpected capability probe: {out}");
+    let mut expected: Vec<String> = golden.iter().copied().filter(|name| !optional.contains(name))
+        .map(str::to_string).collect();
+    assert_eq!(expected.len(), 126);
+    expected.extend(available.iter().map(|name| (*name).to_string()));
+    expected.sort_unstable();
+    assert_eq!(parts[1], expected.join("|"), "complete default-provider inventory");
+    assert_eq!(parts[0], format!("1:2:4|16:12:0|false|{}:yes:yes:yes:yes", expected.len()));
 }
 
 /// Verifies unknown ciphers and invalid padded ciphertext return false in both directions.
 #[test]
 fn test_openssl_non_aead_failures_return_false() {
+    if skip_without_openssl_native("test_openssl_non_aead_failures_return_false") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $key = str_repeat("k", 32);
@@ -124,6 +165,9 @@ echo openssl_decrypt("%%%", "aes-256-cbc", $key, 0, $iv) === false ? "b" : "bad"
 /// Verifies every GCM key size and supported truncated-tag edge matches PHP end to end.
 #[test]
 fn test_openssl_gcm_php_goldens_and_tag_writeback() {
+    if skip_without_openssl_native("test_openssl_gcm_php_goldens_and_tag_writeback") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $pt = "The quick brown fox jumps over the lazy dog";
@@ -168,6 +212,9 @@ echo bin2hex($tag4), ":", ($plain4 === $pt ? "ok" : "bad");
 /// Verifies GCM decrypt authenticates AAD and accepts a non-default 16-byte IV.
 #[test]
 fn test_openssl_gcm_roundtrip_aad_and_non_default_iv() {
+    if skip_without_openssl_native("test_openssl_gcm_roundtrip_aad_and_non_default_iv") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $pt = "The quick brown fox jumps over the lazy dog";
@@ -198,6 +245,9 @@ echo openssl_decrypt($encoded, "aes-256-gcm", $key, 0, $default_iv, $encoded_tag
 /// Verifies GCM rejects missing/wrong tags, empty IVs, and invalid requested tag lengths.
 #[test]
 fn test_openssl_gcm_failure_paths_return_false() {
+    if skip_without_openssl_native("test_openssl_gcm_failure_paths_return_false") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $pt = "The quick brown fox jumps over the lazy dog";
@@ -218,6 +268,9 @@ echo openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv) === false 
 /// Verifies empty GCM plaintext still writes and authenticates the PHP-golden tag.
 #[test]
 fn test_openssl_gcm_empty_plaintext_tag() {
+    if skip_without_openssl_native("test_openssl_gcm_empty_plaintext_tag") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $key = str_repeat("k", 32);
@@ -234,6 +287,9 @@ echo $plain === false ? "false" : strlen($plain);
 /// Verifies GCM replaces tag storage while non-AEAD encryption leaves it unchanged.
 #[test]
 fn test_openssl_gcm_tag_overwrites_existing_and_ref_parameter_storage() {
+    if skip_without_openssl_native("test_openssl_gcm_tag_overwrites_existing_and_ref_parameter_storage") {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 function encrypt_with_tag(string $data, string $key, string $iv, &$tag) {
@@ -262,4 +318,44 @@ echo $cbc_tag;
             "6fd7b2c040ca67e3e5647a:9dc8b5e7b800bfed5c1be43fc4614f51|keep",
         )
     );
+}
+
+/// Verifies the literal AES-CBC length folds and the raw-data fallback.
+#[test]
+fn test_openssl_cbc_length_folds() {
+    if skip_without_openssl_native("test_openssl_cbc_length_folds") {
+        return;
+    }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$plain = "hello"; $iv = "1234567890123456";
+echo strlen(openssl_encrypt($plain, "aes-128-cbc", "key", 0, $iv)), "|";
+$cipher = openssl_encrypt($plain, "aes-128-cbc", "key", 0, $iv);
+echo strlen(openssl_decrypt($cipher, "aes-128-cbc", "key", 0, $iv)), "|";
+echo strlen(openssl_encrypt("", "aes-256-cbc", "", 0, $iv)), "|";
+$raw = openssl_encrypt($plain, "aes-128-cbc", "key", OPENSSL_RAW_DATA, $iv);
+echo strlen($raw), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "24|5|24|16|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Verifies the pinned literal IV-length fold and the dynamic/alias runtime fallback.
+#[test]
+fn test_openssl_cipher_iv_length_literal_fold_and_fallback() {
+    if skip_without_openssl_native("test_openssl_cipher_iv_length_literal_fold_and_fallback") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$cipher = $argc > 0 ? "aes-128-cbc" : "aes-256-gcm";
+echo openssl_cipher_iv_length($cipher), ":";
+echo openssl_cipher_iv_length("AES-256-GCM"), ":";
+echo openssl_cipher_iv_length("aes-128-wrap"), ":";
+echo openssl_cipher_iv_length("aes128"), ":";
+echo openssl_cipher_iv_length("not-a-cipher") === false ? "false" : "bad";
+"#,
+    );
+    assert_eq!(out, "16:12:8:16:false");
 }

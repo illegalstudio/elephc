@@ -16,8 +16,8 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
     name: &str,
     span: Span,
 ) -> LoweredValue {
-    let ty = ctx.local_type(name);
-    let value = ctx.load_local(name, Some(span));
+    let value = ctx.load_local_for_mutation(name, Some(span));
+    let ty = ctx.builder.value_php_type(value.value);
     if ty.codegen_repr() != PhpType::Mixed
         || ctx.append_update_cell_aliases.contains(name)
     {
@@ -32,11 +32,18 @@ pub(in crate::ir_lower) fn load_array_local_for_write(
         Some(span),
     );
     ctx.store_call_argument_local(name, detached, ty, Some(span));
-    ctx.load_local(name, Some(span))
+    ctx.load_local_for_mutation(name, Some(span))
 }
 
 /// Lowers `$array[] = value`.
 pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
+    if super::native_reference_mutations::lower(ctx, array, span,
+        |ctx| lower_array_push_inner(ctx, array, value, span)) { return; }
+    lower_array_push_inner(ctx, array, value, span);
+}
+
+/// Emits one append after native reference layout dispatch has selected its writable view.
+fn lower_array_push_inner(ctx: &mut LoweringContext<'_, '_>, array: &str, value: &Expr, span: Span) {
     let receiver = Expr::new(ExprKind::Variable(array.into()), span);
     if crate::ir_lower::expr::lower_weak_map_denied_append(ctx, &receiver, value, span) { return; }
     let value = lower_expr(ctx, value);
@@ -60,12 +67,13 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         ctx.store_local(array, empty, array_ty, Some(span));
     }
     let array_value = if ctx.is_ref_bound_local(array) {
-        ctx.load_local(array, Some(span))
+        ctx.load_local_for_mutation(array, Some(span))
     } else {
         load_array_local_for_write(ctx, array, span)
     };
     let array_ty = ctx.builder.value_php_type(array_value.value);
     let value = ctx.retype_value_for_container_element(&array_ty, value, Some(span));
+    let value = coerce_declared_array_append(ctx, &array_ty, value, span);
     let pins = crate::ir_lower::expr::pin_in_flight_owners(
         ctx,
         &[array_value.value, value.value],
@@ -104,10 +112,15 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
             } else {
                 prepare_indexed_array_local_write(ctx, array_value, value, span)
             };
+        // A promotable `array<int>` local may already be hash storage: its append keeps the raw
+        // integer under its own tag, as the typed reads of the promoted hash expect.
+        let promotable = ctx.is_promotable_array_local(array)
+            && matches!(ctx.builder.value_php_type(array_value.value).codegen_repr(),
+                PhpType::Array(element) if element.codegen_repr() == PhpType::Int);
         ctx.emit_void(
             op,
             vec![array_value.value, value.value],
-            None,
+            promotable.then_some(crate::ir::Immediate::PromotableArray),
             op.default_effects(),
             Some(span),
         );
@@ -123,15 +136,52 @@ pub(super) fn lower_array_push(ctx: &mut LoweringContext<'_, '_>, array: &str, v
         release_indexed_array_write_operand(ctx, elem_ty.as_ref(), value, span);
         return;
     }
-    ctx.emit_void(
-        op,
-        vec![array_value.value, value.value],
-        None,
-        op.default_effects(),
-        Some(span),
-    );
+    if super::native_dimension_append::lower(ctx, array_value, value, span, |ctx, array, value| {
+        ctx.emit_void(op, vec![array.value, value.value], None, op.default_effects(), Some(span));
+    }) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        // A concrete object read from final Mixed storage owns its unboxed lease.
+        // Finalization removes this release when the local still lends a concrete value.
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
+        return;
+    }
+    ctx.emit_void(op, vec![array_value.value, value.value], None, op.default_effects(), Some(span));
     finish_hash_local_write(ctx, array, array_value, hash_storeback, span);
     release_persisted_string_operand(ctx, value, span);
+}
+
+/// Extracts an admitted value into a declared builder's scalar or callable element storage.
+///
+/// The checker separately proves the declared element, current receiver and stable RHS type
+/// agree at this source point. Unknown or widening appends retain their previous semantics.
+fn coerce_declared_array_append(
+    ctx: &mut LoweringContext<'_, '_>, array_ty: &PhpType,
+    value: LoweredValue, span: Span,
+) -> LoweredValue {
+    let Some(Some(element)) = ctx.array_append_element_types
+        .get(&(ctx.loop_storage_scope.clone(), span)).cloned() else { return value; };
+    let PhpType::Array(current) = array_ty.codegen_repr() else { return value; };
+    let target = element.codegen_repr();
+    if current.codegen_repr() != target { return value; }
+    let source = ctx.builder.value_php_type(value.value).codegen_repr();
+    if source != PhpType::Mixed { return value; }
+    if target == PhpType::Callable && source == PhpType::Mixed {
+        return coerce_typed_assign_value(ctx, value, &element, span);
+    }
+    if !matches!(target, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str) {
+        return value;
+    }
+    let result = ctx.emit_value(
+        Op::Cast, vec![value.value],
+        Some(Immediate::CastTarget(crate::ir_lower::context::value_ir_type(&target))),
+        target, Op::Cast.default_effects(), Some(span),
+    );
+    // String casts detach their result; scalar casts cannot alias the source cell. Borrowed
+    // loop-local boxes keep their owner, while independent temporary sources retire here.
+    if ctx.value_needs_release_after_use(value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    result
 }
 
 /// Prepares an indexed-array local for an offset assignment.
@@ -360,8 +410,13 @@ pub(super) fn is_empty_indexed_array_element(elem_ty: &PhpType) -> bool {
 }
 
 /// Preserves the first concrete value type written into an empty indexed array.
+///
+/// A first value whose storage is the inline tagged scalar (`int|null`, as `$n ?? null` over a
+/// `?int $n` is) widens the array to boxed `mixed` slots instead: the tagged indexed array has no
+/// `ArrayPush`/`ArraySet` entry for an empty receiver and most consumers refuse it (see
+/// `box_tagged_scalar_element`), so the append and the offset write box the value like a literal.
 pub(super) fn normalize_empty_array_write_element_type(item_type: PhpType) -> PhpType {
-    match normalize_materialized_element_type(item_type) {
+    match crate::ir_lower::expr::box_tagged_scalar_element(normalize_materialized_element_type(item_type)) {
         PhpType::Void => PhpType::Mixed,
         other => other,
     }

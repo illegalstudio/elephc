@@ -12,6 +12,48 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Indirect readonly dimension writes reject every non-object container before mutation.
+#[test]
+fn execute_program_readonly_dimensions_preserve_indirect_error() {
+    let program = parse_fragment(br#"class ReadonlyDimensionValue {
+        public function __construct(public readonly mixed $items) {}
+    }
+    foreach ([null, 1, 'ab', [1]] as $value) {
+        $object = new ReadonlyDimensionValue($value);
+        try { $object->items[] = 'x'; } catch (Error $error) { echo $error->getMessage(), '|'; }
+        try { $object->items[0] = 'x'; } catch (Error $error) { echo $error->getMessage(), '|'; }
+    }
+    return true;"#).expect("parse readonly dimension writes");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("catch indirect readonly errors");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.output,
+        "Cannot indirectly modify readonly property ReadonlyDimensionValue::$items|".repeat(8));
+}
+
+/// A final computed parent expires before array mutation while a shared receiver gets writeback.
+#[test]
+fn execute_program_computed_array_property_handoff_preserves_parent_lifetime() {
+    let program = parse_fragment(br#"class DimensionArrayParent {
+        public mixed $items = [1];
+        public function __destruct() { echo 'drop:', count($this->items), '|'; }
+    }
+    function dimensionArrayTemporary() { return new DimensionArrayParent(); }
+    function dimensionArrayShared(DimensionArrayParent $shared) { return $shared; }
+    dimensionArrayTemporary()->items[] = 2;
+    $shared = new DimensionArrayParent();
+    dimensionArrayShared($shared)->items[] = 2;
+    echo 'shared:', count($shared->items), '|';
+    unset($shared);
+    return true;"#).expect("parse computed array parent handoff");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let result = execute_program(&program, &mut scope, &mut values).expect("retire final parent and update shared parent");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(values.output, "drop:1|shared:2|drop:2|");
+}
+
 /// A readonly redeclaration preserves the inherited uninitialized typed-slot state.
 #[test]
 fn execute_program_readonly_followup_redeclaration_remains_uninitialized() {

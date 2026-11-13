@@ -113,6 +113,9 @@ impl State {
     /// Returns the encoding used when an ordinary text operation omits its encoding argument.
     pub fn internal_encoding(&self) -> Encoding { self.internal }
 
+    /// Reports whether the internal encoding came from an explicit setter or INI assignment.
+    pub fn internal_is_explicit(&self) -> bool { self.ini.explicit_internal }
+
     /// Updates the internal encoding without changing the explicit-lookup cache or emitting deprecations.
     pub fn set_internal_encoding(&mut self, name: &[u8]) -> MbResult<()> {
         self.internal = encoding_argument(name, "mb_internal_encoding", 1, "encoding")?;

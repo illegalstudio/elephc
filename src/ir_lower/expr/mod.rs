@@ -42,8 +42,11 @@ mod scalar_literals;
 mod local_values;
 use local_values::lower_local_value;
 mod numeric_binary;
+mod prepared_binary;
 mod integer_destinations;
-pub(crate) use integer_destinations::coerce_integer_arithmetic;
+pub(crate) use integer_destinations::{
+    coerce_integer_arithmetic, narrow_checked_integer_for_int_property,
+};
 use integer_destinations::lower_expr_for_parameter;
 pub(crate) mod object_operators;
 mod string_concat;
@@ -53,6 +56,12 @@ mod branch_conditions;
 mod lazy_branches;
 mod pipe;
 mod assignments;
+mod ordinary_property_incdec;
+mod ordinary_prefix_storage;
+mod native_xml_updates;
+mod static_dimension_incdec;
+mod instance_dimension_incdec;
+pub(crate) use native_xml_updates::lower_statement as lower_native_xml_property_update;
 mod string_offset_assign;
 mod assignment_rhs_capture;
 mod weak_map_places;
@@ -62,6 +71,10 @@ mod function_calls;
 mod eval_barriers;
 mod lazy_isset;
 mod native_isset;
+mod native_dimension_probes;
+mod unset_access_errors;
+use unset_access_errors::{is_unset_closure, require_unset_array_access, reject_unset_closure_property};
+mod native_xml_empty;
 mod callable_probes;
 mod descriptor_invoke;
 pub(crate) mod call_operand_owners;
@@ -88,6 +101,7 @@ mod named_spreads;
 mod variadic_args;
 mod call_return_types;
 mod indexed_array_literals;
+pub(in crate::ir_lower) use indexed_array_literals::box_tagged_scalar_element;
 mod array_cast_source;
 mod assoc_array_literals;
 mod match_expr;
@@ -103,6 +117,7 @@ pub(crate) use missing_string::loop_region_missing_string_names;
 mod closures;
 mod closure_calls;
 mod descriptor_calls;
+mod descriptor_native_selections;
 mod object_construction;
 mod property_access;
 mod property_probes;
@@ -115,7 +130,9 @@ mod method_calls;
 mod closure_binding;
 mod member_receivers;
 mod enum_interface_calls;
-mod enum_argument_guards;
+mod selected_method_arguments;
+mod source_variadic_calls;
+pub(crate) mod enum_argument_guards;
 mod enum_method_args;
 mod enum_static_args;
 mod enum_ref_args;
@@ -125,6 +142,7 @@ mod reflection_property_calls;
 mod reflection_filters;
 mod reflection_constructors;
 mod reflection_static_properties;
+mod reflection_current_statics;
 mod class_introspection;
 mod class_introspection_mixed;
 mod core_introspection;
@@ -155,6 +173,7 @@ use function_calls::*;
 use eval_barriers::*;
 use lazy_isset::*;
 use native_isset::*;
+pub(crate) use native_isset::{ir_can_access_member, property_is_accessible_for_ir};
 use callable_probes::*;
 use descriptor_invoke::*;
 use call_operand_owners::*;
@@ -176,6 +195,7 @@ use array_builtin_args::*;
 use weak_string_unions::*;
 use builtin_special_args::*;
 use call_arg_coercion::*;
+pub(crate) use call_arg_coercion::coerce_scalar_arg_to_param_storage;
 use positional_spreads::*;
 use packed_builtin_args::*;
 use named_args::*;
@@ -192,11 +212,15 @@ use closure_calls::*;
 use descriptor_calls::*;
 use object_construction::*;
 use property_access::*;
+pub(crate) use property_access::lower_property_write_receiver;
+pub(crate) use property_access::defer_native_property_write_receiver;
+pub(crate) use property_access::lower_native_dimension_write_select;
+pub(crate) use property_access::lower_native_dimension_incdec_select_from_values;
 use property_probes::*;
 use method_calls::*;
 use closure_binding::*;
 use member_receivers::{checked_member_receiver_type, lower_member_receiver, refine_member_receiver};
-pub(crate) use member_receivers::lower_member_receiver_at_span;
+pub(crate) use member_receivers::refine_member_receiver_at_span;
 use reflection_class_calls::*;
 use reflection_method_calls::*;
 use reflection_property_calls::*;
@@ -221,11 +245,13 @@ pub(crate) use callable_resolution::{
 pub(crate) use pending_owners::lower_with_pending_owners;
 pub(crate) use branch_conditions::lower_condition;
 pub(crate) use call_operand_owners::{
-    pin_in_flight_owners, register_owned_call_operand, retire_owned_call_operand,
+    pin_in_flight_owners, pinned_transfer_owner, register_owned_call_operand, retire_owned_call_operand,
     root_owned_call_operand, root_value_for_later_use, unpin_in_flight_owners, unregister_owned_call_operand,
     PinnedInFlightOwner,
 };
 pub(crate) use property_access::singular_object_class;
+pub(crate) use enum_argument_guards::{guard_reference_parameter_entry, reference_parameter_needs_entry_guard};
+pub(crate) use property_access::class_extends_class;
 pub(crate) use property_access::packed_receiver_class;
 pub(crate) use property_access::extern_receiver_class;
 pub(crate) use callable_tracking::{
@@ -258,7 +284,13 @@ pub(crate) use instanceof_coercions::{
 };
 pub(crate) use merge_temps::emit_bool_literal;
 pub(in crate::ir_lower) use merge_temps::{store_value_into_temp, take_owned_temp};
+pub(crate) use prepared_binary::lower_prepared_binary;
+pub(crate) use array_access::lower_array_access_from_values;
 pub(crate) use property_access::{
+    borrow_native_xml_property_receiver,
+    coerce_runtime_property_name,
+    lower_property_get_from_value, lower_dynamic_property_fetch_from_operands,
+    lower_native_xml_property_write_fetch,
     lower_owned_ref_assign_array_elem, lower_ref_assign_array_elem, lower_ref_assign_call,
     lower_ref_assign_property, lower_ref_assign_static_property,
     prepare_scoped_addressable_ref_array_receiver, static_property_result_type,
@@ -267,7 +299,7 @@ pub(crate) use property_fetch_for_write::{
     is_static_property_write_chain, lower_static_property_write_chain,
     lower_static_property_write_chain_with_operands,
     by_ref_foreach_property_source_is_addressable, lower_by_ref_foreach_property_source,
-    lower_nested_assignment_property_source,
+    lower_nested_assignment_property_source, nested_property_has_boxed_root,
 };
 pub(crate) use string_concat::string_value_needs_persistence;
 pub(crate) use string_concat::persist_pending_string;
@@ -292,6 +324,44 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> Lowe
     value
 }
 
+/// Returns whether the process entry point has already populated the named storage.
+fn entry_initialized_local(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    (ctx.in_main && matches!(name, "argc" | "argv"))
+        || crate::superglobals::is_superglobal(name)
+        || ctx.extern_globals.contains_key(name)
+}
+
+/// Reads an undefined variable as `null` and emits PHP 8's E_WARNING at this call site.
+fn lower_undefined_variable_read(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    expr: &Expr,
+) -> LoweredValue {
+    // `isset()` and the left operand of `??` are PHP's silent probes: they name storage that
+    // may never have been declared, and answer null/false without an Undefined variable warning.
+    if ctx.suppresses_undefined_reads(name, expr.span) {
+        return lower_null(ctx, expr);
+    }
+    let message = format!("Warning: Undefined variable ${name}\n");
+    let data = ctx.intern_string(&message);
+    let warning = ctx.emit_value(
+        Op::ConstStr,
+        Vec::new(),
+        Some(Immediate::Data(data)),
+        PhpType::Str,
+        Op::ConstStr.default_effects(),
+        Some(expr.span),
+    );
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![warning.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)),
+        crate::ir::Effects::all(),
+        Some(expr.span),
+    );
+    lower_null(ctx, expr)
+}
+
 /// Dispatches one expression while its reference-call context remains distinct from nested operands.
 fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
     if let Some(value) = nullsafe_chain::lower(ctx, expr) {
@@ -309,7 +379,35 @@ fn lower_expr_inner(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredVa
         ExprKind::FloatLiteral(value) => lower_float_literal(ctx, *value, expr),
         ExprKind::BoolLiteral(value) => lower_bool_literal(ctx, *value, expr),
         ExprKind::Null => lower_null(ctx, expr),
-        ExprKind::Variable(name) => lower_local_value(ctx, name, expr.span),
+        ExprKind::Variable(name) if name == "GLOBALS" => lower_globals_read(ctx, expr),
+        ExprKind::Variable(name) => super::scoped_writes::take_value(ctx, name, expr.span)
+            .unwrap_or_else(|| {
+                // A slot created by an earlier store, or one of the names the process entry
+                // point pre-populates, is a real local. A name the checker only learned from
+                // a later assignment has no storage yet, so it takes PHP's undefined-variable
+                // warning path instead of reading an uninitialized frame slot.
+                // An eval-scope read has no frame slot by design; its storage lives in the
+                // active eval scope, so it is initialized even when `has_local_slot` is false.
+                // A read the checker typed as anything but null is a loop-carried binding whose
+                // store (a `for` update, for example) has not been lowered yet. Allocate its
+                // slot from that typed read instead of warning: the checker already decided the
+                // assignment reaches every read that matters.
+                let checker_read = ctx.local_value_read_types.get(&(
+                    ctx.loop_storage_scope.clone(),
+                    expr.span,
+                    name.to_string(),
+                ));
+                if ctx.has_local_slot(name)
+                    || ctx.reads_from_eval_scope(name)
+                    || ctx.has_eval_barrier()
+                    || entry_initialized_local(ctx, name)
+                    || checker_read.is_some_and(|ty| *ty != PhpType::Void)
+                {
+                    lower_local_value(ctx, name, expr.span)
+                } else {
+                    lower_undefined_variable_read(ctx, name, expr)
+                }
+            }),
         ExprKind::BinaryOp { left, op, right } => lower_binary(ctx, left, op, right, expr),
         ExprKind::InstanceOf { value, target } => lower_instanceof(ctx, value, target, expr),
         ExprKind::Negate(inner) => lower_numeric_unary(ctx, inner, Op::INeg, Op::FNeg, expr),
@@ -858,8 +956,8 @@ fn dynamic_property_unset_action(
 
 /// Replaces arguments whose declared-parameter binding is decided by their literal spelling.
 ///
-/// Runs before any argument is lowered so a callable-name string never materializes as string
-/// storage and a constant bound to `int`/`float` is emitted already coerced. Positional and
+/// Runs before any argument is lowered so a constant bound to `int`/`float` is emitted already
+/// coerced. Callable-name strings are handled at their parameter storage boundary. Positional and
 /// named arguments are both handled; a spread makes the positional mapping unknowable, so the
 /// remaining arguments are left alone.
 ///
@@ -935,11 +1033,11 @@ fn rewrite_literal_param_bindings(sig: &FunctionSig, args: &[Expr]) -> Option<Ve
 /// `ArrayPtrSeek` to compute the new cursor, stores it back, and then boxes the value at
 /// the new position — the same two-step shape PHP's own implementations use.
 ///
-/// Returns `None` for anything this path cannot own (named/spread arguments, a wrong
-/// argument count, or a receiver that is not a plain variable) so the generic builtin path
-/// still runs. The checker has already rejected those shapes with a source-level
-/// diagnostic (`crate::builtins::array::internal_pointer`), so reaching the generic path
-/// in a successful compile is not possible.
+/// Returns `None` for anything this path cannot own (named/spread arguments or a wrong
+/// argument count) so the generic builtin path still runs. The checker has already rejected
+/// addressable receivers such as properties and array elements with a source-level diagnostic
+/// (`crate::builtins::array::internal_pointer`); temporary call/match/ternary results reach
+/// this path and are materialized into a hidden local above.
 fn lower_array_internal_pointer(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -959,10 +1057,19 @@ fn lower_array_internal_pointer(
     {
         return None;
     }
-    let ExprKind::Variable(variable) = &args[0].kind else {
-        return None;
+    // A non-variable receiver (a call result such as `current($xml->xpath(...))`) has no
+    // caller-visible cursor, so materialize its value once into a hidden array local. The
+    // cursor then lives beside that local exactly like a source variable's.
+    let variable = match &args[0].kind {
+        ExprKind::Variable(variable) => variable.clone(),
+        _ => {
+            let value = lower_expr(ctx, &args[0]);
+            let ty = ctx.builder.value_php_type(value.value);
+            let temp = ctx.declare_hidden_temp(ty.clone());
+            store_value_into_temp(ctx, &temp, ty, value, args[0].span);
+            temp
+        }
     };
-    let variable = variable.clone();
     let container = ctx.load_local(&variable, Some(args[0].span));
     let cursor_slot = ctx.array_pointer_cursor_slot(&variable);
     let cursor = ctx
@@ -991,7 +1098,7 @@ fn lower_array_internal_pointer(
     } else {
         crate::ir::RuntimeFnId::ArrayPtrValue
     };
-    Some(ctx.emit_value(
+    let result = ctx.emit_value(
         Op::RuntimeCall,
         vec![container.value, cursor],
         Some(Immediate::RuntimeCall(
@@ -1000,7 +1107,14 @@ fn lower_array_internal_pointer(
         PhpType::Mixed,
         effects_lookup::runtime_effects(),
         Some(expr.span),
-    ))
+    );
+    // A later store (an `if` join boxing the local, say) can widen the slot to Mixed after
+    // this load was lowered, which turns the concrete load into an owned unbox. Retire it
+    // provisionally; builder finalization prunes the release while the slot stays concrete.
+    if ctx.value_needs_release_after_use(container) {
+        crate::ir_lower::ownership::release_if_owned(ctx, container, Some(expr.span));
+    }
+    Some(result)
 }
 
 pub(crate) use indexed_array_literals::ir_array_storage_type;

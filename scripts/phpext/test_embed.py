@@ -36,9 +36,14 @@ def check_apple_leaks(command, env, work):
             readable = select.select([process.stdout], [], [], 120)[0]
             ready = process.stdout.readline() if readable else ""
             if not readable or ready not in ("request isolation ok\n", "request isolation failed\n"):
-                if process.poll() is None:
-                    os.killpg(process.pid, signal.SIGKILL)
-                stdout, stderr = process.communicate()
+                if readable and not ready:
+                    # EOF can arrive before waitpid observes the exit. Reap and drain
+                    # it first; macOS can reject killpg on that exiting group.
+                    stdout, stderr = process.communicate(timeout=30)
+                else:
+                    if process.poll() is None:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    stdout, stderr = process.communicate()
                 reason = "failed before leak inspection" if readable else "did not reach the Apple leak inspection checkpoint"
                 raise RuntimeError(f"PHP lifecycle {reason} ({process.returncode}):\n"
                                    f"{ready}{stdout}\n{stderr}")

@@ -76,6 +76,8 @@ pub(super) struct PropertySlot {
     is_reference: bool,
     /// Argument diagnostic prefix when this temporary slot models an inherited setter.
     abstract_setter_type_error_prefix: Option<String>,
+    /// Original declared type when an internal validator always materializes a boxed candidate.
+    reference_declaration: Option<PhpType>,
 }
 
 /// Declared-property candidate reachable from a `Mixed` object receiver.
@@ -167,6 +169,7 @@ mod clone_and_spl;
 mod iterator_iterator;
 pub(in crate::codegen::lower_inst) mod throwable_new;
 mod fiber_dynamic_entry;
+mod constructorless_refusals;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
 mod reflection_constructor;
@@ -178,7 +181,9 @@ mod dynamic_class_flags;
 mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
+mod runtime_magic_reads;
 mod dynamic_property_read_entry;
+mod unset_property_reads;
 mod dynamic_property_read_resolution;
 mod runtime_property_writes;
 mod named_property_writes;
@@ -189,12 +194,14 @@ mod property_resolution;
 mod property_compatibility;
 mod property_loads;
 mod property_fetch_for_write;
+mod property_hash_fetch_for_write;
 mod property_stores;
 mod property_hook_writes;
 mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
 mod mixed_property_type_guard;
+pub(super) use mixed_property_type_guard::lower_reference_property_coercion;
 mod extern_fields;
 pub(super) use mixed_property_type_guard::emit_string_into_int_diagnostics;
 
@@ -221,6 +228,8 @@ use property_defaults::*;
 use known_property_reads::*;
 #[allow(unused_imports)]
 use mixed_property_reads::*;
+#[allow(unused_imports)]
+use runtime_magic_reads::*;
 #[allow(unused_imports)]
 use dynamic_property_read_entry::*;
 #[allow(unused_imports)]
@@ -261,14 +270,19 @@ pub(super) use fiber_dynamic_entry::{
     lower_dynamic_object_new_without_constructor_mixed,
 };
 pub(super) use fixed_new::lower_object_new;
-pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
+pub(in crate::codegen) use reflection::emit_pending_reflection_class_builders;
+pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic, lower_mixed_is_a_literal_target};
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_load_prop_ref_cell_checked, lower_prop_get,
     lower_prop_initialized,
 };
 pub(super) use property_fetch_for_write::lower_prop_get_for_write;
+pub(super) use property_hash_fetch_for_write::{lower_property_hash_contains, lower_property_hash_fetch_for_write, lower_property_hash_read};
 pub(super) use mixed_property_type_guard::{BOOL_TAG, OBJECT_TAG, RUNTIME_TAGS};
-pub(super) use property_store_values::{lower_packed_field_mixed_to_int, release_adopted_mixed_source};
+pub(super) use property_store_values::{
+    emit_mixed_iterable_for_property_store, lower_packed_field_mixed_to_int,
+    release_adopted_mixed_source,
+};
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,
     raw_value_php_type,
@@ -374,11 +388,13 @@ fn lower_dynamic_prop_unset(
 /// Used only for the diagnostic text; the ordering matters because a slot can be both
 /// undeclared and by-reference, and the by-reference storage is the more specific
 /// obstacle to report.
-fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
+fn unset_unsupported_slot_reason(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> Option<&'static str> {
     if slot.is_packed {
         return Some("packed class field");
     }
-    if slot.is_reference {
+    let owned_reference = slot.is_declared && ctx.module.class_infos.get(&slot.class_name)
+        .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16));
+    if slot.is_reference && !owned_reference {
         return Some("by-reference property");
     }
     if !slot.is_declared && !slot_supports_untyped_unset_marker(slot) {

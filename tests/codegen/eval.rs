@@ -14,9 +14,12 @@
 use crate::support::*;
 
 mod buffers;
+mod declaring_class_reflectors;
 mod invoker_sharing;
 mod json_enums;
 mod literal_catalog;
+mod native_false_returns;
+mod reflection_mirror_references;
 
 /// Asserts an eval failure stayed inside the C ABI/error-status contract.
 fn assert_no_rust_panic_leaked(stderr: &str) {
@@ -9345,9 +9348,7 @@ try {
 Error:Object of class EvalBuiltinSprintfPlain could not be converted to string|\
 Error:Object of class Closure could not be converted to string|"
     );
-    assert_eq!(
-        output.stderr,
-        "Warning: Array to string conversion\n\
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: Array to string conversion\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to int\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to float\n\
 Warning: Object of class Closure could not be converted to int\n\
@@ -9367,9 +9368,7 @@ echo sprintf("%d|%f", $box, $box);
     );
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "1|1.000000");
-    assert_eq!(
-        output.stderr,
-        "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
 Warning: Object of class EvalSprintfNumericWarning could not be converted to float\n"
     );
 }
@@ -11261,6 +11260,7 @@ class NativeEvalRefBox {
         $this->name = $name;
     }
 }
+class NativeEvalRefWrong {}
 
 function native_eval_ref_array_heap(array &$items): string {
     $items = ["A", "B"];
@@ -11286,11 +11286,19 @@ $iter = [0];
 $iterFirst = native_eval_ref_iterable_heap($iter);
 $box = new NativeEvalRefBox("start");
 $objectFirst = native_eval_ref_object_heap($box);
-native_eval_ref_object_heap(box: $box);
-return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $iter["right"] . ":" . $objectFirst . ":" . $box->name;');
+$objectNamed = native_eval_ref_object_heap(box: $box);
+$objectCallable = native_eval_ref_object_heap(...);
+$objectDynamic = $objectCallable($box);
+$wrong = new NativeEvalRefWrong();
+try { native_eval_ref_object_heap($wrong); }
+catch (TypeError $error) { $wrongMessage = $error->getMessage(); unset($error); }
+return $first . ":" . $items[0] . ":" . $items[1] . ":" . $iterFirst . ":" . $iter["right"] . ":" . $objectFirst . ":" . $objectNamed . ":" . $objectDynamic . ":" . $box->name . "|" . $wrongMessage;');
 "#,
     );
-    assert_eq!(out, "array:A:B:iter:R:start!:start!!");
+    assert_eq!(
+        out,
+        "array:A:B:iter:R:start!:start!!:start!!!:start!!!|native_eval_ref_object_heap(): Argument #1 ($box) must be of type NativeEvalRefBox, NativeEvalRefWrong given",
+    );
 }
 
 /// Eval keeps an object reference alias when an AOT function changes the value type.
@@ -19904,9 +19912,11 @@ fn test_eval_rejects_invalid_magic_unserialize_arity_contract() {
     );
 }
 
-/// Verifies AOT and dynamic eval OpenSSL calls share Magician's embedded crypto objects.
+/// Verifies AOT and dynamic eval OpenSSL calls link and run together. AOT uses
+/// the libcrypto-backed `elephc_openssl` bridge for the full provider catalog;
+/// eval keeps Magician's embedded pure-Rust hash/cipher bridge.
 #[test]
-fn test_eval_and_aot_openssl_share_one_crypto_bridge() {
+fn test_eval_and_aot_openssl_link_and_run() {
     let dir = make_cli_test_dir("elephc_eval_aot_openssl_bridge_dedup");
     fs::write(
         dir.join("main.php"),
@@ -19920,8 +19930,12 @@ eval($code);
     )
     .expect("write AOT and eval OpenSSL fixture");
 
-    let compile = elephc_cli_command(&dir)
-        .args(["--quiet", "main.php"])
+    let Some(mut command) = openssl_cli_command(&dir) else {
+        eprintln!("ELEPHC_OPENSSL_NATIVE_SKIP_GATE skipping test_eval_and_aot_openssl_link_and_run");
+        return;
+    };
+    let compile = command
+        .args(["--php-version", "8.5", "--quiet", "main.php"])
         .output()
         .expect("compile AOT and eval OpenSSL fixture");
     assert!(
@@ -24261,24 +24275,24 @@ return $target->join("1", "2", "3", "4", "5", "6", "7", "8", "9")
     assert_eq!(out, "123456789|abcdefghi|ABCDEFGHI");
 }
 
-/// Verifies generated/AOT variadic bridge rejects named arguments captured by the tail.
+/// Generated user-method variadic tails retain positional and named entries through eval.
 #[test]
-fn test_eval_aot_variadic_method_rejects_named_tail() {
-    let err = compile_and_run_expect_failure(
+fn test_eval_aot_variadic_methods_preserve_named_tail() {
+    let out = compile_and_run(
         r#"<?php
 class EvalAotVariadicNamedTailTarget {
-    public function collect(...$items): int {
-        return count($items);
+    public function collect(...$items): string {
+        return count($items) . ":" . json_encode($items);
+    }
+    public static function collectStatic(...$items): string {
+        return count($items) . ":" . json_encode($items);
     }
 }
-eval('$target = new EvalAotVariadicNamedTailTarget();
-$target->collect(named: "A");');
+echo eval('$target = new EvalAotVariadicNamedTailTarget();
+return $target->collect("head", named: "A") . "|" . EvalAotVariadicNamedTailTarget::collectStatic(named: "B");');
 "#,
     );
-    assert!(
-        err.contains("Fatal error: eval() runtime failed"),
-        "stderr did not contain eval runtime fatal diagnostic: {err}"
-    );
+    assert_eq!(out, r#"2:{"0":"head","named":"A"}|1:{"named":"B"}"#);
 }
 
 /// Verifies eval ReflectionMethod exposes generated/AOT declared type metadata.
@@ -26708,10 +26722,9 @@ echo ($static->isStatic() ? "S" : "s");');
 /// Verifies eval ReflectionFunction/Method `returnsReference()` reads the reflected declaration
 /// instead of a baked `false` (#1260).
 ///
-/// Eval cannot declare `function &f()` itself, so its functions, closures, and methods report
-/// `false`; the by-reference declarations it can see are a compiled `function &f()` or
-/// `function &m()`, and an eval-declared `&get` property hook. Expected output measured on
-/// PHP 8.5.10.
+/// Eval functions and closures cannot declare reference returns. Eval methods and `&get` hooks
+/// retain their declaration flags, as do compiled functions and methods. Expected output
+/// cross-checked against PHP 8.5.
 #[test]
 fn test_eval_reflection_returns_reference_reads_declarations() {
     let out = compile_and_run_capture(
@@ -26728,6 +26741,7 @@ eval('class EvalHooked {
     public array $items = [] { &get { return $this->items; } }
     public int $n { get => 1; }
     public function plain() { return 1; }
+    public function &refItems() { return $this->items; }
 }
 function eval_value() { return 1; }
 echo (new ReflectionFunction("aot_ref"))->returnsReference() ? "R" : "r";
@@ -26738,6 +26752,7 @@ echo ":";
 echo (new ReflectionMethod("AotStore", "items"))->returnsReference() ? "R" : "r";
 echo (new ReflectionMethod("AotStore", "count"))->returnsReference() ? "R" : "r";
 echo (new ReflectionMethod("EvalHooked", "plain"))->returnsReference() ? "R" : "r";
+echo (new ReflectionMethod("EvalHooked", "refItems"))->returnsReference() ? "R" : "r";
 echo ":";
 echo (new ReflectionProperty("EvalHooked", "items"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";
 echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)->returnsReference() ? "R" : "r";');
@@ -26748,7 +26763,7 @@ echo (new ReflectionProperty("EvalHooked", "n"))->getHook(PropertyHookType::Get)
         "program failed: stdout={:?} stderr={}",
         out.stdout, out.stderr
     );
-    assert_eq!(out.stdout, "Rrrr:Rrr:Rr");
+    assert_eq!(out.stdout, "Rrrr:RrrR:Rr");
 }
 
 /// Verifies eval `returnsReference()` reads an abstract or interface `&get` hook contract, which
@@ -29038,7 +29053,7 @@ echo $box instanceof $target ? "bad" : "bad";
 "#,
     );
     assert!(
-        err.contains("Fatal error: Class name must be a valid object or a string"),
+        err.contains("Class name must be a valid object or a string"),
         "{err}"
     );
 }
@@ -29055,7 +29070,7 @@ echo $value instanceof $target ? "bad" : "bad";
 "#,
     );
     assert!(
-        err.contains("Fatal error: Class name must be a valid object or a string"),
+        err.contains("Class name must be a valid object or a string"),
         "{err}"
     );
 }

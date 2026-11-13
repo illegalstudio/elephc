@@ -169,6 +169,8 @@ impl Function {
             ir_type,
             php_type,
             kind,
+            ref_cell_owner: None,
+            is_reference_argument_owner: false,
         });
         id
     }
@@ -273,6 +275,10 @@ pub struct LocalSlot {
     pub ir_type: IrType,
     pub php_type: PhpType,
     pub kind: LocalKind,
+    /// Hidden owner retired when eval detaches this PHP name from shared native storage.
+    pub ref_cell_owner: Option<LocalSlotId>,
+    /// Pending PHP argument binding transferred to the native parameter on callee entry.
+    pub is_reference_argument_owner: bool,
 }
 
 /// Role of a local slot in PHP/runtime semantics.
@@ -317,4 +323,8 @@ pub struct FunctionFlags {
     /// property-default init thunks and builtin class methods (Reflection, SPL,
     /// DateTime) lowered into the module. Consumed by source-map emission.
     pub is_synthetic: bool,
+    /// Native C-ABI property declaration callback with a context and original boxed RHS.
+    pub is_native_reference_validator: bool,
+    /// Eager generator guard borrows arguments before the constructor captures their bindings.
+    pub is_eager_parameter_validator: bool,
 }

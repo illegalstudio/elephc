@@ -93,9 +93,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// contracts, generic declarations, and caller-scope access masks from both branches.
 /// BUMPED TO 22 because retained generic token streams now include ReservedNameHead.
 /// Older token variant indexes must not be decoded as this layout.
-/// BUMPED TO 23 because `EvalExpr` gained the assignment-expression variant; older
-/// variant indexes must not be decoded as this layout.
-pub(crate) const FORMAT_VERSION: u32 = 23;
+/// Format 23 on the SimpleXML branch added array casts to EvalIR.
+/// Format 24 retained method reference-return flags and dimension-write statements.
+/// Format 23 on main added assignment expressions. Format 25 combines those distinct
+/// serialized layouts, so neither branch's earlier entries can decode as this build.
+/// Format 26 adds property update expressions and preserves computed property name staging.
+/// Format 27 combines SimpleXML property updates with native variable increment statements.
+pub(crate) const FORMAT_VERSION: u32 = 27;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///

@@ -250,6 +250,9 @@ function showGlobalCatch(): void {
     }
 }
 function firstLoopCatch(): void {
+    // PHP keeps `$e` defined after the inner catch; seeding it keeps the runtime path that
+    // this fixture exercises statically known instead of the checker's null fallback.
+    $e = new LoopCatchException('seed');
     for ($i = 0; $i < 2; $i++) {
         try {
             try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $e) {}
@@ -2852,4 +2855,153 @@ maybeCaptured(5, false); maybeCaptured(5, true); detachedCapture(5);
         let run = || assert_nullable_flow_heap_output(source, "NULL\nint(4)\nNULL\nNULL\nint(2)\nint(3)\nNULL\nint(5)\nNULL\ndouble\nint(5)\n");
         if optimized { run(); } else { without_ir_opt(run); }
     }
+}
+
+/// A scalar merged with a null default keeps PHP null (issue #1944, #1835): `?int ?? null` once
+/// answered `9223372036854775806`, `?bool ?? null` `true`, `?float ?? null` `0.0` and
+/// `?string ?? null` `""`, because the merge temp was typed as the bare scalar and the null
+/// arm stored the in-band sentinel. `?:` over a falsy non-nullable scalar, typed array misses,
+/// `??=`, nested merges, array literals, `(array)` casts, nullable call results, returns and
+/// arguments all take the same paths. Runs through the CLI under `--heap-debug` in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_scalar_null_default_runtime() {
+    let source = r#"<?php
+function ternar(?int $n): string { $x = $n ?: null; return $x === null ? "tnull" : "t" . $x; }
+function coal(?int $n): string { $x = $n ?? null; return $x === null ? "cnull" : "c" . $x; }
+function show(string $label, mixed $value): void {
+    echo $label, ":", $value === null ? "N" : "V", "/", json_encode($value), "/", gettype($value), "|";
+}
+function coalInt(?int $n): void { $x = $n ?? null; show("ci", $x); $n ??= null; show("ca", $n); }
+function coalBool(?bool $b): void { $x = $b ?? null; show("cb", $x); }
+function coalFloat(?float $f): void { $x = $f ?? null; show("cf", $x); }
+function coalString(?string $s): void { $x = $s ?? null; show("cs", $x); echo "[", $x, "]|"; }
+function shortInt(int $n): void { $x = $n ?: null; show("si", $x); }
+function shortBool(bool $b): void { $x = $b ?: null; show("sb", $x); }
+function shortFloat(float $f): void { $x = $f ?: null; show("sf", $x); }
+function shortString(string $s): void { $x = $s ?: null; show("ss", $x); }
+function missInt(int $k): void { $a = [1]; $x = $a[$k] ?? null; show("mi", $x); }
+function missBool(int $k): void { $a = [true]; $x = $a[$k] ?? null; show("mb", $x); }
+function missFloat(int $k): void { $a = [1.5]; $x = $a[$k] ?? null; show("mf", $x); }
+function missString(int $k): void { $a = ["s"]; $x = $a[$k] ?? null; show("ms", $x); }
+function nested(?int $n): void {
+    $x = ($n ?? null) ?? 7; $y = [$n ?? null]; $z = (array) ($n ?? null);
+    $w = $n ?? null; $w = $w ?: 8;
+    show("nx", $x); show("ny", $y); show("nz", $z); show("nw", $w);
+}
+function maybeInt(bool $missing): ?int { return $missing ? null : 4; }
+function fromCall(bool $missing): void { $x = maybeInt($missing) ?? null; show("fc", $x); }
+function returned(?int $n): ?int { return $n ?? null; }
+function thrown(?int $n): int { try { $x = $n ?? throw new RuntimeException("none"); return $x + 1; } catch (RuntimeException $error) { return -1; } }
+function compared(?int $n): void { $x = $n ?? null; echo "cmp:", $x == null ? "eq" : "ne", $x < 1 ? "lt" : "ge", "|"; }
+for ($i = 0; $i < 2; $i++) {
+    echo ternar(0), " ", ternar(6), " ", coal(null), " ", coal(0), " ", coal(6), "\n";
+    coalInt(null); coalInt(0); coalInt(6); coalBool(null); coalBool(false); coalFloat(null); coalFloat(0.0);
+    coalString(null); coalString(""); echo "\n";
+    shortInt(0); shortInt(5); shortBool(false); shortFloat(0.0); shortString(""); shortString("0"); echo "\n";
+    missInt(0); missInt(3); missBool(0); missBool(3); missFloat(0); missFloat(3); missString(0); missString(3); echo "\n";
+    nested(null); nested(0); nested(6); echo "\n";
+    fromCall(true); fromCall(false); show("rt", returned(null)); show("rt", returned(3)); show("arg", null ?? null);
+    echo thrown(null), thrown(4), "|"; compared(null); compared(0); compared(5); echo "\n";
+}
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"tnull t6 cnull c0 c6\nci:N/null/NULL|ca:N/null/NULL|ci:V/0/integer|ca:V/0/integer|ci:V/6/integer|ca:V/6/integer|cb:N/null/NULL|cb:V/false/boolean|cf:N/null/NULL|cf:V/0/double|cs:N/null/NULL|[]|cs:V/\"\"/string|[]|\nsi:N/null/NULL|si:V/5/integer|sb:N/null/NULL|sf:N/null/NULL|ss:N/null/NULL|ss:N/null/NULL|\nmi:V/1/integer|mi:N/null/NULL|mb:V/true/boolean|mb:N/null/NULL|mf:V/1.5/double|mf:N/null/NULL|ms:V/\"s\"/string|ms:N/null/NULL|\nnx:V/7/integer|ny:V/[null]/array|nz:V/[]/array|nw:V/8/integer|nx:V/0/integer|ny:V/[0]/array|nz:V/[0]/array|nw:V/8/integer|nx:V/6/integer|ny:V/[6]/array|nz:V/[6]/array|nw:V/6/integer|\nfc:N/null/NULL|fc:V/4/integer|rt:N/null/NULL|rt:V/3/integer|arg:N/null/NULL|-15|cmp:eqlt|cmp:eqlt|cmp:nege|\n".repeat(2));
+}
+
+/// A literal item whose own storage is the inline tagged scalar is boxed (issue #1944): the
+/// 16-byte tagged array exists only as an append specialization, so `[$n]` with `?int $n`
+/// encoded `[6]` as `[null]` and refused `foreach`, and `["k" => $n]` had no hash entry tag at
+/// all. The same boxing keeps `[$n ?? null]`, `[$c ? $n : null]` and `[$n ?: null]` honest now
+/// that those merges keep their tag word. Runs through the CLI under `--heap-debug` in both IR modes.
+#[test]
+fn test_nullable_fallback_flow_tagged_literal_elements_runtime() {
+    let source = r#"<?php
+function plain(?int $n): void { $x = [$n]; echo json_encode($x), count($x); foreach ($x as $v) { echo $v === null ? "n" : "v"; } echo "|"; }
+function keyed(?int $n): void { $x = ["k" => $n]; echo json_encode($x), $x["k"] === null ? "n" : "v", "|"; }
+function ternary(?int $n, bool $c): void { $x = [$c ? $n : null]; echo json_encode($x), "|"; }
+function coalesced(?int $n): void { $x = [$n ?? null, "k" => $n ?? null]; echo json_encode($x), "|"; }
+function shorted(int $n): void { $x = [$n ?: null]; echo json_encode($x), "|"; }
+for ($i = 0; $i < 2; $i++) {
+    plain(null); plain(6); keyed(null); keyed(6); ternary(null, true); ternary(6, true); ternary(6, false);
+    coalesced(null); coalesced(0); coalesced(6); shorted(0); shorted(5); echo "\n";
+}
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"[null]1n|[6]1v|{\"k\":null}n|{\"k\":6}v|[null]|[6]|[null]|{\"0\":null,\"k\":null}|{\"0\":0,\"k\":0}|{\"0\":6,\"k\":6}|[null]|[5]|\n".repeat(2));
+}
+
+/// Writes of a tagged scalar into an empty array or a promoted hash box it as `mixed`.
+///
+/// `$a[] = $n ?? null`, `$a[0] = $n ?? null` and `$h["k"] = $n ?? null` over an empty `[]` used to
+/// select tagged storage the backend has no write entry for (`array_push for PHP type
+/// TaggedScalar`, `array_set value PHP type TaggedScalar`, `hash_set value PHP type
+/// TaggedScalar`), as a bare `?int` parameter already did; the first write now widens the
+/// container to boxed `mixed` slots and every consumer reads the int or the null back (#1944).
+#[test]
+fn test_nullable_fallback_flow_tagged_array_writes_runtime() {
+    let source = r#"<?php
+function pushed(?int $n): void { $a = []; $a[] = $n ?? null; echo json_encode($a), count($a); foreach ($a as $v) { echo $v === null ? "n" : "v"; } echo "|"; }
+function offset(?int $n): void { $a = []; $a[0] = $n ?? null; echo json_encode($a), $a[0] === null ? "n" : "v", "|"; }
+function keyed(?int $n): void { $h = []; $h["k"] = $n ?? null; echo json_encode($h), $h["k"] === null ? "n" : "v", "|"; }
+function builtin(?int $n): void { $a = []; array_push($a, $n ?? null); echo json_encode($a), "|"; }
+function shorted(int $n): void { $a = []; $a[] = $n ?: null; $h = []; $h["k"] = $n ?: null; echo json_encode($a), json_encode($h), "|"; }
+function ternar(?int $n): void { $a = []; $a[] = $n ?: null; echo json_encode($a), "|"; }
+function direct(?int $n): void { $a = []; $a[] = $n; $h = []; $h["k"] = $n; $o = []; $o[0] = $n; echo json_encode($a), json_encode($h), json_encode($o), "|"; }
+function grown(?int $n): void { $a = []; $a[] = $n ?? null; $a[] = 7; $a[] = "s"; echo json_encode($a), implode(",", $a), "|"; }
+for ($i = 0; $i < 2; $i++) {
+    pushed(null); pushed(6); offset(null); offset(6); keyed(null); keyed(6); builtin(null); builtin(6);
+    shorted(0); shorted(5); ternar(0); ternar(6); direct(null); direct(6); grown(null); grown(6); echo "\n";
+}
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"[null]1n|[6]1v|[null]n|[6]v|{\"k\":null}n|{\"k\":6}v|[null]|[6]|[null]{\"k\":null}|[5]{\"k\":5}|[null]|[6]|[null]{\"k\":null}[null]|[6]{\"k\":6}[6]|[null,7,\"s\"],7,s|[6,7,\"s\"]6,7,s|\n".repeat(2));
+}
+
+/// Writes of a tagged scalar into an untyped `[]` property store boxed `mixed` elements.
+///
+/// `public $items = []` and `public static $bag = []` adopt the type of their first write, and
+/// the backend builds the slot's `[]` default, reads and writes from it; `$h->items[0] = $n ??
+/// null`, `$h->keyed["k"] = ...` and `Holder::$bag[0] = $n ?: null` therefore failed with
+/// `array default element PHP type TaggedScalar` or crashed `runtime_value_tag`, as a bare
+/// `?int` already did, and an append reached the tagged array `array_shift` refuses. The slot
+/// now stores `mixed` cells, a later `= []` keeps them (it used to narrow the slot back to the
+/// `array<never>` placeholder), and every consumer reads the int or the null back (#1944). Two
+/// untyped-property writes stay out of this fixture because they misbehave for every value
+/// type: a string key on a static array property drops the key, and a sparse int key on a slot
+/// another function already typed fills the hole instead of promoting to a hash.
+#[test]
+fn test_nullable_fallback_flow_tagged_property_writes_runtime() {
+    let source = r#"<?php
+class Holder { public $items = []; public $keyed = []; public $adopted = []; public static $bag = []; }
+function offsetWrite(?int $n): void { $h = new Holder(); $h->items[0] = $n ?? null; Holder::$bag[0] = $n ?: null; echo json_encode($h->items), json_encode(Holder::$bag), $h->items[0] === null ? "n" : "v", "|"; Holder::$bag = []; }
+function keyedWrite(?int $n): void { $h = new Holder(); $h->keyed["k"] = $n ?? null; echo json_encode($h->keyed), "|"; }
+function pushed(?int $n): void { $h = new Holder(); $h->items[] = $n ?? null; $h->items[] = 7; Holder::$bag[] = $n ?? null; echo json_encode($h->items), count($h->items), implode(",", $h->items); foreach ($h->items as $v) { echo $v === null ? "n" : "v"; } $s = array_shift($h->items); echo $s === null ? "N" : "V", json_encode(Holder::$bag), "|"; Holder::$bag = []; }
+function adopted(?int $n): void { $a = []; $a[] = $n ?? null; $h = new Holder(); $h->adopted = $a; $h->items = [$n ?? null]; Holder::$bag = $a; echo json_encode($h->adopted), json_encode($h->items), json_encode(Holder::$bag), "|"; Holder::$bag = []; }
+function resetWrites(?int $n): void { $h = new Holder(); $h->items[] = $n ?? null; $h->items = []; $h->items[] = $n ?? null; $h->items[] = "s"; Holder::$bag = []; Holder::$bag[] = $n ?? null; echo json_encode($h->items), json_encode(Holder::$bag), count(Holder::$bag), "|"; Holder::$bag = []; }
+function bare(?int $n): void { $h = new Holder(); $h->items[0] = $n; $h->keyed["k"] = $n; Holder::$bag[] = $n; echo json_encode($h->items), json_encode($h->keyed), json_encode(Holder::$bag), "|"; Holder::$bag = []; }
+for ($i = 0; $i < 2; $i++) {
+    offsetWrite(null); offsetWrite(6); keyedWrite(null); keyedWrite(6); pushed(null); pushed(6);
+    adopted(null); adopted(6); resetWrites(null); resetWrites(6); bare(null); bare(6); echo "\n";
+}
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"[null][null]n|[6][6]v|{\"k\":null}|{\"k\":6}|[null,7]2,7nvN[null]|[6,7]26,7vvV[6]|[null][null][null]|[6][6][6]|[null,\"s\"][null]1|[6,\"s\"][6]1|[null]{\"k\":null}[null]|[6]{\"k\":6}[6]|\n".repeat(2));
+}
+
+/// Arrays of tagged scalars adopted by a promoted constructor parameter or nested in a
+/// property store boxed elements all the way down.
+///
+/// `new Promoted($a)` after `$a[] = $n ?? null` typed the promoted slot straight from the
+/// argument (`propagate_constructor_arg_type`), and `$h->rows[] = $row` kept `array<int|null>`
+/// as the inner element, so `foreach ($h->items as $v)` and `array_shift($h->rows[0])` met the
+/// tagged element the iterator and shift lowerings refuse. Both now store `mixed` cells (#1944).
+#[test]
+fn test_nullable_fallback_flow_tagged_property_adoption_runtime() {
+    let source = r#"<?php
+class Promoted { public function __construct(public $items = []) {} }
+class Required { public function __construct(public $items) {} }
+class Nested { public $rows = []; public static $bag = []; public $lit = []; }
+function promoted(?int $n): void { $a = []; $a[] = $n ?? null; $h = new Promoted($a); foreach ($h->items as $v) { echo $v === null ? "n" : "v"; } $s = array_shift($h->items); echo $s === null ? "N" : "V", json_encode($h->items), "|"; }
+function required(?int $n): void { $r = new Required([$n ?? null]); foreach ($r->items as $v) { echo $v === null ? "n" : "v"; } echo json_encode($r->items), count($r->items), "|"; }
+function written(?int $n): void { $h = new Promoted(); $h->items[] = $n ?? null; $a = []; $a[] = $n ?? null; $a[] = 7; $g = new Promoted($a); echo json_encode($h->items), json_encode($g->items), implode(",", $g->items), "|"; }
+function nested(?int $n): void { $h = new Nested(); $row = []; $row[] = $n ?? null; $h->rows[] = $row; Nested::$bag[] = $row; $h->lit = [[$n ?? null]]; foreach ($h->rows[0] as $v) { echo $v === null ? "n" : "v"; } $s = array_shift(Nested::$bag[0]); echo $s === null ? "N" : "V", json_encode($h->rows), json_encode($h->lit), json_encode(Nested::$bag), "|"; Nested::$bag = []; }
+for ($i = 0; $i < 2; $i++) { promoted(null); promoted(6); required(null); required(6); written(null); written(6); nested(null); nested(6); echo "\n"; }
+"#;
+    assert_nullable_flow_cli_heap_output(source, &"nN[]|vV[]|n[null]1|v[6]1|[null][null,7],7|[6][6,7]6,7|nN[[null]][[null]][[]]|vV[[6]][[6]][[]]|\n".repeat(2));
 }

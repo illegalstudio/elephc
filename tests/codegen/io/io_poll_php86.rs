@@ -93,17 +93,20 @@ try {
 fn test_io_poll_fd_setsize_descriptor_throws_php86() {
     let out = run86(
         r#"<?php
-$files = [];
-for ($i = 0; $i < 1100; $i++) { $files[] = fopen("/dev/null", "r"); }
+$pairs = [];
+for ($i = 0; $i < 520; $i++) {
+    [$reader, $writer] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+    $pairs[] = $reader;
+    $pairs[] = $writer;
+}
 $context = new Io\Poll\Context(Io\Poll\Backend::Poll);
-$context->add(new StreamPollHandle($files[1099]), [Io\Poll\Event::Read], "high");
+$context->add(new StreamPollHandle($pairs[count($pairs) - 1]), [Io\Poll\Event::Read], "high");
 try {
     $context->wait(Time\Duration::fromMicroseconds(1000));
     echo "no-throw";
 } catch (Io\Poll\FailedPollWaitException $error) {
     echo "fd-setsize";
 }
-foreach ($files as $handle) { fclose($handle); }
 "#,
     );
     assert_eq!(out, "fd-setsize");

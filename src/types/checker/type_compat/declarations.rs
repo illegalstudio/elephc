@@ -290,6 +290,13 @@ impl Checker {
                 return Ok(());
             }
         }
+        if matches!(expected_ty.codegen_repr(), PhpType::Mixed | PhpType::Object(_))
+            && self.is_native_selection_reference_argument(arg, env)?
+        {
+            // Native XML selections receive independent managed cells instead of borrowing
+            // the parent's physical property or dimension storage.
+            return Ok(());
+        }
         // Guards refine the current value, while a reference still addresses the original
         // slot. Coalescing assignments likewise keep nullable parameter storage alive.
         let storage_ty = self.guarded_local_storage_type(arg, env).unwrap_or(actual_ty).clone();
@@ -307,6 +314,12 @@ impl Checker {
                     context
                 ),
             ));
+        }
+        // A declared-type array/object/float local bound to a nullable parameter of its own
+        // kind keeps its typed slot: the call writes the boxed cell back and verifies its kind.
+        // Any other local takes the boxed cell below instead.
+        if self.nullable_reference_keeps_concrete_storage(expected_ty, actual_ty, arg) {
+            return Ok(());
         }
         // The call lowering boxes PHP array locals before exposing their ref-cell address.
         // This changes storage, not the declared values accepted by the reference parameter.
@@ -532,6 +545,14 @@ impl Checker {
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 self.infer_scoped_constant_access(receiver, name, default_expr)?
             }
+            // `K::ALL[0]` and `E::A ? E::B : E::C` select a constant's value; their syntactic
+            // type is the string guess for each scoped constant, not the selected value. An
+            // untaken branch may hold a lazy Error (`[parent::A]` without a parent), which
+            // inference reports eagerly, so a failed inference keeps the syntactic answer.
+            _ if crate::types::deferred_defaults::default_value_depends_on_scoped_constant(default_expr) => {
+                self.infer_type(default_expr, &TypeEnv::default())
+                    .unwrap_or_else(|_| self.declaration_default_type(default_expr))
+            }
             _ => self.declaration_default_type(default_expr),
         };
         self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
@@ -558,7 +579,7 @@ impl Checker {
         // through: a missing case or an incompatible scalar constant is still reported, just
         // from the pass that can tell the difference.
         if default_expr
-            .is_some_and(|default| matches!(default.kind, ExprKind::ScopedConstantAccess { .. }))
+            .is_some_and(crate::types::deferred_defaults::default_value_depends_on_scoped_constant)
         {
             return Ok(());
         }
@@ -762,12 +783,17 @@ impl Checker {
         // name with something outside. A marked name from this map is announced only when
         // `--strict-locals` would really reject the body; see `run_mixed_storage_scan`.
         self.run_mixed_storage_scan(body, &pre_bound_own_storage);
+        let candidates = super::super::promotable_arrays::find_candidates(self, body);
+        let saved_promotable_array_candidates =
+            std::mem::replace(&mut self.promotable_array_candidates, candidates);
+        self.activate_promotable_params(&pre_bound_own_storage);
         let (sites, dependents) = super::super::numeric_regions::find(body, &pre_bound_own_storage);
         self.numeric_region_sites = sites;
         self.numeric_region_dependents = dependents;
 
         let result = f(self);
 
+        self.promotable_array_candidates = saved_promotable_array_candidates;
         self.active_ref_params = saved_ref_params;
         self.active_external_ref_bindings = saved_external_ref_bindings;
         self.active_globals = saved_globals;

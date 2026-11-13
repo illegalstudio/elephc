@@ -244,7 +244,7 @@ milestones, `$message`, `$message_code`, and `$bytes_max` are deferred.
 
 | Function | Signature | Description |
 |---|---|---|
-| `stream_get_filters()` | `stream_get_filters(): array` | Return built-in filters: `string.toupper`, `string.tolower`, `string.rot13`, `string.strip_tags`, `convert.base64-encode`, `convert.base64-decode`, `convert.quoted-printable-encode`, `convert.quoted-printable-decode`, `convert.iconv.*`, `dechunk`, `zlib.deflate`, `zlib.inflate`, `bzip2.compress`, and `bzip2.decompress`. User filters are not enumerated in v1. |
+| `stream_get_filters()` | `stream_get_filters(): array` | Return built-in filters: `string.toupper`, `string.tolower`, `string.rot13`, `string.strip_tags`, `convert.base64-encode`, `convert.base64-decode`, `convert.quoted-printable-encode`, `convert.quoted-printable-decode`, `convert.iconv.*`, `dechunk`, `zlib.deflate`, `zlib.inflate`, `bzip2.compress`, and `bzip2.decompress`. Compiled code also includes currently registered user filter patterns; eval filter registration remains a compatibility stub. |
 | `stream_filter_append()` | `stream_filter_append(resource $stream, string $filtername, int $read_write = STREAM_FILTER_ALL, mixed $params = null): resource\|false` | Attach a built-in or user-registered filter. `STREAM_FILTER_READ`, `STREAM_FILTER_WRITE`, and `STREAM_FILTER_ALL` select directions. |
 | `stream_filter_prepend()` | `stream_filter_prepend(resource $stream, string $filtername, int $read_write = STREAM_FILTER_ALL, mixed $params = null): resource` | Same behavior as append in v1's one-filter-per-direction model. |
 | `stream_filter_remove()` | `stream_filter_remove(resource $filter): bool` | Remove the attached filter and return `true`. |
@@ -278,8 +278,8 @@ Classes may extend PHP's `php_user_filter` base class; the fourth
 
 | Function | Signature | Description |
 |---|---|---|
-| `stream_get_wrappers()` | `stream_get_wrappers(): array` | Return built-in wrappers: `file`, `php`, `data`, `ftp`, `http`, `https`, `ftps`, `compress.zlib`, `compress.bzip2`, `phar`, and `glob`. User wrappers are not enumerated in v1. |
-| `stream_wrapper_register()` | `stream_wrapper_register(string $protocol, string $class, int $flags = 0): bool` | Register a userspace wrapper class for `$protocol://` URLs. Up to 16 registrations are stored. |
+| `stream_get_wrappers()` | `stream_get_wrappers(): array` | Return built-in wrappers: `file`, `php`, `data`, `ftp`, `http`, `https`, `ftps`, `compress.zlib`, `compress.bzip2`, `phar`, and `glob`. The returned array also includes currently registered user protocols. |
+| `stream_wrapper_register()` | `stream_wrapper_register(string $protocol, string $class, int $flags = 0): bool` | Register a userspace wrapper class for `$protocol://` URLs. Up to 64 registrations are stored. |
 | `stream_wrapper_unregister()` | `stream_wrapper_unregister(string $protocol): bool` | Remove a user-registered wrapper; built-in wrappers cannot be unregistered in v1. |
 | `stream_wrapper_restore()` | `stream_wrapper_restore(string $protocol): bool` | v1 no-op that reports success because built-in wrappers are always present. |
 
@@ -287,11 +287,22 @@ When `fopen("$protocol://...")` matches a registered wrapper, elephc creates an
 instance through the runtime class registry. Declared property defaults are
 applied, but `__construct` is not invoked on this path.
 
+php-src first assigns the stream context resource to the wrapper object's
+`context` property, before calling `stream_open()`. A registered SimpleXML class
+rejects that write because the instance has no XML document, so elephc raises the
+same two-stage failure as PHP: `TypeError: It's not possible to assign a complex
+type to properties, resource given`, whose `getPrevious()` is
+`Error: SimpleXMLElement is not properly initialized`.
+
 Supported wrapper methods include `stream_open`, `stream_read`, `stream_write`,
 `stream_close`, `stream_eof`, `stream_seek`, `stream_tell`, `stream_flush`,
 `stream_stat`, `stream_lock`, `stream_truncate`, `stream_metadata`,
 `stream_set_option`, `stream_cast`, `url_stat`, and the directory methods
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`.
+
+`file_get_contents()` on a registered wrapper path opens the wrapper and drains
+`stream_read()` to EOF through the same stream helper as `fopen()`. A refused
+`stream_open()` returns `false` after the usual failed-open warning.
 
 `url_stat` is consulted by the whole stat family: `stat()`, `lstat()`,
 `file_exists()`, the integer getters (`filesize()`, `filemtime()`, `fileatime()`,

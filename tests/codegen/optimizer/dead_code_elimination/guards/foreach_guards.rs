@@ -10,17 +10,17 @@
 
 use super::*;
 
-/// Verifies by-ref iteration retains both post-write outcomes and by-value iteration still prunes.
+/// Verifies strict guards retain both by-ref post-write outcomes while by-value iteration prunes.
 #[test]
 fn test_dead_code_elimination_invalidates_iterable_guard_for_by_ref_foreach_value() {
     let dir = make_cli_test_dir("elephc_dead_code_elimination_foreach_by_ref_root_guard");
     let (user_asm, _runtime_asm, _required_libraries) = compile_source_to_asm_with_options(
         r#"<?php
 function by_ref($a, $b) {
-    if ($a == $b) {
+    if ($a === $b) {
         foreach ($a as &$value) {
             $value = 2;
-            if ($a == $b) {
+            if ($a === $b) {
                 echo "still-equal-by-ref";
             } else {
                 echo "changed-by-ref";
@@ -30,10 +30,10 @@ function by_ref($a, $b) {
 }
 
 function by_value($a, $b) {
-    if ($a == $b) {
+    if ($a === $b) {
         foreach ($a as $value) {
             $value = 2;
-            if ($a == $b) {
+            if ($a === $b) {
                 echo "by-value-equal";
             } else {
                 echo "dead-by-value-changed";
@@ -45,9 +45,9 @@ function by_value($a, $b) {
 function after_loop($a, $b) {
     foreach ($a as &$value) {
     }
-    if ($a == $b) {
+    if ($a === $b) {
         $value = 2;
-        if ($a == $b) {
+        if ($a === $b) {
             echo "stale-after-loop";
         } else {
             echo "changed-after-loop";

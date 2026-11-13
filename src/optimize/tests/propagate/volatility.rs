@@ -14,6 +14,23 @@
 use super::*;
 use crate::optimize::propagate::is_reference_volatile;
 
+/// Reference parameters never gain facts, while the same names in a value-only body still fold.
+#[test]
+fn reference_parameter_facts_are_scoped_and_exclude_list_unpack() {
+    let source = "<?php function referenceParameterFacts(&$value, &$other) { \
+        $value = 2; [$value] = [2]; $other = 3; echo $value; } \
+        function valueParameterFacts($value) { $value = 2; echo $value; }";
+    let tokens = crate::lexer::tokenize(source).unwrap();
+    let program = crate::parser::parse(&tokens).unwrap();
+    let propagated = propagate_constants(program);
+    let StmtKind::FunctionDecl { body, .. } = &propagated[0].kind else { panic!("reference function"); };
+    assert!(matches!(&body.last().unwrap().kind,
+        StmtKind::Echo(Expr { kind: ExprKind::Variable(name), .. }) if name == "value"));
+    let StmtKind::FunctionDecl { body, .. } = &propagated[1].kind else { panic!("value function"); };
+    assert!(matches!(&body.last().unwrap().kind,
+        StmtKind::Echo(Expr { kind: ExprKind::IntLiteral(2), .. })));
+}
+
 /// Builds a minimal closure expression capturing `captures` (by value) and
 /// `capture_refs` (by reference) with an empty body.
 fn closure_with_captures(captures: Vec<String>, capture_refs: Vec<String>) -> Expr {

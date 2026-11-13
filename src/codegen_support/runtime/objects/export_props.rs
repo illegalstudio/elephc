@@ -130,7 +130,8 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("add x13, x13, #8");                            // skip the leading row-count word
             emitter.instruction("ldr x14, [x13, #16]");                         // load the property's byte offset within the object
             emitter.instruction("add x14, x0, x14");                            // resolve the absolute property slot address
-            emitter.instruction("ldr x15, [x14, #8]");                          // load the slot's high word (the init marker)
+            emitter.instruction("ldr x17, [x13, #24]");                         // read the logical tag and native storage flags
+            crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x14", "x17", "x15", "__rt_obj_prop_name_slot");
             emit_uninit_sentinel_aarch64(emitter, "x16");                       // materialize the uninitialized-property marker
             emitter.instruction("cmp x15, x16");                                // is this property still uninitialized?
             emitter.instruction("b.eq __rt_obj_prop_name_none");                // PHP omits it from var_export output
@@ -174,7 +175,9 @@ pub fn emit_obj_prop_name(emitter: &mut Emitter) {
             emitter.instruction("add rax, 8");                                  // skip the leading row-count word
             emitter.instruction("mov r10, QWORD PTR [rax + 16]");               // load the property's byte offset within the object
             emitter.instruction("add r10, rdi");                                // resolve the absolute property slot address
-            emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                // load the slot's high word (the init marker)
+            emitter.instruction("mov r9, QWORD PTR [rax + 24]");                // read the logical tag and native storage flags
+            crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r9", "r11", "__rt_obj_prop_name_slot");
+            emitter.instruction("mov r10, r11");                                // omit uninitialized reference payloads just like inline slots
             emitter.instruction("movabs r8, 0x7ffffffffffffffd");               // materialize the uninitialized-property marker
             emitter.instruction("cmp r10, r8");                                 // is this property still uninitialized?
             emitter.instruction("je __rt_obj_prop_name_none_x86");              // PHP omits it from var_export output
@@ -252,12 +255,13 @@ pub fn emit_obj_prop_value(emitter: &mut Emitter) {
     emitter.instruction("add x13, x13, #8");                                    // skip the leading row-count word
     emitter.instruction("ldr x14, [x13, #16]");                                 // load the property's byte offset within the object
     emitter.instruction("add x14, x0, x14");                                    // resolve the absolute property slot address
-    emitter.instruction("ldr x2, [x14, #8]");                                   // load the slot high word (payload high / init marker)
+    emitter.instruction("ldr x0, [x13, #24]");                                  // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x14", "x0", "x2", "__rt_obj_prop_value_slot");
     emit_uninit_sentinel_aarch64(emitter, "x16");                               // materialize the uninitialized-property marker
     emitter.instruction("cmp x2, x16");                                         // is this property still uninitialized?
     emitter.instruction("b.eq __rt_obj_prop_value_null");                       // PHP omits it, so report PHP null
     emitter.instruction("ldr x1, [x14]");                                       // load the slot low word (the payload)
-    emitter.instruction("ldr x0, [x13, #24]");                                  // load the property's runtime value tag
+    emitter.instruction("ldr x2, [x14, #8]");                                   // read the initialized payload's high word
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
 
     emitter.label("__rt_obj_prop_value_tagged");
@@ -324,12 +328,14 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rax, 8");                                          // skip the leading row-count word
     emitter.instruction("mov r10, QWORD PTR [rax + 16]");                       // load the property's byte offset within the object
     emitter.instruction("add r10, rdi");                                        // resolve the absolute property slot address
-    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // load the slot high word (payload high / init marker)
+    emitter.instruction("mov r9, QWORD PTR [rax + 24]");                        // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r9", "rsi", "__rt_obj_prop_value_slot");
     emitter.instruction("movabs r8, 0x7ffffffffffffffd");                       // materialize the uninitialized-property marker
     emitter.instruction("cmp rsi, r8");                                         // is this property still uninitialized?
     emitter.instruction("je __rt_obj_prop_value_null_x86");                     // PHP omits it, so report PHP null
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // load the slot low word (the payload)
-    emitter.instruction("mov rax, QWORD PTR [rax + 24]");                       // load the property's runtime value tag
+    emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");                        // read the initialized payload's high word
+    emitter.instruction("mov rax, r9");                                         // pass the logical tag after removing storage flags
     emit_resolve_tagged_scalar_property_tag(emitter, "rax", "rsi");
 
     emitter.label("__rt_obj_prop_value_tagged_x86");

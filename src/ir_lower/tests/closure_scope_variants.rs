@@ -63,6 +63,12 @@ echo $one(), $two(), $global(), $object(), $boxed(), $null_scope();
         assert!(module.functions.iter().flat_map(|function| &function.instructions)
             .any(|instruction| instruction.op == Op::ClosureBind && instruction.operands.len() == 3
                 && matches!(instruction.immediate, Some(Immediate::ClosureBindObjectScope(_)))), "{name}");
+        let main = module.functions.iter().find(|function| function.flags.is_main).unwrap();
+        assert!(main.instructions.iter().any(|instruction| {
+            instruction.op == Op::ReleaseUnlessAliases
+                && instruction.operands.iter().all(|value|
+                    main.value(*value).unwrap().php_type == crate::types::PhpType::Callable)
+        }), "{name}: rebinding must retire an argument descriptor when the result is independent");
         crate::codegen::generate_user_asm_from_ir(&module, false, false)
             .unwrap_or_else(|error| panic!("{name}: {error:?}"));
         crate::ir_passes::optimize_module(&mut module);

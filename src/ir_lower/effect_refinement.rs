@@ -18,6 +18,7 @@ use crate::ir::{
 use crate::names::php_symbol_key;
 use crate::types::{ClassInfo, PhpType};
 
+mod container_stores;
 mod static_calls;
 
 use static_calls::static_call_effects;
@@ -137,6 +138,13 @@ fn all_functions(module: &Module) -> impl Iterator<Item = &Function> {
 /// Computes the caller-visible union of instruction and terminator effects for one body.
 fn summarize_function(function: &Function, context: &RefinementContext<'_>) -> Effects {
     let mut effects = Effects::PURE;
+    // A generator constructor runs its EIR validator eagerly before the lazy body starts.
+    if function.flags.is_generator {
+        let validator = crate::names::generator_parameter_guard_name(&function.name);
+        if let Some(summary) = context.summaries.get(&callable_key(&validator)) {
+            effects |= *summary;
+        }
+    }
     let borrowed_roots = if context.has_dynamic_class_barrier {
         // Dynamic scope operations may write a parameter by name instead of a visible slot op.
         std::collections::HashSet::new()
@@ -204,6 +212,9 @@ fn refined_instruction_effects(
     context: &RefinementContext<'_>,
 ) -> Effects {
     match instruction.op {
+        Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey => {
+            container_stores::effects(function, instruction).unwrap_or(instruction.effects)
+        }
         // Float and boxed truthiness may dispatch a PHP 8.5 NaN warning handler.
         Op::IsTruthy if instruction.operands.first().and_then(|&value| function.value(value))
             .is_none_or(|value| matches!(value.php_type, PhpType::Float | PhpType::Mixed | PhpType::Union(_))) => {
@@ -234,7 +245,12 @@ fn refined_instruction_effects(
             named_property_effects(function, instruction, context).unwrap_or(instruction.effects)
         }
         Op::DynamicPropGet => {
-            dynamic_property_effects(function, instruction, context).unwrap_or(instruction.effects)
+            let effects = dynamic_property_effects(function, instruction, context).unwrap_or(instruction.effects);
+            if instruction.immediate == Some(Immediate::PropertyFetchMode(crate::ir::PropertyFetchMode::QuietRead)) {
+                // Quiet traversal can materialize a missing XML child even when the
+                // ordinary property metadata only describes a read.
+                effects | Effects::WRITES_HEAP | Effects::ALLOC_HEAP | Effects::REFCOUNT_OP
+            } else { effects }
         }
         _ => instruction.effects,
     }

@@ -30,8 +30,7 @@ pub struct EvalClassMethod {
     parameter_is_by_ref: Vec<bool>,
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
-    /// Whether the declaration returns by reference. Eval's grammar has no `function &m()`,
-    /// so only an `&get` property hook sets it.
+    /// Whether a method declaration or an `&get` property hook returns by reference.
     returns_by_ref: bool,
     body: Vec<EvalStmt>,
 }

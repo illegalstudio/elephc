@@ -764,7 +764,9 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x14, x14, x4, lsl #5");                            // row = rows + cursor*32
     emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
     emitter.instruction("add x9, x7, x9");                                      // address of the property slot
-    emitter.instruction("ldr x9, [x9, #8]");                                    // the slot's high word carries the init marker
+    emitter.instruction("ldr x10, [x14, #24]");                                 // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x9", "x10", "x15", "__rt_serialize_count_slot");
+    emitter.instruction("mov x9, x15");                                         // compare the marker selected for the physical storage
     emitter.instruction("cmp x9, x16");                                         // is this property still uninitialized?
     emitter.instruction("cinc x0, x0, ne");                                     // count it only when it holds a value
     emitter.instruction("add x4, x4, #1");                                      // advance to the next row
@@ -784,7 +786,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
-    emitter.instruction("ldr x9, [x7, #8]");                                    // the slot's high word carries the init marker
+    emitter.instruction("ldr x10, [x14, #24]");                                 // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x7", "x10", "x9", "__rt_serialize_object_slot");
     abi::emit_load_int_immediate(emitter, "x16", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x9, x16");                                         // is this property still uninitialized?
     emitter.instruction("b.eq __rt_serialize_object_next");                     // PHP leaves it out of the payload
@@ -799,6 +802,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x14, #24]");                                 // property value tag
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x7", "x10", "x9", "__rt_serialize_object_value_slot");
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
     emitter.instruction("mov x0, x10");                                         // value tag
@@ -885,7 +889,8 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x9, [x14, #16]");                                  // property byte offset
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
-    emitter.instruction("ldr x9, [x7, #8]");                                    // the slot's high word carries the init marker
+    emitter.instruction("ldr x10, [x14, #24]");                                 // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x7", "x10", "x9", "__rt_serialize_named_slot");
     abi::emit_load_int_immediate(emitter, "x16", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
     emitter.instruction("cmp x9, x16");                                         // is the named property still uninitialized?
     emitter.instruction("b.eq __rt_serialize_named_prop_none");                 // PHP leaves it out of the payload
@@ -900,6 +905,7 @@ fn emit_serialize_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x14, #24]");                                 // property value tag
     emitter.instruction("ldr x7, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("add x7, x7, x9");                                      // address of the property slot
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x7", "x10", "x9", "__rt_serialize_named_value_slot");
     emitter.instruction("ldr x1, [x7]");                                        // value low payload word
     emitter.instruction("ldr x2, [x7, #8]");                                    // value high payload word
     emitter.instruction("mov x0, x10");                                         // value tag
@@ -1739,7 +1745,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl rdx, 5");                                          // cursor * 32 (row stride)
     emitter.instruction("mov r8, QWORD PTR [r11 + rdx + 24]");                  // property byte offset (after the count word)
     emitter.instruction("add r8, rdi");                                         // address of the property slot
-    emitter.instruction("cmp QWORD PTR [r8 + 8], r9");                          // does the slot's high word carry the init marker?
+    emitter.instruction("mov r10, QWORD PTR [r11 + rdx + 32]");                 // load this row's logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r8", "r10", "rdx", "__rt_serialize_count_slot");
+    emitter.instruction("cmp rdx, r9");                                         // compare the marker selected for the physical storage
     emitter.instruction("je __rt_serialize_object_count_skip");                 // an uninitialized property is not counted
     emitter.instruction("add rax, 1");                                          // count a property that holds a value
     emitter.label("__rt_serialize_object_count_skip");
@@ -1761,7 +1769,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [r11 + 16]");                        // property byte offset
     emitter.instruction("add r8, QWORD PTR [rbp - 8]");                         // address of the property slot
     abi::emit_load_int_immediate(emitter, "r9", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    emitter.instruction("cmp QWORD PTR [r8 + 8], r9");                          // does the slot's high word carry the init marker?
+    emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");                       // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r8", "rcx", "rdx", "__rt_serialize_object_slot");
+    emitter.instruction("cmp rdx, r9");                                         // compare the marker selected for the physical storage
     emitter.instruction("je __rt_serialize_object_next");                       // PHP leaves an uninitialized property out
     emitter.instruction("mov rdi, QWORD PTR [r11]");                            // mangled key pointer
     emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");                        // mangled key length
@@ -1775,6 +1785,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r11 + 24]");                        // property value tag
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("add rcx, r8");                                         // address of the property slot
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "rcx", "r9", "rax", "__rt_serialize_object_value_slot");
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
     emitter.instruction("mov rdi, r9");                                         // value tag
@@ -1862,7 +1873,9 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, QWORD PTR [r10 + rax + 24]");                 // property byte offset (after the count word)
     emitter.instruction("add rcx, QWORD PTR [rbp - 8]");                        // address of the property slot
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
-    emitter.instruction("cmp QWORD PTR [rcx + 8], r11");                        // does the slot's high word carry the init marker?
+    emitter.instruction("mov rsi, QWORD PTR [r10 + rax + 32]");                 // load this row's logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "rcx", "rsi", "rdx", "__rt_serialize_named_slot");
+    emitter.instruction("cmp rdx, r11");                                        // compare the marker selected for the physical storage
     emitter.instruction("je __rt_serialize_named_prop_none");                   // PHP leaves an uninitialized property out
     emitter.instruction("mov rdi, r8");                                         // mangled key pointer
     emitter.instruction("mov rsi, r9");                                         // mangled key length
@@ -1876,6 +1889,7 @@ fn emit_serialize_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r10 + 24]");                        // property value tag
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("add rcx, r8");                                         // address of the property slot
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "rcx", "r9", "rax", "__rt_serialize_named_value_slot");
     emitter.instruction("mov rsi, QWORD PTR [rcx]");                            // value low payload word
     emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                        // value high payload word
     emitter.instruction("mov rdi, r9");                                         // value tag

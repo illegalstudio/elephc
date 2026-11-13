@@ -102,8 +102,11 @@ fn compile_lfc_eval_project_and_run(
     };
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);
-    // Opaque eval retains the timezone and tokenizer preludes in the CLI assembly.
-    let mut checker_libraries = vec!["elephc_tz".to_string(), "elephc_tokenizer".to_string()];
+    // Opaque eval retains timezone, tokenizer and compression-backed Phar methods.
+    let mut checker_libraries = vec![
+        "elephc_tz".to_string(), "elephc_tokenizer".to_string(),
+        "z".to_string(), "bz2".to_string(),
+    ];
     if target().platform == Platform::MacOS {
         checker_libraries.push("iconv".to_string());
     }

@@ -15,10 +15,11 @@
 //!   hoisted declarations) — but the BUILT aggregator follows the same order so
 //!   the oracle can zip the two programs.
 //! - Version gates are source rewrites at assembly time, mirroring
-//!   `pdo_prelude::prelude_source_for_version`: PHP 8.0 flips the baked
-//!   `mysqli_report` default from `ERROR|STRICT` (3) to `OFF` (0). Each gate has
-//!   a conditional twin in `build/`; the tests below assert the gates on the
-//!   built AST, and the oracle proves the text agrees.
+//!   `pdo_prelude::prelude_source_for_version`: marker-delimited block removals
+//!   plus two literal rewrites (the 8.0 `mysqli_report` default and the < 8.4
+//!   statement-attribute flag). Each gate has a conditional twin in `build/`; the
+//!   tests below assert the gates on the built AST, and the oracle proves the
+//!   text agrees.
 
 use crate::php_version::PhpVersion;
 
@@ -30,19 +31,36 @@ pub(super) fn source_for_version(php_version: PhpVersion) -> String {
     source.push_str(super::connection::SRC);
     source.push_str(super::result::SRC);
     source.push_str(super::statement::SRC);
+    source.push_str(super::driver::SRC);
     source.push_str(super::procedural::SRC);
+    if php_version < PhpVersion::Php86 {
+        // MYSQLI_OPT_COMPRESS and mysqli::quote_string / mysqli_quote_string are PHP 8.6+.
+        remove_version_blocks(&mut source, "PHP >= 8.6 mysqli constants");
+        remove_version_blocks(&mut source, "PHP >= 8.6 mysqli quote_string");
+    }
+    if php_version < PhpVersion::Php84 {
+        // MYSQLI_TYPE_VECTOR arrived in PHP 8.4, which also removed the
+        // prefetch/cursor/charset-dir/interval constants and the matching
+        // statement attributes.
+        remove_version_blocks(&mut source, "PHP >= 8.4 mysqli constants");
+        source = source.replace(
+            "private static bool $legacyAttributes = false;",
+            "private static bool $legacyAttributes = true;",
+        );
+    } else {
+        remove_version_blocks(&mut source, "PHP < 8.4 mysqli constants");
+    }
+    if php_version < PhpVersion::Php83 {
+        // Before PHP 8.3, constructor arguments for a class without a constructor
+        // raised an Exception instead of a ValueError.
+        source = source.replace(
+            "throw new ValueError(\"mysqli_result::fetch_object(): Argument #2",
+            "throw new Exception(\"mysqli_result::fetch_object(): Argument #2",
+        );
+    }
     if php_version < PhpVersion::Php82 {
         // mysqli::execute_query / mysqli_execute_query are PHP 8.2+.
-        remove_version_block(
-            &mut source,
-            "    // -- elephc PHP >= 8.2 mysqli execute_query begin --",
-            "    // -- elephc PHP >= 8.2 mysqli execute_query end --",
-        );
-        remove_version_block(
-            &mut source,
-            "// -- elephc PHP >= 8.2 mysqli execute_query begin --",
-            "// -- elephc PHP >= 8.2 mysqli execute_query end --",
-        );
+        remove_version_blocks(&mut source, "PHP >= 8.2 mysqli execute_query");
     }
     if php_version < PhpVersion::Php81 {
         // PHP 8.0's default mysqli_report mode is MYSQLI_REPORT_OFF; 8.1+
@@ -51,37 +69,36 @@ pub(super) fn source_for_version(php_version: PhpVersion) -> String {
             "public static int $reportMode = 3;",
             "public static int $reportMode = 0;",
         );
-        // mysqli_result::fetch_column and its procedural alias are PHP 8.1+.
-        remove_version_block(
-            &mut source,
-            "    // -- elephc PHP >= 8.1 mysqli fetch_column begin --",
-            "    // -- elephc PHP >= 8.1 mysqli fetch_column end --",
-        );
-        remove_version_block(
-            &mut source,
-            "// -- elephc PHP >= 8.1 mysqli fetch_column begin --",
-            "// -- elephc PHP >= 8.1 mysqli fetch_column end --",
-        );
+        // mysqli_result::fetch_column and its procedural alias, and the
+        // MYSQLI_IS_MARIADB / OPT_LOAD_DATA_LOCAL_DIR / REFRESH_REPLICA
+        // constants, are PHP 8.1+.
+        remove_version_blocks(&mut source, "PHP >= 8.1 mysqli fetch_column");
+        remove_version_blocks(&mut source, "PHP >= 8.1 mysqli constants");
     }
     source
 }
 
-/// Removes one inclusive source fragment delimited by stable version-gate
-/// comments. Panics when either marker is missing because a renamed prelude
-/// marker must fail compiler tests loudly instead of silently exposing a
-/// method in the wrong PHP version (same contract as the PDO prelude's helper).
-fn remove_version_block(source: &mut String, begin: &str, end: &str) {
-    let start = source
-        .find(begin)
-        .unwrap_or_else(|| panic!("missing mysqli prelude version-gate marker: {begin}"));
-    let relative_end = source[start..]
-        .find(end)
-        .unwrap_or_else(|| panic!("missing mysqli prelude version-gate marker: {end}"));
-    let mut finish = start + relative_end + end.len();
-    if source.as_bytes().get(finish) == Some(&b'\n') {
-        finish += 1;
+/// Removes EVERY inclusive source fragment delimited by the stable version-gate
+/// comments `// -- elephc <label> begin --` / `// -- elephc <label> end --`
+/// (a gate can wrap a method and its procedural alias). Panics when the label
+/// has no block at all, because a renamed prelude marker must fail compiler
+/// tests loudly instead of silently exposing a symbol in the wrong PHP version.
+fn remove_version_blocks(source: &mut String, label: &str) {
+    let begin = format!("// -- elephc {label} begin --");
+    let end = format!("// -- elephc {label} end --");
+    let mut removed = 0;
+    while let Some(start) = source.find(&begin) {
+        let relative_end = source[start..]
+            .find(&end)
+            .unwrap_or_else(|| panic!("missing mysqli prelude version-gate marker: {end}"));
+        let mut finish = start + relative_end + end.len();
+        if source.as_bytes().get(finish) == Some(&b'\n') {
+            finish += 1;
+        }
+        source.replace_range(start..finish, "");
+        removed += 1;
     }
-    source.replace_range(start..finish, "");
+    assert!(removed > 0, "missing mysqli prelude version-gate marker: {begin}");
 }
 
 #[cfg(test)]

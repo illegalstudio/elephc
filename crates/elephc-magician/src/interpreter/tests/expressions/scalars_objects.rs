@@ -93,6 +93,30 @@ fn execute_program_evaluates_inc_dec_statements() {
     assert_eq!(values.output, "1");
     assert_eq!(values.get(i), FakeValue::Int(1));
 }
+/// Verifies a null decrement keeps the scope value null and records PHP's warning.
+#[test]
+fn execute_program_preserves_null_decrement() {
+    let program = parse_fragment(
+        br#"$n = null; $n--; --$n; echo ($n === null ? "n" : "x");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let _ = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+    let n = scope.visible_cell("n").expect("scope should contain n");
+
+    assert_eq!(values.output, "n");
+    assert_eq!(values.get(n), FakeValue::Null);
+    assert_eq!(
+        values
+            .warnings
+            .iter()
+            .filter(|warning| warning.contains("Decrement on type null has no effect"))
+            .count(),
+        2
+    );
+}
 /// Verifies echo and unset operate through runtime hooks and scope metadata.
 #[test]
 fn execute_program_echoes_and_unsets_scope_value() {

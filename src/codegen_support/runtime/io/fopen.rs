@@ -231,6 +231,12 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // unknown class → silent fail with -1
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper object pointer for later
 
+    // -- php-src assigns the stream context RESOURCE before stream_open; SimpleXML refuses it --
+    emitter.instruction("ldr x9, [x0]");                                        // class id stored at the wrapper object head
+    abi::emit_symbol_address(emitter, "x10", "_class_native_xml");             // per-class native SimpleXML flag table
+    emitter.instruction("ldrb w10, [x10, x9]");                                 // load this class's native-view flag
+    emitter.instruction("cbnz w10, __rt_fopen_uw_xml_fail");                    // XML classes raise the chained context TypeError
+
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
@@ -287,6 +293,13 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("orr x0, x0, x12");                                     // synthetic fd = USER_WRAPPER_FD_BASE | slot index
     emitter.instruction("add sp, sp, #64");                                     // release the wrapper-dispatch scratch
     emitter.instruction("b __rt_fopen_return");                                 // share the common return path
+
+    emitter.label("__rt_fopen_uw_xml_fail");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the allocated wrapper object
+    emitter.instruction("str xzr, [sp, #32]");                                  // clear the slot so the shared fail path cannot release it twice
+    emitter.instruction("bl __rt_decref_object");                               // release the uninitialized wrapper object
+    emitter.instruction("bl __rt_simplexml_wrapper_failure");                   // raise TypeError(context resource) with the init Error as previous
+    emitter.instruction("b __rt_fopen_uw_fail_release");                        // unreachable when the helper throws; keep a safe fallback
 
     emitter.label("__rt_fopen_uw_fail");
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the wrapper object pointer (or 0 if instantiation never happened)
@@ -525,6 +538,13 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // unknown class → silent fail with -1
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // save the wrapper object pointer for later
 
+    // -- php-src assigns the stream context RESOURCE before stream_open; SimpleXML refuses it --
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // class id stored at the wrapper object head
+    abi::emit_symbol_address(emitter, "r11", "_class_native_xml");             // per-class native SimpleXML flag table
+    emitter.instruction("movzx r10d, BYTE PTR [r11 + r10]");                    // load this class's native-view flag
+    emitter.instruction("test r10d, r10d");                                     // is this a SimpleXMLElement subclass?
+    emitter.instruction("jnz __rt_fopen_uw_xml_fail_x86");                      // XML classes raise the chained context TypeError
+
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
@@ -589,6 +609,13 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index
     emitter.instruction("add rsp, 64");                                         // release the wrapper-dispatch scratch
     emitter.instruction("jmp __rt_fopen_return_x86");                           // share the common return path
+
+    emitter.label("__rt_fopen_uw_xml_fail_x86");
+    emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                       // reload the allocated wrapper object
+    emitter.instruction("mov QWORD PTR [rsp + 32], 0");                         // clear the slot so the shared fail path cannot release it twice
+    emitter.instruction("call __rt_decref_object");                             // release the uninitialized wrapper object
+    emitter.instruction("call __rt_simplexml_wrapper_failure");                 // raise TypeError(context resource) with the init Error as previous
+    emitter.instruction("jmp __rt_fopen_uw_fail_release_x86");                  // unreachable when the helper throws; keep a safe fallback
 
     emitter.label("__rt_fopen_uw_fail_x86");
     emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                       // pass the owned wrapper through the private object-release convention

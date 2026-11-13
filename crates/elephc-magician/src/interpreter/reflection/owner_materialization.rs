@@ -6,11 +6,15 @@
 //!
 //! Key details:
 //! - Temporary arrays and object handles are transferred through runtime ownership APIs.
-//! - Full and shallow class owners avoid recursive metadata expansion.
+//! - Member and parameter owners store their declaring class's NAME, never a reflector: the
+//!   compiled getters build a fresh, complete `ReflectionClass` from it on every call.
 
 use super::*;
 
-/// Materializes one Reflection owner object and transfers the temporary attribute array.
+/// Materializes one Reflection owner object and transfers its temporary metadata cells.
+///
+/// Class owners carry their member reflectors; member and parameter owners carry only their
+/// declaring class's name (see `eval_reflection_lazy_class_name_result`).
 pub(super) fn eval_reflection_owner_object(
     owner_kind: u64,
     reflected_name: &str,
@@ -33,55 +37,6 @@ pub(super) fn eval_reflection_owner_object(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    eval_reflection_owner_object_with_members(
-        owner_kind,
-        reflected_name,
-        attributes,
-        interface_names,
-        trait_names,
-        method_names,
-        property_names,
-        parent_class_name,
-        parameter_metadata,
-        type_metadata,
-        settable_type_metadata,
-        default_value,
-        default_value_trait_origin,
-        flags,
-        modifiers,
-        method_modifiers,
-        constant_value,
-        backing_value,
-        true,
-        context,
-        values,
-    )
-}
-
-/// Materializes one Reflection owner object with optional nested class member objects.
-pub(super) fn eval_reflection_owner_object_with_members(
-    owner_kind: u64,
-    reflected_name: &str,
-    attributes: &[EvalAttribute],
-    interface_names: &[String],
-    trait_names: &[String],
-    method_names: &[String],
-    property_names: &[String],
-    parent_class_name: Option<&str>,
-    parameter_metadata: &[EvalReflectionParameterMetadata],
-    type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
-    settable_type_metadata: Option<&EvalReflectionParameterTypeMetadata>,
-    default_value: Option<&EvalExpr>,
-    default_value_trait_origin: Option<&str>,
-    flags: u64,
-    modifiers: u64,
-    method_modifiers: u64,
-    constant_value: Option<RuntimeCellHandle>,
-    backing_value: Option<RuntimeCellHandle>,
-    include_class_members: bool,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
     let attrs = eval_reflection_attribute_array_result(
         attributes,
         eval_reflection_attribute_target(owner_kind),
@@ -95,7 +50,7 @@ pub(super) fn eval_reflection_owner_object_with_members(
     let class_metadata_owner = eval_reflection_owner_uses_class_metadata(owner_kind);
     let is_eval_class = class_metadata_owner
         && eval_reflection_class_like_exists(reflected_name, context);
-    let method_objects = if class_metadata_owner && include_class_members {
+    let method_objects = if class_metadata_owner {
         if is_eval_class {
             eval_reflection_member_object_array_result(
                 EVAL_REFLECTION_OWNER_METHOD,
@@ -128,7 +83,7 @@ pub(super) fn eval_reflection_owner_object_with_members(
     } else {
         values.array_new(0)?
     };
-    let property_objects = if class_metadata_owner && include_class_members {
+    let property_objects = if class_metadata_owner {
         if is_eval_class {
             eval_reflection_member_object_array_result(
                 EVAL_REFLECTION_OWNER_PROPERTY,
@@ -162,20 +117,10 @@ pub(super) fn eval_reflection_owner_object_with_members(
     } else {
         values.array_new(0)?
     };
-    let parent_class = eval_reflection_related_class_result(
-        owner_kind,
-        parent_class_name,
-        include_class_members,
-        context,
-        values,
-    )?;
-    let constructor = eval_reflection_constructor_object_result(
-        owner_kind,
-        reflected_name,
-        include_class_members,
-        context,
-        values,
-    )?;
+    let parent_class =
+        eval_reflection_related_class_result(owner_kind, parent_class_name, context, values)?;
+    let constructor =
+        eval_reflection_constructor_object_result(owner_kind, reflected_name, context, values)?;
     let (constant_value_cell, release_constant_value) = if owner_kind
         == EVAL_REFLECTION_OWNER_PROPERTY
     {
@@ -220,14 +165,20 @@ pub(super) fn eval_reflection_owner_object_with_members(
             Some(type_metadata) => eval_reflection_type_object_result(type_metadata, values)?,
             None => values.null()?,
         };
-        eval_reflection_with_declaring_class_scope(
+        let stored = eval_reflection_with_declaring_class_scope(
             "ReflectionClassConstant",
             context,
             |_| -> Result<(), EvalStatus> {
                 values.property_set(object, "__has_type", has_type)?;
                 values.property_set(object, "__type", type_value)
             },
-        )?;
+        );
+        let has_type_released = values.release(has_type);
+        let type_value_released = values.release(type_value);
+        if let Err(status) = stored.and(has_type_released).and(type_value_released) {
+            let _ = eval_release_value(context, values, object);
+            return Err(status);
+        }
     }
     if matches!(
         owner_kind,
@@ -321,18 +272,20 @@ fn eval_reflection_store_dump(
     result.and(released)
 }
 
-/// Builds the `ReflectionClass|false` value stored in parent or declaring-class slots.
+/// Builds the value stored in a class's parent slot or a member's declaring-class slot.
+///
+/// A class owner stores its parent's complete `ReflectionClass` (or `false`); a member owner
+/// stores its declaring class's name (see `eval_reflection_lazy_class_name_result`).
 pub(super) fn eval_reflection_related_class_result(
     owner_kind: u64,
     related_class_name: Option<&str>,
-    include_class_members: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let Some(related_class_name) = related_class_name else {
         return values.bool_value(false);
     };
-    if eval_reflection_owner_uses_class_metadata(owner_kind) && include_class_members {
+    if eval_reflection_owner_uses_class_metadata(owner_kind) {
         return eval_reflection_full_class_object_result(related_class_name, context, values);
     }
     if matches!(
@@ -343,13 +296,36 @@ pub(super) fn eval_reflection_related_class_result(
             | EVAL_REFLECTION_OWNER_ENUM_UNIT_CASE
             | EVAL_REFLECTION_OWNER_ENUM_BACKED_CASE
     ) {
-        return eval_reflection_shallow_class_object_result(related_class_name, context, values);
+        return eval_reflection_lazy_class_name_result(related_class_name, context, values);
     }
     values.bool_value(false)
 }
 
-/// Builds a full `ReflectionClass` object for parent-class metadata.
-pub(super) fn eval_reflection_full_class_object_result(
+/// Builds the lazy class value a member or parameter reflector stores in its declaring-class
+/// (or `ReflectionParameter::getClass()`) slot: the class's declared name, or `false` when no
+/// eval or compiled class has that name.
+///
+/// The compiled getters turn the name into a fresh, complete `ReflectionClass` on every call
+/// through `__elephc_eval_reflection_class_build()` (see
+/// `crate::interpreter::execute_context_reflection_class_outcome`), as php builds a new
+/// reflector per call. Storing one reflector instead would hand the same object out on every
+/// call and keep it alive for as long as the member.
+pub(super) fn eval_reflection_lazy_class_name_result(
+    class_name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) {
+        return values.string(&metadata.resolved_name);
+    }
+    if eval_reflection_aot_class_flags(class_name, values)?.is_some() {
+        return values.string(class_name.trim_start_matches('\\'));
+    }
+    values.bool_value(false)
+}
+
+/// Builds a complete `ReflectionClass` object, member reflectors included, for one class.
+pub(in crate::interpreter) fn eval_reflection_full_class_object_result(
     class_name: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
@@ -434,71 +410,6 @@ pub(super) fn eval_reflection_full_class_object_result(
     )
 }
 
-/// Builds a shallow `ReflectionClass` object for member declaring-class metadata.
-pub(super) fn eval_reflection_shallow_class_object_result(
-    class_name: &str,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let Some(metadata) = eval_reflection_class_like_attributes(class_name, context) else {
-        let Some((flags, modifiers)) = eval_reflection_aot_class_flags(class_name, values)? else {
-            return values.bool_value(false);
-        };
-        let interface_names = eval_reflection_aot_class_interface_names(class_name, values)?;
-        let trait_names = eval_reflection_aot_class_trait_names(class_name, values)?;
-        let attributes = context.native_class_attributes(class_name);
-        return eval_reflection_owner_object_with_members(
-            EVAL_REFLECTION_OWNER_CLASS,
-            class_name.trim_start_matches('\\'),
-            &attributes,
-            &interface_names,
-            &trait_names,
-            &[],
-            &[],
-            None,
-            &[],
-            None,
-            None,
-            None,
-            None,
-            flags,
-            modifiers,
-            0,
-            None,
-            None,
-            false,
-            context,
-            values,
-        );
-    };
-    let interface_names =
-        eval_reflection_eval_metadata_interface_names(&metadata, context, values)?;
-    let flags = eval_reflection_eval_metadata_flags(&metadata, context, values)?;
-    eval_reflection_owner_object_with_members(
-        EVAL_REFLECTION_OWNER_CLASS,
-        &metadata.resolved_name,
-        &metadata.attributes,
-        &interface_names,
-        &metadata.trait_names,
-        &[],
-        &[],
-        None,
-        &[],
-        None,
-        None,
-        None,
-        None,
-        flags,
-        metadata.modifiers,
-        0,
-        None,
-        None,
-        false,
-        context,
-        values,
-    )
-}
-
 /// Returns the generated/AOT parent class name for a reflected class, if any.
 pub(super) fn eval_reflection_aot_parent_class_name(
     class_name: &str,
@@ -551,7 +462,7 @@ pub(super) fn eval_reflection_string_assoc_result(
     for (key, value) in pairs {
         let key = values.string(&key)?;
         let value = values.string(&value)?;
-        result = values.array_set(result, key, value)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, value)?;
     }
     Ok(result)
 }
@@ -566,7 +477,7 @@ pub(super) fn eval_reflection_class_object_map_result(
     for name in names {
         let key = values.string(name)?;
         let object = eval_reflection_full_class_object_result(name, context, values)?;
-        result = values.array_set(result, key, object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, object)?;
     }
     Ok(result)
 }
@@ -591,7 +502,7 @@ pub(super) fn eval_reflection_attribute_target(owner_kind: u64) -> u64 {
 pub(super) fn eval_reflection_owner_uses_class_metadata(owner_kind: u64) -> bool {
     matches!(
         owner_kind,
-        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT
+        EVAL_REFLECTION_OWNER_CLASS | EVAL_REFLECTION_OWNER_OBJECT | EVAL_REFLECTION_OWNER_ENUM
     )
 }
 
@@ -605,7 +516,7 @@ pub(super) fn eval_reflection_parameter_object_array_result(
     for parameter in parameters {
         let parameter_object = eval_reflection_parameter_object_result(parameter, context, values)?;
         let key = values.int(parameter.position as i64)?;
-        result = values.array_set(result, key, parameter_object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, parameter_object)?;
     }
     Ok(result)
 }
@@ -634,7 +545,7 @@ pub(super) fn eval_reflection_parameter_object_result(
     let method_objects = values.array_new(0)?;
     let parent_class = match parameter.declaring_class_name.as_deref() {
         Some(declaring_class_name) => {
-            eval_reflection_shallow_class_object_result(declaring_class_name, context, values)?
+            eval_reflection_lazy_class_name_result(declaring_class_name, context, values)?
         }
         None => values.null()?,
     };
@@ -694,14 +605,14 @@ pub(super) fn eval_reflection_parameter_object_result(
     Ok(object)
 }
 
-/// Materializes the legacy ReflectionParameter::getClass() value for known named object types.
+/// Builds the lazy legacy `ReflectionParameter::getClass()` value for known named object types.
 pub(super) fn eval_reflection_parameter_class_value(
     parameter: &EvalReflectionParameterMetadata,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match eval_reflection_parameter_class_name(parameter) {
-        Some(class_name) => eval_reflection_shallow_class_object_result(class_name, context, values),
+        Some(class_name) => eval_reflection_lazy_class_name_result(class_name, context, values),
         None => values.null(),
     }
 }
@@ -1000,7 +911,7 @@ pub(super) fn eval_reflection_named_type_object_array_result(
     for (position, type_metadata) in types.iter().enumerate() {
         let type_object = eval_reflection_named_type_object_result(type_metadata, values)?;
         let key = values.int(position as i64)?;
-        result = values.array_set(result, key, type_object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, type_object)?;
     }
     Ok(result)
 }
@@ -1009,11 +920,10 @@ pub(super) fn eval_reflection_named_type_object_array_result(
 pub(super) fn eval_reflection_constructor_object_result(
     owner_kind: u64,
     class_name: &str,
-    include_class_members: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if !eval_reflection_owner_uses_class_metadata(owner_kind) || !include_class_members {
+    if !eval_reflection_owner_uses_class_metadata(owner_kind) {
         return values.null();
     }
     let Some(member) = eval_reflection_method_metadata(class_name, "__construct", context) else {
@@ -1142,7 +1052,7 @@ pub(super) fn eval_reflection_member_object_array_result(
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, member_object)?;
         index += 1;
     }
     Ok(result)
@@ -1187,7 +1097,7 @@ pub(super) fn eval_reflection_aot_member_object_array_result(
         let member_object =
             eval_reflection_member_object_result(owner_kind, name, &member, context, values)?;
         let key = values.int(index)?;
-        result = values.array_set(result, key, member_object)?;
+        result = crate::interpreter::reflection::owned_collections::insert_owned_element(values, result, key, member_object)?;
         index += 1;
     }
     Ok(result)

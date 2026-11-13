@@ -14,7 +14,7 @@ use crate::codegen_support::platform::Target;
 
 use super::catalog::PackageVersion;
 use super::error::{NativeError, NativeErrorKind};
-use super::recipes::{curl, gmp, libmagic, libssh2, libxml2, nghttp2, oniguruma, openssl, pcre2, zlib};
+use super::recipes::{curl, gmp, libmagic, libssh2, libxml2, nghttp2, oniguruma, openssl, openssl_crypto, pcre2, zlib};
 use super::toolchain::NativeToolchain;
 
 /// Immutable inputs to one trusted package recipe invocation.
@@ -46,6 +46,7 @@ enum BuiltInRecipe {
     Pcre2,
     Zlib,
     Openssl,
+    OpensslCrypto,
     Nghttp2,
     Libssh2,
     Curl,
@@ -61,11 +62,12 @@ fn built_in_recipe(package: &str, revision: u32) -> Option<BuiltInRecipe> {
         ("pcre2", 7) => Some(BuiltInRecipe::Pcre2),
         ("zlib", 1) => Some(BuiltInRecipe::Zlib),
         ("openssl", 1) => Some(BuiltInRecipe::Openssl),
+        ("openssl-crypto", 1) => Some(BuiltInRecipe::OpensslCrypto),
         ("nghttp2", 2) => Some(BuiltInRecipe::Nghttp2),
         ("libssh2", 2) => Some(BuiltInRecipe::Libssh2),
         ("curl", 4) => Some(BuiltInRecipe::Curl),
         ("libmagic", 1) => Some(BuiltInRecipe::Libmagic),
-        ("libxml2", 1) => Some(BuiltInRecipe::Libxml2),
+        ("libxml2", 11) => Some(BuiltInRecipe::Libxml2),
         ("gmp", 2) => Some(BuiltInRecipe::Gmp),
         _ => None,
     }
@@ -79,6 +81,7 @@ impl RecipeRunner for CuratedRecipes {
             Some(BuiltInRecipe::Pcre2) => pcre2::build(request),
             Some(BuiltInRecipe::Zlib) => zlib::build(request),
             Some(BuiltInRecipe::Openssl) => openssl::build(request),
+            Some(BuiltInRecipe::OpensslCrypto) => openssl_crypto::build(request),
             Some(BuiltInRecipe::Nghttp2) => nghttp2::build(request),
             Some(BuiltInRecipe::Libssh2) => libssh2::build(request),
             Some(BuiltInRecipe::Curl) => curl::build(request),
@@ -156,10 +159,19 @@ mod tests {
     #[test]
     fn libxml2_recipe_revision_has_dispatcher() {
         assert!(
-            built_in_recipe("libxml2", 1).is_some(),
-            "missing built-in recipe for libxml2 revision 1"
+            built_in_recipe("libxml2", 11).is_some(),
+            "missing built-in recipe for libxml2 revision 11"
         );
+        assert!(built_in_recipe("libxml2", 1).is_none());
         assert!(built_in_recipe("libxml2", 2).is_none());
+        assert!(built_in_recipe("libxml2", 3).is_none());
+        assert!(built_in_recipe("libxml2", 4).is_none());
+        assert!(built_in_recipe("libxml2", 5).is_none());
+        assert!(built_in_recipe("libxml2", 6).is_none());
+        assert!(built_in_recipe("libxml2", 7).is_none());
+        assert!(built_in_recipe("libxml2", 8).is_none());
+        assert!(built_in_recipe("libxml2", 9).is_none());
+        assert!(built_in_recipe("libxml2", 10).is_none());
     }
 
     /// Verifies the dispatcher recognizes libgmp by its exact catalog recipe revision,

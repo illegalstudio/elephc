@@ -14,6 +14,7 @@ use super::*;
 
 /// Applies one declared function or method return type to a completed control result.
 pub(in crate::interpreter) fn eval_declared_return_control_value(
+    callee: &str,
     return_type: Option<&EvalParameterType>,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
@@ -32,6 +33,7 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
         }
         EvalControl::Return(value) => {
             let result = eval_declared_explicit_return_value(
+                callee,
                 return_type,
                 return_owner,
                 called_class_name,
@@ -128,6 +130,7 @@ fn eval_declared_void_return_value(
 
 /// Validates or coerces an explicit returned value according to a declared return type.
 fn eval_declared_explicit_return_value(
+    callee: &str,
     return_type: Option<&EvalParameterType>,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,
@@ -142,6 +145,11 @@ fn eval_declared_explicit_return_value(
         || eval_declared_return_type_is_never(return_type)
     {
         return Err(EvalStatus::RuntimeFatal);
+    }
+    if eval_nonnull_object_boundary(return_type) && values.type_tag(value)? == EVAL_TAG_NULL {
+        let expected = eval_null_boundary_type_label(return_type, return_owner, called_class_name, context)?;
+        let callee = eval_boundary_callable_label(callee, context);
+        return eval_throw_type_error(&format!("{callee}(): Return value must be of type {expected}, null returned"), context, values);
     }
     eval_declared_return_value(
         return_type,
@@ -253,7 +261,7 @@ fn eval_declared_return_variant_accepts_exact(
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
         EvalParameterTypeVariant::Callable => Ok(matches!(
             tag,
-            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT
+            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE
         )),
         EvalParameterTypeVariant::Class(class_name) => eval_declared_return_class_accepts(
             value,
@@ -293,7 +301,7 @@ fn eval_declared_return_variant_accepts_exact(
         }
         EvalParameterTypeVariant::Mixed => Ok(true),
         EvalParameterTypeVariant::Never | EvalParameterTypeVariant::Void => Ok(false),
-        EvalParameterTypeVariant::Object => Ok(tag == EVAL_TAG_OBJECT),
+        EvalParameterTypeVariant::Object => Ok(matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE)),
         EvalParameterTypeVariant::String => Ok(tag == EVAL_TAG_STRING),
     }
 }
@@ -308,7 +316,7 @@ fn eval_declared_return_class_accepts(
     context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
-    if tag != EVAL_TAG_OBJECT {
+    if !matches!(tag, EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE) {
         return Ok(false);
     }
     let target = eval_declared_return_runtime_class_name(
@@ -317,6 +325,9 @@ fn eval_declared_return_class_accepts(
         called_class_name,
         context,
     )?;
+    if tag == EVAL_TAG_CALLABLE {
+        return Ok(target.eq_ignore_ascii_case("Closure"));
+    }
     let identity = values.object_identity(value)?;
     if let Some(class) = context.dynamic_object_class(identity) {
         return Ok(eval_declared_dynamic_object_is_a(
@@ -350,7 +361,7 @@ fn eval_declared_dynamic_object_is_a(
 }
 
 /// Resolves class keywords and aliases in a declared return type atom.
-fn eval_declared_return_runtime_class_name(
+pub(in crate::interpreter) fn eval_declared_return_runtime_class_name(
     class_name: &str,
     return_owner: Option<&str>,
     called_class_name: Option<&str>,

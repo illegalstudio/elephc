@@ -17,7 +17,11 @@ pub(super) fn lower_null_coalesce(
     expr: &Expr,
 ) -> LoweredValue {
     let value_expr = value;
+    // The left operand of `??` is a PHP null probe: an undeclared root answers the default
+    // without an Undefined variable warning.
+    ctx.begin_quiet_undefined_reads(value_expr);
     let value = lower_null_coalesce_value(ctx, value_expr);
+    ctx.end_quiet_undefined_reads();
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![value.value],
@@ -55,22 +59,26 @@ pub(super) fn lower_null_coalesce(
         else_args: Vec::new(),
     });
 
+    let mut join = crate::ir_lower::stmt::ExprBranchJoin::at_split(ctx);
+
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_arm(ctx);
     store_expr_into_temp(ctx, &temp_name, result_type.clone(), default, expr.span);
     release_discarded_branch_value(ctx, value, expr.span);
     let default_reachable = !ctx.builder.insertion_block_is_terminated();
     let default_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
     ctx.builder.position_at_end(value_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_arm(ctx);
     store_value_into_temp(ctx, &temp_name, result_type, value, expr.span);
     let value_reachable = !ctx.builder.insertion_block_is_terminated();
     let value_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, merge, expr.span);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
         &split_initialized,
         default_initialized,
@@ -167,7 +175,18 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // never created answers it without an `Undefined property` warning. A receiver whose
         // class is only known at run time needs the runtime-name form to carry that mode.
         let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
-        let object = lower_member_receiver(ctx, object, value);
+        let object = match &object.kind {
+            ExprKind::ArrayAccess { array, index } => {
+                let receiver = lower_array_access_with_missing_warning(ctx, array, index, object, false);
+                refine_member_receiver(ctx, receiver, object)
+            }
+            _ => lower_member_receiver(ctx, object, value),
+        };
+        if native_property_method_for_value(ctx, object.value, property,
+            elephc_builtin_contract::ObjectProperty::Probe).is_some()
+        {
+            return lower_property_probe_from_value(ctx, object, property, value);
+        }
         if property_can_be_uninitialized(ctx, object.value, property)
             || union_hook_probe_class(ctx, object.value, property).is_some() {
             return lower_initialized_property_value(ctx, object, property, value);
@@ -264,6 +283,13 @@ pub(super) fn null_coalesce_merge_type(
     // side's slot type win and then reading the stored null back as an object.
     if matches!(value_ty, PhpType::Object(_) | PhpType::Callable) && php_type_allows_null(&default_ty) {
         return nullable_aware_branch_merge_type(&value_ty, &default_ty);
+    }
+    // `$n ?? null` with `?int $n` (or any unboxed scalar): the null arm is the default's, and
+    // the value's own slot type cannot hold it (`scalar_beside_null_merge_type`).
+    if let Some(nullable) =
+        super::merge_temps::scalar_beside_null_merge_type(&value_ty, default, &default_ty)
+    {
+        return nullable;
     }
     materialized_merge_type(&value_ty, &default_ty)
 }
@@ -406,22 +432,26 @@ pub(super) fn lower_short_ternary(
         else_args: Vec::new(),
     });
 
+    let mut join = crate::ir_lower::stmt::ExprBranchJoin::at_split(ctx);
+
     ctx.builder.position_at_end(value_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_arm(ctx);
     store_value_into_temp(ctx, &temp_name, result_type.clone(), value, expr.span);
     let value_reachable = !ctx.builder.insertion_block_is_terminated();
     let value_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
     ctx.builder.position_at_end(default_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    join.enter_arm(ctx);
     store_expr_into_temp(ctx, &temp_name, result_type, default, expr.span);
     release_discarded_branch_value(ctx, value, expr.span);
     let default_reachable = !ctx.builder.insertion_block_is_terminated();
     let default_initialized = ctx.initialized_slots_snapshot();
-    branch_to(ctx, merge);
+    join.leave_arm(ctx);
 
-    ctx.builder.position_at_end(merge);
+    join.finish(ctx, merge, expr.span);
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(
         &split_initialized,
         value_initialized,

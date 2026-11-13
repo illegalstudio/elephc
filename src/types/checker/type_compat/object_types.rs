@@ -63,18 +63,26 @@ impl Checker {
     /// Returns true if `class_name` is or inherits from `ancestor_name` (excluding self equality).
     /// Walks the parent chain via `class_info.parent`.
     pub(crate) fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
+        // A class under construction is absent from `classes` but its parent is already known;
+        // override covariance is validated during that window.
         let mut current = self
             .classes
             .get(class_name)
-            .and_then(|class| class.parent.clone());
+            .and_then(|class| class.parent.clone())
+            .or_else(|| self.pending_class_parents.get(class_name).cloned());
+        let mut seen = std::collections::HashSet::new();
         while let Some(parent_name) = current {
             if parent_name == ancestor_name {
                 return true;
             }
+            if !seen.insert(parent_name.clone()) {
+                return false;
+            }
             current = self
                 .classes
                 .get(&parent_name)
-                .and_then(|class| class.parent.clone());
+                .and_then(|class| class.parent.clone())
+                .or_else(|| self.pending_class_parents.get(&parent_name).cloned());
         }
         false
     }
@@ -104,6 +112,12 @@ impl Checker {
                 || self.interface_extends_interface(type_name, interface_name);
         }
         false
+    }
+
+    /// Accepts ordinary ArrayAccess objects and reviewed internal dimension handlers.
+    pub(crate) fn object_type_supports_dimensions(&self, type_name: &str) -> bool {
+        crate::types::builtin_classes::has_native_dimensions(type_name, &self.classes)
+            || self.object_type_implements_interface(type_name, "ArrayAccess")
     }
 
     /// Returns true if `interface_name` is or transitively extends `ancestor_name`.
@@ -424,6 +438,16 @@ impl Checker {
             return;
         };
 
+        // The promoted property has no default expression, so this write types its slot, and
+        // the backend builds the slot's reads and writes from it: an `array<int|null>` argument
+        // (`new Holder($a)` after `$a[] = $n ?? null`) is stored with boxed elements, as every
+        // other untyped slot update does (#1944). The parameter takes the same type so the
+        // constructor body's `$this->items = $items` sees no change.
+        let stored_ty = if param_is_ref {
+            PhpType::Mixed
+        } else {
+            crate::types::box_tagged_scalar_array_elements(arg_ty.clone())
+        };
         for sharer in self.property_sharers(&prop_name, &declaring_class) {
             let Some(class_info) = self.classes.get_mut(&sharer) else {
                 continue;
@@ -433,11 +457,7 @@ impl Checker {
             if !property_has_declared_type {
                 if let Some(slot) = class_info.visible_property_index(&prop_name) {
                     if let Some(prop) = class_info.properties.get_mut(slot) {
-                        prop.1 = if param_is_ref {
-                            PhpType::Mixed
-                        } else {
-                            arg_ty.clone()
-                        };
+                        prop.1 = stored_ty.clone();
                     }
                 }
             }
@@ -450,11 +470,7 @@ impl Checker {
                 if let Some(sig) = class_info.methods.get_mut("__construct") {
                     if !sig.declared_params.get(param_index).copied().unwrap_or(false) {
                         if let Some((_, param_ty)) = sig.params.get_mut(param_index) {
-                            *param_ty = if param_is_ref {
-                                PhpType::Mixed
-                            } else {
-                                arg_ty.clone()
-                            };
+                            *param_ty = stored_ty.clone();
                         }
                     }
                 }

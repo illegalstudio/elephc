@@ -68,6 +68,17 @@ fn internal_object_operators_available() -> bool {
     with_active_instance_dispatch_metadata(|metadata| metadata.is_some_and(|metadata| metadata.has_internal_object_operators))
 }
 
+/// Native boolean and array conversions can reject a SimpleXML object without a node.
+pub(super) fn internal_conversion_may_throw(expr: &Expr) -> bool {
+    internal_object_operators_available() && !literal_scalar_operand(expr)
+}
+
+/// Includes the implicit native conversion performed when evaluating a condition.
+fn condition_effect(expr: &Expr) -> Effect {
+    let effect = expr_effect(expr);
+    if internal_conversion_may_throw(expr) { effect.with_may_throw() } else { effect }
+}
+
 /// Returns true if any statement in `stmts` may throw, including implicit destruction.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
     block_effect(stmts).may_throw
@@ -101,11 +112,16 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             } else { effect }
         }
         StmtKind::Throw(expr) => expr_effect(expr).with_side_effects().with_may_throw(),
-        StmtKind::Assign { value, .. }
-        | StmtKind::TypedAssign { value, .. }
-        | StmtKind::StaticPropertyAssign { value, .. } => {
-            expr_effect(value).with_side_effects()
+        StmtKind::Assign { name, value }
+        | StmtKind::TypedAssign { name, value, .. } => {
+            let effect = expr_effect(value).with_side_effects();
+            if is_reference_volatile(name) {
+                // A property-backed alias can validate or invoke Stringable callbacks.
+                effect.with_may_throw().with_writes_globals()
+            } else { effect }
         }
+        StmtKind::StaticPropertyAssign { value, .. } => expr_effect(value)
+            .with_side_effects().with_may_throw().with_writes_globals(),
         // The source can call PHP or resolve a property, and rebinding can retire a target
         // whose destructor throws or changes globals. Keep the enclosing exception boundary.
         StmtKind::RefAssign { source, .. } => expr_effect(source)
@@ -146,11 +162,11 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             then_body,
             elseif_clauses,
             else_body,
-        } => expr_effect(condition)
+        } => condition_effect(condition)
             .combine(block_effect(then_body))
             .combine(combine_effects(
                 elseif_clauses.iter().map(|(condition, body)| {
-                    expr_effect(condition).combine(block_effect(body))
+                    condition_effect(condition).combine(block_effect(body))
                 }),
             ))
             .combine(
@@ -170,7 +186,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
                 .unwrap_or(Effect::PURE),
         ),
         StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => {
-            expr_effect(condition).combine(block_effect(body))
+            condition_effect(condition).combine(block_effect(body))
         }
         StmtKind::For {
             init,
@@ -184,7 +200,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
             .combine(
                 condition
                     .as_ref()
-                    .map(|expr| expr_effect(expr))
+                    .map(condition_effect)
                     .unwrap_or(Effect::PURE),
             )
             .combine(
@@ -204,6 +220,8 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         } => expr_effect(subject).combine(combine_effects(cases.iter().map(|(patterns, body)| {
             combine_effects(patterns.iter().map(expr_effect)).combine(block_effect(body))
         })))
+        // Case comparison can convert an object and run a PHP warning handler.
+        .with_side_effects().with_may_throw().with_writes_globals()
         .combine(
             default
                 .as_ref()
@@ -278,15 +296,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Null
         | ExprKind::ConstRef(_)
         | ExprKind::This => Effect::PURE,
-        ExprKind::Negate(inner) => {
+        ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
             let effect = expr_effect(inner);
             if internal_object_operators_available() && !literal_scalar_operand(inner) {
                 effect.with_may_throw()
             } else { effect }
         }
         ExprKind::Not(inner)
-        | ExprKind::BitNot(inner)
-        | ExprKind::ErrorSuppress(inner)
+        | ExprKind::Cast { target: CastType::Bool | CastType::Array, expr: inner } => condition_effect(inner),
+        ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => expr_effect(inner),
         ExprKind::Spread(inner) => {
@@ -304,8 +322,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::BinaryOp { left, op, right } => {
             let operands = expr_effect(left).combine(expr_effect(right));
-            if binary_op_may_throw(op, right)
-                || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right)) {
+            if matches!(op, BinOp::Eq | BinOp::NotEq)
+                && (!literal_scalar_operand(left) || !literal_scalar_operand(right))
+            {
+                // Object-to-number warnings can call a handler that mutates globals or throws.
+                operands.with_side_effects().with_may_throw().with_writes_globals()
+            } else if binary_op_may_throw(op, right)
+                || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right))
+                || (matches!(op, BinOp::And | BinOp::Or | BinOp::Xor)
+                    && (internal_conversion_may_throw(left) || internal_conversion_may_throw(right))) {
                 operands.with_may_throw()
             } else {
                 operands
@@ -334,11 +359,19 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                     .map(expr_effect)
                     .unwrap_or(Effect::PURE),
             )
+            .combine(if matches!(&target.kind, ExprKind::Variable(name) if is_reference_volatile(name)) {
+                Effect::PURE.with_may_throw().with_writes_globals()
+            } else { Effect::PURE })
             .with_side_effects(),
-        ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_) => Effect::PURE.with_side_effects(),
+        ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => {
+            let effect = Effect::PURE.with_side_effects();
+            if is_reference_volatile(name) {
+                effect.with_may_throw().with_writes_globals()
+            } else { effect }
+        }
         ExprKind::FunctionCall { name, args } => combine_effects(args.iter().map(expr_effect))
             .combine(function_call_effect(name.as_str(), args)),
         ExprKind::ClosureCall { var, args } => combine_effects(args.iter().map(expr_effect))
@@ -435,11 +468,11 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             condition,
             then_expr,
             else_expr,
-        } => expr_effect(condition)
+        } => condition_effect(condition)
             .combine(expr_effect(then_expr))
             .combine(expr_effect(else_expr)),
         ExprKind::ShortTernary { value, default } => {
-            expr_effect(value).combine(expr_effect(default))
+            condition_effect(value).combine(expr_effect(default))
         }
         ExprKind::Closure { .. } => Effect::PURE,
         ExprKind::NamedArg { value, .. } => expr_effect(value),
@@ -527,7 +560,7 @@ fn instanceof_target_effect(target: &InstanceOfTarget) -> Effect {
     match target {
         InstanceOfTarget::Name(_) => Effect::PURE,
         InstanceOfTarget::Generic(_) => Effect::PURE,
-        InstanceOfTarget::Expr(expr) => expr_effect(expr),
+        InstanceOfTarget::Expr(expr) => expr_effect(expr).with_may_throw(),
     }
 }
 

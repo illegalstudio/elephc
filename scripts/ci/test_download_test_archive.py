@@ -50,10 +50,11 @@ class ContainerPaths(unittest.TestCase):
         sleep.write_text("#!/bin/sh\nexit 0\n")
         sleep.chmod(0o755)
 
-    def run_step(self, step, download_path):
+    def run_step(self, step, download_path, payload=False):
         """Resolve contexts, then execute the unmodified action shell body."""
         contexts = {
             "github.action_path": str(self.root / "unmounted host action"),
+            "inputs.validate-payload": "true" if payload else "false",
             "inputs.path": str(self.host_artifacts),
             "inputs.name": "nextest-archive-codegen-linux-aarch64",
             **{f"steps.{name}.outputs.download-path": download_path
@@ -86,6 +87,18 @@ class ContainerPaths(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(self.host_archive.read_bytes(), self.frame)
 
+    def test_generic_payload_checksum_participates_in_all_three_attempts(self):
+        """Corruption is rejected before extraction, even after a successful HTTP download."""
+        import hashlib
+        payload = b"artifact bytes"
+        (self.artifacts / "payload.tar.gz").write_bytes(payload)
+        (self.artifacts / "manifest.json").write_text(json.dumps({"archive_sha256": hashlib.sha256(payload).hexdigest()}))
+        for step in [s for s in self.steps if "validate.sh" in s.get("run", "")]:
+            (self.artifacts / "payload.tar.gz").write_bytes(payload)
+            self.assertEqual(self.run_step(step, str(self.artifacts), payload=True).returncode, 0)
+            (self.artifacts / "payload.tar.gz").write_bytes(payload[:-1])
+            self.assertNotEqual(self.run_step(step, str(self.artifacts), payload=True).returncode, 0)
+
     def test_cleanup_removes_only_the_actual_download(self):
         """Both retries remove the mapped archive and preserve host-context files."""
         steps = [s for s in self.steps if "rm -f --" in s.get("run", "")]
@@ -109,6 +122,56 @@ class ContainerPaths(unittest.TestCase):
         self.assertFalse((self.root / "rm.log").exists())
         self.assertEqual(self.archive.read_bytes(), self.frame)
         self.assertEqual(self.host_archive.read_bytes(), self.frame)
+
+
+class DownloadDeadline(unittest.TestCase):
+    """Bound the official downloader's process without keeping successful actions alive."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Read the actual Node launch options from every download attempt."""
+        spec = json.loads(subprocess.check_output([
+            "ruby", "-ryaml", "-rjson", "-e",
+            "puts JSON.generate(YAML.load_file(ARGV.fetch(0)))", str(ACTION_SPEC),
+        ], text=True))
+        cls.downloads = [step for step in spec["runs"]["steps"]
+                         if step.get("uses") == "actions/download-artifact@v4"]
+
+    def node_options(self):
+        """Require the same workspace-relative preload on all three attempts."""
+        expected = "--require ./.github/actions/download-test-archive/deadline.cjs"
+        self.assertEqual([step["id"] for step in self.downloads], ["first", "second", "third"])
+        for step in self.downloads:
+            self.assertEqual(step.get("env", {}).get("NODE_OPTIONS"), expected)
+        return expected
+
+    def test_success_exits_without_waiting_for_the_deadline(self):
+        """A completed action can exit naturally despite the five-minute timer."""
+        env = {**os.environ, "NODE_OPTIONS": self.node_options()}
+        result = subprocess.run(["node", "-e", "console.log('download complete')"],
+                                cwd=REPO, env=env, capture_output=True, text=True, timeout=3)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "download complete")
+
+    def test_slow_active_transfer_fails_instead_of_resetting_the_deadline(self):
+        """Accelerate a real timer, then keep the process active with periodic progress."""
+        options = self.node_options()
+        with tempfile.TemporaryDirectory(prefix=".download-deadline.", dir=REPO) as tmp:
+            clock = Path(tmp) / "fast clock.cjs"
+            clock.write_text("""const assert = require('node:assert/strict');
+const original = global.setTimeout;
+global.setTimeout = (callback, delay) => {
+  assert.equal(delay, 300000);
+  return original(callback, 50);
+};
+""")
+            env = {**os.environ, "NODE_OPTIONS": f'--require "{clock}" {options}'}
+            result = subprocess.run([
+                "node", "-e", "setInterval(() => process.stdout.write('.'), 5)",
+            ], cwd=REPO, env=env, capture_output=True, text=True, timeout=3)
+        self.assertEqual(result.returncode, 124, result.stderr)
+        self.assertIn(".", result.stdout)
+        self.assertIn("Artifact download exceeded 5 minutes", result.stderr)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,69 @@
+name: Build release artifacts
+description: Build and validate the release profile once for packaging or benchmarks.
+inputs:
+  target:
+    description: Native Rust host triple
+    required: true
+  sha:
+    description: Immutable source commit (working-tree version stamps are recorded separately)
+    required: true
+outputs:
+  artifact-attempt:
+    description: Producing workflow attempt
+    value: ${{ github.run_attempt }}
+runs:
+  using: composite
+  steps:
+    - name: Build compiler and bridge outputs
+      shell: bash
+      env:
+        BRIDGE_CRATES: -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-openssl -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-uri -p elephc-pack -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-reference -p elephc-curl -p elephc-zend
+      run: |
+        cargo build --locked --release --bin elephc
+        cargo build --locked --release $BRIDGE_CRATES
+        cargo build --locked --release -p elephc-magician --features curl \
+          --target-dir target/elephc-magician-curl-release-build
+        cp target/elephc-magician-curl-release-build/release/libelephc_magician.a \
+          target/release/libelephc_magician_curl.a
+        printf '\n' > target/release/elephc-pdo-features.txt
+    - name: Validate and package the release build contract
+      id: package
+      shell: bash
+      env:
+        SOURCE_SHA: ${{ inputs.sha }}
+        RUST_TARGET: ${{ inputs.target }}
+      run: |
+        case "$RUST_TARGET" in
+          aarch64-apple-darwin) target=macos-aarch64 ;;
+          x86_64-unknown-linux-gnu) target=linux-x86_64 ;;
+          aarch64-unknown-linux-gnu) target=linux-aarch64 ;;
+          *) echo "Unsupported release host: $RUST_TARGET" >&2; exit 1 ;;
+        esac
+        tool="$GITHUB_ACTION_PATH/../../../scripts/ci/build_artifacts.py"
+        for kind in compiler bridges; do
+          python3 -B "$tool" create --root "$PWD" --sha "$SOURCE_SHA" \
+            --target "$target" --profile release --kind "$kind" \
+            --artifact "$RUNNER_TEMP/release-build-$kind"
+          python3 -B "$tool" verify --root "$PWD" --sha "$SOURCE_SHA" \
+            --target "$target" --profile release --kind "$kind" \
+            --artifact "$RUNNER_TEMP/release-build-$kind"
+        done
+        cp "$RUNNER_TEMP/release-build-compiler/manifest.json" target/release/compiler-build-manifest.json
+        cp "$RUNNER_TEMP/release-build-bridges/manifest.json" target/release/bridge-build-manifest.json
+        echo "target=$target" >> "$GITHUB_OUTPUT"
+    - name: Upload release compiler
+      uses: actions/upload-artifact@v7
+      with:
+        name: build-${{ steps.package.outputs.target }}-release-compiler-default-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/release-build-compiler
+        compression-level: 0
+        retention-days: 3
+        if-no-files-found: error
+    - name: Upload release bridges
+      uses: actions/upload-artifact@v7
+      with:
+        name: build-${{ steps.package.outputs.target }}-release-bridges-default-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/release-build-bridges
+        compression-level: 0
+        retention-days: 3
+        if-no-files-found: error

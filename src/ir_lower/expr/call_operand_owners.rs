@@ -23,6 +23,8 @@ pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) 
         crate::ir_lower::context::CallArgumentEvaluationScope {
             expression_depth: ctx.expression_depth,
             owners: Vec::new(),
+            rooted_reference_value_views: std::collections::HashSet::new(),
+            live_property_reference_arguments: false,
         },
     );
 }
@@ -229,15 +231,18 @@ pub(super) fn finish_call_argument_evaluation(
     finish_call_argument_evaluation_with(ctx, operands, false)
 }
 
-/// `finish_call_argument_evaluation` for a user function call: a pin taken on a borrowed source
-/// stays a root released after the call while the operand keeps borrowing. Handed to the call,
-/// it became an owned operand that a conservative return-alias summary (`f($name, 0)` returning
-/// `mixed`) never released, leaking one reference per call.
+/// Transfers raw-string pins to alias comparison while retaining borrowed pins for boxed returns.
+///
+/// Raw string results may either alias a parameter or own a fresh allocation. Passing the pin
+/// as an owned operand lets the call transfer that exact owner on the alias branch and release
+/// it otherwise, without marking every possible result as borrowed. Boxed returns retain the
+/// separate pin because their conservative return summary does not transfer raw argument owners.
 pub(super) fn finish_user_call_argument_evaluation(
     ctx: &mut LoweringContext<'_, '_>,
     operands: &mut [crate::ir::ValueId],
+    result_type: &PhpType,
 ) -> Vec<CallArgumentIntermediate> {
-    finish_call_argument_evaluation_with(ctx, operands, true)
+    finish_call_argument_evaluation_with(ctx, operands, result_type.codegen_repr() != PhpType::Str)
 }
 
 /// Shared body of the two `finish_*` entries.
@@ -508,7 +513,7 @@ pub(super) fn root_user_call_operands(
                 // the unwinder while the alias-returning callee runs; normal control still uses
                 // ReleaseUnlessAliases below to transfer the owner when it comes back unchanged.
                 for pin in pin_in_flight_owners(ctx, &[*operand], span) {
-                    roots.push((index, pin.slot));
+                    roots.push((index, pin.into_temporary_slot()));
                 }
             }
 
@@ -518,7 +523,7 @@ pub(super) fn root_user_call_operands(
             let claimed = if repeated {
                 *operand
             } else {
-                claim_transient_string_operand(ctx, *operand, span)
+                claim_owned_string_operand(ctx, *operand, span)
             };
             if claimed != *operand {
                 *operand = claimed;
@@ -527,19 +532,41 @@ pub(super) fn root_user_call_operands(
                 // The post-call release retires the pin without releasing and then decides the
                 // release against the result.
                 for pin in pin_in_flight_owners(ctx, &[claimed], span) {
-                    roots.push((index, pin.slot));
+                    roots.push((index, pin.into_temporary_slot()));
                 }
             }
-            // Source-order evaluation can already have acquired a borrowed string. Its
-            // evaluation slot was handed to this call, so keep that lease visible when
-            // an alias-capable callee throws before the ordinary post-call release.
+            // A later eval barrier can widen a heap local after this call is lowered.
+            // Its eventual load then owns a conversion or payload reference. Lease that value
+            // independently and let finalization prune the source release for concrete storage.
+            let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
             if !repeated
+                && !ctx.has_call_argument_guard(*operand)
                 && !roots.iter().any(|(owner_index, _)| *owner_index == index)
-                && ctx.builder.value_php_type(*operand).codegen_repr() == PhpType::Str
-                && matches!(ctx.builder.value_defining_op(*operand), Some(Op::Acquire | Op::EnsureOwned))
+                && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(*operand))
+                && !matches!(ctx.builder.value_php_type(*operand).codegen_repr(), PhpType::Buffer(_))
+                && matches!(ctx.builder.value_defining_op(*operand), Some(Op::LoadLocal | Op::LoadStaticLocal
+                    | Op::LoadGlobal | Op::LoadRefCell | Op::LoadStaticProperty))
+                && ctx.value_needs_release_after_use(value)
+            {
+                let lease = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+                    ctx, value, Some(span),
+                );
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+                *operand = lease.value;
+            }
+            // Pin every independent heap operand, including fresh objects and arrays, without
+            // changing its producer or the alias facts used by normal post-call retirement.
+            if !repeated
+                && !ctx.has_call_argument_guard(*operand)
+                && !roots.iter().any(|(owner_index, _)| *owner_index == index)
+                && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(*operand))
+                && !matches!(ctx.builder.value_php_type(*operand).codegen_repr(), PhpType::Buffer(_))
+                && ctx.value_is_owning_temporary(LoweredValue {
+                    value: *operand, ir_type: ctx.builder.value_type(*operand),
+                })
             {
                 for pin in pin_in_flight_owners(ctx, &[*operand], span) {
-                    roots.push((index, pin.slot));
+                    roots.push((index, pin.into_temporary_slot()));
                 }
             }
             continue;
@@ -552,10 +579,10 @@ pub(super) fn root_user_call_operands(
     roots
 }
 
-/// Gives a transient string argument one releasing owner before a call that may hand it back.
+/// Gives an independently owned string argument one releasing owner across a call.
 ///
 /// The caller pins the claimed value across the call (see `root_user_call_operands`), so a throw
-/// out of the callee releases it through the unwind chain.
+/// out of the callee releases it through the unwind chain. Native dimension reads also claim their key.
 ///
 /// A fresh transient string (a `.`, interpolation or scalar-to-string result in concat scratch,
 /// or a heap block stamped `CONCAT_TEMP_HEAP_KIND`) has no owner that frees it: the first
@@ -566,8 +593,10 @@ pub(super) fn root_user_call_operands(
 /// retags the block as owned without copying it, so every later persist duplicates it, and the
 /// argument becomes an owning temporary whose release after the call is decided against the
 /// result (`ReleaseUnlessAliases`). Scratch and literal payloads pass through unchanged and their
-/// release stays a validated no-op.
-fn claim_transient_string_operand(
+/// release stays a validated no-op. Already owned strings, including Mixed-to-string casts,
+/// keep the same payload and lease, but gain the same unwind-visible record. Borrowed views
+/// are excluded, and an existing argument-evaluation pin already has the required owner shape.
+pub(super) fn claim_owned_string_operand(
     ctx: &mut LoweringContext<'_, '_>,
     operand: crate::ir::ValueId,
     span: Span,
@@ -575,14 +604,18 @@ fn claim_transient_string_operand(
     if ctx.builder.value_php_type(operand).codegen_repr() != PhpType::Str {
         return operand;
     }
-    // Only a FRESH transient is claimed. A builtin view or a string offset also has a no-op
-    // release, but its pointer belongs to a live string: claiming it would make the post-call
-    // release free that string.
-    if !ctx
+    if ctx.has_call_argument_guard(operand) || value_is_call_argument_evaluation_pin(ctx, operand) {
+        return operand;
+    }
+    // A builtin view or string offset belongs to another live value and cannot be claimed.
+    // Owned casts already owe the same normal release; their exceptional release was missing.
+    let transient = ctx
         .builder
         .value_defining_instruction(operand)
-        .is_some_and(crate::ir::Instruction::creates_transient_string)
-    {
+        .is_some_and(crate::ir::Instruction::creates_transient_string);
+    let detached = ctx.value_is_owning_mixed_string_cast(operand)
+        || ctx.value_is_owned_unboxed_local_load(operand);
+    if !transient && !detached {
         return operand;
     }
     ctx.emit_owned_value(
@@ -894,18 +927,32 @@ pub(crate) fn retire_owned_call_operand(
     );
 }
 
-/// One in-flight owned temporary pinned in an unwind-visible frame slot for a single
-/// throwing instruction.
+/// One temporary owner or provisional local view protected across a throwing window.
 ///
-/// The pin does NOT move ownership. The slot receives a plain `OwnedTemp` store, which retains
-/// nothing, so the SSA temporary keeps its single reference and its ordinary post-instruction
-/// release stays correct on the normal path.
+/// Temporary pins use a non-retaining `OwnedTemp` store. Local views use guards whose
+/// cleanup is pruned when final frame storage lends its payload. Neither path releases
+/// its operand during normal retirement.
 #[derive(Clone)]
-pub(crate) struct PinnedInFlightOwner {
-    /// Hidden `OwnedTemp` the operand pointer is parked in for the throwing window.
-    temp_name: String,
-    /// Owner slot published in the unwind chain for the duration of that window.
-    slot: crate::ir::LocalSlotId,
+pub(crate) enum PinnedInFlightOwner {
+    /// An independent SSA owner parked in a non-retaining hidden slot.
+    Temporary {
+        /// Hidden `OwnedTemp` parking the pointer during the throwing window.
+        temp_name: String,
+        /// Owner slot published in the unwind chain for that window.
+        slot: crate::ir::LocalSlotId,
+    },
+    /// A local-load coercion that may own a retained payload after frame finalization.
+    LocalView { value: crate::ir::ValueId },
+}
+
+impl PinnedInFlightOwner {
+    /// Extracts the owner slot from a record returned by temporary-only pinning.
+    fn into_temporary_slot(self) -> crate::ir::LocalSlotId {
+        match self {
+            Self::Temporary { slot, .. } => slot,
+            Self::LocalView { .. } => unreachable!("a local-view guard has no temporary owner slot"),
+        }
+    }
 }
 
 /// Pins the owned SSA temporaries an instruction that can THROW is about to read.
@@ -960,8 +1007,8 @@ pub(crate) fn pin_in_flight_owners(
         if !explicit_lifetime_pin && !ctx.value_is_owning_temporary(value) {
             continue;
         }
-        // A load out of a variable is never such a temporary, whatever the provisional
-        // ownership says. `value_is_owned_unboxed_local_load` marks an array/hash/object load
+        // A transferred merge result owns its reference after take_owned_temp cleared the
+        // backing slot. Other local loads stay excluded, whatever provisional ownership says. `value_is_owned_unboxed_local_load` marks an array/hash/object load
         // owned so a release can be emitted and pruned later, and the variable keeps owning the
         // payload either way: publishing it would run the element destructors of a LIVE `$values`
         // during the unwind, before the catch body that PHP runs first
@@ -969,7 +1016,7 @@ pub(crate) fn pin_in_flight_owners(
         if matches!(
             ctx.builder.value_defining_op(value.value),
             Some(Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadGlobal),
-        ) {
+        ) && !ctx.value_is_taken_owned_temp(value.value) {
             continue;
         }
         let ty = ctx.builder.value_php_type(value.value);
@@ -987,23 +1034,55 @@ pub(crate) fn pin_in_flight_owners(
         let slot = ctx.local_slots[&temp_name];
         register_owned_call_operand(ctx, slot, span);
         pinned.push(*operand);
-        records.push(PinnedInFlightOwner { temp_name, slot });
+        records.push(PinnedInFlightOwner::Temporary { temp_name, slot });
     }
     records
 }
 
+/// Carries a pin's storage identity to a consuming store using the ordinary by-reference load protocol.
+pub(crate) fn pinned_transfer_owner(
+    ctx: &mut LoweringContext<'_, '_>, pins: &[PinnedInFlightOwner], span: Span,
+) -> Option<crate::ir::ValueId> {
+    let temp_name = match pins.first()? {
+        PinnedInFlightOwner::Temporary { temp_name, .. } => temp_name,
+        PinnedInFlightOwner::LocalView { .. } => unreachable!("a local-view guard cannot transfer ownership"),
+    };
+    debug_assert_eq!(pins.len(), 1);
+    let owner = ctx.load_local(temp_name, Some(span));
+    ctx.builder.set_value_ownership(owner.value, Ownership::Borrowed);
+    Some(owner.value)
+}
+
+/// Releases argument owners after their call returns, clearing each slot before PHP cleanup.
+/// An escaping destructor therefore finds an empty record rather than releasing the owner twice.
+pub(crate) fn release_pinned_in_flight_owners(
+    ctx: &mut LoweringContext<'_, '_>, records: Vec<PinnedInFlightOwner>, span: Span,
+) {
+    for record in records.into_iter().rev() {
+        let slot = record.into_temporary_slot();
+        ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(), Some(span));
+        unregister_owned_call_operand(ctx, slot, span);
+    }
+}
+
 /// Retires in-flight pins in reverse publication order once the throwing window has closed.
 ///
-/// `UnsetLocal` zeroes the parking slot without releasing it: the reference never left the SSA
-/// temporary, and its own release still follows.
+/// Temporary parking slots are cleared without release; provisional local guards are
+/// detached. Each operand's ordinary consumer still owns its normal-path cleanup.
 pub(crate) fn unpin_in_flight_owners(
     ctx: &mut LoweringContext<'_, '_>,
     records: Vec<PinnedInFlightOwner>,
     span: Span,
 ) {
     for record in records.into_iter().rev() {
-        unregister_owned_call_operand(ctx, record.slot, span);
-        ctx.clear_owned_hidden_temp(&record.temp_name, Some(span));
+        match record {
+            PinnedInFlightOwner::Temporary { temp_name, slot } => {
+                unregister_owned_call_operand(ctx, slot, span);
+                ctx.clear_owned_hidden_temp(&temp_name, Some(span));
+            }
+            PinnedInFlightOwner::LocalView { value } => ctx.unguard_call_argument(value, span),
+        }
     }
 }
 

@@ -182,14 +182,17 @@ pub(in crate::ir_lower) fn coerce_typed_assign_value(
             // Marking it `MaybeOwned` made every consumer add a second `Acquire` on top, which is
             // one leaked object per `static::$prop = $mixed` store.
             let effects = Op::mixed_unbox_effects(&target);
-            ctx.emit_owned_value(
+            let extracted = ctx.emit_owned_value(
                 Op::MixedUnbox,
                 vec![value.value],
                 None,
                 target,
                 effects,
                 Some(span),
-            )
+            );
+            // Extraction retains the payload independently of the temporary source cell.
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+            extracted
         }
         _ => value,
     }
@@ -205,9 +208,33 @@ pub(super) fn lower_foreach(
     body: &[Stmt],
     loop_span: Span,
 ) {
+    if value_by_ref {
+        if let ExprKind::Variable(name) = &array.kind {
+            if super::native_reference_mutations::lower(ctx, name, loop_span,
+                |ctx| lower_foreach_selected(ctx, array, key_var, value_var, value_by_ref, body, loop_span))
+            { return; }
+        }
+    }
+    lower_foreach_selected(ctx, array, key_var, value_var, value_by_ref, body, loop_span);
+}
+
+/// Iterates through the selected native layout while by-value sources retain copy semantics.
+#[allow(clippy::too_many_arguments)]
+fn lower_foreach_selected(
+    ctx: &mut LoweringContext<'_, '_>, array: &Expr, key_var: Option<&str>,
+    value_var: &str, value_by_ref: bool, body: &[Stmt], loop_span: Span,
+) {
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
+    apply_null_entry_boxing(ctx, None, body, None);
+    if value_by_ref {
+        if let ExprKind::Variable(name) = &array.kind {
+            if let Some(view) = ctx.live_native_mutation_locals.get(name).cloned() {
+                ctx.set_local_logical_type(name, view);
+            }
+        }
+    }
     // A direct instance property has a dedicated fetch-for-write operation that separates and
     // republishes its container before iteration. Reifying it as a synthetic alias here bypasses
     // that operation and loses the property's copy-on-write boundary. Static properties and
@@ -340,6 +367,8 @@ pub(super) fn lower_foreach(
     let header = ctx.builder.create_named_block("foreach.next", Vec::new());
     let body_block = ctx.builder.create_named_block("foreach.body", Vec::new());
     let exit = ctx.builder.create_named_block("foreach.exit", Vec::new());
+    let joins = LoopJumpJoins::begin(ctx, body, exit, header, false);
+    let exit_target = LoopJumpJoins::exit_target(&joins, exit);
     let first_nonempty = (value_by_ref
         && value_needs_null_init
         && foreach_ref_value_type(&source_ty) == PhpType::Mixed)
@@ -360,7 +389,7 @@ pub(super) fn lower_foreach(
             cond: has_next.value,
             then_target: first_nonempty,
             then_args: Vec::new(),
-            else_target: exit,
+            else_target: exit_target,
             else_args: Vec::new(),
         });
 
@@ -386,7 +415,7 @@ pub(super) fn lower_foreach(
         cond: has_next.value,
         then_target: body_block,
         then_args: Vec::new(),
-        else_target: exit,
+        else_target: exit_target,
         else_args: Vec::new(),
     });
 
@@ -410,7 +439,7 @@ pub(super) fn lower_foreach(
     ctx.push_loop_carried_missing_strings(missing_strings);
     ctx.loop_stack.push(LoopFrame {
         break_block: exit,
-        continue_block: header,
+        continue_block: LoopJumpJoins::continue_target(&joins, header),
         cleanup,
         source_owner: source_owner.map(|slot| (slot, array.span)),
         source_pin,
@@ -424,8 +453,16 @@ pub(super) fn lower_foreach(
     lower_block(ctx, body);
     ctx.loop_stack.pop();
     ctx.pop_loop_carried_missing_strings();
-    branch_to(ctx, header);
-    ctx.builder.position_at_end(exit);
+    match joins {
+        Some(joins) => {
+            joins.finish_latch(ctx, loop_span);
+            joins.finish_exit(ctx, loop_span);
+        }
+        None => {
+            branch_to(ctx, header);
+            ctx.builder.position_at_end(exit);
+        }
+    }
     ctx.clear_static_callable_locals();
     if by_ref_origin.is_some() {
         ctx.emit_void(
@@ -574,7 +611,7 @@ pub(crate) fn promote_by_ref_foreach_source(
             // HashToMixed consumes its input owner at the COW boundary. A synthetic
             // reference alias loads the static/property/parent payload borrowed, so give
             // the conversion its own owner before it can retire the source generation.
-            let hash = ctx.load_local(name, Some(array.span));
+            let hash = ctx.load_local_for_mutation(name, Some(array.span));
             let hash = if ctx.is_ref_bound_local(name) {
                 crate::ir_lower::ownership::acquire_if_refcounted(
                     ctx,
@@ -606,7 +643,7 @@ pub(crate) fn promote_by_ref_foreach_source(
     // ArrayToHash consumes its input owner. Retain only a synthetic reference alias: an
     // ordinary local deliberately transfers its old owner into the conversion, while the
     // alias must leave the property or parent element's owner intact until store-back.
-    let array_value = ctx.load_local(name, Some(array.span));
+    let array_value = ctx.load_local_for_mutation(name, Some(array.span));
     let array_value = if ctx.is_ref_bound_local(name) {
         crate::ir_lower::ownership::acquire_if_refcounted(
             ctx,
@@ -646,6 +683,18 @@ fn lower_foreach_source(
     value_by_ref: bool,
 ) -> ForeachSource {
     if value_by_ref {
+        if let ExprKind::Variable(name) = &array.kind {
+            if ctx.live_native_mutation_locals.contains_key(name) {
+                let mut value = ctx.load_local_for_mutation(name, Some(array.span));
+                if value.ir_type == IrType::TaggedScalar {
+                    // The raw nullable scalar cannot iterate, but its warning needs the actual
+                    // int/null tag. This boxed observation is not a writable container copy.
+                    value = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(array.span));
+                }
+                return ForeachSource { value,
+                    is_borrowed_fetch: false, receiver: None };
+            }
+        }
         if let ExprKind::ArrayAccess {
             array: receiver,
             index,
@@ -757,6 +806,12 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
         PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Buffer(_)) => {
             value.codegen_repr()
         }
+        // A hash of objects binds the object like an indexed list does, so the value keeps the
+        // checker's element type: appending it to a pinned `array<C>` builder must not widen the
+        // builder to boxed storage.
+        PhpType::AssocArray { value, .. } if matches!(value.codegen_repr(), PhpType::Object(_)) => {
+            value.codegen_repr()
+        }
         PhpType::Object(class_name) if class_name == "Phar" || class_name == "PharData" => {
             PhpType::Object("PharFileInfo".to_string())
         }
@@ -769,7 +824,8 @@ pub(super) fn foreach_value_type(source_ty: &PhpType) -> PhpType {
 /// Hash iteration hands every entry out boxed as `Mixed`, and a pointer or buffer entry is boxed
 /// as an integer-like payload. For a hash of pointers or buffers the box is cast back to that
 /// word and retyped, so `$p->x`, `$p === null` and `$buf[$i]` see the pointer or handle instead
-/// of a boxed integer.
+/// of a boxed integer. For a hash of objects the box is unboxed into an owned object lease and
+/// then released, matching the owned concrete value an indexed object iteration produces.
 pub(super) fn lower_foreach_current_value(
     ctx: &mut LoweringContext<'_, '_>,
     iterator: LoweredValue,
@@ -777,9 +833,15 @@ pub(super) fn lower_foreach_current_value(
     value_ty: &PhpType,
     span: Span,
 ) -> LoweredValue {
-    let unbox_hash_word = matches!(source_ty, PhpType::AssocArray { .. })
+    let hash_source = matches!(source_ty, PhpType::AssocArray { .. });
+    let unbox_hash_word = hash_source
         && matches!(value_ty.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_));
-    let current_ty = if unbox_hash_word { PhpType::Mixed } else { value_ty.clone() };
+    let unbox_hash_object = hash_source && matches!(value_ty.codegen_repr(), PhpType::Object(_));
+    let current_ty = if unbox_hash_word || unbox_hash_object {
+        PhpType::Mixed
+    } else {
+        value_ty.clone()
+    };
     let value = ctx.emit_value(
         Op::IterCurrentValue,
         vec![iterator.value],
@@ -788,6 +850,20 @@ pub(super) fn lower_foreach_current_value(
         Op::IterCurrentValue.default_effects(),
         Some(span),
     );
+    if unbox_hash_object {
+        // The unbox takes its own payload reference, so the iterator's owned box can be released
+        // at once; the source entry still holds the object, so this release runs no destructor.
+        let object = ctx.emit_owned_value(
+            Op::MixedUnbox,
+            vec![value.value],
+            None,
+            value_ty.clone(),
+            Op::mixed_unbox_effects(value_ty),
+            Some(span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        return object;
+    }
     if !unbox_hash_word {
         return value;
     }

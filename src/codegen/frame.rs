@@ -43,7 +43,9 @@ use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
 mod destructor_cleanup;
+mod return_epilogues;
 mod gc_owners;
+pub(super) mod reference_returns;
 mod web_host_abi;
 pub(super) use destructor_cleanup::is_destructor;
 pub(super) use web_host_abi::preserve_host_callee_saved;
@@ -72,11 +74,14 @@ pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
     pub(super) exception_guard_offsets: HashMap<ValueId, usize>,
+    pub(super) return_owner_guard_offsets: HashMap<LocalSlotId, usize>,
+    pub(super) return_cleanup_skip_offset: Option<usize>,
     pub(super) concat_base_offset: usize,
     pub(super) exception_activation_offset: Option<usize>,
     pub(super) exception_cleanup_activation: bool,
@@ -143,6 +148,11 @@ pub(super) fn layout_for_function(
             numeric_cell_offsets.insert(value, offset);
         }
     }
+    let mut numeric_seed_offsets = HashMap::new();
+    for slot in numeric.seed_slots {
+        offset += 24;
+        numeric_seed_offsets.insert(slot, offset);
+    }
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
@@ -163,6 +173,17 @@ pub(super) fn layout_for_function(
             exception_guard_offsets.insert(token, offset);
         }
     }
+    let guarded_slots = function.instructions.iter().filter_map(|inst| {
+        if inst.op != Op::PushCallOperandOwner { return None; }
+        match inst.immediate { Some(Immediate::LocalSlot(slot)) => Some(slot), _ => None }
+    }).collect::<HashSet<_>>();
+    let mut return_owner_guard_offsets = HashMap::new();
+    for local in &function.locals {
+        if local.kind == LocalKind::ReturnRefCell && guarded_slots.contains(&local.id) {
+            offset += abi::CALL_OPERAND_OWNER_RECORD_BYTES;
+            return_owner_guard_offsets.insert(local.id, offset);
+        }
+    }
     let mut callee_saved_offsets = Vec::new();
     for reg in allocation.used_callee_saved() {
         offset += 8;
@@ -181,6 +202,12 @@ pub(super) fn layout_for_function(
     }
     offset += 8;
     let concat_base_offset = offset;
+    let return_cleanup_skip_offset = if function.blocks.iter().filter(|block|
+        matches!(block.terminator, Some(Terminator::Return { .. }))).take(2).count() > 1
+    {
+        offset += 8;
+        Some(offset)
+    } else { None };
     let exception_activation_offset = if exception_activations || backtrace_activations {
         offset += EXCEPTION_ACTIVATION_BYTES;
         Some(offset)
@@ -192,11 +219,14 @@ pub(super) fn layout_for_function(
         value_placement,
         local_offsets,
         numeric_cell_offsets,
+        numeric_seed_offsets,
         numeric_local_slots: numeric.locals,
         numeric_values: numeric.proven_values,
         ref_cell_state_offsets,
         try_handler_offsets,
         exception_guard_offsets,
+        return_owner_guard_offsets,
+        return_cleanup_skip_offset,
         concat_base_offset,
         exception_activation_offset,
         exception_cleanup_activation: exception_activations,
@@ -304,6 +334,7 @@ fn module_uses_resource_inventory_cleanup(module: &Module) -> bool {
                 _ => return false,
             };
             id.produces_resource_inventory_entry()
+                || matches!(id, crate::ir::RuntimeFnId::StreamFilterRegister | crate::ir::RuntimeFnId::StreamWrapperRegister)
         })
 }
 
@@ -710,7 +741,7 @@ pub(super) fn emit_exception_cleanup_callback(
             ctx.emitter.instruction("str x19, [sp, #8]");                       // preserve the scratch stack-base register
             ctx.emitter.instruction("mov x19, sp");                             // remember the callback stack before cleanup switches frames
             ctx.emitter.instruction("mov x29, x0");                             // select the abandoned PHP frame passed by the unwinder
-            emit_function_local_epilogue_cleanup(ctx, None);
+            emit_function_local_epilogue_cleanup(ctx, None, None);
             ctx.emitter.instruction("mov sp, x19");                             // restore the callback stack after frame-relative cleanup
             ctx.emitter.instruction("ldr x19, [sp, #8]");                       // restore the caller's scratch stack-base register
             ctx.emitter.instruction("ldp x29, x30, [sp, #16]");                 // restore the callback frame chain and return address
@@ -724,7 +755,7 @@ pub(super) fn emit_exception_cleanup_callback(
             ctx.emitter.instruction("sub rsp, 8");                              // keep the callback stack aligned for nested cleanup calls
             ctx.emitter.instruction("mov r12, rbp");                            // remember the callback frame before selecting the PHP frame
             ctx.emitter.instruction("mov rbp, rdi");                            // select the abandoned PHP frame passed by the unwinder
-            emit_function_local_epilogue_cleanup(ctx, None);
+            emit_function_local_epilogue_cleanup(ctx, None, None);
             ctx.emitter.instruction("mov rbp, r12");                            // restore the callback frame after PHP-local cleanup
             ctx.emitter.instruction("lea rsp, [rbp - 8]");                      // discard cleanup-call stack temporaries and padding
             ctx.emitter.instruction("pop r12");                                 // restore the caller's preserved stack-base register
@@ -778,7 +809,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     let (static_properties, hosting_tables) =
         super::runtime_metadata::static_properties_hosting_last(ctx.module);
     emit_main_static_property_cleanup(ctx, static_properties);
+    // Collect PHP cycles while eval declarations and hosted extension state are alive.
     emit_shutdown_cycle_collection(ctx.emitter);
+    emit_eval_context_epilogue_cleanup(ctx);
     // Hosted extensions end the request (RSHUTDOWN) after the program's destructors, then their
     // hosting tables release the engine objects (`free_obj` may still use module state), and the
     // exit sequence's hook runs MSHUTDOWN last: php-src's `php_request_shutdown` frees the object
@@ -886,6 +919,12 @@ fn emit_main_static_property_cleanup(ctx: &mut FunctionContext<'_>, properties: 
         let result = abi::int_result_reg(ctx.emitter);
         let scratch = abi::secondary_scratch_reg(ctx.emitter);
         ctx.emitter.comment(&format!("epilogue cleanup static property {symbol}"));
+        if ctx.module.required_runtime_features.native_reference_validation && ty == PhpType::Mixed {
+            abi::emit_symbol_address(ctx.emitter, result, &symbol);
+            abi::emit_unary_cleanup_preserving_exception(ctx.emitter,
+                "__rt_reference_static_mixed_release", result);
+            continue;
+        }
         abi::emit_load_symbol_to_reg(ctx.emitter, result, &symbol, 8);
         abi::emit_load_int_immediate(ctx.emitter, scratch, crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
         match ctx.emitter.target.arch {
@@ -1172,6 +1211,7 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
     emit_main_local_epilogue_cleanup(ctx);
+    emit_eval_context_epilogue_cleanup(ctx);
     // Per-request local teardown may run PHP destructors, so it belongs inside
     // the request's `{main}` frame just like process-exit teardown does.
     emit_instr_exit(ctx);
@@ -1336,7 +1376,6 @@ fn emit_main_local_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         emit_owned_local_cleanup(ctx, slot, offset, &ty);
     }
     emit_eval_scope_epilogue_cleanup(ctx);
-    emit_eval_context_epilogue_cleanup(ctx);
 }
 
 /// Returns main local slots that receive owned refcounted values through `StoreLocal`.
@@ -1425,7 +1464,7 @@ fn initialize_ref_cell_state_slots(ctx: &mut FunctionContext<'_>) {
 /// Releases hidden ref-cell owner slots that still hold fallback cells at exit.
 fn emit_ref_cell_owner_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
     let owners = ref_cell_owner_locals(ctx);
-    emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners);
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, owners, None, None);
 }
 
 /// Releases live foreach-by-reference aliases recorded in local representation words.
@@ -1448,16 +1487,22 @@ fn emit_hash_entry_ref_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
 fn emit_ref_cell_owner_epilogue_cleanup_for(
     ctx: &mut FunctionContext<'_>,
     owners: Vec<(String, LocalSlotId, PhpType, usize)>,
+    transferred_owner: Option<LocalSlotId>,
+    runtime_return_slot: Option<usize>,
 ) {
     for (name, slot, ty, offset) in owners {
-        if !ctx.unwinding_cleanup
+        if !ctx.unwinding_cleanup && Some(slot) == transferred_owner
             && ctx.function.locals[slot.as_raw() as usize].kind == LocalKind::ReturnRefCell
         {
             continue;
         }
+        let done = if ctx.function.locals[slot.as_raw() as usize].kind == LocalKind::ReturnRefCell {
+            return_epilogues::emit_transfer_guard(ctx, slot, runtime_return_slot)
+        } else { None };
         ctx.emitter
             .comment(&format!("epilogue cleanup ref-cell owner ${}", name));
         emit_ref_cell_owner_cleanup(ctx, offset, &ty);
+        if let Some(done) = done { ctx.emitter.label(&done); }
     }
 }
 
@@ -1699,6 +1744,7 @@ fn zero_initialize_function_cleanup_locals(ctx: &mut FunctionContext<'_>) {
 fn emit_function_local_epilogue_cleanup(
     ctx: &mut FunctionContext<'_>,
     skip_return_slot: Option<LocalSlotId>,
+    runtime_return_slot: Option<usize>,
 ) {
     if ctx.exception_activation_offset.is_some() && is_destructor(ctx.function) {
         destructor_cleanup::emit_call(ctx);
@@ -1735,10 +1781,12 @@ fn emit_function_local_epilogue_cleanup(
         push_return_value(ctx, &return_ty);
     }
     emit_hash_entry_ref_epilogue_cleanup(ctx);
-    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners);
+    emit_ref_cell_owner_epilogue_cleanup_for(ctx, ref_cell_owners, skip_return_slot, runtime_return_slot);
     for (name, slot, ty, offset) in cleanup_locals {
+        let done = return_epilogues::emit_transfer_guard(ctx, slot, runtime_return_slot);
         ctx.emitter.comment(&format!("epilogue cleanup ${}", name));
         emit_owned_local_cleanup(ctx, slot, offset, &ty);
+        if let Some(done) = done { ctx.emitter.label(&done); }
     }
     for (name, offset) in eval_scopes {
         ctx.emitter.comment(&format!("epilogue cleanup {}", name));
@@ -1832,9 +1880,26 @@ pub(super) fn emit_owned_local_cleanup(
 ) {
     if ctx.numeric_local_slots.contains(&slot) {
         // -- numeric cells have no child that can run a PHP destructor --
-        abi::load_at_offset(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+        let result = abi::int_result_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, result, offset);
+        let done = ctx.next_label("numeric_local_cleanup_done");
+        abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
         abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+        let cells = ctx.numeric_cell_offsets_sorted();
+        if !cells.is_empty() && cells.len() <= 4 {
+            // -- a checked numeric local may hold a transient frame cell instead of a heap box --
+            let scratch = abi::secondary_scratch_reg(ctx.emitter);
+            for cell_offset in cells {
+                abi::emit_frame_slot_address(ctx.emitter, scratch, cell_offset);
+                ctx.emitter.instruction(&format!(                               // compare the retiring pointer with this frame cell
+                    "cmp {}, {}",
+                    result, scratch
+                ));
+                abi::emit_branch_if_equal_wide(ctx.emitter, &done);                // frame cells own no heap payload
+            }
+        }
         abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+        ctx.emitter.label(&done);
         return;
     }
     let done = ctx
@@ -2648,25 +2713,7 @@ pub(super) fn emit_function_return_epilogue(
     skip_return_slot: Option<LocalSlotId>,
     return_ownership: super::return_ownership::ReturnOwnershipStatus,
 ) {
-    emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
-    for local in &ctx.function.locals {
-        if local.kind == LocalKind::ReturnRefCell {
-            let offset = ctx.local_offset(local.id).expect("return cell owner has frame storage");
-            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
-        }
-    }
-    emit_exception_activation_pop(ctx);
-    emit_callee_saved_restores(ctx);
-    match return_ownership {
-        super::return_ownership::ReturnOwnershipStatus::Static(owned) => {
-            super::return_ownership::emit_status(ctx.emitter, owned);
-        }
-        super::return_ownership::ReturnOwnershipStatus::Dynamic(offset) => {
-            super::return_ownership::emit_load_status(ctx.emitter, offset);
-        }
-    }
-    abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
-    abi::emit_return(ctx.emitter);
+    return_epilogues::emit(ctx, skip_return_slot, return_ownership);
 }
 
 /// Emits the shared epilogue for a direct-callable user function.
@@ -2679,7 +2726,7 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
         .clone()
         .expect("codegen bug: user function has no epilogue label");
     ctx.emitter.label(&label);
-    emit_function_local_epilogue_cleanup(ctx, None);
+    emit_function_local_epilogue_cleanup(ctx, None, None);
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     super::return_ownership::emit_status(ctx.emitter, true);

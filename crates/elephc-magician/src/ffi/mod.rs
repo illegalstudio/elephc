@@ -30,9 +30,14 @@ pub mod native_methods;
 #[cfg(not(test))]
 pub mod object_construction;
 #[cfg(not(test))]
+mod method_lookup;
+#[cfg(not(test))]
 pub mod object_introspection;
 pub mod opcache_status;
+#[cfg(not(test))]
+pub mod reflection_classes;
 pub mod scope;
+mod scope_owners;
 #[cfg(not(test))]
 pub mod static_members;
 pub mod symbols;
@@ -54,6 +59,8 @@ pub use native_methods::*;
 pub use object_construction::*;
 #[cfg(not(test))]
 pub use object_introspection::*;
+#[cfg(not(test))]
+pub use reflection_classes::*;
 pub use scope::*;
 #[cfg(not(test))]
 pub use static_members::*;

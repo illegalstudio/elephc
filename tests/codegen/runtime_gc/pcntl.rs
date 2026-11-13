@@ -10,6 +10,39 @@
 
 use crate::support::compile_and_run_with_heap_debug;
 
+/// Output writers preserve native reference places after a body assignment boxes later reads.
+#[test]
+fn test_native_reference_output_snapshots_preserve_status_tag_and_aliases() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+function nativeOutputStatusAlias(int &$status): void { $status = 0; }
+function nativeOutputSnapshots(int &$status, string &$tag, array &$matches): void {
+    $status = 0;
+    nativeOutputStatusAlias($status);
+    $pid = pcntl_waitpid(-1, $status, WNOHANG);
+    $tag = 'before';
+    $cipher = openssl_encrypt('payload', 'aes-128-gcm', '0123456789abcdef',
+        OPENSSL_RAW_DATA, '123456789012', $tag);
+    preg_match('/(a)/', 'a', $matches);
+    echo $pid, ':', $status, ':', strlen($tag), ':', $matches[1], '|';
+    echo openssl_decrypt($cipher, 'aes-128-gcm', '0123456789abcdef',
+        OPENSSL_RAW_DATA, '123456789012', $tag), '|';
+    $tag = 'before';
+    $cipher = openssl_encrypt(data: 'payload', cipher_algo: 'aes-128-gcm',
+        passphrase: '0123456789abcdef', options: OPENSSL_RAW_DATA,
+        iv: '123456789012', tag: $tag);
+    echo strlen($tag), ':', openssl_decrypt($cipher, 'aes-128-gcm', '0123456789abcdef',
+        OPENSSL_RAW_DATA, '123456789012', $tag), '|';
+}
+$status = 7; $tag = ''; $matches = [];
+nativeOutputSnapshots($status, $tag, $matches);
+echo $status, ':', strlen($tag), ':', $matches[1];
+"#);
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "-1:0:16:a|payload|16:payload|0:16:a", "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap, got: {}", out.stderr);
+}
+
 /// Reaps two children into the same usage local without leaking or double-freeing either hash.
 #[test]
 fn test_pcntl_waitpid_resource_usage_rebind_is_heap_clean() {

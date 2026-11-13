@@ -369,6 +369,7 @@ fn build_runtime_call_wrapper_function(
             let mut lowering = WrapperBuiltinLoweringContext {
                 builder: &mut builder,
                 data: &mut module.data,
+                functions: &module.functions,
                 strict_php,
             };
             let result = crate::builtins::semantics::lower_registry_call(
@@ -478,6 +479,9 @@ fn wrapper_result_ownership(
 struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
     data: &'a mut crate::ir::DataPool,
+    /// Lowered module functions, so a composing builtin can reproduce the hidden
+    /// argument-collector operand its prelude helper declares.
+    functions: &'a [crate::ir::Function],
     strict_php: bool,
 }
 
@@ -592,10 +596,72 @@ impl crate::builtins::semantics::BuiltinLoweringContext
     fn emit_user_call(
         &mut self,
         name: &str,
-        operands: Vec<ValueId>,
+        mut operands: Vec<ValueId>,
         php_type: PhpType,
         span: Option<crate::span::Span>,
     ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        // A source-declared helper may carry the hidden argument collector that
+        // `func_args::desugar` adds to every frame when the program uses eval or
+        // backtraces. The ordinary lowering appends those operands through
+        // `append_hidden_arguments`; a synthetic wrapper must reproduce them, or the
+        // direct call carries operands the callee signature does not match.
+        let signature = self
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .map(crate::codegen::callable_signatures::function_signature_from_eir);
+        if let Some(signature) = signature {
+            let actual_count = operands.len();
+            if crate::func_args::sig_has_hidden_argc_param(&signature) {
+                let count = self.emit_value(
+                    Op::ConstI64,
+                    Vec::new(),
+                    Some(Immediate::I64(actual_count as i64)),
+                    PhpType::Int,
+                    Op::ConstI64.default_effects(),
+                    span,
+                );
+                operands.push(count.value);
+            }
+            if crate::func_args::sig_collects_surplus_args(&signature) {
+                let count_element = crate::func_args::sig_collects_optional_arg_count(&signature);
+                let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+                let array = self.emit_value(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(u32::from(count_element))),
+                    array_ty,
+                    Op::ArrayNew.default_effects(),
+                    span,
+                );
+                if count_element {
+                    let count = self.emit_value(
+                        Op::ConstI64,
+                        Vec::new(),
+                        Some(Immediate::I64(actual_count as i64)),
+                        PhpType::Int,
+                        Op::ConstI64.default_effects(),
+                        span,
+                    );
+                    let count = self.emit_value(
+                        Op::MixedBox,
+                        vec![count.value],
+                        None,
+                        PhpType::Mixed,
+                        Op::MixedBox.default_effects(),
+                        span,
+                    );
+                    self.emit_void(
+                        Op::ArrayPush,
+                        vec![array.value, count.value],
+                        None,
+                        Op::ArrayPush.default_effects(),
+                        span,
+                    );
+                }
+                operands.push(array.value);
+            }
+        }
         let data = self.data.intern_function_name(name);
         let effects = Op::Call.default_effects();
         self.emit_value(

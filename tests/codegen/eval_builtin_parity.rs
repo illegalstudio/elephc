@@ -22,7 +22,7 @@ fn compile_and_run_with_mbstring_and_regex(source: &str) -> String {
     fs::write(&php, source).expect("write eval builtin catalog fixture");
 
     let compiled = elephc_cli_command_with_eval_catalog_native(&dir)
-        .args(["--with-mbstring", "--with-regex"])
+        .args(["--with-mbstring", "--with-regex", "--php-version=8.6"])
         .arg(&php)
         .output()
         .expect("compile eval builtin catalog fixture");

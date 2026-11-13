@@ -237,7 +237,8 @@ struct GraphState {
     checker_interface_methods: HashMap<String, HashSet<(String, bool)>>,
     checker_method_implementations: HashMap<(String, String, bool), String>,
     vtable_slots: HashSet<(String, String, bool)>,
-    /// Every injected prelude group, rooted whole whenever a literal eval fragment runs. The
+    /// Injected prelude groups, rooted whole whenever a literal eval fragment runs except XML,
+    /// whose forwarding builtins and parsed fragment supply explicit declaration edges. The
     /// interpreter conjures core classes without the fragment naming them, and the builtin
     /// method bodies the eval-only lowering surfaces materialize (`DateTimeZone::getLocation`
     /// calling the `elephc_tz_location` extern, `listIdentifiers` calling the list-id prelude
@@ -370,6 +371,16 @@ impl GraphState {
     fn apply_global_hazards(&mut self) {
         if self.reach.hazards.literal_eval {
             for group in &self.literal_eval_baseline {
+                // XML eval calls have explicit fragment or builtin-helper edges. Keeping
+                // its SAX callback bodies unconditionally introduces user-call hazards.
+                // Retain the existing bridge-presence sentinel used by Magician; its
+                // constructor/destructor edges do not pull in parser callback dispatch.
+                if group.id == "xml" {
+                    let sentinel = php_symbol_key("xml_parser_create");
+                    self.reach.functions.insert(sentinel.clone());
+                    self.behavioral.functions.insert(sentinel);
+                    continue;
+                }
                 self.reach.functions.extend(group.functions.iter().cloned());
                 self.reach.classes.extend(group.classes.iter().cloned());
                 self.reach.methods.extend(group.methods.iter().cloned());
@@ -524,8 +535,19 @@ impl GraphState {
                     || operators.is_some_and(|operators| {
                         if *is_static {
                             operators.arithmetic.iter().any(|(_, adapter)| *adapter == method)
+                                || operators.bitwise.iter().any(|(_, adapter)| *adapter == method)
+                                || operators.shift.iter().any(|(_, adapter)| *adapter == method)
                                 || operators.compare == Some(method.as_str())
-                        } else { operators.boolean == Some(method.as_str()) }
+                        } else { operators.boolean == Some(method.as_str()) || operators.json == Some(method.as_str())
+                            || operators.bit_not == Some(method.as_str())
+                            || operators.native_clone == Some(method.as_str())
+                            || operators.properties.iter().any(|(_, adapter)| *adapter == method)
+                            || operators.dimensions.iter().any(|(_, adapter)| *adapter == method)
+                            || operators.native_casts.iter().any(|(_, adapter)| *adapter == method)
+                            || operators.casts.is_some_and(|casts| {
+                                [casts.to_int, casts.to_float, casts.to_number, casts.to_bool]
+                                    .into_iter().flatten().any(|adapter| adapter == method)
+                            }) }
                     })
                     || matches!(method.as_str(), "__call" | "__callstatic")
                     || self.behavioral.referenced_methods.contains(&reference)

@@ -45,6 +45,24 @@ fn test_emit_branch_if_equal_wide() {
     assert_eq!(x86_64.output(), "    je equal_label\n");
 }
 
+/// Raw receiver and comparison checks use wide transfers on every supported ARM64 target.
+#[test]
+fn test_emit_raw_zero_and_unequal_branches_on_all_targets() {
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let mut emitter = Emitter::new(target);
+        let register = if target.arch == Arch::AArch64 { "x1" } else { "rdx" };
+        emit_branch_if_zero_wide(&mut emitter, register, "zero");
+        emit_branch_if_not_equal_wide(&mut emitter, "unequal");
+        let expected = if target.arch == Arch::AArch64 {
+            "    cbnz x1, 1f\n    b zero\n1:\n    b.eq 1f\n    b unequal\n1:\n"
+        } else {
+            "    test rdx, rdx\n    je zero\n    jne unequal\n"
+        };
+        assert_eq!(emitter.output(), expected, "{name}");
+    }
+}
+
 /// Tests frame setup and teardown for a small frame (64 bytes).
 /// Verifies that the prologue allocates 64 bytes, saves FP/LR at sp+#48,
 /// sets up x29 as the frame pointer, and that restore/return undo this correctly

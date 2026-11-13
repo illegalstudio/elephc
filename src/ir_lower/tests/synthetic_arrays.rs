@@ -12,6 +12,76 @@ use crate::ir::Op;
 use crate::types::PhpType;
 use std::path::Path;
 
+/// Interface receivers probe the actual trusted getter before selecting attached or public lookup.
+#[test]
+fn spl_interface_write_fetch_checks_trusted_runtime_storage_on_every_target() {
+    let source = r#"<?php
+function splInterfaceWriteIr(ArrayAccess $receiver): void { $receiver['x'][] = 2; }
+$object = new ArrayObject(['x' => [1]]); splInterfaceWriteIr($object);
+$iterator = new ArrayIterator(['x' => [1]]); splInterfaceWriteIr($iterator);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, Path::new("main.php"),
+            Path::new("."), Target::parse(name).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "splInterfaceWriteIr").unwrap();
+        let probe = function.instructions.iter().find(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::SplStorageHasAttachedWriteFetch))).unwrap();
+        assert_eq!(probe.result_php_type, PhpType::Int, "{name}");
+        assert_eq!(function.value(probe.operands[0]).unwrap().php_type,
+            PhpType::Object("ArrayAccess".into()), "{name}");
+        for block in ["spl.parent.attached", "spl.parent.public", "spl.parent.selected"] {
+            assert!(function.blocks.iter().any(|candidate| candidate.name.starts_with(block)), "{name}: {block}");
+        }
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("spl_write_fetch_probe_done"), "{name}: missing trusted getter probe");
+        assert!(assembly.contains("_class_iface_method_count") && assembly.contains("_class_offsetget_forwrite_ptrs"), "{name}");
+        assert!(function.instructions.iter().any(|inst| inst.immediate == Some(crate::ir::Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::ArrayFetchForWrite))), "{name}: missing attached fetch");
+    }
+}
+
+/// Writable SPL selectors retain raw storage while returning attached cells and respecting overrides.
+#[test]
+fn spl_write_fetch_separates_raw_storage_and_selects_only_internal_getters_on_all_targets() {
+    let source = r#"<?php
+class StorageSetterOverride extends ArrayObject {
+    public function offsetSet(mixed $key, mixed $value): void { echo 'setter'; }
+}
+class StorageGetterOverride extends ArrayObject {
+    public function offsetGet(mixed $key): mixed { return parent::offsetGet($key); }
+}
+$object = new ArrayObject(['x' => [1]]); $object['x'][] = 2;
+$iterator = new ArrayIterator(['x' => [1]]); $iterator['x'][] = 2;
+$setter = new StorageSetterOverride(['x' => [1]]); $setter['x'][] = 2;
+$getter = new StorageGetterOverride(['x' => [1]]); $getter['x'][] = 2;
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        for class in ["ArrayObject", "ArrayIterator"] {
+            let method_name = format!("{class}::__elephc_fetch_for_write");
+            let method = module.class_methods.iter().find(|method| method.name == method_name).unwrap();
+            let storage = method.instructions.iter().find(|inst| inst.op == Op::PropGetForWrite).unwrap();
+            assert_eq!(storage.result_php_type, PhpType::Array(Box::new(PhpType::Mixed)), "{name}: {class}");
+            let fetch = method.instructions.iter().find(|inst| inst.op == Op::ArrayGetForWrite).unwrap();
+            assert_eq!(fetch.operands[0], storage.result.unwrap(), "{name}: {class}");
+            assert_eq!(fetch.result_php_type, PhpType::Mixed, "{name}: {class}");
+            assert!(!method.instructions.iter().any(|inst| inst.op == Op::LoadArrayElemRefCell), "{name}: {class}");
+        }
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        let (_, table) = assembly.split_once("_class_offsetget_forwrite_ptrs:\n").unwrap();
+        let entries = table.lines().map_while(|line| line.trim().strip_prefix(".quad ")).collect::<Vec<_>>();
+        for class in ["ArrayObject", "ArrayIterator", "StorageSetterOverride"] {
+            let id = module.class_infos[class].class_id as usize;
+            assert_ne!(entries[id], "0", "{name}: {class} must select an internal write getter");
+        }
+        let id = module.class_infos["StorageGetterOverride"].class_id as usize;
+        assert_eq!(entries[id], "0", "{name}: a user getter must keep its value semantics");
+    }
+}
+
 /// User and inherited hydration hooks select boxed input while synthetic SPL keeps its internal ABI.
 #[test]
 fn hydration_parameter_metadata_preserves_boxed_and_synthetic_abis_on_all_targets() {

@@ -19,6 +19,48 @@ pub(super) fn lower_assignment_expr(
     conditional_value_temp: Option<&str>,
     expr: &Expr,
 ) -> LoweredValue {
+    if let Some(result) = super::static_dimension_incdec::lower(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr,
+        |ctx, prelude| {
+            let mut capture = None;
+            let result = lower_ordinary_assignment_expr(
+                ctx, target, value, result_target, prelude, conditional_value_temp, expr, &mut capture,
+            );
+            super::ordinary_property_incdec::finish_old_capture(ctx, capture, result, expr.span)
+        },
+    ) { return result; }
+    if let Some(result) = super::instance_dimension_incdec::lower(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr,
+    ) { return result; }
+    if let Some(result) = native_xml_updates::lower_assignment(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr,
+    ) { return result; }
+    if let Some(result) = crate::ir_lower::stmt::lower_nested_property_compound_expression(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr.span,
+    ) { return result; }
+    let mut old_capture = None;
+    let result = lower_ordinary_assignment_expr(
+        ctx, target, value, result_target, prelude, conditional_value_temp, expr, &mut old_capture,
+    );
+    super::ordinary_property_incdec::finish_old_capture(ctx, old_capture, result, expr.span)
+}
+
+/// Lowers an ordinary write while keeping a boxed scalar snapshot alive through every return.
+fn lower_ordinary_assignment_expr(
+    ctx: &mut LoweringContext<'_, '_>,
+    target: &Expr,
+    value: &Expr,
+    result_target: Option<&Expr>,
+    prelude: &[Stmt],
+    conditional_value_temp: Option<&str>,
+    expr: &Expr,
+    old_capture: &mut Option<crate::ir::LocalSlotId>,
+) -> LoweredValue {
+    let incdec = super::ordinary_property_incdec::captured_arithmetic(
+        target, value, result_target, prelude, conditional_value_temp,
+    );
+    let mut value = value;
+    let mut prefix_readback = false;
     if let Some(result) = super::append_updates::lower(ctx, value, prelude) {
         return result;
     }
@@ -33,8 +75,35 @@ pub(super) fn lower_assignment_expr(
     );
     let mut compound_receiver = None;
     for (position, stmt) in prelude.iter().enumerate() {
+        if position + 1 == prelude.len() {
+            if let Some((operation, old)) = incdec {
+                if super::ordinary_property_incdec::scalar_operand(ctx, old)
+                    && (result_target.is_some()
+                        || super::ordinary_property_incdec::plain_prefix_readback(ctx, target)) {
+                    value = operation;
+                    prefix_readback = result_target.is_none();
+                    continue;
+                }
+            }
+        }
+        if let Some(update) = buffer_update.as_ref() {
+            if compound_receiver.is_none() && update.read_position() == position {
+                crate::ir_lower::stmt::guard_property_expression_update(ctx, update, expr.span);
+            }
+        }
         if let Some(receiver) = guard_static_compound_property_read(ctx, target, value, stmt, expr.span) {
             compound_receiver = Some(receiver);
+            continue;
+        }
+        if let Some((_, old)) = incdec {
+            if let Some(slot) = super::ordinary_property_incdec::lower_old_capture(
+                ctx, target, stmt, old, expr.span,
+            ) {
+                *old_capture = Some(slot);
+                continue;
+            }
+        }
+        if conditional_value_temp.is_none() && lower_property_write_prelude(ctx, target, stmt, expr.span) {
             continue;
         }
         if let Some(update) = buffer_update.as_ref() {
@@ -49,6 +118,7 @@ pub(super) fn lower_assignment_expr(
         crate::ir_lower::stmt::lower_stmt(ctx, stmt);
     }
     let target = compound_receiver.as_ref().map(|receiver| &receiver.target).unwrap_or(target);
+    let result_target = result_target.or_else(|| prefix_readback.then_some(target));
     if let Some(temp_name) = conditional_value_temp {
         if let Some(result) = lower_conditional_non_local_null_coalesce_assignment(
             ctx,
@@ -509,10 +579,20 @@ pub(super) fn lower_dynamic_property_assign(
     value: &Expr,
     span: Span,
 ) {
-    let (mut receiver, property, value) = if is_static_property_write_chain(object) {
+    if native_xml_updates::lower_plain_dynamic(ctx, object, property, value, span) { return; }
+    lower_dynamic_property_assign_prepared(ctx, object, property, value, span);
+}
+
+/// Emits a dynamic property assignment after any source-order receiver staging.
+pub(super) fn lower_dynamic_property_assign_prepared(
+    ctx: &mut LoweringContext<'_, '_>, object: &Expr, property: &Expr, value: &Expr, span: Span,
+) {
+    let (receiver, property, value) = if is_static_property_write_chain(object)
+        || defer_native_property_write_receiver(ctx, object) {
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
         let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
+        let property = lease_provisional_property_name(ctx, property, span);
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         // The traversal must not pin this same lease again at a nullable hop. Its
         // borrowed guard view remains protected by the earlier name record below it.
@@ -526,16 +606,68 @@ pub(super) fn lower_dynamic_property_assign(
         receiver.finish_operand_window(ctx, property_pins, span);
         (receiver, property, value)
     } else {
-        let object = lower_member_receiver_at_span(ctx, object, span);
+        let object = crate::ir_lower::expr::lower_property_write_receiver(ctx, object);
+        let object = refine_member_receiver_at_span(ctx, object, span);
         let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(ctx, object, span);
         let property = lower_expr(ctx, property);
         let property = property_access::coerce_runtime_property_name(ctx, property, span);
         let property = crate::ir_lower::ownership::persist_string_byte_view(ctx, property, Some(span));
+        let property = lease_provisional_property_name(ctx, property, span);
         let property_pins = pin_in_flight_owners(ctx, &[property.value], span);
         let value = lower_expr(ctx, value);
         unpin_in_flight_owners(ctx, property_pins, span);
         (receiver, property, ctx.borrow_write_operand_if_needed(value, span))
     };
+    lower_dynamic_property_assign_with_values(ctx, receiver, property, value, span);
+}
+
+/// Turns a possibly detached local string read into an independently pinnable name before the RHS.
+fn lease_provisional_property_name(
+    ctx: &mut LoweringContext<'_, '_>, property: LoweredValue, span: Span,
+) -> LoweredValue {
+    ctx.with_independent_write_receiver(|ctx| {
+        if !matches!(ctx.builder.value_defining_op(property.value), Some(Op::LoadLocal | Op::LoadStaticLocal))
+            || !ctx.value_needs_release_after_use(property) { return property; }
+        let leased = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, property, Some(span));
+        crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
+        leased
+    })
+}
+
+/// Writes a runtime-name property from operands whose name was already coerced once.
+pub(super) fn lower_dynamic_property_assign_from_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) {
+    let object = refine_member_receiver_at_span(ctx, object, span);
+    let receiver = crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver::new(
+        ctx, object, span,
+    );
+    lower_dynamic_property_assign_with_values(ctx, receiver, property, value, span);
+}
+
+/// Completes a dynamic property write without replaying any prepared operand expression.
+fn lower_dynamic_property_assign_with_values(
+    ctx: &mut LoweringContext<'_, '_>,
+    mut receiver: crate::ir_lower::stmt::property_write_receiver::PropertyWriteReceiver,
+    property: LoweredValue,
+    value: LoweredValue,
+    span: Span,
+) {
+    // A later eval can widen the name's local after this read was lowered, making the
+    // read detach an owned string. Publish its lifetime before any write guard can throw.
+    let (property, property_owner) = ctx.with_independent_write_receiver(|ctx|
+        root_owned_call_operand(ctx, property, span));
+    let property = if property_owner.is_some() {
+        let ty = ctx.builder.value_php_type(property.value);
+        let borrowed = ctx.emit_value(Op::Borrow, vec![property.value], None, ty,
+            Op::Borrow.default_effects(), Some(span));
+        ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
+        borrowed
+    } else { property };
     receiver.narrow_for_dynamic_assignment(ctx, property, value, span);
     let object = receiver.value;
     // The NAME is only known at run time, so a statically known receiver can still land this
@@ -570,16 +702,20 @@ pub(super) fn lower_dynamic_property_assign(
         ctx.builder.set_value_ownership(borrowed.value, Ownership::Borrowed);
         borrowed
     } else { value };
-    ctx.emit_void(
-        Op::DynamicPropSet,
-        vec![object.value, property.value, store_value.value],
-        None,
-        Op::DynamicPropSet.default_effects(),
-        Some(span),
-    );
+    if !crate::ir_lower::stmt::lower_native_dynamic_property_set(ctx, object, property, store_value, span) {
+        ctx.emit_void(
+            Op::DynamicPropSet,
+            vec![object.value, property.value, store_value.value],
+            None,
+            Op::DynamicPropSet.default_effects(),
+            Some(span),
+        );
+    }
     crate::ir_lower::expr::unpin_in_flight_owners(ctx, pins, span);
     if owns_value { crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span)); }
-    if ctx.value_is_owning_temporary(property) {
+    if let Some(owner) = property_owner {
+        retire_owned_call_operand(ctx, owner, span);
+    } else if ctx.value_needs_release_after_use(property) {
         crate::ir_lower::ownership::release_if_owned(ctx, property, Some(span));
     }
     receiver.finish(ctx, span);
@@ -609,6 +745,29 @@ fn runtime_name_value_needs_boxing(
     })
 }
 
+/// Emits PHP's warning for a decrement that leaves a null local unchanged.
+fn emit_null_decrement_warning(ctx: &mut LoweringContext<'_, '_>, span: Span) {
+    let message = lower_expr(
+        ctx,
+        &Expr::new(
+            ExprKind::StringLiteral(
+                "Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n"
+                    .into(),
+            ),
+            span,
+        ),
+    );
+    ctx.emit_void(
+        Op::RuntimeCall,
+        vec![message.value],
+        Some(Immediate::RuntimeCall(
+            crate::ir::RuntimeCallTarget::WriteDiagnostic,
+        )),
+        effects_lookup::runtime_effects(),
+        Some(span),
+    );
+}
+
 /// Lowers pre/post increment and decrement expressions.
 ///
 /// Three paths, all of which can retype the local, so all of them store a boxed Mixed:
@@ -620,7 +779,7 @@ fn runtime_name_value_needs_boxing(
 ///   (`PHP_INT_MAX + 1` becomes float).
 ///
 /// The post-forms return the value the local held before the store; the pre-forms re-read
-/// the local afterwards.
+/// the local afterwards. A null decrement warns and leaves the local unchanged.
 pub(super) fn lower_inc_dec(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -631,16 +790,31 @@ pub(super) fn lower_inc_dec(
     crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
-    if crate::types::object_operators::operator_class(&existing_type).is_some() {
+    let op = if increment { BinOp::Add } else { BinOp::Sub };
+    if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+        &op, &existing_type, &PhpType::Int, ctx.classes,
+    ) {
         let return_old = if post {
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, old, Some(expr.span))
         } else { old };
         let one = lower_int_literal(ctx, 1, expr);
-        let op = if increment { BinOp::Add } else { BinOp::Sub };
-        if let Some(new) = object_operators::lower_object_binary_values(ctx, old, &op, one, expr) {
-            ctx.store_local(name, new, existing_type, Some(expr.span));
+        let new = object_operators::lower_object_binary_values(ctx, old, &op, one, expr)
+            .or_else(|| object_operators::lower_dynamic_object_binary(ctx, old, &op, one, expr, true,
+                |ctx| lower_str_inc_dec(ctx, old, increment, expr)));
+        if let Some(new) = new {
+            let stored_type = if plan.result_type(&op).is_int_float_union() { PhpType::Mixed } else { existing_type };
+            ctx.store_local(name, new, stored_type, Some(expr.span));
             return if post { return_old } else { ctx.load_local(name, Some(expr.span)) };
         }
+    }
+    if matches!(existing_type.codegen_repr(), PhpType::Void) {
+        if increment {
+            let one = lower_int_literal(ctx, 1, expr);
+            ctx.store_local(name, one, PhpType::Int, Some(expr.span));
+            return if post { old } else { ctx.load_local(name, Some(expr.span)) };
+        }
+        emit_null_decrement_warning(ctx, expr.span);
+        return old;
     }
     if matches!(existing_type.codegen_repr(), PhpType::Mixed | PhpType::Str) {
         let return_old = if post {

@@ -26,7 +26,7 @@ mod effect_analysis;
 mod return_boundaries;
 mod effects;
 mod exception_flow;
-mod fold;
+pub(crate) mod fold;
 /// Keeps a declaration PHP calls a generator recognizable as one through the AST passes.
 mod generator_bodies;
 mod namespace_fallbacks;
@@ -637,6 +637,7 @@ struct FunctionEffectBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
     parameter_guard_may_throw: bool,
+    reference_parameters: HashSet<String>,
     return_boundary: Rc<ReturnBoundaryFacts>,
 }
 
@@ -647,6 +648,7 @@ struct StaticMethodBody<'a> {
     body: &'a [Stmt],
     declared_never: bool,
     parameter_guard_may_throw: bool,
+    reference_parameters: HashSet<String>,
     return_boundary: Rc<ReturnBoundaryFacts>,
 }
 

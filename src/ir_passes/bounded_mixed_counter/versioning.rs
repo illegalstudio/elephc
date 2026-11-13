@@ -44,7 +44,9 @@ impl IrPass for LoopCounterVersioning {
 
 /// Bounds code growth and rejects scopes whose storage can be reached implicitly.
 fn run(function: &mut Function, data: &DataPool, pass: &BoundedMixedCounter) -> bool {
-    if function.flags.is_main || function.instructions.len() > 2048 || function.locals.len() > 128
+    if (function.flags.is_main && !super::main_frame_is_private(function, data))
+        || function.instructions.len() > 2048
+        || function.locals.len() > 128
         || function.flags.is_generator || function.flags.is_fiber_wrapper
         || crate::ir_passes::cfg::has_exception_handlers(function)
         || crate::ir_passes::local_scope::has_dynamic_eval(function)
@@ -242,6 +244,9 @@ fn apply(function: &mut Function, plan: &Plan) {
     let seed = builder.emit(Op::LoadLocal, vec![], Some(Immediate::LocalSlot(plan.slot)),
         IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Borrowed).unwrap();
     let seed_ok = integer_guard(&mut builder, seed);
+    // Copy the payload beside its tag test: a non-integer payload is simply unused, and the
+    // borrowed seed read stays inside one block, so a numeric seed keeps its frame cell.
+    let seed_int = integer_payload(&mut builder, seed);
     let bound = match builder.function().value(plan.bound).unwrap().def {
         ValueDef::Instruction { block, .. } if plan.blocks.contains(&block) => {
             let load = defining_instruction(builder.function(), plan.bound).unwrap();
@@ -259,7 +264,6 @@ fn apply(function: &mut Function, plan: &Plan) {
     builder.position_at_end(bound_guard);
     builder.terminate(Terminator::CondBr { cond: bound_ok, then_target: integer_entry, then_args: vec![], else_target: slow, else_args: vec![] });
     builder.position_at_end(integer_entry);
-    let seed_int = integer_payload(&mut builder, seed);
     let bound_int = integer_payload(&mut builder, bound);
     builder.emit_store_local(fast_slot, seed_int);
     let fast_entry = builder.create_named_block("counter.integer.ready", vec![]);

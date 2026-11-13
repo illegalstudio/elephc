@@ -184,6 +184,13 @@ pub(super) fn validate_method_parent_override(
     else {
         return Ok(());
     };
+    // Concrete constructors have no inherited parameter or visibility contract.
+    // Interface constructor requirements are checked separately for the pending class.
+    if method.name().eq_ignore_ascii_case("__construct") && !parent_method.is_abstract() {
+        return if parent_method.is_final() || method.is_abstract() || method.is_static() {
+            Err(EvalStatus::RuntimeFatal)
+        } else { Ok(()) };
+    }
     if parent_method.visibility() == EvalVisibility::Private {
         return Ok(());
     }
@@ -230,6 +237,13 @@ pub(super) fn validate_method_aot_parent_override(
     let Some(flags) = values.reflection_method_flags(&parent, method.name())? else {
         return Ok(());
     };
+    if method.name().eq_ignore_ascii_case("__construct")
+        && flags & EVAL_REFLECTION_MEMBER_FLAG_ABSTRACT == 0
+    {
+        return if flags & EVAL_REFLECTION_MEMBER_FLAG_FINAL != 0 || method.is_abstract() || method.is_static() {
+            Err(EvalStatus::RuntimeFatal)
+        } else { Ok(()) };
+    }
     if flags & EVAL_REFLECTION_MEMBER_FLAG_PRIVATE != 0 {
         return Ok(());
     }

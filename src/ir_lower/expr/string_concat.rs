@@ -22,6 +22,26 @@ pub(super) fn lower_concat(ctx: &mut LoweringContext<'_, '_>, left: &Expr, right
     });
     let lhs = pending[0];
     unpin_in_flight_owners(ctx, lhs_pins, left.span);
+    emit_concat_values(ctx, lhs, rhs, expr)
+}
+
+/// Coerces prepared compound operands without repeating their source expressions.
+pub(super) fn lower_concat_from_values(
+    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, rhs: LoweredValue, expr: &Expr,
+) -> LoweredValue {
+    let lhs = coerce_to_string(ctx, lhs, expr);
+    let lhs = crate::ir_lower::ownership::persist_string_byte_view(ctx, lhs, Some(expr.span));
+    let mut pending = [lhs];
+    let (rhs, pins) = lower_with_pending_owners(ctx, &mut pending, expr.span, |ctx|
+        coerce_to_string(ctx, rhs, expr));
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    emit_concat_values(ctx, pending[0], rhs, expr)
+}
+
+/// Joins converted strings and applies the shared binary temporary cleanup discipline.
+fn emit_concat_values(
+    ctx: &mut LoweringContext<'_, '_>, lhs: LoweredValue, rhs: LoweredValue, expr: &Expr,
+) -> LoweredValue {
     if lhs.ir_type == IrType::Str && rhs.ir_type == IrType::Str {
         let result = ctx.emit_value(
             Op::StrConcat,

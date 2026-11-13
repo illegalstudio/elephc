@@ -33,7 +33,7 @@ pub(super) fn static_callback_name_operand(
     let receiver = inst_ref.operands.first().copied();
     let kind = match inst_ref.op {
         Op::ConstStr => StaticCallbackOperandKind::StringLiteral,
-        Op::FirstClassCallableNew => StaticCallbackOperandKind::FirstClassCallable,
+        Op::FirstClassCallableNew | Op::CallableValueNew => StaticCallbackOperandKind::FirstClassCallable,
         _ => unreachable!("callback source instruction was validated earlier"),
     };
     let data = match inst_ref.immediate.as_ref() {
@@ -206,7 +206,7 @@ pub(super) fn require_static_callback_source<'a>(
     inst: &'a Instruction,
     owner: &str,
 ) -> Result<&'a Instruction> {
-    if matches!(inst.op, Op::ConstStr | Op::FirstClassCallableNew) {
+    if matches!(inst.op, Op::ConstStr | Op::FirstClassCallableNew | Op::CallableValueNew) {
         Ok(inst)
     } else {
         Err(CodegenIrError::unsupported(format!(

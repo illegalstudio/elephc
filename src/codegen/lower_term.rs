@@ -22,7 +22,11 @@ use super::return_ownership;
 use super::{CodegenIrError, Result};
 
 /// Lowers one EIR terminator.
-pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator) -> Result<()> {
+pub(super) fn lower_terminator(
+    ctx: &mut FunctionContext<'_>,
+    source: BlockId,
+    term: &Terminator,
+) -> Result<()> {
     match term {
         Terminator::Return { value: None } => {
             if ctx.is_main {
@@ -52,8 +56,9 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 // is what keeps the acquisition and the returned reference identical when a
                 // fallthrough `finally` rebound that variable in between (PHP snapshots the
                 // same way, with `MAKE_REF` before the finally). The frame's lease slot is the
-                // separate managed OWNER, which a superseding return replaces and cleanup
-                // retires; a borrowed cell leaves it zero while still returning this snapshot.
+                // separate managed OWNER. Each return site keeps its own pending lease, and
+                // cleanup retires every lease except the one belonging to this snapshot.
+                // A borrowed cell leaves its lease zero while still returning this snapshot.
                 if !matches!(ctx.value_php_type(*value)?, PhpType::Pointer(_)) {
                     return Err(CodegenIrError::invalid_module(
                         "by-reference return requires a captured pointer value",
@@ -61,9 +66,12 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
                 }
                 let int_reg = abi::int_result_reg(ctx.emitter);
                 ctx.load_value_to_reg(*value, int_reg)?;
+                let owner = frame::reference_returns::owner_slot(ctx.function, *value)
+                    .ok_or_else(|| CodegenIrError::invalid_module(
+                        "by-reference return snapshot has no matching reference-cell lease slot"))?;
                 frame::emit_function_return_epilogue(
                     ctx,
-                    None,
+                    Some(owner),
                     return_ownership::ReturnOwnershipStatus::Static(false),
                 );
                 return Ok(());
@@ -100,7 +108,7 @@ pub(super) fn lower_terminator(ctx: &mut FunctionContext<'_>, term: &Terminator)
             Ok(())
         }
         Terminator::Br { target, args } => {
-            lower_branch(ctx, *target, args, "br")?;
+            lower_branch(ctx, source, *target, args, "br")?;
             Ok(())
         }
         Terminator::CondBr {
@@ -252,16 +260,41 @@ pub(super) fn lower_throw_value(ctx: &mut FunctionContext<'_>, value: ValueId) -
 /// No jump is emitted when the target block is laid out immediately after this one.
 fn lower_branch(
     ctx: &mut FunctionContext<'_>,
+    source: BlockId,
     target: BlockId,
     args: &[ValueId],
     context: &str,
 ) -> Result<()> {
     materialize_block_args(ctx, target, args, context)?;
+    if try_emit_rotated_loop_branch(ctx, source)? {
+        return Ok(());
+    }
     let label = ctx.block_label_for_id(target)?;
     if ctx.fallthrough_label().as_deref() != Some(label.as_str()) {
         abi::emit_jump(ctx.emitter, &label);
     }
     Ok(())
+}
+
+/// Re-emits an eligible loop header's integer test at a latch and branches to the
+/// header's then/else targets, skipping the header jump on the back edge.
+fn try_emit_rotated_loop_branch(
+    ctx: &mut FunctionContext<'_>,
+    source: BlockId,
+) -> Result<bool> {
+    let Some(plan) = ctx.rotated_loop_branches.get(&source).copied() else {
+        return Ok(false);
+    };
+    let predicate = super::lower_inst::emit_fused_int_compare(ctx, plan.compare)?;
+    let then_label = ctx.block_label_for_id(plan.then_target)?;
+    let else_label = ctx.block_label_for_id(plan.else_target)?;
+    emit_conditional_jump(
+        ctx,
+        BranchCondition::IntegerFlags(predicate),
+        &then_label,
+    )?;
+    abi::emit_jump(ctx.emitter, &else_label);
+    Ok(true)
 }
 
 /// What a lowered `cond_br` tests to select its then-edge.

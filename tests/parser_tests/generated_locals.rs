@@ -16,6 +16,28 @@ use elephc::names::is_generated_local_name;
 
 use super::*;
 
+/// Compound names convert once after the RHS and every read/write uses the captured string.
+#[test]
+fn compound_dynamic_property_name_conversion_follows_rhs() {
+    let statements = parse_source("<?php echo ($box->{$name} += rhs());");
+    let StmtKind::Echo(expression) = &statements[0].kind else { panic!("expected echo"); };
+    let ExprKind::Assignment { target, prelude, .. } = &expression.kind else { panic!("expected assignment"); };
+    let rhs = prelude.iter().position(|stmt| matches!(&stmt.kind,
+        StmtKind::Assign { value, .. } if matches!(&value.kind,
+            ExprKind::FunctionCall { name, .. } if name.as_str() == "rhs"))).unwrap();
+    let conversions: Vec<_> = prelude.iter().enumerate().filter_map(|(index, stmt)| {
+        let StmtKind::Assign { name, value } = &stmt.kind else { return None; };
+        matches!(&value.kind, ExprKind::Cast { target: elephc::parser::ast::CastType::String, expr }
+            if matches!(&expr.kind, ExprKind::Variable(name) if name == "name"))
+            .then_some((index, name))
+    }).collect();
+    assert_eq!(conversions.len(), 1);
+    assert!(rhs < conversions[0].0);
+    let ExprKind::DynamicPropertyAccess { property, .. } = &target.kind else { panic!("expected property target"); };
+    assert!(matches!(&property.kind, ExprKind::Variable(name) if name == conversions[0].1));
+    assert!(is_generated_local_name(conversions[0].1));
+}
+
 /// Intermediate and final probes bracket compound reads without reading plain-write children.
 #[test]
 fn append_live_guard_roles_bracket_dimension_reads() {

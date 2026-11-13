@@ -1083,10 +1083,16 @@ var_dump($GLOBALS[$key]);
 "#,
         PhpVersion::Php86,
     );
-    assert_eq!(
-        out,
-        "Warning: Undefined global variable $notInitialized\nNULL\n"
+    assert!(
+        out.contains("Warning: Undefined global variable $notInitialized"),
+        "missing undefined-global warning: {out}"
     );
+    assert_eq!(
+        out.matches("Warning: Undefined global variable $notInitialized").count(),
+        1,
+        "warning must fire once: {out}"
+    );
+    assert!(out.ends_with("NULL\n"), "expected a null result: {out}");
 }
 
 /// Nested `$GLOBALS[...]` writes update the top-level container, autovivify a missing

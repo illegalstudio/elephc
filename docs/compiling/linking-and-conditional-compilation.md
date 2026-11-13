@@ -162,6 +162,12 @@ runtime calls. Statically visible `pcntl_*` calls auto-link it. See
 [PCNTL](../php/pcntl.md) for target availability, fork/signal semantics, and
 documented limits.
 
+`--with-reference` force-links `elephc_reference`, the native property-reference
+metadata and validation bridge. Native reference validation selects it
+automatically through its runtime capability. It exposes no PHP functions or
+classes and has no interpreter dependencies. Native and eval publishers share
+its weak source registry when both runtimes are present.
+
 `--with-eval` force-links `elephc_magician`; it does not enable new syntax or
 change which fragments are eligible for AOT lowering. Normal eval usage is
 detected automatically. See [Eval](../php/eval.md) for language semantics and
@@ -349,8 +355,9 @@ Linker error: required Elephc bridge `elephc_magician` could not be found
 
 [`--print-capabilities`](cli-reference.md) is the
 authoritative list for the binary you are holding — one line per capability with
-the archives it needs — so a packaging script can check a tarball carries
-everything the compiler inside it advertises rather than guessing from this page.
+the archives it needs and the managed native packages (`native:<package>`) its
+link resolves — so a packaging script can check a tarball carries everything the
+compiler inside it advertises rather than guessing from this page.
 It reports the `eval` bridge under the plain `libelephc_magician.a`; the
 curl-aware variant above is the one name it does not print.
 

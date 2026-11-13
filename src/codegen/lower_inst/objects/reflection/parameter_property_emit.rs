@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Fresh declaring-function and type objects transfer ownership into their cells; the
+//!   declaring-class and class-type slots hold a `ReflectionClass` builder address instead.
 
 use super::*;
 use crate::codegen::lower_inst::emit_runtime_callable_invoker_with_string_owner;
@@ -276,7 +278,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
             metadata.returns_reference = *returns_reference;
             metadata.rendered_to_string = reflection_declaring_function_dump(ctx, None, name);
             emit_reflection_owner_object(ctx, "ReflectionFunction", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionFunction".to_string()),
             );
@@ -311,7 +313,7 @@ pub(super) fn emit_reflection_parameter_declaring_function_property(
                 name,
             );
             emit_reflection_owner_object(ctx, "ReflectionMethod", &metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionMethod".to_string()),
             );
@@ -347,13 +349,7 @@ pub(super) fn emit_reflection_parameter_declaring_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = parameter.declaring_class_name.as_deref() {
-        let declaring_metadata =
-            reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
-        emit_box_current_value_as_mixed(
-            ctx.emitter,
-            &PhpType::Object("ReflectionClass".to_string()),
-        );
+        emit_reflection_class_builder_address_as_mixed(ctx, declaring_class_name);
     } else {
         emit_boxed_null_literal_to_result(ctx);
     }
@@ -393,12 +389,7 @@ pub(super) fn emit_reflection_parameter_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(class_name) = reflection_parameter_class_name(parameter) {
-        let class_metadata = reflection_shallow_class_metadata_for_name(ctx, class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &class_metadata)?;
-        emit_box_current_value_as_mixed(
-            ctx.emitter,
-            &PhpType::Object("ReflectionClass".to_string()),
-        );
+        emit_reflection_class_builder_address_as_mixed(ctx, class_name);
     } else {
         emit_boxed_null_literal_to_result(ctx);
     }
@@ -449,21 +440,21 @@ pub(super) fn emit_reflection_owner_type_property_by_name(
     match type_metadata {
         Some(ReflectionParameterTypeMetadata::Named(type_metadata)) => {
             emit_reflection_named_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionNamedType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Union(type_metadata)) => {
             emit_reflection_union_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionUnionType".to_string()),
             );
         }
         Some(ReflectionParameterTypeMetadata::Intersection(type_metadata)) => {
             emit_reflection_intersection_type_object(ctx, type_metadata)?;
-            emit_box_current_value_as_mixed(
+            emit_box_current_owned_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Object("ReflectionIntersectionType".to_string()),
             );

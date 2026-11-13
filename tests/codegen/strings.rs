@@ -63,6 +63,8 @@ mod offset_writes;
 
 #[path = "strings/mbstring.rs"]
 mod mbstring;
+#[path = "strings/mbstring_fast_semantics.rs"]
+mod mbstring_fast_semantics;
 #[path = "strings/mbstring_coercion.rs"]
 mod mbstring_coercion;
 #[path = "strings/mbstring_scalar.rs"]

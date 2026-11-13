@@ -23,14 +23,40 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Hydration and reflection receive registered cells after defaults and before the return.
+    #[test]
+    fn native_by_name_sources_register_after_property_initialization_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_new_by_name(&mut emitter, true);
+            let assembly = emitter.output();
+            let label = if target.arch == Arch::X86_64 { "__rt_nbn_return_allocated_x86:" }
+                else { "__rt_nbn_return_allocated:" };
+            let (initialized, returning) = assembly.split_once(label).unwrap();
+            assert!(initialized.contains("_class_propinit_ptrs"), "{name}");
+            assert!(returning.find("__rt_reference_sources_bind_object").unwrap()
+                < returning.find("ret").unwrap(), "{name}: bind before exposing the hydrated object");
+            let mut emitter = Emitter::new(target);
+            emit_new_by_name(&mut emitter, false);
+            assert!(!emitter.output().contains("__rt_reference_sources_bind_object"), "{name}");
+        }
+    }
+}
+
 
 /// new_by_name: instantiate a class by its textual name.
 /// Input:  AArch64 x1 = name pointer, x2 = name length
 ///         x86_64  rax = name pointer, rdx = name length
 /// Output: object pointer, or 0 when no class with that name is known.
-pub fn emit_new_by_name(emitter: &mut Emitter) {
+pub fn emit_new_by_name(emitter: &mut Emitter, native_validation: bool) {
     if emitter.target.arch == Arch::X86_64 {
-        emit_new_by_name_linux_x86_64(emitter);
+        emit_new_by_name_linux_x86_64(emitter, native_validation);
         return;
     }
 
@@ -128,6 +154,9 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #40]");                                   // restore the object pointer (the thunk may clobber x0)
     emitter.label("__rt_nbn_no_propinit");
     emitter.label("__rt_nbn_return_allocated");
+    if native_validation {
+        abi::emit_call_label(emitter, "__rt_reference_sources_bind_object");
+    }
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the frame
     emitter.instruction("ret");                                                 // return the object pointer
@@ -140,7 +169,7 @@ pub fn emit_new_by_name(emitter: &mut Emitter) {
 }
 
 /// Emits the Linux x86_64 object runtime helper for new by name.
-fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
+fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter, native_validation: bool) {
     emitter.blank();
     emitter.comment("--- runtime: new_by_name ---");
     emitter.label_global("__rt_new_by_name");
@@ -238,6 +267,10 @@ fn emit_new_by_name_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // restore the object pointer (the thunk may clobber rax)
     emitter.label("__rt_nbn_no_propinit_x86");
     emitter.label("__rt_nbn_return_allocated_x86");
+    if native_validation {
+        abi::emit_reg_move(emitter, "rdi", "rax");
+        abi::emit_call_label(emitter, "__rt_reference_sources_bind_object");
+    }
     emitter.instruction("add rsp, 48");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the object pointer

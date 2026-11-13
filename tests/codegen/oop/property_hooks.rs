@@ -12,6 +12,213 @@
 
 use super::*;
 
+/// An eval-only subclass retains its widened setter visibility and its own accessor body.
+#[test]
+fn test_mixed_property_setters_preserve_eval_subclass_overrides_bundle() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeEvalSetterBase {
+    public protected(set) string $word {
+        get { return ''; }
+        set { echo 'unexpected-base|'; }
+    }
+}
+$code = $argc > 0 ? '
+class RuntimeEvalSetterChild extends RuntimeEvalSetterBase {
+    public string $word {
+        get { return ""; }
+        set {
+            echo "child:", $value, "|";
+            if ($value === "fail") { throw new RuntimeException("caught"); }
+        }
+    }
+}
+$object = new RuntimeEvalSetterChild();
+' : '';
+eval($code);
+$object->word = 'value';
+for ($i = 0; $i < 3; $i++) {
+    try { $object->word = 'fail'; }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, format!("child:value|{}", "child:fail|caught|".repeat(3)));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A raw base-class receiver still reaches a property setter introduced by its runtime subclass.
+/// The base permits property names supplied only by its runtime subclasses.
+#[test]
+fn test_base_class_property_write_reaches_subclass_setter() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+#[\AllowDynamicProperties]
+class RuntimeSetterBase {}
+class RuntimeSetterDerived extends RuntimeSetterBase {
+    public string $stored = '';
+    public string $data {
+        get { return $this->stored; }
+        set { echo 'set|'; $this->stored = $value; }
+    }
+}
+class RuntimeSetterPlain extends RuntimeSetterBase { public string $data = ''; }
+function runtimeSetterBaseWrite(RuntimeSetterBase $object): void { $object->data = 'written'; }
+$object = new RuntimeSetterDerived(); runtimeSetterBaseWrite($object); echo $object->stored, '|';
+$plain = new RuntimeSetterPlain(); runtimeSetterBaseWrite($plain); echo $plain->data;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "set|written|written");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Boxed receivers invoke backed and virtual setters while ordinary objects keep their slots.
+#[test]
+fn test_mixed_property_setters_preserve_native_hook_dispatch() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeSetterBox {
+    public mixed $value = null {
+        set { echo 'hook:', $value, '|'; $this->value = strtoupper((string)$value); }
+    }
+}
+class RuntimeSetterChild extends RuntimeSetterBox {
+    public string $data {
+        get { return (string)$this->value; }
+        set { $this->value = $value; }
+    }
+}
+function runtimeSetterMake(string $class): mixed { return new $class(); }
+function runtimeSetterWriteData(mixed $object, mixed $value): void { $object->data = $value; }
+$box = runtimeSetterMake('RuntimeSetterBox');
+$box->value = 'a'; echo $box->value, '|';
+$child = runtimeSetterMake('RuntimeSetterChild');
+if ($child instanceof RuntimeSetterChild) {
+    $child->value = 'b'; echo $child->data, '|';
+    runtimeSetterWriteData($child, 12); echo $child->value, '|';
+}
+$plain = runtimeSetterMake('stdClass'); $plain->value = 'plain'; echo $plain->value, '|';
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "hook:a|A|hook:b|B|hook:12|12|plain|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Runtime class selection preserves asymmetric visibility and the accessor's lexical scope.
+#[test]
+fn test_mixed_property_setters_preserve_private_set_visibility() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimePrivateSetter {
+    public private(set) string $value = '' {
+        set { echo 'hook:', $value, '|'; $this->value = $value; }
+    }
+    public function assign(mixed $other): void { $other->value = 'inside'; }
+    public function __set(string $name, mixed $value): void { echo 'unexpected-magic|'; }
+}
+function runtimePrivateSetterMake(): mixed { return new RuntimePrivateSetter(); }
+$box = runtimePrivateSetterMake();
+try { $box->value = 'outside'; }
+catch (Error $error) { echo $error->getMessage(), '|'; }
+$box->assign($box); echo $box->value;
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Cannot modify private(set) property RuntimePrivateSetter::$value from global scope|hook:inside|inside");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Throwing boxed setters unwind their argument and both receiver leases exactly once.
+#[test]
+fn test_mixed_property_setters_unwind_temporary_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeSetterArgument { public string $text = 'argument'; }
+class RuntimeThrowingSetter {
+    public mixed $value { set { throw new RuntimeException('caught'); } }
+}
+
+function runtimeThrowingSetterMake(): mixed { return new RuntimeThrowingSetter(); }
+try { runtimeThrowingSetterMake()->value = new RuntimeSetterArgument(); }
+catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// String setter argument conversions retire after both normal and throwing accessor exits.
+#[test]
+fn test_mixed_string_property_setter_conversion_owners() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class RuntimeStringSetterArgument {
+    public function __construct(public bool $fail) {}
+    public function __toString(): string {
+        if ($this->fail) { throw new RuntimeException('conversion'); }
+        return str_repeat('x', 33);
+    }
+}
+class RuntimeStringSetter {
+    public bool $fail = false;
+    public string $value {
+        set {
+            echo strlen($value), '|';
+            if ($this->fail) { throw new RuntimeException('setter'); }
+        }
+    }
+}
+function runtimeStringSetterWrite(mixed $object, mixed $value): void { $object->value = $value; }
+$object = new RuntimeStringSetter();
+for ($index = 0; $index < 3; $index++) {
+    $object->fail = false;
+    runtimeStringSetterWrite($object, str_repeat('a', 33));
+    runtimeStringSetterWrite($object, new RuntimeStringSetterArgument(false));
+    $object->fail = true;
+    try { runtimeStringSetterWrite($object, str_repeat('b', 33)); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+    try { runtimeStringSetterWrite($object, new RuntimeStringSetterArgument(true)); }
+    catch (RuntimeException $error) { echo $error->getMessage(), '|'; }
+}
+unset($object);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "33|33|33|setter|conversion|".repeat(3));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// A backed getter without a setter keeps ordinary writes and compound-update storage.
+#[test]
+fn test_backed_get_only_property_keeps_implicit_storage_writes() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class BackedOnlyRead {
+    public int $number = 1 {
+        get { echo 'G'; return $this->number * 10; }
+    }
+}
+$object = new BackedOnlyRead();
+$object->number = 2;
+var_dump($object->number);
+$object->number += 1;
+var_dump($object->number);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "Gint(20)\nGGint(210)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Camel-case inherited backed hooks read initialized raw storage within their own accessor.
+#[test]
+fn test_camel_case_inherited_backed_property_hooks() {
+    let out = compile_and_run(r#"<?php
+class CamelHookBase {
+    public mixed $childNodes = null {
+        get { return $this->childNodes; }
+        set { $this->childNodes = $value; }
+    }
+}
+class CamelHookChild extends CamelHookBase {}
+$node = new CamelHookChild();
+var_dump($node->childNodes);
+$node->childNodes = "ready";
+var_dump($node->childNodes);
+"#);
+    assert_eq!(out, "NULL\nstring(5) \"ready\"\n");
+}
+
 /// Verifies a virtual get-only hook computes its value from other properties on read.
 #[test]
 fn test_get_only_virtual_property() {

@@ -1,6 +1,6 @@
 ---
 title: "mysqli_quote_string()"
-description: "Escapes a string and wraps it in single quotation marks."
+description: "Escapes a string and wraps it in single quotes."
 ---
 
 ## mysqli_quote_string()
@@ -9,7 +9,7 @@ description: "Escapes a string and wraps it in single quotation marks."
 function mysqli_quote_string(mixed $mysql, string $string): string
 ```
 
-Escapes a string and wraps it in single quotation marks.
+Escapes a string and wraps it in single quotes.
 
 **Parameters**:
 - `$mysql` (`mixed`)

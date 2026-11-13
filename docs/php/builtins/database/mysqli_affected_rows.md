@@ -6,7 +6,7 @@ description: "Returns how many rows the last write affected."
 ## mysqli_affected_rows()
 
 ```php
-function mysqli_affected_rows(mixed $mysql): int
+function mysqli_affected_rows(mixed $mysql): mixed
 ```
 
 Returns how many rows the last write affected.
@@ -14,7 +14,7 @@ Returns how many rows the last write affected.
 **Parameters**:
 - `$mysql` (`mixed`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

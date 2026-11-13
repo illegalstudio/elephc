@@ -33,6 +33,7 @@ builtin! {
 /// is not inferred here. Shared by-reference validation rejects non-lvalues;
 /// unsupported non-local destinations receive an explicit diagnostic instead of count-only execution.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
+    super::preg_match::check_capture_output_storage(cx)?;
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     cx.checker.infer_type(&cx.args[1], cx.env)?;
     if let Some(matches) = cx.args.get(2) {

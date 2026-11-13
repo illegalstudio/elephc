@@ -5,7 +5,8 @@
 //! reset before any instruction can allocate, read, modify, or observe it.
 //!
 //! Called from:
-//! - The fixed-point pass driver in `crate::ir_passes::driver`.
+//! - The fixed-point pass driver (`ConcatResetElim`) and its post-fixed-point
+//!   finalizer (`ConcatResetHoist`) in `crate::ir_passes::driver`.
 //!
 //! Key details:
 //! - Every function, method, closure, main entry, and web handler prologue
@@ -30,14 +31,20 @@
 //! - Exception handler targets named by `Op::TryPushHandler` are seeded as dirty
 //!   on entry because `__rt_throw_current` rewinds `_concat_off` and unwinding may
 //!   leave an arbitrary scratch offset from inside the `try` region.
+//! - Phase 3 (`ConcatResetHoist`, a post-fixed-point finalizer) inserts one marked
+//!   reset in a unique preheader when the loop body has a reset and the preheader
+//!   may arrive dirty. The mark keeps both elimination phases from removing it;
+//!   the next finalizer iteration drops the body resets that became redundant, so
+//!   the insertion is idempotent. It opts in only for non-internal, non-synthetic
+//!   functions of at most 2,000 instructions with a back edge.
 
 use crate::ir::{
     BlockId, DataPool, Effects, Function, Immediate, InstId, Instruction, IrType, LocalSlotId, Op,
-    Terminator, ValueId,
+    RuntimeCallTarget, RuntimeFnId, Terminator, ValueId,
 };
 use crate::types::PhpType;
 
-use super::cfg::{predecessors, reverse_postorder, successors};
+use super::cfg::{has_back_edge, predecessors, reverse_postorder, successors};
 use super::driver::IrPass;
 use super::rewrite::neutralize_to_nop;
 
@@ -83,19 +90,197 @@ impl IrPass for ConcatResetElim {
     }
 
     /// Eliminates redundant clean-state `concat_reset` instructions and coalesces
-    /// unobserved back-to-back resets across basic blocks.
+    /// unobserved resets across basic blocks.
+    fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
+        run_state_elimination(function)
+    }
+}
+
+/// Post-fixed-point finalizer that gives a dirty loop preheader its one-time reset.
+///
+/// Running after the ordinary passes converge keeps the insertion from racing with
+/// LICM or loop simplification, which can otherwise append a scratch-dirtying
+/// instruction behind the reset and make the two passes re-insert forever.
+pub struct ConcatResetHoist;
+
+impl IrPass for ConcatResetHoist {
+    /// Returns the stable pass name used in driver diagnostics.
+    fn name(&self) -> &'static str {
+        "concat-reset-hoist"
+    }
+
+    /// Runs only after the ordinary fixed point has converged.
+    fn run_after_fixed_point(&self) -> bool {
+        true
+    }
+
+    /// Skips compiler-internal, synthetic, large, and loop-free bodies.
+    ///
+    /// Injected preludes and synthetic builtin methods (DateTime/Reflection/SPL
+    /// and property-init thunks) are compiler-generated and not part of a user
+    /// hot loop; analyzing them would only add compile time to eval-heavy
+    /// programs. Very large bodies (the eval builtin catalog) are skipped for the
+    /// same reason: the hoist targets ordinary user loops. User functions,
+    /// methods, closures, and `main` still opt in.
+    fn is_applicable(&self, function: &Function) -> bool {
+        const MAX_HOIST_INSTRUCTIONS: usize = 2_000;
+        !function.flags.is_internal
+            && !function.flags.is_synthetic
+            && function.instructions.len() <= MAX_HOIST_INSTRUCTIONS
+            && has_back_edge(function)
+            && function
+                .instructions
+                .iter()
+                .any(|inst| inst.op == Op::ConcatReset)
+    }
+
+    /// Re-runs the state analyses once, then inserts preheader resets for dirty loops.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
         if function.blocks.is_empty() {
+            return false;
+        }
+        let dominance = super::dominance::compute_dominance(function);
+        let loops = super::loops::compute_loops(function, &dominance);
+        if !loops.loops().iter().any(|lp| {
+            lp.preheader.is_some() && count_resets_in_blocks(function, &lp.blocks) > 0
+        }) {
             return false;
         }
         let inert = ConcatInertAnalysis::new(function).compute_all();
         let handlers = collect_handler_blocks(function);
         let reachable = collect_reachable_blocks(function, &handlers);
-        let mut changed = false;
-        changed |= eliminate_clean_concat_resets(function, &inert, &handlers, &reachable);
+        let (in_clean, out_clean) =
+            compute_clean_states(function, &inert, &handlers, &reachable);
+        let mut changed =
+            eliminate_clean_concat_resets(function, &inert, &reachable, &in_clean);
         changed |= coalesce_postdominated_concat_resets(function, &inert, &reachable);
-        changed
+        if changed {
+            return true;
+        }
+        hoist_loop_resets_to_preheaders(function, &loops, &out_clean)
     }
+}
+
+/// Runs the forward and backward `concat_reset` state analyses to a fixed point.
+fn run_state_elimination(function: &mut Function) -> bool {
+    if function.blocks.is_empty() {
+        return false;
+    }
+    let inert = ConcatInertAnalysis::new(function).compute_all();
+    let handlers = collect_handler_blocks(function);
+    let reachable = collect_reachable_blocks(function, &handlers);
+    let (in_clean, _) = compute_clean_states(function, &inert, &handlers, &reachable);
+    let mut changed = false;
+    changed |= eliminate_clean_concat_resets(function, &inert, &reachable, &in_clean);
+    changed |= coalesce_postdominated_concat_resets(function, &inert, &reachable);
+    changed
+}
+
+/// Inserts one reset in each loop preheader that still has a reset in its body.
+///
+/// The insertion runs only after the two state analyses reach their fixed point.
+/// The driver then re-runs the pass, and the clean-state analysis removes the
+/// per-iteration body resets that the preheader reset now makes redundant. A
+/// loop that concatenates inside its body keeps that reset; the extra preheader
+/// reset only runs once per loop entry and is semantically inert.
+fn hoist_loop_resets_to_preheaders(
+    function: &mut Function,
+    loops: &super::loops::LoopInfo,
+    out_clean: &[bool],
+) -> bool {
+    let candidates: Vec<(Option<BlockId>, Vec<BlockId>)> = loops
+        .loops()
+        .iter()
+        .map(|lp| (lp.preheader, lp.blocks.clone()))
+        .collect();
+    let mut changed = false;
+    for (preheader, blocks) in candidates {
+        let Some(preheader) = preheader else {
+            continue;
+        };
+        // A clean preheader already lets the forward analysis remove every
+        // removable body reset; inserting here would be immediately neutralized
+        // and re-inserted on the next driver iteration.
+        if out_clean
+            .get(preheader.as_raw() as usize)
+            .copied()
+            .unwrap_or(true)
+        {
+            continue;
+        }
+        let Some(block) = function.block(preheader) else {
+            continue;
+        };
+        if block.instructions.last().is_some_and(|inst_id| {
+            function
+                .instruction(*inst_id)
+                .is_some_and(|inst| inst.op == Op::ConcatReset)
+        }) {
+            continue;
+        }
+        if count_resets_in_blocks(function, &blocks) == 0 {
+            continue;
+        }
+        if append_concat_reset(function, preheader).is_some() {
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Counts remaining `concat_reset` instructions across the candidate loop blocks.
+fn count_resets_in_blocks(function: &Function, blocks: &[BlockId]) -> usize {
+    blocks
+        .iter()
+        .filter_map(|block| function.block(*block))
+        .flat_map(|block| block.instructions.iter())
+        .filter(|inst_id| {
+            function
+                .instruction(**inst_id)
+                .is_some_and(|inst| inst.op == Op::ConcatReset)
+        })
+        .count()
+}
+
+/// Appends a void `concat_reset` to `block` and returns its instruction id.
+fn append_concat_reset(function: &mut Function, block: BlockId) -> Option<InstId> {
+    let block_index = block.as_raw() as usize;
+    function.blocks.get(block_index)?;
+    let inst_id = InstId::from_raw(function.instructions.len() as u32);
+    let mut inst = Instruction::new(
+        Op::ConcatReset,
+        Vec::new(),
+        None,
+        None,
+        IrType::Void,
+        PhpType::Void,
+        crate::ir::Ownership::NonHeap,
+        Op::ConcatReset.default_effects(),
+        None,
+    );
+    inst.origin = Some(crate::ir::PassOrigin::ConcatResetHoist);
+    function.instructions.push(inst);
+    function.blocks[block_index].instructions.push(inst_id);
+    Some(inst_id)
+}
+
+/// Returns whether `inst` is a single-argument `count()` of a non-null typed array/hash.
+fn typed_array_count_call(function: &Function, inst: &Instruction) -> bool {
+    inst.operands.len() == 1
+        && matches!(
+            inst.immediate,
+            Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                RuntimeFnId::Count
+            )))
+        )
+        && inst.operands.first().is_some_and(|&operand| {
+            function.value(operand).is_some_and(|value| {
+                matches!(
+                    value.php_type.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                )
+            })
+        })
 }
 
 /// Three-state memoization entry for destructor-freeness queries over values and local slots.
@@ -178,17 +363,20 @@ fn collect_reachable_blocks(function: &Function, handlers: &[bool]) -> Vec<bool>
     reachable
 }
 
-/// Neutralizes `Op::ConcatReset` instructions that are reached when `_concat_off`
-/// is already guaranteed to equal the current frame's `concat_base_offset`.
-fn eliminate_clean_concat_resets(
-    function: &mut Function,
+/// Computes the forward guaranteed-clean state at every block entry and exit.
+///
+/// The fixed point starts optimistic (`true` everywhere) and intersects the
+/// incoming states of reachable predecessors, so a block is clean only when every
+/// path proves it. Handler entries and unreachable blocks start dirty.
+fn compute_clean_states(
+    function: &Function,
     inert: &[bool],
     handlers: &[bool],
     reachable: &[bool],
-) -> bool {
+) -> (Vec<bool>, Vec<bool>) {
     let num_blocks = function.blocks.len();
     if num_blocks == 0 {
-        return false;
+        return (Vec::new(), Vec::new());
     }
 
     let preds = predecessors(function);
@@ -268,6 +456,21 @@ fn eliminate_clean_concat_resets(
         }
     }
 
+    (in_clean, out_clean)
+}
+
+/// Neutralizes `Op::ConcatReset` instructions that are reached when `_concat_off`
+/// is already guaranteed to equal the current frame's `concat_base_offset`.
+fn eliminate_clean_concat_resets(
+    function: &mut Function,
+    inert: &[bool],
+    reachable: &[bool],
+    in_clean: &[bool],
+) -> bool {
+    let num_blocks = function.blocks.len();
+    if num_blocks == 0 {
+        return false;
+    }
     let mut redundant: Vec<InstId> = Vec::new();
     for block in &function.blocks {
         let idx = block.id.as_raw() as usize;
@@ -279,7 +482,10 @@ fn eliminate_clean_concat_resets(
             let inst = function
                 .instruction(inst_id)
                 .expect("block references a valid instruction");
-            if inst.op == Op::ConcatReset && clean {
+            if inst.op == Op::ConcatReset
+                && clean
+                && inst.origin != Some(crate::ir::PassOrigin::ConcatResetHoist)
+            {
                 redundant.push(inst_id);
             }
             let is_inert = inert.get(inst_id.as_raw() as usize).copied().unwrap_or(false);
@@ -386,8 +592,10 @@ fn coalesce_postdominated_concat_resets(
             let inst = function
                 .instruction(inst_id)
                 .expect("block references a valid instruction");
-            if inst.op == Op::ConcatReset && will_reset {
-                redundant.push(inst_id);
+            if inst.op == Op::ConcatReset {
+                if will_reset && inst.origin != Some(crate::ir::PassOrigin::ConcatResetHoist) {
+                    redundant.push(inst_id);
+                }
                 // The later reset on all outgoing paths remains active, so
                 // `will_reset` stays true for any even earlier reset in the block.
                 continue;
@@ -471,6 +679,10 @@ fn terminator_preserves_concat_state(term: &Terminator) -> bool {
 
 /// Returns whether `inst` is unconditionally non-inert regardless of operand or slot types.
 fn is_unconditional_concat_barrier(inst: &Instruction) -> bool {
+    if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey) {
+        // These defaults include callbacks, but a typed operand proof can rule them out.
+        return false;
+    }
     !inst
         .effects
         .intersection(Effects::ALLOC_CONCAT | Effects::OUTPUT | Effects::MAY_WARN)
@@ -699,6 +911,16 @@ impl<'a> ConcatInertAnalysis<'a> {
         // concrete operand/slot specialization before the generic effect filter.
         match inst.op {
             Op::ConcatReset => return true,
+            // The reserved append writes one raw int into preallocated payload and length
+            // storage; it neither allocates nor observes the concat scratch cursor.
+            Op::ArrayPushReserved => return true,
+            // The reduction helper allocates only its Mixed result cell and never formats
+            // or observes concat scratch.
+            Op::ArraySumInt => return true,
+            // A typed-array count lowers inline to a header length read: it allocates nothing,
+            // cannot warn, and its only throwable is a location-less TypeError for a null
+            // container, which a non-null `Array`/`AssocArray` value cannot produce.
+            Op::RuntimeCall if typed_array_count_call(self.function, inst) => return true,
             Op::ReleaseLocalSlot | Op::ReleaseLocalRefCell => {
                 return self.release_slot_is_concat_inert(inst);
             }
@@ -718,6 +940,13 @@ impl<'a> ConcatInertAnalysis<'a> {
             _ => {}
         }
 
+        // Proven container writes can be inert even though the opcode's default also
+        // covers unknown reference markers and destructor-bearing Mixed payloads.
+        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey)
+            && self.container_write_is_concat_inert(inst)
+        {
+            return true;
+        }
         if inst
             .effects
             .intersects(Effects::ALLOC_CONCAT | Effects::OUTPUT | Effects::MAY_WARN)
@@ -1220,7 +1449,7 @@ impl<'a> ConcatInertAnalysis<'a> {
         let Some(container_meta) = self.function.value(container) else {
             return false;
         };
-        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet) {
+        if matches!(inst.op, Op::ArraySet | Op::HashSet | Op::DescriptorArgSet | Op::ArraySetMixedKey) {
             let Some(&key) = inst.operands.get(1) else {
                 return false;
             };

@@ -42,7 +42,7 @@ pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction
     load_pattern_and_subject(ctx, pattern, subject)?;
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
-        store_matches_array_on_success(ctx, slot)?;
+        store_matches_array_on_success(ctx, slot, &PhpType::Array(Box::new(PhpType::Str)))?;
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match");
     }
@@ -74,7 +74,7 @@ pub(crate) fn lower_preg_match_all(
     emit_preg_match_all_flag_guard(ctx);
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_all_capture");
-        store_matches_array_on_success(ctx, slot)?;
+        store_matches_array_on_success(ctx, slot, &PhpType::Array(Box::new(PhpType::Mixed)))?;
     } else {
         lower_preg_match_all_count(ctx);
     }
@@ -578,7 +578,7 @@ fn optional_matches_local_slot(
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         if inst_ref.op == Op::ConstNull
             || (inst_ref.op == Op::ArrayNew
                 && inst_ref.immediate == Some(Immediate::Capacity(0)))
@@ -611,7 +611,7 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell | Op::LoadRefCellValue) {
         return Err(CodegenIrError::unsupported(
             "preg_match matches argument that is not a local variable",
         ));
@@ -713,6 +713,7 @@ fn box_split_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
 fn store_matches_array_on_success(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
+    raw_capture_type: &PhpType,
 ) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
     let failed = ctx.next_label("preg_matches_failed");
@@ -727,7 +728,7 @@ fn store_matches_array_on_success(
             ctx.emitter.instruction(&format!("je {}", failed));                 // leave the caller's matches variable untouched
         }
     }
-    store_matches_array(ctx, slot)?;
+    store_matches_array(ctx, slot, raw_capture_type)?;
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&failed);
     abi::emit_push_reg(ctx.emitter, result);
@@ -746,7 +747,7 @@ fn store_matches_array_on_success(
 }
 
 /// Stores the runtime-built matches array into a local slot without clobbering the match flag.
-fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Result<()> {
+fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId, raw_capture_type: &PhpType) -> Result<()> {
     let result = abi::int_result_reg(ctx.emitter);
     let array = match ctx.emitter.target.arch {
         Arch::AArch64 => "x1",
@@ -755,14 +756,54 @@ fn store_matches_array(ctx: &mut FunctionContext<'_>, slot: LocalSlotId) -> Resu
     // Both return values must survive retirement and optional Mixed boxing.
     abi::emit_push_reg(ctx.emitter, result);
     abi::emit_push_reg(ctx.emitter, array);
-    ctx.release_local_before_refcounted_writeback(slot)?;
-    abi::emit_pop_reg(ctx.emitter, result);
-    if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        crate::codegen::emit_box_current_owned_value_as_mixed(
-            ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
-        );
+    let dynamic = ctx.local_ref_cell_representation_is_dynamic(slot);
+    let raw = dynamic.then(|| ctx.next_label("preg_matches_raw_slot"));
+    let stored = dynamic.then(|| ctx.next_label("preg_matches_published"));
+    if let Some(raw) = &raw {
+        let state = ctx.ref_cell_state_offset(slot).ok_or_else(||
+            CodegenIrError::invalid_module("dynamic regex capture slot has no representation flag"))?;
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        abi::load_at_offset(ctx.emitter, scratch, state);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cbz {scratch}, {raw}"));      // only raw storage uses ordinary local writeback
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("test {scratch}, {scratch}")); // inspect the slot's current representation
+                ctx.emitter.instruction(&format!("jz {raw}"));                  // only raw storage uses ordinary local writeback
+            }
+        }
     }
-    ctx.store_current_result_to_local(slot)?;
+    if ctx.local_stores_ref_cell_pointer(slot) {
+        let payload = ctx.ref_cell_payload_type(slot)?.codegen_repr();
+        if payload != PhpType::Mixed && payload != *raw_capture_type {
+            return Err(CodegenIrError::unsupported(format!(
+                "regex capture output cannot retype a native reference with {:?} payload", payload,
+            )));
+        }
+        abi::emit_pop_reg(ctx.emitter, result);
+        if payload == PhpType::Mixed {
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+        }
+        super::super::local_stores::publish_current_ref_cell_value(
+            ctx, slot, &payload, super::super::local_stores::RefCellStorePrevious::RetireAcquired,
+        )?;
+        if let Some(stored) = &stored { abi::emit_jump(ctx.emitter, stored); }
+    }
+    if let Some(raw) = &raw { ctx.emitter.label(raw); }
+    if !ctx.local_ref_cell_representation_is_definite(slot) {
+        ctx.release_local_before_refcounted_writeback(slot)?;
+        abi::emit_pop_reg(ctx.emitter, result);
+        if matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+            crate::codegen::emit_box_current_owned_value_as_mixed(
+                ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)),
+            );
+        }
+        ctx.store_current_result_to_local(slot)?;
+    }
+    if let Some(stored) = &stored { ctx.emitter.label(stored); }
     abi::emit_pop_reg(ctx.emitter, result);
     Ok(())
 }

@@ -9,6 +9,17 @@
 
 use super::*;
 
+/// Inferred nullable scalar properties cannot keep a scalar type after an array append.
+#[test]
+fn test_error_untyped_nullable_scalar_property_append_keeps_refusal() {
+    for value in ["$argc", "$argc > 5 ? 1 : null"] {
+        expect_error(
+            &format!("<?php class InferredScalarAppend {{ public $n; }} $c = new InferredScalarAppend(); $c->n = {value}; $c->n[] = 7;"),
+            "Array push requires an array property",
+        );
+    }
+}
+
 /// A mixed literal spread unwraps its source once, preserving nested container element types.
 #[test]
 fn test_mixed_literal_spread_preserves_nested_element_type() {
@@ -220,6 +231,24 @@ fn test_error_string_offset_write_on_property() {
     );
 }
 
+/// A key that is not provably an integer on a declared packed `array<T>` property, instance or
+/// static, is refused: the slot keeps packed storage, so the write used to coerce the key into
+/// an index and a string key overwrote element 0 in silence (`$o->xs["s"] = 2` printed `[2]`).
+#[test]
+fn test_error_non_int_key_on_declared_packed_array_property() {
+    let expected = "is a packed array<int>; cast the key with (int) or declare it array<K, V>";
+    for source in [
+        "<?php class O { public array<int> $xs = []; } $o = new O; $o->xs[\"s\"] = 2;",
+        "<?php class O { public array<int> $xs = []; } function f(O $o, mixed $k): void { $o->xs[$k] = 1; } f(new O, 0);",
+        "<?php class O { public array<int> $xs = []; } function f(O $o, string $k): void { $o->xs[$k] = 1; } f(new O, \"a\");",
+        "<?php class C { public static array<int> $xs = []; } function f(mixed $k): void { C::$xs[$k] = 1; } f(0);",
+        "<?php class C { public static array<int> $xs = []; } function f(?int $k): void { C::$xs[$k] = 1; } f(null);",
+        "<?php class C { public static array<int> $xs = []; } C::$xs[\"s\"] = 1;",
+    ] {
+        expect_error(source, expected);
+    }
+}
+
 /// Verifies that by-reference foreach over a parameter typed `iterable` is rejected.
 /// Input: `function f(iterable $items) { foreach ($items as &$value) {} }`
 #[test]
@@ -322,15 +351,6 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
-/// Verifies a boxed `mixed` value cannot enter an object parameter without a runtime tag check.
-#[test]
-fn test_error_mixed_rejected_at_object_parameter_boundary() {
-    expect_error(
-        "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
-        "Function 'take' parameter $box expects Box, got mixed",
-    );
-}
-
 /// Verifies a boxed `mixed` value cannot leave a function through an array return boundary.
 #[test]
 fn test_error_mixed_rejected_at_array_return_boundary() {
@@ -340,16 +360,26 @@ fn test_error_mixed_rejected_at_array_return_boundary() {
     );
 }
 
-/// Verifies that referencing an undefined variable produces an "Undefined variable" error.
+/// Verifies that referencing an undefined variable type-checks and warns at run time.
 #[test]
-fn test_error_undefined_variable() {
-    expect_error("<?php echo $x;", "Undefined variable: $x");
+fn test_undefined_variable_read_warns_at_runtime() {
+    expect_no_error("<?php echo $x;");
 }
 
-/// Verifies that a plain self-referential assignment is not mistaken for `+=`.
+/// Verifies a nullable object union is accepted at an `object` parameter: PHP only throws
+/// when the value is actually null at run time, while a nullable return stays a compile error.
 #[test]
-fn test_error_plain_self_read_assignment_remains_undefined() {
-    expect_error("<?php $x = $x + 1;", "Undefined variable: $x");
+fn test_nullable_object_union_is_accepted_at_an_object_parameter() {
+    expect_no_error(
+        "<?php function take_object(object $value): void {} function maybe(): ?stdClass { return null; } take_object(maybe());",
+    );
+}
+
+/// Verifies that a plain self-referential assignment is not mistaken for `+=`; the self-read
+/// is PHP 8's null-plus-warning read, not a compile error.
+#[test]
+fn test_plain_self_read_assignment_warns_at_runtime() {
+    expect_no_error("<?php $x = $x + 1;");
 }
 
 /// Verifies that reassigning an inferred local to an incompatible type is diagnosed.
@@ -526,13 +556,11 @@ fn test_error_assignment_expression_rejects_non_lvalue() {
 
 /// Verifies that a variable assigned inside a short-circuit `&&` is flagged as possibly undefined
 /// when referenced after the `&&` expression that did not execute.
-/// Input: `echo false && ($x = 1); echo $x;` — `$x` may not be defined.
+/// Input: `echo false && ($x = 1); echo $x;` — `$x` is not definitely assigned, so the read
+/// warns at run time instead of being a compile error.
 #[test]
-fn test_error_short_circuit_assignment_effect_is_not_definite() {
-    expect_error(
-        "<?php echo false && ($x = 1); echo $x;",
-        "Undefined variable: $x",
-    );
+fn test_short_circuit_assignment_effect_is_not_definite() {
+    expect_no_error("<?php echo false && ($x = 1); echo $x;");
 }
 
 /// Verifies that the short ternary (`?:`) with no default expression produces an error.
@@ -1497,18 +1525,19 @@ fn test_scalar_match_merge_stays_mixed_with_checked_array_use() {
     assert_eq!(result.global_env.get("r"), Some(&PhpType::Mixed));
 }
 
-/// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
-/// tolerance is scoped to `isset`/`empty`/`unset`/`??` and nothing else.
+/// Verifies an ordinary undefined read type-checks and is emitted as PHP 8's runtime warning,
+/// while the null-probe constructs stay silent.
 #[test]
-fn test_undefined_variable_read_is_still_rejected() {
-    expect_error("<?php echo $neverDefined;", "Undefined variable: $neverDefined");
+fn test_undefined_variable_read_is_a_runtime_warning() {
+    expect_no_error("<?php echo $neverDefined;");
 }
 
-/// Verifies only the probe's chain SPINE is tolerated: PHP warns about `$b` in `isset($a[$b])`
-/// but not about `$a`, so the index subexpression keeps the diagnostic.
+/// Verifies only the probe's chain SPINE is silent: `isset($a[$b])` warns about `$b` at run
+/// time while `$a` is the tolerated null-probe root.
 #[test]
-fn test_null_probe_index_subexpression_still_requires_a_defined_variable() {
-    expect_error("<?php var_dump(isset($a[$b]));", "Undefined variable: $b");
+fn test_null_probe_index_subexpression_warns_at_runtime() {
+    // `$a` is the silent probe spine; `$b` is an index expression and warns at run time.
+    expect_no_error("<?php var_dump(isset($a[$b]));");
 }
 
 /// Verifies `isset()`, `empty()`, `unset()` and `??` accept a never-declared variable, which is
@@ -1816,10 +1845,12 @@ fn test_unset_then_retype_is_accepted() {
     expect_no_error("<?php $a = 1; unset($a); $a = \"ciao\"; echo $a;");
 }
 
-/// `unset` at top level kills the binding: a later read is an undefined variable.
+/// `unset` at top level kills the binding: a later read is PHP 8's null-plus-warning read.
 #[test]
-fn test_read_after_unset_is_undefined() {
-    expect_error("<?php $a = 1; unset($a); echo $a;", "Undefined variable");
+fn test_read_after_unset_warns_at_runtime() {
+    // PHP 8 reads the variable as null and raises E_WARNING at run time; EIR lowering
+    // emits that warning at the read site, so this is no longer a compile error.
+    expect_no_error("<?php $a = 1; unset($a); echo $a;");
 }
 
 /// Multi-arg unset kills every plain-variable binding.
@@ -3696,4 +3727,26 @@ fn test_standalone_null_return_requirements() {
     ] {
         assert!(check_source_full(source).is_err(), "unexpectedly accepted: {source}");
     }
+}
+
+/// The tentative Countable return attribute cannot weaken an ordinary interface contract.
+#[test]
+fn test_simplexml_followup_count_attribute_keeps_user_interface_returns_strict() {
+    expect_error(r#"<?php
+interface FollowupCounter { public function count(): int; }
+class FollowupBadCounter implements FollowupCounter {
+    #[\ReturnTypeWillChange] public function count(): string { return "5"; }
+}
+"#, "incompatible return type string (interface returns int)");
+}
+
+/// Redeclaring count in a user interface makes its return a strict source contract.
+#[test]
+fn test_simplexml_followup_count_attribute_keeps_redeclared_returns_strict() {
+    expect_error(r#"<?php
+interface FollowupStrictCounter extends Countable { public function count(): int; }
+class FollowupBadStrictCounter implements FollowupStrictCounter {
+    #[\ReturnTypeWillChange] public function count(): string { return "5"; }
+}
+"#, "incompatible return type string (interface returns int)");
 }

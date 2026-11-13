@@ -8,8 +8,8 @@
 //! Key details:
 //! - The checker keys `generic_call_sites`, `generic_new_sites` and `generic_method_sites` by
 //!   `current_loop_storage_scope`, and EIR lowering reads `generic_call_sites` by its own
-//!   `loop_storage_scope`. Both spell a body's scope the same way: `main` for top-level code, the
-//!   declared name for a function, `Class::method` for a method, and
+//!   `loop_storage_scope`. Both spell a body's scope the same way: `TOP_LEVEL_SCOPE` (`#main`)
+//!   for top-level code, the declared name for a function, `Class::method` for a method, and
 //!   `nested_loop_storage_scope(parent, span)` for a closure or arrow function. This tracker builds
 //!   that same string from the walker's enter/leave hooks, so the AST passes that rename a site
 //!   look it up under the key the checker wrote.
@@ -30,7 +30,7 @@ use crate::span::Span;
 pub(crate) struct SiteScope {
     /// The class-like declarations the walk is inside, innermost last.
     classes: Vec<String>,
-    /// The body scopes the walk is inside, innermost last; empty means top-level `main`.
+    /// The body scopes the walk is inside, innermost last; empty means the top-level body.
     scopes: Vec<String>,
     /// The trait declaration the walk is inside, if any. Traits do not nest.
     current_trait: Option<String>,
@@ -42,7 +42,7 @@ impl SiteScope {
         self.scopes
             .last()
             .cloned()
-            .unwrap_or_else(|| "main".to_string())
+            .unwrap_or_else(|| crate::types::TOP_LEVEL_SCOPE.to_string())
     }
 
     /// Enters a class, interface, enum or trait declaration.
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn scope_matches_the_checker_spelling_for_every_body_kind() {
         let mut scope = SiteScope::default();
-        assert_eq!(scope.current(), "main");
+        assert_eq!(scope.current(), crate::types::TOP_LEVEL_SCOPE);
         scope.enter_function("helper");
         assert_eq!(scope.current(), "helper");
         scope.leave_body();
@@ -142,7 +142,7 @@ mod tests {
         scope.leave_body();
         scope.leave_body();
         scope.leave_class();
-        assert_eq!(scope.current(), "main");
+        assert_eq!(scope.current(), crate::types::TOP_LEVEL_SCOPE);
     }
 
     /// Verifies a site in a trait body resolves through the using classes' keys, and only when

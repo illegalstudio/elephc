@@ -69,6 +69,8 @@ mod misc;
 mod attributes;
 #[path = "oop/reflection_array_constants.rs"]
 mod reflection_array_constants;
+#[path = "oop/reflection_static_lifetimes.rs"]
+mod reflection_static_lifetimes;
 #[path = "oop/constants.rs"]
 mod constants;
 #[path = "oop/abstract_properties.rs"]

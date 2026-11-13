@@ -162,15 +162,23 @@ mod tests {
         // branch adds (see `support.rs` for the roll-call).
         // +4: the `ptr_read_f32`/`ptr_write_f32`/`ptr_read_f64`/`ptr_write_f64` pointer builtins.
         // +1: `buffer_ptr`, the payload address of a buffer.
+        // +5: SimpleXML loaders/import plus internal allocation and diagnostic helpers.
         // +5: native heap usage, peak reset, and allocation/free counters.
-        // +4: the internal `__elephc_ptr_get` and `__elephc_zval_{pack,free,unpack}` aliases
-        // the extension-hosting prelude calls.
+        // +8: FileInfo procedures and shared warning/deprecation helpers.
+        // +4: internal pointer/zval aliases used by extension hosting.
         // +2: PHP 8.5 array value-edge functions.
+        // +23: the rest of the mysqli procedural surface (bind_result/fetch, async poll,
+        // statistics, warnings, change_user, ssl_set, statement attributes, and so on).
+        // +1: `__elephc_reflection_class_build`, the internal call that runs a compiled
+        // per-class `ReflectionClass` builder for `getDeclaringClass()`.
+        // +1: `__elephc_eval_reflection_class_build`, its eval twin for the class names
+        // eval-built member reflectors store.
         // +1: `get_debug_type`, the resolved debug type name.
         // +1: `__elephc_poll_revents`, the internal Io\Poll revents probe.
-        // +5: pre-existing catalog entries whose count assertions were stale before this
-        // branch; the catalog diff itself adds only the two contracts above.
-        assert_eq!(contracts().len(), 1255 + curl_surface);
+        // +2: PHP 8.6 `pack`/`unpack` endianness surface.
+        // +1: PHP 8.6 `stream_context_set_options`.
+        // +1: PHP 8.6 `url_percent_encode`.
+        assert_eq!(contracts().len(), 1284 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
@@ -234,7 +242,7 @@ mod tests {
             lookup("openssl_encrypt")
                 .expect("openssl_encrypt contract")
                 .requirements,
-            &[crate::BuiltinRequirement::Bridge("elephc_crypto")]
+            &[crate::BuiltinRequirement::Bridge("elephc_openssl")]
         );
         assert_eq!(
             lookup("preg_match").expect("preg_match contract").requirements,

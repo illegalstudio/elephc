@@ -32,6 +32,12 @@ impl Checker {
             ExprKind::StringLiteral(_) => Ok(PhpType::Str),
             ExprKind::IntLiteral(_) => Ok(PhpType::Int),
             ExprKind::FloatLiteral(_) => Ok(PhpType::Float),
+            // `$GLOBALS` is the program's global symbol table projected as an array. It is
+            // not an ordinary variable, so it never produces the undefined-variable warning.
+            ExprKind::Variable(name) if name == "GLOBALS" => Ok(PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            }),
             ExprKind::Variable(name) => {
                 if name == "GLOBALS" {
                     return Ok(PhpType::AssocArray {
@@ -39,14 +45,25 @@ impl Checker {
                         value: Box::new(PhpType::Mixed),
                     });
                 }
-                let ty = self.variable_type_or_eval_dynamic(name, expr.span, env)?;
+                let ty = match self.variable_type_or_eval_dynamic(name, expr.span, env) {
+                    Ok(ty) => ty,
+                    // PHP 8 reads an undefined variable as `null` and raises E_WARNING. The
+                    // warning is emitted by EIR lowering at the read site so it carries the
+                    // caller's file/line and participates in `@` suppression and handlers.
+                    Err(error) if !self.strict_locals
+                        && error.message.starts_with("Undefined variable: $") => PhpType::Void,
+                    Err(error) => return Err(error),
+                };
+                let ty = self.promotable_array_value_view(name, expr.span, ty);
                 self.record_local_value_read(name, expr.span, &ty, env);
                 Ok(ty)
             }
             ExprKind::Negate(inner) => {
                 let ty = self.infer_type(inner, env)?;
-                if crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty).is_some() {
-                    return Ok(ty);
+                if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty, &self.classes,
+                ) {
+                    return Ok(plan.result_type(&crate::parser::ast::BinOp::Sub));
                 }
                 match ty {
                     PhpType::Int => {
@@ -87,7 +104,19 @@ impl Checker {
                     ));
                 }
                 match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    let result = plan.result_type(&crate::parser::ast::BinOp::Add);
+                    if result.is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
+                        self.record_string_incdec_local(name);
+                    }
+                    Ok(result)
+                },
                 Some(PhpType::Int) => Ok(if self.has_fixed_tagged_reference_storage(name, env) {
                     PhpType::Int
                 } else { PhpType::Mixed }),
@@ -127,7 +156,18 @@ impl Checker {
                     ));
                 }
                 match env.get(name) {
-                Some(ty) if crate::types::object_operators::operator_class(ty).is_some() => Ok(ty.clone()),
+                Some(ty) if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                ).is_some() => {
+                    let plan = crate::types::object_operators::binary_plan_with_classes(
+                        &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes,
+                    ).unwrap();
+                    if plan.result_type(&crate::parser::ast::BinOp::Add).is_int_float_union() {
+                        self.reject_unboxable_native_incdec(name, ty, expr.span)?;
+                        self.record_string_incdec_local(name);
+                    }
+                    Ok(ty.clone())
+                },
                 Some(PhpType::Int)
                 | Some(PhpType::Bool)
                 | Some(PhpType::False)

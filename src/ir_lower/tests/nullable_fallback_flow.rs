@@ -9,6 +9,19 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every supported target lowers and emits a nullable object's cached local initialization.
+#[test]
+fn test_nullable_object_lazy_local_join_all_targets() {
+    let source = include_str!("../../../examples/type-narrowing/main.php");
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("examples/type-narrowing/main.php"),
+            std::path::Path::new("examples/type-narrowing"), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every target emits guarded match labels, arms, defaults and finally inputs.
 #[test]
 fn test_nullable_fallback_flow_r62_match_guard_views_all_targets() {
@@ -166,6 +179,9 @@ function showGlobalCatch(): void {
     if ($globalCatch instanceof GlobalCatchException) { echo $globalCatch->getMessage(); }
 }
 function firstLoopCatch(): void {
+    // PHP keeps `$e` defined after the inner catch; seeding it keeps the runtime path that
+    // this fixture exercises statically known instead of the checker's null fallback.
+    $e = new LoopCatchException('seed');
     for ($i = 0; $i < 2; $i++) {
         try {
             try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $e) {}
@@ -929,5 +945,80 @@ fn test_nullable_fallback_flow_string_chunks_diagnostic_all_targets() {
             assert!(error.message.contains("indexed string arrays is not supported"), "{name}: {}", error.message);
             assert!(error.span.line > 0 && error.span.col > 0);
         }
+    }
+}
+
+/// A null default beside a scalar lowers to null-capable merge storage on every target (issue
+/// #1944): no `null` is ever stored into a plain `I64`, `F64` or `Str` slot, so `?int ?? null`
+/// keeps its tag word instead of the in-band sentinel, and the result assembles everywhere. The
+/// first write of such a value into an empty array, a promoted hash or an untyped `[]` property
+/// boxes it, so the append, the offset write, the string-key write, a reset to `[]`, a promoted
+/// constructor argument and a nested row lower on every target too.
+#[test]
+fn test_nullable_fallback_flow_scalar_null_default_storage_all_targets() {
+    let source = r#"<?php
+function coalesced(?int $n): string { $x = $n ?? null; return $x === null ? "null" : "t" . $x; }
+function shortened(int $n): string { $x = $n ?: null; return $x === null ? "null" : "t" . $x; }
+function missed(int $k): string { $a = [1.5]; $x = $a[$k] ?? null; return $x === null ? "null" : "t" . $x; }
+function strung(?string $s): string { $x = $s ?? null; return $x === null ? "null" : "t" . $x; }
+function pushed(?int $n): int { $a = []; $a[] = $n ?? null; return count($a); }
+function offset(?int $n): int { $a = []; $a[0] = $n ?? null; return count($a); }
+function keyed(?int $n): int { $h = []; $h["k"] = $n ?? null; return count($h); }
+class Holder { public $items = []; public $keyed = []; public static $bag = []; }
+function propOffset(?int $n): int { $h = new Holder(); $h->items[0] = $n ?? null; return count($h->items); }
+function propKeyed(?int $n): int { $h = new Holder(); $h->keyed["k"] = $n ?? null; return count($h->keyed); }
+function propPushed(?int $n): int { $h = new Holder(); $h->items[] = $n ?? null; Holder::$bag[] = $n ?: null; $h->items = []; Holder::$bag = []; $h->items[] = $n ?? null; return count($h->items) + count(Holder::$bag); }
+class Promoted { public function __construct(public $items = []) {} }
+function promoted(?int $n): int { $a = []; $a[] = $n ?? null; $h = new Promoted($a); $c = 0; foreach ($h->items as $v) { $c += $v === null ? 0 : 1; } return $c; }
+function nested(?int $n): int { $h = new Holder(); $row = []; $row[] = $n ?? null; $h->items = []; $h->items[] = $row; $c = 0; foreach ($h->items[0] as $v) { $c += $v === null ? 0 : 1; } return $c; }
+echo coalesced(null), coalesced(6), shortened(0), shortened(6), missed(0), missed(3), strung(null), strung("s");
+echo pushed(null), pushed(6), offset(null), offset(6), keyed(null), keyed(6);
+echo propOffset(null), propOffset(6), propKeyed(null), propKeyed(6), propPushed(null), propPushed(6);
+echo promoted(null), promoted(6), nested(null), nested(6);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), target);
+        for function_name in ["coalesced", "shortened", "missed", "strung", "pushed", "offset", "keyed", "propOffset", "propKeyed", "propPushed", "promoted", "nested"] {
+            let function = module.functions.iter().find(|function| function.name == function_name).unwrap();
+            for inst in &function.instructions {
+                if inst.op != Op::StoreLocal { continue; }
+                let Some(Immediate::LocalSlot(slot)) = &inst.immediate else { continue };
+                let stored = &function.values[inst.operands[0].as_raw() as usize];
+                if stored.php_type != crate::types::PhpType::Void { continue; }
+                let storage = function.locals[slot.as_raw() as usize].ir_type;
+                assert!(
+                    matches!(storage, IrType::TaggedScalar | IrType::Heap(IrHeapKind::Mixed)),
+                    "{name}: {function_name} stores null into a {storage:?} slot"
+                );
+            }
+        }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Every target preserves warnings from indices while keeping the actual probe root silent.
+#[test]
+fn test_simplexml_followup_null_probe_warnings_all_targets() {
+    let source = r#"<?php
+function followup_probe(array $values): void {
+    var_dump(isset($values[(string)$missingIndex]));
+    echo ($values[(string)$missingCoalesce] ?? 7);
+    var_dump(isset($silentRoot));
+    echo ($silentRoot ?? 'fallback');
+}
+followup_probe(['present' => 1]);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("main.php"), std::path::Path::new("."), target);
+        let function = module.functions.iter().find(|function| function.name == "followup_probe").unwrap();
+        let warnings = function.instructions.iter().filter(|inst| inst.op == Op::RuntimeCall
+            && inst.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)))
+            .count();
+        assert_eq!(warnings, 2, "{name}: only the two index reads warn");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

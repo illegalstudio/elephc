@@ -73,6 +73,7 @@ pub(in crate::interpreter) fn eval_pcntl_values_result(
         .iter()
         .copied()
         .map(|value| EvaluatedCallArg {
+            evaluation_owner: None,
             name: None,
             value,
             ref_target: None,

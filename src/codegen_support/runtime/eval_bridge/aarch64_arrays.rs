@@ -392,7 +392,7 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the property-iterator wrapper frame
     emitter.instruction("ret");                                                 // return the boxed property key to Rust
 
-    emitter.label("__elephc_eval_key_normalize");
+    emitter.label_global("__elephc_eval_key_normalize");
     emitter.instruction("sub sp, sp, #32");                                     // allocate a helper frame while classifying the boxed eval key
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across runtime calls
     emitter.instruction("add x29, sp, #16");                                    // establish a stable helper frame pointer

@@ -3149,6 +3149,31 @@ Call to a member function take() on null:3"
     );
 }
 
+/// A missed object-array read is PHP null, so the method call fatals before its arguments run.
+///
+/// `is_object()` must inspect the raw object word (a missed read answers the in-band null
+/// sentinel, not a live pointer); PHP evaluates the receiver, reports the null call, and never
+/// runs the argument expression.
+#[test]
+fn test_array_miss_method_receiver_fatals_before_argument_evaluation() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class MissArgBox { public function take(int $value): int { return $value; } }
+function miss_argument_side_effect(): int { echo "argument"; return 1; }
+$boxes = [new MissArgBox()];
+var_dump(is_object($boxes[7]));
+try { $boxes[7]->take(miss_argument_side_effect()); }
+catch (Error $error) { echo $error->getMessage(); }
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "bool(false)\nCall to a member function take() on null"
+    );
+    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 2);
+}
+
 /// Regression for issue #526: direct associative misses emit both PHP warnings,
 /// while the same chained lookup under null coalescing remains silent.
 #[test]

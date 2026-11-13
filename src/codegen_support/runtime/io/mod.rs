@@ -38,6 +38,7 @@ mod fileinfo_cast;
 mod fd_write;
 mod fnmatch;
 mod fopen;
+mod simplexml_wrapper_failure;
 mod fputcsv;
 mod fread;
 mod fwrite;
@@ -173,6 +174,7 @@ pub(crate) use file_put_contents::emit_file_put_contents;
 pub(crate) use fileinfo_streams::emit_fileinfo_streams;
 pub(crate) use fnmatch::emit_fnmatch;
 pub(crate) use fopen::emit_fopen;
+pub(crate) use simplexml_wrapper_failure::emit_simplexml_wrapper_failure;
 pub(crate) use fputcsv::emit_fputcsv;
 pub(crate) use fread::emit_fread;
 pub(crate) use fwrite::emit_fwrite;
@@ -267,6 +269,7 @@ pub(crate) use user_filter::{
     emit_stream_filter_attach_user, emit_stream_filter_register,
 };
 pub(crate) use user_filter_brigade::emit_user_filter_brigade_invoke;
+pub(crate) use user_wrapper::emit_stream_close_mode;
 pub(crate) use user_filter_lifecycle::emit_user_filter_release_fd;
 pub(crate) use user_wrapper::{
     emit_box_wrapper_stat_result, emit_user_wrapper_fclose, emit_user_wrapper_feof,
@@ -297,8 +300,7 @@ pub(crate) use print_r_walk::{
     emit_print_r_open, emit_print_r_spaces, emit_print_r_str_key, emit_print_r_value,
 };
 pub(crate) use print_r_buffer::{
-    emit_pr_append, emit_pr_base, emit_pr_finish, emit_pr_flush_deferred, emit_pr_release,
-    emit_pr_reserve, emit_pr_write,
+    emit_pr_append, emit_pr_finish, emit_pr_write,
 };
 pub(crate) use ob_buffer::{
     emit_ob_append, emit_ob_contents, emit_ob_flush_all, emit_ob_gated_ops, emit_ob_get_pop_ops,

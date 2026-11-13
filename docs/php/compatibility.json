@@ -1,7 +1,7 @@
 {
   "baseline": {
     "classes": 329,
-    "constants": 3180,
+    "constants": 3181,
     "extensions": 68,
     "functions": 2169,
     "generated_at": "2026-09-04",
@@ -179,15 +179,15 @@
   ],
   "coverage": {
     "classes": {
-      "have": 185,
+      "have": 200,
       "total": 329
     },
     "constants": {
-      "have": 1349,
-      "total": 3180
+      "have": 1420,
+      "total": 3181
     },
     "functions": {
-      "have": 1053,
+      "have": 1082,
       "total": 2169
     }
   },
@@ -311,6 +311,16 @@
       ],
       "notes": "ext/xml SAX parser (22 functions, XMLParser, 28 constants) and ext/xmlwriter (42 functions, XMLWriter) on a pinned static libxml2 2.15.3 from the native catalog (elephc native add libxml2); auto-linked or forced with --with-xml, identical inside eval(); the SURFACE INVENTORY is complete — every function, class and constant exists — which is not behavioural parity: see Differences from PHP in docs/php/xml.md, and Runtime limits there for the per-handler-invocation heap cost",
       "php": "https://www.php.net/manual/en/book.xml.php",
+      "status": "supported"
+    },
+    {
+      "docs": "docs/php/xml.md",
+      "feature": "SimpleXML",
+      "modules": [
+        "simplexml"
+      ],
+      "notes": "Three functions and two classes on the managed libxml2 bridge; supports element and attribute selections, mutation, namespace queries, XPath, and recursive iteration. Auto-linked or forced with --with-xml.",
+      "php": "https://www.php.net/manual/en/book.simplexml.php",
       "status": "supported"
     },
     {
@@ -666,8 +676,8 @@
     },
     {
       "classes": {
-        "eval": 8,
-        "have": 8,
+        "eval": 10,
+        "have": 10,
         "total": 50
       },
       "constants": {
@@ -962,9 +972,9 @@
         "total": 1
       },
       "constants": {
-        "eval": 5,
-        "have": 5,
-        "total": 28
+        "eval": 18,
+        "have": 18,
+        "total": 29
       },
       "docs": null,
       "extension": "libxml",
@@ -995,20 +1005,20 @@
     },
     {
       "classes": {
-        "eval": 4,
-        "have": 4,
+        "eval": 6,
+        "have": 6,
         "total": 6
       },
       "constants": {
         "eval": 0,
-        "have": 52,
+        "have": 110,
         "total": 110
       },
       "docs": "docs/php/mysqli.md#functions",
       "extension": "mysqli",
       "functions": {
         "eval": 0,
-        "have": 84,
+        "have": 106,
         "total": 106
       },
       "name": "mysqli",
@@ -1335,16 +1345,16 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 2,
+        "have": 2,
         "total": 2
       },
       "constants": null,
-      "docs": null,
+      "docs": "docs/php/xml.md#functions",
       "extension": "simplexml",
       "functions": {
-        "eval": 0,
-        "have": 0,
+        "eval": 3,
+        "have": 3,
         "total": 3
       },
       "name": "simplexml",
@@ -1482,8 +1492,8 @@
       "docs": null,
       "extension": "standard",
       "functions": {
-        "eval": 350,
-        "have": 390,
+        "eval": 352,
+        "have": 394,
         "total": 545
       },
       "name": "standard",
@@ -1588,8 +1598,8 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 9,
+        "have": 9,
         "total": 9
       },
       "constants": null,
@@ -1732,9 +1742,38 @@
       {
         "name": "Time\\TimeException",
         "since": "8.6"
+      },
+      {
+        "name": "Uri\\Rfc3986\\UriBuilder",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\Rfc3986\\UriHostType",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\Rfc3986\\UriType",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\WhatWg\\UrlBuilder",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\WhatWg\\UrlHostType",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\WhatWg\\UrlPercentEncodingMode",
+        "since": "8.6"
       }
     ],
-    "constants": [],
+    "constants": [
+      {
+        "name": "MYSQLI_OPT_COMPRESS",
+        "since": "8.6"
+      }
+    ],
     "functions": [
       {
         "name": "clamp",
@@ -1746,6 +1785,10 @@
       },
       {
         "name": "mysqli_quote_string",
+        "since": "8.6"
+      },
+      {
+        "name": "url_percent_encode",
         "since": "8.6"
       }
     ]

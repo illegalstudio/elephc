@@ -161,6 +161,25 @@ pub(crate) const CONCAT_TEMP_HEAP_KIND: u32 = 7;
 /// Independently owned reference cell whose payload descriptor occupies bits 8 through 14.
 pub(crate) const REFERENCE_CELL_HEAP_KIND: u32 = 8;
 
+/// Property descriptor rows preserve the payload tag and mark a native reference-cell slot.
+pub(crate) const SERPROP_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
+/// Serialization rows mark unconstrained Mixed cells that can share a canonical PHP wrapper.
+pub(crate) const SERPROP_MIXED_REFERENCE_PROPERTY_FLAG: u64 = 1 << 9;
+/// Property metadata authenticates an owned scalar cell that may adopt a canonical PHP wrapper.
+pub(crate) const CANONICAL_SCALAR_PROPERTY_FLAG: u64 = 1 << 10;
+
+/// JSON property descriptors preserve the payload tag and mark an indirect reference cell.
+pub(crate) const JSON_REFERENCE_PROPERTY_FLAG: u64 = 1 << 8;
+/// JSON omits declared properties whose native initialization marker is still unset.
+pub(crate) const JSON_DECLARED_PROPERTY_FLAG: u64 = 1 << 9;
+
+/// Heap-header flag marking a string whose native identity is registered with mbstring.
+///
+/// Heap identity registration hooks (bind, copy, fresh, and persist) set this bit.
+/// Collector passes preserve it on non-graph string headers, and `__rt_heap_free()` uses it
+/// to skip the full bridge callback for strings without native identity metadata.
+pub(crate) const MBSTRING_IDENTITY_TRACKED: u32 = 1 << 24;
+
 /// Heap-owned callable descriptor with typed capture metadata.
 pub(crate) const CALLABLE_HEAP_KIND: u32 = 9;
 

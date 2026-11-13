@@ -765,3 +765,70 @@ catch (AlphaFailure $error) {{ echo 'alpha'; }}"
         "a bound receiver must keep its own handler: {matching:?}"
     );
 }
+
+
+/// Reference assignments keep validation catches in each optimizer phase without tainting locals.
+#[test]
+fn test_reference_assignment_validation_preserves_scoped_catches_through_all_phases() {
+    with_fresh_reference_volatile(|| {
+    let source = r#"<?php
+function refValidationWriter(mixed &$target): void {
+    try { $target = true; } catch (TypeError $error) { echo 'reference'; }
+}
+function plainValidationWriter(mixed $target): void {
+    try { $target = true; } catch (TypeError $error) { echo 'plain'; }
+}
+class RefValidationWriters {
+    public static function shared(mixed &$target): void {
+        try { $target = true; } catch (TypeError $error) { echo 'static'; }
+    }
+    public function instance(mixed &$target): void {
+        try { $target = true; } catch (TypeError $error) { echo 'instance'; }
+    }
+}
+"#;
+    let tokens = crate::lexer::tokenize(source).unwrap();
+    let mut program = crate::parser::parse(&tokens).unwrap();
+    let optimizer = PostTypecheckOptimizer::new(&program);
+    for phase in ["prune", "normalize", "dce"] {
+        program = match phase {
+            "prune" => optimizer.prune(program, HashSet::new()),
+            "normalize" => optimizer.normalize(program, HashSet::new()),
+            _ => optimizer.eliminate_dead_code(program, HashSet::new()),
+        };
+        for stmt in &program {
+            match &stmt.kind {
+                StmtKind::FunctionDecl { name, body, .. } if name == "refValidationWriter" =>
+                    assert!(has_catch(body), "{phase}: reference constraints remain fallible"),
+                StmtKind::ClassDecl { methods, .. } => {
+                    for method in methods {
+                        assert!(has_catch(&method.body), "{phase}: method {}", method.name);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let plain = program.iter().find_map(|stmt| match &stmt.kind {
+        StmtKind::FunctionDecl { name, body, .. } if name == "plainValidationWriter" => Some(body),
+        _ => None,
+    }).unwrap();
+    assert!(!has_catch(plain), "reference parameter state cannot leak into another function");
+    });
+}
+
+/// A call to a reference writer can expose a property constraint in its caller's catch.
+#[test]
+fn test_reference_assignment_validation_reaches_callers_through_exception_summaries() {
+    let program = dce_source(r#"<?php
+function refValidationCallee(mixed &$target): void { $target = true; }
+function refValidationCaller(mixed &$target): void {
+    try { refValidationCallee($target); } catch (TypeError $error) { echo 'caught'; }
+}
+"#);
+    let body = program.iter().find_map(|stmt| match &stmt.kind {
+        StmtKind::FunctionDecl { name, body, .. } if name == "refValidationCaller" => Some(body),
+        _ => None,
+    }).unwrap();
+    assert!(has_catch(body), "the callee can write a typed property's live reference");
+}

@@ -102,9 +102,25 @@ impl Checker {
         flattened_classes: &[FlattenedClass],
         errors: &mut Vec<CompileError>,
     ) -> Result<(), CompileError> {
+        let previous = self.method_property_refinements.take();
+        let result = self.type_check_methods_until_stable_inner(flattened_classes, errors);
+        self.method_property_refinements = previous;
+        result
+    }
+
+    /// Keeps precise cross-class storage across passes without replaying constructor placeholders as new writes.
+    fn type_check_methods_until_stable_inner(
+        &mut self,
+        flattened_classes: &[FlattenedClass],
+        errors: &mut Vec<CompileError>,
+    ) -> Result<(), CompileError> {
         let mut method_passes_remaining = (flattened_classes.len().max(1) * 2) + 1;
         loop {
+            self.method_property_refinements = Some(std::collections::HashSet::new());
             let classes_before_pass = self.classes.clone();
+            // A pass that denies a method local the promotable `?int` read view needs another
+            // pass, whose walk then keeps that local's reads `mixed`.
+            let view_denials_before_pass = self.promotable_view_denied.len();
             let mut pass_errors = Vec::new();
 
             for class in flattened_classes {
@@ -173,6 +189,13 @@ impl Checker {
                                 .map(|(_, t)| t.clone())
                                 .unwrap_or(PhpType::Int)
                         };
+                        // An unused untyped magic argument list has no element evidence yet.
+                        // Its Never seed must not turn a runtime callback into a null read.
+                        let ty = if type_ann.is_none() && i == 1
+                            && matches!(method_key.as_str(), "__call" | "__callstatic")
+                            && matches!(&ty, PhpType::Array(element)
+                                if matches!(element.as_ref(), PhpType::Never | PhpType::Void))
+                        { PhpType::Mixed } else { ty };
                         // Match build_method_sig and the runtime hydration adapter:
                         // user hooks consume boxed PHP arrays, synthetic SPL keeps
                         // the raw representation declared by its generated signature.
@@ -219,6 +242,7 @@ impl Checker {
                     self.current_by_ref_return = method.by_ref_return;
                     let loop_storage_scope = format!("{}::{}", class.name, method.name);
                     self.clear_loop_storage_scope(&loop_storage_scope);
+                    self.begin_promotable_walk(&loop_storage_scope);
                     let previous_loop_storage_scope = std::mem::replace(
                         &mut self.current_loop_storage_scope,
                         loop_storage_scope,
@@ -251,7 +275,7 @@ impl Checker {
                             .collect();
                     let return_facts = crate::optimize::ReturnBoundaryFacts::new(method.return_type.as_ref(),
                         method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
-                    crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
+                    let body_walk = crate::optimize::with_return_boundary_facts(Some(&return_facts), || self.with_local_storage_context(
                         method_ref_params,
                         method_param_names,
                         pre_bound_own_storage,
@@ -268,7 +292,10 @@ impl Checker {
                             }
                             Ok(())
                         },
-                    ))?;
+                    ));
+                    let method_scope = self.current_loop_storage_scope.clone();
+                    self.end_promotable_walk(&method_scope);
+                    body_walk?;
                     let method_has_errors = !method_errors.is_empty();
                     pass_errors.extend(method_errors);
 
@@ -283,6 +310,11 @@ impl Checker {
                 }
             }
 
+            // A pass that denied a view is never the kept one, and it does not spend the class
+            // stability budget: denials only grow, so these extra passes are bounded.
+            if self.promotable_view_denied.len() != view_denials_before_pass {
+                continue;
+            }
             let stabilized = self.classes == classes_before_pass;
             let out_of_passes = method_passes_remaining == 0;
             if stabilized || out_of_passes {

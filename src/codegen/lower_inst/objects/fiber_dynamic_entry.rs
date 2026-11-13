@@ -300,6 +300,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
     let fallback_label = ctx.next_label("dynamic_new_no_ctor_mixed_fallback");
+    super::constructorless_refusals::emit_constructorless_abstract_refusals(ctx, inst);
     let candidates = dynamic_new_without_constructor_mixed_candidates(ctx, inst)?;
     let case_labels = candidates
         .iter()
@@ -319,6 +320,14 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_without_construct
     }
 
     ctx.emitter.label(&fallback_label);
+    if crate::codegen::eval_callable_helpers::module_needs_eval_callable_descriptor_support(ctx.module) {
+        let missing = ctx.next_label("dynamic_new_no_ctor_eval_missing");
+        let native_factory = matches!(inst.immediate, Some(Immediate::Bool(true)));
+        builtins::lower_eval_constructorless_fallback(ctx, &missing, native_factory)?;
+        ctx.store_result_value(result)?;
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&missing);
+    }
     emit_dynamic_new_class_not_found_fatal(ctx);
 
     ctx.emitter.label(&non_string_label);

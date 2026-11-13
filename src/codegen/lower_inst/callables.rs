@@ -27,7 +27,7 @@ use super::super::shared_state::RuntimeInstanceMethodDescriptorTemplate;
 use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
     emit_call_arg_temp_cleanups, emit_direct_resolved_method_call,
-    emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks,
+    emit_instance_method_descriptor_entry_wrapper, emit_ref_arg_writebacks_guarding_result,
     emit_runtime_builtin_wrapper_inline, emit_runtime_builtin_invoker_inline,
     emit_runtime_callable_invoker_inline,
     emit_runtime_callable_invoker_in_class,
@@ -35,12 +35,12 @@ use super::{
     emit_runtime_descriptor_with_receiver_capture, emit_runtime_extern_wrapper_inline,
     emit_static_method_descriptor_entry_wrapper, expect_operand, function_signature_from_eir,
     materialize_direct_call_args, materialize_method_call_args_with_receiver_reg_and_refs,
-    runtime_builtin_wrapper_sig, store_call_result,
+    runtime_builtin_wrapper_sig, store_compiled_call_result,
 };
 use crate::codegen::{CodegenIrError, Result};
 
 mod instance_expr;
-mod results;
+pub(super) mod results;
 
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
 const MIXED_METHOD_PAYLOAD_OFFSET: usize = 16;
@@ -166,13 +166,17 @@ pub(super) fn lower_callable_descriptor_invoke(
             arg_mixed,
             "callable_descriptor_invoke",
         ),
-        PhpType::Mixed | PhpType::Union(_) => lower_mixed_callable_descriptor_invoke(
-            ctx,
-            inst,
-            callable,
-            arg_mixed,
-            "callable_descriptor_invoke",
-        ),
+        PhpType::Mixed | PhpType::Union(_) => {
+            if ctx.runtime_callable_candidates(callable).is_none()
+                && super::instruction_strict_php_profile(inst) == crate::strict_php::is_enabled()
+            {
+                lower_shared_mixed_descriptor_invoke(ctx, inst, callable, arg_mixed)
+            } else {
+                lower_mixed_callable_descriptor_invoke(
+                    ctx, inst, callable, arg_mixed, "callable_descriptor_invoke",
+                )
+            }
+        }
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => {
             lower_runtime_mixed_callable_array_descriptor_invoke(
                 ctx,
@@ -204,6 +208,20 @@ pub(super) fn lower_callable_descriptor_invoke(
             other
         ))),
     }
+}
+
+/// Resolves an unrestricted boxed callback once per module instead of expanding every candidate.
+fn lower_shared_mixed_descriptor_invoke(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, callable: ValueId, arguments: ValueId,
+) -> Result<()> {
+    ctx.shared.callable_argument_normalizer = true;
+    ctx.load_value_to_result(callable)?;
+    abi::emit_call_label(ctx.emitter, super::CALLABLE_ARGUMENT_NORMALIZER);
+    let descriptor = abi::nested_call_reg(ctx.emitter);
+    abi::emit_reg_move(ctx.emitter, descriptor, abi::int_result_reg(ctx.emitter));
+    emit_descriptor_reg_invoker_call_with_mixed_arg(
+        ctx, inst, descriptor, arguments, "callable_descriptor_invoke", true,
+    )
 }
 
 /// Lowers descriptor invocation when the callable traveled through a boxed Mixed value.
@@ -544,6 +562,7 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
         string_type_error,
         candidate_names.as_deref(),
         arity,
+        eval_fallback_slot.map(|_| fatal_label.as_str()),
     )?;
     abi::emit_jump(ctx.emitter, &done_label);
 
@@ -611,11 +630,11 @@ fn emit_runtime_mixed_callable_descriptor_value_impl(
             abi::emit_jump(ctx.emitter, &selected_label);
             ctx.emitter.label(&next_label);
         }
-        if let Some(message) = invalid_type_error {
-            super::exceptions::emit_type_error(ctx, message);
-        } else if eval_fallback_slot.is_some() {
+        if eval_fallback_slot.is_some() {
             abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
             abi::emit_jump(ctx.emitter, &fatal_label);
+        } else if let Some(message) = invalid_type_error {
+            super::exceptions::emit_type_error(ctx, message);
         } else {
             emit_mixed_callable_not_callable_fatal(ctx, op_name);
         }
@@ -1156,13 +1175,14 @@ fn emit_runtime_string_descriptor_value_impl(
     Ok(())
 }
 
-/// Selects a callable descriptor from a string payload just returned by `__rt_mixed_unbox`.
+/// Selects a native string descriptor, forwarding a miss to eval when the caller owns that path.
 fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx: &mut FunctionContext<'_>,
     op_name: &str,
     type_error: Option<&'static str>,
     candidate_names: Option<&[String]>,
     arity: Option<usize>,
+    eval_fallback: Option<&str>,
 ) -> Result<()> {
     let cases = runtime_string_descriptor_cases_at_arity(
         ctx,
@@ -1172,6 +1192,10 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
         arity,
     )?;
     if cases.is_empty() {
+        if let Some(fallback) = eval_fallback {
+            abi::emit_jump(ctx.emitter, fallback);
+            return Ok(());
+        }
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime string with no descriptor targets",
             op_name
@@ -1208,7 +1232,10 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     abi::emit_jump(ctx.emitter, &miss_label);
 
     ctx.emitter.label(&miss_label);
-    if let Some(message) = type_error {
+    if let Some(fallback) = eval_fallback {
+        abi::emit_release_temporary_stack(ctx.emitter, 16);
+        abi::emit_jump(ctx.emitter, fallback);
+    } else if let Some(message) = type_error {
         abi::emit_release_temporary_stack(ctx.emitter, 16);
         super::exceptions::emit_type_error(ctx, message);
     } else {
@@ -1749,7 +1776,8 @@ fn runtime_static_method_descriptor_cases(
                 .get(&method_key)
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
-            if !class_method_already_emitted(ctx, &impl_class, &method_key, true) {
+            if !class_method_already_emitted(ctx, &impl_class, &method_key, true)
+                && !super::super::intrinsic_static_descriptor_entry_supported(&impl_class, &method_key) {
                 continue;
             }
             methods.push((
@@ -2419,9 +2447,9 @@ fn emit_runtime_array_instance_method_call(
     emit_direct_resolved_method_call(ctx, &resolved)?;
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
-    store_call_result(ctx, inst, &target.sig.return_type)?;
+    store_compiled_call_result(ctx, inst, &target.sig.return_type, target.sig.by_ref_return)?;
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, false)
 }
 
 /// Builds and invokes a receiver-captured descriptor for a matched instance method.

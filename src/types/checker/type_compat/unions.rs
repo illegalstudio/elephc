@@ -74,6 +74,20 @@ impl Checker {
         // position — including the `int` parameters the preludes pass a loop counter to.
         if let PhpType::Union(members) = actual {
             if !actual.is_int_float_union() {
+                // A factory-style `Object|false` actual reaches an object-only parameter after
+                // an unchecked failure sentinel. PHP accepts the object branch and throws on
+                // `false`, so only the object members must satisfy the expected type.
+                if matches!(expected, PhpType::Object(_))
+                    && members.iter().all(|member| matches!(
+                        member,
+                        PhpType::Object(_) | PhpType::False | PhpType::Void
+                    ))
+                {
+                    return members
+                        .iter()
+                        .filter(|member| matches!(member, PhpType::Object(_)))
+                        .all(|member| self.type_accepts(expected, member));
+                }
                 // Inside a WIDER union the arithmetic pair is still judged as the unit it is:
                 // `$last ? null : -$i` is `int|float|null`, and splitting it asked whether `int`
                 // accepts `float`, so `?int $d` refused what it takes as `int|float` alone and as
@@ -189,6 +203,22 @@ impl Checker {
                         // thing that can relate them, and it relates them here rather than
                         // through an inheritance edge — see `generic_variance`.
                         || self.variance_permits(expected_name, actual_name)
+                }
+                // Factory returns such as `simplexml_load_string(): SimpleXMLElement|false`
+                // reach object-only parameters after an unchecked failure sentinel. PHP's
+                // runtime parameter check accepts the object branch and throws on `false`, so
+                // the static check accepts the object members here; scalar `T|false` unions
+                // stay refused because their unchecked sentinel is a real static bug.
+                PhpType::Union(members)
+                    if members.iter().all(|member| matches!(
+                        member,
+                        PhpType::Object(_) | PhpType::False | PhpType::Void
+                    )) =>
+                {
+                    members
+                        .iter()
+                        .filter(|member| matches!(member, PhpType::Object(_)))
+                        .all(|member| self.type_accepts(expected, member))
                 }
                 _ => false,
             },

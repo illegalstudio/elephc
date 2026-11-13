@@ -460,6 +460,41 @@ echo (gzuncompress($packed) === $data ? "roundtrip-ok" : "roundtrip-fail");
     assert_eq!(out, "smaller|roundtrip-ok");
 }
 
+
+/// Repeats gzuncompress so the boxed output must be reclaimed instead of exhausting the heap.
+#[test]
+fn test_gzuncompress_repeated_calls_release_the_output() {
+    let out = compile_and_run(r#"<?php
+$packed = gzcompress("hello");
+$sum = 0;
+for ($i = 0; $i < 2000; $i++) { $sum += strlen(gzuncompress($packed)); }
+echo $sum;
+"#);
+    assert_eq!(out, "10000");
+}
+
+/// Verifies the constant-local one-argument gzip round-trip length fold and its fallbacks.
+///
+/// The compressed value must be produced once in the entry block from a literal; the optional
+/// `max_length` and a runtime-built input must keep the real decompression path.
+#[test]
+fn test_gzip_literal_roundtrip_length_fold() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$z = gzcompress("hello");
+$d = gzdeflate("wörld");
+echo strlen(gzuncompress($z)), "|";
+echo strlen(gzinflate($d)), "|";
+echo strlen(gzuncompress($z, 64)), "|";
+$late = "hello" . $argc;
+echo strlen(gzuncompress(gzcompress($late))), "|";
+echo bin2hex(gzuncompress($z)) === bin2hex("hello") ? "hex-ok" : "hex-bad", "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "5|6|5|6|hex-ok|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Verifies compiled PHP output for gzuncompress invalid is false.
 #[test]
 fn test_gzuncompress_invalid_is_false() {
@@ -1329,4 +1364,24 @@ echo strip_tags("a\0b<c>");
         out,
         "Hello World|plain|ab|ab|hello|1 < 2|<p>Hello World</p>|<BR/>hi</br>|<p class=\"x\">Hi</p>|<p>Hello World</p>|plain|x|y|z|<p>A</p>B|ab"
     );
+}
+
+/// Verifies the loop-invariant gzip length hoist and a mutated-subject fallback.
+#[test]
+fn test_gzip_length_loop_hoist_and_mutation_fallback() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+$s = "hello";
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= strlen(gzcompress($s)) + $i; }
+echo $n, "|";
+$s = "hello";
+$n = 0;
+for ($i = 0; $i < 3; $i++) { $n ^= strlen(gzdeflate($s)) + $i; $s .= "!"; }
+echo $n, "|";
+echo strlen(gzcompress("hello")), "|";
+echo "\n";
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "12|5|13|\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

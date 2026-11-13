@@ -81,7 +81,10 @@ impl Checker {
             // already holds, so the reference needs no storage change; only the compile-time
             // contract stood in the way, and it refused a `mixed` return value handed straight
             // to such a parameter.
-            if expected.is_php_array()
+            //
+            // A nullable or union parameter (`?array &$read`, `int|string &$v`) lowers to the
+            // same boxed cell too, so a `mixed` variable binds to it on the same terms.
+            if (expected.is_php_array() || expected.codegen_repr() == PhpType::Mixed)
                 && matches!(actual.codegen_repr(), PhpType::Mixed)
                 && matches!(arg.kind, crate::parser::ast::ExprKind::Variable(_))
             {

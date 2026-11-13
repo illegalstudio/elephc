@@ -73,18 +73,15 @@ jobs:
           # main. Walk back instead: an unattended build that nobody watches is
           # worth having only if it is installable.
           SHA=""
-          for CANDIDATE in $(git rev-list -n 20 HEAD); do
-            CONCLUSION="$(gh api \
-              "/repos/${GITHUB_REPOSITORY}/commits/${CANDIDATE}/check-runs?check_name=Build%20%26%20Test&status=completed&filter=latest" \
-              --jq '.check_runs | map(select(.app.slug == "github-actions" and .conclusion == "success")) | first.conclusion // ""')"
-            if [ "$CONCLUSION" = "success" ]; then
+          for CANDIDATE in $(git rev-list --first-parent -n 20 HEAD); do
+            if python3 -B scripts/ci/verify_ci_verdicts.py "$CANDIDATE"; then
               SHA="$CANDIDATE"
               break
             fi
           done
 
           if [ -z "$SHA" ]; then
-            echo "::warning::No successful Build & Test check on the last 20 main commits; skipping tonight's nightly."
+            echo "::warning::No complete required CI verdicts on the last 20 main commits; skipping tonight's nightly."
             echo "build=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -197,8 +194,21 @@ jobs:
           PY
           echo "Set Cargo.toml and Cargo.lock version to ${VERSION}"
 
-      - name: Build release binary
-        run: cargo build --release
+      - name: Load build tooling from the workflow revision
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .build-ci
+          sparse-checkout: |
+            .github/actions/build-release-artifacts
+            scripts/ci
+          persist-credentials: false
+
+      - name: Build shared release profile
+        uses: ./.build-ci/.github/actions/build-release-artifacts
+        with:
+          target: ${{ matrix.target }}
+          sha: ${{ needs.gate.outputs.sha }}
 
       - name: Verify nightly binary version
         run: |
@@ -213,9 +223,6 @@ jobs:
       # Every bridge in `BRIDGES` (src/linker/bridges.rs), in that order. This
       # list is guarded by `every_bridge_crate_is_in_the_build_lists`; a bridge
       # missing here ships a compiler that refuses the flag it advertises.
-      - name: Build release bridge staticlibs
-        run: cargo build --release -p elephc-tls -p elephc-pdo -p elephc-crypto -p elephc-bcmath -p elephc-gmp -p elephc-random -p elephc-uri -p elephc-pack -p elephc-mbstring -p elephc-iconv -p elephc-phar -p elephc-tz -p elephc-image -p elephc-probe -p elephc-instr -p elephc-web -p elephc-pcntl -p elephc-xml -p elephc-fileinfo -p elephc-tokenizer -p elephc-magician -p elephc-curl -p elephc-zend
-
       - name: Strip binary
         run: strip target/release/elephc
 
@@ -265,7 +272,7 @@ jobs:
         run: |
           cd target/release
           TARBALL="elephc-nightly-${{ matrix.target }}.tar.gz"
-          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices fileinfo-notices
+          tar czf "$TARBALL" elephc libelephc_*.a mbstring-notices fileinfo-notices compiler-build-manifest.json bridge-build-manifest.json
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$TARBALL" > "$TARBALL.sha256"
           else
@@ -343,17 +350,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
 
-      # The probe prepares curl, GMP, Oniguruma, PCRE2, libmagic, and libxml2
-      # before force-enabling their packed bridges in its empty WORKDIR. The cache
-      # uses native add's default root (`~/.cache/elephc/native`), so warm runners
-      # skip the from-source native rebuilds.
+      # The probe adds every managed native package the packaged binary names in
+      # `--print-capabilities` before force-enabling its packed bridge in an empty
+      # WORKDIR. The cache uses native add's default root
+      # (`~/.cache/elephc/native`), keyed on the catalog and every recipe, so warm
+      # runners skip the from-source native rebuilds.
       - name: Cache managed native dependencies
         uses: actions/cache@v6
         with:
           path: ~/.cache/elephc/native
-          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/curl.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/libssh2.rs', 'src/native_deps/recipes/nghttp2.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/oniguruma.rs', 'src/native_deps/recipes/oniguruma_shim.c', 'src/native_deps/recipes/oniguruma_shim.h', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/util.rs') }}
-          restore-keys: |
-            verify-native-${{ matrix.target }}-
+          key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/**') }}
 
       - name: Download the built tarball
         uses: actions/download-artifact@v8

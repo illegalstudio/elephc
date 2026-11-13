@@ -72,6 +72,8 @@ pub(super) struct ExceptionFlowAnalysis {
     function_throws: HashMap<String, ThrownTypes>,
     /// Declaration spelling for each case-folded function name, fixed before summary iteration.
     function_names: HashMap<String, String>,
+    /// Aliased property constraints can reject writes or invoke PHP during coercion.
+    reference_parameters: HashMap<String, HashSet<String>>,
     return_boundaries: HashMap<String, Rc<ReturnBoundaryFacts>>,
     static_method_throws: HashMap<String, ThrownTypes>,
     instance_method_throws: HashMap<String, ThrownTypes>,
@@ -116,7 +118,40 @@ fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
     // A by-value object parameter also runs the runtime union guard for a
     // `Class|false` / `Class|null` argument before entering the body. Treat every
     // object parameter conservatively so try/catch DCE keeps its handler reachable.
-    signature.params.iter().any(|(_, ty)| matches!(ty.codegen_repr(), PhpType::Object(_)))
+    //
+    // A by-reference parameter of a class (`?A &$v`), of an array (`array &$v`,
+    // `?array &$v`) or of a union of them checks a boxed (`mixed`) argument at the call
+    // boundary and raises `TypeError` there (the EIR reference-argument guards), so it can
+    // throw too.
+    signature.params.iter().enumerate().any(|(index, (_, ty))| {
+        matches!(ty.codegen_repr(), PhpType::Object(_))
+            || (signature.ref_params.get(index).copied().unwrap_or(false)
+                && by_ref_param_checks_boxed_argument(signature, index, ty))
+    })
+}
+
+/// Whether the EIR call lowering guards a boxed argument bound to by-reference parameter
+/// `index` of type `ty`: a php array, a union of `null`, arrays and objects, or a `mixed`
+/// slot declared with a class name.
+fn by_ref_param_checks_boxed_argument(signature: &FunctionSig, index: usize, ty: &PhpType) -> bool {
+    if ty.is_php_array() {
+        return true;
+    }
+    match ty {
+        PhpType::Union(members) => members.iter().all(|member| {
+            member.is_php_array()
+                || matches!(
+                    member,
+                    PhpType::Void | PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+                )
+        }),
+        PhpType::Mixed => matches!(
+            signature.param_type_exprs.get(index).and_then(Option::as_ref),
+            Some(crate::parser::ast::TypeExpr::Named(name))
+                if !name.as_str().eq_ignore_ascii_case("mixed")
+        ),
+        _ => false,
+    }
 }
 
 /// Installs exception summaries for one optimizer pass and restores the previous analysis.
@@ -297,6 +332,8 @@ impl ExceptionFlowAnalysis {
             &mut instance_method_bodies,
             &mut class_contexts,
         );
+        let mut reference_parameters = HashMap::new();
+        callables::collect_reference_parameter_scopes(program, &mut reference_parameters);
         let function_returns = type_metadata
             .map(|(functions, _, _)| {
                 functions
@@ -399,6 +436,7 @@ impl ExceptionFlowAnalysis {
         }
         let mut analysis = Self {
             checker_retirement_types: None,
+            reference_parameters,
             has_internal_object_operators: class_contexts.keys().any(|name|
                 elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())),
             hierarchy,
@@ -491,8 +529,10 @@ impl ExceptionFlowAnalysis {
             .map(|(name, body)| {
                 (
                     name.clone(),
-                    with_return_boundary_facts(self.return_boundaries.get(name), ||
-                        self.block_throws(body.body, &HashMap::new(), body.class_context))
+                    with_reference_parameter_scope(false,
+                        self.reference_parameters.get(name).cloned().unwrap_or_default(), ||
+                        with_return_boundary_facts(self.return_boundaries.get(name), ||
+                            self.block_throws(body.body, &HashMap::new(), body.class_context)))
                         .combined(self.scope_cleanup_throws(name)),
                 )
             })
@@ -574,15 +614,16 @@ impl ExceptionFlowAnalysis {
                 self.checker_retirement_types.as_ref().and_then(|types| types.get(name)),
             _ => None,
         };
-        self.stmt_throws_at_boundary(stmt, bindings, class_context, true, retired)
+        self.stmt_throws_at_boundary(stmt, bindings, class_context, true, retired, None)
     }
 
     /// Separates a statement's callbacks and cleanup from operands already visited by the checker.
     fn stmt_throws_at_boundary(
         &self, stmt: &Stmt, bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
-        retired_type: Option<&PhpType>,
+        retired_type: Option<&PhpType>, reference_write: Option<bool>,
     ) -> ThrownTypes {
+        // The checker publishes switch comparison throws at each evaluated label prefix.
         if !include_operands && !matches!(stmt.kind,
             StmtKind::Echo(_) | StmtKind::ExprStmt(_) | StmtKind::StaticVar { .. }
             | StmtKind::ListUnpack { .. } | StmtKind::Assign { .. } | StmtKind::TypedAssign { .. }
@@ -635,9 +676,11 @@ impl ExceptionFlowAnalysis {
                 .combined(self.thrown_value_types(expr, bindings, class_context)),
             // Rebinding retires the target's previous value, and that value's destructor runs
             // in THIS frame, so a same-frame catch can still see it.
-            StmtKind::Assign { value, .. }
-            | StmtKind::TypedAssign { value, .. } => operand(value)
-                .combined(overwrite()),
+            StmtKind::Assign { name, value }
+            | StmtKind::TypedAssign { name, value, .. } => operand(value)
+                .combined(overwrite())
+                .combined(if reference_write.unwrap_or_else(|| is_reference_volatile(name)) { ThrownTypes::unknown() }
+                    else { ThrownTypes::default() }),
             // The untyped optimizer cannot prove reference rebinding harmless. The
             // checker boundary has already validated its source and supplies target storage.
             StmtKind::RefAssign { source, .. } => operand(source).combined(overwrite())
@@ -651,6 +694,7 @@ impl ExceptionFlowAnalysis {
                 operand(value)
                     .combined(overwrite())
                     .combined(initialization)
+                    .combined(ThrownTypes::unknown())
             }
             StmtKind::ArrayPush { value, .. }
             | StmtKind::StaticPropertyArrayPush { value, .. } => operand(value)
@@ -681,11 +725,12 @@ impl ExceptionFlowAnalysis {
                 elseif_clauses,
                 else_body,
             } => {
-                let mut thrown = operand(condition);
+                let mut thrown = operand(condition).combined(self.internal_conversion_throws(condition));
                 thrown = thrown.combined(block(then_body));
                 for (condition, body) in elseif_clauses {
                     thrown = thrown
                         .combined(operand(condition))
+                        .combined(self.internal_conversion_throws(condition))
                         .combined(block(body));
                 }
                 if let Some(body) = else_body {
@@ -705,6 +750,7 @@ impl ExceptionFlowAnalysis {
                 thrown
             }
             StmtKind::While { condition, body } | StmtKind::DoWhile { condition, body } => operand(condition)
+                .combined(self.internal_conversion_throws(condition))
                 .combined(block(body)),
             StmtKind::For {
                 init,
@@ -718,7 +764,7 @@ impl ExceptionFlowAnalysis {
                 .combined(
                     condition
                         .as_ref()
-                        .map(|expr| operand(expr))
+                        .map(|expr| operand(expr).combined(self.internal_conversion_throws(expr)))
                         .unwrap_or_default(),
                 )
                 .combined(
@@ -744,6 +790,9 @@ impl ExceptionFlowAnalysis {
                 for (patterns, body) in cases {
                     for pattern in patterns {
                         thrown = thrown.combined(operand(pattern));
+                        if binary_op_has_dynamic_throw(subject, &BinOp::Eq, pattern) {
+                            thrown = thrown.combined(ThrownTypes::unknown());
+                        }
                     }
                     thrown = thrown.combined(block(body));
                 }
@@ -804,6 +853,13 @@ impl ExceptionFlowAnalysis {
         }
     }
 
+    /// Includes native conversion errors while literal scalars retain their exact throw domain.
+    fn internal_conversion_throws(&self, expr: &Expr) -> ThrownTypes {
+        if self.has_internal_object_operators && !effects::literal_scalar_operand(expr) {
+            ThrownTypes::unknown()
+        } else { ThrownTypes::default() }
+    }
+
     /// Computes throwable flow for an expression, preserving exact explicit and callable throws.
     fn expr_throws(
         &self,
@@ -833,15 +889,14 @@ impl ExceptionFlowAnalysis {
         match &expr.kind {
             ExprKind::Throw(inner) => operand(inner)
                 .combined(self.thrown_value_types(inner, bindings, class_context)),
-            ExprKind::Negate(inner) => {
+            ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
                 let thrown = operand(inner);
                 if self.has_internal_object_operators && !effects::literal_scalar_operand(inner) {
                     thrown.combined(ThrownTypes::unknown())
                 } else { thrown }
             }
-            ExprKind::Not(inner)
-            | ExprKind::BitNot(inner)
-            | ExprKind::ErrorSuppress(inner)
+            ExprKind::Not(inner) => operand(inner).combined(self.internal_conversion_throws(inner)),
+            ExprKind::ErrorSuppress(inner)
             | ExprKind::PtrCast { expr: inner, .. } => operand(inner),
             ExprKind::Spread(inner) => {
                 let evaluated = operand(inner);
@@ -858,6 +913,8 @@ impl ExceptionFlowAnalysis {
                 let mut thrown = operand(inner);
                 if matches!(target, CastType::String) {
                     thrown = thrown.combined(self.string_conversion_throws(inner, class_context));
+                } else if matches!(target, CastType::Bool | CastType::Array) {
+                    thrown = thrown.combined(self.internal_conversion_throws(inner));
                 }
                 thrown
             }
@@ -868,6 +925,9 @@ impl ExceptionFlowAnalysis {
                     .combined(operand(right));
                 if self.has_internal_object_operators && effects::internal_arithmetic_candidate(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::unknown());
+                } else if matches!(op, BinOp::And | BinOp::Or | BinOp::Xor) {
+                    thrown = thrown.combined(self.internal_conversion_throws(left))
+                        .combined(self.internal_conversion_throws(right));
                 } else if let Some(class_name) = binary_op_exact_throw_type(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::exact(class_name));
                 } else if binary_op_has_dynamic_throw(left, op, right) {
@@ -1031,10 +1091,13 @@ impl ExceptionFlowAnalysis {
                 then_expr,
                 else_expr,
             } => operand(condition)
+                .combined(self.internal_conversion_throws(condition))
                 .combined(operand(then_expr))
                 .combined(operand(else_expr)),
-            ExprKind::ShortTernary { value, default }
-            | ExprKind::NullCoalesce { value, default } => operand(value)
+            ExprKind::ShortTernary { value, default } => operand(value)
+                .combined(self.internal_conversion_throws(value))
+                .combined(operand(default)),
+            ExprKind::NullCoalesce { value, default } => operand(value)
                 .combined(operand(default)),
             ExprKind::Match {
                 subject,
@@ -1062,8 +1125,10 @@ impl ExceptionFlowAnalysis {
                 .combined(operand(target))
                 .combined(operand(value))
                 // The assignment retires whatever the target held before this write.
-                .combined(if matches!(target.kind, ExprKind::Variable(_)) {
-                    self.local_retirement_throws(target)
+                .combined(if let ExprKind::Variable(name) = &target.kind {
+                    self.local_retirement_throws(target).combined(if is_reference_volatile(name) {
+                        ThrownTypes::unknown()
+                    } else { ThrownTypes::default() })
                 } else { ThrownTypes::unknown() })
                 .combined(
                     result_target
@@ -1151,7 +1216,12 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>,
     ) -> ThrownTypes {
         match &callee.kind {
-            ExprKind::Closure { params, return_type, body, .. } => {
+            ExprKind::Closure { params, return_type, body, variadic, variadic_by_ref,
+                captures, capture_refs, by_ref_return, .. } => {
+                let mut references = reference_parameter_names(params, variadic.as_deref(), *variadic_by_ref);
+                references.extend(capture_refs.iter().cloned());
+                let values = closure_value_binding_names(params, captures, capture_refs,
+                    variadic.as_deref(), *variadic_by_ref);
                 let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                     params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), body);
                 // The callee owns different locals even when their spellings match the caller.
@@ -1161,7 +1231,9 @@ impl ExceptionFlowAnalysis {
                     callee_analysis.checker_retirement_types = None;
                     &callee_analysis
                 } else { self };
-                with_return_boundary_facts(Some(&facts), || analysis.block_throws(body, bindings, class_context))
+                with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
+                    with_reference_parameter_scope(*by_ref_return, references, ||
+                        analysis.block_throws(body, bindings, class_context))))
             }
             ExprKind::FirstClassCallable(CallableTarget::Function(name)) => self
                 .function_throws
@@ -1396,6 +1468,9 @@ fn binary_op_exact_throw_type(
 /// Returns whether an operator may fail but runtime operand types prevent an exact class claim.
 fn binary_op_has_dynamic_throw(left: &Expr, op: &BinOp, right: &Expr) -> bool {
     match op {
+        BinOp::Eq | BinOp::NotEq => {
+            !effects::literal_scalar_operand(left) || !effects::literal_scalar_operand(right)
+        }
         BinOp::Div | BinOp::Mod => !matches!(
             &right.kind,
             ExprKind::IntLiteral(value) if *value != 0

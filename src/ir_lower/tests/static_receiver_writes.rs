@@ -277,3 +277,27 @@ receiver_target_test!(static_receiver_review_ios, "ios-arm64");
 receiver_target_test!(static_receiver_review_ios_sim, "ios-sim-arm64");
 receiver_target_test!(static_receiver_review_linux_arm, "linux-aarch64");
 receiver_target_test!(static_receiver_review_linux_x86, "linux-x86_64");
+/// Nested compound roots guard nullable static receivers after the RHS and fetch attached storage.
+#[test]
+fn nullable_static_nested_compound_guards_before_attached_fetch_on_every_target() {
+    let source = r#"<?php
+class NestedCompoundOwner { public array $items = [[1]]; }
+class NestedCompoundState { public static ?NestedCompoundOwner $owner = null; }
+function nestedCompoundRhs(): int { echo 'rhs'; return 1; }
+function nestedCompoundWrite(): void { NestedCompoundState::$owner->items[0][0] += nestedCompoundRhs(); }
+NestedCompoundState::$owner = new NestedCompoundOwner(); nestedCompoundWrite();
+"#;
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(source, std::path::Path::new("main.php"),
+            std::path::Path::new("."), crate::codegen::platform::Target::parse(target).unwrap());
+        let function = module.functions.iter().find(|function| function.name == "nestedCompoundWrite").unwrap();
+        let position = |op| function.instructions.iter().position(|inst| inst.op == op).unwrap();
+        assert!(position(crate::ir::Op::Call) < position(crate::ir::Op::LoadStaticProperty),
+            "{target}: the compound RHS precedes receiver selection");
+        assert!(position(crate::ir::Op::IsNull) < position(crate::ir::Op::PropGetForWrite),
+            "{target}: null is rejected before the attached property fetch");
+        assert!(!function.instructions.iter().any(|inst| inst.op == crate::ir::Op::PropGet),
+            "{target}: the nested array root must not use a detached plain read");
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

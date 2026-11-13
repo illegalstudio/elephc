@@ -20,6 +20,11 @@ use crate::span::Span;
 pub(super) use members::{walk_class_constant, walk_class_method, walk_class_property};
 pub(crate) use stmts::walk_program;
 
+/// Walks one expression outside a statement, such as a parameter default.
+pub(crate) fn walk_expression<P: Pass>(expr: crate::parser::ast::Expr, pass: &mut P) -> crate::parser::ast::Expr {
+    exprs::walk_expr(expr, pass)
+}
+
 use crate::parser::ast::TypeExpr;
 
 /// Routes one inheritance clause entry (`extends Box<int>`, `implements Repository<User>`)
@@ -188,6 +193,12 @@ pub(crate) trait Pass {
     /// application) use this hook to consume parser markers bottom-up.
     fn transform_expr(&self, expr: Expr) -> Expr {
         expr
+    }
+
+    /// Transforms the span of a rebuilt expression. Default returns it unchanged; a pass that
+    /// copies a body under a new source identity retags every expression here.
+    fn transform_expr_span(&self, span: Span) -> Span {
+        span
     }
 
     /// Transforms a magic constant node (e.g., `__FILE__`, `__LINE__`) into its

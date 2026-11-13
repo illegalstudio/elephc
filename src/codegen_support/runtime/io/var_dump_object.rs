@@ -328,7 +328,9 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
     emitter.instruction("add x7, x7, #8");                                      // skip the leading property-count word
     emitter.instruction("ldr x8, [x7, #16]");                                   // load the property's byte offset within the object
     emitter.instruction("add x8, x1, x8");                                      // resolve the absolute property slot address
-    emitter.instruction("ldr x8, [x8, #8]");                                    // load the slot's high word (the init marker)
+    emitter.instruction("ldr x10, [x7, #24]");                                  // load the descriptor's logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x8", "x10", "x9", "__rt_vd_obj_count_slot");
+    emitter.instruction("mov x8, x9");                                          // count using the marker selected by physical storage
     emitter.instruction("cmp x8, x6");                                          // is this property still uninitialized?
     emitter.instruction("b.eq __rt_vd_obj_count_skip");                         // PHP excludes uninitialized properties from `n`
     emitter.instruction("add x5, x5, #1");                                      // count this initialized property
@@ -338,6 +340,7 @@ pub fn emit_vd_obj_count(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_obj_count_done");
     // -- PHP's `(n)` also counts every dynamic property the body appends --
+    emitter.instruction("ldr x9, [x1]");                                        // reload the class id after marker probes reused its scratch register
     emit_load_dump_dyn_hash(emitter, "x1", "x9", "x12", "x13", "__rt_vd_obj_count_ret");
     emitter.instruction("ldr x12, [x12]");                                      // load the dynamic-property hash entry count
     emitter.instruction("add x5, x5, x12");                                     // count every dynamic property too
@@ -389,9 +392,11 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("imul r10, r10, {}", VD_DESC_ROW_BYTES));      // each descriptor row occupies 48 bytes
     emitter.instruction("add r10, rsi");                                        // advance into the descriptor
     emitter.instruction("add r10, 8");                                          // skip the leading property-count word
+    emitter.instruction("mov r11, QWORD PTR [r10 + 24]");                       // load the descriptor's logical tag and native storage flags
     emitter.instruction("mov r10, QWORD PTR [r10 + 16]");                       // load the property's byte offset within the object
     emitter.instruction("add r10, rdi");                                        // resolve the absolute property slot address
-    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load the slot's high word (the init marker)
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "r11", "r9", "__rt_vd_obj_count_slot");
+    emitter.instruction("mov r10, r9");                                         // count using the marker selected by physical storage
     emitter.instruction("cmp r10, r8");                                         // is this property still uninitialized?
     emitter.instruction("je __rt_vd_obj_count_skip_x86");                       // PHP excludes uninitialized properties from `n`
     emitter.instruction("add rax, 1");                                          // count this initialized property
@@ -401,6 +406,7 @@ fn emit_vd_obj_count_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_vd_obj_count_done_x86");
     // -- PHP's `(n)` also counts every dynamic property the body appends --
+    emitter.instruction("mov r9, QWORD PTR [rdi]");                             // reload the class id after marker probes reused its scratch register
     emit_load_dump_dyn_hash(emitter, "rdi", "r9", "r10", "r11", "__rt_vd_obj_count_ret_x86");
     emitter.instruction("add rax, QWORD PTR [r10]");                            // count every dynamic property too
     emitter.label("__rt_vd_obj_count_ret_x86");
@@ -854,7 +860,9 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
 
     // -- an uninitialized typed property renders `uninitialized(TYPE)` --
     emitter.instruction("ldr x13, [sp, #40]");                                  // reload the property slot pointer
-    emitter.instruction("ldr x14, [x13, #8]");                                  // load the slot's high word (the init marker)
+    emitter.instruction("ldr x11, [sp, #32]");                                  // recover the physical property's descriptor
+    emitter.instruction("ldr x0, [x11, #24]");                                  // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x13", "x0", "x14", "__rt_vd_obj_marker");
     emit_uninit_sentinel_aarch64(emitter, "x15");                               // materialize the uninitialized-property marker
     emitter.instruction("cmp x14, x15");                                        // is this property still uninitialized?
     emitter.instruction("b.ne __rt_vd_obj_value");                              // initialized properties render their value
@@ -871,6 +879,7 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #32]");                                  // reload the descriptor row pointer
     emitter.instruction("ldr x13, [sp, #40]");                                  // reload the property slot pointer
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "x13", "x0", "x14", "__rt_vd_obj_payload");
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
@@ -969,7 +978,10 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_var_dump_emit_object_key");                  // emit `<indent>[KEY]=>\n`
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot pointer
-    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load the slot's high word (the init marker)
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // recover the physical property's descriptor
+    emitter.instruction("mov rcx, QWORD PTR [r11 + 24]");                       // load the logical tag and native storage flags
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "rcx", "rax", "__rt_vd_obj_marker");
+    emitter.instruction("mov r10, rax");                                        // compare the marker selected by physical storage
     emitter.instruction("movabs r11, 0x7ffffffffffffffd");                      // materialize the uninitialized-property marker
     emitter.instruction("cmp r10, r11");                                        // is this property still uninitialized?
     emitter.instruction("jne __rt_vd_obj_value_x86");                           // initialized properties render their value
@@ -984,6 +996,7 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the descriptor row pointer
     emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the property slot pointer
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload(emitter, "r10", "rdi", "r8", "__rt_vd_obj_payload");
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");

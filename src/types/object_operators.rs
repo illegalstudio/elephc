@@ -33,14 +33,78 @@ pub(crate) fn operator_class(ty: &PhpType) -> Option<&'static ClassContract> {
     }
 }
 
+/// Resolves inherited adapters and nullable selections using the checked class graph.
+pub(crate) fn binary_plan_with_classes(
+    op: &BinOp, left: &PhpType, right: &PhpType,
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> Option<ObjectOperatorPlan> {
+    let normalize = |ty: &PhpType| normalize_operator_type(ty, classes);
+    binary_plan(op, &normalize(left), &normalize(right))
+}
+
+/// Finds a declared native cast on the checked class or its internal ancestor.
+pub(crate) fn supports_cast_with_classes(
+    ty: &PhpType, cast: elephc_builtin_contract::ObjectCast,
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> bool {
+    operator_class(&normalize_operator_type(ty, classes))
+        .and_then(|class| class.operators).and_then(|operators| operators.cast_method(cast)).is_some()
+}
+
+/// Replaces a native subclass by its declaring ancestor without erasing nullable branches.
+fn normalize_operator_type(ty: &PhpType, classes: &std::collections::HashMap<String, crate::types::ClassInfo>) -> PhpType {
+    match ty {
+        PhpType::Object(name) => {
+            let mut name = name.as_str();
+            for _ in 0..=classes.len() {
+                let Some(info) = classes.get(name) else { break; };
+                if info.is_internal && operator_class(&PhpType::Object(name.into())).is_some() {
+                    return PhpType::Object(name.into());
+                }
+                let Some(parent) = info.parent.as_deref() else { break; };
+                name = parent;
+            }
+            ty.clone()
+        }
+        PhpType::Union(members) => PhpType::Union(members.iter().map(|member| normalize_operator_type(member, classes)).collect()),
+        _ => ty.clone(),
+    }
+}
+
+/// Finds one possible native class without treating a nullable value as a definite object.
+fn possible_operator_class(ty: &PhpType) -> Option<&'static ClassContract> {
+    operator_class(ty).or_else(|| match ty {
+        PhpType::Union(members) => members.iter().find_map(possible_operator_class),
+        _ => None,
+    })
+}
+
+/// Rejects static selection when a union can offer a different native operator first.
+fn contains_other_operator_class(ty: &PhpType, class: &ClassContract) -> bool {
+    match ty {
+        PhpType::Union(members) => members.iter().any(|member| contains_other_operator_class(member, class)),
+        _ => operator_class(ty).is_some_and(|other| !other.name.eq_ignore_ascii_case(class.name)),
+    }
+}
+
 /// Finds the first internal class whose contract declares the requested scalar cast.
 pub(crate) fn cast_class(ty: &PhpType) -> Option<&'static ClassContract> {
     match ty {
         PhpType::Object(name) => lookup_class(name).filter(|class| {
-            class.operators.and_then(|operators| operators.casts).is_some()
+            class.operators.is_some_and(|operators| {
+                operators.casts.is_some() || !operators.native_casts.is_empty()
+            })
         }),
         _ => None,
     }
+}
+
+/// Resolves explicit casts on a native class or its checked subclass.
+pub(crate) fn cast_class_with_classes(
+    ty: &PhpType,
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> Option<&'static ClassContract> {
+    cast_class(&normalize_operator_type(ty, classes))
 }
 
 /// Returns one class's declared cast adapter, if any.
@@ -48,13 +112,18 @@ pub(crate) fn cast_method(
     class: &'static ClassContract,
     cast: ObjectCast,
 ) -> Option<&'static str> {
-    let casts = class.operators?.casts?;
-    match cast {
+    let operators = class.operators?;
+    let scalar = operators.casts.and_then(|casts| match cast {
         ObjectCast::Int => casts.to_int,
         ObjectCast::Float => casts.to_float,
         ObjectCast::Number => casts.to_number,
         ObjectCast::Bool => casts.to_bool,
-    }
+    });
+    scalar.or_else(|| match cast {
+        ObjectCast::Int => operators.cast_method(elephc_builtin_contract::ObjectCast::Int),
+        ObjectCast::Float => operators.cast_method(elephc_builtin_contract::ObjectCast::Float),
+        ObjectCast::Number | ObjectCast::Bool => None,
+    })
 }
 
 /// One scalar cast an internal value class can provide.
@@ -82,41 +151,37 @@ pub(crate) fn null_comparison_allowed(left: &PhpType, right: &PhpType) -> bool {
 
 /// Selects the class handler and checks that the other operand belongs to its domain.
 pub(crate) fn binary_plan(op: &BinOp, left: &PhpType, right: &PhpType) -> Option<ObjectOperatorPlan> {
-    let class = operator_class(left).or_else(|| operator_class(right))?;
+    let class = possible_operator_class(left).or_else(|| possible_operator_class(right))?;
     binary_plan_for_class(class, op, left, right)
 }
 
 /// Resolves a reviewed class contract without depending on a particular PHP class name.
-fn binary_plan_for_class(
-    class: &'static ClassContract,
-    op: &BinOp,
-    left: &PhpType,
-    right: &PhpType,
-) -> Option<ObjectOperatorPlan> {
+fn binary_plan_for_class(class: &'static ClassContract, op: &BinOp, left: &PhpType, right: &PhpType) -> Option<ObjectOperatorPlan> {
+    let comparison = matches!(op, BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq | BinOp::Spaceship);
     let operators = class.operators?;
-    let comparison = matches!(
-        op,
-        BinOp::Eq | BinOp::NotEq | BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq | BinOp::Spaceship
-    );
-    // PHP never invokes an object's comparison handler against null: the engine's
-    // standard object-versus-null ordering is the observable result.
-    if comparison && (matches!(left, PhpType::Void | PhpType::Never)
+    // Classes that own foreign-operand diagnostics still use PHP's null ordering.
+    if operators.accepts_any_operands && comparison && (matches!(left, PhpType::Void | PhpType::Never)
         || matches!(right, PhpType::Void | PhpType::Never))
     {
         return None;
     }
-    let accepts = |ty: &PhpType| {
-        if operators.accepts_any_operands {
-            return true;
-        }
-        comparison
-            || matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
-                | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar)
-            || matches!(ty, PhpType::Object(name) if name.eq_ignore_ascii_case(class.name))
+    let accepts = |ty: &PhpType| operators.accepts_any_operands || comparison
+        || matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar)
+        || (*ty == PhpType::Void && operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number)
+        || matches!(ty, PhpType::Object(name) if name.eq_ignore_ascii_case(class.name)
+            || (operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number
+                && operator_class(ty).and_then(|other| other.operators)
+                .is_some_and(|other| std::ptr::eq(other, operators))));
+    let accepted = |ty: &PhpType| match ty {
+        PhpType::Union(members) if comparison
+            || operators.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number => members.iter().all(accepts),
+        PhpType::Union(_) => operators.accepts_any_operands
+            && [left, right].iter().any(|operand| operator_class(operand)
+                .is_some_and(|known| known.name.eq_ignore_ascii_case(class.name)))
+            && !contains_other_operator_class(ty, class),
+        _ => accepts(ty),
     };
-    if !accepts(left) || !accepts(right) {
-        return None;
-    }
+    if !accepted(left) || !accepted(right) { return None; }
     let arithmetic = match op {
         BinOp::Add => Some(ObjectArithmetic::Add),
         BinOp::Sub => Some(ObjectArithmetic::Sub),
@@ -182,11 +247,17 @@ mod tests {
         to_bool: Some("synthetic_bool"),
     };
     static OPERATORS: ClassOperators = ClassOperators {
-        arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")],
+        dimensions: &[],
+        properties: &[],
+        native_clone: None,
+        json: None,
+        native_casts: &[],
+        arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")], compare: Some("synthetic_order"), boolean: None,
+        arithmetic_result: elephc_builtin_contract::ObjectArithmeticResult::Object,
+        operand_dispatch: elephc_builtin_contract::ObjectOperandDispatch::Handler,
+        bit_not: None,
         bitwise: &[(ObjectBitwise::And, "synthetic_and")],
         shift: &[(ObjectShift::Left, "synthetic_shl")],
-        compare: Some("synthetic_order"),
-        boolean: None,
         casts: Some(&CASTS),
         accepts_any_operands: true,
     };
@@ -228,17 +299,83 @@ mod tests {
         assert_eq!(cast_method(&SYNTHETIC, ObjectCast::Int), Some("synthetic_int"));
         assert_eq!(cast_method(&SYNTHETIC, ObjectCast::Number), Some("synthetic_number"));
     }
+
+    /// Possible object-result operands cannot promise an object when the scalar branch runs.
+    #[test]
+    fn union_arithmetic_preserves_native_result_representation() {
+        let possible_xml = PhpType::Union(vec![PhpType::Object("SimpleXMLElement".into()), PhpType::Void]);
+        for op in [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div, BinOp::Mod, BinOp::Pow] {
+            for name in ["BcMath\\Number", "GMP"] {
+                let possible_number = PhpType::Union(vec![PhpType::Object(name.into()), PhpType::Int]);
+                assert!(binary_plan(&op, &possible_number, &PhpType::Int).is_none());
+                assert!(binary_plan(&op, &PhpType::Int, &possible_number).is_none());
+                let comparison = binary_plan(&BinOp::Lt, &possible_number, &PhpType::Int).unwrap();
+                assert_eq!(comparison.result_type(&BinOp::Lt), PhpType::Bool);
+            }
+            assert!(binary_plan(&op, &possible_xml, &PhpType::Int).unwrap().result_type(&op).is_int_float_union());
+        }
+    }
+
+    /// Native classes sharing one operator contract accept each other's values and unions.
+    #[test]
+    fn simplexml_lineages_share_numeric_operator_plans() {
+        let element = PhpType::Object("SimpleXMLElement".into());
+        let iterator = PhpType::Object("SimpleXMLIterator".into());
+        let either = PhpType::Union(vec![element.clone(), iterator.clone()]);
+        for op in [BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div, BinOp::Mod, BinOp::Pow] {
+            for (left, right) in [(&element, &iterator), (&iterator, &element), (&either, &PhpType::Int)] {
+                assert!(binary_plan(&op, left, right).unwrap().result_type(&op).is_int_float_union());
+            }
+        }
+    }
+
+    /// Explicit casts resolve both native families without adding implicit GMP integer casts.
+    #[test]
+    fn simplexml_and_gmp_scalar_cast_plans_coexist() {
+        for (name, int_method, float_method) in [
+            ("SimpleXMLElement", "__elephc_int", "__elephc_float"),
+            ("SimpleXMLIterator", "__elephc_int", "__elephc_float"),
+            ("GMP", "__elephc_to_int", "__elephc_to_float"),
+        ] {
+            let class = cast_class(&PhpType::Object(name.into())).unwrap();
+            assert_eq!(cast_method(class, ObjectCast::Int), Some(int_method));
+            assert_eq!(cast_method(class, ObjectCast::Float), Some(float_method));
+        }
+        let gmp = lookup_class("GMP").unwrap().operators.unwrap();
+        assert!(gmp.cast_method(elephc_builtin_contract::ObjectCast::Int).is_none());
+    }
+
+    /// A definite GMP operand keeps its result class beside scalar or GMP-only unions.
+    #[test]
+    fn definite_gmp_accepts_union_operands_without_promising_scalar_branches() {
+        let gmp = PhpType::Object("GMP".into());
+        for other in [
+            PhpType::Union(vec![gmp.clone(), PhpType::False]),
+            PhpType::Union(vec![PhpType::Int, PhpType::Void]),
+            PhpType::Union(vec![PhpType::Int, PhpType::Str]),
+        ] {
+            for (left, right) in [(&gmp, &other), (&other, &gmp)] {
+                for op in [BinOp::Add, BinOp::Mul] {
+                    assert_eq!(binary_plan(&op, left, right).unwrap().result_type(&op), gmp);
+                }
+            }
+        }
+        let scalar_branch = PhpType::Union(vec![gmp.clone(), PhpType::Int]);
+        assert!(binary_plan(&BinOp::Mul, &scalar_branch, &PhpType::Int).is_none());
+        let foreign = PhpType::Union(vec![PhpType::Object("SimpleXMLElement".into()), PhpType::Int]);
+        assert!(binary_plan(&BinOp::Mul, &gmp, &foreign).is_none());
+    }
 }
 
 impl ObjectOperatorPlan {
     /// Returns the PHP-facing result, distinct from a comparison adapter's signed integer.
     pub(crate) fn result_type(&self, op: &BinOp) -> PhpType {
         if !self.comparison {
-            PhpType::Object(self.class.name.to_string())
-        } else if matches!(op, BinOp::Spaceship) {
-            PhpType::Int
-        } else {
-            PhpType::Bool
+            if self.class.operators.is_some_and(|ops| ops.arithmetic_result == elephc_builtin_contract::ObjectArithmeticResult::Number) {
+                PhpType::Union(vec![PhpType::Int, PhpType::Float])
+            } else { PhpType::Object(self.class.name.to_string()) }
         }
+        else if matches!(op, BinOp::Spaceship) { PhpType::Int }
+        else { PhpType::Bool }
     }
 }

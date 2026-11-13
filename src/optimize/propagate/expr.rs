@@ -34,6 +34,15 @@ pub(crate) fn captured_constant_env(
 pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     let invalidation = expr_invalidation(&expr);
     if matches!(invalidation, Invalidation::All) {
+        // `eval()` can retain a reference to any in-scope local, so a later
+        // assignment must not turn that local into a propagated constant.
+        if let ExprKind::FunctionCall { name, .. } = &expr.kind {
+            if crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval" {
+                for name in env.keys() {
+                    super::stmt::mark_reference_volatile(name);
+                }
+            }
+        }
         // A present element in a scalar-only array fact cannot warn. Fold only
         // wholly read-only scalar expressions here, never across a call, write,
         // or unknown/missing read whose handler could invalidate another fact.
@@ -227,6 +236,10 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             for name in &capture_refs {
                 super::stmt::mark_reference_volatile(name);
             }
+            let mut reference_parameters = super::stmt::reference_parameter_names(&params, variadic.as_deref(), variadic_by_ref);
+            reference_parameters.extend(capture_refs.iter().cloned());
+            let values = super::stmt::closure_value_binding_names(&params, &captures, &capture_refs,
+                variadic.as_deref(), variadic_by_ref);
             ExprKind::Closure {
                 params: propagate_params(params),
                 param_attributes,
@@ -234,12 +247,12 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
                 variadic_by_ref,
                 variadic_type,
                 return_type,
-                body: super::stmt::with_function_scope_mode(by_ref_return, || {
+                body: super::stmt::with_reference_value_scope(values, || super::stmt::with_reference_parameter_scope(by_ref_return, reference_parameters, || {
                     crate::optimize::generator_bodies::rewrite_preserving_yield(body, |body| {
                         propagate_block(body, captured_constant_env(&captures, &capture_refs, env))
                             .0
                     })
-                }),
+                })),
                 is_arrow,
                 is_static,
                 captures,

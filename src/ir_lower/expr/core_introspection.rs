@@ -22,6 +22,34 @@ pub(super) fn lower_get_defined_vars(
     Some(lower_visible_defined_vars(ctx, expr))
 }
 
+/// Builds PHP's `$GLOBALS` array from the program globals this frame can address.
+///
+/// Main has every top-level PHP variable in its own frame, so the visible-local projection
+/// is exactly the global symbol table at that point. Inside a function, only `global $name`
+/// aliases and superglobals spelled in this body have initialised global storage to read;
+/// ordinary top-level locals cannot be enumerated from a function frame without changing
+/// every top-level local into permanent global storage.
+pub(super) fn lower_globals_read(
+    ctx: &mut LoweringContext<'_, '_>,
+    expr: &Expr,
+) -> LoweredValue {
+    // `$GLOBALS` is PHP's superglobal view of every program global, from any scope. The
+    // runtime table already knows every top-level binding plus literal and runtime-created
+    // names, so materialize from it instead of rebuilding a hash from this frame's local
+    // slots (which only saw `global` declarations and superglobals).
+    ctx.emit_owned_value(
+        Op::LoadGlobalsArray,
+        Vec::new(),
+        None,
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Str),
+            value: Box::new(PhpType::Mixed),
+        },
+        Op::LoadGlobalsArray.default_effects(),
+        Some(expr.span),
+    )
+}
+
 /// Builds the associative array of locals visible at the current lexical call site.
 pub(super) fn lower_visible_defined_vars(
     ctx: &mut LoweringContext<'_, '_>,

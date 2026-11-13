@@ -130,6 +130,9 @@ pub(super) fn lower_reflection_property_set_value(
         return None;
     }
     let object = lower_expr(ctx, &object_arg);
+    // Argument evaluation and coercion can throw or replace the caller's receiver variable.
+    // Keep the selected object rooted until the value argument has finished retiring.
+    let (object, object_owner) = root_method_receiver(ctx, object, expr.span);
     let value = lower_expr(ctx, &value_arg);
     let value = crate::ir_lower::stmt::contextualize_property_array_value(
         ctx,
@@ -156,7 +159,7 @@ pub(super) fn lower_reflection_property_set_value(
     } else {
         value
     };
-    let pins = pin_in_flight_owners(ctx, &[object.value, value.value], expr.span);
+    let pins = pin_in_flight_owners(ctx, &[value.value], expr.span);
     ctx.emit_void(
         Op::PropSet,
         vec![object.value, value.value],
@@ -174,6 +177,11 @@ pub(super) fn lower_reflection_property_set_value(
         crate::ir_lower::stmt::release_property_assignment_source_after_retaining_store(
             ctx, &property_ty, value, expr.span,
         );
+    }
+    if let Some(owner) = object_owner {
+        retire_owned_call_operand(ctx, owner, expr.span);
+    } else {
+        release_owning_receiver_temporary(ctx, object, expr.span);
     }
     Some(lower_null(ctx, expr))
 }
@@ -226,14 +234,18 @@ pub(super) fn lower_reflection_property_is_initialized(
     let object_arg = reflection_property_get_value_arg(args)?;
     let object = lower_expr(ctx, &object_arg);
     let data = ctx.intern_string(property);
-    Some(ctx.emit_value(
+    let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
+    let result = ctx.emit_value(
         Op::PropInitialized,
         vec![object.value],
         Some(Immediate::Data(data)),
         PhpType::Bool,
         Op::PropInitialized.default_effects(),
         Some(expr.span),
-    ))
+    );
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    release_owning_receiver_temporary(ctx, object, expr.span);
+    Some(result)
 }
 
 /// Lowers static `ReflectionProperty::getValue()` to a reflection static-property read.

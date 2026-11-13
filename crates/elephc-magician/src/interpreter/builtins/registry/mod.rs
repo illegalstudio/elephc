@@ -360,6 +360,7 @@ fn call_shared_runtime_builtin(
         if let [data] = args {
             if let Some(function) = context.native_function("__elephc_gmp_unserialize") {
                 let arguments = vec![EvaluatedCallArg {
+                    evaluation_owner: None,
                     name: None,
                     value: data.borrowed(),
                     ref_target: None,

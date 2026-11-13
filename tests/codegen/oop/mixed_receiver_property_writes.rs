@@ -12,6 +12,33 @@
 
 use super::*;
 
+/// An inherited constructor and compound write retain the parent's private array and its COW.
+#[test]
+fn test_indexed_private_ancestor_storage_keeps_descendant_dynamic_entries_separate() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+#[AllowDynamicProperties]
+class PrivateIndexedStorageBase {
+    private array $items = [];
+    public function __construct(array $options) {
+        foreach ($options as $key => $value) { $this->items[$key] = $value; }
+    }
+    public function change(): void { $this->items[2] += 1; }
+    public function snapshot(): array { return $this->items; }
+}
+class PrivateIndexedStorageChild extends PrivateIndexedStorageBase {}
+function privateIndexedStorageExternal(mixed $object): void { $object->items[0] += 1; }
+$child = new PrivateIndexedStorageChild([2 => 2, 1005 => 1, 1002 => true]);
+$snapshot = $child->snapshot();
+$child->items = [99]; privateIndexedStorageExternal($child);
+$child->change();
+echo json_encode($snapshot), '|', json_encode($child->snapshot()), '|', json_encode($child->items);
+unset($snapshot, $child);
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "{\"2\":2,\"1005\":1,\"1002\":true}|{\"2\":3,\"1005\":1,\"1002\":true}|[100]");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// Issue #1094's own repro: the write is not landing in a copy, it is not landing at all, so the
 /// callee's own read-back is already wrong.
 #[test]
@@ -283,8 +310,7 @@ var_dump($t->n, $t->fresh);
     assert_eq!(out, "int(9)\nint(7)\n");
 }
 
-/// The other control: a NON-object payload must still drop the write rather than fault, which is
-/// PHP's "attempt to assign property on non-object" behaviour this backend models as a no-op.
+/// Legacy scalar payloads retain their no-op while a null receiver raises PHP's catchable Error.
 #[test]
 fn test_mixed_receiver_non_object_payload_drops_the_write() {
     let out = compile_and_run(
@@ -292,11 +318,11 @@ fn test_mixed_receiver_non_object_payload_drops_the_write() {
 function w(mixed $o): void { $o->n = 9; }
 w(7);
 w("x");
-w(null);
+try { w(null); } catch (Error $error) { echo $error->getMessage(), '|'; }
 echo "survived";
 "#,
     );
-    assert_eq!(out, "survived");
+    assert_eq!(out, "Attempt to assign property \"n\" on null|survived");
 }
 
 /// The runtime-name spelling has always dispatched this way; pinned so the two paths cannot drift
@@ -345,5 +371,37 @@ fn test_example_mixed_property_write_compiles_and_runs() {
     assert_eq!(
         out,
         "Ada\n"
+    );
+}
+
+/// A dynamic-name write (`$o->{$name} = $v`, the shape of `fetch_object()` / PDO `FETCH_CLASS`
+/// hydration) into an UNTYPED property that nothing else assigns: php treats the slot as
+/// `mixed`, so it lands in the declared slot, not in a duplicate dynamic property. An untyped
+/// slot inferred `null` used to refuse the write at compile time (or, through a boxed receiver,
+/// fall into the property hash and crash `var_dump`), and one inferred `int` coerced a string.
+#[test]
+fn test_dynamic_name_write_reaches_untyped_null_and_int_slots() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain { public $id; public $untouched; }
+class Counter { public $n = 0; }
+function make(string $class): mixed { return new $class(); }
+function assign(mixed $object, string $name, mixed $value): mixed {
+    $object->{$name} = $value;
+    return $object;
+}
+$plain = assign(make("Plain"), "id", "7");
+var_dump($plain);
+$direct = new Plain();
+$name = "id";
+$direct->{$name} = [1];
+var_dump($direct->id);
+$counter = assign(make("Counter"), "n", "hello");
+var_dump($counter->n);
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(Plain)#1 (2) {\n  [\"id\"]=>\n  string(1) \"7\"\n  [\"untouched\"]=>\n  NULL\n}\narray(1) {\n  [0]=>\n  int(1)\n}\nstring(5) \"hello\"\n"
     );
 }

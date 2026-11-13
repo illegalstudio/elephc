@@ -79,7 +79,6 @@ pub(super) fn reflection_class_metadata_for_name(
         let constant_members = reflection_class_constant_members(ctx, class_name, info)?;
         let default_property_members =
             reflection_class_default_property_members(ctx, info, &property_names);
-        let static_property_members = reflection_class_static_property_members(class_name, info);
         let constant_reflection_members =
             reflection_class_constant_reflection_members(ctx, class_name, info)?;
         let enum_case_members = if is_enum {
@@ -117,7 +116,6 @@ pub(super) fn reflection_class_metadata_for_name(
             constant_names,
             constant_members,
             default_property_members,
-            static_property_members,
             constant_reflection_members,
             enum_case_members,
             method_members,
@@ -187,7 +185,6 @@ pub(super) fn reflection_class_metadata_for_name(
             constant_names,
             constant_members,
             default_property_members: Vec::new(),
-            static_property_members: Vec::new(),
             constant_reflection_members,
             enum_case_members: Vec::new(),
             method_members,
@@ -263,7 +260,6 @@ pub(super) fn reflection_class_metadata_for_name(
             constant_names,
             constant_members,
             default_property_members: Vec::new(),
-            static_property_members: Vec::new(),
             constant_reflection_members,
             enum_case_members: Vec::new(),
             method_members,
@@ -304,25 +300,6 @@ pub(super) fn reflection_class_metadata_for_name(
         });
     }
     Ok(empty_reflection_metadata())
-}
-
-/// Resolves class metadata for nested declaring-class slots without recursive member objects.
-pub(super) fn reflection_shallow_class_metadata_for_name(
-    ctx: &FunctionContext<'_>,
-    reflected_class: &str,
-) -> Result<ReflectionOwnerMetadata> {
-    let mut metadata = reflection_class_metadata_for_name(ctx, reflected_class)?;
-    metadata.method_names.clear();
-    metadata.property_names.clear();
-    metadata.constant_names.clear();
-    metadata.constant_members.clear();
-    metadata.constant_reflection_members.clear();
-    metadata.enum_case_members.clear();
-    metadata.method_members.clear();
-    metadata.property_members.clear();
-    metadata.constructor_member = None;
-    metadata.parent_class_name = None;
-    Ok(metadata)
 }
 
 /// Resolves `ReflectionEnum` metadata for nested enum-case slots.

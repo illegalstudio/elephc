@@ -24,7 +24,7 @@ description: "Compiler internals for trim(): lowering path, type checks, and run
 - **Validation**: `signature`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
-- **Effects**: `static (0 declared effects)`
+- **Effects**: `static (4 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `dynamic_target`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`

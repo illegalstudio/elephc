@@ -190,6 +190,8 @@ pub enum BuiltinArgumentLowering {
     /// the receiver and the replacement, which is why it is a registry-owned strategy rather
     /// than a per-argument rule.
     ArraySplice,
+    /// Keep write-only output operands boxed so reading their place creates no payload lease.
+    WriteOnlyMixedOutputs(&'static [usize]),
     /// Type an unannotated `xml_set_*_handler()` closure's parameters from the SAX event
     /// it receives, so the EIR closure signature matches what the checker hook validated.
     XmlHandlerSetter,
@@ -366,10 +368,10 @@ pub trait BuiltinLoweringContext {
         span: Option<Span>,
     ) -> LoweredBuiltinValue;
 
-    /// Emits a direct call to a PHP function declared by the program (or an injected
-    /// prelude) under its canonical lowercase name. The operands must already have the
-    /// callee's parameter representations: this is the composition primitive for a
-    /// builtin whose semantics live in prelude-declared PHP, not a coercing call.
+    /// Emits a direct call to a PHP function declared by the program or an injected prelude.
+    /// The name is canonical lowercase and visible operands already use callee representations.
+    /// Lowering adds hidden backtrace metadata while preserving caller-owned operands.
+    /// This composes builtins whose semantics live in prelude-declared PHP.
     fn emit_user_call(
         &mut self,
         name: &str,
@@ -541,6 +543,21 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
         },
         lowering: BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)),
     }
+}
+
+/// Builds EIR-graph semantics that forward raw operands to one typed runtime target.
+///
+/// The target keeps its argument ABI, effects, result ownership, requirements and dynamic
+/// callable policy. Only the lowering route changes: no PHP builtin-call operand pins or
+/// copies are materialized around a helper that only reads its arguments.
+pub const fn eir_runtime_semantics(
+    target: RuntimeFnId,
+    lower: BuiltinLowerFn,
+) -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(target);
+    semantics.target_strategy = BuiltinTargetStrategy::EirGraph;
+    semantics.lowering = BuiltinLowering::Eir(lower);
+    semantics
 }
 
 /// Builds runtime-call semantics for a builtin that is explicitly unavailable on iOS.

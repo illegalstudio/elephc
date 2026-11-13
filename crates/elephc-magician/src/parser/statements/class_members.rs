@@ -22,6 +22,7 @@ impl Parser {
         let type_scope = self.type_parameters.len();
         let source_start_line = self.current_line();
         self.advance();
+        let returns_by_ref = self.consume(TokenKind::Ampersand);
         let TokenKind::Ident(name) = self.current() else {
             return Err(EvalParseError::UnexpectedToken);
         };
@@ -74,6 +75,7 @@ impl Parser {
             .with_parameter_defaults(parameter_defaults)
             .with_parameter_by_ref_flags(parameter_is_by_ref)
             .with_parameter_variadic_flags(parameter_is_variadic)
+            .with_returns_by_ref(returns_by_ref)
             .with_return_type(return_type);
         self.type_parameters.truncate(type_scope);
         self.type_parameter_origins.truncate(type_scope);
