@@ -8144,6 +8144,115 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "class",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_eval_reflection_class_build",
+    "description": "Internal: build a fresh, complete ReflectionClass for a class an eval-built reflector names.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_eval_reflection_class_build` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_eval_reflection_class_build.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_eval_reflection_class_build",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw",
+          "may_fatal"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_eval_reflection_class_build"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "__elephc_eval_reflection_class_build"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "class",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "object",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_eval_reflection_class_build",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "hour",
           "optional": false,
           "type": "int"
@@ -14021,6 +14130,112 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "builder",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_reflection_class_build",
+    "description": "Internal: build a fresh, complete ReflectionClass through a compiled per-class builder.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_reflection_class_build` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_reflection_class_build.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_reflection_class_build",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "alloc_heap",
+          "refcount_op"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_reflection_class_build"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "__elephc_reflection_class_build"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "builder",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "object",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_reflection_class_build",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "operation",
           "optional": false,
           "type": "int"
@@ -14218,6 +14433,220 @@
     "since": null,
     "slug": "__elephc_shared_ini",
     "sub_area": "String"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "class",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_simplexml_allocate",
+    "description": "Allocates a compiler-prelude XML object without invoking a user constructor.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/callables/__elephc_simplexml_allocate.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_simplexml_allocate",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "compiler-prelude object allocation"
+      },
+      "effects": {
+        "kind": "shared"
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "class",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_simplexml_allocate",
+    "sub_area": "Callables"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "diagnostic",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_simplexml_warning",
+    "description": "Dispatches a complete internal XML diagnostic through PHP error handlers.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_simplexml_warning.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_simplexml_warning",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "internal compiler primitive"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt",
+          "blocking_io",
+          "network_io"
+        ]
+      },
+      "lowering": {
+        "kind": "eir"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "eir_primitive",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "diagnostic",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_simplexml_warning",
+    "sub_area": "System"
   },
   {
     "aot": {
@@ -47359,7 +47788,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "non_heap"
       },
       "requirements": {
         "kind": "shared"
@@ -102642,7 +103071,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
@@ -102811,6 +103240,109 @@
     },
     "since": null,
     "slug": "mysqli_begin_transaction",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "username",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "database",
+          "optional": false,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 4,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_change_user",
+    "description": "Changes the user of the database connection.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_change_user",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_change_user",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "username",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "password",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "database",
+          "optional": false,
+          "type": "?string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_change_user",
     "sub_area": "mysqli"
   },
   {
@@ -103327,6 +103859,128 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "options",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_debug",
+    "description": "Performs debugging operations.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_debug",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_debug",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "options",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_debug",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_dump_debug_info",
+    "description": "Asks the server to write debugging information to its log.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_dump_debug_info",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_dump_debug_info",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_dump_debug_info",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "mysql",
           "optional": false,
           "type": "mixed"
@@ -103588,6 +104242,13 @@
           "name": "statement",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "params",
+          "optional": true,
+          "type": "?array"
         }
       ],
       "required_param_count": 1,
@@ -103630,6 +104291,13 @@
           "name": "statement",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "params",
+          "optional": true,
+          "type": "?array"
         }
       ],
       "return_type": "bool",
@@ -104265,7 +104933,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "?array",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
@@ -104749,11 +105417,11 @@
           "by_ref": false,
           "default": null,
           "name": "mysql",
-          "optional": false,
+          "optional": true,
           "type": "mixed"
         }
       ],
-      "required_param_count": 1,
+      "required_param_count": 0,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -104789,9 +105457,9 @@
       "params": [
         {
           "by_ref": false,
-          "default": null,
+          "default": "null",
           "name": "mysql",
-          "optional": false,
+          "optional": true,
           "type": "mixed"
         }
       ],
@@ -104805,16 +105473,53 @@
   {
     "aot": {
       "kind": "prelude",
-      "params": [
-        {
-          "by_ref": false,
-          "default": null,
-          "name": "mysql",
-          "optional": false,
-          "type": "mixed"
-        }
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_get_client_stats",
+    "description": "Returns client per-process statistics.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_get_client_stats",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
       ],
-      "required_param_count": 1,
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_get_client_stats",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_get_client_stats",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
       "signature_override_reason": null,
       "supported": true,
       "variadic": null
@@ -104847,6 +105552,17 @@
     "name": "mysqli_get_client_version",
     "semantics": null,
     "sig": {
+      "params": [],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_get_client_version",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
       "params": [
         {
           "by_ref": false,
@@ -104856,11 +105572,53 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_get_connection_stats",
+    "description": "Returns statistics about the client connection.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_get_connection_stats",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_get_connection_stats",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "array",
       "variadic": null
     },
     "since": null,
-    "slug": "mysqli_get_client_version",
+    "slug": "mysqli_get_connection_stats",
     "sub_area": "mysqli"
   },
   {
@@ -104922,6 +105680,51 @@
     },
     "since": null,
     "slug": "mysqli_get_host_info",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [],
+      "required_param_count": 0,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_get_links_stats",
+    "description": "Returns information about open and cached links.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_get_links_stats",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_get_links_stats",
+    "semantics": null,
+    "sig": {
+      "params": [],
+      "return_type": "array",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_get_links_stats",
     "sub_area": "mysqli"
   },
   {
@@ -105125,6 +105928,67 @@
       "variadic": null
     },
     "area": "Database",
+    "canonical_name": "mysqli_get_warnings",
+    "description": "Returns the warnings of the last statement.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_get_warnings",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_get_warnings",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_get_warnings",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
     "canonical_name": "mysqli_info",
     "description": "Returns information about the last query, when the server supplies it.",
     "eval": {
@@ -105267,11 +106131,86 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
     "slug": "mysqli_insert_id",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "process_id",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_kill",
+    "description": "Asks the server to kill a MySQL thread.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_kill",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_kill",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "process_id",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_kill",
     "sub_area": "mysqli"
   },
   {
@@ -105586,7 +106525,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
@@ -105741,6 +106680,123 @@
     },
     "since": null,
     "slug": "mysqli_ping",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "read",
+          "optional": false,
+          "type": "?array"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "error",
+          "optional": false,
+          "type": "?array"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "reject",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "seconds",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "microseconds",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 4,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_poll",
+    "description": "Polls connections for completed async queries.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_poll",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_poll",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "read",
+          "optional": false,
+          "type": "?array"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "error",
+          "optional": false,
+          "type": "?array"
+        },
+        {
+          "by_ref": true,
+          "default": null,
+          "name": "reject",
+          "optional": false,
+          "type": "array"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "seconds",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "microseconds",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_poll",
     "sub_area": "mysqli"
   },
   {
@@ -105905,6 +106961,81 @@
     },
     "since": null,
     "slug": "mysqli_query",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_quote_string",
+    "description": "Escapes a string and wraps it in single quotes.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_quote_string",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_quote_string",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": "8.6",
+    "slug": "mysqli_quote_string",
     "sub_area": "mysqli"
   },
   {
@@ -106214,6 +107345,142 @@
     },
     "since": null,
     "slug": "mysqli_real_query",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_reap_async_query",
+    "description": "Returns the result of an async query.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_reap_async_query",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_reap_async_query",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_reap_async_query",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "flags",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_refresh",
+    "description": "Flushes tables or caches, or resets replication server information.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_refresh",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_refresh",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "flags",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_refresh",
     "sub_area": "mysqli"
   },
   {
@@ -106826,6 +108093,137 @@
           "name": "mysql",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "key",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "certificate",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "ca_certificate",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "ca_path",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "cipher_algos",
+          "optional": false,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 6,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_ssl_set",
+    "description": "Collects TLS settings for the next connection.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_ssl_set",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_ssl_set",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "key",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "certificate",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "ca_certificate",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "ca_path",
+          "optional": false,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "cipher_algos",
+          "optional": false,
+          "type": "?string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_ssl_set",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mysql",
+          "optional": false,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -106931,11 +108329,175 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
     "slug": "mysqli_stmt_affected_rows",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "attribute",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_attr_get",
+    "description": "Returns the current value of a statement attribute.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_attr_get",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_attr_get",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "attribute",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_attr_get",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "attribute",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_attr_set",
+    "description": "Changes the behavior of a prepared statement.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_attr_set",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_attr_set",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "attribute",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_attr_set",
     "sub_area": "mysqli"
   },
   {
@@ -107028,6 +108590,67 @@
       "required_param_count": 1,
       "signature_override_reason": null,
       "supported": true,
+      "variadic": "vars"
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_bind_result",
+    "description": "Binds variables to a prepared statement for result storage.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_bind_result",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_bind_result",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": "vars"
+    },
+    "since": null,
+    "slug": "mysqli_stmt_bind_result",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
       "variadic": null
     },
     "area": "Database",
@@ -107072,6 +108695,81 @@
     },
     "since": null,
     "slug": "mysqli_stmt_close",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "offset",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_data_seek",
+    "description": "Seeks to an arbitrary row in a stored statement result set.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_data_seek",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_data_seek",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "offset",
+          "optional": false,
+          "type": "int"
+        }
+      ],
+      "return_type": "void",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_data_seek",
     "sub_area": "mysqli"
   },
   {
@@ -107350,6 +109048,67 @@
       "variadic": null
     },
     "area": "Database",
+    "canonical_name": "mysqli_stmt_fetch",
+    "description": "Fetches the next row into the bound result variables.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_fetch",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_fetch",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "?bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_fetch",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
     "canonical_name": "mysqli_stmt_field_count",
     "description": "Returns how many columns a prepared statement produces.",
     "eval": {
@@ -107522,6 +109281,67 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_get_warnings",
+    "description": "Returns the warnings of the last statement execution.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_get_warnings",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_get_warnings",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_get_warnings",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "mysql",
           "optional": false,
           "type": "mixed"
@@ -107630,11 +109450,133 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
     "slug": "mysqli_stmt_insert_id",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_more_results",
+    "description": "Checks whether more results exist from a multiple-result statement.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_more_results",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_more_results",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_more_results",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_next_result",
+    "description": "Moves to the next result of a multiple-result statement.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_next_result",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_next_result",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_next_result",
     "sub_area": "mysqli"
   },
   {
@@ -107691,7 +109633,7 @@
           "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "since": null,
@@ -107893,6 +109835,156 @@
     },
     "since": null,
     "slug": "mysqli_stmt_reset",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_result_metadata",
+    "description": "Returns result set metadata from a prepared statement.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_result_metadata",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_result_metadata",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_result_metadata",
+    "sub_area": "mysqli"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "param_num",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 3,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Database",
+    "canonical_name": "mysqli_stmt_send_long_data",
+    "description": "Sends parameter data in chunks.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/mysqli_prelude/build/procedural.rs",
+      "codegen_function": "mysqli_stmt_send_long_data",
+      "notes": [
+        "Implemented by the compiler-injected mysqli prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "mysqli",
+    "name": "mysqli_stmt_send_long_data",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "statement",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "param_num",
+          "optional": false,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "mysqli_stmt_send_long_data",
     "sub_area": "mysqli"
   },
   {
@@ -129394,6 +131486,438 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "node",
+          "optional": false,
+          "type": "object"
+        },
+        {
+          "by_ref": false,
+          "default": "SimpleXMLElement",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "simplexml_import_dom",
+    "description": "Imports a DOM node as a SimpleXML element.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/simplexml_import_dom.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "node",
+          "optional": false,
+          "type": "object"
+        },
+        {
+          "by_ref": false,
+          "default": "\"SimpleXMLElement\"",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/simplexml_prelude/generated.rs",
+      "codegen_function": "simplexml_import_dom",
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs"
+    },
+    "module": "simplexml",
+    "name": "simplexml_import_dom",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "node",
+          "optional": false,
+          "type": "object"
+        },
+        {
+          "by_ref": false,
+          "default": "'SimpleXMLElement'",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        }
+      ],
+      "return_type": "?SimpleXMLElement",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "simplexml_import_dom",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "SimpleXMLElement",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "simplexml_load_file",
+    "description": "Parses an XML file into a SimpleXML element.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/simplexml_load_file.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"SimpleXMLElement\"",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\"",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/simplexml_prelude/generated.rs",
+      "codegen_function": "simplexml_load_file",
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs"
+    },
+    "module": "simplexml",
+    "name": "simplexml_load_file",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "filename",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "'SimpleXMLElement'",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "SimpleXMLElement|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "simplexml_load_file",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "SimpleXMLElement",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": false,
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "XML",
+    "canonical_name": "simplexml_load_string",
+    "description": "Parses XML bytes into a SimpleXML element.",
+    "eval": {
+      "adapter_reason": "dynamic-language-surface",
+      "area": "xml",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/xml/simplexml_load_string.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "\"SimpleXMLElement\"",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "\"\"",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/simplexml_prelude/generated.rs",
+      "codegen_function": "simplexml_load_string",
+      "notes": [
+        "Implemented by the compiler-injected xml prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_xml.rs"
+    },
+    "module": "simplexml",
+    "name": "simplexml_load_string",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "data",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "'SimpleXMLElement'",
+          "name": "class_name",
+          "optional": true,
+          "type": "?string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "options",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "''",
+          "name": "namespace_or_prefix",
+          "optional": true,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "is_prefix",
+          "optional": true,
+          "type": "bool"
+        }
+      ],
+      "return_type": "SimpleXMLElement|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "simplexml_load_string",
+    "sub_area": "XML"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -136317,7 +138841,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -147245,7 +149769,7 @@
         "directly and then names the one shape users hit most.",
         "Fixed untyped slots selected by reachable property `unset()` operations are widened to",
         "boxed `Mixed` and lowered through `PropUnset`, so they do not reach this fallback. Packed",
-        "fields, by-reference property slots, and dynamic shapes whose magic behavior depends on",
+        "fields, borrowed or untyped reference-property slots, and dynamic shapes whose magic behavior depends on",
         "runtime state remain deliberately unsupported.",
         "A BY-REFERENCE INDEXED ARRAY is the shape named here. `unset()` removes a key without",
         "renumbering, so a packed list has to become a hash \u2014 and a callee cannot retype the",
@@ -149484,7 +152008,7 @@
     "module": "xml",
     "name": "xml_parse_into_struct",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "write_only_mixed_outputs",
       "callable": {
         "kind": "static_only",
         "reason": "xml_parse_into_struct() writes by-reference outputs into caller variables"

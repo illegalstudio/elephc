@@ -6,7 +6,7 @@ description: "Returns the id the last prepared INSERT generated."
 ## mysqli_stmt_insert_id()
 
 ```php
-function mysqli_stmt_insert_id(mixed $statement): int
+function mysqli_stmt_insert_id(mixed $statement): mixed
 ```
 
 Returns the id the last prepared INSERT generated.
@@ -14,7 +14,7 @@ Returns the id the last prepared INSERT generated.
 **Parameters**:
 - `$statement` (`mixed`)
 
-**Returns**: `int`
+**Returns**: `mixed`
 
 ## Availability
 

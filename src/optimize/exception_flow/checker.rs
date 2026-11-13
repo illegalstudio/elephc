@@ -64,7 +64,7 @@ impl CheckerExceptionAnalysis {
     }
 
     /// Reports callbacks and cleanup owned by a statement, excluding evaluated operands.
-    pub(crate) fn statement_throws(&self, stmt: &Stmt, class: Option<&str>, retired_type: Option<&PhpType>) -> CheckerThrownTypes {
+    pub(crate) fn statement_throws(&self, stmt: &Stmt, class: Option<&str>, retired_type: Option<&PhpType>, reference_write: Option<bool>) -> CheckerThrownTypes {
         if matches!(&stmt.kind, StmtKind::ExprStmt(expr) if Self::is_process_exit(expr)) {
             return CheckerThrownTypes(ThrownTypes::default());
         }
@@ -73,7 +73,7 @@ impl CheckerExceptionAnalysis {
             parent_name: self.analysis.hierarchy.parents.get(&php_symbol_key(name)).cloned(),
         });
         CheckerThrownTypes(with_callable_effect_analysis(&self.effects, ||
-            self.analysis.stmt_throws_at_boundary(stmt, &HashMap::new(), context.as_ref(), false, retired_type)))
+            self.analysis.stmt_throws_at_boundary(stmt, &HashMap::new(), context.as_ref(), false, retired_type, reference_write)))
     }
 
     /// Reports destruction of a binding's old value before an implicit replacement.

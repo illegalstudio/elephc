@@ -1200,6 +1200,83 @@ echo $c->readP() . ":" . $c->readC();
     assert_eq!(out, "10:2;10:20");
 }
 
+/// Prefix increment returns the value after coercion to an ordinary declared property type.
+#[test]
+fn test_typed_string_property_prefix_increment_returns_stored_string() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class TypedPrefixResult { public string $value = '5'; }
+$object = new TypedPrefixResult();
+var_dump(++$object->value, $object->value);
+$dynamic = new TypedPrefixResult();
+var_dump(++$dynamic->{'value'}, $dynamic->value);
+class HookPrefixResult {
+    public int $back = 5;
+    public int $value {
+        get { echo 'G'; return $this->back; }
+        set { echo 'S'; $this->back = $value; }
+    }
+}
+class MagicPrefixResult {
+    public int $back = 5;
+    public function __get(string $name): int { echo 'G'; return $this->back; }
+    public function __set(string $name, mixed $value): void { echo 'S'; $this->back = (int)$value; }
+}
+$hook = new HookPrefixResult();
+var_dump(++$hook->value, $hook->back);
+$magic = new MagicPrefixResult();
+var_dump(++$magic->value, $magic->back);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "string(1) \"6\"\nstring(1) \"6\"\n".repeat(2)
+        + "GSint(6)\nint(6)\nGSint(6)\nint(6)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Computed ordinary statement operands expire at their uses even without XML capability.
+#[test]
+fn test_computed_property_statement_capture_destructors() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ScopedNameResult {
+    public function __toString(): string { echo 'name|'; return 'child'; }
+    public function __destruct() { echo '~name|'; }
+}
+class ScopedTextResult {
+    public function __toString(): string { echo 'text|'; return 'x'; }
+    public function __destruct() { echo '~text|'; }
+}
+function scopedNameResult(): ScopedNameResult { return new ScopedNameResult(); }
+function scopedTextResult(): ScopedTextResult { return new ScopedTextResult(); }
+function scopedCaptureRun(): void {
+    $root = new stdClass(); $root->child = new stdClass(); $root->child->value = 'p';
+    $root->{scopedNameResult()}->value .= scopedTextResult();
+    echo 'after|';
+}
+scopedCaptureRun();
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "name|~name|text|~text|after|");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Wrapping logic around a computed property assignment must not require a missing scope.
+#[test]
+fn test_computed_property_assignment_low_precedence_logic() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class ComputedLogicNode { public int $count = 0; public ?int $maybe = null; }
+function computedLogicKey(): int { return 0; }
+function computedLogicFallback(string $name): bool { echo $name, '|'; return true; }
+$rows = [new ComputedLogicNode()];
+$rows[computedLogicKey()]->count += 1 or computedLogicFallback('or');
+$rows[computedLogicKey()]->count += 1 and computedLogicFallback('and');
+$rows[computedLogicKey()]->count += 1 xor computedLogicFallback('xor');
+$rows[computedLogicKey()]->maybe ??= 1 or computedLogicFallback('coalesce');
+var_dump($rows[0]->count, $rows[0]->maybe);
+"#);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "and|xor|int(3)\nint(1)\n");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
 /// A property name computed for one access (`$o->{(string) $mixed}`) is a
 /// temporary string the access only reads. Neither the write nor the read
 /// released it, so each access leaked one block.
@@ -1223,4 +1300,64 @@ echo $total, "\n";
     assert!(out.success, "stderr: {}", out.stderr);
     assert_eq!(out.stdout, "1225\n");
     assert!(out.stderr.contains("leak summary: clean"), "{}", out.stderr);
+}
+
+/// Erased prefix operations preserve typed storage and one hook pair without loading XML.
+#[test]
+fn test_erased_property_prefix_results_preserve_typed_storage() {
+    let source = r#"<?php
+class ErasedPrefixString { public string $value = '5'; }
+class ErasedPrefixDeclaredMagic {
+    public string $value = '5';
+    public function __get(string $name): mixed { echo 'unexpected-get'; return '5'; }
+    public function __set(string $name, mixed $value): void { echo 'unexpected-set'; }
+}
+class ErasedPrefixHook {
+    public string $value = '5' {
+        get { echo 'G'; return $this->value; }
+        set { echo 'S'; $this->value = $value; }
+    }
+}
+function erasedPrefixNamed(mixed $object): mixed { return ++$object->value; }
+function erasedPrefixDynamic(mixed $object, string $name): mixed { return --$object->{$name}; }
+foreach ([new ErasedPrefixString(), new ErasedPrefixDeclaredMagic(), new ErasedPrefixHook()] as $object) {
+    var_dump(erasedPrefixNamed($object), erasedPrefixDynamic($object, 'value'));
+}
+"#;
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    let expected = "string(1) \"6\"\nstring(1) \"5\"\n".repeat(2) + "GSGSint(6)\nint(5)\n";
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[&expected]);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Erased compound stores keep assignment errors independently of XML capability reachability.
+#[test]
+fn test_erased_compound_property_null_errors_bundle() {
+    let body = r#"
+function compoundNamedFailure(mixed $object): mixed {
+    try { return $object->value .= 'x'; }
+    catch (Error $error) { echo $error->getMessage(), '|'; unset($error); return null; }
+}
+function compoundDynamicFailure(mixed $object, string $name): void {
+    try { $object->{$name} .= 'x'; }
+    catch (Error $error) { echo $error->getMessage(), '|'; unset($error); }
+    try { $object->{$name} += 2; }
+    catch (Error $error) { echo $error->getMessage(), '|'; unset($error); }
+}
+compoundNamedFailure(null); compoundDynamicFailure(null, 'value');
+"#;
+    for xml in [false, true] {
+        if xml && crate::support::skip_without_xml_native("test_erased_compound_property_null_errors_bundle") { continue; }
+        let capability = if xml {
+            "class CompoundFailureXmlCapability extends SimpleXMLElement {} $capability = new CompoundFailureXmlCapability('<r/>'); unset($capability);"
+        } else { "" };
+        let source = format!("<?php {capability} {body}");
+        let out = compile_and_run_with_heap_debug(&source);
+        assert!(out.success, "xml={xml}: stdout={} stderr={}", out.stdout, out.stderr);
+        assert_eq!(out.stdout, "Attempt to assign property \"value\" on null|".repeat(3), "xml={xml}");
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "xml={xml}: {}", out.stderr);
+        assert!(!out.stderr.contains("Warning:"), "xml={xml}: {}", out.stderr);
+    }
 }

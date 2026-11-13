@@ -10,6 +10,7 @@
 //!   position, and set-position entries are state-shape agnostic.
 //! - Invalid subjects return zero, and a failed set-position returns zero so the caller can run
 //!   the generic bridge and preserve PHP's exact ValueError diagnostics.
+//! - Search honors live resource limits; diagnostics defer to the ordinary callback bridge.
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use super::*;
@@ -26,6 +27,11 @@ pub unsafe extern "C" fn elephc_mbstring_ereg_search_init_simple_v1(
 ) -> i32 {
     catch_unwind(AssertUnwindSafe(|| unsafe {
         if !crate::regex::provider_available() || len > isize::MAX as u64 || (len != 0 && subject.is_null()) {
+            return -1;
+        }
+        // This callback-free initializer cannot publish pattern diagnostics in other encodings.
+        if REGEX.with(|session| session.encoding().name() != "UTF-8"
+            || session.options() != crate::regex::Options::default()) {
             return -1;
         }
         let bytes = if len == 0 {
@@ -55,8 +61,12 @@ pub extern "C" fn elephc_mbstring_ereg_search_step_v1() -> i32 {
             if !session.progressive_ready() {
                 return -1;
             }
-            let limits = Limits { stack: None, retry: None };
-            match session.search(None, None, "mb_ereg_search", limits, &mut |_| {}) {
+            let (stack, retry) = REQUEST.with(|state| state.borrow().ini_regex_limits());
+            let limits = Limits::from_ini(stack, retry, false);
+            let mut diagnostic = false;
+            let result = session.search(None, None, "mb_ereg_search", limits, &mut |_| diagnostic = true);
+            if diagnostic { return -1; }
+            match result {
                 Ok(Some(_)) => 1,
                 Ok(None) => 0,
                 Err(_) => -1,
@@ -87,8 +97,9 @@ pub extern "C" fn elephc_mbstring_ereg_search_setpos_v1(position: i64) -> i32 {
 /// Runs one search step and reports the retained match's start and length.
 ///
 /// Returns one on a match, zero when the search found nothing, and the negative sentinel when
-/// the provider is not registered yet or the request has no progressive pattern/subject. The
-/// caller then runs the generic bridge, which installs the provider and emits PHP diagnostics.
+/// the provider is not registered yet, the request has no progressive pattern/subject, or a
+/// search needs PHP diagnostics. The caller then runs the generic bridge, which installs the
+/// provider and emits those diagnostics.
 ///
 /// # Safety
 /// Both output pointers must be null or address writable `i64` storage.
@@ -108,8 +119,12 @@ pub unsafe extern "C" fn elephc_mbstring_ereg_search_pos_v1(
             if !session.simple_ready() {
                 return -2;
             }
-            let limits = Limits { stack: None, retry: None };
-            match session.search(None, None, "mb_ereg_search_pos", limits, &mut |_| {}) {
+            let (stack, retry) = REQUEST.with(|state| state.borrow().ini_regex_limits());
+            let limits = Limits::from_ini(stack, retry, false);
+            let mut diagnostic = false;
+            let result = session.search(None, None, "mb_ereg_search_pos", limits, &mut |_| diagnostic = true);
+            if diagnostic { return -1; }
+            match result {
                 Ok(Some(_)) => match session.match_position() {
                     Some((start, len)) => {
                         unsafe {
@@ -151,8 +166,12 @@ pub unsafe extern "C" fn elephc_mbstring_ereg_search_regs_v1(
             if !session.simple_ready() {
                 return -2;
             }
-            let limits = Limits { stack: None, retry: None };
-            match session.search(None, None, "mb_ereg_search_regs", limits, &mut |_| {}) {
+            let (stack, retry) = REQUEST.with(|state| state.borrow().ini_regex_limits());
+            let limits = Limits::from_ini(stack, retry, false);
+            let mut diagnostic = false;
+            let result = session.search(None, None, "mb_ereg_search_regs", limits, &mut |_| diagnostic = true);
+            if diagnostic { return -1; }
+            match result {
                 Ok(Some(_)) => match session.match_group0() {
                     Some((ptr, len)) => {
                         unsafe {

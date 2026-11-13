@@ -51,6 +51,7 @@ pub(super) fn eval_native_function_ref_param_supported(ty: &PhpType) -> bool {
             | PhpType::Mixed
             | PhpType::Object(_)
             | PhpType::Str
+            | PhpType::TaggedScalar
     )
 }
 
@@ -326,6 +327,15 @@ pub(super) fn eval_native_signature_shape(sig: &FunctionSig) -> EvalNativeSignat
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Nullable integer reference parameters use the supported two-word tagged-scalar bridge.
+    #[test]
+    fn nullable_integer_reference_parameters_can_bridge_with_eval() {
+        assert!(eval_native_function_ref_param_supported(&PhpType::Union(vec![
+            PhpType::Int,
+            PhpType::Void,
+        ])));
+    }
 
     /// Builds a signature whose hidden slots mirror what `crate::func_args` appends.
     ///

@@ -10,11 +10,11 @@
 mod callables;
 mod classes;
 mod dynamic_references;
+mod native_references;
 mod static_members;
 
 use super::function_variants;
 use crate::codegen::emit::Emitter;
-use crate::codegen::platform::Arch;
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Function, Immediate, Module, Op, ValueDef};
 use crate::names::{method_symbol, php_symbol_key, static_method_symbol};
@@ -25,3 +25,5 @@ pub(super) use callables::*;
 pub(super) use classes::*;
 pub(super) use dynamic_references::*;
 pub(super) use static_members::*;
+
+pub(super) use native_references::emit_native_reference_metadata;

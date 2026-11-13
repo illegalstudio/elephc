@@ -462,6 +462,11 @@ pub fn e_not(value: Expr) -> Expr {
     Expr::new(ExprKind::Not(Box::new(value)), Span::dummy())
 }
 
+/// `@value` — evaluates `value` while suppressing PHP diagnostics.
+pub fn e_error_suppress(value: Expr) -> Expr {
+    Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
+}
+
 /// `-value`, the unary minus.
 ///
 /// A NEGATIVE LITERAL IS THIS TOO. The parser does NOT fold `-3` into `IntLiteral(-3)`; it
@@ -521,6 +526,21 @@ pub fn e_index(array: Expr, index: Expr) -> Expr {
 /// `$name++` in expression position.
 pub fn e_post_inc(name: &str) -> Expr {
     Expr::new(ExprKind::PostIncrement(name.to_string()), Span::dummy())
+}
+
+/// `++$name` in expression position; the expression evaluates to the incremented value.
+pub fn e_pre_inc(name: &str) -> Expr {
+    Expr::new(ExprKind::PreIncrement(name.to_string()), Span::dummy())
+}
+
+/// `$name--` in expression position.
+pub fn e_post_dec(name: &str) -> Expr {
+    Expr::new(ExprKind::PostDecrement(name.to_string()), Span::dummy())
+}
+
+/// `--$name` in expression position; the expression evaluates to the decremented value.
+pub fn e_pre_dec(name: &str) -> Expr {
+    Expr::new(ExprKind::PreDecrement(name.to_string()), Span::dummy())
 }
 
 /// A list array literal `[a, b, c]`.
@@ -676,6 +696,22 @@ pub fn e_closure_call(var: &str, args: Vec<Expr>) -> Expr {
     Expr::new(
         ExprKind::ClosureCall {
             var: var.to_string(),
+            args,
+        },
+        Span::dummy(),
+    )
+}
+
+/// `(callee)(<args>)` — calling an arbitrary callable expression.
+///
+/// A distinct node from `e_call` (a named function) and `e_closure_call` (a variable): the
+/// callee is an expression, so no function name resolves statically. The DOM prelude uses the
+/// form to reach the optional SimpleXML loader without making the SimpleXML prelude a
+/// compile-time dependency of every `DOMDocument` program.
+pub fn e_expr_call(callee: Expr, args: Vec<Expr>) -> Expr {
+    Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(callee),
             args,
         },
         Span::dummy(),
@@ -850,6 +886,13 @@ pub fn s_static_prop_array_assign(
     )
 }
 
+/// `<array-access chain> = <value>;` in statement position, for a write through more than
+/// one index (`Class::$prop[$a][$b] = <value>`, `$x[$a][$b] = <value>`): the parser's
+/// `NestedArrayAssign`, whose target is the full `ArrayAccess` chain.
+pub fn s_nested_array_assign(target: Expr, value: Expr) -> Stmt {
+    Stmt::new(StmtKind::NestedArrayAssign { target, value }, Span::dummy())
+}
+
 /// `Class::$prop[] = <value>;` in statement position.
 pub fn s_static_prop_array_push(class_name: &str, property: &str, value: Expr) -> Stmt {
     Stmt::new(
@@ -935,6 +978,11 @@ pub fn s_array_assign(array: &str, index: Expr, value: Expr) -> Stmt {
         },
         Span::dummy(),
     )
+}
+
+/// Builds a parser-generated synthetic statement group (nested append lowering).
+pub fn s_synthetic(body: Vec<Stmt>) -> Stmt {
+    Stmt::new(StmtKind::Synthetic(body), Span::dummy())
 }
 
 /// `if (…) { … } elseif (…) { … } else { … }`.
@@ -1281,6 +1329,12 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
                 walk_expr(arg, out);
             }
         }
+        ExprKind::ExprCall { callee, args } => {
+            walk_expr(callee, out);
+            for arg in args {
+                walk_expr(arg, out);
+            }
+        }
         ExprKind::NewDynamic { name_expr, args } => {
             walk_expr(name_expr, out);
             for arg in args {
@@ -1306,7 +1360,8 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
-        | ExprKind::Negate(inner) => walk_expr(inner, out),
+        | ExprKind::Negate(inner)
+        | ExprKind::ErrorSuppress(inner) => walk_expr(inner, out),
         ExprKind::Match { subject, arms, default } => {
             walk_expr(subject, out);
             for (labels, value) in arms {
@@ -1880,6 +1935,10 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
             audit_expr(index, out);
             audit_expr(value, out);
         }
+        StmtKind::NestedArrayAssign { target, value } => {
+            audit_expr(target, out);
+            audit_expr(value, out);
+        }
         StmtKind::ArrayPush { value, .. } => audit_expr(value, out),
         StmtKind::PropertyArrayPush { object, value, .. } => {
             audit_expr(object, out);
@@ -2128,7 +2187,8 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
-        | ExprKind::Negate(inner) => audit_expr(inner, out),
+        | ExprKind::Negate(inner)
+        | ExprKind::ErrorSuppress(inner) => audit_expr(inner, out),
         ExprKind::Match { subject, arms, default } => {
             audit_expr(subject, out);
             for (labels, value) in arms {
@@ -2156,6 +2216,13 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         // The callee is a variable, so nothing is NAMED here — but the arguments are code.
         ExprKind::ClosureCall { args, .. } => {
+            for arg in args {
+                audit_expr(arg, out);
+            }
+        }
+        // An expression callee names no function statically, but both sides are still code.
+        ExprKind::ExprCall { callee, args } => {
+            audit_expr(callee, out);
             for arg in args {
                 audit_expr(arg, out);
             }
@@ -2352,6 +2419,25 @@ impl ClassBuilder {
             span: Span::dummy(),
             attributes: Vec::new(),
         });
+        self
+    }
+
+    /// Marks the most recently added property as PHP 8.4 hooked: `get` / `set` say
+    /// which hooks exist and `uses_backing_slot` whether a hook body touches the
+    /// property's own storage (a virtual property when it does not). The hook
+    /// bodies themselves are the class's `__propget_*` / `__propset_*` methods, as
+    /// the parser produces them. Panics when no property was added yet.
+    pub fn hooked(mut self, get: bool, set: bool, uses_backing_slot: bool) -> Self {
+        let property = self
+            .properties
+            .last_mut()
+            .expect("hooked() needs a property to mark");
+        property.hooks = PropertyHooks {
+            get,
+            set,
+            get_by_ref: false,
+            uses_backing_slot,
+        };
         self
     }
 
@@ -2581,6 +2667,20 @@ mod tests {
     fn parse_php(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse_internal(&tokens).expect("fixture must parse")
+    }
+
+    /// An expression-call callee and its arguments are both uses of the enclosed variables.
+    #[test]
+    fn expression_calls_count_callee_and_arguments_as_reads() {
+        let body = vec![s_return(e_expr_call(
+            e_var("callable"),
+            vec![e_var("value")],
+        ))];
+        let params = vec![
+            ("callable".to_string(), None, None, false),
+            ("value".to_string(), Some(TypeExpr::Int), None, false),
+        ];
+        assert!(unread_params(&params, &body).is_empty());
     }
 
     /// The builders must emit the SAME nodes the parser emits for the equivalent PHP.

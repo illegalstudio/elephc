@@ -135,35 +135,41 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
     }
 }
 
+/// Maps shared signature-independent ordering rules for checker and parser call surfaces.
+pub(crate) fn validate_unresolved_call_argument_order(args: &[Expr], callee_desc: &str) -> Result<(), CompileError> {
+    call_args::validate_unresolved_call_argument_order(args).map_err(|err| match err {
+        CallArgPlanError::SpreadAfterNamed { span } => {
+            spread_after_named_error(span, callee_desc)
+        }
+        CallArgPlanError::PositionalAfterNamed { span } => CompileError::new(span,
+            &format!("{} cannot use positional arguments after named arguments", callee_desc)),
+        CallArgPlanError::PositionalAfterSpread { span } => CompileError::new(span,
+            &format!("{} cannot use positional arguments after spread arguments", callee_desc)),
+        CallArgPlanError::PositionalAfterNamedUnpack { span } => CompileError::new(span,
+            &format!("{} cannot use positional argument after named argument during unpacking", callee_desc)),
+        // The remaining variants need a signature and cannot originate here. Keep
+        // the match exhaustive so a future rule still reports a real span.
+        CallArgPlanError::UnknownNamed { span, .. }
+        | CallArgPlanError::Duplicate { span, .. }
+        | CallArgPlanError::MissingRequired { span, .. } => {
+            CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
+        }
+    })
+}
+
 impl Checker {
-    /// Enforces PHP's syntactic "no argument unpacking after named arguments"
-    /// rule on a call surface whose callee is not resolvable at compile time
+    /// Enforces PHP's syntactic argument ordering on a callee not resolvable at compile time
     /// (string callables, `new $class(...)`), where no signature is available to
     /// run the shared planner against.
     ///
     /// The rule itself stays in `crate::types::call_args`; this only maps its
     /// error onto the same diagnostic the planner-backed surfaces produce.
-    pub(crate) fn require_no_spread_after_named_args(
+    pub(crate) fn require_valid_unresolved_call_argument_order(
         &self,
         args: &[Expr],
         callee_desc: &str,
     ) -> Result<(), CompileError> {
-        call_args::validate_no_spread_after_named(args).map_err(|err| match err {
-            CallArgPlanError::SpreadAfterNamed { span } => {
-                spread_after_named_error(span, callee_desc)
-            }
-            // The rule only reports `SpreadAfterNamed`; the remaining variants
-            // need a signature to plan against and cannot originate here. Keep
-            // the match exhaustive so a future rule still reports a real span.
-            CallArgPlanError::UnknownNamed { span, .. }
-            | CallArgPlanError::Duplicate { span, .. }
-            | CallArgPlanError::PositionalAfterNamed { span }
-            | CallArgPlanError::PositionalAfterSpread { span }
-            | CallArgPlanError::PositionalAfterNamedUnpack { span }
-            | CallArgPlanError::MissingRequired { span, .. } => {
-                CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
-            }
-        })
+        validate_unresolved_call_argument_order(args, callee_desc)
     }
 
     /// Returns true when a by-reference argument is an object-property place whose declared
@@ -182,7 +188,7 @@ impl Checker {
             return Ok(false);
         }
         let mut arg = arg;
-        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+        while let ExprKind::NamedArg { value, .. } = &arg.kind {
             arg = value;
         }
         if !matches!(
@@ -192,10 +198,47 @@ impl Checker {
             return Ok(false);
         }
         let property_ty = self.infer_type(arg, env)?;
-        Ok(crate::types::param_binding::by_ref_property_storage_compatible(
-            expected_ty,
-            &property_ty,
-        ))
+        let compatible = crate::types::param_binding::by_ref_property_storage_compatible(expected_ty, &property_ty);
+        if compatible && *expected_ty == PhpType::Mixed && property_ty == PhpType::Mixed {
+            self.promote_live_mixed_property_argument(arg, env)?;
+        }
+        Ok(compatible)
+    }
+
+    /// Gives plain Mixed property arguments stable cell storage before EIR call lowering.
+    fn promote_live_mixed_property_argument(&mut self, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+        let ExprKind::PropertyAccess { object, property } = &arg.kind else { return Ok(()); };
+        let Some((class_name, true)) = self.ref_property_slot_addressability(object, property, env)? else {
+            return Ok(());
+        };
+        let (access_class, index) = match crate::types::resolve_property_name(
+            &self.classes, &class_name, property, self.current_class.as_deref(),
+        ) {
+            crate::types::PropertyNameResolution::ScopePrivate { scope, index } => (scope, index),
+            crate::types::PropertyNameResolution::Visible => {
+                let Some(index) = self.classes[&class_name].visible_property_index(property) else { return Ok(()); };
+                (class_name, index)
+            }
+            _ => return Ok(()),
+        };
+        let info = &self.classes[&access_class];
+        if info.properties.get(index).is_none_or(|(_, ty)| *ty != PhpType::Mixed)
+            || info.is_internal || info.readonly_properties.contains(property)
+            || info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
+        { return Ok(()); }
+        let mut owner = info.property_declaring_classes.get(property).cloned().unwrap_or(access_class);
+        // Public/protected redeclarations reuse their ancestor's physical slot. Every view
+        // of that storage must agree on indirection before inherited method bodies are emitted.
+        for _ in 0..self.classes.len() {
+            let Some(parent) = self.classes.get(&owner).and_then(|info| info.parent.clone()) else { break; };
+            let Some(info) = self.classes.get(&parent) else { break; };
+            if info.visible_property_index(property) != Some(index)
+                || info.properties.get(index).is_none_or(|(_, ty)| *ty != PhpType::Mixed) { break; }
+            if info.is_internal { return Ok(()); }
+            owner = parent;
+        }
+        self.reference_property_promotions.insert((owner, property.clone()));
+        Ok(())
     }
 
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
@@ -204,6 +247,9 @@ impl Checker {
         arg: &Expr,
         env: &TypeEnv,
     ) -> Result<bool, CompileError> {
+        if self.is_native_selection_reference_argument(arg, env)? {
+            return Ok(true);
+        }
         match &arg.kind {
             ExprKind::Variable(_) => Ok(true),
             ExprKind::ArrayAccess { array, .. } => {
@@ -211,6 +257,24 @@ impl Checker {
             }
             _ => Ok(false),
         }
+    }
+
+    /// Recognizes XML selections before ordinary property/array reference-place validation.
+    pub(crate) fn is_native_selection_reference_argument(
+        &mut self, arg: &Expr, env: &TypeEnv,
+    ) -> Result<bool, CompileError> {
+        if let ExprKind::NamedArg { value, .. } = &arg.kind {
+            return self.is_native_selection_reference_argument(value, env);
+        }
+        let Some(receiver) = crate::types::param_binding::native_selection_reference_receiver(arg) else {
+            return Ok(false);
+        };
+        let ty = self.infer_type(receiver, env)?;
+        if crate::types::param_binding::native_selection_reference_receiver_type(&ty, &self.classes) {
+            self.record_member_receiver_type(arg.span, &ty);
+            return Ok(true);
+        }
+        self.is_native_selection_reference_argument(receiver, env)
     }
 
     /// Validates one source value collected by a user-visible by-reference variadic.
@@ -236,6 +300,9 @@ impl Checker {
             ExprKind::NamedArg { value, .. } => value.as_ref(),
             _ => arg,
         };
+        if self.is_native_selection_reference_argument(storage_arg, caller_env)? {
+            return Ok(());
+        }
         if matches!(storage_arg.kind, ExprKind::ArrayAccess { .. }) {
             let detail = if descriptor_invocation {
                 "through callable descriptor dispatch"
@@ -288,6 +355,7 @@ impl Checker {
             arg,
             caller_env,
             can_widen_local,
+            false,
             &format!("{} variadic parameter ${}", callee_desc, variadic_name),
         )?;
         self.record_boxed_reference_output(
@@ -296,7 +364,8 @@ impl Checker {
             actual_ty,
             call_span,
             caller_env,
-        );
+            false,
+        )?;
         self.record_reference_alias_root(arg);
         Ok(())
     }
@@ -550,8 +619,8 @@ impl Checker {
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
             (PhpType::Bool, PhpType::False) => true,
             // The backend has explicit boxed-Mixed cast funnels for scalar boundaries.
-            // Refcounted/object boundaries do not yet validate the runtime tag, so keep
-            // those statically rejected instead of treating Mixed as universally safe.
+            // Object parameters use the narrower `ParamBinding::ObjectGuard` route below;
+            // accepting them here would also admit unchecked Mixed function returns.
             (PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str, PhpType::Mixed) => true,
             (PhpType::Iterable, PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable) => true,
             (PhpType::Union(expected_members), PhpType::Union(actual_members)) => actual_members
@@ -779,6 +848,8 @@ impl Checker {
         };
         self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
         let source_has_spread = plan.has_spread_args();
+        let supports_literal_search_rewrite = !source_has_spread
+            && !call_args::has_named_args(args);
         let defaults = plan.default_argument_mask();
         let descriptor_projections = plan.descriptor_projection_mask();
         let normalized_args = plan.normalized_args();
@@ -869,7 +940,8 @@ impl Checker {
                 let supplied_reference = sig.ref_params.get(param_idx).copied().unwrap_or(false)
                     && !defaults.get(param_idx).copied().unwrap_or(false);
                 if supplied_reference && !self.internal_callback_binding {
-                    if descriptor_invocation && matches!(arg.kind, ExprKind::ArrayAccess { .. }) {
+                    if descriptor_invocation && matches!(arg.kind, ExprKind::ArrayAccess { .. })
+                        && !self.is_native_selection_reference_argument(arg, caller_env)? {
                         let param_name = sig
                             .params
                             .get(param_idx)
@@ -918,12 +990,18 @@ impl Checker {
                         && (sig.declared_params.get(param_idx).copied().unwrap_or(false)
                             || matches!(expected_ty, PhpType::Mixed));
                     if tracks_boxed_reference_output {
+                        let layout_contract = crate::types::is_written_reference_array_param(
+                            &sig.ref_params,
+                            &sig.param_type_exprs,
+                            param_idx,
+                        );
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
                             arg,
                             caller_env,
                             can_widen_by_ref_local,
+                            layout_contract,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                         self.record_boxed_reference_output(
@@ -932,7 +1010,8 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
-                        );
+                            layout_contract,
+                        )?;
                     }
                     // `strict_types` applies to every declared parameter type, including the
                     // closure and first-class-callable surfaces that stay off the coercive
@@ -958,10 +1037,44 @@ impl Checker {
                         && self
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
-                    if !proven_callable_array && !runtime_descriptor_projection {
+                    // `str_replace([literal, ...], 'x', $s)` is folded into scalar calls by
+                    // the AST optimizer before lowering, so its array search is accepted here
+                    // even though the runtime helper is string-only.
+                    let literal_str_replace_search = supports_literal_search_rewrite
+                        && param_idx == 0
+                        && callee_desc
+                            .trim_start_matches('\\')
+                            .eq_ignore_ascii_case("str_replace")
+                        && args.get(1).is_some_and(|replacement| matches!(
+                            replacement.kind, ExprKind::StringLiteral(_)
+                        ))
+                        && matches!(&arg.kind, crate::parser::ast::ExprKind::ArrayLiteral(items)
+                            if !items.is_empty()
+                                && items.iter().all(|item| matches!(
+                                    item.kind,
+                                    crate::parser::ast::ExprKind::StringLiteral(_)
+                                )));
+                    // A by-value list is rebuilt as the declared hash; refuse what cannot be.
+                    if sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        && !supplied_reference
+                        && !runtime_descriptor_projection
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                        )?;
+                    }
+                    if !proven_callable_array && !runtime_descriptor_projection
+                        && !literal_str_replace_search
+                    {
                         if (coercive_param_binding
                             && sig.declared_params.get(param_idx).copied().unwrap_or(false))
                             || (supplied_reference && matches!(expected_ty, PhpType::Object(_)))
+                            || (supplied_reference
+                                && expected_ty.codegen_repr() == PhpType::Mixed
+                                && actual_ty.codegen_repr() == PhpType::Mixed)
                         {
                             self.require_bound_param_arg_type(
                                 expected_ty,
@@ -1039,6 +1152,21 @@ impl Checker {
                         arg.span,
                         &format!("{} variadic parameter ${}", callee_desc, vname),
                     )?;
+                    // Same list-to-hash rule as a regular declared parameter: a collected list
+                    // is rebuilt as the element hash, or refused when no conversion exists.
+                    if variadic_index
+                        .and_then(|index| sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                        && !variadic_by_ref
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                        )?;
+                    }
                 }
             }
             param_idx += 1;

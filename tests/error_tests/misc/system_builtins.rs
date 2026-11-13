@@ -237,13 +237,10 @@ fn test_eval_barrier_allows_dynamic_function_call() {
         .expect("eval-declared function calls after the barrier should type-check");
 }
 
-/// Verifies eval does not hide undefined-variable reads that happen before the barrier.
+/// Verifies eval keeps a pre-barrier undefined-variable read on PHP 8's runtime-warning path.
 #[test]
-fn test_eval_barrier_does_not_hide_prior_undefined_variable() {
-    expect_error(
-        "<?php echo $created; eval('$created = 1;');",
-        "Undefined variable: $created",
-    );
+fn test_eval_barrier_keeps_prior_undefined_variable_runtime_warning() {
+    expect_no_error("<?php echo $created; eval('$created = 1;');");
 }
 
 /// Verifies that referencing an undefined constant produces the expected "Undefined constant" error.
@@ -945,4 +942,15 @@ fn test_error_get_defined_vars_first_class_callable() {
         "<?php function inspect_scope() { $callback = get_defined_vars(...); return $callback(); }",
         "Cannot call get_defined_vars() dynamically",
     );
+}
+
+/// Frozen native scalar reference layouts cannot silently receive boxed capture arrays.
+#[test]
+fn test_error_regex_capture_retyping_raw_reference_payload() {
+    for (ty, value) in [("int", "7"), ("bool", "true"), ("float", "1.5"), ("string", "'old'")] {
+        for builtin in ["preg_match", "preg_match_all"] {
+            expect_error(&format!("<?php function capture({ty} &$matches): void {{ {builtin}('/a/', 'a', $matches); }} $value = {value}; capture($value);"),
+                "regex capture output cannot retype a native reference");
+        }
+    }
 }

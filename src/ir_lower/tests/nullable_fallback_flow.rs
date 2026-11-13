@@ -9,6 +9,19 @@
 
 use crate::ir::{Immediate, IrHeapKind, IrType, Op};
 
+/// Every supported target lowers and emits a nullable object's cached local initialization.
+#[test]
+fn test_nullable_object_lazy_local_join_all_targets() {
+    let source = include_str!("../../../examples/type-narrowing/main.php");
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("examples/type-narrowing/main.php"),
+            std::path::Path::new("examples/type-narrowing"), target);
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
 /// Every target emits guarded match labels, arms, defaults and finally inputs.
 #[test]
 fn test_nullable_fallback_flow_r62_match_guard_views_all_targets() {
@@ -166,6 +179,9 @@ function showGlobalCatch(): void {
     if ($globalCatch instanceof GlobalCatchException) { echo $globalCatch->getMessage(); }
 }
 function firstLoopCatch(): void {
+    // PHP keeps `$e` defined after the inner catch; seeding it keeps the runtime path that
+    // this fixture exercises statically known instead of the checker's null fallback.
+    $e = new LoopCatchException('seed');
     for ($i = 0; $i < 2; $i++) {
         try {
             try { throw new LoopCatchException('a' . $i); } catch (LoopCatchException $e) {}
@@ -978,6 +994,31 @@ echo promoted(null), promoted(6), nested(null), nested(6);
                 );
             }
         }
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}
+
+/// Every target preserves warnings from indices while keeping the actual probe root silent.
+#[test]
+fn test_simplexml_followup_null_probe_warnings_all_targets() {
+    let source = r#"<?php
+function followup_probe(array $values): void {
+    var_dump(isset($values[(string)$missingIndex]));
+    echo ($values[(string)$missingCoalesce] ?? 7);
+    var_dump(isset($silentRoot));
+    echo ($silentRoot ?? 'fallback');
+}
+followup_probe(['present' => 1]);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = crate::codegen::platform::Target::parse(name).unwrap();
+        let module = super::lower_source_at_for_target(source,
+            std::path::Path::new("main.php"), std::path::Path::new("."), target);
+        let function = module.functions.iter().find(|function| function.name == "followup_probe").unwrap();
+        let warnings = function.instructions.iter().filter(|inst| inst.op == Op::RuntimeCall
+            && inst.immediate == Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::WriteDiagnostic)))
+            .count();
+        assert_eq!(warnings, 2, "{name}: only the two index reads warn");
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }

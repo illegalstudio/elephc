@@ -117,9 +117,11 @@ fn specialize(function: &mut Function, length_id: InstId) -> bool {
     let Some(call) = function.instruction_mut(call_id) else {
         return false;
     };
-    call.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
-        length_target,
-    )));
+    let Some(Immediate::RuntimeCall(
+        RuntimeCallTarget::Function(target)
+        | RuntimeCallTarget::ProfiledFunction { target, .. },
+    )) = &mut call.immediate else { return false; };
+    *target = length_target;
     call.result_type = IrType::I64;
     call.result_php_type = PhpType::Int;
     call.result_ownership = Ownership::NonHeap;

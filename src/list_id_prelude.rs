@@ -16,13 +16,14 @@
 //!   synthetic method's built-array return would degrade to scalar `mixed` (see
 //!   the `synthetic-method-return-inference-gap`), regressing `in_array`.
 //! - Pay-for-use: injected only when `detect::program_uses_list_identifiers` finds
-//!   a use, so non-datetime binaries never carry the ~13 KB baked table.
+//!   a use, or when the autoload probe reports the group, so non-datetime binaries
+//!   never carry the ~13 KB baked table.
 //! - The internal `$countryCode` default is `""` (not `null`): `=== null` on a
 //!   null-defaulted param miscompiles, and the function is internal so no user
 //!   observes the default. PER_COUNTRY with an empty country throws `ValueError`
 //!   with PHP's exact message, matching the interpreter.
 
-use crate::parser::ast::{BinOp, CastType, Program};
+use crate::parser::ast::{BinOp, CastType, Program, Stmt};
 use crate::synthetic_class::{
     e_array, e_binop, e_call, e_cast, e_index, e_int, e_new, e_str, e_var, function,
     internal_declarations, s_array_push, s_assign, s_foreach, s_if, s_return, s_throw,
@@ -128,30 +129,43 @@ pub(crate) fn list_id_declarations() -> Program {
     })
 }
 
-/// Prepends the `__elephc_list_identifiers` function when the program references
-/// `DateTimeZone::listIdentifiers` or `timezone_identifiers_list`; otherwise
-/// returns the program unchanged so unrelated binaries pay nothing. The prelude is
-/// hoisted function declarations only, so prepending does not change top-level
-/// execution order.
+/// Returns whether `program` references `DateTimeZone::listIdentifiers` or
+/// `timezone_identifiers_list`.
 ///
-/// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
-/// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
-/// budget.
+/// The autoload probe calls this after name resolution has rewritten both forms
+/// to `__elephc_list_identifiers`. Entry injection calls the same walk before
+/// that rewrite, on the source spelling.
+pub(crate) fn program_uses_list_identifiers(program: &[Stmt]) -> bool {
+    crate::compiler_stack::with_compiler_stack(|| detect::program_uses_list_identifiers(program))
+}
+
+/// Prepends the `__elephc_list_identifiers` function when the program references
+/// `DateTimeZone::listIdentifiers` or `timezone_identifiers_list`, or when `force`
+/// is set; otherwise returns the program unchanged so unrelated binaries pay
+/// nothing. The prelude is hoisted function declarations only, so prepending does
+/// not change top-level execution order.
+///
+/// `force` carries an autoload-probe hit. The scan runs under
+/// `crate::compiler_stack::with_compiler_stack` (issue #1149): it walks the whole
+/// program, so an embedder calling it without the CLI driver's wrapper gets the
+/// same stack budget.
 pub fn inject_if_used(
     program: Program,
+    force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
-        inject_if_used_on_compiler_stack(program, inventory)
+        inject_if_used_on_compiler_stack(program, force, inventory)
     })
 }
 
 /// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
 fn inject_if_used_on_compiler_stack(
     program: Program,
+    force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
-    if !detect::program_uses_list_identifiers(&program) {
+    if !force && !detect::program_uses_list_identifiers(&program) {
         return program;
     }
     let mut combined = list_id_declarations();

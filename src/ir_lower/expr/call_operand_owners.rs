@@ -23,6 +23,8 @@ pub(super) fn begin_call_argument_evaluation(ctx: &mut LoweringContext<'_, '_>) 
         crate::ir_lower::context::CallArgumentEvaluationScope {
             expression_depth: ctx.expression_depth,
             owners: Vec::new(),
+            rooted_reference_value_views: std::collections::HashSet::new(),
+            live_property_reference_arguments: false,
         },
     );
 }
@@ -229,15 +231,18 @@ pub(super) fn finish_call_argument_evaluation(
     finish_call_argument_evaluation_with(ctx, operands, false)
 }
 
-/// `finish_call_argument_evaluation` for a user function call: a pin taken on a borrowed source
-/// stays a root released after the call while the operand keeps borrowing. Handed to the call,
-/// it became an owned operand that a conservative return-alias summary (`f($name, 0)` returning
-/// `mixed`) never released, leaking one reference per call.
+/// Transfers raw-string pins to alias comparison while retaining borrowed pins for boxed returns.
+///
+/// Raw string results may either alias a parameter or own a fresh allocation. Passing the pin
+/// as an owned operand lets the call transfer that exact owner on the alias branch and release
+/// it otherwise, without marking every possible result as borrowed. Boxed returns retain the
+/// separate pin because their conservative return summary does not transfer raw argument owners.
 pub(super) fn finish_user_call_argument_evaluation(
     ctx: &mut LoweringContext<'_, '_>,
     operands: &mut [crate::ir::ValueId],
+    result_type: &PhpType,
 ) -> Vec<CallArgumentIntermediate> {
-    finish_call_argument_evaluation_with(ctx, operands, true)
+    finish_call_argument_evaluation_with(ctx, operands, result_type.codegen_repr() != PhpType::Str)
 }
 
 /// Shared body of the two `finish_*` entries.
@@ -518,7 +523,7 @@ pub(super) fn root_user_call_operands(
             let claimed = if repeated {
                 *operand
             } else {
-                claim_transient_string_operand(ctx, *operand, span)
+                claim_owned_string_operand(ctx, *operand, span)
             };
             if claimed != *operand {
                 *operand = claimed;
@@ -530,13 +535,35 @@ pub(super) fn root_user_call_operands(
                     roots.push((index, pin.into_temporary_slot()));
                 }
             }
-            // Source-order evaluation can already have acquired a borrowed string. Its
-            // evaluation slot was handed to this call, so keep that lease visible when
-            // an alias-capable callee throws before the ordinary post-call release.
+            // A later eval barrier can widen a heap local after this call is lowered.
+            // Its eventual load then owns a conversion or payload reference. Lease that value
+            // independently and let finalization prune the source release for concrete storage.
+            let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
             if !repeated
+                && !ctx.has_call_argument_guard(*operand)
                 && !roots.iter().any(|(owner_index, _)| *owner_index == index)
-                && ctx.builder.value_php_type(*operand).codegen_repr() == PhpType::Str
-                && matches!(ctx.builder.value_defining_op(*operand), Some(Op::Acquire | Op::EnsureOwned))
+                && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(*operand))
+                && !matches!(ctx.builder.value_php_type(*operand).codegen_repr(), PhpType::Buffer(_))
+                && matches!(ctx.builder.value_defining_op(*operand), Some(Op::LoadLocal | Op::LoadStaticLocal
+                    | Op::LoadGlobal | Op::LoadRefCell | Op::LoadStaticProperty))
+                && ctx.value_needs_release_after_use(value)
+            {
+                let lease = crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(
+                    ctx, value, Some(span),
+                );
+                crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+                *operand = lease.value;
+            }
+            // Pin every independent heap operand, including fresh objects and arrays, without
+            // changing its producer or the alias facts used by normal post-call retirement.
+            if !repeated
+                && !ctx.has_call_argument_guard(*operand)
+                && !roots.iter().any(|(owner_index, _)| *owner_index == index)
+                && Ownership::php_type_needs_lifetime_tracking(&ctx.builder.value_php_type(*operand))
+                && !matches!(ctx.builder.value_php_type(*operand).codegen_repr(), PhpType::Buffer(_))
+                && ctx.value_is_owning_temporary(LoweredValue {
+                    value: *operand, ir_type: ctx.builder.value_type(*operand),
+                })
             {
                 for pin in pin_in_flight_owners(ctx, &[*operand], span) {
                     roots.push((index, pin.into_temporary_slot()));
@@ -552,10 +579,10 @@ pub(super) fn root_user_call_operands(
     roots
 }
 
-/// Gives a transient string argument one releasing owner before a call that may hand it back.
+/// Gives an independently owned string argument one releasing owner across a call.
 ///
 /// The caller pins the claimed value across the call (see `root_user_call_operands`), so a throw
-/// out of the callee releases it through the unwind chain.
+/// out of the callee releases it through the unwind chain. Native dimension reads also claim their key.
 ///
 /// A fresh transient string (a `.`, interpolation or scalar-to-string result in concat scratch,
 /// or a heap block stamped `CONCAT_TEMP_HEAP_KIND`) has no owner that frees it: the first
@@ -566,8 +593,10 @@ pub(super) fn root_user_call_operands(
 /// retags the block as owned without copying it, so every later persist duplicates it, and the
 /// argument becomes an owning temporary whose release after the call is decided against the
 /// result (`ReleaseUnlessAliases`). Scratch and literal payloads pass through unchanged and their
-/// release stays a validated no-op.
-fn claim_transient_string_operand(
+/// release stays a validated no-op. Already owned strings, including Mixed-to-string casts,
+/// keep the same payload and lease, but gain the same unwind-visible record. Borrowed views
+/// are excluded, and an existing argument-evaluation pin already has the required owner shape.
+pub(super) fn claim_owned_string_operand(
     ctx: &mut LoweringContext<'_, '_>,
     operand: crate::ir::ValueId,
     span: Span,
@@ -575,14 +604,18 @@ fn claim_transient_string_operand(
     if ctx.builder.value_php_type(operand).codegen_repr() != PhpType::Str {
         return operand;
     }
-    // Only a FRESH transient is claimed. A builtin view or a string offset also has a no-op
-    // release, but its pointer belongs to a live string: claiming it would make the post-call
-    // release free that string.
-    if !ctx
+    if ctx.has_call_argument_guard(operand) || value_is_call_argument_evaluation_pin(ctx, operand) {
+        return operand;
+    }
+    // A builtin view or string offset belongs to another live value and cannot be claimed.
+    // Owned casts already owe the same normal release; their exceptional release was missing.
+    let transient = ctx
         .builder
         .value_defining_instruction(operand)
-        .is_some_and(crate::ir::Instruction::creates_transient_string)
-    {
+        .is_some_and(crate::ir::Instruction::creates_transient_string);
+    let detached = ctx.value_is_owning_mixed_string_cast(operand)
+        || ctx.value_is_owned_unboxed_local_load(operand);
+    if !transient && !detached {
         return operand;
     }
     ctx.emit_owned_value(
@@ -851,6 +884,31 @@ pub(crate) fn root_owned_call_operand(
     (rooted, Some(slot))
 }
 
+/// Roots the owned list-to-hash conversions argument lowering could not publish itself.
+///
+/// `coerce_operands_to_params` rebuilds a list bound to a declared `array<K, V>` parameter as an
+/// owned hash and hands it to the argument-evaluation scope of the call. A descriptor
+/// `ExprCall` has no such scope, so the conversion comes back unpublished: nothing would
+/// release it after the call, on the normal path or while unwinding. Each one is moved into a
+/// frame slot here; the caller retires the returned slots once the call has returned.
+pub(super) fn root_unpublished_argument_conversions(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+    span: Span,
+) -> Vec<crate::ir::LocalSlotId> {
+    let mut roots = Vec::new();
+    for operand in operands.iter_mut() {
+        if ctx.builder.value_defining_op(*operand) != Some(Op::ArrayToHash) {
+            continue;
+        }
+        let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
+        let (rooted, slot) = root_owned_call_operand(ctx, value, span);
+        *operand = rooted.value;
+        roots.extend(slot);
+    }
+    roots
+}
+
 /// Makes a rooted operand visible even to a catch that preserves the current PHP activation.
 pub(crate) fn register_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,
@@ -974,8 +1032,8 @@ pub(crate) fn pin_in_flight_owners(
         if !explicit_lifetime_pin && !ctx.value_is_owning_temporary(value) {
             continue;
         }
-        // A load out of a variable is never such a temporary, whatever the provisional
-        // ownership says. `value_is_owned_unboxed_local_load` marks an array/hash/object load
+        // A transferred merge result owns its reference after take_owned_temp cleared the
+        // backing slot. Other local loads stay excluded, whatever provisional ownership says. `value_is_owned_unboxed_local_load` marks an array/hash/object load
         // owned so a release can be emitted and pruned later, and the variable keeps owning the
         // payload either way: publishing it would run the element destructors of a LIVE `$values`
         // during the unwind, before the catch body that PHP runs first
@@ -983,7 +1041,7 @@ pub(crate) fn pin_in_flight_owners(
         if matches!(
             ctx.builder.value_defining_op(value.value),
             Some(Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadGlobal),
-        ) {
+        ) && !ctx.value_is_taken_owned_temp(value.value) {
             continue;
         }
         let ty = ctx.builder.value_php_type(value.value);
@@ -1004,6 +1062,33 @@ pub(crate) fn pin_in_flight_owners(
         records.push(PinnedInFlightOwner::Temporary { temp_name, slot });
     }
     records
+}
+
+/// Carries a pin's storage identity to a consuming store using the ordinary by-reference load protocol.
+pub(crate) fn pinned_transfer_owner(
+    ctx: &mut LoweringContext<'_, '_>, pins: &[PinnedInFlightOwner], span: Span,
+) -> Option<crate::ir::ValueId> {
+    let temp_name = match pins.first()? {
+        PinnedInFlightOwner::Temporary { temp_name, .. } => temp_name,
+        PinnedInFlightOwner::LocalView { .. } => unreachable!("a local-view guard cannot transfer ownership"),
+    };
+    debug_assert_eq!(pins.len(), 1);
+    let owner = ctx.load_local(temp_name, Some(span));
+    ctx.builder.set_value_ownership(owner.value, Ownership::Borrowed);
+    Some(owner.value)
+}
+
+/// Releases argument owners after their call returns, clearing each slot before PHP cleanup.
+/// An escaping destructor therefore finds an empty record rather than releasing the owner twice.
+pub(crate) fn release_pinned_in_flight_owners(
+    ctx: &mut LoweringContext<'_, '_>, records: Vec<PinnedInFlightOwner>, span: Span,
+) {
+    for record in records.into_iter().rev() {
+        let slot = record.into_temporary_slot();
+        ctx.emit_void(Op::ReleaseLocalSlot, Vec::new(), Some(Immediate::LocalSlot(slot)),
+            Op::ReleaseLocalSlot.default_effects(), Some(span));
+        unregister_owned_call_operand(ctx, slot, span);
+    }
 }
 
 /// Retires in-flight pins in reverse publication order once the throwing window has closed.

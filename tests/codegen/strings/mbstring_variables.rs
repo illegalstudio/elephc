@@ -176,8 +176,9 @@ for ($i = 0; $i < 3; $i++) {
     let out = compile_and_run_with_heap_debug(source);
     assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
     assert_eq!(out.stdout, "ISO-8859-1|e9|e8\n".repeat(3));
-    assert_eq!(out.stderr.matches("Warning: mb_convert_variables(): Argument #3 ($var) must be passed by reference, value given\n").count(), 3);
-    assert_eq!(out.stderr.matches("Warning: mb_convert_variables(): Argument #4 must be passed by reference, value given\n").count(), 3);
+    let diagnostics = normalize_diagnostic_text(&out.stderr);
+    assert_eq!(diagnostics.matches("Warning: mb_convert_variables(): Argument #3 ($var) must be passed by reference, value given\n").count(), 3);
+    assert_eq!(diagnostics.matches("Warning: mb_convert_variables(): Argument #4 must be passed by reference, value given\n").count(), 3);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

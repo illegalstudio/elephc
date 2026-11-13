@@ -244,6 +244,6 @@ echo ":", extension_loaded("xml") ? "loaded" : "absent", ":", count(get_loaded_e
         .expect("run with the bridge registered");
     assert_eq!(
         values.output,
-        format!("{}:xml:xmlwriter:loaded:1", base + 2)
+        format!("{}:xml:xmlwriter:loaded:1", base + 3)
     );
 }

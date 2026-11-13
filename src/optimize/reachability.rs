@@ -64,3 +64,5 @@ fn prune_on_compiler_stack(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod simplexml_tests;

@@ -31,11 +31,14 @@ pub(crate) fn dce_method(method: ClassMethod, class_name: &str, parent_name: Opt
         parent_name: parent_name.map(str::to_string),
     };
     let guards = GuardState::for_params(&method.params);
+    let reference_parameters = reference_parameter_names(&method.params,
+        method.variadic.as_deref(), method.variadic_by_ref);
     let return_facts = ReturnBoundaryFacts::new(method.return_type.as_ref(),
         method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
     ClassMethod {
         body: with_class_effect_context(Some(context), || {
-            with_return_boundary_facts(Some(&return_facts), || with_function_scope(|| {
+            with_return_boundary_facts(Some(&return_facts), ||
+                with_reference_parameter_scope(method.by_ref_return, reference_parameters, || {
                 crate::optimize::generator_bodies::rewrite_preserving_yield(method.body, |body| {
                     dce_block_with_guards(body, guards)
                 })
@@ -50,11 +53,14 @@ pub(crate) fn dce_method(method: ClassMethod, class_name: &str, parent_name: Opt
 /// such as methods defined outside class bodies or during incremental passes.
 pub(crate) fn dce_method_without_context(method: ClassMethod) -> ClassMethod {
     let guards = GuardState::for_params(&method.params);
+    let reference_parameters = reference_parameter_names(&method.params,
+        method.variadic.as_deref(), method.variadic_by_ref);
     let return_facts = ReturnBoundaryFacts::new(method.return_type.as_ref(),
         method.params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &method.body);
     ClassMethod {
         body: with_class_effect_context(None, || {
-            with_return_boundary_facts(Some(&return_facts), || with_function_scope(|| {
+            with_return_boundary_facts(Some(&return_facts), ||
+                with_reference_parameter_scope(method.by_ref_return, reference_parameters, || {
                 crate::optimize::generator_bodies::rewrite_preserving_yield(method.body, |body| {
                     dce_block_with_guards(body, guards)
                 })

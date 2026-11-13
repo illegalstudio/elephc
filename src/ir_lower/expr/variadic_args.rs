@@ -248,6 +248,10 @@ pub(super) fn lower_variadic_tail_source_value(
         if let Some(value) = prelowered {
             return lowered_value_from_id(ctx, value);
         }
+        if is_native_selection_reference_argument(ctx, expr) {
+            let alias = stage_native_selection_reference(ctx, expr);
+            return lower_invoker_ref_variadic_arg_marker(ctx, &alias, expr.span);
+        }
         if let ExprKind::Variable(name) = &expr.kind {
             if ctx.boxed_reference_promotion_is_authorized(name, expr.span)
                 && !ctx.is_ref_bound_local(name)
@@ -338,7 +342,8 @@ pub(super) fn variadic_container_element_type(ty: PhpType) -> PhpType {
     }
 }
 
-/// Boxes variadic tail values when the callee expects an `array<mixed>` slot.
+/// Converts a variadic tail value to its collector's element storage: a list becomes the hash
+/// a declared `array<K, V>` element is compiled for, and any value is boxed for `array<mixed>`.
 pub(super) fn coerce_variadic_tail_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -348,6 +353,27 @@ pub(super) fn coerce_variadic_tail_value(
     let PhpType::Array(elem_ty) = array_ty.codegen_repr() else {
         return value;
     };
+    if let Some(hash_ty) = crate::types::packed_argument_hash_storage(
+        &elem_ty,
+        &ctx.builder.value_php_type(value.value),
+    ) {
+        // A list collected by `array<K, V> ...$xs` is rebuilt as the hash the callee reads.
+        // `ArrayToHash` consumes one owner, so the source lends it a reference of its own and
+        // an owning temporary is then released like any other consumed operand.
+        let source = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+        let converted = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![source.value],
+            None,
+            hash_ty,
+            Op::ArrayToHash.default_effects(),
+            Some(span),
+        );
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return converted;
+    }
     if elem_ty.codegen_repr() != PhpType::Mixed {
         return value;
     }

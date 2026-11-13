@@ -24,15 +24,24 @@ pub(super) fn lower_reflection_class_get_static_properties(
         key: Box::new(PhpType::Str),
         value: Box::new(PhpType::Mixed),
     };
+    let owner = ctx.declare_owned_hidden_temp(hash_ty.clone());
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
         Some(Immediate::Capacity(properties.len() as u32)),
-        hash_ty,
+        hash_ty.clone(),
         Op::HashNew.default_effects(),
         Some(expr.span),
     );
+    ctx.store_local(&owner, hash, hash_ty, Some(expr.span));
     for (property, declaring_class, property_ty) in properties {
+        let initialized = lower_reflection_static_property_initialized_by_class_name(
+            ctx, &declaring_class, &property, expr);
+        let present = ctx.builder.create_named_block("reflection.statics.present", Vec::new());
+        let next = ctx.builder.create_named_block("reflection.statics.omitted", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr { cond: initialized.value,
+            then_target: present, then_args: Vec::new(), else_target: next, else_args: Vec::new() });
+        ctx.builder.position_at_end(present);
         let key_expr = Expr::new(ExprKind::StringLiteral(property.clone()), expr.span);
         let key = lower_string_literal(ctx, &property, &key_expr);
         let value = lower_reflection_static_property_get_by_class_name(
@@ -50,8 +59,10 @@ pub(super) fn lower_reflection_class_get_static_properties(
             Op::HashSet.default_effects(),
             Some(expr.span),
         );
+        branch_to(ctx, next);
+        ctx.builder.position_at_end(next);
     }
-    Some(hash)
+    Some(take_owned_temp(ctx, &owner, expr.span))
 }
 
 /// Lowers `ReflectionClass::getStaticPropertyValue()` to a live static-property read.
@@ -366,12 +377,31 @@ pub(super) fn store_static_property_by_class_name_with_op(
     if crate::ir_lower::property_default_errors::for_class(ctx, class_name, span).is_some() {
         return;
     }
+    let (value, argument_pins) = if reflection_class_static_property_target(ctx, class_name, property)
+        .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+    {
+        let source = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
+        // Reflection is a call: its by-value argument remains alive until the setter returns,
+        // independently of the destination publisher's consuming owner.
+        let argument = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span));
+        let argument_pins = super::pin_in_flight_owners(ctx, &[argument.value], span);
+        let stored = ctx.emit_value(Op::MixedClone, vec![argument.value], None, PhpType::Mixed,
+            Op::MixedClone.default_effects(), Some(span));
+        (stored.value, argument_pins)
+    } else { (value, Vec::new()) };
     let data = ctx.intern_string(&format!("{}::{}", class_name, property));
+    let pins = super::pin_in_flight_owners(ctx, &[value], span);
+    let strict = ctx.builder.emit_const_bool(op != Op::StoreReflectionStaticProperty
+        && crate::source::current_strict_types());
+    let mut operands = vec![value, strict];
+    if let Some(owner) = super::pinned_transfer_owner(ctx, &pins, span) { operands.push(owner); }
     ctx.emit_void(
         op,
-        vec![value],
+        operands,
         Some(Immediate::Data(data)),
         op.default_effects(),
         Some(span),
     );
+    super::unpin_in_flight_owners(ctx, pins, span);
+    super::call_operand_owners::release_pinned_in_flight_owners(ctx, argument_pins, span);
 }

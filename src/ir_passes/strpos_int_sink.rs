@@ -121,6 +121,20 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
     let Some(call) = function.instruction(candidate) else {
         return false;
     };
+    // Setting getters return strings/integers, not the setter's boolean payload. Keep
+    // their real PHP cast, and retain preparation for noncanonical setter arguments.
+    let setting_type = match inet_target(call) {
+        Some(RuntimeFnId::MbInternalEncoding | RuntimeFnId::MbLanguage
+            | RuntimeFnId::MbHttpOutput | RuntimeFnId::MbRegexEncoding) => Some(PhpType::Str),
+        Some(RuntimeFnId::MbSubstituteCharacter) => Some(PhpType::Int),
+        _ => None,
+    };
+    if let Some(expected) = setting_type {
+        if !call.operands.first().and_then(|value| function.value(*value))
+            .is_some_and(|value| value.php_type == expected) {
+            return false;
+        }
+    }
     let Some(result) = call.result else {
         return false;
     };
@@ -134,14 +148,14 @@ fn specialize(function: &mut Function, candidate: InstId) -> bool {
     let Some(Immediate::RuntimeCall(
         RuntimeCallTarget::Function(current)
         | RuntimeCallTarget::ProfiledFunction { target: current, .. },
-    )) = call.immediate
+    )) = &mut call.immediate
     else {
         return false;
     };
-    let Some(raw) = raw_variant(current) else {
+    let Some(raw) = raw_variant(*current) else {
         return false;
     };
-    call.immediate = Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(raw)));
+    *current = raw;
     call.result_type = IrType::I64;
     call.result_php_type = PhpType::Int;
     call.result_ownership = Ownership::NonHeap;

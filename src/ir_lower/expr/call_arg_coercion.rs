@@ -31,6 +31,40 @@ pub(super) fn lower_arg_with_signature(
     index: usize,
     arg: &Expr,
 ) -> crate::ir::ValueId {
+    let value = lower_signature_argument(ctx, sig, index, arg);
+    if sig.ref_params.get(index).copied().unwrap_or(false) {
+        root_reference_value_view(ctx, value, arg.span);
+    }
+    value
+}
+
+/// Normalizes one argument while allowing recursive rewrites of addressable places.
+fn lower_signature_argument(
+    ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, arg: &Expr,
+) -> crate::ir::ValueId {
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        && index < crate::types::call_args::regular_param_count(sig)
+        && ctx.call_argument_evaluation_scopes.last().is_some_and(|scope|
+            scope.live_property_reference_arguments && scope.expression_depth == ctx.expression_depth)
+        && sig.params.get(index).is_some_and(|(_, ty)|
+            super::ref_place_args::live_mixed_property_argument(ctx, arg, ty))
+    {
+        let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+        let owner = ctx.declare_ref_cell_owner(&alias, PhpType::Mixed);
+        ctx.builder.mark_reference_argument_owner(owner);
+        // Receiver cleanup can throw after the cell binds, including into a same-frame catch.
+        publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
+        lower_ref_assign_property(ctx, &alias, arg, arg.span);
+        let variable = Expr::new(ExprKind::Variable(alias), arg.span);
+        return lower_arg_with_signature(ctx, sig, index, &variable);
+    }
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        && is_native_selection_reference_argument(ctx, arg)
+    {
+        let alias = stage_native_selection_reference(ctx, arg);
+        let variable = Expr::new(ExprKind::Variable(alias), arg.span);
+        return lower_arg_with_signature(ctx, sig, index, &variable);
+    }
     if sig.ref_params.get(index).copied().unwrap_or(false)
         && matches!(&arg.kind, ExprKind::ArrayAccess { array, .. }
             if instance_object_class_for_ir(ctx, array)
@@ -87,11 +121,58 @@ pub(super) fn lower_arg_with_signature(
     let reference_local = sig.ref_params.get(index).copied().unwrap_or(false)
         .then(|| local_values::lower_reference_local(ctx, arg)).flatten();
     let lowered = reference_local.unwrap_or_else(|| match sig.params.get(index) {
-        Some((_, param_ty)) => lower_expr_for_parameter(ctx, arg, param_ty),
+        Some((_, param_ty)) => lower_expr_for_parameter(
+            ctx, arg, param_ty, super::integer_destinations::parameter_is_source_typed(sig, index),
+        ),
         None => lower_expr(ctx, arg),
     });
     record_pointer_reference_argument(ctx, sig, index, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
+}
+
+/// Shares the checker's XML selection classification before any argument is evaluated.
+pub(super) fn is_native_selection_reference_argument(
+    ctx: &LoweringContext<'_, '_>, arg: &Expr,
+) -> bool {
+    if let ExprKind::NamedArg { value, .. } = &arg.kind {
+        return is_native_selection_reference_argument(ctx, value);
+    }
+    let Some(receiver) = crate::types::param_binding::native_selection_reference_receiver(arg) else {
+        return false;
+    };
+    let source = super::array_cast_source::array_cast_source_type_for_ir(ctx, receiver);
+    let checked = ctx.member_receiver_types.get(&(ctx.loop_storage_scope.clone(), arg.span))
+        .and_then(Option::as_ref).unwrap_or(&source);
+    crate::types::param_binding::native_selection_reference_receiver_type(checked, ctx.classes)
+        || is_native_selection_reference_argument(ctx, receiver)
+}
+
+/// Includes erased receivers whose native family must be selected at the argument's runtime position.
+pub(super) fn may_be_native_selection_reference_argument(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    if let ExprKind::NamedArg { value, .. } = &arg.kind {
+        return may_be_native_selection_reference_argument(ctx, value);
+    }
+    if is_native_selection_reference_argument(ctx, arg) { return true; }
+    if !ctx.classes.contains_key("SimpleXMLElement") { return false; }
+    let Some(receiver) = crate::types::param_binding::native_selection_reference_receiver(arg) else { return false; };
+    let ty = super::array_cast_source::array_cast_source_type_for_ir(ctx, receiver);
+    matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        || singular_object_class(&ty).is_some_and(|(class, _)| class.is_empty() || ctx.interfaces.contains_key(class))
+        || may_be_native_selection_reference_argument(ctx, receiver)
+}
+
+/// Moves the selected view into a scoped reference cell so no old-value lease spans the call.
+pub(super) fn stage_native_selection_reference(
+    ctx: &mut LoweringContext<'_, '_>, arg: &Expr,
+) -> String {
+    let mut selection = arg;
+    while let ExprKind::NamedArg { value, .. } = &selection.kind { selection = value; }
+    let lowered = property_access::lower_property_reference_receiver(ctx, selection);
+    let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
+    store_value_into_temp(ctx, &alias, PhpType::Mixed, lowered, arg.span);
+    ctx.promote_local_mixed_ref_cell(&alias, Some(arg.span));
+    publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
+    alias
 }
 
 /// Records a local passed to a pointer by-reference parameter for the final storage check.
@@ -230,6 +311,11 @@ pub(super) fn capture_call_argument_value(
 }
 
 /// Rechecks a declared object reference when an earlier call has changed its boxed payload.
+///
+/// Only a non-nullable class parameter is checked here: inside the callee its slot reads an
+/// object pointer. A union of `null`, arrays and objects (`?A &$v`, `?array &$v`) is a boxed
+/// cell in the callee and is checked on entry instead, after every argument was evaluated
+/// (`crate::ir_lower::expr::guard_reference_parameter_entry`).
 fn guard_boxed_object_reference_argument(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -258,7 +344,7 @@ fn guard_boxed_object_reference_argument(
     if ctx.local_type(name).codegen_repr() != PhpType::Mixed {
         return;
     }
-    let condition = if class_name.is_empty() || class_name.eq_ignore_ascii_case("object") {
+    let mut condition = if class_name.is_empty() || class_name.eq_ignore_ascii_case("object") {
         let value = lower_expr(ctx, arg);
         let condition = ctx.emit_value(
             Op::TypePredicate,
@@ -280,6 +366,21 @@ fn guard_boxed_object_reference_argument(
             arg,
         )
     };
+    // Native reads retain a useful object hint even when a missing continuation is null.
+    // Let the shared callee entry report that null with its exact PHP callable label;
+    // all other invalid reference payloads still take the existing class refusal here.
+    if crate::types::builtin_classes::native_object_sink_needs_null_guard(
+        &PhpType::Object(class_name.to_string()), ctx.classes, ctx.interfaces,
+    ) {
+        let value = lower_expr(ctx, arg);
+        let null = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,
+            Op::IsNull.default_effects(), Some(arg.span));
+        if ctx.value_needs_release_after_use(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(arg.span));
+        }
+        condition = ctx.emit_value(Op::IBitOr, vec![condition.value, null.value], None,
+            PhpType::Bool, Op::IBitOr.default_effects(), Some(arg.span));
+    }
     let accepted = ctx.builder.create_named_block("object.ref.accepted", Vec::new());
     let rejected = ctx.builder.create_named_block("object.ref.rejected", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -305,6 +406,37 @@ fn guard_boxed_object_reference_argument(
     ctx.builder.position_at_end(accepted);
 }
 
+/// Whether a by-reference parameter of type `ty` takes a boxed cell a promoted local can share:
+/// `mixed`, an object, a union of objects only (`A|B`), or a NULLABLE union of objects, arrays
+/// and floats (`?Base`, `?array`, `?float`). The checker authorizes promotion only for a whole
+/// local it gave boxed storage: one that may receive `null` (or a sibling class) through such a
+/// parameter, which its typed slot could not hold.
+fn boxed_reference_param_type(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Mixed | PhpType::Object(_) => true,
+        PhpType::Union(members) => {
+            let objects_only = members.iter().any(|member| matches!(member, PhpType::Object(_)))
+                && members
+                    .iter()
+                    .all(|member| matches!(member, PhpType::Object(_) | PhpType::Void));
+            let nullable_heap_or_float = members.iter().any(|member| matches!(member, PhpType::Void))
+                && members.iter().all(|member| {
+                    member.is_php_array()
+                        || matches!(
+                            member,
+                            PhpType::Void
+                                | PhpType::Object(_)
+                                | PhpType::Array(_)
+                                | PhpType::AssocArray { .. }
+                                | PhpType::Float
+                        )
+                });
+            objects_only || nullable_heap_or_float
+        }
+        _ => false,
+    }
+}
+
 /// Gives an eligible whole-local reference the canonical boxed payload required by the callee.
 ///
 /// The checker permits this only for an eligible whole local. An existing object alias already
@@ -319,19 +451,38 @@ fn promote_boxed_reference_local_argument(
         || !sig
             .params
             .get(index)
-            .is_some_and(|(_, ty)| matches!(ty, PhpType::Mixed | PhpType::Object(_)))
+            .is_some_and(|(_, ty)| boxed_reference_param_type(ty))
     {
         return;
     }
     let ExprKind::Variable(name) = &arg.kind else {
         return;
     };
-    if !ctx.boxed_reference_promotion_is_authorized(name, arg.span) {
+    if !ctx.boxed_reference_promotion_is_authorized(name, arg.span)
+        && ctx.local_type(name) != PhpType::Mixed
+        && !constructor_argument_owns_mixed_reference(ctx, index)
+    {
         return;
     }
-    if !ctx.is_ref_bound_local(name) && ctx.local_is_promotable_to_ref_cell(name) {
+    let owner_needs_promotion = ctx.local_type(name).codegen_repr() == PhpType::Mixed
+        && ctx.ref_cell_owner_slot(name).is_some_and(|owner| !ctx.slot_is_initialized(owner));
+    if (!ctx.is_ref_bound_local(name) || owner_needs_promotion) && ctx.local_can_own_reference_cell(name) {
         ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
     }
+}
+
+/// Applies the selected constructor's storage contract after dynamic class dispatch.
+fn constructor_argument_owns_mixed_reference(ctx: &LoweringContext<'_, '_>, index: usize) -> bool {
+    let Some((class, method)) = ctx.call_description.as_deref().and_then(|name| name.rsplit_once("::")) else {
+        return false;
+    };
+    if !method.eq_ignore_ascii_case("__construct") { return false; }
+    let Some((owner, info)) = crate::types::constructor_owner(ctx.classes, class) else { return false; };
+    let implementation = info.method_impl_classes.get("__construct").map(String::as_str).unwrap_or(owner);
+    let Some(info) = ctx.classes.get(implementation) else { return false; };
+    let Some(property) = info.constructor_param_to_prop.get(index).and_then(Option::as_ref) else { return false; };
+    info.visible_property_index(property).is_some_and(|slot|
+        info.property_slot_owns_reference(slot) && info.properties[slot].1 == PhpType::Mixed)
 }
 
 /// Materializes a proven callable array as the descriptor required by a Callable slot.
@@ -396,6 +547,19 @@ fn promote_reference_return_local_argument(
     ctx.promote_local_ref_cell(name, Some(arg.span));
 }
 
+/// Protects a reference snapshot once while retaining its original addressable load operand.
+fn root_reference_value_view(
+    ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId, span: Span,
+) {
+    if ctx.builder.value_defining_op(value) != Some(Op::LoadRefCellValue) { return; }
+    let depth = ctx.expression_depth;
+    let Some(scope) = ctx.call_argument_evaluation_scopes.last_mut()
+        .filter(|scope| scope.expression_depth == depth) else { return; };
+    if !scope.rooted_reference_value_views.insert(value) { return; }
+    let lowered = lowered_value_from_id(ctx, value);
+    let _protected_view = root_evaluated_call_argument(ctx, lowered, span);
+}
+
 /// Protects an incidental value view of an earlier reference place without replacing the place.
 ///
 /// A local whose final frame storage widens to `Mixed` can make its narrower `LoadLocal<Str>`
@@ -412,9 +576,11 @@ fn root_prior_argument_preserving_reference_place(
 ) -> crate::ir::ValueId {
     let lowered = lowered_value_from_id(ctx, value);
     if sig.ref_params.get(index).copied().unwrap_or(false) {
-        if matches!(arg.kind, ExprKind::Variable(_))
-            && sig.params.get(index).is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Str)
-            && ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str
+        if ctx.builder.value_defining_op(value) == Some(Op::LoadRefCellValue) {
+            root_reference_value_view(ctx, value, arg.span);
+        } else if matches!(arg.kind, ExprKind::Variable(_))
+                && sig.params.get(index).is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Str)
+                && ctx.builder.value_php_type(value).codegen_repr() == PhpType::Str
         {
             let _protected_view = root_evaluated_call_argument(ctx, lowered, arg.span);
         }
@@ -429,7 +595,7 @@ fn root_prior_argument_preserving_reference_place(
 /// conversion is also explicit here because it allocates caller-owned storage whose lifetime
 /// depends on the call's return/argument alias contract; leaving that conversion hidden in ABI
 /// materialization would give EIR no value to transfer or release after the call.
-pub(super) fn coerce_scalar_arg_to_param_storage(
+pub(crate) fn coerce_scalar_arg_to_param_storage(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     index: usize,
@@ -587,6 +753,38 @@ pub(super) fn unbox_array_param_storage(
     result
 }
 
+/// Extracts a boxed array for a declared `array<K, V>` parameter, as the hash it is compiled for.
+///
+/// This is the typed contract `unbox_array_param_storage` says needs a layout check: a declared
+/// PHP `array` (or any boxed array value) holds a packed list or a hash depending on what was
+/// stored, and a list is a valid keyed array, but the callee reads hash storage. The payload is
+/// unboxed as a list VIEW and handed to `Op::ArrayToHash`, which reads the runtime heap kind:
+/// a hash is passed through as it is, a list is rebuilt. Either way the result owns one
+/// reference, taken over from the unbox.
+fn unbox_hash_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    param_ty: PhpType,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let PhpType::AssocArray { value: entry_ty, .. } = param_ty.codegen_repr() else {
+        return unbox_array_param_storage(ctx, value, param_ty, span);
+    };
+    let list_view_ty = PhpType::Array(entry_ty);
+    let effects = Op::mixed_unbox_effects(&list_view_ty);
+    let list_view =
+        ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, list_view_ty, effects, span);
+    release_coerced_source_if_owned(ctx, value, span);
+    ctx.emit_value(
+        Op::ArrayToHash,
+        vec![list_view.value],
+        None,
+        param_ty,
+        Op::ArrayToHash.default_effects(),
+        span,
+    )
+}
+
 /// Extracts a statically checked callable whose merge storage became a Mixed cell.
 /// The backend retains the descriptor, so the extracted EIR value must own that lease.
 pub(super) fn unbox_callable_param_storage(
@@ -672,15 +870,16 @@ fn guard_union_object_param(
             span,
         )
     };
-    let class_data = ctx.intern_class_name(class_name);
-    let condition = ctx.emit_value(
-        Op::InstanceOf,
-        vec![value.value],
-        Some(Immediate::Data(class_data)),
-        PhpType::Bool,
-        Op::InstanceOf.default_effects(),
-        span,
-    );
+    let bare_object = class_name.is_empty() || class_name.eq_ignore_ascii_case("object");
+    let condition = if bare_object {
+        ctx.emit_value(Op::TypePredicate, vec![value.value],
+            Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+            PhpType::Bool, Op::TypePredicate.default_effects(), span)
+    } else {
+        let class_data = ctx.intern_class_name(class_name);
+        ctx.emit_value(Op::InstanceOf, vec![value.value], Some(Immediate::Data(class_data)),
+            PhpType::Bool, Op::InstanceOf.default_effects(), span)
+    };
     let accepted = ctx.builder.create_named_block("object.arg.accepted", Vec::new());
     let rejected = ctx.builder.create_named_block("object.arg.rejected", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -709,7 +908,7 @@ fn guard_union_object_param(
         callable,
         index + 1,
         param_name,
-        class_name
+        if bare_object { "object" } else { class_name }
     );
     let suffix = format!(" given, called in {} on line {}", source, arg.span.line);
     let given = match given {
@@ -854,9 +1053,32 @@ pub(super) fn coerce_operands_to_params(
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
             let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
-            let coerced = unbox_array_param_storage(ctx, lowered, param_ty.clone(), None);
+            let declared_hash = sig.declared_params.get(index).copied().unwrap_or(false)
+                && matches!(param_ty, PhpType::AssocArray { .. });
+            let coerced = if declared_hash {
+                unbox_hash_param_storage(ctx, lowered, param_ty.clone(), None)
+            } else {
+                unbox_array_param_storage(ctx, lowered, param_ty.clone(), None)
+            };
             operands[index] =
                 root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
+        } else if let Some(hash_ty) = packed_argument_param_storage(ctx, sig, index, value) {
+            // `ArrayToHash` consumes one owner of its operand, so the argument (a borrowed
+            // local, or a temporary the pass above already rooted) lends it a reference of its
+            // own. The caller's list is untouched and the callee receives an independent hash.
+            let lowered = lowered_value_from_id(ctx, value);
+            let source =
+                crate::ir_lower::ownership::acquire_if_refcounted(ctx, lowered, None);
+            let converted = ctx.emit_value(
+                Op::ArrayToHash,
+                vec![source.value],
+                None,
+                hash_ty,
+                Op::ArrayToHash.default_effects(),
+                None,
+            );
+            operands[index] =
+                root_evaluated_call_argument(ctx, converted, Span::dummy()).value;
         } else if sig.declared_params.get(index).copied().unwrap_or(false) {
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
@@ -901,8 +1123,29 @@ fn operand_needs_param_coercion(
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
+        || packed_argument_param_storage(ctx, sig, index, operands[index]).is_some()
         || (sig.declared_params.get(index).copied().unwrap_or(false)
             && crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty).is_some())
+}
+
+/// Returns the hash a packed list operand is rebuilt into for a declared by-value hash
+/// parameter, or `None` when the operand already has the parameter's storage.
+///
+/// Only user-declared parameter types take part: a builtin's signature describes what its
+/// runtime helper accepts, and those helpers read either layout through the heap kind.
+fn packed_argument_param_storage(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    operand: crate::ir::ValueId,
+) -> Option<PhpType> {
+    if !sig.declared_params.get(index).copied().unwrap_or(false)
+        || sig.ref_params.get(index).copied().unwrap_or(false)
+    {
+        return None;
+    }
+    let (_, param_ty) = sig.params.get(index)?;
+    crate::types::packed_argument_hash_storage(param_ty, &ctx.builder.value_php_type(operand))
 }
 
 /// Normalizes concrete local arrays to the storage required by their by-reference parameter.
@@ -928,6 +1171,14 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
         promote_reference_return_local_argument(ctx, sig, index, arg);
         return Some(ctx.load_local(name, Some(arg.span)).value);
     }
+    // Only a written array type is a layout contract; a plain `array` hint keeps the paths below.
+    if crate::types::is_written_reference_array_param(&sig.ref_params, &sig.param_type_exprs, index) {
+        if let Some(storage_ty) =
+            crate::types::packed_reference_argument_storage(param_ty, &ctx.local_type(name))
+        {
+            return Some(convert_packed_local_for_reference(ctx, sig, index, arg, name, storage_ty));
+        }
+    }
     if !by_ref_array_arg_needs_mixed_storage(ctx, name, param_ty) {
         return None;
     }
@@ -944,6 +1195,64 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
     ctx.store_call_normalized_local(name, converted, array_ty, Some(arg.span));
     promote_reference_return_local_argument(ctx, sig, index, arg);
     Some(ctx.load_local(name, Some(arg.span)).value)
+}
+
+/// Converts a typed list local, in place, to the layout a declared by-reference container
+/// parameter is compiled for: a hash (`array<K, V>`) or a list of boxed values (`array<mixed>`).
+///
+/// The callee reads and writes the caller's variable through the reference, so the variable
+/// has to hold the declared layout before its address is taken. The conversion consumes the
+/// local's owner and the local is re-typed and stored back, which also records the conversion
+/// for the statement fixed point, so a call inside a loop or a branch converts the local at
+/// the region entry instead of mid-flight.
+///
+/// The checker accepts only an ordinary local here (rule 4 of `require_boxed_by_ref_storage`).
+/// A slot lowering cannot convert in place after all is refused rather than bound unconverted.
+fn convert_packed_local_for_reference(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+    name: &str,
+    storage_ty: PhpType,
+) -> crate::ir::ValueId {
+    if ctx.is_ref_bound_local(name)
+        || !crate::ir_lower::stmt::local_slot_is_convertible_here(ctx, name)
+    {
+        crate::ir_lower::diagnostics::refuse(
+            arg.span,
+            "A list variable that other code already reads as a typed list cannot be bound to a \
+             by-reference parameter with another array layout; declare the variable with the \
+             parameter's type",
+        );
+    }
+    let local = ctx.load_local(name, Some(arg.span));
+    if matches!(storage_ty.codegen_repr(), PhpType::AssocArray { .. }) {
+        let hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![local.value],
+            None,
+            storage_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(arg.span),
+        );
+        // The callee reaches the hash through this slot's address, so the slot has to keep
+        // holding the raw container pointer. A plain re-typing store would widen the frame
+        // slot to a boxed cell instead, and the callee would then read the box as the table.
+        ctx.store_retyped_container_local(name, hash, storage_ty, Some(arg.span));
+    } else {
+        let boxed = ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![local.value],
+            None,
+            storage_ty.clone(),
+            Op::ArrayToMixed.default_effects(),
+            Some(arg.span),
+        );
+        ctx.store_mutated_local(name, boxed, storage_ty, Some(arg.span));
+    }
+    promote_reference_return_local_argument(ctx, sig, index, arg);
+    ctx.load_local(name, Some(arg.span)).value
 }
 
 /// Lowers `$array[$index]` as a direct by-reference argument cell address.
@@ -964,7 +1273,42 @@ pub(super) fn lower_by_ref_array_element_arg_with_signature(
     };
     let local_ty = ctx.local_type(array_name).codegen_repr();
     let (_, param_ty) = sig.params.get(index)?;
-    if let PhpType::AssocArray { .. } = local_ty {
+    if let PhpType::AssocArray { key, value } = &local_ty {
+        // A ref-bound table is shared with another frame that keeps its declared layout; the
+        // typed write-back rewrite in `ref_place_args` handles those elements instead.
+        if param_ty.codegen_repr() == PhpType::Mixed
+            && matches!(value.codegen_repr(), PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_))
+        {
+            // Widening boxes raw pointer, buffer and packed words as plain integers, which would
+            // corrupt every entry of the hash before the callee even runs.
+            crate::ir_lower::diagnostics::refuse(
+                arg.span,
+                "A typed array element holding pointers, or whose own entries are arrays or \
+                 objects, cannot be passed to a wider by-reference parameter; declare the \
+                 parameter with the element's exact type",
+            );
+        } else if param_ty.codegen_repr() == PhpType::Mixed
+            && value.codegen_repr() != PhpType::Mixed
+            && !ctx.is_ref_bound_local(array_name)
+        {
+            // Same as the indexed branch below: the callee can store any value through this
+            // entry, so widen the hash's entries to boxed Mixed cells first. Binding the concrete
+            // entry left the local typed `int` while the callee stored an object in it, and every
+            // later typed read decoded that object pointer as an integer.
+            let parent = ctx.load_local(array_name, Some(array.span));
+            let owned =
+                crate::ir_lower::ownership::acquire_if_refcounted(ctx, parent, Some(arg.span));
+            let boxed_ty = PhpType::AssocArray { key: key.clone(), value: Box::new(PhpType::Mixed) };
+            let converted = ctx.emit_value(
+                Op::HashToMixed,
+                vec![owned.value],
+                None,
+                boxed_ty.clone(),
+                Op::HashToMixed.default_effects(),
+                Some(arg.span),
+            );
+            ctx.store_call_argument_local(array_name, converted, boxed_ty, Some(arg.span));
+        }
         let hash_value = ctx.load_local(array_name, Some(array.span));
         let element_index = lower_expr(ctx, element_index);
         let cell = ctx.emit_value(

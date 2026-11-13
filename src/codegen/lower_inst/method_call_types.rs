@@ -68,13 +68,10 @@ pub(super) enum RefArgCellLifetime {
     /// The caller owns a managed lease until return or throw. An escaping closure may
     /// retain the cell independently, so this lifetime does not prohibit reference escape.
     CallOnly,
-    /// The callee may KEEP the reference. A constructor that promotes a by-reference
-    /// parameter (`__construct(public int &$value = 1)`) BORROWS the cell for the whole life
-    /// of the object it builds — `crate::types::checker`'s
-    /// `apply_reference_property_promotions` documents that such a property holds a borrowed
-    /// cell rather than an owned one — so the cell must be heap storage that outlives this
-    /// frame. It is never freed, which is a narrower pre-existing defect (one cell per
-    /// constructed object, not one per call) that only the object model can fix.
+    /// The callee may keep an unowned raw reference property. Exact Mixed constructor
+    /// references retain managed cells and use CallOnly. Other promoted payloads still
+    /// borrow their cell for the object's lifetime, so their persistent fallback outlives
+    /// this frame. That legacy fallback is not freed until their ownership model changes.
     MayOutliveCall,
 }
 
@@ -93,13 +90,26 @@ pub(super) struct RefArgTempCell {
     pub(super) retain_existing: bool,
 }
 
-/// A caller-side scalar local boxed into a temporary Mixed by-reference cell.
+/// A caller-side local boxed into a temporary Mixed by-reference cell.
+///
+/// The cell is published as a call-operand owner, so an exception thrown by the callee
+/// releases it (and the value it holds) while unwinding; the normal path unlinks it before
+/// writing the value back.
 pub(super) struct RefArgWriteback {
     pub(super) param_index: usize,
-    pub(super) source_value: ValueId,
+    /// Further by-reference parameters bound to the same local (`f($v, $v)`): they share this
+    /// cell, so every write through any of them is seen by the others and written back once.
+    pub(super) alias_param_indexes: Vec<usize>,
     pub(super) source_slot: LocalSlotId,
     pub(super) source_ty: PhpType,
     pub(super) cell_offset: usize,
+}
+
+impl RefArgWriteback {
+    /// Whether by-reference parameter `param_index` passes this writeback's cell.
+    pub(super) fn covers(&self, param_index: usize) -> bool {
+        self.param_index == param_index || self.alias_param_indexes.contains(&param_index)
+    }
 }
 
 /// Runtime dispatch path for EIR `RuntimeCall` instructions that mean ArrayAccess indexing.

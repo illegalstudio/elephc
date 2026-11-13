@@ -632,6 +632,7 @@ pub(crate) fn insert_enum_metadata(
             readonly_properties,
             reference_properties,
             owned_reference_properties: HashSet::new(),
+            owned_reference_property_slots: HashSet::new(),
             promoted_properties: HashSet::new(),
             property_reference_slots,
             abstract_properties: HashSet::new(),

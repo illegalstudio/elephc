@@ -534,10 +534,12 @@ echo "|", $db->errno;
 
 /// SECURITY: executable comments cannot smuggle a second statement through
 /// `query()`. MySQL's `/*! ... */` and MariaDB's `/*M! ... */` (bare and
-/// versioned) are live SQL — on MariaDB the server expands `/*M!` and would
-/// EXECUTE the hidden statement — so all three are rejected client-side with
-/// 1064. A plain `/* */` and the case-mismatched `/*m!` (inert on the server,
-/// verified on MariaDB 11.8) stay ordinary comments.
+/// versioned) are live SQL where the server expands them, but a mysqli session
+/// runs without server-side multi-statements (like mysqlnd), so the hidden
+/// second statement is a 1064 syntax error from the server instead of being
+/// executed. MySQL does not expand `/*M!` at all, so there it is an ordinary
+/// comment and the query runs, as under php. The case-mismatched `/*m!` is
+/// inert on both servers.
 #[test]
 #[ignore]
 fn test_mysqli_query_rejects_executable_comment_statement() {
@@ -554,13 +556,18 @@ $r = $db->query("SELECT 3 /*m! ; not a second statement */ AS v");
 echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
 "#,
     ));
-    assert_eq!(out, "F|1064|F|1064|F|1064|3");
+    // MySQL treats MariaDB's `/*M!` as a plain comment, so there the query runs (and
+    // server-side multi-statements are off, so nothing hidden can execute either).
+    assert!(
+        ["F|1064|F|1064|F|1064|3", "F|1064|ok|0|ok|0|3"].contains(&out.as_str()),
+        "unexpected output: {out}"
+    );
 }
 
-/// `close()` discards an unconsumed buffered result, so `real_connect` +
-/// `query` on the same object afterwards starts clean instead of raising a
-/// spurious 2014 (php-src frees all pending state with the connection).
-/// Covers both the `real_query` and `multi_query` pending shapes.
+/// Reconnecting discards an unconsumed result: `connect()` on a closed object
+/// (php reopens it) and `real_connect()` on a link with a pending multi_query
+/// batch both start clean instead of raising a spurious 2014. `real_connect()`
+/// on a closed object is php's "already closed" Error.
 #[test]
 #[ignore]
 fn test_mysqli_close_clears_pending_result_for_reconnect() {
@@ -569,17 +576,22 @@ fn test_mysqli_close_clears_pending_result_for_reconnect() {
 mysqli_report(MYSQLI_REPORT_OFF);
 $db->real_query("SELECT 1");
 $db->close();
-echo $db->real_connect($host, $user, $pass, $dbname, $port) ? "re" : "no";
+echo $db->connect($host, $user, $pass, $dbname, $port) ? "re" : "no";
 $r = $db->query("SELECT 2");
 echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
 $db->multi_query("SELECT 3 AS a; SELECT 4 AS b");
-$db->close();
 echo "|", $db->real_connect($host, $user, $pass, $dbname, $port) ? "re" : "no";
 $r2 = $db->query("SELECT 5");
 echo "|", ($r2 instanceof mysqli_result) ? $r2->fetch_column(0) : ("no:" . $db->errno);
+$db->close();
+try {
+    $db->real_connect($host, $user, $pass, $dbname, $port);
+} catch (Error $e) {
+    echo "|", $e->getMessage();
+}
 "#,
     ));
-    assert_eq!(out, "re|2|re|5");
+    assert_eq!(out, "re|2|re|5|mysqli object is already closed");
 }
 
 /// The two-step `stmt_init()` + `prepare()` form honors the
@@ -614,15 +626,11 @@ echo "|", ($res instanceof mysqli_result) ? $res->fetch_column(0) : "no";
     assert_eq!(out, "prep|F|2014|F|2014|drained|prep2|exec|5");
 }
 
-/// A server error while producing the first result set of a multi_query
-/// batch (a scalar subquery returning 3 rows, errno 1242 on both MySQL and
-/// MariaDB) is reported as a failure — errno set, no partial result
-/// buffered, batch closed, connection still usable — never swallowed as a
-/// truncated success. Under the bridge's buffered execution the error
-/// surfaces on the first step; the same assertions guard the drain loop's
-/// mid-set path if execution ever streams. (Provoking a genuinely mid-set
-/// error needs a stored function, but CREATE FUNCTION fails with 1419 on
-/// binlog-enabled MySQL without SUPER — the CI user has no such privilege.)
+/// A server error while producing the first result set of a multi_query batch (a scalar
+/// subquery returning 3 rows, errno 1242 on both MySQL and MariaDB): like mysqlnd,
+/// `multi_query()` itself succeeds — it reads only the set's header and metadata — and the
+/// error surfaces when `store_result()` reads the rows (no partial result, batch closed,
+/// connection still usable). Expected output is php 8.3 mysqlnd's.
 #[test]
 #[ignore]
 fn test_mysqli_multi_query_reports_mid_set_error() {
@@ -638,26 +646,35 @@ echo "|", $db->store_result() === false ? "nores" : "res";
 echo "|", $db->more_results() ? "more" : "nomore";
 $r = $db->query("SELECT 7");
 echo "|", ($r instanceof mysqli_result) ? $r->fetch_column(0) : ("no:" . $db->errno);
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$db->multi_query("SELECT (SELECT v FROM mde) AS s FROM mde; SELECT 99");
+try {
+    $db->store_result();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+echo "|", $db->query("SELECT 8")->fetch_column(0);
 "#,
     ));
-    assert_eq!(out, "F|1242|nores|nomore|7");
+    assert_eq!(out, "mq|0|nores|nomore|7|1242|8");
 }
 
-/// Compound-body DDL is NOT exempt from the multi-statement scan: through
-/// `query()` it fails 1064 (including the `... END; DROP ...` injection-tail
-/// shape), while `multi_query()` runs it as one statement and `CALL` works.
+/// Multi-statements are off on a mysqli session, like mysqlnd's: compound-body DDL is ONE
+/// statement, so `query()` creates the procedure, while a `... END; DROP ...` injection
+/// tail is rejected by the server itself (1064). `multi_query()` turns them on, `CALL`
+/// walks both result sets, and the next `query()` is back to single statements.
 #[test]
 #[ignore]
-fn test_mysqli_compound_ddl_requires_multi_query() {
+fn test_mysqli_session_runs_without_multi_statements() {
     let out = compile_and_run(&my_program(
         r#"
 mysqli_report(MYSQLI_REPORT_OFF);
 $db->query("DROP PROCEDURE IF EXISTS mproc");
-echo $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") === false ? "F" : "leaked";
-echo "|", $db->errno;
-echo "|", $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 1; END; DROP TABLE users") === false ? "F" : "leaked";
-echo "|", $db->errno;
-echo "|", $db->multi_query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") ? "ddl" : ("no:" . $db->errno);
+echo $db->query("CREATE PROCEDURE mproc() BEGIN SELECT 41; SELECT 42 AS v; END") === true ? "created" : ("F:" . $db->errno);
+echo "|", $db->query("CREATE PROCEDURE mproc2() BEGIN SELECT 1; END; DROP TABLE users") === false ? "F" : "leaked";
+echo "|", $db->errno, "|", $db->sqlstate;
+echo "|", $db->query("SELECT 1; SELECT 2") === false ? "F" : "leaked", "|", $db->errno;
 echo "|", $db->multi_query("CALL mproc()") ? "call" : "no";
 $r1 = $db->store_result();
 echo "|", ($r1 instanceof mysqli_result) ? $r1->fetch_column(0) : "no";
@@ -668,11 +685,20 @@ while ($db->more_results()) {
         echo "|", $rn->fetch_column(0);
     }
 }
+echo "|", $db->multi_query("SELECT 5; SELECT 6") ? "mq" : "no";
+do {
+    $set = $db->store_result();
+    if ($set instanceof mysqli_result) {
+        $set->free();
+    }
+} while ($db->next_result());
+echo "|", $db->query("SELECT 7; SELECT 8") === false ? "F" : "leaked", "|", $db->errno;
+echo "|", $db->get_connection_stats()["com_stmt_set_option"];
 $db->query("DROP PROCEDURE mproc");
 echo "|done";
 "#,
     ));
-    assert_eq!(out, "F|1064|F|1064|ddl|call|41|42|done");
+    assert_eq!(out, "created|F|1064|42000|F|1064|call|41|42|mq|F|1064|2|done");
 }
 
 /// `fetch_field_direct()->decimals` carries MySQL's wire "decimals" byte
@@ -700,12 +726,11 @@ $db->query("DROP TABLE md");
     assert_eq!(out, "2|0");
 }
 
-/// Pins the documented bind_param divergence: values are captured at bind
-/// time, so mutating the variable WITHOUT re-binding executes with the value
-/// seen at bind (PHP's references would read the mutated value instead).
+/// `bind_param()` binds REFERENCES (php's semantics): mutating the variable
+/// after binding and WITHOUT re-binding executes with the mutated value.
 #[test]
 #[ignore]
-fn test_mysqli_stmt_bind_param_snapshot_divergence() {
+fn test_mysqli_stmt_bind_param_reads_the_variable_at_execute() {
     let out = compile_and_run(&my_program(
         r#"
 $db->query("DROP TABLE IF EXISTS msnap");
@@ -720,7 +745,7 @@ echo ($r instanceof mysqli_result) ? $r->fetch_column(0) : "no";
 $db->query("DROP TABLE msnap");
 "#,
     ));
-    assert_eq!(out, "Ada");
+    assert_eq!(out, "Ben");
 }
 
 /// Connection information, ping, charset, autocommit, and a commit round-trip
@@ -817,9 +842,9 @@ $sel->execute();
 $r = $sel->get_result();
 if ($r instanceof mysqli_result) {
     $r->fetch_field();
-    echo "|field_tell=", $r->field_tell();
+    echo "|field_tell=", $r->current_field;
     $r->field_seek(0);
-    echo "|after_seek=", $r->field_tell();
+    echo "|after_seek=", $r->current_field;
 }
 $sel->close();
 $db->query("DROP TABLE msi");
@@ -829,4 +854,2608 @@ $db->query("DROP TABLE msi");
         out,
         "prep|params=1|stmt_insert_id=1|stmt_affected=1|stmt_sqlstate=00000|charset=utf8mb4|field_tell=1|after_seek=0"
     );
+}
+
+/// `bind_param()` and `bind_result()` bind BY REFERENCE, exactly like php:
+/// each `execute()` reads the bound variables' CURRENT values, and every
+/// `fetch()` writes the row back into the result variables (`null` once the
+/// set is exhausted). The same statement re-executes with fresh values.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_reference_binding_and_fetch() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS msr");
+$db->query("CREATE TABLE msr (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(20), score DOUBLE)");
+$ins = $db->prepare("INSERT INTO msr (name, score) VALUES (?, ?)");
+$name = "";
+$score = 0.0;
+$ins->bind_param("sd", $name, $score);
+foreach ([["Ada", 1.5], ["Ben", 2.25], ["Cy", 3.0]] as $row) {
+    $name = $row[0];
+    $score = $row[1];
+    $ins->execute();
+}
+echo "last=", $db->insert_id;
+$sel = $db->prepare("SELECT id, name, score FROM msr WHERE id >= ? ORDER BY id");
+echo "|fields=", $sel->field_count;
+$min = 1;
+$sel->bind_param("i", $min);
+$id = null;
+$n = null;
+$s = null;
+$sel->bind_result($id, $n, $s);
+$sel->execute();
+while ($sel->fetch()) {
+    echo "|", $id, ":", $n, ":", $s;
+}
+var_dump($sel->fetch());
+$min = 3;
+$sel->execute();
+$sel->fetch();
+echo "again=", $id, ":", $n;
+// Like mysqlnd, the unread EOF keeps the link out of sync until the result is freed.
+$sel->free_result();
+$db->query("DROP TABLE msr");
+"#,
+    ));
+    assert_eq!(out, "last=3|fields=3|1:Ada:1.5|2:Ben:2.25|3:Cy:3NULL\nagain=3:Cy");
+}
+
+/// `store_result()` buffers the statement's rows client-side: `num_rows` /
+/// `num_rows()` are exact, `data_seek()` rewinds `fetch()`, and
+/// `result_metadata()` describes the columns before execution.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_store_result_data_seek_and_metadata() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mss");
+$db->query("CREATE TABLE mss (id INT PRIMARY KEY, label VARCHAR(10))");
+$db->query("INSERT INTO mss VALUES (1, 'a'), (2, 'b'), (3, 'c')");
+$stmt = $db->prepare("SELECT id, label FROM mss ORDER BY id");
+$meta = $stmt->result_metadata();
+echo "meta=", $meta->field_count, ":", $meta->fetch_field()->name, ":", $meta->num_rows;
+echo "|id>0=", $stmt->id > 0 ? "y" : "n";
+$stmt->execute();
+$stmt->store_result();
+echo "|rows=", $stmt->num_rows, "/", $stmt->num_rows();
+$id = 0;
+$label = "";
+$stmt->bind_result($id, $label);
+$stmt->data_seek(2);
+$stmt->fetch();
+echo "|seek2=", $id, $label;
+$stmt->data_seek(0);
+$stmt->fetch();
+echo "|seek0=", $id, $label;
+$stmt->free_result();
+$db->query("DROP TABLE mss");
+"#,
+    ));
+    assert_eq!(out, "meta=2:id:0|id>0=y|rows=3/3|seek2=3c|seek0=1a");
+}
+
+/// `send_long_data()` streams a `b` parameter in chunks (sent at the next
+/// `execute()`), a `b` parameter without chunks sends an empty string like
+/// mysqlnd, and php's ArgumentCountError / ValueError argument checks apply.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_long_data_and_argument_errors() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS msl");
+$db->query("CREATE TABLE msl (id INT PRIMARY KEY, body BLOB)");
+$stmt = $db->prepare("INSERT INTO msl (id, body) VALUES (?, ?)");
+$id = 1;
+$blob = "ignored";
+$stmt->bind_param("ib", $id, $blob);
+$stmt->send_long_data(1, "hello ");
+$stmt->send_long_data(1, "world");
+$stmt->execute();
+$id = 2;
+$stmt->execute();
+echo $stmt->send_long_data(5, "x") ? "T" : "F", $stmt->errno;
+$r = $db->query("SELECT id, body FROM msl ORDER BY id");
+while ($row = $r->fetch_row()) {
+    echo "|", $row[0], "=", $row[1];
+}
+try {
+    $stmt->bind_param("i", $id);
+} catch (ArgumentCountError $e) {
+    echo "|ace";
+}
+try {
+    $stmt->execute([1]);
+} catch (ValueError $e) {
+    echo "|", $e->getMessage();
+}
+try {
+    $stmt->attr_set(99, 1);
+} catch (ValueError $e) {
+    echo "|attr-ve";
+}
+echo "|", $stmt->attr_set(MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH, 1) ? "set" : "no";
+echo ":", $stmt->attr_get(MYSQLI_STMT_ATTR_UPDATE_MAX_LENGTH);
+$db->query("DROP TABLE msl");
+"#,
+    ));
+    assert_eq!(
+        out,
+        "F2034|1=hello world|2=|ace|mysqli_stmt::execute(): Argument #1 ($params) must consist of exactly 2 elements, 1 present|attr-ve|set:1"
+    );
+}
+
+/// mysqlnd's `send_long_data()` preconditions and the `store_result()` / `get_result()`
+/// exclusion: no bound parameters is 2014, a parameter number past the count 2034, a
+/// parameter not bound as `b` (even `s`) 2035, none of them reported (so STRICT mode does not
+/// throw), and a success clears the error, as `bind_param()` and `bind_result()` do.
+/// `get_result()` after `store_result()` fails with a reported 2014 and leaves the stored
+/// rows fetchable. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_long_data_preconditions_and_stored_get_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+$plain = $db->prepare("SELECT ?");
+echo $plain->send_long_data(0, "x") ? "T" : "F", $plain->errno;
+$i = 1;
+$plain->bind_param("i", $i);
+echo "/", $plain->errno;
+echo "|", $plain->send_long_data(0, "x") ? "T" : "F", $plain->errno, ":", $plain->error_list[0]["sqlstate"];
+$s = "s";
+$plain->bind_param("s", $s);
+echo "|", $plain->send_long_data(0, "x") ? "T" : "F", $plain->errno;
+echo "|", $plain->send_long_data(4, "x") ? "T" : "F", $plain->errno;
+$plain->bind_param("b", $s);
+echo "|", $plain->send_long_data(0, "x") ? "T" : "F", $plain->errno, count($plain->error_list);
+$sel = $db->prepare("SELECT 1 UNION SELECT 2");
+$sel->execute();
+$sel->store_result();
+try {
+    $sel->get_result();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode(), ":", $e->getMessage();
+}
+$v = 0;
+$sel->bind_result($v);
+$sel->fetch();
+echo "|", $v, ",", $sel->num_rows, ",", $sel->errno;
+"#,
+    ));
+    assert_eq!(
+        out,
+        "F2014/0|F2035:HY000|F2035|F2034|T00|2014:Commands out of sync; you can't run this command now|1,2,0"
+    );
+}
+
+/// `MYSQLI_CURSOR_TYPE_READ_ONLY` opens a server cursor like mysqlnd: the link stays free while
+/// its rows are fetched one `COM_STMT_FETCH` each, a fetch past the end is `false`,
+/// `get_result()` / `store_result()` read the rest in one fetch, `free_result()` / a
+/// re-execution / `close()` drain the cursor, and a statement without a result set runs as
+/// usual. The lifecycle statistics match mysqlnd's. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_read_only_cursor() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mcur");
+$db->query("CREATE TABLE mcur (id INT)");
+$db->query("INSERT INTO mcur VALUES (1), (2), (3)");
+$st = $db->prepare("SELECT id FROM mcur ORDER BY id");
+echo $st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY) ? "set" : "unset";
+$st->execute();
+echo "|", $st->num_rows, "|", $db->query("SELECT 42")->fetch_row()[0];
+$id = 0;
+$st->bind_result($id);
+$out = "";
+while ($st->fetch()) {
+    $out = $out . $id . ":" . $db->query("SELECT 7")->fetch_row()[0] . ",";
+}
+echo "|", $out, "|", $st->num_rows;
+echo "|", var_export($st->fetch(), true);
+$st->execute();
+$st->fetch();
+$st->free_result();
+echo "|", $db->query("SELECT 8")->fetch_row()[0];
+$st->execute();
+$r = $st->get_result();
+$ids = [];
+foreach ($r->fetch_all() as $row) {
+    $ids[] = $row[0];
+}
+echo "|", $r->num_rows, "=", implode(",", $ids);
+$st->execute();
+$st->store_result();
+echo "|", $st->num_rows;
+$st->fetch();
+echo "=", $id;
+$st->execute();
+$st->fetch();
+$st->execute();
+$st->fetch();
+echo "|re=", $id;
+$st->close();
+$e = $db->prepare("SELECT id FROM mcur WHERE id > 100");
+$e->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+$e->execute();
+$x = 0;
+$e->bind_result($x);
+echo "|empty=", var_export($e->fetch(), true);
+$ins = $db->prepare("INSERT INTO mcur VALUES (?)");
+$ins->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+$v = 4;
+$ins->bind_param("i", $v);
+$ins->execute();
+echo "|ins=", $ins->affected_rows;
+$s = $db->get_connection_stats();
+echo "|", $s["com_stmt_fetch"], ",", $s["rows_fetched_from_server_ps"], ",", $s["rows_fetched_from_client_ps_cursor"], ",", $s["rows_skipped_ps"], ",", $s["flushed_ps_sets"], ",", $s["ps_unbuffered_sets"], ",", $s["ps_buffered_sets"];
+$db->query("DROP TABLE mcur");
+"#,
+    ));
+    assert_eq!(out, "set|0|42|1:7,2:7,3:7,|3|false|8|3=1,2,3|3=1|re=1|empty=NULL|ins=1|20,18,12,6,3,5,1");
+}
+
+/// Every fetch() of a read-only cursor is one `COM_STMT_FETCH` on the wire (17 bytes), the
+/// fetch past the end included: the server answers that one with an error packet, which
+/// mysqlnd drops (fetch() is `false`, no errno, nothing reported even under STRICT) and the
+/// link stays usable. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_cursor_fetch_past_the_end_goes_on_the_wire() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function cur_snap(mysqli $db): array {
+    $s = $db->get_connection_stats();
+    $o = [];
+    foreach (["packets_sent_command", "bytes_sent", "packets_received", "bytes_received", "com_stmt_fetch"] as $n) {
+        $o[] = (int) $s[$n];
+    }
+    return $o;
+}
+function cur_delta(array $a, array $b): string {
+    $o = [];
+    for ($i = 0; $i < count($a); $i++) {
+        $o[] = $b[$i] - $a[$i];
+    }
+    return implode(",", $o);
+}
+$st = $db->prepare("SELECT 1 UNION ALL SELECT 2");
+$st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+$st->execute();
+$id = 0;
+$st->bind_result($id);
+for ($i = 0; $i < 5; $i++) {
+    $a = cur_snap($db);
+    $r = $st->fetch();
+    echo var_export($r, true), ":", cur_delta($a, cur_snap($db)), ":", $st->errno, ":", $st->error, ":", $db->errno, "|";
+}
+echo $db->query("SELECT 5")->fetch_row()[0], "|";
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try { echo var_export($st->fetch(), true), "nothrow"; } catch (mysqli_sql_exception $e) { echo "throw:", $e->getCode(); }
+echo "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "true:1,17,2,23,1:0::0|true:1,17,2,23,1:0::0|NULL:1,17,1,9,1:0::0|false:1,17,1,50,1:0::0|false:1,17,1,50,1:0::0|5|falsenothrow\n"
+    );
+}
+
+/// A read-only cursor statement refuses `fetch()` and `store_result()` with a reported 2014 (on
+/// the statement and the link) while an unbuffered query owns the link, then reads its remaining
+/// rows once that result is freed. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_cursor_waits_for_a_busy_link() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mcurb");
+$db->query("CREATE TABLE mcurb (id INT)");
+$db->query("INSERT INTO mcurb VALUES (1), (2), (3)");
+$st = $db->prepare("SELECT id FROM mcurb ORDER BY id");
+$st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+$st->execute();
+$id = 0;
+$st->bind_result($id);
+$st->fetch();
+echo $id;
+$u = $db->query("SELECT 7", MYSQLI_USE_RESULT);
+try {
+    $st->fetch();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+echo ":", $st->errno, ":", $db->errno;
+try {
+    $st->store_result();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+echo "|u=", $u->fetch_row()[0];
+$u->free();
+echo "|", var_export($st->fetch(), true), ":", $id;
+echo "|", var_export($st->fetch(), true), ":", $id;
+echo "|", var_export($st->fetch(), true), "\n";
+"#,
+    ));
+    assert_eq!(out, "1|2014:2014:2014|2014|u=7|true:2|true:3|NULL\n");
+}
+
+/// A buffered `MYSQLI_ASYNC` query is readable as soon as the server's first response arrives,
+/// not when every row has: the first row (100 KB) is flushed before the second row's
+/// `SLEEP(1)`, so `mysqli_poll()` reports the link at once and `reap_async_query()` then waits
+/// for the rest. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_poll_ready_before_rows_complete() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(1)", MYSQLI_ASYNC);
+$start = microtime(true);
+$read = [$db];
+$error = [];
+$reject = [];
+$ready = mysqli_poll($read, $error, $reject, 0, 600000);
+$polled = microtime(true) - $start;
+$result = $db->reap_async_query();
+echo $ready, "|", $polled < 0.5 ? "early" : "late", "|", $result->num_rows, "|", strlen($result->fetch_row()[0]), "\n";
+"#,
+    ));
+    assert_eq!(out, "1|early|2|100000\n");
+}
+
+/// Closing a link with a pending `MYSQLI_ASYNC` query (buffered or `MYSQLI_USE_RESULT`) returns
+/// at once, like mysqlnd, which closes the socket instead of waiting for the server to finish
+/// the query. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_close_does_not_wait_for_a_pending_async_query() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$a = new mysqli($host, $user, $pass, $dbname, $port);
+$a->query("SELECT SLEEP(3)", MYSQLI_ASYNC);
+$start = microtime(true);
+$a->close();
+echo microtime(true) - $start < 1.0 ? "buffered:early" : "buffered:late";
+$b = new mysqli($host, $user, $pass, $dbname, $port);
+$b->query("SELECT SLEEP(3)", MYSQLI_ASYNC | MYSQLI_USE_RESULT);
+$start = microtime(true);
+$b->close();
+echo "|", microtime(true) - $start < 1.0 ? "streaming:early" : "streaming:late";
+echo "|", $db->query("SELECT 5")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "buffered:early|streaming:early|5\n");
+}
+
+/// An unbuffered result kept across a reconnect of its link does not finish the link's newer
+/// stream when it is freed: the newer result still reads its remaining rows. Expected output
+/// is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_old_stream_result_leaves_the_new_stream_alone() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$link = new mysqli($host, $user, $pass, $dbname, $port);
+$old = $link->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+echo $old->fetch_row()[0];
+$link->real_connect($host, $user, $pass, $dbname, $port);
+$new = $link->query("SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9", MYSQLI_USE_RESULT);
+echo "|", $new->fetch_row()[0];
+$old->free();
+$rest = [];
+while ($row = $new->fetch_row()) {
+    $rest[] = $row[0];
+}
+echo "|", implode(",", $rest), "|", $new->num_rows, "|", $link->errno, "\n";
+"#,
+    ));
+    assert_eq!(out, "1|7|8,9|3|0\n");
+}
+
+/// A read that times out midway through an unbuffered result is reported (errno 2006 on the
+/// link, `mysqli_sql_exception` under STRICT) instead of ending the set as if it were complete.
+/// Expected output is php 8.5 + mysqlnd's, except that with reporting off elephc's fetch
+/// returns `null` where php returns `false` (documented in docs/php/mysqli.md).
+#[test]
+#[ignore]
+fn test_mysqli_unbuffered_read_failure_is_reported() {
+    let out = compile_and_run(&my_program(
+        r#"
+$slow = mysqli_init();
+$slow->options(MYSQLI_OPT_READ_TIMEOUT, 1);
+$slow->real_connect($host, $user, $pass, $dbname, $port);
+$r = $slow->query("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(3)", MYSQLI_USE_RESULT);
+echo strlen($r->fetch_row()[0]);
+try {
+    $row = $r->fetch_row();
+    echo "|no-throw:", var_export($row, true);
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode(), ":", $e->getMessage();
+}
+echo "|", $slow->errno, "\n";
+mysqli_report(MYSQLI_REPORT_OFF);
+$slow2 = mysqli_init();
+$slow2->options(MYSQLI_OPT_READ_TIMEOUT, 1);
+$slow2->real_connect($host, $user, $pass, $dbname, $port);
+$r = $slow2->query("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(3)", MYSQLI_USE_RESULT);
+echo strlen($r->fetch_row()[0]), "|", var_export($r->fetch_row(), true), "|", $slow2->errno, "|", $slow2->error, "|", $r->num_rows, "\n";
+"#,
+    ));
+    assert_eq!(out, "100000|2006:MySQL server has gone away|2006\n100000|NULL|2006|MySQL server has gone away|1\n");
+}
+
+/// A persistent link closed with an unreaped `MYSQLI_ASYNC` query (either result mode) closes
+/// at once and does not poison the pool: the next `p:` connection with the same credentials
+/// runs queries right away. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_persistent_link_closed_with_pending_async_query() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+foreach ([MYSQLI_ASYNC, MYSQLI_ASYNC | MYSQLI_USE_RESULT] as $mode) {
+    $p = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+    $p->query("SELECT SLEEP(2)", $mode);
+    $start = microtime(true);
+    $p->close();
+    $closed = microtime(true) - $start;
+    $q = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+    $r = $q->query("SELECT 41 + 1");
+    echo $closed < 1.0 ? "early" : "late", ":", $r === false ? "failed:" . $q->errno : $r->fetch_row()[0], ":", microtime(true) - $start < 1.5 ? "fast" : "slow", "|";
+    $q->close();
+}
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "early:42:fast|early:42:fast|\n");
+}
+
+/// Opening a second `p:` link with the same credentials while the first still has a pending
+/// `MYSQLI_ASYNC` query leaves that query alone: the first link polls and reaps it. Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_persistent_checkout_keeps_a_busy_owners_async_query() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$a = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+$a->query("SELECT 6 * 7, SLEEP(1)", MYSQLI_ASYNC);
+$b = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+$read = [$a];
+$error = [];
+$reject = [];
+echo mysqli_poll($read, $error, $reject, 3), "|", $a->reap_async_query()->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "1|42\n");
+}
+
+/// `mysqli_poll()` with links only in `$error` waits for its timeout (mysqlnd selects on them for
+/// exceptional conditions, which never come) instead of returning at once, validates those
+/// entries, and leaves readiness to `$read`. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_poll_waits_on_error_only_links() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$x = new mysqli($host, $user, $pass, $dbname, $port);
+$x->query("SELECT SLEEP(2)", MYSQLI_ASYNC);
+$start = microtime(true);
+$read = null;
+$error = [$x];
+$reject = [];
+$n = mysqli_poll($read, $error, $reject, 1);
+$waited = microtime(true) - $start;
+echo var_export($n, true), "|", $waited >= 0.9 && $waited < 1.8 ? "waited" : "returned", "|", var_export($read, true), "|", count($error), "|", count($reject);
+try {
+    $read = null;
+    $bad = [1];
+    mysqli_poll($read, $bad, $reject, 0);
+    echo "|accepted";
+} catch (TypeError $e) {
+    echo "|TypeError";
+}
+$read = [$x];
+$error = [$x];
+echo "|", mysqli_poll($read, $error, $reject, 3), "|", count($read), "|", count($error), "|", $x->reap_async_query()->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "0|waited|NULL|0|0|TypeError|1|1|0|0\n");
+}
+
+/// Reaping a `MYSQLI_ASYNC | MYSQLI_USE_RESULT` query reads only its header and metadata: the
+/// first row's bytes arrive with the first fetch (wire and row statistics advance there), like
+/// mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_use_result_reap_leaves_the_first_row_unread() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("SELECT REPEAT('y', 5000) AS v", MYSQLI_ASYNC | MYSQLI_USE_RESULT);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+$r = $db->reap_async_query();
+$before = $db->get_connection_stats();
+$row = $r->fetch_row();
+$after = $db->get_connection_stats();
+echo strlen($row[0]), "|", (int) $after["bytes_received"] - (int) $before["bytes_received"] > 5000 ? "read-at-fetch" : "read-at-reap";
+echo "|", (int) $before["rows_fetched_from_server_normal"], "|", (int) $after["rows_fetched_from_server_normal"], "\n";
+$r->free();
+"#,
+    ));
+    assert_eq!(out, "5000|read-at-fetch|0|1\n");
+}
+
+/// A later statement of a `multi_query()` batch that fails makes the first `next_result()`
+/// fail with its error (1146), reported under STRICT, instead of an empty successful set, and
+/// the link is free for the next query after the exception is caught.
+/// Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_multi_query_next_result_reports_a_later_error() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->multi_query("SELECT 1; SELECT * FROM missing_table_xyz");
+$r = $db->store_result();
+echo $r->fetch_row()[0], "|", var_export($db->more_results(), true);
+$next = $db->next_result();
+echo "|", var_export($next, true), "|", $db->errno, "|", var_export($db->more_results(), true);
+echo "|", $db->query("SELECT 2")->fetch_row()[0];
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$db->multi_query("SELECT 3; SELECT * FROM missing_table_xyz");
+$db->use_result()->free();
+try {
+    $db->next_result();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+echo "|", $db->query("SELECT 4")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "1|true|false|1146|false|2|1146|4\n");
+}
+
+/// Closing a link in the middle of an unbuffered result (a `MYSQLI_USE_RESULT` query or an
+/// unstored statement execution) returns at once, like mysqlnd closing the transport, instead
+/// of reading the unread rows first. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_close_mid_stream_does_not_drain_unread_rows() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$a = new mysqli($host, $user, $pass, $dbname, $port);
+$r = $a->query("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(3)", MYSQLI_USE_RESULT);
+echo strlen($r->fetch_row()[0]);
+$start = microtime(true);
+$a->close();
+echo "|", microtime(true) - $start < 1.0 ? "early" : "late";
+$b = new mysqli($host, $user, $pass, $dbname, $port);
+$st = $b->prepare("SELECT REPEAT('x', 100000) AS v UNION ALL SELECT SLEEP(3)");
+$st->execute();
+$v = "";
+$st->bind_result($v);
+$st->fetch();
+echo "|", strlen($v);
+$start = microtime(true);
+$b->close();
+echo "|", microtime(true) - $start < 1.0 ? "early" : "late";
+echo "|", $db->query("SELECT 9")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "100000|early|100000|early|9\n");
+}
+
+/// `send_long_data()` while another result or an async query owns the link fails without an
+/// error and drops the chunk, like mysqlnd, which sends a chunk only on a ready link. Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_send_long_data_refused_on_a_busy_link() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$st = $db->prepare("SELECT LENGTH(?)");
+$blob = null;
+$st->bind_param("b", $blob);
+$u = $db->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$sent = $st->send_long_data(0, "abc");
+echo var_export($sent, true), ":", $st->errno, ":", $db->errno;
+$u->free();
+$st->send_long_data(0, "de");
+$st->execute();
+$len = 0;
+$st->bind_result($len);
+$st->fetch();
+echo "|", $len;
+$st->close();
+$st = $db->prepare("SELECT LENGTH(?)");
+$st->bind_param("b", $blob);
+$db->query("SELECT SLEEP(0.3)", MYSQLI_ASYNC);
+echo "|", var_export($st->send_long_data(0, "xyz"), true), ":", $st->errno;
+$db->reap_async_query();
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "false:0:0|2|false:0\n");
+}
+
+/// `dump_debug_info()` while an async query is pending fails with an unreported 2014 (no
+/// exception under STRICT) instead of reaching the worker-owned client, and the query is
+/// reaped normally afterwards. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_dump_debug_info_refused_during_async_query() {
+    let out = compile_and_run(&my_program(
+        r#"
+$x = new mysqli($host, $user, $pass, $dbname, $port);
+$x->query("SELECT 5, SLEEP(0.5)", MYSQLI_ASYNC);
+echo var_export($x->dump_debug_info(), true), ":", $x->errno;
+echo "|", $x->reap_async_query()->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "false:2014|5\n");
+}
+
+/// `new mysqli_result($db, $mode)` after `real_query()` counts the statistics on the result it
+/// returns, in both modes: one explicit free, the rows read from the server, the unbuffered
+/// client rows and the data bytes, like mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_result_constructor_keeps_lifecycle_statistics() {
+    let out = compile_and_run(&my_program(
+        r#"
+$keys = ["explicit_free_result", "implicit_free_result", "rows_fetched_from_server_normal", "rows_fetched_from_client_normal_unbuffered", "rows_fetched_from_client_normal_buffered", "bytes_received_real_data_normal"];
+$deltas = function (array $before, array $after) use ($keys): string {
+    $out = [];
+    foreach ($keys as $key) {
+        $out[] = (int) $after[$key] - (int) $before[$key];
+    }
+    return implode(",", $out);
+};
+foreach ([MYSQLI_USE_RESULT, MYSQLI_STORE_RESULT] as $mode) {
+    $before = $db->get_connection_stats();
+    $db->real_query("SELECT 'abc' UNION ALL SELECT 'de'");
+    $r = new mysqli_result($db, $mode);
+    $rows = [];
+    while ($row = $r->fetch_row()) {
+        $rows[] = $row[0];
+    }
+    $r->free();
+    $after = $db->get_connection_stats();
+    echo implode(",", $rows), "=", $deltas($before, $after), "|";
+}
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "abc,de=1,0,2,2,0,5|abc,de=1,0,2,0,0,5|\n");
+}
+
+/// `reset()` keeps a set `store_result()` buffered: `num_rows`, the read position and
+/// `data_seek()` survive, and `free_result()` drops it. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_reset_keeps_stored_rows() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$st = $db->prepare("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3");
+$st->execute();
+$st->store_result();
+$v = 0;
+$st->bind_result($v);
+$st->fetch();
+echo $v, "|", $st->num_rows;
+echo "|", var_export($st->reset(), true), "|", $st->num_rows;
+$got = [];
+while ($st->fetch()) {
+    $got[] = $v;
+}
+echo "|", implode(",", $got), "|", $st->num_rows;
+$st->data_seek(0);
+$st->fetch();
+echo "|seek=", $v;
+$st->free_result();
+echo "|", $st->num_rows, "\n";
+"#,
+    ));
+    assert_eq!(out, "1|3|true|3|2,3|3|seek=1|0\n");
+}
+
+/// A `CALL` whose procedure fails after a first result set returns that set (sync `query()`
+/// and a buffered `MYSQLI_ASYNC` reap alike) and reports the failure (1644) only when
+/// `next_result()` reaches it, like mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_call_error_after_first_set_waits_for_next_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP PROCEDURE IF EXISTS masig");
+$db->query("CREATE PROCEDURE masig() BEGIN SELECT 1 AS a; SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'boom'; END");
+$db->query("CALL masig()", MYSQLI_ASYNC);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+$r = $db->reap_async_query();
+echo is_object($r) ? get_class($r) . ":" . $r->fetch_row()[0] : var_export($r, true) . ":" . $db->errno;
+echo "|", var_export($db->more_results(), true);
+echo "|", var_export($db->next_result(), true), ":", $db->errno, ":", $db->error;
+echo "|", $db->query("SELECT 5")->fetch_row()[0];
+$db->query("CALL masig()");
+echo "|sync:", $db->errno;
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "mysqli_result:1|true|false:1644:boom|5|sync:0\n");
+}
+
+/// A failed second `MYSQLI_INIT_COMMAND` under STRICT throws its error (1146) only after the
+/// connection is released: the link count is unchanged and the object is unconnected
+/// afterwards. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_failed_init_command_releases_the_connection_before_throwing() {
+    let out = compile_and_run(&my_program(
+        r#"
+$before = mysqli_get_links_stats()["total"];
+$x = mysqli_init();
+$x->options(MYSQLI_INIT_COMMAND, "SET @a = 1");
+$x->options(MYSQLI_INIT_COMMAND, "SELECT * FROM missing_init_tbl");
+try {
+    $x->real_connect($host, $user, $pass, $dbname, $port);
+    echo "no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo $e->getCode();
+}
+echo "|links+", mysqli_get_links_stats()["total"] - $before;
+try {
+    $x->query("SELECT 1");
+    echo "|queried";
+} catch (Throwable $e) {
+    echo "|", get_class($e), ":", $e->getMessage();
+}
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "1146|links+0|Error:mysqli object is not fully initialized\n");
+}
+
+/// A row read that fails in a later set of a buffered `CALL` (sync and `MYSQLI_ASYNC`) leaves
+/// `next_result()` successful and fails the `store_result()` that buffers that set (1242),
+/// after which the link is usable, like mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_call_later_set_row_error_fails_at_store_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mrr");
+$db->query("CREATE TABLE mrr (v INT)");
+$db->query("INSERT INTO mrr VALUES (1), (2), (3)");
+$db->query("DROP PROCEDURE IF EXISTS mrrp");
+$db->query("CREATE PROCEDURE mrrp() BEGIN SELECT 1 AS a; SELECT (SELECT v FROM mrr) AS s FROM mrr; END");
+foreach (["sync", "async"] as $mode) {
+    if ($mode === "sync") {
+        $r = $db->query("CALL mrrp()");
+    } else {
+        $db->query("CALL mrrp()", MYSQLI_ASYNC);
+        $read = [$db];
+        $error = [];
+        $reject = [];
+        mysqli_poll($read, $error, $reject, 5);
+        $r = $db->reap_async_query();
+    }
+    echo $mode, ":", is_object($r) ? $r->fetch_row()[0] : "F" . $db->errno;
+    echo ",", var_export($db->next_result(), true), ":", $db->errno;
+    $s = $db->store_result();
+    echo ",", $s === false ? "F" . $db->errno : "rows" . $s->num_rows;
+    echo ",", $db->query("SELECT 6")->fetch_row()[0], "|";
+}
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "sync:1,true:0,F1242,6|async:1,true:0,F1242,6|\n");
+}
+
+/// Persistent links closed with a pending async query do not inflate
+/// `mysqli_get_links_stats()['cached_plinks']`: after three such closes and one ordinary
+/// open/close of the same key, one link is cached, as in php 8.5 + mysqlnd.
+#[test]
+#[ignore]
+fn test_mysqli_cached_plinks_ignores_evicted_async_links() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$start = mysqli_get_links_stats()["cached_plinks"];
+for ($i = 0; $i < 3; $i++) {
+    $p = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+    $p->query("SELECT SLEEP(1)", MYSQLI_ASYNC);
+    $p->close();
+}
+$afterAsync = mysqli_get_links_stats()["cached_plinks"] - $start;
+$q = new mysqli("p:" . $host, $user, $pass, $dbname, $port);
+$q->close();
+echo mysqli_get_links_stats()["cached_plinks"] - $start, "\n";
+"#,
+    ));
+    assert_eq!(out, "1\n");
+}
+
+/// A statement left with an unread result does not keep its link busy after `real_connect()`
+/// replaced the connection: the new connection runs queries at once. Expected output is
+/// php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_reconnect_forgets_an_old_statements_unread_set() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$link = new mysqli($host, $user, $pass, $dbname, $port);
+$st = $link->prepare("SELECT 1 UNION ALL SELECT 2");
+$st->execute();
+$link->real_connect($host, $user, $pass, $dbname, $port);
+$r = $link->query("SELECT 3");
+echo $r === false ? "busy:" . $link->errno : $r->fetch_row()[0];
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "3\n");
+}
+
+/// A buffered `MYSQLI_ASYNC` `CALL` is reaped as soon as its first set arrives, and its later
+/// sets are read by `next_result()` (waiting for the slow statement between them), like
+/// mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_buffered_call_reads_later_sets_on_next_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP PROCEDURE IF EXISTS mslow");
+$db->query("CREATE PROCEDURE mslow() BEGIN SELECT 1 AS a; DO SLEEP(1.5); SELECT 2 AS b; END");
+$start = microtime(true);
+$db->query("CALL mslow()", MYSQLI_ASYNC);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+$first = $db->reap_async_query();
+$reaped = microtime(true) - $start;
+echo $first->fetch_row()[0], ":", $reaped < 1.0 ? "early" : "late";
+$db->next_result();
+$second = $db->store_result();
+echo "|", $second->fetch_row()[0], ":", microtime(true) - $start >= 1.4 ? "waited" : "early";
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "1:early|2:waited\n");
+}
+
+/// A stored synchronous `query()` of a `CALL` returns once its first set is buffered (mysqlnd's
+/// store_result()); the later sets stay on the server, keep the link out of sync (2014) and are
+/// read by `next_result()`, which waits for the slow statement between them, also for a `CALL`
+/// inside or after an executable comment (active or not) or after a `--` comment the server
+/// ends at a newline or control byte. Expected output is php 8.5 +
+/// mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_query_call_reads_later_sets_on_next_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP PROCEDURE IF EXISTS msyncslow");
+$db->query("CREATE PROCEDURE msyncslow() BEGIN SELECT 1 AS a; DO SLEEP(1.5); SELECT 2 AS b; END");
+foreach (["CALL msyncslow()", "/*!50000 CALL msyncslow() */", "/*! */ CALL msyncslow()", "/*!99999 SELECT 1 */ CALL msyncslow()", "--\nCALL msyncslow()", "--\x01\nCALL msyncslow()", "--\x7f x\nCALL msyncslow()"] as $sql) {
+    $start = microtime(true);
+    $first = $db->query($sql);
+    echo $first->fetch_row()[0], ":", microtime(true) - $start < 1.0 ? "early" : "late";
+    echo ":", var_export($db->more_results(), true), ":", var_export($db->query("SELECT 9"), true), $db->errno;
+    $db->next_result();
+    $second = $db->store_result();
+    echo "|", $second->fetch_row()[0], ":", microtime(true) - $start >= 1.4 ? "waited" : "early";
+    while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+    echo "|", $db->query("SELECT 9")->fetch_row()[0], "\n";
+}
+"#,
+    ));
+    assert_eq!(out, "1:early:true:false2014|2:waited|9\n".repeat(7));
+}
+
+/// send_long_data() sends each chunk to the server at once (one COM_STMT_SEND_LONG_DATA
+/// command, counted in the wire statistics before execute()), and the execution leaves the
+/// parameter's value out of COM_STMT_EXECUTE; the chunks are forgotten after it, so a NULL
+/// variable is NULL again. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_send_long_data_sends_each_chunk() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mld");
+$db->query("CREATE TABLE mld (id INT, b LONGBLOB)");
+$st = function () use ($db) {
+    $s = $db->get_connection_stats();
+    return [$s["packets_sent_command"], $s["bytes_sent"], $s["com_stmt_send_long_data"]];
+};
+$s = $db->prepare("INSERT INTO mld VALUES (?, ?)");
+$id = 1;
+$null = null;
+$s->bind_param("ib", $id, $null);
+$a = $st();
+echo var_export($s->send_long_data(1, str_repeat("a", 1000)), true), ",";
+$b = $st();
+echo var_export($s->send_long_data(1, "bc"), true), "|";
+$c = $st();
+echo $b[0] - $a[0], ",", $b[1] - $a[1], ",", $b[2] - $a[2], "|", $c[0] - $b[0], ",", $c[1] - $b[1], "|";
+$d = $st();
+echo var_export($s->execute(), true), ",";
+$e = $st();
+echo $e[0] - $d[0], ",", $e[1] - $d[1], "|";
+$id = 2;
+$s->execute();
+$r = $db->query("SELECT id, LENGTH(b), RIGHT(b, 3) FROM mld ORDER BY id");
+echo json_encode($r->fetch_all()), "\n";
+"#,
+    ));
+    assert_eq!(out, "true,true|1,1015,1|1,17|true,1,32|[[\"1\",\"1002\",\"abc\"],[\"2\",null,null]]\n");
+}
+
+/// mysqli_stmt::reset() sends COM_STMT_RESET on a ready link (counted, also for a fresh or an
+/// unread statement, whose rows it skips), resets locally without traffic while another result
+/// owns the link, keeps a stored set fetchable, and fails without mysqli_report() (even
+/// STRICT) when the connection is lost, with 2006 on the statement and the link. Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_reset_sends_com_stmt_reset() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$s = $db->prepare("SELECT 1 UNION ALL SELECT 2");
+$c = function () use ($db) { return $db->get_connection_stats()["com_stmt_reset"]; };
+$c0 = $c();
+echo "fresh:", var_export($s->reset(), true), $c() - $c0, "|";
+$v = null;
+$s->execute();
+$s->store_result();
+$s->bind_result($v);
+echo "stored:", var_export($s->reset(), true), $c() - $c0, var_export($s->fetch(), true), $v, "|";
+$r = $db->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+echo "busy:", var_export($s->reset(), true), $c() - $c0, ":", $s->errno, "|";
+$r->free();
+$s->execute();
+echo "unread:", var_export($s->reset(), true), $c() - $c0, ":", $s->errno, ":", $db->query("SELECT 5")->fetch_row()[0], "|";
+$k = new mysqli($host, $user, $pass, $dbname, $port);
+$k->query("KILL " . $db->thread_id);
+usleep(200000);
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+echo "killed:", var_export($s->reset(), true), $c() - $c0, ":", $s->errno, ":", $s->sqlstate, ":", $db->errno, "\n";
+"#,
+    ));
+    assert_eq!(out, "fresh:true1|stored:true2true1|busy:true2:0|unread:true3:0:5|killed:false4:2006:HY000:2006\n");
+}
+
+/// A MYSQLI_ASYNC query is written before query() returns (its command and bytes are counted
+/// at once), and a session a transport error already ended refuses it immediately with 2006,
+/// sending nothing (no com_query), reported through mysqli_report (STRICT throws), like
+/// mysqlnd. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_send_writes_the_query_before_returning() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$st = function () use ($db) {
+    $s = $db->get_connection_stats();
+    return [$s["packets_sent_command"], $s["bytes_sent"], $s["com_query"]];
+};
+$a = $st();
+echo var_export($db->query("SELECT SLEEP(0.3)", MYSQLI_ASYNC), true), ",";
+$b = $st();
+echo $b[0] - $a[0], ",", $b[1] - $a[1], "|";
+$db->reap_async_query();
+$k = new mysqli($host, $user, $pass, $dbname, $port);
+$k->query("KILL " . $db->thread_id);
+usleep(200000);
+echo var_export($db->query("SELECT 1"), true), ":", $db->errno, "|";
+$a = $st();
+echo var_export($db->query("SELECT 1", MYSQLI_ASYNC), true), ":", $db->errno, ":", $db->error, ":";
+$b = $st();
+echo $b[0] - $a[0], ",", $b[2] - $a[2], "|";
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try { $db->query("SELECT 1", MYSQLI_ASYNC); echo "nothrow"; } catch (mysqli_sql_exception $e) { echo "throw:", $e->getCode(); }
+echo "\n";
+"#,
+    ));
+    assert_eq!(out, "true,1,26|false:2006|false:2006:MySQL server has gone away:0,0|throw:2006\n");
+}
+
+/// An async `UPDATE` (and an unbuffered `real_query()` one) reports its OK packet once
+/// reaped: `affected_rows` and the "Rows matched: ..." `info` string, like mysqlnd.
+/// Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_dml_reports_affected_rows_and_info() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mad");
+$db->query("CREATE TABLE mad (v INT)");
+$db->query("INSERT INTO mad VALUES (1), (2), (3)");
+$db->query("UPDATE mad SET v = v + 10 WHERE v < 3", MYSQLI_ASYNC);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+echo var_export($db->reap_async_query(), true), "|", $db->affected_rows, "|", $db->info;
+$db->real_query("UPDATE mad SET v = v + 1");
+echo "|", $db->affected_rows, "|", $db->info, "\n";
+"#,
+    ));
+    assert_eq!(out, "true|2|Rows matched: 2  Changed: 2  Warnings: 0|3|Rows matched: 3  Changed: 3  Warnings: 0\n");
+}
+
+/// real_escape_string() follows the session's NO_BACKSLASH_ESCAPES mode set just before an
+/// unbuffered result took the link: the quote is doubled, not backslash-escaped (and back to
+/// backslashes once the mode is cleared). Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_escape_during_a_stream_follows_the_current_sql_mode() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES'");
+$r = $db->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+echo $db->real_escape_string("a'b\\c"), "|";
+$r->free();
+$db->query("SET SESSION sql_mode = ''");
+$r = $db->query("SELECT 1 UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+echo $db->real_escape_string("a'b\\c"), "\n";
+"#,
+    ));
+    assert_eq!(out, "a''b\\c|a\\'b\\\\c\n");
+}
+
+/// A `SET sql_mode` earlier in a multi_query() batch changes real_escape_string() as soon as
+/// its OK packet arrived, while the batch still owns the link, in both directions. Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_escape_follows_a_sql_mode_set_inside_a_batch() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->multi_query("SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES'; SELECT 1");
+echo $db->real_escape_string("a'b"), "|";
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+echo $db->real_escape_string("a'b"), "|";
+$db->multi_query("SET SESSION sql_mode = ''; SELECT 1");
+echo $db->real_escape_string("a'b"), "|";
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+echo $db->real_escape_string("a'b"), "\n";
+"#,
+    ));
+    assert_eq!(out, "a''b|a''b|a\\'b|a\\'b\n");
+}
+
+/// A multi_query() batch whose set is column-less (an OK packet) still announces the sets that
+/// follow, and exposes that OK packet's `info`, while the batch owns the link: a DML-first batch
+/// reaches its SELECT, a later statement's error waits for next_result(), and a trailing DML set
+/// ends the batch. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_multi_query_column_less_sets_keep_the_batch() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mdf");
+$db->query("CREATE TABLE mdf (v INT)");
+$db->query("INSERT INTO mdf VALUES (1), (2)");
+$db->multi_query("SET @v = 1; SELECT 7");
+do {
+    $r = $db->store_result();
+    echo $r ? $r->fetch_row()[0] : "ok", ",";
+} while ($db->more_results() && $db->next_result());
+$db->multi_query("UPDATE mdf SET v = v + 1; SELECT * FROM missing_mdf");
+echo "|", var_export($db->info, true), ",", var_export($db->more_results(), true);
+echo ",", var_export($db->next_result(), true), ":", $db->errno;
+echo "|", $db->query("SELECT 8")->fetch_row()[0];
+$db->multi_query("SELECT 1; UPDATE mdf SET v = v + 1");
+$db->store_result();
+echo "|", var_export($db->next_result(), true), ",", $db->info, ",", var_export($db->more_results(), true), "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "ok,7,|'Rows matched: 2  Changed: 2  Warnings: 0',true,false:1146|8|true,Rows matched: 2  Changed: 2  Warnings: 0,false\n"
+    );
+}
+
+/// mysqli sends query text exactly as written: `?` and `:name` are not PDO placeholders, so
+/// a malformed `SELECT :a, ?` is the server's syntax error (1064) for both a sync and an async
+/// query, the async reap gives the client back to the link, and a literal '?' is just data.
+/// Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_query_text_is_sent_without_placeholder_parsing() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("SELECT :a, ?", MYSQLI_ASYNC);
+$read = [$db];
+$error = [];
+$reject = [];
+mysqli_poll($read, $error, $reject, 5);
+echo var_export($db->reap_async_query(), true), ":", $db->errno;
+echo "|", $db->query("SELECT 5")->fetch_row()[0];
+echo "|", var_export($db->query("SELECT :a, ?"), true), ":", $db->errno;
+echo "|", $db->query("SELECT '?' AS q")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "false:1064|5|false:1064|?\n");
+}
+
+/// `MYSQLI_ASYNC | MYSQLI_USE_RESULT` reaps an unbuffered result like mysqlnd: the rows are
+/// read from the server on fetch (`num_rows` is 0 until the end), the link answers 2014 while
+/// the set is unread, and the statistics count one unbuffered set. Expected output is
+/// php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_async_use_result_streams_rows() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS masy");
+$db->query("CREATE TABLE masy (id INT)");
+$db->query("INSERT INTO masy VALUES (1), (2), (3)");
+$db->query("SELECT id FROM masy ORDER BY id", MYSQLI_ASYNC | MYSQLI_USE_RESULT);
+$read = [$db];
+$error = [$db];
+$reject = [];
+echo mysqli_poll($read, $error, $reject, 5);
+$r = $db->reap_async_query();
+echo "|", get_class($r), "|", $r->num_rows, "|", $r->fetch_row()[0];
+try {
+    $db->query("SELECT 1");
+    echo "|no-2014";
+} catch (mysqli_sql_exception $e) {
+    echo "|", $e->getCode();
+}
+$rest = [];
+while ($row = $r->fetch_row()) {
+    $rest[] = $row[0];
+}
+echo "|", implode(",", $rest), "|", $r->num_rows, "|", $db->query("SELECT 5")->fetch_row()[0];
+$s = $db->get_connection_stats();
+echo "|", $s["unbuffered_sets"], ",", $s["buffered_sets"], ",", $s["rows_fetched_from_client_normal_unbuffered"], ",", $s["rows_fetched_from_server_normal"];
+$db->query("DROP TABLE masy");
+"#,
+    ));
+    assert_eq!(out, "1|mysqli_result|0|1|2014|2,3|3|5|1,1,3,4");
+}
+
+/// Warnings come back as a `mysqli_warning` chain (`SHOW WARNINGS`), from the
+/// connection and from a statement; `$info` carries the server's OK-packet
+/// info string; MYSQLI_OPT_INT_AND_FLOAT_NATIVE turns text-protocol numbers into
+/// PHP ints/floats.
+#[test]
+#[ignore]
+fn test_mysqli_warnings_info_and_native_types() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("SELECT CAST('abc' AS SIGNED) AS a, CAST('1x' AS SIGNED) AS b");
+echo "wc=", $db->warning_count;
+$w = $db->get_warnings();
+$codes = [];
+do {
+    $codes[] = $w->errno . "/" . $w->sqlstate;
+} while ($w->next());
+echo "|", implode(",", $codes);
+$db->query("DROP TABLE IF EXISTS msw");
+$db->query("CREATE TABLE msw (v INT)");
+$db->query("INSERT INTO msw VALUES (1), (2)");
+echo "|info=", $db->info;
+$stmt = $db->prepare("SELECT CAST(? AS SIGNED)");
+$text = "9z";
+$stmt->bind_param("s", $text);
+$stmt->execute();
+$stmt->store_result();
+// mysqlnd takes the statement's warning count from the metadata EOF execute() read (0
+// here), so like php no mysqli_warning chain is built.
+echo "|stmt-warn=", $stmt->get_warnings() instanceof mysqli_warning ? "y" : "n";
+$plain = mysqli_init();
+$plain->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
+$plain->real_connect($host, $user, $pass, $dbname, $port);
+$row = $plain->query("SELECT 7 AS i, 2.5e0 AS f, 1.25 AS d")->fetch_row();
+echo "|", gettype($row[0]), ",", gettype($row[1]), ",", gettype($row[2]);
+$row = $db->query("SELECT 7 AS i")->fetch_row();
+echo "|default=", gettype($row[0]);
+$db->query("DROP TABLE msw");
+"#,
+    ));
+    assert_eq!(
+        out,
+        "wc=2|1292/HY000,1292/HY000|info=Records: 2  Duplicates: 0  Warnings: 0|stmt-warn=n|integer,double,string|default=string"
+    );
+}
+
+/// MYSQLI_ASYNC queries complete on send; `mysqli_poll()` reports links with an
+/// unreaped query as readable and the rest as rejected, and a failing async
+/// query is reported by `reap_async_query()` (where mysqlnd surfaces it).
+#[test]
+#[ignore]
+fn test_mysqli_async_query_poll_and_reap() {
+    let out = compile_and_run(&my_program(
+        r#"
+$other = new mysqli($host, $user, $pass, $dbname, $port);
+echo $db->query("SELECT 41 + 1 AS x", MYSQLI_ASYNC) ? "sent" : "no";
+$read = [$db, $other];
+$error = [$db, $other];
+$reject = [];
+echo "|ready=", mysqli_poll($read, $error, $reject, 1), "|errors=", count($error), "|rejected=", count($reject);
+$result = $db->reap_async_query();
+echo "|", $result->fetch_row()[0];
+$db->query("SELECT * FROM no_such_table_xyz", MYSQLI_ASYNC);
+try {
+    $db->reap_async_query();
+    echo "|no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "|reap-error=", $e->getCode();
+}
+"#,
+    ));
+    assert_eq!(out, "sent|ready=1|errors=0|rejected=1|42|reap-error=1146");
+}
+
+/// The connection-maintenance API: a real COM_PING, COM_CHANGE_USER (which
+/// resets session state), killing another connection, `refresh()`, the
+/// public `mysqli_result` constructor over a `real_query()`, MYSQLI_USE_RESULT
+/// observability, and the mysqlnd-style statistics. MySQL 8.4 removed
+/// COM_PROCESS_KILL and COM_REFRESH, which mysqli sends like mysqlnd: there the
+/// server answers 1047 "Unknown command" (php 8.3 behaves the same).
+#[test]
+#[ignore]
+fn test_mysqli_connection_maintenance_and_stats() {
+    let out = compile_and_run(&my_program(
+        r#"
+echo $db->ping() ? "ping" : "no";
+$db->query("SET @marker = 5");
+echo "|change=", $db->change_user($user, $pass, $dbname) ? "ok" : "no";
+$row = $db->query("SELECT @marker IS NULL AS cleared")->fetch_row();
+echo "|session-reset=", $row[0];
+$victim = new mysqli($host, $user, $pass, $dbname, $port);
+mysqli_report(MYSQLI_REPORT_OFF);
+$killed = $db->kill($victim->thread_id);
+echo "|kill=", $killed ? "ok" : ($db->errno == 1047 ? "removed" : "no");
+// FLUSH TABLES needs the RELOAD privilege: either it succeeds or the server's
+// own 1227 "Access denied" comes back (with its plain server text).
+$refreshed = $db->refresh(MYSQLI_REFRESH_TABLES);
+echo "|refresh=", $refreshed || ($db->errno == 1227 && str_starts_with($db->error, "Access denied")) ? "ok" : ($db->errno == 1047 ? "removed" : "no");
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$db->real_query("SELECT 1 AS a UNION SELECT 2");
+$result = new mysqli_result($db);
+echo "|ctor=", $result->num_rows, ":", $result->type;
+$unbuffered = $db->query("SELECT 1 AS a UNION SELECT 2", MYSQLI_USE_RESULT);
+echo "|use=", $unbuffered->type, ":", $unbuffered->num_rows;
+try {
+    mysqli_num_rows($unbuffered);
+} catch (Error $e) {
+    echo "|use-num-rows-error";
+}
+while ($unbuffered->fetch_row()) {
+}
+echo "|after=", $unbuffered->num_rows;
+$stats = $db->get_connection_stats();
+echo "|stats=", count($stats), ":", ((int) $stats["com_query"]) > 0 ? "q" : "-", ":", $stats["connect_success"];
+$links = mysqli_get_links_stats();
+echo "|links=", $links["total"] >= 1 ? "y" : "n";
+"#,
+    ));
+    let tail = "|ctor=2:0|use=1:0|use-num-rows-error|after=2|stats=163:q:1|links=y";
+    assert!(
+        [
+            format!("ping|change=ok|session-reset=1|kill=ok|refresh=ok{tail}"),
+            format!("ping|change=ok|session-reset=1|kill=removed|refresh=removed{tail}"),
+        ]
+        .contains(&out),
+        "unexpected output: {out}"
+    );
+}
+
+/// A `CALL` returning several result sets walks them through the statement's
+/// `more_results()` / `next_result()`, like mysqlnd.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_multiple_result_sets() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP PROCEDURE IF EXISTS msp_two");
+$db->multi_query("CREATE PROCEDURE msp_two() BEGIN SELECT 1 AS a; SELECT 2 AS b, 3 AS c; END");
+while ($db->more_results()) {
+    $db->next_result();
+}
+$stmt = $db->prepare("CALL msp_two()");
+$stmt->execute();
+$sets = 0;
+do {
+    $result = $stmt->get_result();
+    if ($result instanceof mysqli_result) {
+        $sets++;
+        echo "set", $sets, "=", implode(",", $result->fetch_row()), ";";
+    }
+} while ($stmt->more_results() && $stmt->next_result());
+echo "sets=", $sets;
+$stmt->close();
+$db->query("DROP PROCEDURE msp_two");
+"#,
+    ));
+    assert_eq!(out, "set1=1;set2=2,3;sets=2");
+}
+
+/// `$error` / `mysqli_error()` carry the server's own message text, like php
+/// (not the bridge's `MySqlError { … }` rendering), on the connection and on a
+/// statement.
+#[test]
+#[ignore]
+fn test_mysqli_error_text_is_the_server_message() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("SELECT * FROM no_such_table_err");
+echo $db->errno, "|", $db->sqlstate, "|", $db->error, "\n";
+$stmt = $db->prepare("SELECT * FROM no_such_table_err2");
+echo var_export($stmt, true), "|", mysqli_error($db), "\n";
+mysqli_report(MYSQLI_REPORT_STRICT);
+try {
+    $db->query("SELECT * FROM no_such_table_err3");
+} catch (mysqli_sql_exception $e) {
+    echo $e->getCode(), "|", $e->getSqlState(), "|", $e->getMessage();
+}
+"#,
+    ));
+    assert_eq!(
+        out,
+        "1146|42S02|Table 'testdb.no_such_table_err' doesn't exist\nfalse|Table 'testdb.no_such_table_err2' doesn't exist\n1146|42S02|Table 'testdb.no_such_table_err3' doesn't exist"
+    );
+}
+
+/// MYSQLI_OPT_READ_TIMEOUT bounds the socket read: a statement that outlives it
+/// fails fast with mysqlnd's errno 2006 instead of waiting for the server.
+#[test]
+#[ignore]
+fn test_mysqli_read_timeout_aborts_a_stalled_read() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$slow = mysqli_init();
+echo $slow->options(MYSQLI_OPT_READ_TIMEOUT, 1) ? "opt" : "no";
+$slow->real_connect($host, $user, $pass, $dbname, $port);
+$started = microtime(true);
+$result = $slow->query("SELECT SLEEP(4)");
+$elapsed = microtime(true) - $started;
+echo "|", $result === false ? "failed" : "ran", "|", $elapsed < 3.0 ? "fast" : "slow";
+echo "|", $slow->errno, "|", $slow->error;
+"#,
+    ));
+    assert_eq!(out, "opt|failed|fast|2006|MySQL server has gone away");
+}
+
+/// MYSQLI_USE_RESULT / use_result() stream the rows from the server one fetch
+/// at a time: the link answers every other command with mysqlnd's 2014 until
+/// the set is exhausted or freed (or the result is destroyed), num_rows reads
+/// 0 until the end, and real_query() + use_result() / store_result() and
+/// multi_query() batches walk the same on-demand protocol.
+#[test]
+#[ignore]
+fn test_mysqli_use_result_streams_and_guards_the_link() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS msu");
+$db->query("CREATE TABLE msu (id INT)");
+$db->query("INSERT INTO msu VALUES (1), (2), (3)");
+$r = $db->query("SELECT id FROM msu ORDER BY id", MYSQLI_USE_RESULT);
+echo $r->type, ":", $r->num_rows, ":", $db->affected_rows;
+echo "|first=", $r->fetch_row()[0];
+echo "|busy=", $db->query("SELECT 1") === false ? $db->errno : "ran";
+echo "|busy-prepare=", $db->prepare("SELECT 1") === false ? $db->errno : "ran";
+$rest = [];
+while ($row = $r->fetch_row()) {
+    $rest[] = $row[0];
+}
+echo "|rest=", implode(",", $rest), "|rows=", $r->num_rows, "|affected=", $db->affected_rows;
+echo "|free=", $db->query("SELECT 7")->fetch_row()[0];
+$partial = $db->query("SELECT id FROM msu", MYSQLI_USE_RESULT);
+$partial->fetch_row();
+$partial->free();
+echo "|after-free=", $db->query("SELECT 8")->fetch_row()[0];
+function read_one(mysqli $db): void {
+    $result = $db->query("SELECT id FROM msu", MYSQLI_USE_RESULT);
+    $result->fetch_row();
+}
+read_one($db);
+echo "|after-scope=", $db->query("SELECT 9")->fetch_row()[0];
+$db->real_query("SELECT id FROM msu ORDER BY id DESC");
+echo "|pending=", $db->query("SELECT 1") === false ? $db->errno : "ran";
+$stream = $db->use_result();
+$ids = "";
+foreach ($stream as $row) {
+    $ids .= $row["id"];
+}
+echo "|streamed=", $ids;
+$db->multi_query("SELECT 1 AS a; INSERT INTO msu VALUES (4); SELECT 2 AS b");
+$sets = [];
+do {
+    $set = $db->use_result();
+    if ($set instanceof mysqli_result) {
+        $sets[] = $set->fetch_row()[0];
+        $set->free();
+    } else {
+        $sets[] = "ok" . $db->affected_rows;
+    }
+} while ($db->more_results() && $db->next_result());
+echo "|batch=", implode(",", $sets);
+$db->query("DROP TABLE msu");
+"#,
+    ));
+    assert_eq!(
+        out,
+        "1:0:-1|first=1|busy=2014|busy-prepare=2014|rest=2,3|rows=3|affected=3|free=7|after-free=8|after-scope=9|pending=2014|streamed=321|batch=1,ok1,2"
+    );
+}
+
+/// `mysqli_poll()` / `mysqli::poll()` take php's exact `?array &$read, ?array &$error,
+/// array &$reject` signature: typed link arrays are rewritten in place, either list may be
+/// `null`, and passing two `null` lists is php's ValueError.
+#[test]
+#[ignore]
+fn test_mysqli_poll_accepts_null_link_lists() {
+    let out = compile_and_run(&my_program(
+        r#"
+$other = new mysqli($host, $user, $pass, $dbname, $port);
+$db->query("SELECT 42", MYSQLI_ASYNC);
+$read = [$db, $other];
+$error = null;
+$reject = [];
+echo mysqli_poll($read, $error, $reject, 1), "|", count($read), "|", count($reject), "|", var_export($error, true);
+echo "|", $read[0]->reap_async_query()->fetch_row()[0];
+$noRead = null;
+$errors = [$db];
+echo "|", mysqli::poll($noRead, $errors, $reject, 0), "|", var_export($noRead, true), "|", count($errors);
+try {
+    $a = null;
+    $b = null;
+    mysqli_poll($a, $b, $reject, 0);
+} catch (ValueError $e) {
+    echo "|", $e->getMessage();
+}
+"#,
+    ));
+    assert_eq!(out, "1|1|1|NULL|42|0|NULL|0|No stream arrays were passed");
+}
+
+/// MYSQLI_ASYNC queries really run in the background: `query()` returns at once,
+/// `mysqli_poll()` waits (with its timeout) until a link's query finished, two links
+/// overlap their work, and `reap_async_query()` collects each result.
+#[test]
+#[ignore]
+fn test_mysqli_async_queries_overlap_and_poll_waits() {
+    let out = compile_and_run(&my_program(
+        r#"
+$other = new mysqli($host, $user, $pass, $dbname, $port);
+$started = microtime(true);
+$db->query("SELECT SLEEP(1) AS s, 'first' AS tag", MYSQLI_ASYNC);
+$other->query("SELECT SLEEP(1) AS s, 'second' AS tag", MYSQLI_ASYNC);
+echo "sent-fast=", (microtime(true) - $started) < 0.5 ? "y" : "n";
+$read = [$db];
+$error = [];
+$reject = [];
+echo "|early=", mysqli_poll($read, $error, $reject, 0, 100000);
+$tags = [];
+$links = [$db, $other];
+while (count($links) > 0) {
+    $read = $links;
+    $error = [];
+    $reject = [];
+    if (mysqli_poll($read, $error, $reject, 5) < 1) {
+        continue;
+    }
+    foreach ($read as $link) {
+        $row = $link->reap_async_query()->fetch_assoc();
+        $tags[] = $row["tag"];
+        $remaining = [];
+        foreach ($links as $candidate) {
+            if ($candidate !== $link) {
+                $remaining[] = $candidate;
+            }
+        }
+        $links = $remaining;
+    }
+}
+sort($tags);
+$elapsed = microtime(true) - $started;
+echo "|tags=", implode(",", $tags), "|overlapped=", $elapsed < 1.8 ? "y" : "n";
+echo "|busy=";
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("SELECT SLEEP(0.2)", MYSQLI_ASYNC);
+echo $db->query("SELECT 1") === false ? $db->errno : "ran";
+$db->reap_async_query();
+echo "|after=", $db->query("SELECT 5")->fetch_row()[0];
+"#,
+    ));
+    assert_eq!(out, "sent-fast=y|early=0|tags=first,second|overlapped=y|busy=2014|after=5");
+}
+
+/// MYSQLI_REPORT_INDEX reads the OK/EOF packet's server status flags: a full table scan
+/// raises php's "No index used in query/prepared statement …" (an exception under STRICT),
+/// an indexed lookup does not; `refresh()` and `dump_debug_info()` send real COM_REFRESH /
+/// COM_DEBUG commands without mysqli_report dispatch: a refused refresh is `false` +
+/// errno, while `dump_debug_info()` is `true` whatever the server answers (mysqlnd).
+#[test]
+#[ignore]
+fn test_mysqli_report_index_and_raw_protocol_commands() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS msx");
+$db->query("CREATE TABLE msx (id INT PRIMARY KEY, v INT)");
+$db->query("INSERT INTO msx VALUES (1, 10), (2, 20)");
+mysqli_report(MYSQLI_REPORT_ALL);
+$indexed = $db->query("SELECT v FROM msx WHERE id = 1");
+echo "indexed=", $indexed->fetch_row()[0];
+try {
+    $db->query("SELECT v FROM msx WHERE v = 20");
+    echo "|scan=quiet";
+} catch (mysqli_sql_exception $e) {
+    echo "|scan=", $e->getMessage(), "|code=", $e->getCode(), "|state=", $e->getSqlState();
+}
+$stmt = $db->prepare("SELECT v FROM msx WHERE v > ?");
+$min = 0;
+$stmt->bind_param("i", $min);
+try {
+    $stmt->execute();
+    echo "|stmt=quiet";
+} catch (mysqli_sql_exception $e) {
+    echo "|stmt=", str_starts_with($e->getMessage(), "No index used in query/prepared statement SELECT v FROM msx") ? "reported" : $e->getMessage();
+}
+mysqli_report(MYSQLI_REPORT_OFF);
+// The executed statement's rows are still on the server: free them first, or
+// (like mysqlnd) the link answers the next command with 2014.
+$stmt->free_result();
+$refreshed = $db->refresh(MYSQLI_REFRESH_TABLES);
+echo "|refresh=", $refreshed ? "ok" : ($db->errno == 1227 ? "denied" : "err" . $db->errno);
+$dumped = $db->dump_debug_info();
+echo "|debug=", $dumped ? "ok" : ($db->errno == 1227 ? "denied" : "err" . $db->errno);
+$db->query("DROP TABLE msx");
+"#,
+    ));
+    let (head, tail) = out.split_once("|refresh=").expect("refresh marker");
+    assert_eq!(
+        head,
+        "indexed=10|scan=No index used in query/prepared statement SELECT v FROM msx WHERE v = 20|code=0|state=00000|stmt=reported"
+    );
+    // The test user may or may not hold RELOAD / SUPER: either the command ran or the
+    // server's own 1227 came back — never a client-side substitute.
+    assert!(
+        // dump_debug_info() is true whatever the server answers, like mysqlnd;
+        // MySQL 8.4 removed COM_REFRESH (1047).
+        ["ok|debug=ok", "denied|debug=ok", "err1047|debug=ok"].contains(&tail),
+        "unexpected tail: {tail}"
+    );
+}
+
+/// Point-6 fidelity against a live server: `fetch_object()` assigns the columns
+/// before the constructor runs (and rejects constructor args for a class without
+/// one), a `BIGINT UNSIGNED` AUTO_INCREMENT id beyond `PHP_INT_MAX` comes back as a
+/// numeric string, and the byte / packet counters follow the wire traffic.
+#[test]
+#[ignore]
+fn test_mysqli_fetch_object_order_big_ids_and_wire_stats() {
+    let out = compile_and_run(&my_program(
+        r#"
+class Seen {
+    public ?string $id = null;
+    public string $before = "";
+    public function __construct(public string $tag = "") { $this->before = (string) $this->id; }
+}
+class Bare { public ?string $id = null; }
+$o = $db->query("SELECT '7' AS id")->fetch_object("Seen", ["t"]);
+echo "ctor-saw=", $o->before, "|tag=", $o->tag;
+try {
+    $db->query("SELECT '7' AS id")->fetch_object("Bare", ["x"]);
+    echo "|bare=accepted";
+} catch (ValueError $e) {
+    echo "|bare=", get_class($e), ":", $e->getMessage();
+}
+$db->query("DROP TABLE IF EXISTS mbig");
+$db->query("CREATE TABLE mbig (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, v INT)");
+$db->query("INSERT INTO mbig VALUES (5, 1)");
+echo "|small="; var_dump($db->insert_id);
+$db->query("INSERT INTO mbig VALUES (18446744073709551610, 1)");
+echo "|big="; var_dump($db->insert_id);
+$stmt = $db->prepare("INSERT INTO mbig VALUES (?, 2)");
+$id = "18446744073709551611";
+$stmt->bind_param("s", $id);
+$stmt->execute();
+echo "|stmt=", $stmt->insert_id, "|proc=", mysqli_stmt_insert_id($stmt), "|link=", mysqli_insert_id($db);
+$db->query("DROP TABLE mbig");
+$before = $db->get_connection_stats();
+$db->query("SELECT REPEAT('x', 1000)")->fetch_row();
+$after = $db->get_connection_stats();
+$sent = (int) $after["bytes_sent"] - (int) $before["bytes_sent"];
+$received = (int) $after["bytes_received"] - (int) $before["bytes_received"];
+echo "|sent=", $sent, "|recv-big=", $received > 1000 ? "y" : "n";
+echo "|pkts=", (int) $after["packets_sent"] - (int) $before["packets_sent"];
+echo "|overhead=", (int) $after["protocol_overhead_out"] === 4 * (int) $after["packets_sent"] ? "y" : "n";
+echo "|client=", (int) mysqli_get_client_stats()["bytes_received"] >= (int) $after["bytes_received"] ? "y" : "n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "ctor-saw=7|tag=t|bare=ValueError:mysqli_result::fetch_object(): Argument #2 ($constructor_args) must be empty when the specified class (Bare) does not have a constructor|small=int(5)\n|big=string(20) \"18446744073709551610\"\n|stmt=18446744073709551611|proc=18446744073709551611|link=18446744073709551611|sent=33|recv-big=y|pkts=2|overhead=y|client=y"
+    );
+}
+
+/// `fetch_object()` into a class whose properties are UNTYPED and never assigned anywhere else
+/// (`public $id;`): the columns land in the declared slots, like php, instead of crashing on a
+/// duplicate dynamic property.
+#[test]
+#[ignore]
+fn test_mysqli_fetch_object_fills_untyped_declared_properties() {
+    let out = compile_and_run(&my_program(
+        r#"
+class Row { public $id; public $label; public $absent; }
+$row = $db->query("SELECT 7 AS id, 'seven' AS label")->fetch_object("Row");
+var_dump($row);
+"#,
+    ));
+    assert_eq!(
+        out,
+        "object(Row)#2 (3) {\n  [\"id\"]=>\n  string(1) \"7\"\n  [\"label\"]=>\n  string(5) \"seven\"\n  [\"absent\"]=>\n  NULL\n}\n"
+    );
+}
+
+/// `get_charset()` reports mysqlnd's charset-table entry for the session charset: the
+/// default collation, its number, the character byte lengths and the comment, with
+/// `state` 1 and an empty `dir`, after connecting and after each `set_charset()`.
+#[test]
+#[ignore]
+fn test_mysqli_get_charset_reports_the_mysqlnd_table_entry() {
+    let out = compile_and_run(&my_program(
+        r#"
+$show = function (mixed $c): string {
+    return $c->charset . "/" . $c->collation . "/" . $c->number . "/" . $c->min_length . "-"
+        . $c->max_length . "/" . $c->state . "/" . $c->dir . "/" . $c->comment;
+};
+echo $show($db->get_charset());
+$db->set_charset("LATIN1");
+echo "|", $show(mysqli_get_charset($db));
+$db->set_charset("utf8mb4");
+echo "|", $show($db->get_charset());
+"#,
+    ));
+    assert_eq!(
+        out,
+        "utf8mb4/utf8mb4_general_ci/45/1-4/1//UTF-8 Unicode|latin1/latin1_swedish_ci/8/1-1/1//|utf8mb4/utf8mb4_general_ci/45/1-4/1//UTF-8 Unicode"
+    );
+}
+
+/// Against a live server, `MYSQLI_REPORT_ERROR` / `MYSQLI_REPORT_INDEX` warnings are real
+/// `E_WARNING`s with php's exact text: the method or procedural entry point, then
+/// `(SQLSTATE/errno): message` (a failed `prepare()` reports the server's own error, not a
+/// statement placeholder), or the "No index used …" notice; `@` silences them.
+#[test]
+#[ignore]
+fn test_mysqli_report_warnings_are_php_warnings() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_ERROR);
+set_error_handler(function (int $no, string $str): bool {
+    echo $no === E_WARNING ? "W:" : "?:", $str, "\n";
+    return true;
+});
+$db->query("SELECT * FROM mwarn_missing");
+mysqli_query($db, "SELECT * FROM mwarn_missing");
+$db->prepare("SELECT mwarn_nope FROM dual");
+mysqli_report(MYSQLI_REPORT_INDEX);
+$db->query("DROP TABLE IF EXISTS mwarn");
+$db->query("CREATE TABLE mwarn (id INT PRIMARY KEY, v INT)");
+$db->query("SELECT * FROM mwarn WHERE v = 1");
+mysqli_report(MYSQLI_REPORT_ERROR);
+restore_error_handler();
+set_error_handler(function (int $no, string $str): bool {
+    echo "silenced-but-seen:", error_reporting() === 0 ? "0" : "mask", "\n";
+    return true;
+});
+@$db->query("SELECT * FROM mwarn_missing");
+$db->query("DROP TABLE mwarn");
+"#,
+    ));
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines[0], "W:mysqli::query(): (42S02/1146): Table 'testdb.mwarn_missing' doesn't exist");
+    assert_eq!(lines[1], "W:mysqli_query(): (42S02/1146): Table 'testdb.mwarn_missing' doesn't exist");
+    assert!(
+        lines[2].starts_with("W:mysqli::prepare(): (42S22/1054): Unknown column 'mwarn_nope'"),
+        "{}",
+        lines[2]
+    );
+    assert_eq!(lines[3], "W:mysqli::query(): No index used in query/prepared statement SELECT * FROM mwarn WHERE v = 1");
+    assert_eq!(lines.len(), 5, "{out}");
+}
+
+/// The wire statistics follow mysqlnd's own accounting, checked against PHP 8.3 mysqlnd on
+/// the same server: a command counts `physical + 1` packets and `payload + 4` bytes for
+/// each, and every received packet is charged to the counter of the mysqlnd reader that
+/// consumes it through php-src's shifted per-type tables — result headers under
+/// `rset_row`, field definitions under `prepare_response`, rows under `change_user` (the
+/// closing EOF as its 4 header bytes), EOFs under `rset_header`, OK packets nowhere.
+/// `stmt->close()` really sends COM_STMT_CLOSE, and a re-prepare reaches the server.
+#[test]
+#[ignore]
+fn test_mysqli_wire_statistics_follow_mysqlnd() {
+    let out = compile_and_run(&my_program(
+        r#"
+$keys = ["packets_sent", "packets_sent_command", "packets_received_rset_row",
+    "packets_received_prepare_response", "packets_received_rset_header",
+    "packets_received_change_user", "packets_received_ok", "bytes_received_change_user_packet"];
+$prev = $db->get_connection_stats();
+$step = function (string $label) use ($db, $keys, &$prev): void {
+    $now = $db->get_connection_stats();
+    echo $label;
+    foreach ($keys as $k) {
+        echo " ", (int) $now[$k] - (int) $prev[$k];
+    }
+    echo "|";
+    $prev = $now;
+};
+$db->query("SELECT REPEAT('x', 1000) AS a, 2 AS b")->fetch_all();
+$step("query");
+$db->ping();
+$step("ping");
+$s = $db->prepare("SELECT ? + 1 AS r, 'z' AS c");
+$step("prepare");
+$v = 5;
+$s->bind_param("i", $v);
+$s->execute();
+$s->get_result()->fetch_all();
+$step("execute");
+$s->close();
+$step("close");
+$again = $db->prepare("SELECT 1");
+$again->close();
+$again = $db->prepare("SELECT 1");
+$step("reprepare");
+$out = $db->get_connection_stats();
+echo (int) $out["protocol_overhead_out"] === 4 * (int) $out["packets_sent"] ? "overhead" : "?";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "query 2 1 1 2 1 2 0 1013|ping 2 1 0 0 0 0 0 0|prepare 2 1 0 3 2 0 0 0|execute 2 1 1 2 1 2 0 20|close 2 1 0 0 0 0 0 0|reprepare 6 3 0 2 2 0 0 0|overhead"
+    );
+}
+
+/// Like mysqlnd, a prepared statement's result set stays on the server after `execute()`:
+/// any other command on the link — a query, another prepare — gets errno 2014 until the
+/// rows are fetched to the end, stored (`store_result()` / `get_result()`), freed, or the
+/// statement is re-executed or closed. Expected output is php 8.3 mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_statement_results_stay_on_the_server() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$s = $db->prepare("SELECT 1 AS a UNION SELECT 2");
+$s->execute();
+var_dump($db->query("SELECT 9"), $db->errno);
+$t = $db->prepare("SELECT 3"); var_dump($t, $db->errno);
+$a = null; $s->bind_result($a);
+while ($s->fetch()) echo $a, ",";
+echo "\n";
+var_dump($db->query("SELECT 9")->fetch_row()[0]);
+$s->execute(); $s->store_result(); var_dump($s->num_rows, $db->query("SELECT 10")->fetch_row()[0]);
+$s->execute(); $r = $s->get_result(); var_dump($db->query("SELECT 11")->fetch_row()[0], count($r->fetch_all()));
+$s->execute(); $s->free_result(); var_dump($db->query("SELECT 12")->fetch_row()[0]);
+$s->execute(); $s->execute(); $s->store_result(); var_dump($s->num_rows);
+$s->execute(); $s->close(); var_dump($db->query("SELECT 13")->fetch_row()[0]);
+$u = $db->prepare("INSERT INTO nonexist VALUES (1)"); var_dump($u);
+"#,
+    ));
+    assert_eq!(
+        out,
+        r#"bool(false)
+int(2014)
+bool(false)
+int(2014)
+1,2,
+string(1) "9"
+int(2)
+string(2) "10"
+string(2) "11"
+int(2)
+string(2) "12"
+int(2)
+string(2) "13"
+bool(false)
+"#
+    );
+}
+
+/// Like mysqlnd, results are read only when the program consumes them: `multi_query()`
+/// reads the first set's header and metadata, `store_result()` its rows, `next_result()`
+/// the next set's header and metadata, `use_result()` nothing and each `fetch_row()` one
+/// row — so the wire counters move at the same calls as php's (packets per call checked
+/// against php 8.3 mysqlnd), with and without MYSQLI_CLIENT_COMPRESS.
+#[test]
+#[ignore]
+fn test_mysqli_results_are_read_when_consumed() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+foreach ([0, MYSQLI_CLIENT_COMPRESS] as $flags) {
+    $link = mysqli_init();
+    $link->real_connect($host, $user, $pass, $dbname, $port, null, $flags);
+    $prev = $link->get_connection_stats();
+    $step = function (string $label) use ($link, &$prev): void {
+        $now = $link->get_connection_stats();
+        echo $label, ":", (int) $now["packets_received"] - (int) $prev["packets_received"], "|";
+        $prev = $now;
+    };
+    $link->multi_query("SELECT 1 UNION SELECT 2; SELECT 3; DO 4; SELECT 5");
+    $step("mq");
+    $r = $link->store_result();
+    $step("store1");
+    $r->free();
+    $link->next_result();
+    $step("next2");
+    $r = $link->use_result();
+    $step("use2");
+    $r->fetch_row();
+    $step("fetch2");
+    $r->free();
+    $step("free2");
+    $link->next_result();
+    $step("next3");
+    $link->next_result();
+    $step("next4");
+    $r = $link->store_result();
+    $step("store4");
+    echo $link->more_results() ? "more" : "done", "\n";
+    $link->close();
+}
+"#,
+    ));
+    let expected = "mq:4|store1:3|next2:3|use2:0|fetch2:1|free2:1|next3:1|next4:3|store4:2|done\n";
+    assert_eq!(out, format!("{expected}{expected}"));
+}
+
+/// Per-step mysqlnd statistics across the whole result and statement lifecycle
+/// (decode-time protocol counters, data bytes, buffered / unbuffered / flushed
+/// sets, free and close accounting), connection and process-wide. The golden
+/// output was produced by php 8.3 + mysqlnd running this same program.
+#[test]
+#[ignore]
+fn test_mysqli_lifecycle_statistics_follow_mysqlnd() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$wire = ["bytes_sent","bytes_received","packets_sent","packets_received","protocol_overhead_in","protocol_overhead_out","packets_sent_command"];
+$prevC = $db->get_connection_stats();
+$prevG = mysqli_get_client_stats();
+$step = function (string $label) use ($db, &$prevC, &$prevG, $wire): void {
+    $c = $db->get_connection_stats();
+    $g = mysqli_get_client_stats();
+    $out = [];
+    foreach ($c as $k => $v) {
+        if (in_array($k, $wire) || str_starts_with($k, "bytes_received_") && str_ends_with($k, "_packet") || str_starts_with($k, "packets_received_")) { continue; }
+        $d = (int) $v - (int) $prevC[$k];
+        if ($d != 0) { $out[] = "c." . $k . "=" . $d; }
+    }
+    foreach ($g as $k => $v) {
+        if (in_array($k, $wire) || str_starts_with($k, "bytes_received_") && str_ends_with($k, "_packet") || str_starts_with($k, "packets_received_")) { continue; }
+        $d = (int) $v - (int) $prevG[$k];
+        if ($d != 0) { $out[] = "g." . $k . "=" . $d; }
+    }
+    echo $label, ": ", implode(" ", $out), "\n";
+    $prevC = $c;
+    $prevG = $g;
+};
+$db->query("DROP TABLE IF EXISTS mysqli_life_t");
+$db->query("CREATE TABLE mysqli_life_t (i INT, b BIGINT, d DECIMAL(6,2), f DOUBLE, s VARCHAR(10), bl BLOB, dt DATETIME, da DATE, t TINYINT, n INT NULL, e ENUM('a','b'), y YEAR, bt BIT(3), fl FLOAT, sm SMALLINT, md MEDIUMINT, tm TIME, ts TIMESTAMP NULL)");
+$step("ddl");
+$db->query("INSERT INTO mysqli_life_t VALUES (1, 2, 3.5, 4.25, 'abc', 'xyz', '2024-01-02 03:04:05', '2024-01-02', 7, NULL, 'b', 2024, 5, 1.5, 9, 10, '01:02:03', '2024-01-02 03:04:05'), (2, 3, 4.5, 5.25, 'de', NULL, NULL, NULL, 8, 1, 'a', 2025, 1, 2.5, 3, 4, '05:06:07', NULL)");
+$step("insert");
+$r = $db->query("SELECT * FROM mysqli_life_t");
+$step("query");
+$r->fetch_row();
+$step("fetch1");
+$r->data_seek(0);
+$r->fetch_assoc();
+$step("refetch");
+$r->fetch_all();
+$step("fetchall");
+$r->free();
+$step("free");
+$r = $db->query("SELECT i, s FROM mysqli_life_t", MYSQLI_USE_RESULT);
+$step("use");
+$r->fetch_row();
+$step("ufetch");
+$r->free();
+$step("ufree");
+$r = $db->query("SELECT i FROM mysqli_life_t");
+unset($r);
+$step("implicit");
+$db->real_query("SELECT s FROM mysqli_life_t");
+$r = $db->store_result();
+$step("real+store");
+$r->close();
+$db->query("UPDATE mysqli_life_t SET i = i + 1");
+$step("update");
+$s = $db->prepare("SELECT * FROM mysqli_life_t WHERE i > ?");
+$step("prepare");
+$v = 0; $s->bind_param("i", $v);
+$s->execute();
+$step("execute");
+$s->fetch();
+$step("sfetch1");
+$s->fetch();
+$s->fetch();
+$step("sfetchend");
+$s->execute();
+$s->store_result();
+$step("sstore");
+$s->fetch();
+$step("sfetchstored");
+$s->free_result();
+$step("sfree");
+$s->execute();
+$res = $s->get_result();
+$step("getresult");
+$res->fetch_all();
+$step("gfetchall");
+$res->free();
+$s->execute();
+$s->fetch();
+$s->close();
+$step("sclose_pending");
+$u = $db->prepare("UPDATE mysqli_life_t SET i = i + 1 WHERE i > ?");
+$u->bind_param("i", $v);
+$u->execute();
+$step("supdate");
+$u->close();
+$step("uclose");
+$never = $db->prepare("SELECT 1");
+$never->close();
+$step("never");
+$twice = $db->prepare("SELECT 1");
+$twice->execute(); $twice->store_result(); $twice->execute(); $twice->store_result();
+$twice->close();
+$step("twice");
+$db->multi_query("SELECT 1; UPDATE mysqli_life_t SET i = i; SELECT 2");
+do { if ($x = $db->store_result()) { $x->free(); } } while ($db->next_result());
+$step("multi");
+$db->ping();
+$db->select_db("testdb");
+$step("ping+select");
+$db->query("DROP TABLE mysqli_life_t");
+$db->close();
+$g = mysqli_get_client_stats();
+echo "end-close: g.explicit_close=", $g["explicit_close"] - $prevG["explicit_close"], "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        r#"ddl: c.non_result_set_queries=2 c.com_query=2 g.non_result_set_queries=2 g.com_query=2
+insert: c.non_result_set_queries=1 c.rows_affected_normal=2 c.com_query=1 g.non_result_set_queries=1 g.rows_affected_normal=2 g.com_query=1
+query: c.result_set_queries=1 c.no_index_used=1 c.buffered_sets=1 c.rows_fetched_from_server_normal=2 c.rows_buffered_from_client_normal=2 c.com_query=1 g.result_set_queries=1 g.no_index_used=1 g.buffered_sets=1 g.rows_fetched_from_server_normal=2 g.rows_buffered_from_client_normal=2 g.com_query=1
+fetch1: c.proto_text_fetched_bit=1 c.proto_text_fetched_tinyint=1 c.proto_text_fetched_short=1 c.proto_text_fetched_int24=1 c.proto_text_fetched_int=1 c.proto_text_fetched_bigint=1 c.proto_text_fetched_decimal=1 c.proto_text_fetched_float=1 c.proto_text_fetched_double=1 c.proto_text_fetched_date=1 c.proto_text_fetched_year=1 c.proto_text_fetched_time=1 c.proto_text_fetched_datetime=1 c.proto_text_fetched_timestamp=1 c.proto_text_fetched_string=2 c.proto_text_fetched_enum=1 c.bytes_received_real_data_normal=85 g.rows_fetched_from_client_normal_buffered=1 g.proto_text_fetched_bit=1 g.proto_text_fetched_tinyint=1 g.proto_text_fetched_short=1 g.proto_text_fetched_int24=1 g.proto_text_fetched_int=1 g.proto_text_fetched_bigint=1 g.proto_text_fetched_decimal=1 g.proto_text_fetched_float=1 g.proto_text_fetched_double=1 g.proto_text_fetched_date=1 g.proto_text_fetched_year=1 g.proto_text_fetched_time=1 g.proto_text_fetched_datetime=1 g.proto_text_fetched_timestamp=1 g.proto_text_fetched_string=2 g.proto_text_fetched_enum=1 g.bytes_received_real_data_normal=85
+refetch: c.proto_text_fetched_bit=1 c.proto_text_fetched_tinyint=1 c.proto_text_fetched_short=1 c.proto_text_fetched_int24=1 c.proto_text_fetched_int=1 c.proto_text_fetched_bigint=1 c.proto_text_fetched_decimal=1 c.proto_text_fetched_float=1 c.proto_text_fetched_double=1 c.proto_text_fetched_date=1 c.proto_text_fetched_year=1 c.proto_text_fetched_time=1 c.proto_text_fetched_datetime=1 c.proto_text_fetched_timestamp=1 c.proto_text_fetched_string=2 c.proto_text_fetched_enum=1 c.bytes_received_real_data_normal=85 g.rows_fetched_from_client_normal_buffered=1 g.proto_text_fetched_bit=1 g.proto_text_fetched_tinyint=1 g.proto_text_fetched_short=1 g.proto_text_fetched_int24=1 g.proto_text_fetched_int=1 g.proto_text_fetched_bigint=1 g.proto_text_fetched_decimal=1 g.proto_text_fetched_float=1 g.proto_text_fetched_double=1 g.proto_text_fetched_date=1 g.proto_text_fetched_year=1 g.proto_text_fetched_time=1 g.proto_text_fetched_datetime=1 g.proto_text_fetched_timestamp=1 g.proto_text_fetched_string=2 g.proto_text_fetched_enum=1 g.bytes_received_real_data_normal=85
+fetchall: c.proto_text_fetched_bit=1 c.proto_text_fetched_tinyint=1 c.proto_text_fetched_short=1 c.proto_text_fetched_int24=1 c.proto_text_fetched_int=2 c.proto_text_fetched_bigint=1 c.proto_text_fetched_decimal=1 c.proto_text_fetched_float=1 c.proto_text_fetched_double=1 c.proto_text_fetched_year=1 c.proto_text_fetched_time=1 c.proto_text_fetched_string=2 c.bytes_received_real_data_normal=33 g.rows_fetched_from_client_normal_buffered=1 g.proto_text_fetched_bit=1 g.proto_text_fetched_tinyint=1 g.proto_text_fetched_short=1 g.proto_text_fetched_int24=1 g.proto_text_fetched_int=2 g.proto_text_fetched_bigint=1 g.proto_text_fetched_decimal=1 g.proto_text_fetched_float=1 g.proto_text_fetched_double=1 g.proto_text_fetched_year=1 g.proto_text_fetched_time=1 g.proto_text_fetched_string=2 g.bytes_received_real_data_normal=33
+free: c.explicit_free_result=1 g.explicit_free_result=1
+use: c.result_set_queries=1 c.no_index_used=1 c.unbuffered_sets=1 c.com_query=1 g.result_set_queries=1 g.no_index_used=1 g.unbuffered_sets=1 g.com_query=1
+ufetch: c.rows_fetched_from_server_normal=1 c.rows_fetched_from_client_normal_unbuffered=1 c.proto_text_fetched_int=1 c.proto_text_fetched_string=1 c.bytes_received_real_data_normal=4 g.rows_fetched_from_server_normal=1 g.rows_fetched_from_client_normal_unbuffered=1 g.proto_text_fetched_int=1 g.proto_text_fetched_string=1 g.bytes_received_real_data_normal=4
+ufree: c.flushed_normal_sets=1 c.rows_fetched_from_server_normal=1 c.rows_fetched_from_client_normal_unbuffered=1 c.rows_skipped_normal=1 c.explicit_free_result=1 g.flushed_normal_sets=1 g.rows_fetched_from_server_normal=1 g.rows_fetched_from_client_normal_unbuffered=1 g.rows_skipped_normal=1 g.explicit_free_result=1
+implicit: c.result_set_queries=1 c.no_index_used=1 c.buffered_sets=1 c.rows_fetched_from_server_normal=2 c.rows_buffered_from_client_normal=2 c.explicit_free_result=1 c.com_query=1 g.result_set_queries=1 g.no_index_used=1 g.buffered_sets=1 g.rows_fetched_from_server_normal=2 g.rows_buffered_from_client_normal=2 g.explicit_free_result=1 g.com_query=1
+real+store: c.result_set_queries=1 c.no_index_used=1 c.buffered_sets=1 c.rows_fetched_from_server_normal=2 c.rows_buffered_from_client_normal=2 c.com_query=1 g.result_set_queries=1 g.no_index_used=1 g.buffered_sets=1 g.rows_fetched_from_server_normal=2 g.rows_buffered_from_client_normal=2 g.com_query=1
+update: c.non_result_set_queries=1 c.rows_affected_normal=2 c.explicit_free_result=1 c.com_query=1 g.non_result_set_queries=1 g.rows_affected_normal=2 g.explicit_free_result=1 g.com_query=1
+prepare: c.com_stmt_prepare=1 g.com_stmt_prepare=1
+execute: c.result_set_queries=1 c.no_index_used=1 c.com_stmt_execute=1 g.result_set_queries=1 g.no_index_used=1 g.com_stmt_execute=1
+sfetch1: c.ps_unbuffered_sets=1 c.rows_fetched_from_server_ps=1 c.rows_fetched_from_client_ps_unbuffered=1 g.ps_unbuffered_sets=1 g.rows_fetched_from_server_ps=1 g.rows_fetched_from_client_ps_unbuffered=1
+sfetchend: c.rows_fetched_from_server_ps=1 c.rows_fetched_from_client_ps_unbuffered=1 g.rows_fetched_from_server_ps=1 g.rows_fetched_from_client_ps_unbuffered=1
+sstore: c.result_set_queries=1 c.no_index_used=1 c.ps_buffered_sets=1 c.rows_fetched_from_server_ps=2 c.rows_buffered_from_client_ps=2 c.com_stmt_execute=1 g.result_set_queries=1 g.no_index_used=1 g.ps_buffered_sets=1 g.rows_fetched_from_server_ps=2 g.rows_buffered_from_client_ps=2 g.com_stmt_execute=1
+sfetchstored: g.rows_fetched_from_client_ps_buffered=1
+sfree: 
+getresult: c.result_set_queries=1 c.no_index_used=1 c.buffered_sets=1 c.rows_fetched_from_server_ps=2 c.rows_buffered_from_client_ps=2 c.com_stmt_execute=1 g.result_set_queries=1 g.no_index_used=1 g.buffered_sets=1 g.rows_fetched_from_server_ps=2 g.rows_buffered_from_client_ps=2 g.com_stmt_execute=1
+gfetchall: c.proto_binary_fetched_bit=5 c.proto_binary_fetched_tinyint=2 c.proto_binary_fetched_short=2 c.proto_binary_fetched_int24=2 c.proto_binary_fetched_int=2 c.proto_binary_fetched_bigint=3 c.proto_binary_fetched_decimal=2 c.proto_binary_fetched_float=2 c.proto_binary_fetched_double=2 c.proto_binary_fetched_date=2 c.proto_binary_fetched_year=1 c.proto_binary_fetched_time=2 c.proto_binary_fetched_datetime=2 c.proto_binary_fetched_timestamp=1 c.proto_binary_fetched_string=1 c.proto_binary_fetched_json=4 c.proto_binary_fetched_blob=1 c.bytes_received_real_data_ps=160 g.rows_fetched_from_client_ps_buffered=2 g.proto_binary_fetched_bit=5 g.proto_binary_fetched_tinyint=2 g.proto_binary_fetched_short=2 g.proto_binary_fetched_int24=2 g.proto_binary_fetched_int=2 g.proto_binary_fetched_bigint=3 g.proto_binary_fetched_decimal=2 g.proto_binary_fetched_float=2 g.proto_binary_fetched_double=2 g.proto_binary_fetched_date=2 g.proto_binary_fetched_year=1 g.proto_binary_fetched_time=2 g.proto_binary_fetched_datetime=2 g.proto_binary_fetched_timestamp=1 g.proto_binary_fetched_string=1 g.proto_binary_fetched_json=4 g.proto_binary_fetched_blob=1 g.bytes_received_real_data_ps=160
+sclose_pending: c.result_set_queries=1 c.no_index_used=1 c.ps_unbuffered_sets=1 c.flushed_ps_sets=1 c.rows_fetched_from_server_ps=2 c.rows_fetched_from_client_ps_unbuffered=2 c.rows_skipped_ps=1 c.explicit_free_result=1 c.implicit_free_result=1 c.com_stmt_execute=1 c.com_stmt_close=1 g.result_set_queries=1 g.no_index_used=1 g.ps_unbuffered_sets=1 g.flushed_ps_sets=1 g.rows_fetched_from_server_ps=2 g.rows_fetched_from_client_ps_unbuffered=2 g.rows_skipped_ps=1 g.explicit_free_result=2 g.implicit_free_result=1 g.explicit_stmt_close=1 g.com_stmt_execute=1 g.com_stmt_close=1
+supdate: c.non_result_set_queries=1 c.com_stmt_prepare=1 c.com_stmt_execute=1 g.non_result_set_queries=1 g.com_stmt_prepare=1 g.com_stmt_execute=1
+uclose: c.ps_prepared_once_executed=1 c.com_stmt_close=1 g.ps_prepared_once_executed=1 g.explicit_free_result=1 g.explicit_stmt_close=1 g.com_stmt_close=1
+never: c.ps_prepared_never_executed=1 c.implicit_free_result=1 c.com_stmt_prepare=1 c.com_stmt_close=1 g.ps_prepared_never_executed=1 g.explicit_free_result=1 g.implicit_free_result=1 g.explicit_stmt_close=1 g.com_stmt_prepare=1 g.com_stmt_close=1
+twice: c.result_set_queries=2 c.ps_buffered_sets=2 c.rows_fetched_from_server_ps=2 c.rows_buffered_from_client_ps=2 c.implicit_free_result=1 c.com_stmt_prepare=1 c.com_stmt_execute=2 c.com_stmt_close=1 g.result_set_queries=2 g.ps_buffered_sets=2 g.rows_fetched_from_server_ps=2 g.rows_buffered_from_client_ps=2 g.explicit_free_result=1 g.implicit_free_result=1 g.explicit_stmt_close=1 g.com_stmt_prepare=1 g.com_stmt_execute=2 g.com_stmt_close=1
+multi: c.result_set_queries=2 c.non_result_set_queries=1 c.buffered_sets=2 c.rows_fetched_from_server_normal=2 c.rows_buffered_from_client_normal=2 c.explicit_free_result=2 c.com_query=1 c.com_stmt_set_option=1 g.result_set_queries=2 g.non_result_set_queries=1 g.buffered_sets=2 g.rows_fetched_from_server_normal=2 g.rows_buffered_from_client_normal=2 g.explicit_free_result=2 g.com_query=1 g.com_stmt_set_option=1
+ping+select: c.com_init_db=1 c.com_ping=1 g.com_init_db=1 g.com_ping=1
+end-close: g.explicit_close=1
+"#
+    );
+}
+
+/// mysqlnd's cell decoding: BIT becomes a decimal string (text) or an integer
+/// (binary / INT_AND_FLOAT_NATIVE), ZEROFILL integers stay padded strings,
+/// unsigned values past PHP_INT_MAX stay strings, and fields carry NUM_FLAG.
+/// Golden output from php 8.3 + mysqlnd.
+#[test]
+#[ignore]
+fn test_mysqli_cell_decoding_follows_mysqlnd() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP TABLE IF EXISTS mysqli_decode_t");
+$db->query("CREATE TABLE mysqli_decode_t (a INT(5) ZEROFILL, b TINYINT ZEROFILL, c BIGINT UNSIGNED ZEROFILL, y YEAR, bt BIT(3), b64 BIT(64), bt9 BIT(9), fz FLOAT ZEROFILL, u BIGINT UNSIGNED, d DECIMAL(4,1), ts TIMESTAMP NULL, n INT NULL)");
+$db->query("INSERT INTO mysqli_decode_t VALUES (7, 3, 12, 2024, 5, b'1111111111111111111111111111111111111111111111111111111111111111', 300, 1.5, 18446744073709551615, 2.5, NULL, NULL), (0, 0, 0, 1999, 0, 0, 1, 0, 1, 0, NULL, 4)");
+$show = function (string $label, ?array $row): void {
+    echo $label, ":";
+    foreach ((array) $row as $v) {
+        echo " ", gettype($v), "(", var_export($v, true), ")";
+    }
+    echo "\n";
+};
+$q = "SELECT * FROM mysqli_decode_t ORDER BY y DESC";
+$r = $db->query($q);
+$show("text", $r->fetch_row());
+$show("text", $r->fetch_row());
+foreach ($r->fetch_fields() as $f) {
+    // A TIMESTAMP's flags are the server's own (MariaDB adds UNSIGNED_FLAG).
+    if ($f->name !== "ts") {
+        echo $f->name, "=", $f->type, "/", $f->flags, " ";
+    }
+}
+echo "\n";
+$u = $db->query($q, MYSQLI_USE_RESULT);
+$show("unbuf", $u->fetch_row());
+$u->free();
+$s = $db->prepare($q);
+$s->execute();
+$g = $s->get_result();
+$show("binary", $g->fetch_row());
+$show("binary", $g->fetch_row());
+$a = $b = $c = $y = $bt = $b64 = $bt9 = $fz = $uu = $d = $ts = $n = null;
+$s->execute();
+$s->bind_result($a, $b, $c, $y, $bt, $b64, $bt9, $fz, $uu, $d, $ts, $n);
+$s->fetch();
+$show("bound", [$a, $b, $c, $y, $bt, $b64, $bt9, $fz, $uu, $d, $ts, $n]);
+$s->close();
+$native = mysqli_init();
+$native->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
+$native->real_connect($host, $user, $pass, $dbname, $port);
+$show("native", $native->query($q)->fetch_row());
+$db->query("DROP TABLE mysqli_decode_t");
+"#,
+    ));
+    assert_eq!(
+        out,
+        r#"text: string('00007') string('003') string('00000000000000000012') string('2024') string('5') string('18446744073709551615') string('300') string('0000000001.5') string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+text: string('00000') string('000') string('00000000000000000000') string('1999') string('0') string('0') string('1') string('000000000000') string('1') string('0.0') NULL(NULL) string('4')
+a=3/32864 b=1/32864 c=8/32864 y=13/32864 bt=16/32 b64=16/32 bt9=16/32 fz=4/32864 u=8/32800 d=246/0 n=3/32768 
+unbuf: string('00007') string('003') string('00000000000000000012') string('2024') string('5') string('18446744073709551615') string('300') string('0000000001.5') string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+binary: string('00007') string('003') string('00000000000000000012') string('2024') integer(5) string('18446744073709551615') integer(300) double(1.5) string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+binary: string('00000') string('000') string('00000000000000000000') string('1999') integer(0) integer(0) integer(1) double(0.0) integer(1) string('0.0') NULL(NULL) integer(4)
+bound: string('00007') string('003') string('00000000000000000012') string('2024') integer(5) string('18446744073709551615') integer(300) double(1.5) string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+native: string('00007') string('003') string('00000000000000000012') string('2024') integer(5) string('18446744073709551615') integer(300) double(1.5) string('18446744073709551615') string('2.5') NULL(NULL) NULL(NULL)
+"#
+    );
+}
+
+/// The link lifecycle follows php-src's mysqli_common_connect and mysqlnd:
+/// connecting a connected link closes it implicitly and starts over on a fresh
+/// handle (every option back to its default), a failed reconnect leaves a
+/// connected link that answers 2014, a failed constructor closes the object
+/// while a failed real_connect() on mysqli_init() leaves it unconnected,
+/// connect() reopens a closed object, and the connection counters move like
+/// mysqlnd's (mysqli_init() handles count as persistent, active_connections
+/// drops twice per close). Golden output from php 8.3 + mysqlnd.
+#[test]
+#[ignore]
+fn test_mysqli_link_lifecycle_follows_mysqlnd() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$keys = ["connect_success", "connect_failure", "implicit_close", "explicit_close", "pconnect_success", "active_connections", "active_persistent_connections", "com_quit"];
+$signed = function (string $v): int {
+    if (strlen($v) < 19) {
+        return (int) $v;
+    }
+    return -((18446744073 - (int) substr($v, 0, -9)) * 1000000000 + (709551616 - (int) substr($v, -9)));
+};
+$prev = mysqli_get_client_stats();
+$delta = function (string $label) use (&$prev, $keys, $signed): void {
+    $now = mysqli_get_client_stats();
+    echo $label, ":";
+    foreach ($keys as $k) {
+        $d = $signed((string) $now[$k]) - $signed((string) $prev[$k]);
+        if ($d != 0) {
+            echo " ", $k, "=", $d;
+        }
+    }
+    echo "\n";
+    $prev = $now;
+};
+$kind = function (mysqli $link): string {
+    $row = $link->query("SELECT 1, @elephc_init")->fetch_row();
+    return gettype($row[0]) . "/" . var_export($row[1], true);
+};
+$attempt = function (string $label, Closure $call): void {
+    try {
+        $result = (string) $call();
+        echo $label, ": ", $result, "\n";
+    } catch (Error $e) {
+        echo $label, ": ", get_class($e), " ", $e->getMessage(), "\n";
+    }
+};
+// Reconnecting a connected link starts over on a fresh handle: options gone.
+$a = new mysqli($host, $user, $pass, $dbname, $port);
+$a->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
+echo "before: ", $kind($a), "\n";
+$a->query("SELECT 2");
+$delta("connected");
+$a->real_connect($host, $user, $pass, $dbname, $port);
+echo "after: ", $kind($a), " q=", $a->get_connection_stats()["com_query"], "\n";
+$delta("reconnected");
+$b = mysqli_init();
+$b->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
+$b->options(MYSQLI_INIT_COMMAND, "SET @elephc_init = 5");
+$b->real_connect($host, $user, $pass, $dbname, $port);
+echo "init: ", $kind($b), "\n";
+$b->connect($host, $user, $pass, $dbname, $port);
+echo "connect: ", $kind($b), "\n";
+$delta("init+connect");
+// A failed reconnect leaves a connected link with no connection: 2014.
+@$a->real_connect($host, $user, "elephc-wrong", $dbname, $port);
+$delta("failed reconnect");
+echo "dead: ", var_export($a->ping(), true), " ", $a->errno, " ", var_export($a->query("SELECT 1"), true), " ", $a->errno, "\n";
+$a->real_connect($host, $user, $pass, $dbname, $port);
+echo "revived: ", $kind($a), "\n";
+$delta("revived");
+$a->close();
+$delta("closed");
+$attempt("closed real_connect", fn() => var_export($a->real_connect($host, $user, $pass, $dbname, $port), true));
+$attempt("closed options", fn() => var_export($a->options(MYSQLI_OPT_CONNECT_TIMEOUT, 1), true));
+$attempt("closed ping", fn() => var_export($a->ping(), true));
+$attempt("closed errno", fn() => (string) mysqli_errno($a));
+$attempt("closed close", fn() => var_export($a->close(), true));
+$attempt("closed connect", fn() => var_export($a->connect($host, $user, $pass, $dbname, $port), true));
+echo "reopened: ", $kind($a), "\n";
+$delta("reopened");
+unset($a);
+$delta("destroyed");
+// A failed constructor frees the handle; a failed real_connect on
+// mysqli_init() keeps an unconnected one.
+$c = @new mysqli($host, $user, "elephc-wrong", $dbname, $port);
+$delta("failed constructor");
+$attempt("failed ctor ping", fn() => var_export($c->ping(), true));
+$e = mysqli_init();
+@$e->real_connect($host, $user, "elephc-wrong", $dbname, $port);
+$delta("failed init");
+$attempt("failed init ping", fn() => var_export($e->ping(), true));
+$attempt("failed init error", fn() => mysqli_error($e));
+echo "init retry: ", var_export($e->real_connect($host, $user, $pass, $dbname, $port), true), "\n";
+$delta("init retry");
+$f = mysqli_init();
+unset($f);
+$delta("unused init");
+echo "links: ", json_encode(mysqli_get_links_stats()), "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        r#"before: integer/NULL
+connected: connect_success=1 active_connections=1
+after: string/NULL q=1
+reconnected: connect_success=1 implicit_close=1 active_connections=-1 com_quit=1
+init: integer/5
+connect: string/NULL
+init+connect: connect_success=2 implicit_close=1 pconnect_success=1 active_persistent_connections=-1 com_quit=1
+failed reconnect: connect_failure=1 implicit_close=1 active_connections=-2 com_quit=1
+dead: false 2014 false 2014
+revived: string/NULL
+revived: connect_success=1
+closed: explicit_close=1 active_connections=-2 com_quit=1
+closed real_connect: Error mysqli object is already closed
+closed options: Error mysqli object is already closed
+closed ping: Error mysqli object is already closed
+closed errno: Error mysqli object is already closed
+closed close: Error mysqli object is already closed
+closed connect: true
+reopened: string/NULL
+reopened: connect_success=1 active_connections=1
+destroyed: explicit_close=1 active_connections=-2 com_quit=1
+failed constructor: connect_failure=1 active_connections=-1
+failed ctor ping: Error mysqli object is already closed
+failed init: connect_failure=1
+failed init ping: Error mysqli object is not fully initialized
+failed init error: Error mysqli object is not fully initialized
+init retry: true
+init retry: connect_success=1 pconnect_success=1 active_connections=1 active_persistent_connections=1
+unused init: active_connections=-1 active_persistent_connections=-1
+links: {"total":2,"active_plinks":0,"cached_plinks":0}
+"#
+    );
+}
+
+/// change_user() announces the charset set_charset() last chose, like mysqlnd: a `latin1`
+/// session stays `latin1_swedish_ci` (escaping included), a `utf8mb4` one becomes
+/// `utf8mb4_general_ci`, and a raw `SET NAMES` query does not count. set_charset() rejects a
+/// name mysqlnd's charset table does not know (`utf8mb3`, `utf-8`) with 2019 without contacting
+/// the server, reported through mysqli_report (STRICT throws). Expected output is php 8.5 +
+/// mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_change_user_keeps_the_set_charset() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function col(mysqli $db): string { $row = $db->query("SELECT @@collation_connection")->fetch_row(); return (string) $row[0]; }
+var_export($db->set_charset("LATIN1"));
+var_export($db->change_user($user, $pass, $dbname));
+echo ":", $db->character_set_name(), ":", col($db), ":", bin2hex($db->real_escape_string("\xbf'")), "|";
+$db->set_charset("utf8mb4");
+$db->change_user($user, $pass, $dbname);
+echo $db->character_set_name(), ":", col($db), "|";
+$db->query("SET NAMES latin1");
+$db->change_user($user, $pass, $dbname);
+echo $db->character_set_name(), ":", col($db), "|";
+foreach (["utf8mb3", "utf-8", "nope"] as $n) {
+    echo var_export($db->set_charset($n), true), ":", $db->errno, ":", $db->error, ":", $db->character_set_name(), "|";
+}
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try { $db->set_charset("utf8mb3"); echo "nothrow"; } catch (mysqli_sql_exception $e) { echo "throw:", $e->getCode(); }
+echo "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "truetrue:latin1:latin1_swedish_ci:bf5c27|utf8mb4:utf8mb4_general_ci|utf8mb4:utf8mb4_general_ci|false:2019:Invalid character set was provided:utf8mb4|false:2019:Invalid character set was provided:utf8mb4|false:2019:Invalid character set was provided:utf8mb4|throw:2019\n"
+    );
+}
+
+/// more_results() reads the connection's last server status like mysqlnd, so a row set's
+/// metadata EOF already announces a following set: right after multi_query(), during an
+/// unbuffered read, and after a prepared CALL's execute() (on the statement and on the link),
+/// while next_result() still needs the current set consumed. Expected output is php 8.5 +
+/// mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_more_results_is_known_before_the_set_is_read() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function mr(mysqli $db): string { return var_export($db->more_results(), true); }
+$db->multi_query("SELECT 1 UNION ALL SELECT 2; SELECT 3");
+echo "a:", mr($db), ",";
+$r = $db->use_result();
+echo mr($db), ",";
+$r->fetch_row();
+echo mr($db), ",";
+$r->fetch_row();
+$r->fetch_row();
+echo mr($db), ",";
+$r->free();
+echo mr($db), "|";
+$db->next_result();
+$db->store_result()->free();
+echo "b:", mr($db), "|";
+$db->multi_query("SELECT 1; SELECT 2");
+$r = $db->store_result();
+echo "c:", mr($db), ",";
+$r->free();
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+$db->multi_query("DO 1; SELECT 2");
+echo "d:", mr($db), "|";
+while ($db->more_results()) { $db->next_result(); if ($x = $db->store_result()) { $x->free(); } }
+$db->query("DROP PROCEDURE IF EXISTS mmr");
+$db->query("CREATE PROCEDURE mmr() BEGIN SELECT 1 UNION ALL SELECT 2; SELECT 3; END");
+$st = $db->prepare("CALL mmr()");
+$st->execute();
+echo "e:", var_export($st->more_results(), true), ":", mr($db), ",";
+$v = 0;
+$st->bind_result($v);
+$st->fetch();
+echo var_export($st->more_results(), true), ":", mr($db), ",";
+$st->fetch(); $st->fetch();
+echo var_export($st->more_results(), true), ":", mr($db), "|";
+$st->close();
+$db->query("CALL mmr()");
+echo "f:", mr($db), "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "a:true,true,true,true,true|b:false|c:true,d:true|e:true:true,true:true,true:true|f:true\n"
+    );
+}
+
+/// A READ_ONLY cursor on a prepared CALL, which the server runs without a cursor: execute()
+/// succeeds with the first set's rows, a later statement's failure (a SIGNAL after the first
+/// SELECT) is reported only by next_result() (thrown under STRICT), and a procedure whose sets
+/// all succeed walks them as usual. Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stmt_cursor_call_keeps_the_first_set_before_a_later_error() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$db->query("DROP PROCEDURE IF EXISTS mcsig");
+$db->query("CREATE PROCEDURE mcsig() BEGIN SELECT 1 AS a UNION ALL SELECT 2; SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'late'; END");
+$db->query("DROP PROCEDURE IF EXISTS mcok");
+$db->query("CREATE PROCEDURE mcok() BEGIN SELECT 1 AS a UNION ALL SELECT 2; SELECT 3 AS b; END");
+foreach (["mcsig", "mcok"] as $p) {
+    $st = $db->prepare("CALL $p()");
+    $st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+    echo $p, ":", var_export($st->execute(), true), ":", $st->errno, ":", var_export($st->more_results(), true);
+    $v = 0;
+    $st->bind_result($v);
+    $rows = [];
+    while ($st->fetch()) { $rows[] = $v; }
+    echo ":", implode(",", $rows), ":", var_export($st->more_results(), true);
+    $n = $st->next_result();
+    echo ":next=", var_export($n, true), ":", $st->errno, ":", $st->error;
+    if ($n) {
+        $st->bind_result($v);
+        $rows = [];
+        while ($st->fetch()) { $rows[] = $v; }
+        echo ":", implode(",", $rows);
+        while ($st->more_results()) { $st->next_result(); }
+    }
+    $st->close();
+    echo ":", $db->query("SELECT 9")->fetch_row()[0], "|";
+}
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$st = $db->prepare("CALL mcsig()");
+$st->attr_set(MYSQLI_STMT_ATTR_CURSOR_TYPE, MYSQLI_CURSOR_TYPE_READ_ONLY);
+try { $st->execute(); echo "exec-ok"; $st->store_result(); echo ":stored"; $st->next_result(); echo ":nothrow"; } catch (mysqli_sql_exception $e) { echo ":throw:", $e->getCode(), ":", $e->getMessage(); }
+echo "\n";
+"#,
+    ));
+    assert_eq!(
+        out,
+        "mcsig:true:0:true:1,2:true:next=false:1644:late:9|mcok:true:0:true:1,2:true:next=true:0::3:9|exec-ok:stored:throw:1644:late\n"
+    );
+}
+
+/// stat() sends one real COM_STATISTICS (no COM_QUERY, no result set) and returns the
+/// server's status line; its statistics follow mysqlnd's accounting of that exchange (two
+/// sent packets, the answer's length plus 14 bytes sent and plus 4 received). Expected
+/// output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_stat_sends_com_statistics() {
+    let out = compile_and_run(&my_program(
+        r#"
+$a = $db->get_connection_stats();
+$s = $db->stat();
+$b = $db->get_connection_stats();
+$len = strlen($s);
+$d = [];
+foreach (["packets_sent", "packets_sent_command", "packets_received", "protocol_overhead_in", "protocol_overhead_out", "com_statistics", "com_query", "packets_received_rset_header", "packets_received_ok"] as $n) {
+    $d[] = $n . "=" . ($b[$n] - $a[$n]);
+}
+echo substr($s, 0, 8), "|sent-len=", $b["bytes_sent"] - $a["bytes_sent"] - $len, "|recv-len=", $b["bytes_received"] - $a["bytes_received"] - $len, "|", implode(",", $d), "\n";
+"#,
+    ));
+    assert_eq!(out, "Uptime: |sent-len=14|recv-len=4|packets_sent=2,packets_sent_command=1,packets_received=1,protocol_overhead_in=4,protocol_overhead_out=8,com_statistics=1,com_query=0,packets_received_rset_header=0,packets_received_ok=0\n");
+}
+
+/// Under `elephc monitor`, every mysqli execution counts once with its SQL text for the exact
+/// profiler: a stored query(), a real_query(), a multi_query() batch, each prepared execute()
+/// (the first included), and a MYSQLI_ASYNC query (counted when it is sent, its blocking reap
+/// timed as database wait). The capture lists each distinct statement shape with its count.
+#[test]
+#[ignore]
+fn test_mysqli_queries_reach_the_monitor() {
+    let dir = make_cli_test_dir("elephc_mysqli_monitor_queries");
+    let program = my_program(
+        r#"
+function run(mysqli $db): void {
+    $db->query("SELECT 41 AS sync_probe")->fetch_row();
+    $db->real_query("SELECT 3 AS real_probe");
+    $db->store_result()->free();
+    $db->multi_query("SELECT 1 AS multi_a; SELECT 2 AS multi_b");
+    do { if ($r = $db->store_result()) { $r->free(); } } while ($db->more_results() && $db->next_result());
+    $s = $db->prepare("SELECT ? AS prep_probe");
+    $v = 1;
+    $s->bind_param("i", $v);
+    $s->execute();
+    $s->execute();
+    $s->close();
+    $db->query("SELECT 42 AS async_probe", MYSQLI_ASYNC);
+    $db->reap_async_query()->fetch_row();
+    echo "ran\n";
+}
+run($db);
+"#,
+    );
+    std::fs::write(dir.join("queries.php"), program).expect("failed to write the monitored fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["monitor", "queries.php", "--save", "queries.json"])
+        .output()
+        .expect("failed to run elephc monitor");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "monitor failed\nstdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("ran"), "the program did not run: {stdout}");
+    let capture: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.join("queries.json")).expect("saved capture"),
+    )
+    .expect("valid capture JSON");
+    let mut shapes: Vec<(String, u64)> = capture["queries"]
+        .as_array()
+        .expect("query list")
+        .iter()
+        .map(|entry| {
+            (
+                entry[0].as_str().expect("query shape").to_string(),
+                entry[1].as_u64().expect("query count"),
+            )
+        })
+        .filter(|(shape, _)| shape.contains("_probe") || shape.contains("multi_"))
+        .collect();
+    shapes.sort();
+    assert_eq!(
+        shapes,
+        vec![
+            ("SELECT ? AS async_probe".to_string(), 1),
+            ("SELECT ? AS multi_a; SELECT ? AS multi_b".to_string(), 1),
+            ("SELECT ? AS prep_probe".to_string(), 2),
+            ("SELECT ? AS real_probe".to_string(), 1),
+            ("SELECT ? AS sync_probe".to_string(), 1),
+        ],
+        "capture: {capture}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A buffered result does not keep its mysqli object alive: unsetting the link closes the
+/// connection at once while the result (already read into the client) stays fetchable, like
+/// php, whose result holds the native result state rather than the mysqli wrapper. Expected
+/// output is php 8.5 + mysqlnd's. The PROCESSLIST probe counts only the thread ids of the link
+/// under test, so connections opened by concurrent live tests on the same user cannot skew it.
+#[test]
+#[ignore]
+fn test_mysqli_buffered_result_does_not_keep_the_link_alive() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function lc_threads(string $h, string $u, string $p, string $d, int $port, string $ids): int {
+    $m = new mysqli($h, $u, $p, $d, $port);
+    $row = $m->query("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID IN (" . $ids . ")")->fetch_row();
+    $m->close();
+    return (int) $row[0];
+}
+$db2 = new mysqli($host, $user, $pass, $dbname, $port);
+$ids = (string) $db2->thread_id;
+$r = $db2->query("SELECT 1 UNION ALL SELECT 2");
+echo "a:", lc_threads($host, $user, $pass, $dbname, $port, $ids), "|";
+unset($db2);
+echo "b:", lc_threads($host, $user, $pass, $dbname, $port, $ids), "|", json_encode($r->fetch_row()), "|";
+$r->free();
+echo "c:", lc_threads($host, $user, $pass, $dbname, $port, $ids), "|";
+unset($r);
+echo "d:", lc_threads($host, $user, $pass, $dbname, $port, $ids), "\n";
+"#,
+    ));
+    assert_eq!(out, "a:1|b:0|[\"1\"]|c:0|d:0\n");
+}
+
+/// A result produced before the link reconnected counts its fetches and its free on the
+/// connection that produced it: the replacement connection's statistics stay untouched while
+/// the process-wide totals still move, and the new connection's own results count on it.
+/// Expected output is php 8.5 + mysqlnd's.
+#[test]
+#[ignore]
+fn test_mysqli_old_result_after_reconnect_charges_its_own_connection() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function rc_keys(mysqli $db): string {
+    $s = $db->get_connection_stats();
+    return $s["explicit_free_result"] . "," . $s["rows_fetched_from_client_normal_buffered"] . "," . $s["bytes_received_real_data_normal"] . "," . $s["rows_fetched_from_client_normal_unbuffered"] . "," . $s["flushed_normal_sets"];
+}
+function rc_client(): string {
+    $s = mysqli_get_client_stats();
+    return $s["explicit_free_result"] . "," . $s["rows_fetched_from_client_normal_buffered"];
+}
+$r = $db->query("SELECT 1 AS a UNION ALL SELECT 2");
+$c0 = rc_client();
+$db->real_connect($host, $user, $pass, $dbname, $port);
+echo "fresh:", rc_keys($db), "|", json_encode($r->fetch_row()), "|";
+$r->free();
+$c1 = rc_client();
+echo "after:", rc_keys($db), "|client:", $c0, "->", $c1, "|";
+$own = $db->query("SELECT 3 AS b");
+$own->fetch_row();
+$own->free();
+echo "own:", rc_keys($db), "\n";
+"#,
+    ));
+    assert_eq!(out, "fresh:0,0,0,0,0|[\"1\"]|after:0,0,0,0,0|client:0,0->1,1|own:1,0,1,0,0\n");
+}
+
+/// An unbuffered result whose link reconnected is stale: every fetch fails (fetch_all() an
+/// empty array) without touching the new connection's error, and under STRICT it throws
+/// mysqlnd's 2014 "Commands out of sync" of its own, not the link's last error. Expected output
+/// is php 8.5 + mysqlnd's, except that the failed row fetches return `null` where php returns
+/// `false` (the documented fetch-failure difference; fetch_column() is `false` in both).
+#[test]
+#[ignore]
+fn test_mysqli_stale_unbuffered_result_fails_with_its_own_error() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$u = $db->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$db->real_connect($host, $user, $pass, $dbname, $port);
+echo var_export($u->fetch_row(), true), ":", var_export($u->fetch_assoc(), true), ":", var_export($u->fetch_object(), true), ":", var_export($u->fetch_column(), true), ":", count($u->fetch_all()), ":", $db->errno, "|";
+$u->free();
+$u2 = $db->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$u2->fetch_row();
+$db->real_connect($host, $user, $pass, $dbname, $port);
+$db->query("SELECT 1 FROM nope_table_x");
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try { $u2->fetch_row(); echo "nothrow"; } catch (mysqli_sql_exception $e) { echo "throw:", $e->getCode(), ":", $e->getMessage(), ":", $e->getSqlState(); }
+echo ":", $db->errno, "|", $db->query("SELECT 5")->fetch_row()[0], "\n";
+"#,
+    ));
+    assert_eq!(out, "NULL:NULL:NULL:false:0:0|throw:2014:Commands out of sync; you can't run this command now:HY000:1146|5\n");
+}
+
+/// A stale MYSQLI_USE_RESULT result (its link reconnected) keeps no reference to the link:
+/// freeing it, or failing a fetch on it, and then unsetting the mysqli object closes the
+/// replacement connection at once, as in php. Expected output is php 8.5 + mysqlnd's. The
+/// PROCESSLIST probe counts only the original and replacement thread ids of the link under
+/// test, so connections opened by concurrent live tests on the same user cannot skew it.
+#[test]
+#[ignore]
+fn test_mysqli_stale_result_does_not_keep_the_replacement_link_alive() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+function sd_threads(string $h, string $u, string $p, string $d, int $port, string $ids): int {
+    $m = new mysqli($h, $u, $p, $d, $port);
+    $row = $m->query("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID IN (" . $ids . ")")->fetch_row();
+    $m->close();
+    return (int) $row[0];
+}
+$db2 = new mysqli($host, $user, $pass, $dbname, $port);
+$ids2 = (string) $db2->thread_id;
+$u = $db2->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$db2->real_connect($host, $user, $pass, $dbname, $port);
+$ids2 = $ids2 . "," . $db2->thread_id;
+echo "a:", sd_threads($host, $user, $pass, $dbname, $port, $ids2), "|";
+$u->free();
+unset($db2);
+echo "b:", sd_threads($host, $user, $pass, $dbname, $port, $ids2), "|";
+$db3 = new mysqli($host, $user, $pass, $dbname, $port);
+$ids3 = (string) $db3->thread_id;
+$w = $db3->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
+$db3->real_connect($host, $user, $pass, $dbname, $port);
+$ids3 = $ids3 . "," . $db3->thread_id;
+echo var_export($w->fetch_column(), true), "|";
+unset($db3);
+echo "c:", sd_threads($host, $user, $pass, $dbname, $port, $ids3), "\n";
+"#,
+    ));
+    assert_eq!(out, "a:1|b:0|false|c:0\n");
 }

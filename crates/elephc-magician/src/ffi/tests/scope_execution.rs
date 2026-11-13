@@ -10,6 +10,31 @@
 
 use super::*;
 
+/// The ABI carries a past unset even after rebinding, then clears it on the next native snapshot.
+#[test]
+fn scope_get_preserves_native_detachment_until_a_new_snapshot() {
+    let mut scope = ElephcEvalScope::new();
+    let name = b"node";
+    let original = 1usize as *mut RuntimeCell;
+    let replacement = 2usize as *mut RuntimeCell;
+    let mut thrown = std::ptr::null_mut();
+    let snapshot = crate::abi::SCOPE_FLAG_NATIVE_SNAPSHOT;
+    assert_eq!(unsafe { __elephc_eval_scope_set(&mut scope, name.as_ptr(), 4,
+        original, snapshot, &mut thrown) }, 0);
+    scope.unset_respecting_references("node");
+    scope.set("node", RuntimeCellHandle::from_raw(replacement), crate::scope::ScopeCellOwnership::Borrowed);
+    let mut value = std::ptr::null_mut();
+    let mut flags = 0;
+    assert_eq!(unsafe { __elephc_eval_scope_get(&scope, name.as_ptr(), 4, &mut value, &mut flags) }, 0);
+    assert_eq!(value, replacement);
+    assert_ne!(flags & crate::abi::SCOPE_FLAG_NATIVE_DETACHED, 0);
+    assert_ne!(flags & SCOPE_FLAG_PRESENT, 0);
+    assert_eq!(unsafe { __elephc_eval_scope_set(&mut scope, name.as_ptr(), 4,
+        replacement, snapshot, &mut thrown) }, 0);
+    assert_eq!(unsafe { __elephc_eval_scope_get(&scope, name.as_ptr(), 4, &mut value, &mut flags) }, 0);
+    assert_eq!(flags & (crate::abi::SCOPE_FLAG_NATIVE_DETACHED | SCOPE_FLAG_DIRTY), 0);
+}
+
 /// Verifies scope allocation returns an empty opaque activation scope handle.
 #[test]
 fn scope_new_returns_empty_handle() {

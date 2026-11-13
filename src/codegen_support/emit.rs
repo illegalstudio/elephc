@@ -182,6 +182,60 @@ impl Emitter {
         }
     }
 
+    /// Emits the global `entry`, which Rust calls through a function pointer, running the
+    /// argument-less `target` with rbx and r12-r15 preserved for it.
+    ///
+    /// The `--web` bridge calls the request handler, and in application mode the ready,
+    /// request and shutdown callbacks, through function pointers from Rust. Those bodies
+    /// follow the emitter's convention, not SysV's: the lowering uses r12-r15 as scratch.
+    /// Once the bridge is optimized, its worker loop keeps values in r12-r14 across the
+    /// handler call, so the worker died after its first request.
+    ///
+    /// SysV-only: Win64 passes the first four integer arguments in rcx/rdx/r8/r9, reserves
+    /// 32 bytes of shadow space and keeps its state in different registers, so this wrapper
+    /// would preserve the wrong ones there.
+    pub fn sysv_callee_saved_entry(&mut self, entry: &str, target: &str) {
+        debug_assert_eq!(self.target.arch, Arch::X86_64);
+        debug_assert!(
+            self.platform.uses_sysv_abi(),
+            "the SysV callee-saved entry is not defined for {:?}",
+            self.platform
+        );
+        self.label_global(entry);
+        self.emit_sysv_callee_saved_call(target, 0);
+    }
+
+    /// Saves rbx and r12-r15, calls `target`, restores the registers and returns its result.
+    ///
+    /// `stack_words` copies that many caller stack arguments below the saved registers so the
+    /// body sees them at the offsets its own prologue expects. The `--web` entry passes 0;
+    /// the count exists because an export called from Rust with more than six integer
+    /// arguments needs the same treatment.
+    fn emit_sysv_callee_saved_call(&mut self, target: &str, stack_words: usize) {
+        for reg in ["rbx", "r12", "r13", "r14", "r15"] {
+            self.instruction(&format!("push {}", reg));                     // save a register Rust may keep a value in across this call
+        }
+        // The return address and five saves leave rsp 16-byte aligned; pad an odd copy count.
+        let padding = if stack_words % 2 == 1 { 8 } else { 0 };
+        if padding != 0 {
+            self.instruction("sub rsp, 8");                                     // keep rsp 16-byte aligned at the body call
+        }
+        // Copying the last argument first keeps every source at the same offset from rsp.
+        let source = 48 + padding + 8 * stack_words.saturating_sub(1);
+        for _ in 0..stack_words {
+            self.instruction(&format!("push QWORD PTR [rsp + {}]", source));   // copy a stack-passed argument below the saved registers
+        }
+        self.instruction(&format!("call {}", target));                          // run the body with the caller's registers saved
+        let pushed = 8 * stack_words + padding;
+        if pushed != 0 {
+            self.instruction(&format!("add rsp, {}", pushed));                  // drop the copied arguments and the padding
+        }
+        for reg in ["r15", "r14", "r13", "r12", "rbx"] {
+            self.instruction(&format!("pop {}", reg));                          // restore the caller's register
+        }
+        self.instruction("ret");                                                // return the body's rax/rdx/xmm0 result untouched
+    }
+
     /// Starts writing a whole function that is needed WHILE another one is being written.
     ///
     /// Descriptor invokers and PHP-ABI wrappers are discovered mid-body — the first callable that
@@ -620,5 +674,21 @@ mod tests {
         e.label_global("_php_outer");
         e.instruction("ret");
         assert_eq!(e.output(), ".globl _php_outer\n_php_outer:\n    ret\n");
+    }
+
+    /// The web entry wrapper must save and restore exactly the registers Rust keeps state in,
+    /// and must not be emitted where its SysV assumptions do not hold.
+    #[test]
+    fn test_sysv_callee_saved_entry_wraps_the_web_handler() {
+        let mut linux = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        linux.sysv_callee_saved_entry("_elephc_web_handler_rust_entry", "_elephc_web_handler");
+        let output = linux.output();
+        let expected = "_elephc_web_handler_rust_entry:\n    push rbx\n    push r12\n    push r13\n    push r14\n    push r15\n    call _elephc_web_handler\n    pop r15\n    pop r14\n    pop r13\n    pop r12\n    pop rbx\n    ret\n";
+        assert!(output.ends_with(expected), "{output}");
+
+        // Darwin is SysV too, so the wrapper applies unchanged there.
+        let mut darwin = Emitter::new(Target::new(Platform::MacOS, Arch::X86_64));
+        darwin.sysv_callee_saved_entry("__elephc_web_handler_rust_entry", "__elephc_web_handler");
+        assert!(darwin.output().contains("__elephc_web_handler_rust_entry:\n    push rbx\n"));
     }
 }

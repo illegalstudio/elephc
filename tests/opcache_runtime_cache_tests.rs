@@ -802,44 +802,68 @@ echo 'num=', eval('$s = opcache_get_status(); return $s["opcache_statistics"]["n
 /// Literal fragments can also assemble their callable names at runtime. They need the
 /// declaration so their variable calls update the same manifest latch as native calls.
 /// Reference PHP 8.5 reports `before=1 after=0` across these spellings.
-#[test]
-fn a_forced_invalidate_agrees_across_every_surface_that_can_issue_it() {
-    for (label, issue) in [
-        ("native", r#"opcache_invalidate($p, true);"#),
-        ("literal fragment", r#"eval("opcache_invalidate(\$p, true);");"#),
-        ("literal computed callable", r#"eval('$f = "opcache_" . "invalidate"; $f($p, true);');"#),
-        ("literal runtime callable", r#"eval('$f = getenv("REVIEW_FUNCTION"); $f($p, true);');"#),
-    ] {
-        let dir = make_test_dir("opcache_rt_surface_agreement");
-        write_dynamic_fixture(
-            &dir,
-            &format!(
-                r#"<?php
+fn assert_forced_invalidate_reaches_the_latch(label: &str, issue: &str) {
+    let dir = make_test_dir("opcache_rt_surface_agreement");
+    write_dynamic_fixture(
+        &dir,
+        &format!(
+            r#"<?php
 $p = __FILE__;
 echo 'before=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
 {issue}
 echo 'after=', (opcache_is_script_cached($p) ? '1' : '0'), "\n";
 "#
-            ),
-        );
+        ),
+    );
 
-        let binary = compile_with_flags(
-            &dir,
-            &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
-            &["--php-version", "8.5"],
-        );
-        let (output, stderr) = run_binary_with_env(&binary, "REVIEW_FUNCTION", "opcache_invalidate");
+    let binary = compile_with_flags(
+        &dir,
+        &["opcache.enable_cli=1", "opcache.file_update_protection=0"],
+        &["--php-version", "8.5"],
+    );
+    let (output, stderr) = run_binary_with_env(&binary, "REVIEW_FUNCTION", "opcache_invalidate");
 
-        assert_eq!(
-            field(&output, "before"),
-            "1",
-            "{label}: the entry script is a manifest member"
-        );
-        assert_eq!(
-            field(&output, "after"),
-            "0",
-            "{label}: the invalidate did not reach the manifest latch\n{output}\n{stderr}"
-        );
+    assert_eq!(
+        field(&output, "before"),
+        "1",
+        "{label}: the entry script is a manifest member"
+    );
+    assert_eq!(
+        field(&output, "after"),
+        "0",
+        "{label}: the invalidate did not reach the manifest latch\n{output}\n{stderr}"
+    );
+}
+
+/// Schedules one program per surface that can issue the forced invalidate.
+mod a_forced_invalidate_agrees_across_every_surface_that_can_issue_it {
+    use super::assert_forced_invalidate_reaches_the_latch;
+
+    /// A native call reaches the manifest latch.
+    #[test]
+    fn native() {
+        assert_forced_invalidate_reaches_the_latch("native", r#"opcache_invalidate($p, true);"#);
+    }
+
+    /// A literal eval fragment reaches the manifest latch.
+    #[test]
+    fn literal_fragment() {
+        assert_forced_invalidate_reaches_the_latch(
+            "literal fragment", r#"eval("opcache_invalidate(\$p, true);");"#);
+    }
+
+    /// A callable name computed inside a literal fragment reaches the manifest latch.
+    #[test]
+    fn literal_computed_callable() {
+        assert_forced_invalidate_reaches_the_latch(
+            "literal computed callable", r#"eval('$f = "opcache_" . "invalidate"; $f($p, true);');"#);
+    }
+
+    /// A callable name read at run time inside a literal fragment reaches the manifest latch.
+    #[test]
+    fn literal_runtime_callable() {
+        assert_forced_invalidate_reaches_the_latch(
+            "literal runtime callable", r#"eval('$f = getenv("REVIEW_FUNCTION"); $f($p, true);');"#);
     }
 }
 

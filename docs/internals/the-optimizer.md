@@ -535,9 +535,9 @@ the trial replaces the original function.
 The proof preserves the physical ABI of eligible by-value, nonvariadic `mixed`
 call parameters by rematerializing their integer arguments at the existing call
 boundary. It does not authorize a different closure call or change dispatch.
-Executable main, parameter slots, references, dynamic `eval`, suspension,
-exception handlers, escaping values and uncertain integer/type facts are
-excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
+Private executable main frames are eligible when runtime includes cannot expose
+their locals. Parameter slots, references, dynamic `eval`, suspension, exception
+handlers, escaping values and uncertain integer/type facts are excluded. See [Bounded mixed counters](../compiling/optimization.md#bounded-mixed-counters).
 
 The backend's [frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells)
 are a separate storage optimization and do not require this pass to run.
@@ -568,12 +568,19 @@ ordinary lowering again, including with IR optimization disabled, rather than
 installing speculative trial instructions in the executable function. Integer
 storage and buffer bounds remain independent proofs.
 
+The validator keeps dominator membership in dense bitsets throughout each check.
+Precomputed singleton flags retain the existing unreachable-continuation rules.
+This avoids materializing a hash set for every block during storage trials and
+debug pass checks, while preserving same-block ordering and dominance diagnostics.
+
 For a canonical counter that lacks a static overflow proof,
 `bounded_mixed_counter/versioning.rs` can retain the original loop and add a
 guarded integer copy. Both the seed and the invariant bound must have integer
 tags. Inclusive ascending bounds must differ from `PHP_INT_MAX`, and descending
 ones from `PHP_INT_MIN`. The copied counter uses private scalar storage, and each
-normal exit publishes its final integer into the original boxed slot. Float
+normal exit publishes its final integer into the original boxed slot. The entry
+test copies the seed payload beside its tag check, so a numeric seed and that exit
+box can use the backend's frame cells instead of heap boxes. Float
 bounds, overflowing seeds and unsafe inclusive bounds follow the original loop.
 Mutable bounds, escaping SSA values, references, dynamic scopes, handlers and
 suspension are excluded. Only innermost loops of at most 256 instructions qualify,
@@ -775,6 +782,29 @@ lifetime pin and hidden slot are retired for both sinks. The operand
 evaluation and its side effects remain; the binary `md5(..., true)` form,
 non-string operands, the replacement-pair `strtr()` form and any other observer
 keep the real call.
+
+For explicit UTF-8 ASCII mbstring calls, a length fold must also prove that
+argument validation cannot fail. `mb_convert_case()` requires a constant mode in
+`0..=7`; `mb_str_pad()` requires a nonempty ASCII pad and a constant pad type in
+`0..=2`. Other modes and dynamic mode expressions retain the producer, including
+its exceptions and source-order argument effects. Multibyte trim length folds use
+literal character membership, without byte-trim range syntax. Literal mbstring
+regex and MIME decode calls retain their runtime calls: regex results depend on
+`mb_regex_encoding()`, and MIME output bytes depend on `mb_internal_encoding()`.
+Literal arguments alone cannot prove those request settings. Regex length/count
+shortcuts additionally check live UTF-8/default options and limits, plus ASCII subjects, before
+using byte scans; other states retain the full regex bridge. Explicit UTF-8 iconv
+position and MIME length folds retain their encoding proof. MIME words with interior
+Base64 padding keep the runtime decoder, whose lenient decoding differs from
+independent padded-quantum decoding. Progressive regex sessions and implicit iconv
+encoding getters also retain runtime calls: a function-local absence of setters
+cannot prove caller state or make session mutations unobservable to its caller.
+Likewise, an unobserved `mb_convert_variables()` array does not hide its updates
+to the request's illegal-character counter.
+
+The `count(explode($literal_separator, $subject))` fusion accepts only proven scalar
+string coercions. Other subjects keep the original `explode()` path and diagnostic;
+the decision happens before lowering the subject so fallback evaluates it once.
 
 ## Borrowed string reads
 
@@ -1457,6 +1487,17 @@ operation, the final integer cast, and removable `Release` instructions into
 `ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the
 first signed overflow promotes the exact accumulator and operand, finishes the
 remaining suffix in double, and then uses the existing PHP float-to-int conversion.
+
+Before that range proof, `RawPromotableLoop` copies a straight-line loop whose
+accumulators and counters are still mixed only because add, subtract, or multiply may
+overflow. The copy keeps those locals in `I64` until a signed overflow, then keeps each
+promoted local as a raw float for the rest of the loop. A float is boxed only at the
+exit. The original mixed loop remains for a seed that is not an integer.
+
+`LazyBoxedAccumulator` then handles accumulators in loops of any other shape. It keeps a
+raw integer companion and a tag next to the mixed local, runs updates and compares on the
+companion while every operand is an int, and boxes the value only before something else
+reads the local.
 Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's

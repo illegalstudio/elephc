@@ -140,12 +140,17 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
             capture_refs,
             by_ref_return,
         } => {
+            let mut references = reference_parameter_names(&params, variadic.as_deref(), variadic_by_ref);
+            references.extend(capture_refs.iter().cloned());
+            let values = closure_value_binding_names(&params, &captures, &capture_refs,
+                variadic.as_deref(), variadic_by_ref);
             let facts = ReturnBoundaryFacts::new(return_type.as_ref(),
                 params.iter().map(|(name, hint, ..)| (name.as_str(), hint.as_ref())), &body);
             ExprKind::Closure {
                 params, variadic, variadic_by_ref, variadic_type, return_type,
-                body: with_return_boundary_facts(Some(&facts), ||
-                    crate::optimize::generator_bodies::rewrite_preserving_yield(body, prune_block)),
+                body: with_return_boundary_facts(Some(&facts), || with_reference_value_scope(values, ||
+                    with_reference_parameter_scope(by_ref_return, references, ||
+                        crate::optimize::generator_bodies::rewrite_preserving_yield(body, prune_block)))),
                 is_arrow, is_static, captures, capture_refs, by_ref_return,
             }
         },

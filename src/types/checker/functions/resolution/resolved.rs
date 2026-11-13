@@ -205,12 +205,18 @@ impl Checker {
                             .unwrap_or(false)
                             || matches!(expected_ty, PhpType::Mixed));
                     if tracks_boxed_reference_output {
+                        let layout_contract = crate::types::is_written_reference_array_param(
+                            &effective_sig.ref_params,
+                            &effective_sig.param_type_exprs,
+                            param_idx,
+                        );
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
                             arg,
                             caller_env,
                             can_widen_by_ref_local,
+                            layout_contract,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                         self.record_boxed_reference_output(
@@ -219,7 +225,8 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
-                        );
+                            layout_contract,
+                        )?;
                     }
                     // PHP's parameter binding only applies to a *declared* parameter type.
                     // An inferred parameter's "expected" type is just what earlier call sites
@@ -233,6 +240,16 @@ impl Checker {
                         .copied()
                         .unwrap_or(false)
                     {
+                        if !supplied_reference {
+                            // A by-value list is rebuilt as the declared hash; refuse what
+                            // cannot be.
+                            self.require_packed_argument_hash_storage(
+                                expected_ty,
+                                &actual_ty,
+                                arg.span,
+                                &format!("Function '{}' parameter ${}", name, param_name),
+                            )?;
+                        }
                         self.require_bound_param_arg_type(
                             expected_ty,
                             &actual_ty,
@@ -291,6 +308,23 @@ impl Checker {
                         arg.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
+                    let declared = variadic_index
+                        .and_then(|index| effective_sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false);
+                    let by_reference = variadic_index
+                        .and_then(|index| effective_sig.ref_params.get(index))
+                        .copied()
+                        .unwrap_or(false);
+                    if declared && !by_reference {
+                        // A collected list is rebuilt as the element hash, or refused.
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                        )?;
+                    }
                 }
             }
             param_idx += 1;

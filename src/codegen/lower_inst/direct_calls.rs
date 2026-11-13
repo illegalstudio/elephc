@@ -73,6 +73,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     )?;
     let caller_stack_pad_bytes = direct_call_stack_pad_bytes(ctx, call_args.overflow_bytes);
     abi::emit_reserve_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
+    super::reference_argument_handoff::activate(ctx, &inst.operands, &ref_params)?;
     abi::emit_call_label(ctx.emitter, &function_symbol(&function_name));
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
@@ -94,7 +95,7 @@ pub(super) fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     // User callees own their Mixed parameter shadows, including an aliased resource return.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
     emit_borrowed_stack_mixed_arg_release(ctx, &call_args);
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, callee_by_ref_return)
 }
 
 /// Loads SSA operands into ABI argument registers and caller-stack slots for a direct call.

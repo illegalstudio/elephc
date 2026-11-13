@@ -10,12 +10,30 @@
 use super::*;
 use crate::ir::RuntimeCallTarget;
 
+mod owned_output;
+mod native_reference_store;
+#[cfg(test)]
+mod tests;
+pub(super) use native_reference_store::emit_static_if_managed;
+pub(in crate::codegen) use owned_output::publish_current_owned_output;
+
 /// Lowers an addressable local store from one SSA operand.
 pub(super) fn lower_store_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
-    let reset_concat_after_store =
-        inst.span.is_some_and(|span| span.line > 0) && value_is_acquire_of_str_concat(ctx, value)?;
+    if let Some(cell) = ctx.numeric_seed_offsets.get(&slot).copied() {
+        let seed = ctx.function.value(value).is_some_and(|metadata| {
+            crate::codegen::stack_numeric::scalar_numeric(&metadata.ir_type, &metadata.php_type)
+        });
+        if seed && ctx.local_slot_is_raw(slot) {
+            return super::arithmetic::stack_cell::store_seed(ctx, slot, value, cell);
+        }
+    }
+    // Parking a call operand can happen after a sibling scratch string was evaluated.
+    // Only an ordinary PHP assignment ends the concat lifetime, not a temporary owner store.
+    let reset_concat_after_store = ctx.local_kind(slot)? == LocalKind::PhpLocal
+        && inst.span.is_some_and(|span| span.line > 0)
+        && value_is_acquire_of_str_concat(ctx, value)?;
     ctx.store_value_to_local(slot, value)?;
     if reset_concat_after_store {
         reset_concat_to_frame_base(ctx);
@@ -73,6 +91,8 @@ pub(super) fn instruction_for_value<'a>(
 pub(in crate::codegen) enum RefCellStorePrevious {
     /// A PHP assignment through the reference: release the payload being replaced.
     Retire,
+    /// The helper returned a separate acquired owner, including when its pointer is unchanged.
+    RetireAcquired,
     /// A container write-back: the mutating helper already owns that transition.
     Keep,
 }
@@ -81,13 +101,35 @@ pub(in crate::codegen) enum RefCellStorePrevious {
 pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
+    let canonical_done = if !value_is_consuming_mutation_of_ref_cell(ctx, value, slot)?
+        && !value_is_retained_mutation_of_ref_cell(ctx, value, slot)?
+    {
+        native_reference_store::emit_if_canonical(ctx, inst, slot, value)?
+    } else { None };
     let previous = if value_is_consuming_mutation_of_ref_cell(ctx, value, slot)? {
         RefCellStorePrevious::Keep
     } else {
         retire_raw_occupant_before_ref_store(ctx, slot)?;
-        RefCellStorePrevious::Retire
+        if value_is_retained_mutation_of_ref_cell(ctx, value, slot)? {
+            RefCellStorePrevious::RetireAcquired
+        } else {
+            RefCellStorePrevious::Retire
+        }
     };
-    store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)
+    store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type, previous)?;
+    if let Some(done) = canonical_done { ctx.emitter.label(&done); }
+    Ok(())
+}
+
+/// Detects the independent destination owner acquired by a mixed-key ref-cell write.
+fn value_is_retained_mutation_of_ref_cell(
+    ctx: &FunctionContext<'_>, value: ValueId, slot: LocalSlotId,
+) -> Result<bool> {
+    let Some(mutation) = instruction_for_value(ctx, value)? else { return Ok(false); };
+    if mutation.op != Op::ArraySetMixedKey { return Ok(false); }
+    let Some(source) = mutation.operands.first().copied() else { return Ok(false); };
+    Ok(instruction_for_value(ctx, source)?.is_some_and(|source|
+        source.op == Op::LoadRefCell && source.immediate == Some(Immediate::LocalSlot(slot))))
 }
 
 /// Returns true when a container mutation already consumed the ref-cell owner being replaced.
@@ -248,14 +290,34 @@ pub(super) fn lower_alias_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &I
     Ok(())
 }
 
-/// Copies a nullable owned cell into another owner slot, preserving aliases beyond source retirement.
+/// Retains an owner slot or an authenticated incoming parameter cell into a hidden owner.
 pub(super) fn lower_retain_local_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let (source, target) = expect_local_slot_pair(inst)?;
     let source_offset = ctx.local_offset(source)?;
     let target_offset = ctx.local_offset(target)?;
     let result = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, result, source_offset);
-    abi::emit_call_label(ctx.emitter, "__rt_incref");
+    if !matches!(ctx.local_kind(source)?, crate::ir::LocalKind::RefCell | crate::ir::LocalKind::ReturnRefCell) {
+        if !ctx.function.params.get(source.as_raw() as usize).is_some_and(|parameter|
+            parameter.by_ref && !parameter.variadic)
+        {
+            return Err(CodegenIrError::invalid_module("reference owner source must be an owner or incoming reference parameter"));
+        }
+        if ctx.function.flags.is_eager_parameter_validator {
+            // The generator constructor has not captured this binding yet. Its guard only borrows.
+            abi::emit_call_label(ctx.emitter, "__rt_reference_cell_owner");
+            abi::emit_call_label(ctx.emitter, "__rt_incref");
+        } else {
+            abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), result);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("add x1, x29, #16"),   // identify this native callee's incoming stack pointer
+                Arch::X86_64 => ctx.emitter.instruction("lea rsi, [rbp + 16]"), // identify this native callee's incoming stack pointer
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_reference_parameter_acquire");
+        }
+    } else {
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+    }
     abi::store_at_offset(ctx.emitter, result, target_offset);
     Ok(())
 }
@@ -332,7 +394,7 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
     Ok(())
 }
 
-/// Snapshots the returned cell address, leases it when it is managed, and retires a superseded lease.
+/// Snapshots the returned cell address and replaces only this return site's previous managed lease.
 ///
 /// The instruction produces TWO distinct things, and keeping them apart is the whole point:
 ///
@@ -340,7 +402,7 @@ pub(super) fn lower_bind_ref_cell_ptr(ctx: &mut FunctionContext<'_>, inst: &Inst
 ///   that snapshot, so a `finally` that rebinds the returned variable and falls through cannot
 ///   make the validated address and the returned reference disagree.
 /// - Its `ReturnRefCell` slot is the optional MANAGED lease, used only for cleanup. The
-///   retained replacement is published into it before the superseded lease is retired, because
+///   retained replacement is published before any previous execution's lease is retired, because
 ///   that retirement can run a throwing payload destructor.
 ///
 /// `__rt_reference_cell_owner` answers zero for every address that is not an exact live managed
@@ -406,7 +468,7 @@ pub(in crate::codegen) fn materialize_returned_local_ref_cell(
             value = source;
             continue;
         }
-        if inst.op != Op::LoadRefCell {
+        if !matches!(inst.op, Op::LoadRefCell | Op::LoadRefCellValue) {
             return Ok(false);
         }
         let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
@@ -650,6 +712,20 @@ fn emit_mixed_local_slot_retirement(ctx: &mut FunctionContext<'_>, done: &str) {
     ctx.emitter.label(done);
 }
 
+/// Retires an unpromoted local owner without consuming the payload of a shared reference cell.
+pub(super) fn lower_release_raw_local_slot(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let slot = expect_local_slot(inst)?;
+    if ctx.local_kind(slot)? == LocalKind::PhpLocal && ctx.has_dynamic_ref_cell_state(slot) {
+        let offset = ctx.local_offset(slot)?;
+        let ty = ctx.local_php_type(slot)?;
+        crate::codegen::frame::emit_owned_local_cleanup(ctx, slot, offset, &ty);
+    }
+    Ok(())
+}
+
 /// Lowers `unset($local)` by breaking any promoted alias and writing PHP null locally.
 pub(super) fn lower_unset_local(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
@@ -727,25 +803,35 @@ pub(in crate::codegen) fn store_value_to_ref_cell_as(
 /// Returns whether `value` is an owned in-place `++`/`--` result.
 ///
 /// The increment helper may mutate a unique heap cell and return that same pointer with one
-/// fresh owner. Ownership wrappers (acquire/move/borrow/ensure-owned) are followed so the
+/// fresh owner. Ownership wrappers and transferred merge temporaries are followed so the
 /// ref-cell store can distinguish that new owner from a republished container alias.
-fn value_is_in_place_increment(ctx: &FunctionContext<'_>, mut value: ValueId) -> Result<bool> {
+fn value_is_in_place_increment(ctx: &FunctionContext<'_>, value: ValueId) -> Result<bool> {
     if ctx.value_ownership(value)? != Ownership::Owned {
         return Ok(false);
     }
-    for _ in 0..8 {
+    let mut pending = vec![value];
+    let mut visited = std::collections::HashSet::new();
+    while let Some(value) = pending.pop() {
+        if !visited.insert(value) { continue; }
         let Some(inst) = instruction_for_value(ctx, value)? else {
-            return Ok(false);
+            continue;
         };
         match inst.op {
             Op::StrIncDec => return Ok(true),
             Op::Acquire | Op::Move | Op::Borrow | Op::EnsureOwned => {
-                let Some(&source) = inst.operands.first() else {
-                    return Ok(false);
-                };
-                value = source;
+                pending.extend(inst.operands.first().copied());
             }
-            _ => return Ok(false),
+            Op::LoadLocal if ctx.value_ownership(value)? == Ownership::Owned => {
+                let Some(Immediate::LocalSlot(slot)) = inst.immediate else { continue; };
+                if ctx.local_kind(slot)? != LocalKind::OwnedTemp { continue; }
+                // Dynamic object arithmetic transfers a branch result out of this slot.
+                // Its scalar arm can return the same acquired cell as the old pointee.
+                pending.extend(ctx.function.instructions.iter().filter(|store|
+                    store.op == Op::StoreLocal
+                        && store.immediate == Some(Immediate::LocalSlot(slot)))
+                    .filter_map(|store| store.operands.first().copied()));
+            }
+            _ => {}
         }
     }
     Ok(false)
@@ -773,11 +859,24 @@ fn store_value_to_raw_ref_cell_as(
     } else {
         coerce_ref_cell_store_value(ctx, &source_ty, &target_ty)?;
     }
-    // `StrIncDec` may update a unique cell in place and return that same pointer with a
-    // fresh owner for this store. The pointer-equality short-circuit below assumes a
-    // same-pointer store republishes the cell's existing owner, so it must not apply here.
-    let in_place_increment = value_is_in_place_increment(ctx, value)?;
-    let retires_previous = previous == RefCellStorePrevious::Retire
+    // An in-place increment returns a fresh owner even if its pointer is unchanged.
+    let previous = if previous == RefCellStorePrevious::Retire
+        && value_is_in_place_increment(ctx, value)?
+    {
+        RefCellStorePrevious::RetireAcquired
+    } else {
+        previous
+    };
+    publish_current_ref_cell_value(ctx, slot, &target_ty, previous)
+}
+
+/// Publishes an already owned ABI result through a reference before retiring its previous value.
+pub(in crate::codegen) fn publish_current_ref_cell_value(
+    ctx: &mut FunctionContext<'_>, slot: LocalSlotId, target_ty: &PhpType,
+    previous: RefCellStorePrevious,
+) -> Result<()> {
+    let target_ty = target_ty.codegen_repr();
+    let retires_previous = previous != RefCellStorePrevious::Keep
         && (matches!(target_ty, PhpType::Str | PhpType::Callable) || target_ty.is_refcounted());
     if retires_previous {
         abi::emit_push_result_value(ctx.emitter, &target_ty);
@@ -786,6 +885,13 @@ fn store_value_to_raw_ref_cell_as(
     let pointer_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, pointer_reg, offset);
     let old_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    if target_ty == PhpType::Mixed {
+        let done = ctx.next_label("mixed_reference_store_slot");
+        let scratch = abi::secondary_scratch_reg(ctx.emitter);
+        crate::codegen_support::runtime::reference_cells::follow_mixed_reference_slot(
+            ctx.emitter, pointer_reg, scratch, old_reg, &done,
+        );
+    }
     if retires_previous {
         abi::emit_load_from_address(ctx.emitter, old_reg, pointer_reg, 0);
         pop_ref_cell_store_value(ctx, &target_ty);
@@ -832,19 +938,18 @@ fn store_value_to_raw_ref_cell_as(
         ),
     }
     if retires_previous {
-        // A mutating container write-back republishes whatever its helper returned, which is the
-        // SAME pointer whenever copy-on-write found a sole owner and growth did not relocate.
-        // Retiring then takes the storage the cell still points at: two `$items[$i] = …` writes
-        // through one by-reference variadic were enough to free the collector out from under the
-        // next read. Skip the retirement when nothing was actually replaced.
-        let published = ctx.next_label("ref_cell_store_same_pointer");
-        abi::emit_load_from_address(
-            ctx.emitter,
-            abi::int_result_reg(ctx.emitter),
-            pointer_reg,
-            0,
-        );
-        if !in_place_increment {
+        // An ordinary identical-pointer publication can reuse the cell's existing owner.
+        // A mixed-key helper acquired an independent owner before the call, so its publication
+        // must retire the old owner even when a reference-marker update bypasses COW.
+        let published = (previous == RefCellStorePrevious::Retire)
+            .then(|| ctx.next_label("ref_cell_store_same_pointer"));
+        if let Some(published) = &published {
+            abi::emit_load_from_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                pointer_reg,
+                0,
+            );
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
                     ctx.emitter.instruction(&format!(                           // did this store replace the cell's occupant at all?
@@ -873,7 +978,7 @@ fn store_value_to_raw_ref_cell_as(
             abi::emit_decref_preserving_exception(ctx.emitter, &target_ty);
             abi::emit_branch_if_int_result_nonzero(ctx.emitter, "__rt_throw_current");
         }
-        ctx.emitter.label(&published);
+        if let Some(published) = published { ctx.emitter.label(&published); }
     }
     Ok(())
 }
@@ -998,8 +1103,17 @@ pub(super) fn coerce_ref_cell_store_value(
                 return Ok(());
             }
             PhpType::Str => {
+                let result = abi::int_result_reg(ctx.emitter);
+                abi::emit_push_reg(ctx.emitter, result);
                 move_int_result_to_first_arg(ctx);
                 abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+                // The cast owns its persisted string, while this store still owns the source box.
+                abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+                let (pointer, length) = abi::string_result_regs(ctx.emitter);
+                abi::emit_pop_reg_pair(ctx.emitter, pointer, length);
+                abi::emit_release_temporary_stack(ctx.emitter, 16);
                 return Ok(());
             }
             _ => {}

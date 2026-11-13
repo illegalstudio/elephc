@@ -8,6 +8,7 @@
 //! - Arguments are already normalized by the shared call planner.
 //! - A referenced array element widens its local root to boxed Mixed element storage.
 //! - A `null` local bound to a `?ptr<T>` parameter becomes a `?ptr<T>` local.
+//! - A typed list local bound to a declared hash or `array<mixed>` parameter takes that layout.
 
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
@@ -215,6 +216,9 @@ impl Checker {
     ///
     /// A `null` local bound to a `?ptr<T>` parameter leaves the call as that `?ptr<T>`: the
     /// callee may store a live address through it, and lowering gives the slot that pointer word.
+    ///
+    /// `layout_contract` says the parameter carries a written array type, the only kind whose
+    /// layout the caller's list is converted to (`crate::types::is_written_reference_array_param`).
     pub(crate) fn record_boxed_reference_output(
         &mut self,
         arg: &Expr,
@@ -222,12 +226,19 @@ impl Checker {
         actual: &PhpType,
         call_span: Span,
         env: &TypeEnv,
-    ) {
+        layout_contract: bool,
+    ) -> Result<(), crate::errors::CompileError> {
         // A narrowed value can still occupy a nullable or union slot. Use that slot for
         // layout decisions and restore its full view after a callee can write through it.
         let array_value = actual.is_php_array()
             || matches!(actual, PhpType::Array(_) | PhpType::AssocArray { .. });
         let guarded_storage = self.guarded_local_storage_type(arg, env).cloned();
+        let keeps_concrete = guarded_storage.is_none()
+            && self.nullable_reference_keeps_concrete_storage(expected, actual, arg);
+        self.record_declared_reference_binding(arg, expected, keeps_concrete, call_span)?;
+        if keeps_concrete {
+            return Ok(());
+        }
         let actual = guarded_storage.as_ref().unwrap_or(actual);
         let output_ty = if expected.is_php_array()
             && array_value
@@ -243,13 +254,20 @@ impl Checker {
             && matches!(actual.codegen_repr(), PhpType::Void | PhpType::Never)
         {
             expected.clone()
+        } else if let Some(promoted) = layout_contract
+            .then(|| crate::types::packed_reference_argument_storage(expected, actual))
+            .flatten()
+        {
+            // A typed list bound to a declared hash or boxed-list parameter is converted to that
+            // layout before the call (`require_boxed_by_ref_storage` rule 4), and keeps it.
+            promoted
         } else if let Some(storage) = guarded_storage {
             storage
         } else {
-            return;
+            return Ok(());
         };
         if !call_span.identifies_a_node() {
-            return;
+            return Ok(());
         }
         let mut arg = arg;
         while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
@@ -271,10 +289,10 @@ impl Checker {
                     root = array;
                 }
                 let ExprKind::Variable(name) = &root.kind else {
-                    return;
+                    return Ok(());
                 };
                 let Some(root_ty) = env.get(name) else {
-                    return;
+                    return Ok(());
                 };
                 let widened = match root_ty.codegen_repr() {
                     PhpType::Array(_) => PhpType::Array(Box::new(PhpType::Mixed)),
@@ -282,16 +300,71 @@ impl Checker {
                         key,
                         value: Box::new(PhpType::Mixed),
                     },
-                    _ => return,
+                    _ => return Ok(()),
                 };
                 (name, widened)
             }
-            _ => return,
+            _ => return Ok(()),
         };
         self.boxed_reference_outputs
             .entry((self.current_loop_storage_scope.clone(), call_span))
             .or_default()
             .insert(name.clone(), output_ty);
+        Ok(())
+    }
+
+    /// Records how a declared-type local is bound to by-reference parameter `expected` in the
+    /// call at `call_span`, and rejects the call once the same local is bound both through a
+    /// boxed writeback cell (a nullable parameter keeping its typed slot) and by its direct
+    /// typed address (a concrete parameter, or any of its elements bound in place): the two
+    /// cannot alias, so a write through one would be lost to the other, where php shares one
+    /// reference.
+    fn record_declared_reference_binding(
+        &mut self,
+        arg: &Expr,
+        expected: &PhpType,
+        through_cell: bool,
+        call_span: Span,
+    ) -> Result<(), crate::errors::CompileError> {
+        let mut bare = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &bare.kind {
+            bare = value;
+        }
+        // An element (`$a[0]`, `$a[0][1]`) is bound in place, inside the root local's array
+        // storage: for the alias rule it is a direct binding of that root, so a boxed
+        // whole-array writeback cell of the same local in the same call would lose its writes.
+        let mut element = false;
+        while let ExprKind::ArrayAccess { array, .. } = &bare.kind {
+            element = true;
+            bare = array;
+        }
+        let ExprKind::Variable(name) = &bare.kind else {
+            return Ok(());
+        };
+        if !call_span.identifies_a_node() || !self.typed_local_names.contains_key(name) {
+            return Ok(());
+        }
+        let through_cell = through_cell && !element;
+        let direct = element
+            || (!through_cell
+                && !matches!(expected.codegen_repr(), PhpType::Mixed | PhpType::TaggedScalar));
+        let entry = self
+            .declared_reference_bindings
+            .entry((self.current_loop_storage_scope.clone(), call_span))
+            .or_default()
+            .entry(name.clone())
+            .or_insert((false, false));
+        entry.0 |= through_cell;
+        entry.1 |= direct;
+        if entry.0 && entry.1 {
+            return Err(crate::errors::CompileError::new(
+                arg.span,
+                &format!(
+                    "${name} is passed by reference to a nullable parameter and to a typed parameter of the same call (itself or one of its elements); elephc cannot share one reference between them, pass a separate variable to one of them"
+                ),
+            ));
+        }
+        Ok(())
     }
 
     /// Returns whether this call has already approved boxing the same local for an earlier slot.
@@ -332,5 +405,108 @@ impl Checker {
                 env.insert(name, output_ty);
             }
         }
+    }
+}
+
+impl Checker {
+    /// Whether a DECLARED-type local bound to a NULLABLE typed by-reference parameter keeps its
+    /// own concrete storage across the call (`?array &$read` given `array<Foo> $read = …`,
+    /// `?Foo &$o` given `Foo $o = …`, `?float &$f` given `float $f = …`).
+    ///
+    /// The declaration pins the local's storage, so it cannot take the parameter's boxed cell:
+    /// the cell is written back into the typed slot after the call, and the writeback verifies
+    /// the callee left a value of the local's own kind (converting an array built from Mixed
+    /// values into the typed element layout, and checking object classes and nested array
+    /// layouts). `null`, which the declared type does not admit, stops the program there with a
+    /// diagnostic. Every other local (parameters included) takes the boxed cell like php, and a
+    /// place without a frame slot of its own (a global, a static, a property, an element)
+    /// follows the ordinary by-reference storage rules, because the writeback only targets a
+    /// local slot.
+    ///
+    /// An object local keeps its class only when every class the parameter admits is that class
+    /// or one of its subclasses: `?Base &$v` given `A $v` may receive a sibling `B`, which `A`'s
+    /// property layout cannot describe, so that binding follows the ordinary rules instead.
+    pub(crate) fn nullable_reference_keeps_concrete_storage(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+        arg: &Expr,
+    ) -> bool {
+        let mut arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &arg.kind {
+            arg = value;
+        }
+        let ExprKind::Variable(name) = &arg.kind else {
+            return false;
+        };
+        if !self.typed_local_names.contains_key(name)
+            || self.active_ref_params.contains(name)
+            || self.ref_assign_aliased_locals.contains(name)
+            || self.by_ref_captured_locals.contains(name)
+            || self.boxed_ref_aliased_locals.contains(name)
+            || self.active_globals.contains(name)
+            || self.static_local_names.contains(name)
+            || self.name_is_seeded_program_storage(name)
+            || self.top_level_binding_is_program_global(name)
+        {
+            return false;
+        }
+        let PhpType::Union(members) = expected else {
+            return false;
+        };
+        if !members.iter().any(|member| matches!(member, PhpType::Void)) {
+            return false;
+        }
+        let non_null: Vec<&PhpType> = members
+            .iter()
+            .filter(|member| !matches!(member, PhpType::Void))
+            .collect();
+        match actual {
+            PhpType::Array(element) => {
+                writeback_element_supported(element, false)
+                    && non_null.iter().all(|member| {
+                        member.is_php_array()
+                            || matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. })
+                    })
+            }
+            PhpType::Object(local_class) => non_null.iter().all(|member| {
+                matches!(member, PhpType::Object(member_class)
+                    if self.object_class_stays_within(member_class, local_class))
+            }),
+            PhpType::Float => non_null.iter().all(|member| matches!(member, PhpType::Float)),
+            _ => false,
+        }
+    }
+
+    /// Whether every instance of `member_class` is also an instance of `local_class` (the same
+    /// class, or a subclass of it), so a typed `local_class` slot can hold it.
+    fn object_class_stays_within(&self, member_class: &str, local_class: &str) -> bool {
+        let member = member_class.trim_start_matches('\\');
+        let local = local_class.trim_start_matches('\\');
+        crate::names::php_symbol_key(member) == crate::names::php_symbol_key(local)
+            || self.is_subclass_of(member, local)
+    }
+}
+
+/// Whether the by-reference writeback can rebuild an `array<element>` slot from the boxed cell:
+/// it converts boxed Mixed slots into int, float, bool, object, callable and (nested) string
+/// layouts, widens raw slots into `mixed`, and recurses into nested indexed arrays. A nested
+/// hash is accepted only with `mixed` values, which hold anything: the writeback checks a
+/// hash element's own tag, not its values, so `array<string, Item>` values could carry another
+/// class. Other element representations (`?int`'s tagged scalars, pointers, buffers) have no
+/// conversion either; such a local follows the ordinary by-reference storage rules instead.
+/// A top-level string element is excluded too: the writeback keeps 8-byte payload slots there.
+fn writeback_element_supported(element: &PhpType, nested: bool) -> bool {
+    match element.codegen_repr() {
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Bool
+        | PhpType::Mixed
+        | PhpType::Object(_)
+        | PhpType::Callable => true,
+        PhpType::AssocArray { value, .. } => value.codegen_repr() == PhpType::Mixed,
+        PhpType::Str => nested,
+        PhpType::Array(inner) => writeback_element_supported(&inner, true),
+        _ => false,
     }
 }

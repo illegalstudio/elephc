@@ -432,6 +432,15 @@ pub(super) fn lower_count_explode(
     if separator.is_empty() {
         return None;
     }
+    // Refuse unsupported coercions before emitting the subject: fallback must evaluate it once
+    // and diagnose the PHP function the caller actually wrote.
+    let subject_type = super::array_cast_source::array_cast_source_type_for_ir(ctx, &explode_args[1]);
+    if !matches!(subject_type.codegen_repr(),
+        PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+            | PhpType::Void | PhpType::TaggedScalar)
+    {
+        return None;
+    }
     let subject = lower_expr(ctx, &explode_args[1]);
     let data = ctx.intern_string(separator);
     let needle = ctx.emit_value(

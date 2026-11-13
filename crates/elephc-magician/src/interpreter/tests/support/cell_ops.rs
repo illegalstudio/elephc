@@ -16,6 +16,9 @@ impl FakeOps {
     }
     /// Returns the fake runtime tag corresponding to a test value.
     pub(super) fn runtime_type_tag(&mut self, value: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        if self.native_callable_cells.contains(&(value.as_ptr() as usize)) {
+            return Ok(EVAL_TAG_CALLABLE);
+        }
         Ok(match self.get(value) {
             FakeValue::Int(_) => EVAL_TAG_INT,
             FakeValue::String(_) | FakeValue::Bytes(_) => EVAL_TAG_STRING,

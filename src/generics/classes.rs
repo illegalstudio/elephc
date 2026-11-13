@@ -405,7 +405,7 @@ struct Instantiate<'a> {
     /// The body the walk is lexically inside, spelled as the checker spells its site scope.
     ///
     /// Half the key for the construction rewrite. It has to be built exactly as the checker
-    /// builds `current_loop_storage_scope` (`main`, a function's declared name, `Class::method`,
+    /// builds `current_loop_storage_scope` (`#main`, a function's declared name, `Class::method`,
     /// or a closure's nested scope), or the lookup misses and a `new Box(5)` keeps naming the
     /// stripped template.
     site_scope: super::site_scope::SiteScope,

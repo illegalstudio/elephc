@@ -281,12 +281,12 @@ fn assoc_array_literal_value_type_for_ir_unboxed(
         }
         ExprKind::MethodCall { object, method, .. } => {
             method_call_expr_type_for_ir(ctx, object, method)
-                .and_then(materializable_array_element_type)
+                .map(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
         ExprKind::StaticMethodCall { receiver, method, .. } => {
             static_method_call_expr_type_for_ir(ctx, receiver, method)
-                .and_then(materializable_array_element_type)
+                .map(materializable_array_element_type)
                 .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(value)))
         }
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
@@ -366,9 +366,11 @@ pub(in crate::ir_lower) fn array_access_expr_value_type_for_ir(
         // Any other receiver that loads a buffer (`make()[0]`, `($b ?? $c)[0]`) is typed from
         // what its own lowering loads; other receivers keep the previous syntactic answer.
         _ => buffer_receiver_type_for_ir(ctx, array),
-    }?
-    .codegen_repr();
-    match array_ty {
+    }?;
+    if let Some((class_name, _)) = singular_object_class(&array_ty) {
+        return array_access_offset_get_return_type(ctx, class_name);
+    }
+    match array_ty.codegen_repr() {
         // A buffer element reads as its handle word, and a miss as the invalid handle 0 rather
         // than null, so the read keeps the plain buffer type: a nullable union would box the
         // handle in a merge or literal, where an element read of it answered null.
@@ -473,6 +475,13 @@ pub(in crate::ir_lower) fn property_access_expr_type_for_ir(
         return Some(normalize_value_php_type(property_ty));
     }
     let class_info = ctx.classes.get(normalized)?;
+    if !property.starts_with("__elephc_")
+        && crate::types::builtin_classes::has_native_dimensions(normalized, ctx.classes)
+    {
+        // The native property adapter returns a boxed view or null. Literal storage
+        // must match that result rather than stamp a raw object payload over the cell.
+        return Some(PhpType::Mixed);
+    }
     class_info
         .properties
         .iter()
@@ -502,11 +511,28 @@ pub(in crate::ir_lower) fn method_call_expr_type_for_ir(
     method: &str,
 ) -> Option<PhpType> {
     let method_key = php_symbol_key(method);
+    if method_key == "__invoke"
+        && super::merge_temps::materialized_expr_type_for_merge(ctx, object).codegen_repr() == PhpType::Callable
+    {
+        return Some(PhpType::Mixed);
+    }
     let Some(class_name) = instance_callable_object_class(ctx, object) else {
         return dynamic_receiver_method_call_type_for_ir(ctx, object, &method_key);
     };
-    class_method_signature(ctx, &class_name, &method_key)
-        .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
+    if let Some(signature) = class_method_signature(ctx, &class_name, &method_key) {
+        return Some(normalize_value_php_type(crate::types::eir_value_php_type(
+            &signature.return_type,
+        )));
+    }
+    // A missing method forwarded to `__call` still produces that hook's result.
+    // An undeclared return is not a precise element type: syntactic inference can
+    // answer `int` for a string body, and an int stamp prints the string as `0`.
+    let magic = class_method_signature(ctx, &class_name, &php_symbol_key("__call"))?;
+    Some(if magic.declared_return {
+        normalize_value_php_type(crate::types::eir_value_php_type(&magic.return_type))
+    } else {
+        PhpType::Mixed
+    })
 }
 
 /// Returns the result type of a call on a receiver of no single class (a `foreach` element of

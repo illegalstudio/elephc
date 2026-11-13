@@ -725,3 +725,24 @@ echo $c->value;
     );
     assert_eq!(out, "1:3:3");
 }
+
+/// A class built before its parent still answers its own ancestry for covariant returns.
+///
+/// `ATrigger` sorts first, so building it recurses into `ZChild` before `ZChild` is registered.
+/// The covariant `?ZChild` override must still see that `ZChild` extends `ZParent`.
+#[test]
+fn test_covariant_return_validates_while_parent_is_under_construction() {
+    let out = compile_and_run(r#"<?php
+class ZParent {
+    public function make(): ?ZParent { return null; }
+}
+class ZChild extends ZParent {
+    public function make(): ?ZChild { return null; }
+    public function name(): string { return 'child'; }
+}
+class ATrigger extends ZChild {}
+$child = new ATrigger();
+var_dump($child->make(), $child->name());
+"#);
+    assert_eq!(out, "NULL\nstring(5) \"child\"\n");
+}

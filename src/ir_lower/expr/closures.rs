@@ -187,6 +187,7 @@ pub(super) fn lower_closure_with_context(
     let body_contains_eval = body_contains_eval_call(body);
     let mut captured_values = Vec::with_capacity(captures.len());
     let mut capture_params = Vec::with_capacity(captures.len());
+    let mut logical_capture_params = Vec::with_capacity(captures.len());
     let mut by_value_capture_views = Vec::with_capacity(captures.len());
     for capture in captures {
         let by_ref = capture_refs.iter().any(|name| name == capture);
@@ -210,9 +211,18 @@ pub(super) fn lower_closure_with_context(
                 PhpType::Mixed,
             )
         } else {
+            // A raw by-reference variadic holds its argument array, not a cell (see
+            // `is_raw_reference_variadic`). Its slot is part of the ABI, so it cannot be widened
+            // to Mixed in place: promote it to a cell that keeps the array payload instead.
+            let raw_reference_variadic = by_ref && ctx.is_raw_reference_variadic(capture);
+            let preserves_native_reference_layout = by_ref
+                && ctx.is_ref_bound_local(capture)
+                && ctx.local_load_php_type(capture).is_some_and(|ty|
+                    crate::ir_lower::eval_reference_layouts::contains_unboxed_array(&ty));
             let widens_by_ref_capture = by_ref
                 && self_ref_callable_capture != Some(capture.as_str())
-                && (body_contains_eval || body_writes_local(body, capture));
+                && (body_contains_eval || body_writes_local(body, capture))
+                && !preserves_native_reference_layout;
             let php_type_override = if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
                 Some(PhpType::Callable)
             } else if widens_by_ref_capture {
@@ -227,7 +237,26 @@ pub(super) fn lower_closure_with_context(
             } else {
                 None
             };
-            if widens_by_ref_capture {
+            if by_ref && self_ref_callable_capture == Some(capture.as_str()) {
+                // The capture is created before the closure descriptor is assigned back to its
+                // own variable. Give that shared cell a stable boxed ABI now, while the closure
+                // body keeps the narrower callable view used for direct recursive dispatch.
+                // A first assignment such as `$f = function () use (&$f) { ... };` has no
+                // existing payload to promote. Seed the binding with PHP null so reference-cell
+                // construction never reads an uninitialized frame word as a Mixed pointer.
+                let initialized = ctx
+                    .local_slots
+                    .get(capture)
+                    .copied()
+                    .is_some_and(|slot| ctx.slot_is_initialized(slot));
+                if !initialized {
+                    let null = lower_boxed_null(ctx, expr);
+                    ctx.store_local(capture, null, PhpType::Mixed, Some(expr.span));
+                }
+                ctx.promote_local_mixed_ref_cell(capture, Some(expr.span));
+            } else if raw_reference_variadic {
+                ctx.promote_local_ref_cell(capture, Some(expr.span));
+            } else if widens_by_ref_capture {
                 // Convert the existing payload before changing the slot contract. Merely
                 // widening metadata first leaves a raw array, object, or string in storage that
                 // `PromoteLocalRefCell` then interprets as a boxed Mixed pointer.
@@ -246,6 +275,7 @@ pub(super) fn lower_closure_with_context(
         ctx.emit_void(Op::ClosureCapture, vec![captured.value], immediate, Op::ClosureCapture.default_effects(), Some(expr.span));
         if by_ref {
             ctx.mark_ref_bound_local(capture);
+            if ctx.value_is_owning_temporary(captured) { by_value_capture_views.push(captured); }
         } else {
             by_value_capture_views.push(captured);
         }
@@ -253,7 +283,13 @@ pub(super) fn lower_closure_with_context(
             value: captured.value,
             by_ref_local: by_ref.then(|| capture.clone()),
         });
-        capture_params.push((capture.clone(), php_type, by_ref));
+        let physical_php_type = if by_ref {
+            ctx.local_reference_payload_type(capture)
+        } else {
+            php_type.clone()
+        };
+        capture_params.push((capture.clone(), physical_php_type, by_ref));
+        logical_capture_params.push((capture.clone(), php_type, by_ref));
     }
     if ctx.current_class.is_some()
         && (ctx.local_slots.contains_key(CALLED_CLASS_ID_CAPTURE)
@@ -286,8 +322,13 @@ pub(super) fn lower_closure_with_context(
             PhpType::Int,
             false,
         ));
+        logical_capture_params.push((
+            CALLED_CLASS_ID_CAPTURE.to_string(),
+            PhpType::Int,
+            false,
+        ));
     }
-    let signature_capture_params = capture_params
+    let signature_capture_params = logical_capture_params
         .iter()
         .map(|(name, php_type, by_ref)| {
             let signature_type = if name == "this" && ctx.local_slots.contains_key("this") {
@@ -322,6 +363,7 @@ pub(super) fn lower_closure_with_context(
             return_type,
             body,
             &capture_params,
+            &logical_capture_params,
             &signature_capture_params,
             self_ref_callable_capture,
             by_ref_return,
@@ -338,6 +380,7 @@ pub(super) fn lower_closure_with_context(
             return_type,
             body,
             &capture_params,
+            &logical_capture_params,
             &signature_capture_params,
             contextual_arg_types,
             bound_this_context,

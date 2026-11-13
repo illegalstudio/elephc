@@ -31,5 +31,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
-          WORKFLOW_FILES: ci.yml pdo-live.yml
+          WORKFLOW_FILES: ci.yml
         run: bash scripts/ci/cancel_superseded_queue_runs.sh

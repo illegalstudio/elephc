@@ -114,7 +114,18 @@ pub(super) fn check_assign(
     checker: &mut Checker, name: &str, value: &Expr, span: Span,
     env: &mut TypeEnv, stmt_form: bool,
 ) -> Result<(), CompileError> {
-    check_assign_value_type(checker, name, value, span, env, stmt_form).map(|_| ())
+    // A promotable `array<int>` stored into a candidate local stays raw, and the local is then
+    // promotable itself: its element ops dispatch on the heap kind the value may already have.
+    let promotes = checker.prepare_promotable_assignment(name, value, env);
+    check_assign_value_type(checker, name, value, span, env, stmt_form)?;
+    // Judged once the value is checked: a call is known to return a promotable value only now.
+    if promotes
+        && checker.is_promotable_value_expr(value, env)
+        && matches!(env.get(name), Some(PhpType::Array(elem)) if elem.codegen_repr() == PhpType::Int)
+    {
+        checker.record_promotable_array_local(name);
+    }
+    Ok(())
 }
 
 /// Type-checks a simple variable assignment (`$name = value`).
@@ -273,9 +284,13 @@ fn check_assign_value_type(
     let previously_bound = checker.definitely_bound_locals.contains(name);
     // A new ordinary store is measured against the binding, then owns its merge result.
     // It must not inherit a read-only flow view or have a widening overwritten afterwards.
+    // A sibling guard complement can retain nullable storage only in its narrowing origin.
+    let nullable_guard_store = !type_is_definitely_non_null(&ty)
+        && checker.guarded_local_storage_type(&Expr::var(name), env)
+            .is_some_and(Checker::union_contains_void);
     if null_coalesce_default.is_none()
-        && previous_storage.as_ref().is_some_and(|origin|
-            origin.coalesced || !type_is_definitely_non_null(&ty))
+        && (nullable_guard_store || previous_storage.as_ref().is_some_and(|origin|
+            origin.coalesced || !type_is_definitely_non_null(&ty)))
     {
         checker.invalidate_local_flow_narrowing(name, env);
     }
@@ -320,8 +335,9 @@ fn check_assign_value_type(
             if checker.local_flow_read_is_stable(name) {
                 if stored_non_null && env.get(name).is_some_and(Checker::is_raw_non_null_contract) {
                     // Keep a successful fresh-value proof available to later local copies.
-                    // A same-type contract changes no physical representation.
-                    let storage = env.get(name).expect("successful assignment").clone();
+                    // A sibling complement may retain nullable storage only in its guard origin.
+                    let storage = checker.guarded_local_storage_type(&Expr::var(name), env)
+                        .or_else(|| env.get(name)).expect("successful assignment").clone();
                     checker.guarded_union_types.entry(name.to_string())
                         .or_insert(GuardedLocalStorage { ty: storage, coalesced: false });
                 } else if checker.guarded_union_types.get(name)
@@ -436,6 +452,14 @@ pub(super) fn check_ref_assign(
                     .reference_property_promotions
                     .insert((class, property.clone()));
             }
+            env.insert(target.to_string(), target_ty);
+            checker.active_ref_params.insert(target.to_string());
+            clear_callable_metadata(checker, target);
+            Ok(())
+        }
+        ExprKind::StaticPropertyAccess { .. } => {
+            let target_ty = checker.infer_type(source, env)?;
+            target_has_boxed_ref_provenance = target_ty.codegen_repr() == PhpType::Mixed;
             env.insert(target.to_string(), target_ty);
             checker.active_ref_params.insert(target.to_string());
             clear_callable_metadata(checker, target);
@@ -1405,7 +1429,14 @@ pub(super) fn check_typed_assign(
             return Err(error);
         }
     };
-    if !checker.type_accepts(&declared_ty, &value_ty) {
+    // A runtime-named constructor has no statically known class, so inference keeps its result
+    // as Mixed. The expression still either produces an object or throws before assignment, which
+    // is sufficient for the non-nominal `object` contract. Do not extend this exception to an
+    // arbitrary Mixed value or to a named class, because neither has a runtime nominal guard here.
+    let dynamic_new_satisfies_object =
+        matches!(&declared_ty, PhpType::Object(class) if class.is_empty())
+            && matches!(value.kind, ExprKind::NewDynamic { .. });
+    if !checker.type_accepts(&declared_ty, &value_ty) && !dynamic_new_satisfies_object {
         // The initializer typed successfully but violates the declared type. Poison
         // `$name` as `Mixed` for recovery so later uses do not cascade, then report
         // the initialization mismatch as the one real diagnostic.

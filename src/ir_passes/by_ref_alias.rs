@@ -62,6 +62,16 @@ pub(crate) fn address_escaping_slots(function: &Function) -> HashSet<LocalSlotId
         return escaping;
     }
     for inst in &function.instructions {
+        let owner_index = match inst.op {
+            Op::StoreStaticProperty | Op::StoreReflectionStaticProperty => Some(2),
+            Op::StoreRefCell => Some(2),
+            _ => None,
+        };
+        if let Some(index) = owner_index {
+            if let Some(slot) = inst.operands.get(index).and_then(|value| load_result_slot.get(value)) {
+                escaping.insert(*slot);
+            }
+        }
         // A packed field store copies a scalar into the record; unlike an object property store
         // it can never bind a promoted by-reference parameter, so the operand stays a value.
         // `buffer_len` and `buffer_ptr` likewise observe a buffer handle by value through their
@@ -127,7 +137,7 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
     matches!(
         op,
         // Integer/float arithmetic and bitwise operators.
-        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
+        IAdd | ISub | IMul | IOverflows | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
             | ICheckedSubToInt | ICheckedMulToInt | ICheckedNumericChainToInt | ICheckedPow
             | IDiv | ISDiv | ISMod
             | IPow | INeg | IBitAnd | IBitOr | IBitXor
@@ -142,6 +152,9 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | MixedCastString | ReturnBoundaryMixedToInt
             | PropertyBoundaryCheckedToInt
+            // A Mixed clone loads its operand and copies the dereferenced value into a new cell
+            // (or retains a shared resource cell); it never takes the source slot's address.
+            | MixedClone
             // String value operations.
             | StrConcat | StrAppend | StrLen | StrPersist | StrCharAt | StrInterpolate | StrIncDec
             // Output operations consume their operand by value.

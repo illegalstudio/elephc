@@ -58,6 +58,12 @@ fn normalize_function(function: &mut Function) {
                 || !matches!(load.result_php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
                 || native_layouts.contains(&slot)
             { continue; }
+            // A typed native reference arm already selected its concrete payload ABI.
+            // Reboxing it creates an owning snapshot instead of mutating the caller's cell.
+            if load.op == Op::LoadRefCell && function.params.iter().any(|parameter| {
+                parameter.by_ref && local.name.as_deref() == Some(parameter.name.as_str())
+                    && matches!(parameter.php_type.codegen_repr(), PhpType::Array(_) | PhpType::AssocArray { .. })
+            }) { continue; }
 
             let load = &mut function.instructions[load_id.as_raw() as usize];
             load.result_type = IrType::Heap(IrHeapKind::Mixed);

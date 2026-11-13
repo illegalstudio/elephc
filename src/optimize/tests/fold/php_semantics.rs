@@ -883,62 +883,25 @@ fn test_fold_direct_scalar_builtin_calls_match_php() {
     ));
 }
 
-/// Literal MIME and small-regex calls fold to their exact PHP results while unsupported forms stay
-/// on the bridge.
+/// Literal mbstring MIME and regex calls retain the request encoding dependency.
 #[test]
-fn test_fold_mb_literal_mime_and_regex_calls() {
-    let fold_one = |name: &str, args: Vec<Expr>| {
-        let call = Expr::new(
-            ExprKind::FunctionCall {
-                name: Name::unqualified(name),
-                args,
-            },
-            Span::dummy(),
-        );
-        let result = fold_constants(vec![Stmt::echo(call)]);
-        let StmtKind::Echo(expr) = &result[0].kind else {
-            panic!("expected echo");
-        };
-        expr.kind.clone()
-    };
-    assert_eq!(
-        fold_one("mb_ereg", vec![Expr::string_lit("[0-9]+"), Expr::string_lit("abc123")]),
-        ExprKind::BoolLiteral(true)
-    );
-    assert_eq!(
-        fold_one("mb_ereg", vec![Expr::string_lit("[0-9]+"), Expr::string_lit("abc")]),
-        ExprKind::BoolLiteral(false)
-    );
-    assert_eq!(
-        fold_one("mb_ereg_match", vec![Expr::string_lit("[0-9A-Za-z]+"), Expr::string_lit("abc123")]),
-        ExprKind::BoolLiteral(true)
-    );
-    assert_eq!(
-        fold_one("mb_eregi", vec![Expr::string_lit("[A-Z]+"), Expr::string_lit("abcDEF")]),
-        ExprKind::BoolLiteral(true)
-    );
-    assert_eq!(
-        fold_one("mb_eregi_replace", vec![
-            Expr::string_lit("[A-Z]+"),
-            Expr::string_lit("#"),
-            Expr::string_lit("abcDEF"),
+fn test_fold_mb_literals_preserve_request_encoding() {
+    let cases = [
+        ("mb_ereg", vec![Expr::string_lit("[0-9]+"), Expr::string_lit("1234")]),
+        ("mb_ereg_match", vec![Expr::string_lit("[0-9A-Za-z]+"), Expr::string_lit("ab")]),
+        ("mb_ereg_match", vec![Expr::string_lit("[0-9A-Za-z]+"), Expr::string_lit("!!!a")]),
+        ("mb_eregi", vec![Expr::string_lit("[A-Z]+"), Expr::string_lit("abcd")]),
+        ("mb_eregi_replace", vec![
+            Expr::string_lit("[A-Z]+"), Expr::string_lit("X"), Expr::string_lit("abcd"),
         ]),
-        ExprKind::StringLiteral("#".to_string())
-    );
-    assert_eq!(
-        fold_one("mb_decode_mimeheader", vec![Expr::string_lit("=?UTF-8?B?aMOpbGxv?=")]),
-        ExprKind::StringLiteral("héllo".to_string())
-    );
-    assert!(matches!(
-        fold_one("mb_ereg", vec![Expr::string_lit("a+"), Expr::string_lit("aaa")]),
-        ExprKind::FunctionCall { .. }
-    ));
-    assert!(matches!(
-        fold_one("mb_eregi_replace", vec![
-            Expr::string_lit("[A-Z]+"),
-            Expr::string_lit("#"),
-            Expr::string_lit("abcé"),
-        ]),
-        ExprKind::FunctionCall { .. }
-    ));
+        ("mb_decode_mimeheader", vec![Expr::string_lit("=?UTF-8?B?w6k=?=")]),
+    ];
+    for (name, args) in cases {
+        let call = Expr::new(ExprKind::FunctionCall {
+            name: Name::unqualified(name), args,
+        }, Span::dummy());
+        let folded = fold_constants(vec![Stmt::echo(call.clone())]);
+        let StmtKind::Echo(expr) = &folded[0].kind else { panic!("expected echo"); };
+        assert_eq!(expr.kind, call.kind, "{name} must read the live encoding");
+    }
 }

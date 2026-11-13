@@ -17,7 +17,10 @@ use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
-const FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 64;
+const FRAME_SIZE: usize = TRY_HANDLER_SLOT_SIZE + 128;
+const OWNER_RECORD: usize = 112;
+const OWNER_VISITOR: &str = "__rt_callable_owned_args_frame_owners";
+const OWNER_CLEANUP: &str = "__rt_callable_owned_args_frame_cleanup";
 const HANDLER_OFFSET: usize = FRAME_SIZE - 16;
 const DESCRIPTOR: usize = 8;
 const ARGUMENTS: usize = 16;
@@ -51,6 +54,9 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, result, "_exc_value", 0);
     abi::store_at_offset(emitter, result, PREVIOUS);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0);
+    abi::emit_temporary_stack_address(emitter, result, 0);
+    abi::emit_link_call_operand_custom_cleanup_at_stack(emitter, result, OWNER_CLEANUP,
+        OWNER_VISITOR, FRAME_SIZE - 16 - OWNER_RECORD);
     save_handler_state(emitter);
     abi::emit_frame_slot_address(emitter, descriptor_arg, HANDLER_OFFSET - TRY_HANDLER_JMP_BUF_OFFSET);
     emitter.save_exception_handler();                                           // catch descriptor or cleanup throws without discarding the owned slots
@@ -80,6 +86,7 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
     clear_slot(emitter, PENDING);
     restore_handler_state(emitter);
+    abi::emit_unlink_call_operand_owner_in_frame(emitter, OWNER_RECORD);
     abi::emit_frame_restore(emitter, FRAME_SIZE);
     abi::emit_jump(emitter, "__rt_throw_current");
 
@@ -88,6 +95,7 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, result, "_exc_value", 0);
     restore_handler_state(emitter);
     abi::load_at_offset(emitter, result, RESULT);
+    abi::emit_unlink_call_operand_owner_in_frame(emitter, OWNER_RECORD);
     abi::emit_frame_restore(emitter, FRAME_SIZE);
     abi::emit_return(emitter);
 
@@ -100,6 +108,14 @@ pub(crate) fn emit_callable_invoke_owned_args(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, PENDING);
     abi::emit_call_label(emitter, "__rt_exception_chain");
     abi::emit_jump(emitter, cleanup);
+
+    // The inner handler retains cleanup responsibility when a native throw returns to it.
+    emitter.label_global(OWNER_CLEANUP);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    abi::emit_return(emitter);
+    let offsets = [ARGUMENTS, OWNED_DESCRIPTOR, RESULT, PENDING, PREVIOUS]
+        .map(|offset| FRAME_SIZE - 16 - offset);
+    super::super::arrays::emit_native_frame_owners(emitter, OWNER_VISITOR, &offsets);
 }
 
 /// Saves both ABI inputs and records whether this entry consumes the descriptor owner.
@@ -179,6 +195,30 @@ fn previous_exception_reg(emitter: &Emitter) -> &'static str {
 mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
+
+    /// Owned descriptors, arguments, results and exception chains remain visible while paused.
+    #[test]
+    fn owned_argument_boundary_visits_all_suspended_owners_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit_callable_invoke_owned_args(&mut emitter);
+            let assembly = emitter.output();
+            assert_eq!(assembly.matches("__rt_gc_frame_owner_slot").count(), 5, "{name}: {assembly}");
+            let publish = assembly.find(OWNER_VISITOR).unwrap();
+            let boundary = assembly.find("setjmp").unwrap();
+            assert!(publish < boundary, "{name}: the handler must preserve the owner frame: {assembly}");
+            for slot in [ARGUMENTS, OWNED_DESCRIPTOR, RESULT, PENDING, PREVIOUS] {
+                let offset = FRAME_SIZE - 16 - slot;
+                let address = if target.arch == Arch::AArch64 {
+                    format!("add x0, x0, #{offset}")
+                } else { format!("add rdi, {offset}") };
+                assert!(assembly.contains(&address), "{name}: missing owner {slot}: {assembly}");
+            }
+            assert!(FRAME_SIZE - 16 - OWNER_RECORD >= TRY_HANDLER_SLOT_SIZE);
+            assert!(assembly.matches("965:").count() >= 2, "{name}: both exits unlink the exact record");
+        }
+    }
 
     /// The invocation-site scope is copied through the exception boundary without shared state.
     #[test]

@@ -109,10 +109,10 @@ echo "alive";
     assert_eq!(out, expected);
 }
 
-/// Native joins honor eval Stringable overrides, including compact Throwable subclasses.
+/// Native joins honor eval overrides and retire iterator and exception temporaries.
 #[test]
 fn test_implode_argument_errors_eval_bundle() {
-    let out = compile_and_run(r#"<?php
+    let out = compile_and_run_with_heap_debug(r#"<?php
 function bridgeJoin(mixed $value): string { return join($value); }
 function bridgeJoinTwo(mixed $value): string { return join(",", $value); }
 class ImplodeNativeStringableBase {
@@ -158,7 +158,9 @@ echo "bridged";
     }
     expected.push_str("implode(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\nimplode(): Argument #2 ($array) must be of type ?array, Closure given\nimplode(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\nimplode(): Argument #2 ($array) must be of type ?array, int given\nimplode(): Argument #2 ($array) must be of type ?array, false given\nab:c-d:alive\njoin(): Argument #1 ($separator) must be of type array|string, EvalImplodeArgumentObject given\njoin(): Argument #2 ($array) must be of type ?array, EvalImplodeArgumentObject given\neval-converted:join(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\noverride-converted:join(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\noverride-throwing:override-throw\n");
     expected.push_str("exception-override:join(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\nerror-override:error-override-throw\nbridged");
-    assert_eq!(out, expected);
+    assert!(out.success, "stdout: {}\nstderr: {}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Named and unpacked calls retain ordinary separator binding instead of the positional fast path.

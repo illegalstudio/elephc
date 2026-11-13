@@ -453,7 +453,14 @@ pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     ensure_arg_count(inst, "is_object", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
-        PhpType::Object(_) | PhpType::Callable => emit_static_bool(ctx, true),
+        // An object-typed word is not always a live object: a missed array read answers PHP's
+        // null-container sentinel while the checker keeps the element's `Object` type. The
+        // null-container check keeps `is_object()` false there and lets nullable method
+        // receivers fatal before their arguments run.
+        PhpType::Object(_) => {
+            predicates::emit_object_truthiness(ctx, value)?;
+        }
+        PhpType::Callable => emit_static_bool(ctx, true),
         PhpType::Mixed | PhpType::Union(_) => {
             predicates::emit_mixed_tag_membership(ctx, value, &[6, 10])?;
         }

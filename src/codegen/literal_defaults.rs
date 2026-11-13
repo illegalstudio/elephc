@@ -89,15 +89,11 @@ pub(crate) enum LiteralDefaultValue {
     /// already worked because its default is evaluated as a parameter before the assignment;
     /// a DIRECTLY declared property had no form for it at all.
     ///
-    /// Recognition is by shape only, because this function has no module: whether the receiver
-    /// really names an enum, and the constant one of its cases, is settled by
-    /// `emit_property_default`, which does. The checker has already validated the pair by then
-    /// (`schema::defaults::validate_deferred_default`); the emit-side lookup is what keeps a
-    /// non-enum `Foo::BAR` in an object slot reporting unsupported rather than loading a symbol
-    /// that does not exist.
+    /// Module-aware resolution supplies the canonical case and ordered singleton reads.
+    /// The selected case is loaded last; union and mixed slots box that borrowed object.
     EnumCase {
-        enum_name: String,
-        case_name: String,
+        value: crate::codegen::const_default_values::EnumCaseDefault,
+        boxed: bool,
     },
 }
 
@@ -324,20 +320,21 @@ pub(crate) fn literal_default_value(
                 elements,
             })
         }
-        // `public Level $level = Level::Low;` — the enum case singleton, not a literal. See
-        // `LiteralDefaultValue::EnumCase` for why the receiver is taken on shape alone here.
-        (
-            PhpType::Object(_),
-            ExprKind::ScopedConstantAccess {
-                receiver: crate::parser::ast::StaticReceiver::Named(enum_name),
-                name: case_name,
-            },
-        ) => Ok(LiteralDefaultValue::EnumCase {
-            enum_name: enum_name.to_string(),
-            case_name: case_name.clone(),
-        }),
         _ => Err(unsupported_literal_default(context, php_type, op_name)),
     }
+}
+
+/// Selects raw or boxed storage for an enum default resolved against module metadata.
+pub(crate) fn enum_case_default_value(
+    context: &str, php_type: &PhpType,
+    value: crate::codegen::const_default_values::EnumCaseDefault, op_name: &str,
+) -> Result<LiteralDefaultValue> {
+    if !matches!(php_type, PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)) {
+        return Err(unsupported_literal_default(context, php_type, op_name));
+    }
+    Ok(LiteralDefaultValue::EnumCase {
+        value, boxed: matches!(php_type, PhpType::Mixed | PhpType::Union(_)),
+    })
 }
 
 /// Emits a string literal default into the canonical string result registers.

@@ -10,6 +10,45 @@
 
 use super::super::support::*;
 
+/// Expression updates retain their result and prefix increment binds above exponentiation.
+#[test]
+fn parse_property_update_expressions_keep_receivers_and_operator_precedence() {
+    let program = parse_fragment(br#"
+echo ($box->receiver()->number += 3);
+echo ($box->receiver()->{$name} .= 'x');
+echo ++$box->{$name} ** 2;
+echo $box->{$name}++;
+echo ($box->{"number"} += 1);
+"#).unwrap();
+    assert!(matches!(&program.statements()[0], EvalStmt::Echo(EvalExpr::PropertyCompoundAssign {
+        object, op: EvalBinOp::Add, ..
+    }) if matches!(object.as_ref(), EvalExpr::MethodCall { .. })));
+    assert!(matches!(&program.statements()[1], EvalStmt::Echo(EvalExpr::PropertyCompoundAssign {
+        property, op: EvalBinOp::Concat, ..
+    }) if matches!(property.as_ref(), EvalExpr::LoadVar(name) if name == "name")));
+    assert!(matches!(&program.statements()[2], EvalStmt::Echo(EvalExpr::Binary {
+        op: EvalBinOp::Pow, left, ..
+    }) if matches!(left.as_ref(), EvalExpr::PropertyIncDec { prefix: true, .. })));
+    assert!(matches!(&program.statements()[3], EvalStmt::Echo(EvalExpr::PropertyIncDec {
+        increment: true, prefix: false, ..
+    })));
+    assert!(matches!(&program.statements()[4], EvalStmt::Echo(EvalExpr::PropertyCompoundAssign {
+        dynamic: true, ..
+    })));
+    assert!(parse_fragment(b"echo (1 += 2);").is_err());
+}
+
+/// Indexed receivers keep property stores and updates on the property mutation path.
+#[test]
+fn parse_fragment_accepts_indexed_property_mutations() {
+    let program = parse_fragment(br#"$view[0]->y = 1; $held[0][0]->y += 2; $view[0]->{$name}++; $view[0]->{"y"} += 3;"#)
+        .expect("indexed property mutations should parse");
+    assert!(matches!(&program.statements()[0], EvalStmt::PropertySet { object: EvalExpr::ArrayGet { .. }, .. }));
+    assert!(matches!(&program.statements()[1], EvalStmt::PropertyCompoundAssign { object: EvalExpr::ArrayGet { .. }, .. }));
+    assert!(matches!(&program.statements()[2], EvalStmt::DynamicPropertyIncDec { object: EvalExpr::ArrayGet { .. }, .. }));
+    assert!(matches!(&program.statements()[3], EvalStmt::DynamicPropertyCompoundAssign { object: EvalExpr::ArrayGet { .. }, .. }));
+}
+
 /// Verifies object property writes parse as dedicated EvalIR statements.
 #[test]
 fn parse_fragment_accepts_property_write_source() {

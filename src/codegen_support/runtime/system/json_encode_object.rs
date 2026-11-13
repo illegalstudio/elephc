@@ -12,7 +12,12 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::abi;
-use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
+use crate::codegen_support::sentinels::{emit_resolve_tagged_scalar_property_tag, JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG};
+
+mod property_presence;
+
+#[cfg(test)]
+mod reference_tests;
 
 /// __rt_json_encode_object: encode a PHP object instance as JSON.
 ///
@@ -182,6 +187,8 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #48]");                                   // reload a non-self result for ordinary recursive encoding
     emitter.instruction("bl __rt_json_encode_mixed");                           // encode the boxed mixed return value as JSON
     emitter.instruction("stp x1, x2, [sp, #32]");                               // checkpoint the encoded result slice across depth cleanup
+    emitter.instruction("ldr x0, [sp, #48]");                                   // recover the owned serializer result after encoding
+    emitter.instruction("bl __rt_decref_mixed");                                // release the temporary projection and its nested values
     emitter.instruction("bl __rt_json_depth_exit");                             // balance object entry after recursive result encoding
     emitter.instruction("ldp x1, x2, [sp, #32]");                               // restore the encoded result slice after cleanup
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address after JsonSerializable encoding
@@ -216,6 +223,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("str x11, [sp, #136]");                                 // save the running write pointer after the opening brace
     emitter.instruction("bl __rt_json_pretty_push");                            // enter one pretty-print indentation level after the object opens
     emitter.instruction("str xzr, [sp, #32]");                                  // initialize the property loop index to zero
+    emitter.instruction("str xzr, [sp, #8]");                                   // count properties that actually produce JSON entries
 
     emitter.label("__rt_json_obj_loop");
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the current property loop index
@@ -237,6 +245,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x17, [x13, #24]");                                 // load the property compile-time type tag
     emitter.instruction("str x16, [sp, #48]");                                  // save the property slot index for value loading
     emitter.instruction("str x17, [sp, #56]");                                  // save the property type tag for runtime dispatch
+    property_presence::emit_skip_uninitialized(emitter);
 
     // Reserve room for the separator, the indentation, and the key punctuation.
     emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
@@ -244,7 +253,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_json_buf_ensure");                             // grow first: every punctuation byte of this key prefix fits after it
 
     // Comma separator before all but the first property
-    emitter.instruction("ldr x10, [sp, #32]");                                  // reload the property loop index after the reservation
+    emitter.instruction("ldr x10, [sp, #8]");                                   // reload the property loop index after the reservation
     emitter.instruction("cbz x10, __rt_json_obj_key");                          // skip the comma before the first property entry
     emitter.instruction("ldr x11, [sp, #136]");                                 // reload the running write pointer
     emitter.instruction("mov w12, #44");                                        // ASCII ','
@@ -293,6 +302,16 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("mul x9, x16, x9");                                     // compute the property slot byte offset within the instance
     emitter.instruction("add x9, x9, #8");                                      // skip the leading class_id field at offset 0
     emitter.instruction("add x9, x0, x9");                                      // resolve the absolute address of the property slot
+    emitter.instruction("ldr x17, [sp, #56]");                                  // recover the payload tag and reference-storage flag
+    emitter.instruction(&format!("tbz x17, #{}, __rt_json_obj_direct_payload", JSON_REFERENCE_PROPERTY_FLAG.trailing_zeros())); // ordinary properties already point at their payload words
+    emitter.instruction("ldr x9, [x9]");                                        // follow the reference cell without acquiring another owner
+    emitter.instruction("ldr x14, [x9]");                                       // provide the low word for canonical scalar payload resolution
+    crate::codegen_support::runtime::reference_cells::resolve_scalar_property(
+        emitter, "x9", "x17", "x14", "__rt_json_obj_scalar",
+    );
+    emitter.label("__rt_json_obj_direct_payload");
+    emitter.instruction("and x17, x17, #255");                                  // leave the concrete PHP tag for value encoding
+    emitter.instruction("str x17, [sp, #56]");                                  // preserve the resolved tag across nested encoding
     // x14, not x18: Apple AArch64 reserves x18 for the OS, which is free to overwrite it at
     // any point — the load and the store below are two instructions apart, and that is enough.
     // x14 carries nothing across this whole region, and x15 already served the same purpose
@@ -377,6 +396,10 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("add x0, sp, #128");                                    // address of the output-buffer descriptor
     emitter.instruction("bl __rt_json_buf_append");                             // copy the encoded value to the cursor, growing first
 
+    emitter.instruction("ldr x10, [sp, #8]");                                   // recover the number of encoded properties
+    emitter.instruction("add x10, x10, #1");                                    // count the completed key and value
+    emitter.instruction("str x10, [sp, #8]");                                   // retain the emitted count for commas and closing lines
+    emitter.label("__rt_json_obj_next_property");
     // Advance the loop index and continue.
     emitter.instruction("ldr x10, [sp, #32]");                                  // reload the property loop index
     emitter.instruction("add x10, x10, #1");                                    // advance to the next property entry
@@ -388,7 +411,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #1");                                          // room for the closing brace
     emitter.instruction("bl __rt_json_buf_ensure");                             // x11 = cursor with headroom for the closing line
     emitter.instruction("bl __rt_json_pretty_pop");                             // leave the object indentation level before closing it
-    emitter.instruction("ldr x14, [sp, #40]");                                  // reload public property count to decide whether closing needs its own line
+    emitter.instruction("ldr x14, [sp, #8]");                                   // reload public property count to decide whether closing needs its own line
     emitter.instruction("cbz x14, __rt_json_obj_close_emit");                   // empty objects stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("bl __rt_json_pretty_line");                            // append the closing-line indentation for non-empty pretty objects
     emitter.label("__rt_json_obj_close_emit");
@@ -568,7 +591,9 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     // Save the (rax, rdx) result across __rt_json_depth_exit.
     emitter.instruction("mov QWORD PTR [rbp - 120], rax");                      // checkpoint the encoded result pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], rdx");                       // checkpoint the encoded result length
-    emitter.instruction("call __rt_json_depth_exit");                           // decrement _json_active_depth so a sibling encoder can re-enter cleanly
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // recover the owned serializer result after encoding
+    emitter.instruction("call __rt_decref_mixed");                              // release the temporary projection and its nested values
+    emitter.instruction("call __rt_json_depth_exit");                           // balance object entry after recursive result encoding
     emitter.instruction("mov rax, QWORD PTR [rbp - 120]");                      // restore the encoded result pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // restore the encoded result length
     emitter.instruction("mov rsp, rbp");                                        // unwind the encoder scratch frame
@@ -598,6 +623,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 120], r11");                      // save the running write pointer after the opening brace
     emitter.instruction("call __rt_json_pretty_push");                          // enter one pretty-print indentation level after the object opens
     emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize the property loop index to zero
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // count properties that actually produce JSON entries
 
     emitter.label("__rt_json_obj_loop_x");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the current property loop index
@@ -621,6 +647,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 96], rdx");                       // save the property name length for the key copy loop
     emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // save the property slot index for value loading
     emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // save the property type tag for runtime dispatch
+    property_presence::emit_skip_uninitialized(emitter);
 
     // Reserve room for the separator, the indentation, and the key punctuation.
     emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
@@ -628,7 +655,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_json_buf_ensure");                           // grow first: every punctuation byte of this key prefix fits after it
 
     // Comma separator before all but the first property.
-    emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // is this the first property entry?
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // is this the first property entry?
     emitter.instruction("je __rt_json_obj_key_x");                              // skip the comma before the first property
     emitter.instruction("mov r11, QWORD PTR [rbp - 120]");                      // reload the running write pointer
     emitter.instruction("mov BYTE PTR [r11], 44");                              // emit the comma separator between properties
@@ -664,6 +691,17 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shl rcx, 4");                                          // multiply by 16 (slot stride)
     emitter.instruction("add rcx, 8");                                          // skip the leading class_id field at offset 0
     emitter.instruction("add rax, rcx");                                        // resolve the absolute address of the property slot
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // recover the payload tag and reference-storage flag
+    emitter.instruction(&format!("test r9, {JSON_REFERENCE_PROPERTY_FLAG}"));   // distinguish indirect reference storage from ordinary payload words
+    emitter.instruction("jz __rt_json_obj_direct_payload_x");                   // ordinary properties already address their payload
+    emitter.instruction("mov rax, QWORD PTR [rax]");                            // follow the reference cell without acquiring another owner
+    emitter.instruction("mov rcx, QWORD PTR [rax]");                            // provide the low word for canonical scalar payload resolution
+    crate::codegen_support::runtime::reference_cells::resolve_scalar_property(
+        emitter, "rax", "r9", "rcx", "__rt_json_obj_scalar_x",
+    );
+    emitter.label("__rt_json_obj_direct_payload_x");
+    emitter.instruction("and r9, 255");                                         // leave the concrete PHP tag for value encoding
+    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // preserve the resolved tag across nested encoding
     emitter.instruction("mov rdx, QWORD PTR [rax]");                            // load the property low payload word
     emitter.instruction("mov rsi, QWORD PTR [rax + 8]");                        // load the property high payload word
     emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // save the property low payload across the encoder dispatch
@@ -740,6 +778,8 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rdi, [rbp - 128]");                                // address of the output-buffer descriptor
     emitter.instruction("call __rt_json_buf_append");                           // copy the encoded value to the cursor, growing first, and release a transient child buffer
 
+    emitter.instruction("add QWORD PTR [rbp - 16], 1");                         // count the completed key and value
+    emitter.label("__rt_json_obj_next_property_x");
     // Advance the loop index and continue.
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");                       // reload the property loop index
     emitter.instruction("add rcx, 1");                                          // advance to the next property entry
@@ -751,7 +791,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 1");                                          // room for the closing brace
     emitter.instruction("call __rt_json_buf_ensure");                           // r11 = cursor with headroom for the closing line
     emitter.instruction("call __rt_json_pretty_pop");                           // leave the object indentation level before closing it
-    emitter.instruction("cmp QWORD PTR [rbp - 48], 0");                         // did the object contain any public properties?
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // did the object contain any public properties?
     emitter.instruction("je __rt_json_obj_close_emit_x");                       // empty objects stay compact even under JSON_PRETTY_PRINT
     emitter.instruction("call __rt_json_pretty_line");                          // append the closing-line indentation for non-empty pretty objects
     emitter.label("__rt_json_obj_close_emit_x");

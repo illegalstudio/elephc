@@ -1,0 +1,194 @@
+name: Test PHP host SDK
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      artifact-attempt:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: '4'
+  RUST_MIN_STACK: '33554432'
+
+jobs:
+  host-sdk:
+    name: Host SDK (${{ inputs.target }}, ${{ matrix.phpts }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        phpts: [nts, ts]
+    env:
+      ELEPHC_PHPEXT_EXPECT_ZTS: ${{ matrix.phpts == 'ts' && '1' || '0' }}
+      ELEPHC_PHPEXT_EXPECT_TARGET: ${{ inputs.target }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Select preinstalled test environment
+        uses: ./.github/actions/use-ci-image
+        with:
+          role: ${{ matrix.phpts == 'ts' && 'php-ts' || 'php-nts' }}
+
+      - name: Install Rust
+        if: runner.os == 'macOS'
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: '1.98'
+
+      - name: Install matching PHP 8.5 SDK and CLI
+        if: runner.os == 'macOS'
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # 2.40.0
+        with:
+          php-version: '8.5'
+          coverage: none
+        env:
+          phpts: ${{ matrix.phpts }}
+          fail-fast: 'true'
+
+      - name: Restore compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ inputs.target }}
+          kind: compiler
+          attempt: ${{ inputs.artifact-attempt }}
+
+      - name: Restore bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ inputs.target }}
+          kind: bridges
+          attempt: ${{ inputs.artifact-attempt }}
+
+      - name: Restore Rust tests
+        uses: ./.github/actions/restore-test-build
+        with:
+          target: ${{ inputs.target }}
+          attempt: ${{ inputs.artifact-attempt }}
+
+      - name: Verify runner and selected interpreter
+        shell: elephc-ci-shell {0}
+        run: |
+          set -euo pipefail
+          php -n -r 'if (PHP_VERSION_ID < 80500 || PHP_VERSION_ID >= 80600 || (int) PHP_ZTS !== (int) getenv("ELEPHC_PHPEXT_EXPECT_ZTS")) { exit(1); }'
+          echo "ELEPHC_PHPEXT_PHP_BINARY=$(command -v php)" >> "$GITHUB_ENV"
+          if [[ '${{ runner.os }}' == Linux ]]; then
+            echo 'ELEPHC_PHPEXT_DEBUG_CONFIG=/opt/elephc/php-debug/bin/php-config' >> "$GITHUB_ENV"
+          else
+            echo "ELEPHC_PHPEXT_DEBUG_CONFIG=$RUNNER_TEMP/phpext-test-host/bin/php-config" >> "$GITHUB_ENV"
+          fi
+          php-config --vernum
+          php -n -v
+
+      - name: Check SDK parsing, host build and warning cleanup
+        shell: elephc-ci-shell {0}
+        run: |
+          python3 -m unittest discover -s scripts/phpext -p test_embed_runner.py
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(phpext::)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(warning_dispatch_emits_every_supported_target)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(nested_boundary_reads_linked_concat_capacity_on_all_targets)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(hosted_fatal_paths_escape_before_raw_diagnostics)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(phpext_pack_rejects_non_php_tags_before_normalization)'
+
+      - name: Check consumer ABI after sharing value-layout facts
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-zend) and binary(=abi) and test(structures_have_the_layout_rust_gives_them)'
+
+      # These are explicit real-host tests. A missing SDK must fail, not skip.
+      - name: Verify real PHP SDK, compiled exports, ownership and output
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=phpext_tests)' --run-ignored all
+
+      - name: Check existing library outputs
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=cdylib_tests) and test(test_cdylib_builds_and_host_calls_exports)'
+
+      - name: Check static archive output
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=cdylib_tests) and test(test_staticlib_links_directly_into_a_host_binary)'
+
+      - name: Check iOS library emitter contracts
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=cdylib_tests) and test(test_ios_aarch64_emit_asm_pins_string_return_out_parameters)'
+
+      - name: Cache real PHP debug embed SDK
+        if: runner.os == 'macOS'
+        uses: actions/cache@v6
+        with:
+          # Keep the non-relocatable SDK outside Rust's target cache. Both the
+          # builder identity and its workflow configure flags invalidate this cache.
+          path: ${{ runner.temp }}/phpext-test-host
+          key: phpext-embed-${{ inputs.target }}-${{ matrix.phpts }}-${{ hashFiles('scripts/phpext/build_host.py', '.github/workflows/ci-test-php-sdk.yml') }}-v3
+
+      - name: Build real PHP debug CLI and embed SDK
+        if: runner.os == 'macOS'
+        shell: elephc-ci-shell {0}
+        run: |
+          set -euo pipefail
+          flags=(--prefix "$RUNNER_TEMP/phpext-test-host" --debug)
+          if [ '${{ matrix.phpts }}' = ts ]; then
+            flags+=(--zts)
+          fi
+          if [ '${{ runner.os }}' = Linux ]; then
+            flags+=(--with-valgrind)
+          fi
+          python3 scripts/phpext/build_host.py "${flags[@]}"
+
+      - name: Verify repeated requests and concurrent ZTS requests in real PHP
+        shell: elephc-ci-shell {0}
+        run: python3 scripts/phpext/test_embed.py --php-config "$ELEPHC_PHPEXT_DEBUG_CONFIG"
+
+      - name: Check native and adapter leaks with Valgrind
+        if: runner.os == 'Linux'
+        shell: elephc-ci-shell {0}
+        run: python3 scripts/phpext/test_embed.py --php-config "$ELEPHC_PHPEXT_DEBUG_CONFIG" --valgrind
+
+      - name: Check native and adapter leaks with Apple leaks
+        if: runner.os == 'macOS'
+        shell: elephc-ci-shell {0}
+        run: python3 scripts/phpext/test_embed.py --php-config "$ELEPHC_PHPEXT_DEBUG_CONFIG" --leaks
+
+      - name: Check macOS lifecycle across independent module builds
+        if: runner.os == 'macOS'
+        shell: elephc-ci-shell {0}
+        run: |
+          set -euo pipefail
+          for attempt in {1..8}; do
+            echo "macOS lifecycle build $attempt/8"
+            python3 scripts/phpext/test_embed.py --php-config "$ELEPHC_PHPEXT_DEBUG_CONFIG" --leaks
+          done
+
+      - name: Check standalone null declaration parsing
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=parser_tests) and test(standalone_null)'
+
+      - name: Check standalone warning cleanup and default output
+        shell: elephc-ci-shell {0}
+        run: |
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(test_core_error_regression_ordinary_warning_unwind)'
+          bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(test_core_warning_fragments_newline_key_default_output)'
+
+      - name: Check standalone null declarations in executable output
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=codegen_tests) and test(test_standalone_null_parameters_and_returns)'
+
+      - name: Check standalone null and void diagnostics
+        shell: elephc-ci-shell {0}
+        run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and binary(=error_tests) and test(test_standalone_null_return_requirements)'
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds

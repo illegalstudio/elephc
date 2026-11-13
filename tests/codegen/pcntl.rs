@@ -1696,7 +1696,7 @@ fn test_pcntl_dispatch_cleanup_catch_preserves_masked_snapshot() {
 /// Eval-side dispatch cannot make an escaping AOT handler skip its saved signal-mask restoration.
 #[test]
 fn test_pcntl_eval_dispatch_inside_aot_handler_keeps_unwind_mask() {
-    let out = compile_and_run(r#"<?php
+    let out = crate::support::compile_and_run_with_heap_debug(r#"<?php
         extern "System" {
             function getpid(): int;
             function kill(int $pid, int $signal): int;
@@ -1726,7 +1726,9 @@ fn test_pcntl_eval_dispatch_inside_aot_handler_keeps_unwind_mask() {
         pcntl_sigprocmask(SIG_SETMASK, $original);
         pcntl_signal(SIGUSR1, SIG_DFL);
     "#);
-    assert_eq!(out, "caught:clear|returned:clear");
+    assert!(out.success, "stdout={:?} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "caught:clear|returned:clear");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
 /// Reaps a real child through `pcntl_waitid()` and exposes target-aware siginfo fields.

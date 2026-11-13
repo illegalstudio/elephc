@@ -31,6 +31,12 @@ pub(super) fn emit_reflection_constant_value_as_mixed(
             crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
             emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(enum_name.clone()));
         }
+        ReflectionConstantValue::Evaluated { value, enum_cases } => {
+            for (enum_name, case_name) in enum_cases {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_reflection_constant_value_as_mixed(ctx, value);
+        }
         ReflectionConstantValue::Array(elements) => {
             emit_reflection_constant_array_to_result(ctx, elements);
             emit_box_current_owned_value_as_mixed(
@@ -88,6 +94,18 @@ pub(super) fn emit_reflection_default_value_as_mixed(
     value: &ReflectionParameterDefaultValue,
 ) {
     match value {
+        ReflectionParameterDefaultValue::EnumCase(value) => {
+            for (enum_name, case_name) in &value.evaluated {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(value.enum_name.clone()));
+        }
+        ReflectionParameterDefaultValue::Evaluated { value, enum_cases } => {
+            for (enum_name, case_name) in enum_cases {
+                crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
+            }
+            emit_reflection_default_value_as_mixed(ctx, value);
+        }
         ReflectionParameterDefaultValue::Int(value) => {
             emit_boxed_int_literal_to_result(ctx, *value)
         }
@@ -309,40 +327,6 @@ pub(super) fn emit_reflection_constant_hash_insert(ctx: &mut FunctionContext<'_>
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection constant value as the hash payload
-            ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
-            abi::emit_pop_reg(ctx.emitter, "rdi");
-            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
-            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                "r9",
-                runtime_value_tag(&PhpType::Mixed) as i64,
-            );
-            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
-        }
-    }
-}
-
-/// Inserts the current boxed Mixed static-property value into the stacked associative array.
-#[rustfmt::skip]
-pub(super) fn emit_reflection_static_property_hash_insert(ctx: &mut FunctionContext<'_>, key: &str) {
-    let (key_label, key_len) = ctx.data.add_string(key.as_bytes());
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("mov x3, x0");                              // pass the boxed Reflection static value as the hash payload
-            ctx.emitter.instruction("mov x4, xzr");                             // boxed Mixed hash payloads do not use the high word
-            abi::emit_pop_reg(ctx.emitter, "x0");
-            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
-            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                "x5",
-                runtime_value_tag(&PhpType::Mixed) as i64,
-            );
-            abi::emit_call_label(ctx.emitter, "__rt_hash_set");
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("mov rcx, rax");                            // pass the boxed Reflection static value as the hash payload
             ctx.emitter.instruction("xor r8, r8");                              // boxed Mixed hash payloads do not use the high word
             abi::emit_pop_reg(ctx.emitter, "rdi");
             abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);

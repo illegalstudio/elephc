@@ -5,7 +5,7 @@
 //! - `crate::ir_lower::expr`.
 //!
 //! Key details:
-//! - Preserves source-order evaluation, EIR typing, effects, and ownership contracts.
+//! - Heap merge slots retain their incoming owner; scalar slots borrow conversion inputs.
 
 use super::*;
 
@@ -56,9 +56,13 @@ pub(in crate::ir_lower) fn store_value_into_temp(
 ) {
     let value = coerce_value_for_temp(ctx, value, &temp_type, span);
     let source = value;
-    let stored = crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span));
+    // A tagged scalar store can read a boxed branch value without keeping its box.
+    // Retaining that input would leave an owner that the inline destination cannot retire.
+    let stored = if Ownership::php_type_needs_lifetime_tracking(&temp_type) {
+        crate::ir_lower::ownership::acquire_if_refcounted(ctx, value, Some(span))
+    } else { value };
     ctx.store_local(temp_name, stored, temp_type, Some(span));
-    if stored.value != source.value && ctx.value_needs_release_after_retaining_store(source) {
+    if ctx.value_needs_release_after_retaining_store(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
 }
@@ -71,6 +75,7 @@ pub(in crate::ir_lower) fn take_owned_temp(
 ) -> LoweredValue {
     let value = ctx.load_local(temp_name, Some(span));
     ctx.clear_owned_hidden_temp(temp_name, Some(span));
+    ctx.mark_taken_owned_temp(value.value);
     value
 }
 
@@ -410,6 +415,10 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             }
         }
         ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
+        // `clone $block` has the same value type as `$block`. The syntactic fallback
+        // answers `int`, which stamps a literal `array<int>` and then calls a method on
+        // the nullable read of that slot.
+        ExprKind::Clone(inner) => materialized_expr_type_for_merge(ctx, inner),
         ExprKind::BinaryOp { left, op, right } if mixed_numeric_op(op).is_some() => {
             let left_ty = materialized_expr_type_for_merge(ctx, left).codegen_repr();
             let right_ty = materialized_expr_type_for_merge(ctx, right).codegen_repr();
@@ -446,6 +455,9 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         ),
         ExprKind::ArrayAccess { array, .. } => array_access_expr_value_type_for_ir(ctx, array)
             .unwrap_or_else(|| fallback_expr_type(expr)),
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_merge_type(ctx, receiver, name, expr)
+        }
         // Typed the way `lower_buffer_new` stamps the allocation, so `buffer_new<float>(1)[0]`
         // is read as a float element rather than the syntactic `int`.
         ExprKind::BufferNew { element_type, .. } => {
@@ -492,6 +504,33 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
         }
         _ => fallback_expr_type(expr),
     }
+}
+
+/// Types a scoped constant as `lower_scoped_constant` materializes it, not by its spelling.
+///
+/// An enum case is its singleton object, and a lexical class constant lowers its declaration-
+/// scoped initializer in place. The syntactic fallback answers `string` for both, so a ternary
+/// over enum cases got a string merge temp that the object destination could not accept.
+/// Late static `static::` reads keep the fallback because descendants may override them.
+fn scoped_constant_merge_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: &str,
+    expr: &Expr,
+) -> PhpType {
+    let class_name = super::scoped_values::scoped_constant_receiver_name(ctx, receiver);
+    let normalized = class_name.trim_start_matches('\\');
+    if ctx.enums.get(normalized)
+        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == name))
+    {
+        return PhpType::Object(normalized.to_string());
+    }
+    if !matches!(receiver, StaticReceiver::Static) {
+        if let Some(value) = ctx.scoped_constant_value(&class_name, name) {
+            return merge_arm_type(ctx, &value);
+        }
+    }
+    fallback_expr_type(expr)
 }
 
 /// Returns the expression an assignment expression evaluates to, for type prediction.

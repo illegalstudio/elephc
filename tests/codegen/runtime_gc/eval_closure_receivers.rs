@@ -10,6 +10,65 @@
 
 use crate::support::*;
 
+/// Captures belong to each Closure object, including bound copies, reference cells and cycles.
+#[test]
+fn test_core_eval_closure_capture_edges_release_bundle() {
+    let definitions = r#"class CapturedEvalOwner {
+    public function __construct(public string $label, public bool $throws = false) {}
+    public function __destruct() {
+        echo $this->label, "|";
+        if ($this->throws) { throw new RuntimeException("capture"); }
+    }
+}"#;
+    let body = r#"if ($argc === 1) {
+    $object = new CapturedEvalOwner("one");
+    $callback = function() use ($object): string { return $object->label; };
+    unset($object); echo $callback(), ":"; unset($callback); echo "done";
+} elseif ($argc === 2) {
+    $object = new CapturedEvalOwner("two");
+    $callback = function() use ($object): string { return $object->label; };
+    $copy = $callback->bindTo(null);
+    unset($callback, $object); gc_collect_cycles();
+    echo $copy(), ":"; unset($copy); echo "done";
+} elseif ($argc === 3) {
+    $object = new CapturedEvalOwner("old");
+    $callback = function() use (&$object): string {
+        $object = new CapturedEvalOwner("new"); return $object->label;
+    };
+    echo $callback(), ":"; unset($object, $callback); echo "done";
+} elseif ($argc === 4) {
+    gc_disable(); $callback = null; $object = new CapturedEvalOwner("cycle");
+    $callback = function() use (&$callback, $object): string { return $object->label; };
+    unset($object); gc_collect_cycles(); echo $callback(), ":";
+    unset($callback); gc_collect_cycles(); echo "done";
+} else {
+    $object = new CapturedEvalOwner("throw", true);
+    $callback = function() use ($object): void {};
+    unset($object);
+    try { unset($callback); }
+    catch (RuntimeException $error) { echo $error->getMessage(), ":"; unset($error); }
+    echo "done";
+}"#;
+    let quoted = body.replace('\\', "\\\\").replace('\'', "\\'");
+    let source = format!("<?php {definitions}\n$source = $argc > 0 ? '{quoted}' : ''; eval($source); unset($source);");
+    let runs = compile_and_run_with_heap_debug_per_argv(&source, &[
+        &[], &["x"], &["x", "x"], &["x", "x", "x"], &["x", "x", "x", "x"],
+    ]);
+    for (mode, (out, expected)) in runs.iter().zip([
+        "one:one|done", "two:two|done", "old|new:new|done", "cycle:cycle|done", "throw|capture:done",
+    ]).enumerate() {
+        assert!(out.success, "mode={mode}\n{}", out.stderr);
+        assert_eq!(out.stdout, expected, "mode={mode}\n{}", out.stderr);
+        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={mode}\n{}", out.stderr);
+    }
+}
+
+/// Capture edges retain the same destruction order without EIR optimization.
+#[test]
+fn test_core_eval_closure_capture_edges_release_no_ir_opt_bundle() {
+    without_ir_opt(test_core_eval_closure_capture_edges_release_bundle);
+}
+
 /// Native receiver throws return through Rust edge cleanup before eval catches the complete chain.
 #[test]
 fn test_core_eval_closure_receiver_destructor_throws_finish_native_owner_cleanup() {

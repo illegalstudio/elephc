@@ -172,3 +172,20 @@ foreach ([0, 1] as $skip) {
         )
     );
 }
+
+/// Omitted index outputs retire the parser's detached empty index after transferring values.
+#[test]
+fn test_xml_parse_into_struct_omitted_index_owners_heap_clean() {
+    if skip_without_xml_native("test_xml_parse_into_struct_omitted_index_owners_heap_clean") { return; }
+    let out = compile_and_run_with_heap_debug(r#"<?php
+for ($i = 0; $i < 8; $i++) {
+    $parser = xml_parser_create();
+    $values = ['previous'];
+    echo xml_parse_into_struct($parser, '<r>value</r>', $values), ':';
+    echo $values[0]['value'], '|';
+}
+"#);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "1:value|".repeat(8));
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

@@ -70,6 +70,7 @@ mod property_values;
 mod receiver_place;
 mod runtime_calls;
 mod runtime_array_liveness;
+mod spl_storage_write_fetch;
 mod string_write_offsets;
 mod runtime_class_messages;
 mod literal_parameter_guards;
@@ -99,15 +100,23 @@ mod local_loads;
 pub(in crate::codegen) mod local_stores;
 mod method_call_types;
 mod method_dispatch;
+mod method_dispatch_errors;
 mod method_intrinsics;
 mod method_resolution;
+mod method_lookup;
+mod reference_return_dispatch;
 #[cfg(test)]
 #[path = "lower_inst/null_parameter_guard_tests.rs"]
 mod null_parameter_guard_tests;
+#[cfg(test)]
+#[path = "lower_inst/mixed_unbox_ownership_tests.rs"]
+mod mixed_unbox_ownership_tests;
 mod mixed_array_runtime;
 mod mixed_property_runtime;
 mod output_values;
 mod reference_arguments;
+mod reference_argument_handoff;
+mod reference_payloads;
 mod runtime_wrappers;
 mod static_method_calls;
 mod throwable_methods;
@@ -154,11 +163,13 @@ pub(in crate::codegen) use conversions::{
 };
 pub(super) use core_closures::function_signature_from_eir;
 pub(in crate::codegen) use core_builtins::emit_function_frame_reader;
+pub(in crate::codegen) use objects::emit_pending_reflection_class_builders;
 pub(super) use descriptor_entries::emit_static_method_descriptor_entry_wrapper;
 pub(super) use descriptor_metadata::{
     class_method_body_exists, emit_runtime_descriptor_with_receiver_capture,
 };
 pub(super) use floats::{emit_fused_float_compare, float_branch_condition_suffix};
+pub(in crate::codegen) use arithmetic::{emit_fused_overflow, OverflowBranch};
 pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
 };
@@ -205,8 +216,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
     if inst.result.is_some_and(|value| ctx.allocation.rematerialized(value).is_some()) {
         return Ok(());
     }
-    if ctx.is_fused_compare(inst_id) {
-        // The block's `cond_br` emits this compare and branches on its flags directly.
+    if ctx.is_fused_compare(inst_id) || ctx.is_fused_overflow(inst_id) {
+        // The block's `cond_br` emits this compare or overflow test and branches on its flags.
         return Ok(());
     }
     match inst.op {
@@ -222,12 +233,14 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
         Op::ZeroLocalSlot => lower_zero_local_slot(ctx, &inst),
         Op::LoadRefCell => lower_load_ref_cell(ctx, &inst),
+        Op::LoadRefCellValue => local_loads::lower_load_ref_cell_value(ctx, &inst),
         Op::StoreRefCell => lower_store_ref_cell(ctx, &inst),
         Op::PromoteLocalRefCell => lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => lower_alias_local_ref_cell(ctx, &inst),
         Op::RetainLocalRefCell => lower_retain_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => lower_release_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalSlot => lower_release_local_slot(ctx, inst_id, &inst),
+        Op::ReleaseRawLocalSlot => local_stores::lower_release_raw_local_slot(ctx, &inst),
         Op::PushCallOperandOwner => ownership::lower_push_call_operand_owner(ctx, &inst),
         Op::PopCallOperandOwner => ownership::lower_pop_call_operand_owner(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
@@ -237,6 +250,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IAdd => arithmetic::lower_int_binop(ctx, &inst, "add", "add"),
         Op::ISub => arithmetic::lower_int_binop(ctx, &inst, "sub", "sub"),
         Op::IMul => arithmetic::lower_int_binop(ctx, &inst, "mul", "imul"),
+        Op::IOverflows => arithmetic::lower_ioverflows(ctx, &inst),
         Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
         Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
         Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
@@ -433,6 +447,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ExprCall => callables::lower_expr_call(ctx, &inst),
         Op::CallableDescriptorInvoke => callables::lower_callable_descriptor_invoke(ctx, &inst),
         Op::PipeCall => callables::lower_pipe_call(ctx, &inst),
+        Op::MethodLookup => method_lookup::lower_method_lookup(ctx, &inst),
         Op::MethodCall => lower_method_call(ctx, &inst),
         Op::NullsafeMethodCall => lower_nullsafe_method_call(ctx, &inst),
         Op::StaticMethodCall => lower_static_method_call(ctx, &inst),

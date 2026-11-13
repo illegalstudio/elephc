@@ -59,10 +59,12 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_mixed_method_call(ctx, inst, object, &method_name);
     }
     let PhpType::Object(class_name) = object_ty else {
-        return Err(CodegenIrError::unsupported(format!(
-            "method call receiver for PHP type {:?}",
-            object_ty
-        )));
+        // PHP raises a catchable Error naming the runtime type. A static int, string,
+        // array, bool, or null used to stop compilation instead.
+        super::method_dispatch_errors::emit_static_non_object_method_error(
+            ctx, object, &method_name, &object_ty,
+        )?;
+        return Ok(());
     };
     guard_static_method_receiver(ctx, object, &method_name)?;
     if let Some(state) = fiber_state_predicate(&class_name, &method_name) {
@@ -145,7 +147,7 @@ pub(super) fn lower_method_call(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_method_call_result(ctx, inst, &target)?;
     // User callees return an owner independent of the caller's materialized Mixed arguments.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, target.by_ref_return)
 }
 
 /// Rejects the raw null-container representation before a static object method dispatch.
@@ -180,14 +182,25 @@ pub(super) fn lower_mixed_method_call(
     method_name: &str,
 ) -> Result<()> {
     let candidates = mixed_method_candidates(ctx, method_name, inst.operands.len())?;
-    if candidates.is_empty() {
-        if builtins::has_eval_context(ctx) {
-            return builtins::lower_eval_method_call(ctx, inst, object, method_name);
-        }
-        emit_method_call_on_null_fatal(ctx, method_name);
+    // Eval subclasses keep their native backing class id, so identity must precede that ladder.
+    let eval_done_label = if ctx.module.required_runtime_features.eval_bridge {
+        let native_label = ctx.next_label("mixed_method_native");
+        let eval_done = ctx.next_label("mixed_method_eval_done");
+        builtins::lower_eval_context_free_method_call(
+            ctx, inst, object, method_name, &native_label, &eval_done,
+        )?;
+        ctx.emitter.label(&native_label);
+        Some(eval_done)
+    } else { None };
+    // A method declared only by eval has no native candidate. Its owning context
+    // must still get the first chance to resolve the call from a context-free frame.
+    // Without eval, an empty native ladder is not "on null": the receiver may be a
+    // real object (`__call`, or an undefined method) or a non-object mixed value.
+    if candidates.is_empty() && builtins::has_eval_context(ctx) {
+        builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
+        if let Some(label) = eval_done_label { ctx.emitter.label(&label); }
         return Ok(());
     }
-
     let receiver_reg = abi::nested_call_reg(ctx.emitter);
     let non_object_label = ctx.next_label("mixed_method_non_object");
     let no_match_label = ctx.next_label("mixed_method_no_match");
@@ -228,13 +241,16 @@ pub(super) fn lower_mixed_method_call(
         builtins::lower_eval_method_call(ctx, inst, object, method_name)?;
         abi::emit_jump(ctx.emitter, &done_label);
     } else {
-        emit_method_call_on_null_fatal(ctx, method_name);
+        super::method_dispatch_errors::emit_undefined_or_arity_error(
+            ctx, inst, receiver_reg, method_name,
+        )?;
     }
 
     ctx.emitter.label(&non_object_label);
-    emit_method_call_on_null_fatal(ctx, method_name);
+    super::method_dispatch_errors::emit_mixed_non_object_method_fatal(ctx, method_name);
 
     ctx.emitter.label(&done_label);
+    if let Some(label) = eval_done_label { ctx.emitter.label(&label); }
     Ok(())
 }
 
@@ -296,7 +312,7 @@ pub(super) fn lower_mixed_method_candidate_call(
     store_method_call_result(ctx, inst, &candidate.target)?;
     // Candidate dispatch creates the same caller-owned coercion cells as concrete dispatch.
     emit_call_arg_temp_cleanups(ctx, &call_args, None)?;
-    emit_ref_arg_writebacks(ctx, &call_args)
+    emit_ref_arg_writebacks_guarding_result(ctx, &call_args, inst.result, candidate.target.by_ref_return)
 }
 
 /// Returns true when `class_name` is `ancestor` or reaches it through `parent`.

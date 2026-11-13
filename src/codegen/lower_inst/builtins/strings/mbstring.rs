@@ -14,10 +14,12 @@ use elephc_builtin_contract::{RuntimeBuiltinId, TypeSpec};
 
 mod capture;
 mod mbstring_fast;
+mod prepared_args;
 
 /// Stages borrowed value descriptors and invokes shared PHP argument preparation on either architecture.
 pub(crate) fn lower_mbstring(ctx: &mut FunctionContext<'_>, inst: &Instruction, operation: RuntimeBuiltinId) -> Result<()> {
-    if mbstring_fast::try_lower(ctx, inst, operation)? {
+    if prepared_args::already_prepared(ctx, inst, operation)?
+        && mbstring_fast::try_lower(ctx, inst, operation)? {
         return Ok(());
     }
     lower_mbstring_impl(ctx, inst, operation, true)

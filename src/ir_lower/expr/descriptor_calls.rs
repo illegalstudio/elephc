@@ -31,8 +31,8 @@ pub(super) fn lower_literal_callable_array_expr_call(
         .as_ref()
         .map(|sig| descriptor_invoker_result_type(Some(sig)))
         .unwrap_or_else(|| dynamic_callable_result_type(ctx, lowered_callee.value, expr));
-    let lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
-    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
+    let mut lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
+    let arg_container = lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut lowered_callee, args, expr.span);
     Some(emit_callable_descriptor_invoke(
         ctx,
         lowered_callee,
@@ -49,8 +49,8 @@ pub(super) fn lower_expr_call_from_value(
     expr: &Expr,
 ) -> LoweredValue {
     let result_type = dynamic_callable_result_type(ctx, callee.value, expr);
-    let callee = root_descriptor_callback(ctx, callee, result_type, expr.span);
-    let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
+    let mut callee = root_descriptor_callback(ctx, callee, result_type, expr.span);
+    let arg_container = lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut callee, args, expr.span);
     emit_callable_descriptor_invoke(ctx, callee, arg_container, expr.span)
 }
 
@@ -73,12 +73,30 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container(
     args: &[Expr],
     span: Span,
 ) -> LoweredValue {
+    let selections: Vec<_> = (0..args.len()).map(|_| None).collect();
+    lower_untyped_descriptor_invoker_arg_container_with_selections(ctx, args, &selections, span)
+}
+
+/// Reads selected passing modes before building a direct signature-unknown call's arguments.
+pub(super) fn lower_untyped_descriptor_invoker_arg_container_for_callable(
+    ctx: &mut LoweringContext<'_, '_>, callback: &mut RootedDescriptorCallback,
+    args: &[Expr], span: Span,
+) -> LoweredValue {
+    let selections = descriptor_native_selections::prepare(ctx, callback, args, span);
+    lower_untyped_descriptor_invoker_arg_container_with_selections(ctx, args, &selections, span)
+}
+
+/// Builds the ordinary runtime binder container with optional XML selection contexts.
+fn lower_untyped_descriptor_invoker_arg_container_with_selections(
+    ctx: &mut LoweringContext<'_, '_>, args: &[Expr],
+    selections: &[Option<descriptor_native_selections::SelectionArgument>], span: Span,
+) -> LoweredValue {
     if crate::types::call_args::has_named_args(args)
         || descriptor_args_need_runtime_unpack_keys(args)
     {
-        return lower_untyped_descriptor_invoker_hash_container(ctx, args, span, false);
+        return lower_untyped_descriptor_invoker_hash_container(ctx, args, selections, span);
     }
-    lower_untyped_descriptor_invoker_indexed_container(ctx, args, span, false)
+    lower_untyped_descriptor_invoker_indexed_container(ctx, args, selections, span)
 }
 
 /// Registers exceptional cleanup for an owning descriptor or argument container.
@@ -99,8 +117,8 @@ pub(super) fn guard_owned_descriptor_callback(ctx: &mut LoweringContext<'_, '_>,
 fn lower_untyped_descriptor_invoker_indexed_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
+    selections: &[Option<descriptor_native_selections::SelectionArgument>],
     span: Span,
-    _guarded: bool,
 ) -> LoweredValue {
     let elem_ty = PhpType::Mixed;
     let array_ty = PhpType::Array(Box::new(elem_ty.clone()));
@@ -113,8 +131,8 @@ fn lower_untyped_descriptor_invoker_indexed_container(
         Some(span),
     );
     let owner = publish_constructed_container(ctx, array, span);
-    for arg in args {
-        let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
+    for (index, arg) in args.iter().enumerate() {
+        let value = lower_untyped_descriptor_arg_with_selection(ctx, arg, selections[index].as_ref());
         let array = load_published_container(
             ctx,
             owner,
@@ -138,8 +156,8 @@ fn lower_untyped_descriptor_invoker_indexed_container(
 fn lower_untyped_descriptor_invoker_hash_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
+    selections: &[Option<descriptor_native_selections::SelectionArgument>],
     span: Span,
-    _guarded: bool,
 ) -> LoweredValue {
     let hash_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
@@ -155,11 +173,11 @@ fn lower_untyped_descriptor_invoker_hash_container(
     );
     let owner = publish_constructed_container(ctx, hash, span);
     let state = begin_descriptor_unpack(ctx, owner, hash_ty.clone(), span);
-    for arg in args {
+    for (index, arg) in args.iter().enumerate() {
         match &arg.kind {
             ExprKind::NamedArg { name, value } => {
                 let key = lower_string_literal(ctx, name, arg);
-                let value = lower_untyped_descriptor_invoker_arg_value(ctx, value);
+                let value = lower_untyped_descriptor_arg_with_selection(ctx, value, selections[index].as_ref());
                 bind_descriptor_unpack_named(ctx, &state, key, value, None, arg.span);
             }
             ExprKind::Spread(inner) => {
@@ -167,7 +185,7 @@ fn lower_untyped_descriptor_invoker_hash_container(
                 lower_descriptor_unpack_source(ctx, &state, source, arg.span, None);
             }
             _ => {
-                let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
+                let value = lower_untyped_descriptor_arg_with_selection(ctx, arg, selections[index].as_ref());
                 bind_descriptor_unpack_positional(ctx, &state, value, None, arg.span);
             }
         }
@@ -176,6 +194,17 @@ fn lower_untyped_descriptor_invoker_hash_container(
     let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span));
     retire_owned_call_operand(ctx, owner, span);
     boxed
+}
+
+/// Selects write context only for an XML argument whose resolved parameter binds by reference.
+fn lower_untyped_descriptor_arg_with_selection(
+    ctx: &mut LoweringContext<'_, '_>, arg: &Expr,
+    selection: Option<&descriptor_native_selections::SelectionArgument>,
+) -> LoweredValue {
+    match selection {
+        Some(selection) => descriptor_native_selections::lower(ctx, arg, selection),
+        None => lower_untyped_descriptor_invoker_arg_value(ctx, arg),
+    }
 }
 
 /// Lowers one untyped descriptor argument, preserving variables as ref markers.
@@ -264,9 +293,9 @@ pub(super) fn lower_first_class_callable_expr_call(
                 .as_ref()
                 .map(|signature| normalize_value_php_type(crate::types::eir_value_php_type(&signature.return_type)))
                 .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
-            let callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
+            let mut callable = root_descriptor_callback(ctx, callable, result_type, expr.span);
             let arg_container =
-                lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span);
+                lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut callable, args, expr.span);
             Some(emit_callable_descriptor_invoke(
                 ctx,
                 callable,

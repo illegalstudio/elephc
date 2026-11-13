@@ -174,3 +174,35 @@ echo numericPart($n), ':', closurePart($n);
 "#, r#"499500:500500"#, Some(6032));
 }
 
+/// Native and eval callers preserve reference occupants through increments and sparse
+/// collector copies.
+#[test]
+fn test_borrowed_numeric_reference_increment_after_sparse_collector_copy() {
+    check_numeric(r#"<?php
+function incrementMixed(&$value): void { $value++; }
+$raw = json_decode('7');
+$alias =& $raw;
+incrementMixed($raw);
+echo $raw, ':', $alias, '|';
+function sparseReferenceIncrement(&...$values): void {
+    $copy = $values;
+    $copy[3] = 'extra';
+    $copy[0]++;
+    echo $values[0], ':', $copy[0], ':', $copy[3], '|';
+}
+$counter = json_decode('17');
+$other = json_decode('23');
+sparseReferenceIncrement($counter, $other);
+echo $counter, ':', $other;
+echo '|';
+eval('class SparseReferenceIntegrationEvalMarker {}
+$evalRaw = json_decode("7");
+$evalAlias =& $evalRaw;
+incrementMixed($evalRaw);
+echo $evalRaw, ":", $evalAlias, "|";
+$evalCounter = json_decode("17");
+$evalOther = json_decode("23");
+sparseReferenceIncrement($evalCounter, $evalOther);
+echo $evalCounter, ":", $evalOther;');
+"#, "8:8|18:18:extra|18:23|8:8|18:18:extra|18:23", None);
+}

@@ -6,6 +6,9 @@
 //!
 //! Key details:
 //! - Preserves compile-time metadata, target-aware object layout, and ownership.
+//! - Fresh nested reflectors transfer their producer reference into each boxed property.
+//! - Declaring-class slots hold a builder address, so a member reflector owns no
+//!   `ReflectionClass` and never forms a cycle with one.
 
 use super::*;
 
@@ -103,7 +106,7 @@ pub(super) fn emit_reflection_constructor_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -134,7 +137,7 @@ pub(super) fn emit_reflection_method_prototype_property(
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(member) = member {
         emit_reflection_member_object(ctx, "ReflectionMethod", member)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionMethod".to_string()),
         );
@@ -167,7 +170,7 @@ pub(super) fn emit_reflection_parent_class_property(
     if let Some(parent_class_name) = parent_class_name {
         let parent_metadata = reflection_class_metadata_for_name(ctx, parent_class_name)?;
         emit_reflection_owner_object(ctx, "ReflectionClass", &parent_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionClass".to_string()),
         );
@@ -182,7 +185,27 @@ pub(super) fn emit_reflection_parent_class_property(
     Ok(())
 }
 
-/// Replaces a member reflector's private declaring-class slot with `ReflectionClass|false`.
+/// Leaves a boxed `int` holding the address of `class_name`'s module-level `ReflectionClass`
+/// builder in the integer result register.
+///
+/// Member reflectors (methods, properties, constants, enum cases, parameters) store this
+/// address instead of a `ReflectionClass`, and their getters call it through
+/// `__elephc_reflection_class_build()`. Materializing a reflector per member cost the class's
+/// default and static property arrays per member (megabytes for `mysqli`), and sharing one
+/// complete reflector would form a cycle with its own members. Building at call time gives
+/// php's fresh, complete reflector per call, and the member holds no object at all.
+pub(super) fn emit_reflection_class_builder_address_as_mixed(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+) {
+    let label = ctx.shared.request_reflection_class_builder(class_name);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, result_reg, &label);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+}
+
+/// Replaces a member reflector's private declaring-class slot with its class's builder
+/// address (see `emit_reflection_class_builder_address_as_mixed`), or `false`.
 pub(super) fn emit_reflection_declaring_class_property(
     ctx: &mut FunctionContext<'_>,
     member_class_name: &str,
@@ -206,13 +229,7 @@ pub(super) fn emit_reflection_declaring_class_property(
     let object_reg = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_push_reg(ctx.emitter, result_reg);
     if let Some(declaring_class_name) = declaring_class_name {
-        let declaring_metadata =
-            reflection_shallow_class_metadata_for_name(ctx, declaring_class_name)?;
-        emit_reflection_owner_object(ctx, "ReflectionClass", &declaring_metadata)?;
-        emit_box_current_value_as_mixed(
-            ctx.emitter,
-            &PhpType::Object("ReflectionClass".to_string()),
-        );
+        emit_reflection_class_builder_address_as_mixed(ctx, declaring_class_name);
     } else {
         abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
@@ -245,7 +262,7 @@ pub(super) fn emit_reflection_enum_property(
     if let Some(enum_name) = enum_name {
         let enum_metadata = reflection_enum_metadata_for_name(ctx, enum_name)?;
         emit_reflection_owner_object(ctx, "ReflectionEnum", &enum_metadata)?;
-        emit_box_current_value_as_mixed(
+        emit_box_current_owned_value_as_mixed(
             ctx.emitter,
             &PhpType::Object("ReflectionEnum".to_string()),
         );

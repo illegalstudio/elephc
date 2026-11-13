@@ -85,9 +85,13 @@ pub(in crate::interpreter) fn eval_implode_result(
             output.extend_from_slice(&separator);
         }
         let key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, key)?;
-        let value = values.string_bytes(value)?;
-        output.extend_from_slice(&value);
+        with_eval_value_lease(key, context, values, |key, context, values| {
+            let value = values.array_get(array, key)?;
+            with_eval_value_lease(value, context, values, |value, _, values| {
+                output.extend_from_slice(&values.string_bytes(value)?);
+                Ok(())
+            })
+        })?;
     }
     values.string_bytes_value(&output)
 }

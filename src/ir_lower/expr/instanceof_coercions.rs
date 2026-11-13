@@ -105,6 +105,12 @@ pub(crate) fn coerce_to_int_at_span(
     value: LoweredValue,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
+    // Scalar fallbacks are part of the emitted graph even when a native object adapter owns
+    // the reachable path. The backend's generic cast helper consumes a boxed Mixed cell, not
+    // a raw object pointer, so keep every fallback graph representable on every target.
+    let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Object(_)) {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, span)
+    } else { value };
     match value.ir_type {
         IrType::I64 => value,
         IrType::F64 => ctx.emit_value(Op::FToI, vec![value.value], None, PhpType::Int, Op::FToI.default_effects(), span),
@@ -168,6 +174,11 @@ pub(super) fn coerce_to_float_at_span(
     value: LoweredValue,
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
+    // See the integer coercion above: unreachable scalar fallbacks still have to satisfy the
+    // backend ABI, and object payload pointers are not Mixed cells.
+    let value = if matches!(ctx.builder.value_php_type(value.value).codegen_repr(), PhpType::Object(_)) {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, span)
+    } else { value };
     match value.ir_type {
         IrType::F64 => value,
         IrType::I64 => ctx.emit_value(Op::IToF, vec![value.value], None, PhpType::Float, Op::IToF.default_effects(), span),

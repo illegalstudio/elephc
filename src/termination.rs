@@ -454,6 +454,15 @@ fn stmt_may_break_current_loop(stmt: &Stmt, breakable_depth_to_loop: usize) -> b
     }
 }
 
+/// Returns true if a loop body may `break` or `continue` that loop or an enclosing one.
+///
+/// EIR lowering uses it to decide whether a loop needs join points for those jumps (see
+/// `ir_lower::stmt::conditionals::LoopJumpJoins`). A `break`/`continue` that only targets a
+/// nested loop or `switch` does not count.
+pub(crate) fn block_may_jump_out_of_current_loop(stmts: &[Stmt]) -> bool {
+    stmts.iter().any(|stmt| stmt_may_leave_current_switch(stmt, 1))
+}
+
 /// Returns true if the statement may break or continue out of `breakable_depth_to_switch`
 /// or more enclosing switch levels.
 fn stmt_may_leave_current_switch(stmt: &Stmt, breakable_depth_to_switch: usize) -> bool {

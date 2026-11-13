@@ -107,6 +107,7 @@ pub(super) fn env_after_list_unpack(mut env: ConstantEnv, vars: &[String], value
             .iter()
             .zip(items.iter())
             .filter_map(|(var, item)| {
+                if super::is_reference_volatile(var) { return None; }
                 assigned_scalar_value(item).map(|value| (var.clone(), value))
             })
             .collect();

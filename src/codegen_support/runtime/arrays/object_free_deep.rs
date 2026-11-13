@@ -263,6 +263,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     emitter.instruction("cmp x12, x13");                                        // have we visited every property slot?
     emitter.instruction("b.ge __rt_object_free_deep_struct");                   // finish once every property has been scanned
 
+    if features.native_reference_validation {
+        super::native_reference_source_retirement::emit(emitter);
+    }
+
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("mov x10, #16");                                        // each property slot occupies 16 bytes
     emitter.instruction("mul x10, x12, x10");                                   // compute the property slot byte offset
@@ -324,6 +328,10 @@ pub fn emit_object_free_deep(emitter: &mut Emitter, features: RuntimeFeatures) {
     super::deep_cleanup::invoke(emitter, "__rt_decref_any", "x0");
 
     emitter.label("__rt_object_free_deep_no_dyn_props");
+    if features.eval_bridge {
+        emitter.instruction("ldr x0, [sp, #0]");                                // remove eval identity metadata immediately before storage can be reused
+        emitter.bl_c("__elephc_eval_dynamic_object_forget");
+    }
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer before freeing it
     emitter.instruction("bl __rt_heap_free");                                   // return the object storage to the heap allocator
     emitter.label("__rt_object_free_deep_resurrected");
@@ -541,6 +549,9 @@ fn emit_object_free_deep_linux_x86_64(emitter: &mut Emitter, features: RuntimeFe
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the current object-property index at the top of every loop iteration
     emitter.instruction("cmp r10, QWORD PTR [rbp - 24]");                       // have we already scanned every property slot owned by this object?
     emitter.instruction("jae __rt_object_free_deep_struct");                    // finish once the property index reaches the saved property count
+    if features.native_reference_validation {
+        super::native_reference_source_retirement::emit(emitter);
+    }
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the object pointer after any nested helper call
     emitter.instruction("mov rcx, r10");                                        // copy the current property index before scaling it into a byte offset
     emitter.instruction("shl rcx, 4");                                          // convert the property index into a 16-byte property-slot offset
@@ -756,6 +767,35 @@ mod tests {
         assert!(asm.contains("cmp x15, #10\n"));
         assert!(asm.contains("__rt_object_free_deep_release_callable:\n"));
         assert!(asm.contains("__rt_callable_descriptor_release") && asm.contains("__rt_cleanup_invoke"));
+    }
+
+    /// Both targets clear a freed object's eval metadata (dynamic objects and registered
+    /// reflectors) before its storage can be reused, and only when the program links the eval
+    /// bridge, so a program without Magician references no `__elephc_eval_*` symbol.
+    #[test]
+    fn object_free_forgets_eval_identity_only_with_the_eval_bridge() {
+        for (platform, arch, call) in [
+            (Platform::MacOS, Arch::AArch64, "bl ___elephc_eval_dynamic_object_forget\n"),
+            (Platform::Linux, Arch::AArch64, "bl __elephc_eval_dynamic_object_forget\n"),
+            (Platform::Linux, Arch::X86_64, "call __elephc_eval_dynamic_object_forget\n"),
+        ] {
+            let mut with = Emitter::new(Target::new(platform, arch));
+            emit_object_free_deep(&mut with, RuntimeFeatures::all());
+            let with = with.output();
+            let forget = with.find(call).unwrap_or_else(|| panic!("{arch:?}: forget call missing"));
+            assert!(
+                with[forget..].contains("__rt_heap_free"),
+                "{arch:?}: the forget call must precede the heap free"
+            );
+            let mut without = Emitter::new(Target::new(platform, arch));
+            let mut features = RuntimeFeatures::all();
+            features.eval_bridge = false;
+            emit_object_free_deep(&mut without, features);
+            assert!(
+                !without.output().contains("__elephc_eval_dynamic_object_forget"),
+                "{arch:?}: no eval symbol without the bridge"
+            );
+        }
     }
 
     /// The stack-releasing arms appear only for a program that has the classes, and the guard has

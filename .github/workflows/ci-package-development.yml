@@ -1,0 +1,97 @@
+name: Package development build
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        required: true
+      runner:
+        type: string
+        required: true
+      source-sha:
+        type: string
+        required: true
+      producer-run:
+        type: string
+        required: true
+      producer-attempt:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  actions: read
+  packages: read
+
+jobs:
+  package:
+    name: Package development build (${{ inputs.target }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    steps:
+      # Revalidate here so every caller crosses the same trust boundary before
+      # any scripts or actions from a requested historical commit are executed.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Validate the package source against retained main history
+        id: source
+        env:
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: python3 -B scripts/ci/reconcile_development.py validate "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Select preinstalled link environment
+        uses: ./.github/actions/use-ci-image
+        with:
+          role: smoke
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+      - name: Restore verified compiler
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ inputs.target }}
+          sha: ${{ inputs.source-sha }}
+          kind: compiler
+          run-id: ${{ inputs.producer-run }}
+          attempt: ${{ inputs.producer-attempt }}
+      - name: Restore verified bridges
+        uses: ./.github/actions/restore-build-artifact
+        with:
+          target: ${{ inputs.target }}
+          sha: ${{ inputs.source-sha }}
+          kind: bridges
+          run-id: ${{ inputs.producer-run }}
+          attempt: ${{ inputs.producer-attempt }}
+      - name: Package and verify the standalone installation
+        env:
+          GITHUB_SHA: ${{ inputs.source-sha }}
+          TARGET: ${{ inputs.target }}
+        run: |
+          python3 "$RUNNER_TEMP/elephc-image-shell.py" command python3 -B scripts/ci/development_artifact.py --target "$TARGET" --sha "$GITHUB_SHA" \
+            --compiler-manifest "$RUNNER_TEMP/build-$TARGET-debug-compiler-default/manifest.json" \
+            --bridge-manifest "$RUNNER_TEMP/build-$TARGET-debug-bridges-default/manifest.json"
+      - name: Retain development download
+        id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: elephc-dev-${{ inputs.target }}-${{ inputs.source-sha }}-${{ github.run_attempt }}
+          path: target/development/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90
+      - name: Link the development download
+        env:
+          GITHUB_SHA: ${{ inputs.source-sha }}
+          TARGET: ${{ inputs.target }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          SOURCE_RUN: ${{ inputs.producer-run }}
+        run: |
+          # shellcheck disable=SC2016
+          printf 'Development build `%s` for `%s`: [download](%s), producer run `%s`. Retained until a newer complete main set replaces it.\n' \
+            "$GITHUB_SHA" "$TARGET" "$ARTIFACT_URL" "$SOURCE_RUN" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Audit consumer compilation
+        if: always()
+        uses: ./.github/actions/assert-consumer-builds

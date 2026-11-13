@@ -5,12 +5,20 @@
 //! - Frame layout before any generated instruction is emitted.
 //!
 //! Key details:
-//! - Numeric consumers copy payloads; one local or owned operand slot may retain the pointer.
+//! - Numeric consumers copy payloads; one local or owned operand slot may retain the pointer,
+//!   beside any block-scoped call-operand temporaries that pin it while an operand is evaluated.
 //! - A string cast is a payload observation: numeric tags render into concat scratch without
 //!   adopting the cell, so an accumulator echoed at loop exit keeps its frame storage.
 //! - Pointer reads cannot survive another execution of the producing instruction.
 //! - Independent producers may intervene, but owning-slot replacements invalidate borrowed reads.
+//! - Array and hash keys only copy the cell into key registers, so they are numeric observations.
 //! - References, eval, suspension, unknown consumers and escaping values fail closed.
+//! - A raw integer/float seed stored into a proven numeric local gets one cell per slot; the
+//!   slot exclusively owns that cell, so only a later store to the same slot rewrites it.
+//! - An explicit box of a raw integer/float stored into one such local is a cell producer too.
+//! - A Mixed clone of a proven numeric value copies only its tag and payload, so reading a cell
+//!   into a clone is an observation, and the clone itself can own a frame cell for one local
+//!   (an update's key snapshot, say) instead of a fresh heap box.
 
 use crate::ir::{
     Function, Immediate, InstId, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, Ownership,
@@ -25,6 +33,8 @@ mod tests;
 #[cfg(test)]
 mod comparison_tests;
 mod placement;
+mod retirement;
+pub(super) use retirement::frame_only_locals;
 use crate::ir_passes::numeric_domain as domain;
 
 /// Stack cells and the exclusively numeric locals proven while selecting them.
@@ -33,8 +43,49 @@ pub(super) struct NumericFrame {
     #[cfg(test)]
     pub(super) cells: Vec<ValueId>,
     pub(super) cell_groups: Vec<Vec<ValueId>>,
+    /// Proven numeric locals whose raw scalar seed stores write a dedicated frame cell.
+    pub(super) seed_slots: Vec<LocalSlotId>,
     pub(super) locals: HashSet<LocalSlotId>,
     pub(super) proven_values: HashSet<ValueId>,
+}
+
+/// The frame cells and proven numeric locals of one function, as codegen would select them.
+///
+/// An optimizer pass compares this proof before and after a rewrite, so a rewrite that
+/// moves a read away from its user cannot send another local back to heap boxes.
+pub(crate) struct FrameCells {
+    locals: HashSet<LocalSlotId>,
+    values: HashSet<ValueId>,
+}
+
+impl FrameCells {
+    /// Runs the frame-cell proof on `function`.
+    pub(crate) fn of(function: &Function) -> Self {
+        let frame = plan(function);
+        Self {
+            locals: frame.locals,
+            values: frame.cell_groups.into_iter().flatten().collect(),
+        }
+    }
+
+    /// Returns whether every access to the slot passed the numeric payload-copy proof.
+    #[cfg(test)]
+    pub(crate) fn contains_local(&self, slot: LocalSlotId) -> bool {
+        self.locals.contains(&slot)
+    }
+
+    /// Returns true when `after` keeps every cell and numeric local of this proof.
+    ///
+    /// `slots` and `values` are the locals and results the rewrite replaced on purpose.
+    pub(crate) fn kept_by(
+        &self,
+        after: &Self,
+        slots: &HashSet<LocalSlotId>,
+        values: &HashSet<ValueId>,
+    ) -> bool {
+        self.locals.iter().all(|slot| slots.contains(slot) || after.locals.contains(slot))
+            && self.values.iter().all(|value| values.contains(value) || after.values.contains(value))
+    }
 }
 
 /// Returns checked producers whose complete pointer lifetime stays inside their frame.
@@ -97,18 +148,24 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
         slots: HashMap::new(),
         invalidations: RefCell::new(HashMap::new()),
     };
-    let cells: Vec<_> = function
+    // Collected first: `cell_box` borrows `proof` shared, while `producer` below needs it `&mut`.
+    let candidates: Vec<_> = function
         .instructions
         .iter()
-        .filter(|inst| producer_op(inst))
+        .filter(|inst| producer_op(inst) || proof.cell_box(inst))
         .filter_map(|inst| inst.result)
+        .collect();
+    let cells: Vec<_> = candidates
+        .into_iter()
         .filter(|&value| proof.producer(value))
         .collect();
     let cell_groups = placement::storage_groups(&proof, &cells);
+    let seed_slots = seed_slots(&mut proof);
     NumericFrame {
         #[cfg(test)]
         cells,
         cell_groups,
+        seed_slots,
         proven_values: proof.domain.into_inner().into_proven_values(),
         locals: proof
             .slots
@@ -116,6 +173,39 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
             .filter_map(|(slot, safe)| safe.then_some(slot))
             .collect(),
     }
+}
+
+/// Selects proven numeric locals written by raw scalar seeds, in slot order.
+///
+/// Every other access to such a slot already passed `Proof::slot`: loads copy payloads before
+/// any write to the slot, and no pointer read from it reaches another owner. A seed store
+/// therefore rewrites the slot's own cell only while replacing the slot's occupant.
+fn seed_slots(proof: &mut Proof<'_>) -> Vec<LocalSlotId> {
+    let mut seeded: Vec<_> = proof
+        .function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == Op::StoreLocal)
+        .filter_map(|inst| {
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+                return None;
+            };
+            let value = proof.function.value(*inst.operands.first()?)?;
+            scalar_numeric(&value.ir_type, &value.php_type).then_some(slot)
+        })
+        .collect();
+    seeded.sort_unstable_by_key(|slot| slot.as_raw());
+    seeded.dedup();
+    seeded.retain(|&slot| proof.slot(slot));
+    seeded
+}
+
+/// Recognizes the raw integer and float representations a seed cell can tag.
+pub(super) fn scalar_numeric(ir_type: &IrType, php_type: &PhpType) -> bool {
+    matches!(
+        (ir_type, php_type),
+        (IrType::I64, PhpType::Int) | (IrType::F64, PhpType::Float)
+    )
 }
 
 /// Shared use graph and cached whole-slot proofs for one function.
@@ -136,27 +226,56 @@ impl Proof<'_> {
         self.domain.borrow_mut().prove(values)
     }
 
+    /// Recognizes a Mixed clone whose whole input graph holds only integers or floats.
+    ///
+    /// `__rt_mixed_clone` of such a value only copies the tag and payload words into a fresh
+    /// box, so a frame cell holding the same words is an equivalent private copy.
+    fn clone_box(&self, inst: &crate::ir::Instruction) -> bool {
+        inst.op == Op::MixedClone
+            && inst.operands.len() == 1
+            && inst.result_type == IrType::Heap(IrHeapKind::Mixed)
+            && self.numeric_inputs(&inst.operands)
+    }
+
+    /// Recognizes every box that can be written straight into one local's frame cell.
+    fn cell_box(&self, inst: &crate::ir::Instruction) -> bool {
+        numeric_box(self.function, inst) || self.clone_box(inst)
+    }
+
     /// Requires an owned numeric producer with an independently proven scalar-input ABI.
     fn producer(&mut self, value: ValueId) -> bool {
         let Some((id, definition)) = definition(self.function, value) else {
             return false;
         };
-        if !producer_op(definition)
-            || definition.result_type != IrType::Heap(IrHeapKind::Mixed)
+        let boxed = self.cell_box(definition);
+        // A scalar box is always fresh; guarded exits label it with the generic Mixed ownership.
+        let owned = definition.result_ownership == Ownership::Owned
+            || (boxed && definition.result_ownership == Ownership::MaybeOwned);
+        if definition.result_type != IrType::Heap(IrHeapKind::Mixed)
             || definition.result_php_type != PhpType::Mixed
-            || definition.result_ownership != Ownership::Owned
+            || !owned
+        {
+            return false;
+        }
+        if !boxed && (!producer_op(definition)
             || definition.operands.len() != if domain::increment(definition) { 1 } else { 2 }
             || (!tagged_producer(definition) && definition.operands.iter().any(|&input| {
                 self.function.value(input).is_none_or(|input| {
                     input.ir_type != IrType::I64 || input.php_type != PhpType::Int
                 })
             }))
-            || (tagged_producer(definition) && !self.numeric_inputs(&definition.operands))
+            || (tagged_producer(definition) && !self.numeric_inputs(&definition.operands)))
         {
             return false;
         }
         let mut stores = HashSet::new();
-        if !self.value_uses(value, id, &mut HashSet::new(), &mut stores) || stores.len() > 1 {
+        if !self.value_uses(value, id, &mut HashSet::new(), &mut stores)
+            || stores.iter().filter(|&&slot| !self.scoped_temp(slot)).count() > 1
+        {
+            return false;
+        }
+        // A box is selected only as a local seed (a guarded counter's exit publication).
+        if boxed && stores.len() != 1 {
             return false;
         }
         stores.into_iter().all(|slot| self.slot(slot))
@@ -194,7 +313,9 @@ impl Proof<'_> {
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
                     Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
-                    _ if domain::comparison(user) && self.numeric_inputs(&user.operands) => true,
+                    _ if key_observation(user, value) => true,
+                    _ if (domain::comparison(user) || domain::identity(user))
+                        && self.numeric_inputs(&user.operands) => true,
                     _ if tagged_producer(user) && self.numeric_inputs(&user.operands) => true,
                     Op::StoreLocal => match user.immediate {
                         Some(Immediate::LocalSlot(slot)) => {
@@ -248,7 +369,7 @@ impl Proof<'_> {
                         self.load_uses(id, value)
                     }),
                     Op::ReleaseLocalSlot => true,
-                    Op::PushCallOperandOwner | Op::PopCallOperandOwner => {
+                    Op::PushCallOperandOwner | Op::PopCallOperandOwner | Op::UnsetLocal => {
                         scoped && inst.operands.is_empty()
                     }
                     _ => false,
@@ -257,6 +378,17 @@ impl Proof<'_> {
         });
         self.slots.insert(slot, safe);
         safe
+    }
+
+    /// Returns whether `slot` is a call-operand temporary scoped to one block.
+    ///
+    /// Such a slot pins the cell only while an operand is evaluated and is retired in the same
+    /// block before the producer can run again, so several of them may hold one cell beside its
+    /// single ordinary destination.
+    fn scoped_temp(&self, slot: LocalSlotId) -> bool {
+        self.function.locals.get(slot.as_raw() as usize).is_some_and(|local| {
+            matches!(local.kind, LocalKind::OwnedTemp | LocalKind::HiddenTemp)
+        }) && self.scoped_operand(slot)
     }
 
     /// Requires one same-block stored operand with balanced publication and final retirement.
@@ -281,7 +413,9 @@ impl Proof<'_> {
                     let Some(next) = depth.checked_sub(1) else { return false; };
                     depth = next;
                 }
-                Op::ReleaseLocalSlot if stored => {
+                // An operand temporary's `unset_local` only zeroes the slot; the value's own
+                // `release` retires it, exactly like a `release_local_slot` after the scope.
+                Op::ReleaseLocalSlot | Op::UnsetLocal if stored => {
                     if depth != 0 { return false; }
                     retired = true;
                 }
@@ -307,12 +441,14 @@ impl Proof<'_> {
                 return false;
             };
             match inst.op {
+                Op::Acquire if numeric_box(self.function, inst) => return true,
                 Op::Acquire if inst.immediate.is_none() => {
                     let Some(&source) = inst.operands.first() else {
                         return false;
                     };
                     value = source;
                 }
+                Op::MixedClone => return self.clone_box(inst),
                 Op::MixedBox => {
                     return inst.operands.first().is_some_and(|&source| {
                         self.function.value(source).is_some_and(|source| {
@@ -327,7 +463,8 @@ impl Proof<'_> {
                     let mut stores = HashSet::new();
                     return (!tagged_producer(inst) || self.numeric_inputs(&inst.operands))
                         && self.value_uses(value, id, &mut HashSet::new(), &mut stores)
-                        && stores == HashSet::from([slot]);
+                        && stores.contains(&slot)
+                        && stores.iter().all(|&other| other == slot || self.scoped_temp(other));
                 }
                 _ => return false,
             }
@@ -349,9 +486,22 @@ impl Proof<'_> {
                 if inst.op == Op::Release {
                     return true;
                 }
+                // Strict identity copies the tag and payload like an ordered comparison.
+                if domain::identity(inst) && self.numeric_inputs(&inst.operands) {
+                    return self.stable_read(load, user);
+                }
+                // A numeric clone copies the tag and payload into its own cell or heap box.
+                if self.clone_box(inst) {
+                    return self.stable_read(load, user);
+                }
                 let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
                 let comparison = domain::comparison(inst) && self.numeric_inputs(&inst.operands);
-                if !scalar_observation(inst) && !arithmetic && !comparison {
+                if !scalar_observation(inst)
+                    && !tag_or_payload_copy(inst)
+                    && !arithmetic
+                    && !comparison
+                    && !key_observation(inst, value)
+                {
                     return false;
                 }
                 self.stable_read(load, user)
@@ -388,7 +538,7 @@ impl Proof<'_> {
             let mut source = source;
             for _ in 0..self.function.values.len() {
                 let Some((producer, writer)) = definition(self.function, source) else { break; };
-                if producer_op(writer) { invalidating.insert(producer); break; }
+                if producer_op(writer) || self.cell_box(writer) { invalidating.insert(producer); break; }
                 if writer.op != Op::Acquire || writer.immediate.is_some() { break; }
                 let Some(&input) = writer.operands.first() else { break; };
                 source = input;
@@ -410,6 +560,21 @@ fn checked(op: Op) -> bool {
     matches!(op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
 }
 
+/// Recognizes a Mixed box of a raw integer or float, such as a guarded exit seed.
+///
+/// An `acquire` boxes too when range analysis has narrowed the checked producer it retained to a
+/// raw scalar (`$j = $i - 1` into an `int|float` local): its lowering allocates the same cell.
+pub(super) fn numeric_box(function: &Function, inst: &crate::ir::Instruction) -> bool {
+    (inst.op == Op::MixedBox
+        || (inst.op == Op::Acquire
+            && inst.immediate.is_none()
+            && inst.result_type == IrType::Heap(IrHeapKind::Mixed)))
+        && inst.operands.len() == 1
+        && function
+            .value(inst.operands[0])
+            .is_some_and(|source| scalar_numeric(&source.ir_type, &source.php_type))
+}
+
 /// Includes tagged arithmetic only when its emitter preserves concrete numeric tags.
 fn producer_op(inst: &crate::ir::Instruction) -> bool {
     checked(inst.op) || tagged_producer(inst)
@@ -427,9 +592,30 @@ pub(super) fn numeric_comparison(function: &Function, proven: &HashSet<ValueId>,
             || domain::inputs(function, &inst.operands))
 }
 
+/// Admits strict identity only when both operands can hold just integer or float tags.
+pub(super) fn numeric_identity(function: &Function, proven: &HashSet<ValueId>, inst: &crate::ir::Instruction) -> bool {
+    domain::identity(inst)
+        && (inst.operands.iter().all(|value| proven.contains(value))
+            || domain::inputs(function, &inst.operands))
+}
+
 /// Shares the complete scalar-origin proof with retirement, without admitting any pointer escape.
 pub(super) fn numeric_value(function: &Function, proven: &HashSet<ValueId>, value: ValueId) -> bool {
     proven.contains(&value) || domain::inputs(function, &[value])
+}
+
+/// Reads a numeric tag or copies an integer payload, as a guarded counter entry does.
+fn tag_or_payload_copy(inst: &crate::ir::Instruction) -> bool {
+    use crate::ir::PhpTypePredicate;
+    inst.operands.len() == 1
+        && match inst.op {
+            Op::TypePredicate => matches!(
+                inst.immediate,
+                Some(Immediate::TypePredicate(PhpTypePredicate::Int | PhpTypePredicate::Float))
+            ),
+            Op::MixedUnbox => inst.result_type == IrType::I64 && inst.result_php_type == PhpType::Int,
+            _ => false,
+        }
 }
 
 /// Copies a scalar payload without exposing its address; declared returns retain their checks.
@@ -458,6 +644,22 @@ fn int_property_observation(inst: &crate::ir::Instruction) -> bool {
         && inst.operands.len() == 1
         && inst.result_type == IrType::I64
         && inst.result_php_type == PhpType::Int
+}
+
+/// Accepts a cell read only as the key of an array or hash access.
+///
+/// Every key materializer (`materialize_hash_key_*`, inline for a proven numeric cell and
+/// through `__rt_mixed_unbox` otherwise) copies the cell's tag and payload into key registers
+/// before the access runs; `__rt_array_set_mixed_key` only unboxes its borrowed key cell. None
+/// retains the cell, so the pointer cannot outlive the instruction. The value must not also be the stored
+/// element or the receiver, which would publish the frame address into the container.
+fn key_observation(inst: &crate::ir::Instruction, value: ValueId) -> bool {
+    matches!(
+        inst.op,
+        Op::ArrayGet | Op::ArrayGetSilent | Op::ArraySet | Op::HashGet | Op::HashGetSilent | Op::HashSet
+            | Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent | Op::ArraySetMixedKey
+    ) && inst.operands.get(1) == Some(&value)
+        && inst.operands.iter().enumerate().all(|(position, &operand)| position == 1 || operand != value)
 }
 
 /// Finds the defining instruction for a non-parameter SSA value.

@@ -14,11 +14,14 @@
 mod incref_register_tests;
 #[cfg(test)]
 mod gc_incoming_cache_tests;
+#[cfg(test)]
+mod overwrite_order_tests;
 
 mod array_chunk;
 mod array_chunk_refcounted;
 mod array_chunk_to_hash;
 mod call_argument_unpack;
+mod container_refusal_owner;
 mod array_count_values;
 mod array_column;
 mod array_column_boxed;
@@ -56,6 +59,7 @@ mod array_intersect;
 mod array_intersect_refcounted;
 mod array_intersect_key;
 mod array_is_list;
+mod array_unbox_slots;
 mod array_key_exists;
 mod array_key_exists_mixed_key;
 mod array_map;
@@ -138,6 +142,7 @@ mod gc_collect_cycles;
 mod gc_host_roots;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
+mod gc_collect_budget;
 mod memory;
 mod gc_destructors;
 mod gc_weak_observers;
@@ -169,6 +174,7 @@ mod hash_key_hash;
 mod hash_normalize_key;
 mod hash_may_have_cyclic_values;
 mod hash_ensure_unique;
+mod hash_set_reference_layout;
 mod hash_entry_reference;
 mod hash_flip;
 mod hash_slice;
@@ -201,6 +207,7 @@ mod natsort;
 
 pub(super) mod deep_cleanup;
 mod object_free_deep;
+mod native_reference_source_retirement;
 mod range;
 mod incref;
 mod foreach_non_iterable_warning;
@@ -209,6 +216,7 @@ mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
+mod mixed_bit_not;
 mod mixed_cast_array;
 mod mixed_clone;
 mod mixed_reference;
@@ -324,6 +332,8 @@ pub use array_intersect_refcounted::emit_array_intersect_refcounted;
 pub use array_intersect_key::emit_array_intersect_key;
 /// Emit array list-shape predicate helper (array_is_list).
 pub use array_is_list::emit_array_is_list;
+/// Emit the boxed-slot to raw-slot indexed array conversion helper.
+pub use array_unbox_slots::emit_array_unbox_slots;
 /// Emit array key existence check helper.
 pub use array_key_exists::emit_array_key_exists;
 /// Emit the storage-kind-dispatching presence-only array key existence helper.
@@ -566,6 +576,7 @@ pub use natsort::emit_natsort;
 pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_str};
 /// Emit the single-array `min()` / `max()` reductions for Mixed, string, and hash containers.
 pub use mixed_abs::emit_mixed_abs;
+pub(crate) use mixed_bit_not::{emit_mixed_bit_not, BIT_NOT_PREFIX, BIT_NOT_TYPE_ROWS};
 /// Emit boxed-Mixed-to-array cast helper.
 pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.

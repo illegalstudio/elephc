@@ -468,12 +468,12 @@ fn test_error_constructor_promotion_by_reference_requires_variable_arg() {
     );
 }
 
-/// A promoted reference property cannot outlive a managed array-entry argument lease.
+/// A raw typed reference property cannot retain managed array-entry storage.
 #[test]
 fn test_error_constructor_promoted_reference_rejects_array_element() {
     for source in [
-        "<?php class Box { public function __construct(public mixed &$value) {} } $items = ['k' => new stdClass()]; $box = new Box($items['k']); $items = []; echo $box->value;",
-        "<?php class Box { public function __construct(public mixed &$value) {} } $items = ['k' => new stdClass()]; $alias =& $items['k']; $box = new Box($alias); unset($alias); $items = []; echo $box->value;",
+        "<?php class Box { public function __construct(public stdClass &$value) {} } $items = ['k' => new stdClass()]; $box = new Box($items['k']); $items = []; echo $box->value;",
+        "<?php class Box { public function __construct(public stdClass &$value) {} } $items = ['k' => new stdClass()]; $alias =& $items['k']; $box = new Box($alias); unset($alias); $items = []; echo $box->value;",
     ] {
         expect_error(
             source,

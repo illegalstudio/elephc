@@ -115,7 +115,8 @@ echo $afterAllocations - $allocations, ':', $afterFrees - $frees, ':', $afterUsa
 }
 measureCheckedAllocations(new CheckedBuffer<int>($argc + 15), $argc + 15);
 "#);
-    assert_eq!(run(&source, true, false), "0:0:0:190");
+    let (output, _) = run(&source, true, false);
+    assert_eq!(output, "0:0:0:190");
 }
 
 /// Argument evaluation that replaces a local keeps the original receiver alive through its call.

@@ -342,6 +342,7 @@ class WideCells {
     public buffer<int> $cells;
     public function __construct() { $this->cells = buffer_new<int>(2); }
 }
+
 $one = $argc;
 $b = buffer_new<int>(6);
 $b[0] = PHP_INT_MAX; $b[0]++;
@@ -366,6 +367,59 @@ buffer_free($cells);
     );
     for optimized in [false, true] {
         assert_eq!(run_clean(source, optimized), expected, "ir-opt={optimized}");
+    }
+}
+
+
+/// Computed receivers preserve PHP expression values before narrow, float and overflow stores.
+#[test]
+fn test_computed_buffer_incdec_values_and_owners() {
+    let source = r#"<?php
+class ComputedStepBuffers {
+    public buffer<u8> $bytes;
+    public buffer<f32> $singles;
+    public buffer<int> $counts;
+    public function __construct() {
+        $this->bytes = buffer_new<u8>(1);
+        $this->singles = buffer_new<f32>(1);
+        $this->counts = buffer_new<int>(1);
+    }
+    public function release(): void {
+        $bytes = $this->bytes; buffer_free($bytes);
+        $singles = $this->singles; buffer_free($singles);
+        $counts = $this->counts; buffer_free($counts);
+    }
+}
+function computedStepBuffer(ComputedStepBuffers $buffers): ComputedStepBuffers { echo 'R|'; return $buffers; }
+function computedStepKey(): int { echo 'K|'; return 0; }
+$buffers = new ComputedStepBuffers();
+$buffers->bytes[0] = 255;
+$old = computedStepBuffer($buffers)->bytes[computedStepKey()]++;
+echo $old, ':', $buffers->bytes[0], '|';
+$buffers->bytes[0] = 255;
+$next = ++computedStepBuffer($buffers)->bytes[computedStepKey()];
+echo $next, ':', $buffers->bytes[0], '|';
+$buffers->singles[0] = 16777216.0;
+$next = ++computedStepBuffer($buffers)->singles[computedStepKey()];
+echo $next === 16777217.0 && $buffers->singles[0] === 16777216.0 ? 'rounded|' : 'wrong|';
+$buffers->counts[0] = PHP_INT_MAX;
+$next = ++computedStepBuffer($buffers)->counts[computedStepKey()];
+echo is_float($next) && $next === (float)PHP_INT_MAX && $buffers->counts[0] === PHP_INT_MIN ? 'overflow|' : 'wrong|';
+$buffers->counts[0] = PHP_INT_MAX;
+$old = computedStepBuffer($buffers)->counts[computedStepKey()]++;
+echo $old === PHP_INT_MAX && $buffers->counts[0] === PHP_INT_MIN ? 'old|' : 'wrong|';
+for ($i = 0; $i < 32; $i++) {
+    $next = ++computedStepBuffer($buffers)->counts[0];
+}
+$buffers->release();
+unset($buffers, $next, $old);
+"#;
+    let expected = format!("R|K|255:0|R|K|256:0|R|K|rounded|R|K|overflow|R|K|old|{}", "R|".repeat(32));
+    for optimized in [false, true] {
+        let runs = run_variants(source, optimized, &[&[]]);
+        assert!(runs[0].0, "ir-opt={optimized}: {}", runs[0].2);
+        assert_eq!(runs[0].1, expected, "ir-opt={optimized}");
+        balanced_allocations(&runs[0].2);
     }
 }
 

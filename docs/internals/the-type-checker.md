@@ -830,6 +830,8 @@ The `!isset(self::$inst)`, `self::$inst !== null` early-return, `self::$inst ??=
 
 Return-type validation is flow-sensitive against these facts: each `return` records the type it had where it was checked (`Checker::flow_typed_returns`), so a narrowing established halfway down a body is not applied to a `return` that executes before it.
 
+A nullable object copied to an unaliased local can use the same join. For example, `$service = $this->service; if ($service === null) { $service = new Service(); $this->service = $service; } return $service;` leaves a `Service` on both exits and satisfies a `Service` return declaration. Compatible object exits retain their shared parent or interface type when initialization constructs a subtype. The join retains the local's nullable physical storage separately from its non-null read view. A nested optional assignment, a nullable replacement, or an explicit null write on either exit keeps the return nullable. Nullable writes consult storage retained in either the guard origin or the guarded-storage map, so an `else` complement cannot hide a null replacement. A completed non-null store also preserves that physical contract when recording a value proof, allowing a later null store in the same branch to invalidate the proof.
+
 Narrowing applies across `if`/`elseif`/`else` chains: each subsequent clause (and the `else`) sees the accumulated complement of the previous guards. A chain with no `else` whose every clause body always diverges (`return`, `throw`, `exit()`/`die()`, or a call to a function declared `: never`) narrows the statements after the entire `if` construct to the accumulated complement. This is what makes the common "overload" shape type-check:
 
 ```php

@@ -14,6 +14,8 @@
 //! - EIR lowering consumes the checker-recorded contract instead of repeating expression
 //!   inference, keeping non-literal RHSs and cascading promotions aligned across both layers.
 //! - Tagged nullable integers gain boxed contracts when loop writes can produce a float or Mixed.
+//! - An indexed object element keeps its class when a write stores a subclass or interface
+//!   implementation of it, the same nominal upcast EIR's indexed local write keeps.
 //! - An `(array)` cast inside a literal uses the same `ArrayCast` classification as the checker,
 //!   so a loop-carried array of those casts does not collapse to `array<int>`.
 
@@ -76,7 +78,7 @@ fn loop_carried_storage_types(
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
 ) -> Vec<(String, PhpType)> {
     analyze_loop_storage(body, update, None, entry, packed_counter,
-        tagged_integer_locals, infer_value).contracts
+        tagged_integer_locals, &Default::default(), infer_value, &|_, _| false).contracts
 }
 
 /// Assignment values and executable calls collected without entering nested function bodies.
@@ -103,10 +105,16 @@ pub(super) struct LoopStorageAnalysis {
 }
 
 /// Computes loop storage while exposing the same write evidence to read-flow analysis.
+///
+/// `object_is_a(class, ancestor)` answers the nominal upcast an indexed object element write
+/// keeps (see [`join_indexed_element_write`]).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn analyze_loop_storage<'a>(
     body: &'a [Stmt], update: Option<&'a Stmt>, condition: Option<&'a Expr>,
     entry: &TypeEnv, packed_counter: Option<&str>, tagged_integer_locals: &HashSet<String>,
+    promotable_candidates: &super::promotable_arrays::PromotableCandidates,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    object_is_a: &dyn Fn(&str, &str) -> bool,
 ) -> LoopStorageAnalysis {
     let mut assignments = LoopWrites::default();
     collect_value_assignments(body, &mut assignments);
@@ -139,7 +147,9 @@ pub(super) fn analyze_loop_storage<'a>(
             packed_counter,
             &foreach_keys,
             &foreach_values,
+            promotable_candidates,
             infer_value,
+            object_is_a,
         );
         if fixed == previous {
             break;
@@ -247,7 +257,9 @@ fn apply_array_write_evidence(
     packed_counter: Option<&str>,
     foreach_keys: &HashSet<&str>,
     foreach_values: &HashSet<&str>,
+    promotable_candidates: &super::promotable_arrays::PromotableCandidates,
     infer_value: &mut dyn FnMut(&Expr, &TypeEnv) -> Option<PhpType>,
+    object_is_a: &dyn Fn(&str, &str) -> bool,
 ) {
     for write in writes {
         let incoming = infer_storage_value_type(write.value, env, infer_value)
@@ -289,6 +301,23 @@ fn apply_array_write_evidence(
                 && array_key_contiguity_is_unproven(index);
             literal_string_key || unbounded_integer_key
         });
+        // `check_array_assign` keeps a promotable candidate's `array<int>` storage under a boxed
+        // or unbounded key when the value is an integer or `?int` (codegen promotes the storage at
+        // run time instead), so this pass must not widen the loop's contract to `mixed` either.
+        let promotable_keep = !forces_hash
+            && promotable_candidates.contains(write.name)
+            && matches!(&current, PhpType::Array(element) if element.codegen_repr() == PhpType::Int)
+            && matches!(incoming.codegen_repr(), PhpType::Int | PhpType::TaggedScalar)
+            && write.index.is_some_and(|index| {
+                !matches!(&index.kind, ExprKind::Variable(name) if foreach_keys.contains(name.as_str()))
+                    && !crate::types::nonempty_array_key_stays_in_range(index)
+                    && infer_value(index, env).is_some_and(|key| {
+                        matches!(key, PhpType::Mixed | PhpType::Int) || key.is_int_float_union()
+                    })
+            });
+        if promotable_keep {
+            continue;
+        }
         let updated = match current {
             PhpType::Array(element) if forces_hash => {
                 let was_empty = matches!(element.as_ref(), PhpType::Never);
@@ -309,7 +338,7 @@ fn apply_array_write_evidence(
                 }
             }
             PhpType::Array(element) => {
-                PhpType::Array(Box::new(join_array_payload_type(*element, incoming)))
+                PhpType::Array(Box::new(join_indexed_element_write(*element, incoming, object_is_a)))
             }
             PhpType::AssocArray { key, value } => PhpType::AssocArray {
                 key: Box::new(merge_array_key_types(
@@ -602,6 +631,24 @@ fn join_array_payload_type(existing: PhpType, incoming: PhpType) -> PhpType {
     PhpType::Mixed
 }
 
+/// Joins a value written into an indexed array's elements with the element type it already has.
+///
+/// An object element keeps its class when the written object is an instance of it (the class,
+/// a subclass, or an implementation of the element interface): every object element is one
+/// counted pointer, and EIR lowering keeps the same element view for that write instead of
+/// emitting `Op::ArrayToMixed` (`ir_lower::stmt::array_write_storage`). Any other pair, including
+/// a wider or sibling class, still joins on the representation lattice.
+fn join_indexed_element_write(
+    existing: PhpType, incoming: PhpType, object_is_a: &dyn Fn(&str, &str) -> bool,
+) -> PhpType {
+    if let (PhpType::Object(element), PhpType::Object(value)) = (&existing, &incoming) {
+        if !element.is_empty() && object_is_a(value, element) {
+            return existing;
+        }
+    }
+    join_array_payload_type(existing, incoming)
+}
+
 /// Returns the concrete pre-loop storage contract required by a fixed-point result.
 fn representation_contract(
     entry: &PhpType,
@@ -700,6 +747,32 @@ fn precise_scalar_expr_type(value: &Expr) -> Option<PhpType> {
         ExprKind::ErrorSuppress(inner) => precise_scalar_expr_type(inner),
         _ => None,
     }
+}
+
+/// Returns every local a loop may assign on some iteration: in its condition, body, or update.
+///
+/// EIR lowering uses it for the entry shape the checker's environment cannot see: a local whose
+/// LOWERING fact is `null` at the loop head (`$o = new C; $o = null; for (…) { … $o = new C; }`
+/// keeps the checker's `C` type) while the body assigns it. See
+/// `ir_lower::stmt::conditionals::apply_null_entry_boxing`.
+pub(crate) fn loop_assigned_local_names(
+    condition: Option<&Expr>,
+    body: &[Stmt],
+    update: Option<&Stmt>,
+) -> HashSet<String> {
+    let mut assignments = LoopWrites::default();
+    if let Some(condition) = condition {
+        collect_value_assignments_from_expr(condition, &mut assignments);
+    }
+    collect_value_assignments(body, &mut assignments);
+    if let Some(update) = update {
+        collect_value_assignment_stmt(update, &mut assignments);
+    }
+    assignments
+        .values
+        .into_iter()
+        .map(|(name, _)| name.to_string())
+        .collect()
 }
 
 /// Collects local assignments from every statement in source traversal order.
@@ -1668,5 +1741,38 @@ mod tests {
                 PhpType::Union(vec![PhpType::Pointer(None), PhpType::Void]),
             )],
         );
+    }
+
+    /// Returns the loop contracts of `$items[] = $value;` for one element and value class.
+    ///
+    /// `Player` is the only subclass the fixture oracle knows: it is-a `Actor`.
+    fn object_append_contracts(element: &str, value: &str) -> Vec<(String, PhpType)> {
+        let body = vec![Stmt::new(
+            StmtKind::ArrayPush { array: "items".to_string(), value: Expr::var("value") },
+            Span::dummy(),
+        )];
+        let mut entry = TypeEnv::new();
+        entry.insert("items".to_string(), PhpType::Array(Box::new(PhpType::Object(element.into()))));
+        entry.insert("value".to_string(), PhpType::Object(value.into()));
+        let mut infer = |_expr: &Expr, _env: &TypeEnv| -> Option<PhpType> { None };
+        let object_is_a = |class: &str, ancestor: &str| {
+            class == ancestor || (class == "Player" && ancestor == "Actor")
+        };
+        super::analyze_loop_storage(&body, None, None, &entry, None,
+            &std::collections::HashSet::new(), &Default::default(), &mut infer, &object_is_a)
+            .contracts
+    }
+
+    /// A loop append of a subclass instance keeps an `array<Actor>` builder's object storage,
+    /// while the wider and unrelated directions still box the builder before the loop, exactly
+    /// as EIR's indexed write keeps or widens the same element.
+    #[test]
+    fn indexed_object_append_keeps_the_element_only_for_a_nominal_upcast() {
+        assert_eq!(object_append_contracts("Actor", "Player"), Vec::new());
+        assert_eq!(object_append_contracts("Actor", "Actor"), Vec::new());
+        let boxed = vec![("items".to_string(), PhpType::Array(Box::new(PhpType::Mixed)))];
+        assert_eq!(object_append_contracts("Player", "Actor"), boxed);
+        assert_eq!(object_append_contracts("Actor", "Stranger"), boxed);
+        assert_eq!(object_append_contracts("", "Player"), boxed);
     }
 }

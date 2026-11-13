@@ -75,6 +75,31 @@ pub(super) fn collect_exception_bodies<'a>(
     }
 }
 
+/// Preserves lexical reference parameter names for each fixed-point exception summary.
+pub(super) fn collect_reference_parameter_scopes(
+    stmts: &[Stmt], scopes: &mut HashMap<String, HashSet<String>>,
+) {
+    for stmt in stmts {
+        match &stmt.kind {
+            StmtKind::FunctionDecl { name, params, variadic, variadic_by_ref, .. } => {
+                scopes.insert(name.clone(), crate::optimize::reference_parameter_names(
+                    params, variadic.as_deref(), *variadic_by_ref));
+            }
+            StmtKind::ClassDecl { name, methods, .. }
+            | StmtKind::TraitDecl { name, methods, .. }
+            | StmtKind::InterfaceDecl { name, methods, .. } => {
+                for method in methods {
+                    scopes.insert(method_effect_key(name, &method.name),
+                        crate::optimize::reference_parameter_names(&method.params,
+                            method.variadic.as_deref(), method.variadic_by_ref));
+                }
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_reference_parameter_scopes(body, scopes),
+            _ => {}
+        }
+    }
+}
+
 /// Collects declaration-level entry checks when checker metadata is unavailable to the pass.
 pub(super) fn collect_object_reference_entry_checks(
     stmts: &[Stmt],
@@ -112,14 +137,29 @@ pub(super) fn collect_object_reference_entry_checks(
 /// Finds parameter hints that can reject a `Class|false` / `Class|null` argument.
 ///
 /// A class-typed parameter runs the union guard at the call boundary whether it is by-value
-/// or by-reference, and a literal `false` parameter always checks its argument. Checker
-/// metadata narrows this down; without it the declaration is the conservative source.
+/// or by-reference, and a literal `false` parameter always checks its argument. A
+/// by-reference `array` / `?array` / `array|Class` parameter checks a boxed (`mixed`) argument
+/// at the boundary too, raising `TypeError` before the callee runs. Checker metadata narrows
+/// this down; without it the declaration is the conservative source.
 fn params_have_object_reference(
     params: &[(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)],
 ) -> bool {
-    params
-        .iter()
-        .any(|(_, hint, _, _)| hint.as_ref().is_some_and(type_hint_is_class))
+    params.iter().any(|(_, hint, _, by_ref)| {
+        hint.as_ref().is_some_and(|hint| {
+            type_hint_is_class(hint) || (*by_ref && type_hint_mentions_array(hint))
+        })
+    })
+}
+
+/// Returns whether a declared parameter hint is, or contains, the `array` type.
+fn type_hint_mentions_array(hint: &TypeExpr) -> bool {
+    match hint {
+        TypeExpr::Array(_) => true,
+        TypeExpr::Named(name) => name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("array"),
+        TypeExpr::Nullable(inner) => type_hint_mentions_array(inner),
+        TypeExpr::Union(members) => members.iter().any(type_hint_mentions_array),
+        _ => false,
+    }
 }
 
 /// Returns whether a declared parameter hint names a class or interface type.

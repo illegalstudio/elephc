@@ -11,8 +11,12 @@ use super::*;
 
 #[path = "stack_numeric/comparisons.rs"]
 mod comparisons;
+#[path = "stack_numeric/counter_keys.rs"]
+mod counter_keys;
 #[path = "stack_numeric/integer_casts.rs"]
 mod integer_casts;
+#[path = "stack_numeric/process_args.rs"]
+mod process_args;
 
 /// Runtime-bound typed reductions exercise both a return check and a checked producer chain.
 const TYPED_CHAIN: &str = r#"<?php
@@ -242,6 +246,8 @@ sum_echo($argc + 1000);
 }
 
 /// A TaggedScalar array element narrows to null-as-zero int and keeps the accumulator cell.
+///
+/// The cast inside the loop keeps the lazy accumulator pass from taking `$sum`.
 #[test]
 fn test_stack_numeric_tagged_scalar_rhs_uses_frame_cell() {
     let source = r#"<?php
@@ -256,6 +262,7 @@ function sum_tagged_rhs(int $n): void {
     $i = 0;
     while ($i < count($data)) {
         $sum += $data[$i];
+        if ((int)$sum === PHP_INT_MIN) { break; }
         $i += 1;
     }
     echo $sum . "|" . $i;
@@ -295,8 +302,8 @@ sum_tagged_rhs($argc + 9);
         "the narrowed element must stay out of the boxed numeric helper:\n{body}"
     );
     assert!(
-        body.contains("numeric_local_cleanup_done"),
-        "the numeric slot retirement must recognize its frame cell:\n{body}"
+        !function.contains("__rt_decref_mixed"),
+        "frame-only numeric owners must retire without a runtime decref:\n{function}"
     );
     let condition = function
         .split("@block name=while.cond")

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Preserve checked class/interface views on native interface receiver values.
+//! Preserve checked class/interface views on native object receiver values.
 //!
 //! Called from:
 //! - Property reads, writes, unset probes and method-call lowering.
@@ -39,7 +39,7 @@ pub(super) fn refine_member_receiver(
 }
 
 /// Refines a freshly evaluated receiver using the checked member's source identity.
-fn refine_member_receiver_at_span(
+pub(crate) fn refine_member_receiver_at_span(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Span,
@@ -72,8 +72,9 @@ fn checked_member_receiver_type_at_span(
     original: &PhpType,
     span: Span,
 ) -> Option<PhpType> {
-    let (original, _) = singular_object_class(original)?;
-    if !ctx.interfaces.contains_key(original) { return None; }
+    let (original, nullable) = singular_object_class(original)?;
+    // Raw concrete views remain valid; nullable projection requires a checked interface view.
+    if nullable && !ctx.interfaces.contains_key(original) { return None; }
     let Some(Some(PhpType::Object(class))) = ctx.member_receiver_types
         .get(&(ctx.loop_storage_scope.clone(), span))
     else {

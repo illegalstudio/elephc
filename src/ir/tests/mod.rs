@@ -15,4 +15,5 @@ mod local_load_ownership;
 mod print_test;
 mod types_test;
 mod validator_test;
+mod validator_dominance;
 mod value_test;

@@ -40,6 +40,8 @@ mod connection;
 mod constants;
 mod detect;
 #[cfg(test)]
+mod driver;
+#[cfg(test)]
 mod exception;
 #[cfg(test)]
 mod fragments;

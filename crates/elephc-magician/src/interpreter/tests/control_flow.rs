@@ -431,6 +431,7 @@ fn execute_program_foreach_iterates_eval_traversable_objects() {
     let program = parse_fragment(
         br#"class EvalForeachIterator implements Iterator {
     private int $i = 0;
+    public function __destruct() { echo 'D'; }
     public function rewind(): void { echo "rewind:"; $this->i = 0; }
     public function valid(): bool { echo "valid" . $this->i . ":"; return $this->i < 2; }
     public function current(): mixed { echo "current" . $this->i . ":"; return "v" . $this->i; }
@@ -458,6 +459,6 @@ foreach (new EvalForeachAggregate() as $item) {
 
     assert_eq!(
         values.output,
-        "rewind:valid0:current0:key0:k0=v0:next0:valid1:current1:key1:k1=v1:|agg:rewind:valid0:current0:v0:next0:valid1:current1:v1:next1:valid2:"
+        "rewind:valid0:current0:key0:k0=v0:next0:valid1:current1:key1:k1=v1:D|agg:rewind:valid0:current0:v0:next0:valid1:current1:v1:next1:valid2:D"
     );
 }

@@ -8,6 +8,8 @@
 //! Key details:
 //! - The helper consumes the incoming boxed `Mixed` value, preserves COW, grows
 //!   indexed storage as needed, and releases any overwritten boxed cell.
+//! - An overwrite stores the replacement BEFORE releasing the old cell: the release can run a
+//!   destructor that reads or replaces the array, which must already hold the new element.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -66,9 +68,14 @@ pub fn emit_array_set_mixed(emitter: &mut Emitter) {
     emitter.instruction("ldr x11, [sp, #40]");                                  // reload the original logical length
     emitter.instruction("cmp x9, x11");                                         // does this write overwrite an existing slot?
     emitter.instruction("b.hs __rt_array_set_mixed_skip_release");              // writes past the old end do not replace an existing Mixed cell
+    // The release can run a destructor that reads or replaces this array, so the slot takes
+    // the replacement first and the array is not touched again afterwards.
     emitter.instruction("add x12, x10, #24");                                   // compute the indexed-array data base
-    emitter.instruction("ldr x0, [x12, x9, lsl #3]");                           // load the previous boxed Mixed pointer from the slot
+    emitter.instruction("ldr x0, [x12, x9, lsl #3]");                           // keep the previous boxed Mixed pointer for the release below
+    emitter.instruction("ldr x13, [sp, #16]");                                  // reload the consumed boxed Mixed value
+    emitter.instruction("str x13, [x12, x9, lsl #3]");                          // publish the replacement before the old cell is released
     emitter.instruction("bl __rt_decref_mixed");                                // release the overwritten boxed Mixed cell
+    emitter.instruction("b __rt_array_set_mixed_done");                         // an in-bounds overwrite keeps the logical length
     emitter.label("__rt_array_set_mixed_skip_release");
 
     emitter.instruction("ldr x10, [sp, #24]");                                  // reload the indexed-array pointer after old-slot release
@@ -152,8 +159,13 @@ fn emit_array_set_mixed_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // reload the original logical length
     emitter.instruction("cmp r9, r11");                                         // does this write overwrite an existing slot?
     emitter.instruction("jae __rt_array_set_mixed_skip_release");               // writes past the old end do not replace an existing Mixed cell
-    emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // load the previous boxed Mixed pointer from the slot
+    // The release can run a destructor that reads or replaces this array, so the slot takes
+    // the replacement first and the array is not touched again afterwards.
+    emitter.instruction("mov rax, QWORD PTR [r10 + 24 + r9 * 8]");              // keep the previous boxed Mixed pointer for the release below
+    emitter.instruction("mov r8, QWORD PTR [rbp - 24]");                        // reload the consumed boxed Mixed value
+    emitter.instruction("mov QWORD PTR [r10 + 24 + r9 * 8], r8");               // publish the replacement before the old cell is released
     emitter.instruction("call __rt_decref_mixed");                              // release the overwritten boxed Mixed cell
+    emitter.instruction("jmp __rt_array_set_mixed_done");                       // an in-bounds overwrite keeps the logical length
     emitter.label("__rt_array_set_mixed_skip_release");
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the indexed-array pointer after old-slot release

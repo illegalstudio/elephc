@@ -9,6 +9,22 @@
 
 use crate::support::*;
 
+/// Native reentry can replace a global cell without invalidating eval's same-object lease.
+#[test]
+fn test_eval_global_object_cell_survives_native_reentry_replacement() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function touchEvalGlobal(): void { global $box; $box['k'] = 2; }
+$box = new ArrayObject(['k' => 1]);
+$source = $argc > 0 ? 'touchEvalGlobal(); echo $box["k"], "|";' : '';
+eval($source);
+echo $box['k'];
+unset($box, $source);
+"#);
+    assert!(output.success, "stdout={} stderr={}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "2|2");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}
+
 /// Shares names created by main-scope eval with eval-declared function globals.
 #[test]
 fn test_eval_main_global_scope_dynamic_names() {

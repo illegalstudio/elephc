@@ -528,6 +528,30 @@ case conversion, trimming, padding, slicing, search, splitting, codepoints,
 scrubbing, detection, latin-1 conversion, decimal numeric entities, RFC 2047
 base64 MIME encoding, half-width katakana conversion, and the UTF-8 output-handler
 passthrough, plus the literal `,` split and `[0-9]+`/`#` replacement patterns.
+ASCII multibyte trim calls use the byte-trim helpers only for masks without dots;
+any dot selects the shared bridge, because mbstring character lists have literal
+membership and never expand `a..z` ranges or issue byte-trim range warnings. This
+check also covers masks computed at runtime. Shared padding guards keep the
+caller-visible `str_pad()` or `mb_str_pad()` name in their exception messages.
+The multibyte padding fast path requires integer length and mode operands; other
+PHP types retain bridge validation, including valid weak numeric-string coercions.
+All ordinary mbstring shortcuts first compare argument types with the shared
+builtin contract. Only canonical scalar types can bypass preparation; other values
+retain shared coercions, Stringable callbacks, strict typing and diagnostics.
+Union arguments qualify only when every possible type is already accepted without
+a conversion. Null, container and reference arguments retain the coordinator.
+Length/count/cast specializations preserve the original caller strictness; nullable
+setting getters keep their ordinary result cast instead of becoming native setters.
+Regex split-count and replacement-length byte scans first query the shared request
+for UTF-8, default regex options and default resource limits, and require ASCII
+subjects. Other cases use the regex bridge. A failed split result is released
+before raising `count()`'s TypeError; it never becomes a silent zero count.
+Progressive searches, including `mb_ereg_search_pos()` and `mb_ereg_search_regs()`,
+use live regex resource limits and route diagnostic results through the ordinary
+bridge so error handlers run exactly once. A limit failure clears retained
+captures and preserves the cursor; resetting the limits restores ordinary match
+results.
+
 When a length-only observation reads a local assigned once from a compile-time
 ASCII literal, the EIR fold replaces case conversion, trimming, padding,
 slicing, width, encoding checks, counting, splitting, search positions, and
@@ -538,20 +562,19 @@ literals under explicit UTF-8 fold to their character positions, and a
 the literal's byte length, and an invariant `strlen(gzcompress($s))` is hoisted
 to the loop preheader. `token_name()` over a literal id or `T_*` constant is a
 compile-time catalog lookup; literal iconv MIME-word lengths and single-header
-counts, plus the default `iconv_get_encoding("internal_encoding")` length, fold
-once their call staging is proven removable; literal AES-CBC encrypt lengths and
+counts fold once their call staging is proven removable; literal AES-CBC encrypt lengths and
 matching encrypt/decrypt round trips fold to the PKCS#7/base64 or plaintext length;
 a literal `count(token_get_all($source))` is hoisted to the loop preheader after
-validating the source with the compiler front end; literal SHA-256/HMAC digests and the literal
-`[0-9]+` `mb_ereg_search*` progressive state machine are also constant-folded;
+validating the source with the compiler front end; literal SHA-256/HMAC digests
+are also constant-folded;
 `hash_algos()` reports PHP's complete 60-algorithm catalog, including the legacy
 Tiger/HAVAL/Snefru/GOST implementations and murmur3/xxHash checksums, and a
-zero-argument `count(hash_algos())` is hoisted out of loops,
-including the `start`/`length` or matched-bytes elements of the `pos`/`regs`/`getregs`
-arrays when every read is a known element access.
-When an identical-UTF-8 `mb_convert_variables()` result is observed only through
-`strlen()`, its unobserved array mutation is skipped and the encoding length is
-folded directly. A simple literal `mb_parse_str()` query (`key=value` pairs) folds
+zero-argument `count(hash_algos())` is hoisted out of loops. Progressive regex
+sessions, including their result arrays, and implicit iconv encoding getters retain
+runtime calls so caller-visible session changes and settings remain authoritative.
+`mb_convert_variables()` also retains its runtime conversion when its array result
+is unobserved: even identical UTF-8 encodings can update the request
+`illegal_chars` counter for malformed input. A simple literal `mb_parse_str()` query (`key=value` pairs) folds
 its known key reads to boxed values, using an int box for numeric-only consumers;
 encoded, duplicate, nested, or otherwise observed queries keep the runtime parser. Non-ASCII input,
 unsupported encodings, and other regex maps or patterns fall back to the shared
@@ -915,7 +938,7 @@ Dynamic invocation builtins use generated callable descriptors rather than these
 
 The signature side record stores visible, required, and regular parameter counts; variadic index; return type and return register count; declared-return flags; parameter names and types; defaults; by-reference flags; and declared-parameter flags. The environment record stores capture and hidden wrapper-parameter bindings. The invocation record stores the callable shape (`string`, callable array, closure, first-class callable, object `__invoke`, static method, instance method, builtin, extern, or user function) plus receiver, method, and auxiliary names where applicable.
 
-`call_user_func()`, `call_user_func_array()`, direct string-variable calls, direct callable-array variable and literal calls, direct invokable-object calls, method first-class callable variable calls, and `iterator_apply()` compare runtime string names or descriptor-selected callable entries against generated cases. Runtime string callback names now materialize the matched descriptor and invoke its uniform invoker slot for user functions, extern wrappers, builtins, and public static methods, so signature defaults, named arguments, by-reference flags, variadics, and return boxing live behind the descriptor rather than in each string-dispatch callsite. `iterator_apply()` can also retain a branch-selected captured descriptor or runtime-selected callable-array descriptor and call that descriptor's invoker directly for each loop iteration. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, and `preg_replace_callback()` retain descriptor-valued callable variables and `callable` parameters in descriptor callback environments, so by-value closure captures, method receivers, and late-static binding state are read from descriptor storage instead of current source locals. These callback runtimes also match runtime callable-array variables such as `[$object, $method]` or `[$class, $method]` against public method descriptor cases before invoking the shared descriptor callback wrapper. `usort()`, `uksort()`, and `uasort()` use descriptor comparator environments for branch-selected captured descriptors. `CallbackFilterIterator` and `RecursiveCallbackFilterIterator` store branch-selected captured descriptors and runtime-selected callable-array variable or literal descriptors in persistent callback environments, then call the same descriptor invoker from `accept()`. `call_user_func()` and direct callable-variable invocations build boxed indexed argument containers for descriptor-backed calls; named direct calls build associative hashes. Variable arguments in either shape can be encoded as internal reference-cell markers, including boxed markers inside named hash entries, so the generated invoker can either pass the original storage to by-reference parameters or dereference it for by-value parameters after reading the descriptor signature. `call_user_func_array()` clones the provided indexed array or hash, widens the clone to boxed `Mixed`, and passes one boxed container to the descriptor invoker. The invoker inspects the boxed container tag at runtime, dispatches to indexed-array or associative-hash argument materialization, unboxes boxed array/hash payloads for declared array parameters, and is keyed by callable signature rather than by caller array shape. Closure and first-class-callable descriptors with `use (...)`, receiver, or late-static-binding context allocate runtime descriptor copies whose fixed header is followed by capture value slots; descriptor invokers reload those slots as hidden arguments, including by-reference captures. Method first-class callable variables use this descriptor path even when the original receiver variable still has static metadata, so reassignment of that source local cannot change the stored receiver. Callable variables and array elements whose descriptor was selected by an earlier runtime expression use the descriptor invoker when the local callsite no longer has static signature or capture metadata. Compile-time static-method callable arrays now materialize static-method descriptors for direct variable and literal calls, `call_user_func()` calls, and `call_user_func_array()` calls, including associative argument containers whose leftover string keys are forwarded into user-defined variadic method tails. Direct instance-method callable-array variable calls read the receiver from slot zero of the stored callable array, while direct instance-method callable-array literal calls evaluate the receiver before visible call arguments; both prepend it as descriptor argument zero and then let the descriptor signature normalize visible named/default/variadic/by-reference arguments. Direct invokable-object calls prepend the object as descriptor argument zero and use the object-invoke descriptor shape for the same named/default/variadic/by-reference handling, including non-local receiver expressions such as `(new Runner())(...)`. Compile-time instance-method callable arrays and invokable objects use instance/object descriptor shapes for direct `call_user_func()` calls and for `call_user_func_array()` calls whose argument container is literal indexed, literal associative, dynamic indexed, dynamic associative, or runtime-opaque mixed/union; the receiver is prepended as a synthetic descriptor argument before the visible callback arguments. Receiver-bound runtime-opaque containers branch on their boxed payload tag, clone and widen the payload to Mixed entries, then build a receiver-prefixed indexed array or associative hash for the descriptor invoker.
+`call_user_func()`, `call_user_func_array()`, direct string-variable calls, direct callable-array variable and literal calls, direct invokable-object calls, method first-class callable variable calls, and `iterator_apply()` compare runtime string names or descriptor-selected callable entries against generated cases. Runtime string callback names now materialize the matched descriptor and invoke its uniform invoker slot for user functions, extern wrappers, builtins, and public static methods, so signature defaults, named arguments, by-reference flags, variadics, and return boxing live behind the descriptor rather than in each string-dispatch callsite. `iterator_apply()` can also retain a branch-selected captured descriptor or runtime-selected callable-array descriptor and call that descriptor's invoker directly for each loop iteration. `array_map()`, `array_filter()`, `array_reduce()`, `array_walk()`, `usort()`, `uksort()`, `uasort()`, and `preg_replace_callback()` retain descriptor-valued callable variables and `callable` parameters in descriptor callback environments, so by-value closure captures, method receivers, and late-static binding state are read from descriptor storage instead of current source locals. These callback runtimes also match runtime callable-array variables such as `[$object, $method]` or `[$class, $method]` against public method descriptor cases before invoking the shared descriptor callback wrapper. `usort()`, `uksort()`, and `uasort()` use descriptor comparator environments for branch-selected captured descriptors. `CallbackFilterIterator` and `RecursiveCallbackFilterIterator` store branch-selected captured descriptors and runtime-selected callable-array variable or literal descriptors in persistent callback environments, then call the same descriptor invoker from `accept()`. `call_user_func()` and direct callable-variable invocations build boxed indexed argument containers for descriptor-backed calls; named direct calls build associative hashes. Variable arguments in either shape can be encoded as internal reference-cell markers, including boxed markers inside named hash entries, so the generated invoker can either pass the original storage to by-reference parameters or dereference it for by-value parameters after reading the descriptor signature. `call_user_func_array()` clones the provided indexed array or hash, widens the clone to boxed `Mixed`, and passes one boxed container to the descriptor invoker. The invoker inspects the boxed container tag at runtime, dispatches to indexed-array or associative-hash argument materialization, unboxes boxed array/hash payloads for declared array parameters, and is keyed by callable signature rather than by caller array shape. A declared `array<K, V>` parameter is compiled for hash storage, so its boxed argument is checked first: a boxed list is rebuilt as an owned hash with `__rt_array_to_hash`, while a boxed hash passes through with a reference of its own; either way the invoker releases that one owner after the call. Closure and first-class-callable descriptors with `use (...)`, receiver, or late-static-binding context allocate runtime descriptor copies whose fixed header is followed by capture value slots; descriptor invokers reload those slots as hidden arguments, including by-reference captures. Method first-class callable variables use this descriptor path even when the original receiver variable still has static metadata, so reassignment of that source local cannot change the stored receiver. Callable variables and array elements whose descriptor was selected by an earlier runtime expression use the descriptor invoker when the local callsite no longer has static signature or capture metadata. Compile-time static-method callable arrays now materialize static-method descriptors for direct variable and literal calls, `call_user_func()` calls, and `call_user_func_array()` calls, including associative argument containers whose leftover string keys are forwarded into user-defined variadic method tails. Direct instance-method callable-array variable calls read the receiver from slot zero of the stored callable array, while direct instance-method callable-array literal calls evaluate the receiver before visible call arguments; both prepend it as descriptor argument zero and then let the descriptor signature normalize visible named/default/variadic/by-reference arguments. Direct invokable-object calls prepend the object as descriptor argument zero and use the object-invoke descriptor shape for the same named/default/variadic/by-reference handling, including non-local receiver expressions such as `(new Runner())(...)`. Compile-time instance-method callable arrays and invokable objects use instance/object descriptor shapes for direct `call_user_func()` calls and for `call_user_func_array()` calls whose argument container is literal indexed, literal associative, dynamic indexed, dynamic associative, or runtime-opaque mixed/union; the receiver is prepended as a synthetic descriptor argument before the visible callback arguments. Receiver-bound runtime-opaque containers branch on their boxed payload tag, clone and widen the payload to Mixed entries, then build a receiver-prefixed indexed array or associative hash for the descriptor invoker.
 
 Multiple runtime unpack sources in a dynamically resolved call are validated and copied in source
 order, including named-key duplication and the rule against a numeric key after a named key within
@@ -1133,6 +1156,7 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_gc_note_child_ref` | Add one transient incoming edge to a heap child during cycle counting | `x0` = child pointer | — |
 | `__rt_gc_mark_reachable` | Recursively mark array/hash/object blocks reachable from external roots | `x0` = pointer | — |
 | `__rt_gc_collect_cycles` | Run the targeted cycle collector over heap-backed arrays/hashes/objects | — | — |
+| `__rt_gc_collect_cycles_budgeted` | Automatic unset safe point: collect once the saved per-safe-point scan credit covers `_heap_off` or live bytes reach `_gc_safe_point_live_limit` (always in candidate mode) | — | — |
 | `__rt_mixed_free_deep` | Free a mixed cell and release any nested heap-backed payload; for tag-9 resources, dispatch the kind-specific destructor (kind 1 `close`, kind 2 `__rt_hash_ctx_free`, kind 3 `__rt_pclose`, kind 4 `__rt_closedir`) | `x0` = mixed pointer | — |
 | `__rt_object_free_deep` | Free an object and release heap-backed properties using runtime/class metadata | `x0` = object pointer | — |
 
@@ -1270,7 +1294,7 @@ elephc lowers exceptions with a small runtime layer around the libc `_setjmp` / 
 | `__rt_exception_release_owned` / `__rt_exception_release_callable` | Clear captured ownership and run its typed release behind a protected PHP callback | C ABI guard pointer | Success or pending throwable status |
 | `__rt_exception_matches` | Check whether the active exception matches a catch target by class id or interface id | `x0` = exception object, `x1` = target id, `x2` = 0 for class / 1 for interface | `x0` = 1 if it matches, 0 otherwise |
 | `__rt_instanceof_lookup` | Resolve a dynamic class-string `instanceof` target through emitted case-insensitive class/interface metadata | `x1`/`x2` = target string | `x0` = found flag, `x1` = target id, `x2` = 0 class / 1 interface |
-| `__rt_instanceof_invalid_target` | Abort when a dynamic `instanceof` target is neither a string nor an object | — | does not return |
+| `__rt_instanceof_invalid_target` | Construct and throw an `Error` when a dynamic `instanceof` target is neither a string nor an object | none | does not return normally |
 | `__rt_class_implements_interface` | Test class metadata against an interface id for dynamic class-string checks without an object instance | `x0` = class id, `x1` = interface id | `x0` = 1 if implemented, 0 otherwise |
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
@@ -1367,7 +1391,7 @@ The `json_encode` implementation uses **type-aware dispatch** — the codegen ca
 | `__rt_json_encode_assoc` | Encode an associative array as a JSON object, while tracking PHP list-shape keys during the same hash walk and compacting to JSON array form when applicable | `x0` = hash ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_float` | Encode finite floats and record `JSON_ERROR_INF_OR_NAN` for `INF`/`NAN`, honoring throw and partial-output flags | `d0` = float | `x1`/`x2` = JSON string |
 | `__rt_json_encode_mixed` | Encode a boxed mixed payload by unboxing its runtime tag and dispatching to the concrete JSON encoder | `x0` = mixed ptr | `x1`/`x2` = JSON string |
-| `__rt_json_encode_object` | Encode class objects by consulting per-class JSON descriptors; dispatches `JsonSerializable::jsonSerialize()` when present, otherwise walks public properties | `x0` = object ptr | `x1`/`x2` = JSON string |
+| `__rt_json_encode_object` | Encode class objects through JSON descriptors, including JsonSerializable callbacks and native SimpleXML projections | `x0` = object ptr | `x1`/`x2` = JSON string |
 | `__rt_json_encode_stdclass` | Encode the dynamic-property hash backing `stdClass`, preserving `{}` for empty instances | `x0` = stdClass hash ptr | `x1`/`x2` = JSON string |
 | `__rt_json_decode` | String-only compatibility helper used by string decode paths; trims outer whitespace and unescapes quoted JSON strings including surrogate-aware `\uXXXX` sequences | `x1`/`x2` = JSON string | `x1`/`x2` = decoded string |
 | `__rt_json_decode_mixed` | Checked structural recursive decoder that returns boxed `Mixed` cells for null, bool, int, float, string, indexed arrays, associative arrays, and stdClass objects depending on `_json_decode_assoc`; records syntax/depth/UTF-8/UTF-16 errors plus source offsets and returns 0 on malformed input | `x1`/`x2` = JSON string | `x0` = Mixed* or 0 |
@@ -1603,7 +1627,7 @@ A `convert.iconv.*` write filter keeps its libc `iconv_t` open across writes. Ap
 
 Every terminal stdout write in a compiled program travels through one indirection, `__rt_stdout_write` (`io/stdout_write.rs`). Its branch order is part of the output contract:
 
-1. **print_r return-mode capture** — while `_print_r_mode` is set, append the bytes to the current capture block (`_print_r_base`) via `__rt_pr_append` instead of writing
+1. **print_r capture**: while `_print_r_mode` is set, append bytes to growable `_print_r_ptr` storage through `__rt_pr_append`.
 2. **user output-handler guard** — while `_ob_in_handler` is set, discard the bytes entirely (PHP discards output produced inside an `ob_start()` handler)
 3. **output-buffer capture** — while the `ob_*` stack is non-empty (`_ob_level` > 0), append the bytes to the top output buffer via `__rt_ob_append`
 4. **`--web` capture** — in `--web` builds only, a non-zero `elephc_web_capture` flag routes the bytes to `elephc_web_write`; default worker isolation buffers them, while pool/request isolation frames them onto the handler response stream
@@ -1613,13 +1637,18 @@ The `--web` capture branch is emitted only when compiling with `--web`, so ordin
 
 ### print_r rendering and capture routines
 
-`print_r()` uses walker helpers that mirror the var_dump family — `__rt_print_r_spaces`, `__rt_print_r_open` / `__rt_print_r_close`, `__rt_print_r_int_key` / `__rt_print_r_str_key`, `__rt_print_r_value`, `__rt_print_r_indexed`, and `__rt_print_r_hash` (whose entry lines come from `__rt_print_r_hash_entries`) — all writing through `__rt_pr_write`. Object bodies (`__rt_var_dump_object`, `__rt_print_r_object`, and the `__rt_obj_prop_*` accessors behind `var_export`) list the declared properties from the per-class descriptor, then the instance's dynamic-property hash in insertion order, located by `__rt_obj_dump_dyn_props` (`__rt_obj_dyn_prop_at` for indexed access). The `_class_dump_dyn_prop_flags` table gates that tail off for classes whose `__debugInfo()` folded into a projection. A user class whose `__debugInfo()` does NOT fold (a body that computes its entries) gets a non-zero `_class_debuginfo_ptrs[class_id]` entry instead: `__rt_var_dump_value` and `__rt_print_r_object` call `__rt_vd_debuginfo_object` / `__rt_pr_debuginfo_object` right after pushing the object on the `_vd_seen` guard, which run the method through `__rt_obj_debuginfo_fetch`, classify the owned result by heap kind (indexed array, hash, or boxed `Mixed` wrapping either; null is an empty array) and dump it under the object header with the returned entry count, then release the result. A non-array result raises a catchable `TypeError` (`__debuginfo() must return an array`), where PHP raises an uncatchable fatal error; a method with a statically scalar/string return type keeps the declared-property dump. `var_export()` never reads this table. Return mode (`print_r($value, true)`) is backed by three capture helpers in `io/print_r_buffer.rs`:
+`print_r()` builds the complete rendering before returning or echoing it. Its recursive array and object walkers write through `__rt_pr_write`. Capture state consists of `_print_r_mode`, `_print_r_off`, `_print_r_ptr`, and `_print_r_cap`; raw heap storage grows geometrically. Finalization copies the captured bytes through the ordinary string metadata hooks, frees raw storage, and clears the capture state. Echo mode then writes the completed string through `__rt_stdout_write`, preserving output buffering and web responses.
+
+User classes with a runtime `__debugInfo()` use the `_class_debuginfo_ptrs` table and the shared guarded fetch/render helpers from `objects/debug_info.rs`. The returned array supplies the header count. Invalid or escaping-throw results preserve PHP's fatal diagnostic path; null uses the shared deprecation. The fetch moves the active raw capture aside while the method runs, then restores it.
+
+Ordinary object bodies use their property descriptors and dynamic-property hash. Native XML objects obtain an owned debug projection through a protected info hook and a separate projection adapter. The renderer retains the receiver and projection while walking it, shares the recursion guard, and moves capture ownership aside while PHP hooks or temporary destructors run.
 
 | Routine | What it does |
 |---|---|
-| `__rt_pr_append` | Append bytes to the current capture block at `_print_r_off`, growing through `__rt_concat_grow` when the inline 64KB block is full, so oversized captures return the full string |
-| `__rt_pr_write` | Walker-facing write wrapper: branch on `_print_r_mode` between the stdout path and `__rt_pr_append` |
-| `__rt_pr_finish` | Persist the captured bytes to an owned heap string via `__rt_str_persist` and reset the capture state |
+| `__rt_pr_append` | Append bytes to growable raw heap storage, checking the complete required size before allocation |
+| `__rt_pr_write` | Route walker output to capture or the existing terminal/output-buffer path |
+| `__rt_pr_finish` | Persist captured bytes as an owned string, free raw storage, and reset state |
+| `__rt_pr_abort` | Release an abandoned capture and clear state during exception cleanup |
 
 ### Output buffering (`ob_*`) routines
 
@@ -1736,7 +1765,7 @@ These helpers support `stdClass`, `json_decode()` object results, boxed Mixed pr
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_object_to_hash` | Project an object's properties into a string-keyed hash — backs `get_object_vars()` and `(array)` object casts through serialize descriptors, with declaring-class protected/private filtering and `__PHP_Incomplete_Class` handling | object pointer + mode | hash pointer |
+| `__rt_object_to_hash` | Project object properties through a native adapter or serialize descriptors. Backs `get_object_vars()` and `(array)`, with lexical visibility and incomplete-object handling | object pointer + mode | owned hash pointer |
 | `__rt_throw_object_not_array` | Raise PHP's catchable `Cannot use object of type X as array` | object pointer | does not return |
 | `__rt_throw_object_not_array_name` | Raise the same catchable Error for a Closure without reading an object header | class name pointer/length (`x1`/`x2` on AArch64, `rax`/`rdx` on x86_64) | does not return |
 | `__rt_new_by_name` | Instantiate a class by its textual name through the `_classes_by_name` table (case-insensitive `__rt_strcasecmp` lookup), allocating and zeroing the object payload | class name string | object pointer, or 0 (null) on miss |
@@ -1951,11 +1980,10 @@ The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` 
 ```asm
 .comm _concat_buf, <heap-size> ; heap-sized string buffer (at least 64 KiB)
 .comm _concat_off, 8         ; current offset into string buffer
-.comm _print_r_mode, 8       ; print_r($v, true) return-mode capture flag
+.comm _print_r_mode, 8       ; print_r rendering capture flag
 .comm _print_r_off, 8        ; print_r capture write offset
-.comm _print_r_buf, 65536    ; inline print_r return-mode capture buffer
-_print_r_base: .quad _print_r_buf ; current capture block
-_print_r_cap: .quad 65536   ; current capture capacity
+.comm _print_r_ptr, 8        ; owned raw print_r capture pointer
+.comm _print_r_cap, 8        ; allocated print_r capture capacity
 .comm _ob_level, 8           ; output-buffer (ob_*) stack depth
 .comm _ob_ptrs, 512          ; 64-slot ob buffer base pointers
 .comm _ob_lens, 512          ; 64-slot ob buffer used byte counts
@@ -2043,7 +2071,7 @@ _principal_lookup_read_mode:
 .comm _static_func_var, 16   ; 16 bytes for persisted value
 .comm _static_func_var_init, 8 ; 8-byte initialization flag
 ; Per-program: static property storage (one slot per effective declaring class property)
-.comm _static_prop_Class_prop, 16 ; 16 bytes for the static property value
+.comm _static_prop_Class_prop, 24 ; value, initialization and reference-layout words
 ```
 
 Additionally, the runtime emits static data tables:
@@ -2052,7 +2080,7 @@ Additionally, the runtime emits static data tables:
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_alloc_size_msg`, `_buffer_registry_exhausted_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg`: runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_resource_id_prefix` — prefix used by resource display helpers
@@ -2081,7 +2109,7 @@ Additionally, the runtime emits static data tables:
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used by late static binding
 - `_class_destruct_ptrs` — class_id-indexed `__destruct` method pointers (or `0`) consulted by `__rt_call_object_destructor` during object deep-free
 - `_classes_by_name`, `_classes_by_name_count` — case-insensitive `name -> (class_id, object size)` lookup table used by `__rt_new_by_name` for `new $variable()`
-- `static_property_symbol(...)`-derived `.comm` slots — 16-byte storage slots for effective declaring static properties, shared by inherited static properties until a subclass redeclares the property
+- `static_property_symbol(...)`-derived `.comm` slots: 24-byte storage slots for effective declaring static properties, shared by inherited static properties until a subclass redeclares the property
 - `enum_case_symbol(...)`-derived `.comm` slots — singleton backing storage for enum cases emitted from user program metadata
 
 When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.

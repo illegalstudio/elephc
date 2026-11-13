@@ -386,12 +386,18 @@ fn visible_class_method_names(
     class_name: &str,
 ) -> Vec<String> {
     let mut names = if let Some(info) = ctx.classes.get(class_name) {
-        let mut order = Vec::new();
-        let mut declaration = Some(info);
-        while let Some(declaring) = declaration {
-            order.extend(declaring.method_decls.iter().map(|method| php_symbol_key(&method.name)));
-            declaration = declaring.parent.as_ref().and_then(|parent| ctx.classes.get(parent));
-        }
+        // Zend's function-table order: own methods, the parent's table, then trait methods.
+        let mut order = crate::types::method_order::zend_method_table_order(
+            class_name,
+            ctx.classes,
+            &|class| {
+                crate::types::method_order::trait_imported_method_keys(
+                    class,
+                    ctx.declared_trait_methods,
+                    &|method: &crate::ir::TraitMethodInfo| method.span,
+                )
+            },
+        );
         if ctx.enums.contains_key(class_name) {
             order.extend(["cases", "from", "tryfrom"].map(str::to_string));
         }
@@ -409,8 +415,14 @@ fn visible_class_method_names(
             })
             .filter(|method| class_method_visible(ctx, class_name, info, method))
             .filter(|method| {
-                elephc_builtin_contract::lookup_class(class_name)
-                    .is_none_or(|class| class.method_is_php_visible(method))
+                let declaring = info.method_declaring_classes.get(*method)
+                    .or_else(|| info.static_method_declaring_classes.get(*method))
+                    .map(String::as_str)
+                    .unwrap_or(class_name);
+                [class_name, declaring].iter().all(|owner| {
+                    elephc_builtin_contract::lookup_class(owner)
+                        .is_none_or(|class| class.method_is_php_visible(method))
+                })
             })
             .map(|method| class_method_display_name(ctx, class_name, info, method))
             .collect::<Vec<_>>()

@@ -27,12 +27,12 @@ _Implemented by an injected elephc-PHP prelude._
 ## Signature summary
 
 ```php
-function mysqli_get_client_version(mixed $mysql): int
+function mysqli_get_client_version(): int
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes no arguments.
 
 ## Eval interpreter (magician)
 

@@ -234,7 +234,8 @@ const WORDWRAP_ZERO_WIDTH_CUT_MESSAGE: &str =
 /// untouched *before* either value check, then `$pad_string` emptiness, then `$pad_type`.
 /// `has_pad_type` suppresses the fourth-argument guard for calls that leave `$pad_type`
 /// defaulted, where `STR_PAD_RIGHT` is materialized as a constant and can never fail.
-fn emit_str_pad_argument_guards(ctx: &mut FunctionContext<'_>, has_pad_type: bool) {
+/// `name` preserves the caller-visible builtin name when mb_str_pad shares these guards.
+fn emit_str_pad_argument_guards(ctx: &mut FunctionContext<'_>, has_pad_type: bool, name: &str) {
     let ok_label = ctx.next_label("str_pad_args_ok");
     let empty_pad_label = ctx.next_label("str_pad_empty_pad_string");
     let bad_type_label = ctx.next_label("str_pad_bad_pad_type");
@@ -262,10 +263,16 @@ fn emit_str_pad_argument_guards(ctx: &mut FunctionContext<'_>, has_pad_type: boo
         }
     }
     ctx.emitter.label(&empty_pad_label);
-    super::super::exceptions::emit_value_error(ctx, STR_PAD_EMPTY_PAD_STRING_MESSAGE);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!("{name}(): Argument #3 ($pad_string) must not be empty"),
+    );
     if has_pad_type {
         ctx.emitter.label(&bad_type_label);
-        super::super::exceptions::emit_value_error(ctx, STR_PAD_INVALID_PAD_TYPE_MESSAGE);
+        super::super::exceptions::emit_value_error(
+            ctx,
+            &format!("{name}(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH"),
+        );
     }
     ctx.emitter.label(&ok_label);
 }
@@ -430,14 +437,6 @@ pub(crate) fn lower_ucwords(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-
-/// php-src's verbatim `ValueError` wording for `str_pad()` with an empty `$pad_string`.
-const STR_PAD_EMPTY_PAD_STRING_MESSAGE: &str =
-    "str_pad(): Argument #3 ($pad_string) must not be empty";
-
-/// php-src's verbatim `ValueError` wording for a `str_pad()` `$pad_type` outside 0..2.
-const STR_PAD_INVALID_PAD_TYPE_MESSAGE: &str =
-    "str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH";
 
 /// The byte length of `_ucwords_default_seps`, PHP's `" \t\r\n\f\v"` separator set.
 const UCWORDS_DEFAULT_SEPARATOR_COUNT: i64 = 6;

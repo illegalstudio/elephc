@@ -1,0 +1,90 @@
+name: Artifact retention
+
+on:
+  workflow_run:
+    workflows: [CI, PDO Live Databases, PHP extension host SDK, iOS curl live, Nightly, Release, Development artifacts]
+    types: [completed]
+  schedule:
+    - cron: '41 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Preview deletions without changing artifacts or the ledger
+        type: boolean
+        default: true
+      run-id:
+        description: Optional workflow run to inspect (otherwise discover since the checkpoint)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+# Both workflows update separate files on the same ledger branch.
+concurrency:
+  group: development-artifact-ledger
+  cancel-in-progress: false
+
+jobs:
+  retain:
+    if: github.repository == 'illegalstudio/elephc'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      actions: write
+    outputs:
+      refresh: ${{ steps.retain.outputs.refresh }}
+    steps:
+      # Never execute a completed PR's checkout with the janitor's write token.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select the latest complete download and remove disposable artifacts
+        id: retain
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run-id }}
+          APPLY: ${{ github.event_name != 'workflow_dispatch' || !inputs.dry-run }}
+        run: |
+          args=()
+          if [[ -n "$RUN_ID" ]]; then args+=(--run-id "$RUN_ID"); fi
+          if [[ "$APPLY" == true ]]; then args+=(--apply); fi
+          python3 -B scripts/ci/artifact_retention.py "${args[@]}"
+      - name: Continue a checkpointed cleanup backlog
+        if: steps.retain.outputs.continue_cleanup == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.dry-run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run artifact-retention.yml --repo "$GITHUB_REPOSITORY" --ref main -f dry-run=false
+
+  refresh:
+    name: Refresh development build (${{ matrix.target }})
+    needs: retain
+    if: needs.retain.outputs.refresh != '[]' && (github.event_name != 'workflow_dispatch' || !inputs.dry-run)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.retain.outputs.refresh) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Copy and verify the original package without rebuilding
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RETAINED_ARTIFACT: ${{ toJSON(matrix) }}
+        run: python3 -B scripts/ci/refresh_development_artifact.py
+      - name: Renew the development download
+        uses: actions/upload-artifact@v7
+        with:
+          name: elephc-dev-${{ matrix.target }}-${{ matrix.sha }}-${{ github.run_attempt }}
+          path: target/development/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 90

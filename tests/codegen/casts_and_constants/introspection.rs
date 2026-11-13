@@ -155,7 +155,7 @@ echo empty($map["text"]) ? "1" : "0";
 /// binding (see `docs/php/types.md`, Local retyping): the name leaves the type
 /// environment, so `is_null($x)` after it is an `Undefined variable` diagnostic rather than a
 /// read of a nulled slot — that half of the contract is pinned by
-/// `tests/error_tests/type_system.rs::test_read_after_unset_is_undefined`. A conditional `unset`
+/// `tests/error_tests/type_system.rs::test_read_after_unset_warns_at_runtime`. A conditional `unset`
 /// is not kill-eligible (the branch may not run), so it keeps the null-store behaviour this test
 /// exercises. `$argc` is 1 under the harness, so the branch does run.
 #[test]

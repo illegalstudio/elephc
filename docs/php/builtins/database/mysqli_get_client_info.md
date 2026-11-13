@@ -6,13 +6,13 @@ description: "Returns the client library version as a string."
 ## mysqli_get_client_info()
 
 ```php
-function mysqli_get_client_info(mixed $mysql): string
+function mysqli_get_client_info(mixed $mysql = null): string
 ```
 
 Returns the client library version as a string.
 
 **Parameters**:
-- `$mysql` (`mixed`)
+- `$mysql` (`mixed`), default `null`, optional
 
 **Returns**: `string`
 

@@ -17,3 +17,4 @@ mod finally_paths;
 mod iterator_catches;
 mod tail_paths;
 mod default_prefix_catches;
+mod reference_constraint_catches;

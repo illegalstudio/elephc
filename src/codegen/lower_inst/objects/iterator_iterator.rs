@@ -64,6 +64,7 @@ pub(super) fn lower_iterator_iterator_new(ctx: &mut FunctionContext<'_>, inst: &
         width: None,
         is_reference: false,
         abstract_setter_type_error_prefix: None,
+        reference_declaration: None,
     };
     emit_object_allocation(
         ctx,

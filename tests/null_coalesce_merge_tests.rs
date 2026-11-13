@@ -126,6 +126,32 @@ fn run_binary(bin: &Path) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+
+/// Removes the runtime diagnostic's leading framing and ` in FILE on line N` suffix.
+///
+/// The compiler now prints PHP's caller location for every displayed diagnostic. These
+/// fixtures pin the message body and warning count, not the temp-directory path.
+fn normalize_runtime_stderr(stderr: &str) -> String {
+    fn strip_location(line: &str) -> &str {
+        let Some(on_line) = line.rfind(" on line ") else { return line; };
+        let suffix = &line[on_line + " on line ".len()..];
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return line;
+        }
+        line[..on_line].rfind(" in ").map_or(line, |in_pos| &line[..in_pos])
+    }
+    let mut normalized = String::new();
+    for line in stderr.lines() {
+        let line = strip_location(line);
+        if line.is_empty() {
+            continue;
+        }
+        normalized.push_str(line);
+        normalized.push('\n');
+    }
+    normalized
+}
+
 /// Compiles `source`, runs it, and asserts stdout equals `expected`.
 fn assert_program_output(prefix: &str, source: &str, expected: &str) {
     let dir = make_test_dir(prefix);
@@ -150,7 +176,7 @@ fn assert_program_output_with_warnings(prefix: &str, source: &str, expected: &st
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+        normalize_runtime_stderr(&String::from_utf8_lossy(&output.stderr))
     );
     assert_eq!(combined, expected);
     let _ = fs::remove_dir_all(&dir);

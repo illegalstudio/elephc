@@ -418,7 +418,7 @@ echo $child->value . ":" . $child->parentValue(); // 5:1
 
 A property can define **hooks** that run when it is read or written, replacing hand-written getter and setter methods. The hooks live in a `{ ... }` block after the property name. Reading the property runs its `get` hook; assigning to it runs its `set` hook.
 
-A `get`-only property is **virtual** — it has no stored value of its own and is read-only. The short form `get => expr;` returns `expr`; the block form `get { ... }` runs statements and returns a value:
+A property whose hooks never access its own backing slot is **virtual** and has no stored value. A virtual `get`-only property is read-only. A backed getter without a setter keeps ordinary writes to its stored value. The short form `get => expr;` returns `expr`; the block form `get { ... }` runs statements and returns a value:
 
 ```php
 <?php
@@ -487,7 +487,7 @@ echo $n->value; // Ada
 
 Rules:
 
-- A property with a `get` hook but no `set` hook is read-only. Writing it is a compile-time error.
+- A virtual property with a `get` hook but no `set` hook is read-only. Writing it is a compile-time error. A backed getter-only property retains its implicit write operation.
 - Hooked properties cannot have a default value and cannot be `static`, `final`, or `readonly`.
 - Each hook may be declared at most once per property.
 - `set => expr;` is equivalent to assigning `expr` to the property's own backing slot.
@@ -606,7 +606,7 @@ $counter->value = 3;
 echo $value;           // 3
 ```
 
-By-reference promoted parameters may also have defaults. If no argument is passed, elephc creates a private reference cell for the default value; if a variable is passed, the promoted property aliases that variable. `readonly` by-reference promoted properties are rejected at compile time because construction would have to bind an indirect mutable alias to a readonly slot.
+By-reference promoted parameters may also have defaults. If no argument is passed, elephc creates a private reference cell for the default value; if a variable is passed, the promoted property aliases that variable. Exact `mixed` promoted references own their shared storage, so the object can outlive the caller's local scope. Native and eval aliases of these Mixed properties preserve writes across inherited constructors, clone and unset. `readonly` by-reference promoted properties are rejected at compile time because construction would have to bind an indirect mutable alias to a readonly slot.
 
 ## Instance methods and $this
 Virtual dispatch for overrides.
@@ -821,6 +821,13 @@ Traits may declare abstract hooked property contracts. A concrete class using th
 ## Property access
 `->` for properties and methods.
 
+Writing through a receiver that is `null` at run time throws a catchable `Error`, as in PHP,
+including a receiver whose static type is a class, such as a missing element of an
+`array<Node>`: `$nodes[5]->count = 2` reports `Attempt to assign property "count" on null`,
+and an element write or append (`$nodes[5]->items[] = 1`) reports `Attempt to modify property
+"items" on null`. Reading the missing element still emits PHP's `Undefined array key` warning
+first, where PHP fetches it for write silently.
+
 ### Dynamic property access
 
 The property name can be computed at runtime with the `$obj->{$expr}` syntax,
@@ -949,6 +956,23 @@ var_dump($config->level === Level::Low);         // bool(true)
 
 Every form stores the case's **canonical singleton**, so `===` against the case holds, exactly as it does for a case read anywhere else. Cases are materialized lazily, and a default is resolved through that same materialization rather than by copying the slot, so a default written before the case's first use elsewhere in the program is still the singleton and not `null`.
 
+Instance and static defaults also support nullable (`?Level` or `Level|null`), union,
+and `mixed` property types. Class and interface constant aliases resolve to the same
+case; `self::` and `parent::` bind to the property's declaring class, including on
+inherited properties and properties shadowing a private parent slot. PHP forbids
+`static::` in a property default. `ReflectionClass::getDefaultProperties()` and
+`ReflectionProperty::getDefaultValue()` return the enum case object for both pure
+and backed enums, including when these APIs are called inside `eval()`.
+
+Aliases can also select a case from a constant array, such as
+`const DEFAULT = self::CASES[0]`. Evaluated cases retain PHP's materialization
+order; cases on an untaken conditional branch remain lazy. The same projections and
+branches can be written directly on the property (`public Level $first =
+Holder::CASES[0];`, `public Level $level = Level::Low ? Level::High : Level::Low;`),
+an offset or key may itself depend on an enum (`self::CASES[Level::Low ? 1 : 0]`),
+and a scalar property may be selected by an enum condition (`public int $n =
+Level::Low ? 1 : 2;`); all of them initialize and reflect like PHP.
+
 A default naming a case that does not exist is a compile error (`Undefined enum case: Level::Missing`), and a scoped constant that resolves to a scalar is still rejected for an enum-typed slot.
 
 ### Built-in `SortDirection`
@@ -981,6 +1005,12 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__invoke(...$args)` — calling an object directly, including `$this(...)` from inside its own class. The class that contains `$this(...)` must declare or inherit `__invoke`: an abstract parent that relies on a subclass's `__invoke` is refused at compile time, where PHP resolves it at run time
 - `__call($name, $args)` — intercepting missing instance methods
 - `__callStatic($name, $args)` — intercepting missing static methods
+
+Instance `__call` dispatch also works through `mixed` and bare `object` receivers.
+The hook receives the method name as written and an argument array that preserves
+named keys, including keys supplied through argument unpacking. Exceptions thrown
+by the hook remain catchable, and temporary argument containers are released on
+both normal return and exception unwinding.
 
 ## Property interception (`__get`, `__set`, `__isset`, `__unset`)
 
@@ -1053,6 +1083,17 @@ the default instead of raising, on instance and static typed properties alike,
 including reads through a nullable receiver (`?Row $r` → `$r->id ?? "none"`). A
 plain read still raises the catchable `Error`.
 
+An eval function can retain a reference parameter bound to an ordinary `mixed`
+instance property. The alias observes subsequent native and eval writes and can
+outlive the object. Cloning preserves shared aliases; unsetting the property
+detaches its storage while surviving aliases keep their value.
+
+The same eval reference-parameter binding shares ordinary `mixed` static
+properties with native reads, writes and aliases. Inherited static properties
+share their declaring class's storage; a redeclaration in a child has separate
+storage. Static storage releases its owner during request teardown. PHP rejects
+unsetting a static property, so that operation leaves the shared value intact.
+
 ### `unset()` on a dynamic property
 
 A property that lives in the object's **dynamic-property hash** — every `stdClass`
@@ -1096,10 +1137,13 @@ removed, `isset()` answers `false`, object-property renderers omit the property,
 normal read emits `Warning: Undefined property: C::$foo` and answers `null`. A later
 assignment clears the marker and recreates the property with any supported PHP value.
 
-`unset()` on a **by-reference** property (`public function __construct(public int
-&$p) {}`) is rejected for the same reason: the slot holds an object-owned reference
-cell that the destructor still frees and that a later write would write *through*,
-which would revive the very alias `unset()` is supposed to break.
+For an object-owned typed property referenced through `$alias = &$object->value`
+or a method returning that property by reference, `unset()` installs a fresh
+uninitialized cell. Surviving aliases keep the old value, and later writes to the
+property leave those aliases detached. Native code and opaque eval use the same
+operation, including when the old value's destructor recreates the property.
+Borrowed constructor-promoted references (`public function __construct(public int
+&$p) {}`) and untyped reference-property slots remain unsupported.
 
 Packed fields are also rejected because their native layout has no room for a removed
 marker. A dynamic name on a class that both permits dynamic properties and declares
@@ -1591,7 +1635,7 @@ echo ($instance instanceof Route) ? "yes" : "no";
 | `ReflectionEnumUnitCase::getValue()` / `ReflectionEnumBackedCase::getValue()` | Same as enum-case `getName()` | Return the reflected enum-case object |
 | `ReflectionEnumBackedCase::getBackingValue()` | `new ReflectionEnumBackedCase($enum_name, $case_name)` | Return the scalar backing value for the reflected backed enum case |
 | `ReflectionEnumUnitCase::getAttributes()` / `ReflectionEnumBackedCase::getAttributes()` | Same as enum-case `getName()` | Return `ReflectionAttribute` objects for enum-case attributes, optionally filtered to one attribute class by `$name` |
-| `ReflectionEnumUnitCase::getDeclaringClass()` / `ReflectionEnumBackedCase::getDeclaringClass()` | Same as enum-case `getName()` | Return a `ReflectionClass` object for the enum that declares the reflected case |
+| `ReflectionEnumUnitCase::getDeclaringClass()` / `ReflectionEnumBackedCase::getDeclaringClass()` | Same as enum-case `getName()` | Return a `ReflectionEnum` object for the enum that declares the reflected case |
 | `ReflectionEnumUnitCase::getEnum()` / `ReflectionEnumBackedCase::getEnum()` | Same as enum-case `getName()` | Return a `ReflectionEnum` object for the enum that declares the reflected case |
 | `ReflectionEnumUnitCase::isDeprecated()` / `ReflectionEnumBackedCase::isDeprecated()` | Same as enum-case `getName()` | Return PHP's current non-deprecated default for retained enum-case metadata |
 | `ReflectionEnumUnitCase::hasType()` / `ReflectionEnumBackedCase::hasType()` | Same as enum-case `getName()` | Return `false` because enum cases expose no class-constant type metadata |
@@ -1677,6 +1721,7 @@ Limitations today:
 - The flat `class_attribute_args()` helper materializes supported literal and array values directly, but symbolic references are resolved through `ReflectionClass::getAttributes()->getArguments()` / `ReflectionAttribute::newInstance()` instead.
 - When several attributes share a name on the same class, `class_attribute_args()` returns the args of the first match; `class_get_attributes()` does expose every occurrence as a separate `ReflectionAttribute` in source order.
 - `ReflectionClass` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `getAttributes()`, `isFinal()`, `isAbstract()`, `isInterface()`, `isTrait()`, `isEnum()`, `isReadOnly()`, `isAnonymous()`, `isInstantiable()`, `isCloneable()`, `isIterable()`, `isIterateable()`, `isInternal()`, `isUserDefined()`, `getModifiers()`, `hasMethod()`, `hasProperty()`, `hasConstant()`, `getConstant()`, `getConstants()`, `getDefaultProperties()`, `getReflectionConstant()`, `getReflectionConstants()`, `implementsInterface()`, `isSubclassOf()`, `isInstance()`, `getInterfaceNames()`, `getInterfaces()`, `getTraitNames()`, `getTraits()`, `getTraitAliases()`, `getMethods()`, `getConstructor()`, `getParentClass()`, `getProperties()`, `newInstance()`, `newInstanceArgs()`, and `newInstanceWithoutConstructor()`. Its constructor accepts class-name strings and object arguments; object arguments reflect the runtime class of eval-created or generated/AOT objects. It also exposes PHP-compatible `ReflectionClass::IS_IMPLICIT_ABSTRACT`, `ReflectionClass::IS_FINAL`, `ReflectionClass::IS_EXPLICIT_ABSTRACT`, and `ReflectionClass::IS_READONLY` constants. `ReflectionClass::implementsInterface()` returns the metadata predicate for known interface names and throws PHP-compatible `ReflectionException` messages when the argument is missing or names a non-interface class-like symbol. `ReflectionClass::isSubclassOf()` returns the metadata predicate for known class/interface targets, excludes the reflected symbol itself, returns `false` for trait and enum targets, and throws PHP-compatible `ReflectionException` messages for missing names. `ReflectionClass::isInstance()` checks the provided object against the reflected class/interface/enum metadata and returns `false` for trait targets. `ReflectionClass::getDefaultProperties()` returns supported materialized property defaults, including static and instance properties, omits typed properties without an initializer, and reports implicit `null` for untyped concrete properties without an explicit initializer. `ReflectionClass::newInstance()` constructs eval-declared and bridge-supported generated/AOT reflected classes with public constructors and forwards positional, named, unpacked, and defaulted constructor arguments through eval's call binding. `ReflectionClass::newInstanceArgs()` constructs those reflected classes from indexed or string-keyed argument arrays, including arrays built at eval runtime; string keys become named constructor arguments. When the receiver is an inline `new ReflectionClass(Known::class)` expression, named arguments, static string-keyed unpacking, and constructor defaults are normalized through the reflected constructor signature. `ReflectionClass::newInstanceWithoutConstructor()` allocates concrete non-enum reflected classes with supported property defaults while skipping `__construct()`; specialized internal classes with runtime-owned storage still require dedicated support. Dynamic unpacking and named-argument forwarding from a `ReflectionClass` object held only in runtime storage still require richer runtime constructor binding. `ReflectionFunction` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `isInternal()`, `isUserDefined()`, `isClosure()`, `isDeprecated()`, `returnsReference()`, `isGenerator()`, `getAttributes()`, `getParameters()`, `getNumberOfParameters()`, `getNumberOfRequiredParameters()`, `hasReturnType()`, `getReturnType()`, `isVariadic()`, `hasTentativeReturnType()`, `getTentativeReturnType()`, `getClosureUsedVariables()`, `invoke()`, `invokeArgs()`, `isDisabled()`, and `__toString()` for statically known user functions and supported first-class-callable builtins. AOT invocation supports reflected user functions with declared or inferred/untyped parameter contracts, plus supported callable builtins. Inside eval fragments, registered generated/AOT free-function defaults are reflected through `ReflectionParameter` metadata. `ReflectionMethod` construction accepts class-name strings and object arguments; object arguments resolve to the runtime class before method lookup. `ReflectionMethod` supports `getName()`, `getShortName()`, `getNamespaceName()`, `inNamespace()`, `isInternal()`, `isUserDefined()`, `isClosure()`, `isDeprecated()`, `returnsReference()`, `isGenerator()`, `hasPrototype()`, `getPrototype()`, `getDeclaringClass()`, `getAttributes()`, `getParameters()`, `getNumberOfParameters()`, `getNumberOfRequiredParameters()`, `hasReturnType()`, `getReturnType()`, `isVariadic()`, `hasTentativeReturnType()`, `getTentativeReturnType()`, `isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`, `isFinal()`, `isAbstract()`, `isConstructor()`, `isDestructor()`, `getModifiers()`, and `__toString()`. It also exposes PHP-compatible `ReflectionMethod::IS_PUBLIC`, `IS_PROTECTED`, `IS_PRIVATE`, `IS_STATIC`, `IS_FINAL`, and `IS_ABSTRACT` constants. `ReflectionParameter` supports direct construction for statically known user function names or supported callable-builtin names (`"function"`), class/interface/trait method arrays (`[ClassLike::class, "method"]`), and statically typed object-expression method arrays (`[$object_expr, "method"]`) outside eval; those object expressions are still evaluated before reflection metadata is materialized. Inside eval fragments it can also resolve object-method arrays from evaluated runtime objects, including inline `new` expressions. It also supports `getName()`, `getPosition()`, `isOptional()`, `isVariadic()`, `isPassedByReference()`, `canBePassedByValue()`, `isPromoted()`, `hasType()`, `getType()` for simple named, union, and intersection parameter types, `allowsNull()`, `isArray()`, `isCallable()`, `getAttributes()` for function and method parameter attributes, `getDeclaringClass()`, `getDeclaringFunction()`, `isDefaultValueAvailable()`, `getDefaultValue()`, `isDefaultValueConstant()`, `getDefaultValueConstantName()` for supported scalar/null/global-constant/class-constant/default-array metadata, and `__toString()` and object defaults with up to eight supported scalar/null constructor arguments from literals or constants, including omitted constructor defaults. `ReflectionNamedType` supports `getName()`, `allowsNull()`, and `isBuiltin()`. `ReflectionUnionType` and `ReflectionIntersectionType` support `getTypes()` and `allowsNull()`. `ReflectionProperty` supports `getName()`, `getDeclaringClass()`, `getAttributes()`, `isStatic()`, `isPublic()`, `isProtected()`, `isPrivate()`, `isFinal()`, `isAbstract()`, `isReadOnly()`, `isPromoted()`, `isProtectedSet()`, `isPrivateSet()`, `getModifiers()`, `isDefault()`, `isDynamic()`, `isLazy()`, `skipLazyInitialization()`, `__toString()`, `hasHooks()`, `getHooks()`, `hasHook()`, `getHook()`, `hasType()`, `getType()`, `getSettableType()`, `hasDefaultValue()`, `getDefaultValue()` for supported property defaults, and `isInitialized()` for supported known property slots. It also exposes PHP-compatible `ReflectionProperty::IS_PUBLIC`, `IS_PROTECTED`, `IS_PRIVATE`, `IS_STATIC`, `IS_FINAL`, `IS_ABSTRACT`, `IS_READONLY`, `IS_VIRTUAL`, `IS_PROTECTED_SET`, and `IS_PRIVATE_SET` constants. `ReflectionClassConstant` supports `getName()`, `getValue()`, `getAttributes()`, `getDeclaringClass()`, `isEnumCase()`, `isPublic()`, `isProtected()`, `isPrivate()`, `isFinal()`, `isDeprecated()`, `hasType()`, `getType()` for retained named, nullable, union, and intersection declarations, and `getModifiers()`. It also exposes PHP-compatible `ReflectionClassConstant::IS_PUBLIC`, `IS_PROTECTED`, `IS_PRIVATE`, and `IS_FINAL` constants. `ReflectionEnumUnitCase` and `ReflectionEnumBackedCase` support `getName()`, `getValue()`, `getAttributes()`, and `getDeclaringClass()`, and `ReflectionEnumBackedCase` also supports `getBackingValue()`. The enum-case reflectors expose the untyped `hasType()` / `getType()` defaults. Broader APIs such as object parameter defaults beyond that limited literal constructor-argument slice, broader internal-function metadata beyond supported first-class-callable builtin signatures, and runtime-only/dynamically typed object-expression `new ReflectionParameter(...)` construction outside eval fragments are not yet available. `ReflectionClassConstant::getValue()` returns the reflected class-constant value, or the enum-case object when the reflected constant is an enum case. An explicit `mixed` class-constant hint is retained as a declared type.
+- `getDeclaringClass()` (methods, properties, class constants, enum cases, parameters) and `ReflectionParameter::getClass()` build a new, complete `ReflectionClass` on every call, as PHP does: two calls return distinct objects, and the returned reflector lists its own methods, properties and constants. This holds for reflectors created in compiled code and inside `eval()` fragments alike. As in PHP, the declaring class of an enum member (a case, a constant or a method) and the class of an enum-typed parameter are reflected as a `ReflectionEnum`; the enum-case getters are typed `ReflectionEnum`, so `isBacked()` and `getBackingType()` can be called on their result directly. A `ReflectionClass` built inside `eval()` and used from compiled code answers `getMethod()`, `getProperty()`, `getDefaultProperties()` and typed iteration over `getMethods()`, `getProperties()` and `getParameters()` like one built in compiled code.
 - `ReflectionObject` supports the inherited class-metadata methods for object arguments and materializes the same metadata through a `ReflectionObject` instance.
 - `ReflectionEnum` additionally supports backing metadata (`isBacked()`, `getBackingType()`); inside eval fragments it also supports enum-case lookup (`hasCase()`, `getCase()`, `getCases()`). Enum-case reflectors expose `getEnum()`.
 - `ReflectionNamedType`, `ReflectionUnionType`, and `ReflectionIntersectionType` also support `__toString()` for retained named, nullable, union, and intersection metadata.
@@ -1768,6 +1813,6 @@ Constants are inherited from parents and implemented interfaces (transitively). 
 ## Limitations
 - `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
 - Backed property hooks may read and write their own backing slot.
-- `unset()` is supported on typed declared properties (the slot becomes uninitialized), untyped fixed properties selected by reachable removal paths (the slot carries an internal removed marker), and dynamic properties (`stdClass`, undeclared names on `#[AllowDynamicProperties]` classes, where the entry is removed). It is rejected on by-reference properties, packed fields, and dynamic names of a class that also declares `__unset()`. See "`unset()` limitations" above.
+- `unset()` is supported on typed declared properties, including object-owned reference cells (the property becomes uninitialized and surviving aliases keep their detached value), untyped fixed properties selected by reachable removal paths (the slot carries an internal removed marker), and dynamic properties (`stdClass`, undeclared names on `#[AllowDynamicProperties]` classes, where the entry is removed). It is rejected on borrowed or untyped reference-property slots, packed fields, and dynamic names of a class that also declares `__unset()`. See "`unset()` limitations" above.
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
 - Class and function attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionObject`/`ReflectionEnum`/`ReflectionFunction`/`ReflectionMethod`/`ReflectionProperty`/`ReflectionParameter`/`ReflectionClassConstant`/`ReflectionEnumUnitCase`/`ReflectionEnumBackedCase::getAttributes()` APIs; function and method parameter names, counts, positions, optional/variadic/by-reference flags, declared-type presence, simple named, union, and intersection type metadata, function and method parameter attributes, supported scalar/null/class-constant/array/object parameter defaults, parameter declaring-class/function metadata, and reflected member/constant declaring-class metadata are exposed through the supported Reflection APIs. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` replaces backtrace arguments with `SensitiveParameterValue` wrappers in native code and eval. Core attribute targets and repeatability are validated, with `#[\DelayedTargetValidation]` deferring target errors to reflection construction. `#[\NoDiscard]` diagnoses discarded direct-call results; assigning a result to `$_` explicitly consumes it.

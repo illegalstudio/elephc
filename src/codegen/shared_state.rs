@@ -17,7 +17,7 @@
 //!   trailing id keeps two functions with similar names from emitting the same label.
 
 use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethodCallableCase};
-use crate::ir::{CoreBuiltinOp, Function, Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+use crate::ir::{CoreBuiltinOp, Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::types::{FunctionSig, PhpType};
 
 /// Optional runtime families discovered while codegen lowers synthetic EIR functions.
@@ -44,6 +44,10 @@ pub(crate) struct SharedCodegenState {
     runtime_callable_invokers: Vec<RuntimeCallableInvokerCacheEntry>,
     runtime_builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     runtime_extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
+    /// Wrapper lowering only extends the literal pool. Reuse private module snapshots between
+    /// wrappers instead of cloning every source body once for every builtin in the catalog.
+    /// An active snapshot is removed from the pool, so recursive wrapper emission stays isolated.
+    wrapper_modules: Vec<Module>,
     label_counter: usize,
     /// Memoized "does this module share the Mixed string-context ladder", indexed by mode.
     ///
@@ -54,6 +58,8 @@ pub(crate) struct SharedCodegenState {
     mixed_string_sharing: [Option<bool>; 2],
     /// Memoized "does this module share the `count()` countable guard", for the same reason.
     count_guard_sharing: Option<bool>,
+    /// Runtime-name Mixed property ladders shared by lexical scope and fetch mode.
+    pub(super) property_read_helpers: Option<Vec<super::shared_property_read::ReadHelper>>,
     /// `--counters`: every non-synthetic PHP function prologue increments a BSS slot.
     pub(super) counters: bool,
     /// `--instrument`: every non-synthetic PHP function calls
@@ -70,6 +76,12 @@ pub(crate) struct SharedCodegenState {
     /// name table `elephc_instr_init` reads; main is emitted last, so it is
     /// complete by then.
     instr_registry: Vec<String>,
+    /// Classes whose module-level complete `ReflectionClass` builder was requested, as
+    /// `(php symbol key, class name, label)` in request order. Builders are emitted after the
+    /// module's bodies, and emitting one can request more (its members' declaring classes).
+    reflection_class_builders: Vec<(String, String, String)>,
+    /// How many of `reflection_class_builders` have been emitted.
+    reflection_class_builders_emitted: usize,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -109,6 +121,44 @@ struct RuntimeCallWrapperCacheEntry {
 }
 
 impl SharedCodegenState {
+    /// Borrows an idle wrapper snapshot or clones one for a newly reached nesting depth.
+    pub(super) fn take_wrapper_module(&mut self, module: &Module) -> Module {
+        self.wrapper_modules.pop().unwrap_or_else(|| module.clone())
+    }
+
+    /// Retains a completed wrapper's private literal pool for the next independent wrapper.
+    pub(super) fn recycle_wrapper_module(&mut self, module: Module) {
+        self.wrapper_modules.push(module);
+    }
+
+    /// Returns the global label of `class_name`'s complete `ReflectionClass` builder,
+    /// queuing the builder for emission the first time the class is asked for.
+    pub(super) fn request_reflection_class_builder(&mut self, class_name: &str) -> String {
+        let key = crate::names::php_symbol_key(class_name);
+        if let Some((_, _, label)) =
+            self.reflection_class_builders.iter().find(|(existing, _, _)| *existing == key)
+        {
+            return label.clone();
+        }
+        let label = format!(
+            "__elephc_reflection_class_builder_{}_{}",
+            self.reflection_class_builders.len(),
+            crate::names::label_fragment(&key)
+        );
+        self.reflection_class_builders
+            .push((key, class_name.to_string(), label.clone()));
+        label
+    }
+
+    /// Takes the next requested `ReflectionClass` builder that has not been emitted yet,
+    /// as `(class name, label)`.
+    pub(super) fn next_pending_reflection_class_builder(&mut self) -> Option<(String, String)> {
+        let (_, class_name, label) =
+            self.reflection_class_builders.get(self.reflection_class_builders_emitted)?.clone();
+        self.reflection_class_builders_emitted += 1;
+        Some((class_name, label))
+    }
+
     /// Records dependencies introduced by a synthetic wrapper that was not present during the
     /// module's original EIR feature scan.
     pub(super) fn record_generated_runtime_features(&mut self, function: &Function) {

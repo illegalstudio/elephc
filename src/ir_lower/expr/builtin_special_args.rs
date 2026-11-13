@@ -47,6 +47,19 @@ pub(super) fn lower_static_settype(
     }
     let (var_arg, type_arg) = static_settype_arg_exprs(ctx, name, args)?;
     let target_ty = static_settype_target_type(&type_arg)?;
+    if super::call_arg_coercion::is_native_selection_reference_argument(ctx, &var_arg) {
+        let target = match target_ty {
+            PhpType::Int => CastType::Int,
+            PhpType::Float => CastType::Float,
+            PhpType::Str => CastType::String,
+            PhpType::Bool => CastType::Bool,
+            _ => unreachable!("static settype targets are scalar"),
+        };
+        let selection = property_access::lower_property_reference_receiver(ctx, &var_arg);
+        let converted = super::ternary_cast::lower_scalar_cast_value(ctx, &target, selection, expr);
+        crate::ir_lower::ownership::release_if_owned(ctx, converted, Some(expr.span));
+        return Some(emit_bool_literal(ctx, true, Some(expr.span)));
+    }
     if matches!(&var_arg.kind, ExprKind::ArrayAccess { array, .. }
         if instance_object_class_for_ir(ctx, array)
             .is_some_and(|class| class.eq_ignore_ascii_case("WeakMap")))
@@ -67,7 +80,14 @@ pub(super) fn lower_static_settype(
     {
         ctx.promote_local_mixed_ref_cell(local_name, Some(var_arg.span));
     }
-    if ctx.is_ref_bound_local(local_name) && ctx.local_type(local_name).codegen_repr() == PhpType::Mixed {
+    // A narrowed value view still occupies its boxed slot after an earlier conversion.
+    // Every replacement must publish an EIR store and retire the previous occupant.
+    let boxed_storage = ctx.local_slots.get(local_name)
+        .is_some_and(|slot| ctx.builder.local_php_type(*slot).codegen_repr() == PhpType::Mixed);
+    if ctx.local_type(local_name).codegen_repr() == PhpType::Mixed || boxed_storage {
+        if boxed_storage {
+            ctx.set_local_logical_type(local_name, PhpType::Mixed);
+        }
         let target = match target_ty {
             PhpType::Int => CastType::Int,
             PhpType::Float => CastType::Float,

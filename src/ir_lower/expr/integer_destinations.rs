@@ -4,6 +4,7 @@
 //! Called from:
 //! - Declared `int` instance-property stores in `stmt::instance_property_writes`.
 //! - Typed destination and declared-local assignment lowering.
+//! - Call argument lowering, which also exposes conversions at source-typed `float` parameters.
 //!
 //! Key details:
 //! - Only closed add/sub/mul trees with concrete integer leaves are accepted.
@@ -13,11 +14,22 @@
 
 use super::*;
 
+/// Returns whether parameter `index` carries a source-written type declaration.
+///
+/// Builtin registry signatures never do, so their arguments keep the operand shapes that
+/// builtin-specific passes match (for example the boxed `sqrt($i + c)` range reducer).
+pub(super) fn parameter_is_source_typed(sig: &crate::types::FunctionSig, index: usize) -> bool {
+    sig.param_type_exprs.get(index).is_some_and(Option::is_some)
+}
+
 /// Lowers parameter storage, preserving implicit callable identity and integer destinations.
+///
+/// `source_typed` admits the float conversion only for user-declared `float` parameters.
 pub(super) fn lower_expr_for_parameter(
     ctx: &mut LoweringContext<'_, '_>,
     expr: &Expr,
     destination: &PhpType,
+    source_typed: bool,
 ) -> LoweredValue {
     if destination.codegen_repr() == PhpType::Callable {
         let source = match &expr.kind {
@@ -31,7 +43,26 @@ pub(super) fn lower_expr_for_parameter(
         }
     }
     let value = lower_expr_for_destination(ctx, expr, destination);
+    if source_typed && destination == &PhpType::Float {
+        return coerce_float_arithmetic(ctx, value, expr.span);
+    }
     coerce_integer_arithmetic(ctx, value, destination, expr.span)
+}
+
+/// Exposes a float parameter's conversion of a checked arithmetic tree as one scalar cast.
+///
+/// PHP passes an int|float argument to a `float` parameter as `(float)` of the whole result,
+/// so an overflowed tree keeps its promoted double and an in-range integer converts exactly
+/// once, matching the boxed call-boundary conversion.
+fn coerce_float_arithmetic(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if !checked_integer_tree(ctx, value.value) {
+        return value;
+    }
+    coerce_to_float_at_span(ctx, value, Some(span))
 }
 
 /// Makes a checked arithmetic tree's existing integer destination conversion explicit.
