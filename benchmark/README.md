@@ -329,8 +329,19 @@ keep-alive throughput/latency with `wrk` and a sequential new-connection path
 with a fresh TCP connection per request (`curl`); it does not start or configure
 either server. It alternates the two endpoints between repeats to reduce
 load-drift bias, and its JSON output keeps every raw round. `jq` is required for
-the comparison report. Use a quiet machine: a busy shared host can make
-high-concurrency FPM numbers unusable even when the Elephc side remains stable.
+the comparison report. A run with non-2xx responses, socket errors, or failed
+new connections is invalid: the runner writes the reports for diagnosis and
+then exits non-zero, so a saturated or misconfigured endpoint cannot be
+published as a benchmark result.
+
+Use a quiet machine: a busy shared host can make high-concurrency FPM numbers
+unusable even when the Elephc side remains stable. On macOS,
+`kern.ipc.somaxconn` (128 by default) caps PHP-FPM's accept queue. A
+400-connection FPM run then returns `Connection refused`, which the runner now
+rejects; raise the limit for the run or compare at a concurrency at or below
+it. The c=64 reference used PHP-FPM `pm=static`, `pm.max_children=64`, and
+`listen.backlog=65535`, with Nginx `worker_processes 8`,
+`fastcgi_keep_conn on`, and an upstream `keepalive 64`.
 
 ## Tooling checks
 

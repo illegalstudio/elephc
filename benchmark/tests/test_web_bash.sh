@@ -87,6 +87,10 @@ case $wrk_socket_errors in
   *"read 2"*) ;;
   *) printf 'FAIL wrk socket errors: %s\n' "$wrk_socket_errors" >&2; failures=$((failures + 1)) ;;
 esac
+assert_eq "5" "$(wrk_failure_count)" "wrk failure count"
+wrk_non_2xx=0
+wrk_socket_errors="connect 0, read 0, write 0, timeout 0"
+assert_eq "0" "$(wrk_failure_count)" "wrk clean failure count"
 
 if "$WEB_DIR/run.sh" --workers >/dev/null 2>&1; then
   printf 'FAIL run.sh accepted a missing option value\n' >&2

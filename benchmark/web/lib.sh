@@ -223,6 +223,16 @@ wrk_json_object() {
   printf '%s' "$json"
 }
 
+# Counts non-2xx responses and socket errors from the last parsed wrk report.
+#
+# A benchmark that silently averages failed responses is worse than no
+# benchmark: callers must treat a non-zero count as an invalid run.
+wrk_failure_count() {
+  local total=${wrk_non_2xx:-0} socket_total
+  socket_total=$(printf '%s' "${wrk_socket_errors:-}" | tr -cs '0-9' '\n' | awk '{ sum += $1 } END { print sum + 0 }')
+  printf '%s\n' "$((total + socket_total))"
+}
+
 # Runs one wrk process with a watchdog and parses its report.
 run_wrk_one() {
   local url=$1 threads=$2 connections=$3 duration=$4 timeout=$5 output=$6
@@ -247,6 +257,13 @@ run_wrk_one() {
     return 1
   fi
   parse_wrk_file "$output"
+  local failures
+  failures=$(wrk_failure_count)
+  if [[ $failures -ne 0 ]]; then
+    printf 'wrk reported %s failed response(s) or socket error(s):\n' "$failures" >&2
+    cat "$output" >&2
+    return 1
+  fi
 }
 
 # Runs one wrk round (possibly several concurrent clients) and writes:
@@ -254,7 +271,7 @@ run_wrk_one() {
 #   round-N.stats     rps<TAB>avg<TAB>p99<TAB>requests
 run_wrk_round() {
   local url=$1 threads=$2 connections=$3 duration=$4 timeout=$5 clients=$6 dir=$7 index=$8
-  local client output i failed=0 json
+  local client output i failed=0 failures=0 json
   local -a pids outputs client_jsons
   local rps_sum=0 requests_sum=0 avg_sum=0 p99_max=0 avg_count=0 p99_count=0
   local json_out
@@ -293,6 +310,7 @@ run_wrk_round() {
   for ((client = 1; client <= clients; client += 1)); do
     output="$dir/round-$index-client-$client.txt"
     parse_wrk_file "$output"
+    failures=$((failures + $(wrk_failure_count)))
     json=$(wrk_json_object)
     client_jsons+=("$json")
     rps_sum=$(awk -v a="$rps_sum" -v b="$wrk_requests_per_sec" 'BEGIN { printf "%.6f", a + b }')
@@ -306,6 +324,13 @@ run_wrk_round() {
       p99_count=$((p99_count + 1))
     fi
   done
+  if [[ $failures -ne 0 ]]; then
+    printf 'wrk reported %s failed response(s) or socket error(s):\n' "$failures" >&2
+    for output in "${outputs[@]}"; do
+      cat "$output" >&2
+    done
+    return 1
+  fi
   if [[ $clients -eq 1 ]]; then
     parse_wrk_file "$dir/round-$index-client-1.txt"
     json_out="${client_jsons[0]%?},\"clients\": 1}"

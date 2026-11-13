@@ -13,6 +13,10 @@
 #     connection-setup costs without the client-side TIME_WAIT noise of a
 #     high-concurrency churn run.
 #
+# A run with non-2xx responses, socket errors, or failed new connections is
+# invalid and exits non-zero after writing the reports, so a saturated or
+# misconfigured endpoint cannot be published as a benchmark result.
+#
 # The script is a comparison tool, not a historical benchmark sample. CI keeps
 # its process-execution benchmarks separate.
 #
@@ -158,7 +162,7 @@ summarize_wrk_samples() {
   local p50_file="$WORK_DIR/wrk-p50.$$"
   local p99_file="$WORK_DIR/wrk-p99.$$"
   local requests_file="$WORK_DIR/wrk-requests.$$"
-  local failures=0 socket_errors="" index value
+  local failures=0 non_2xx_total=0 socket_errors="" index value
   : >"$rps_file"
   : >"$avg_file"
   : >"$p50_file"
@@ -171,6 +175,7 @@ summarize_wrk_samples() {
     [[ $p50 != "-" && $p50 != "null" ]] && printf '%s\n' "$p50" >>"$p50_file"
     [[ $p99 != "-" && $p99 != "null" ]] && printf '%s\n' "$p99" >>"$p99_file"
     [[ $requests != "-" && $requests != "null" ]] && printf '%s\n' "$requests" >>"$requests_file"
+    non_2xx_total=$((non_2xx_total + ${non_2xx:-0}))
     failures=$((failures + ${non_2xx:-0} + ${sample_failures:-0}))
     if [[ -n $socket_errors ]]; then
       socket_errors+=","
@@ -183,7 +188,7 @@ summarize_wrk_samples() {
     "$(json_number_or_null "$(median_values <"$avg_file")")" \
     "$(json_number_or_null "$(median_values <"$p50_file")")" \
     "$(json_number_or_null "$(median_values <"$p99_file")")" \
-    "0" \
+    "$non_2xx_total" \
     "$(json_number_or_null "$(median_values <"$requests_file")")" \
     "$failures" \
     "$socket_errors" \
@@ -269,6 +274,9 @@ markdown_report() {
       esac
       printf '| %s | %s | %s | %s | %s |\n' "$scenario" "$label" "$left" "$right" "$ratio_value"
     done
+    printf '| %s | Failures | %s | %s | - |\n' "$scenario" \
+      "$(printf '%s' "$comparison" | jq -r --arg scenario "$scenario" '.[$scenario].elephc.failures // 0' 2>/dev/null)" \
+      "$(printf '%s' "$comparison" | jq -r --arg scenario "$scenario" '.[$scenario].fpm.failures // 0' 2>/dev/null)"
   done
   printf '\n'
 }
@@ -286,6 +294,7 @@ main() {
   local skip_new_connection=0
   local json_out=""
   local markdown_out=""
+  local failure_total=0
   local timeout=5
   local wrk_timeout=120
   while (($#)); do
@@ -390,6 +399,10 @@ main() {
   fi
   if [[ -n $markdown_out ]]; then
     printf '%s\n' "$report" >"$markdown_out"
+  fi
+  failure_total=$(printf '%s' "$scenarios_json" | jq '[.[] | (.elephc.failures // 0), (.fpm.failures // 0)] | add // 0')
+  if [[ $failure_total -ne 0 ]]; then
+    die "benchmark invalid: $failure_total failed response(s) or socket error(s)"
   fi
 }
 

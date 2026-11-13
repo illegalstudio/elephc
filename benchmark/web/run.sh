@@ -4,7 +4,8 @@
 # Compiles one PHP fixture with `--web`, starts the prefork server, drives it
 # with `wrk` (and optionally k6), and reports per-round samples plus a median.
 # The default fixture is the minimal handler used by the FrankenPHP-vs-PHP-FPM
-# article: one echo and one `$_SERVER` read.
+# article: one echo and one `$_SERVER` read. A round with non-2xx responses or
+# socket errors is a failed benchmark and exits non-zero.
 #
 # This is deliberately separate from `benchmark/run.py`: that runner times
 # short-lived processes, while this one owns a long-running server and an
