@@ -901,3 +901,24 @@ eval callback status/ownership matrices also pass. The compiler build, assembly
 comment checks and diff hygiene pass. No builtin contract or documentation
 metadata changed in this step. Remaining eval reductions/updates and other strict
 features continue before exposing the complete profile family.
+
+
+### Checked eval array reductions
+
+The versioned numeric callback now appends ArraySum/ArrayProduct selectors and
+reuses the checked native aggregate kernels. Eval direct, first-class, dynamic,
+CUF/CUFA and case-insensitive routes select the same explicit operation. Direct
+source evaluation uses the shared operand-owner boundary instead of leaving a
+fresh input array unretired. The fake callback evaluates numeric payloads without
+unrooted intermediate cells and retires optional internal-class numeric adapters.
+
+Validation: the focused interpreter matrix covers identities, exact integer
+strings, float continuation and overflowing reductions across call routes with
+balanced owners. The native callback fixture passes both optimizer modes with
+clean heaps, unchanged failure output and retired partial carries/Throwable boxes.
+The all-five-target boundary unit, permissive aggregate control and preceding
+numeric interpreter matrices pass. Compiler/exporter builds, generated builtin
+docs/architecture audits and assembly/diff hygiene pass; generated docs are
+unchanged. The older permissive interpreter loop's intermediate-owner cleanup is
+tracked separately as journal task b388f531. Checked eval updates and the remaining
+strict guarantees continue before public activation.

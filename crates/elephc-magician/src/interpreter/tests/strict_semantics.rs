@@ -235,3 +235,43 @@ fn strict_eval_numeric_staged_builtin_boundaries_and_php_controls() {
     assert_eq!(values.get(php), FakeValue::Float(9223372036854775808.0));
     for value in [maximum, one, php] { values.release(value).unwrap(); }
 }
+
+
+/// Array reductions use checked kernels on every builtin route and retire failed argument arrays.
+#[test]
+fn strict_eval_reductions_staged_calls_kinds_and_ownership() {
+    for (source, expected) in [
+        ("return array_sum([2, 3]);", Some(FakeValue::Int(5))),
+        ("return array_product([2, 3]);", Some(FakeValue::Int(6))),
+        ("return array_sum([]);", Some(FakeValue::Int(0))),
+        ("return array_product([]);", Some(FakeValue::Int(1))),
+        ("return array_sum(['9007199254740993', 0]);", Some(FakeValue::Int(9007199254740993))),
+        ("return array_sum([1.0, 9223372036854775807, 1]);", Some(FakeValue::Float(9223372036854775808.0))),
+        ("return array_sum([9223372036854775807, 1]);", None),
+        ("return array_product([9223372036854775807, 2]);", None),
+        (r"return \ARRAY_SUM([9223372036854775807, 1]);", None),
+        ("$sum = array_sum(...); return $sum([9223372036854775807, 1]);", None),
+        ("$name = 'array_product'; return $name([9223372036854775807, 2]);", None),
+        ("return call_user_func('array_sum', [9223372036854775807, 1]);", None),
+        ("return call_user_func_array('array_product', [[9223372036854775807, 2]]);", None),
+    ] {
+        let mut context = ElephcEvalContext::new();
+        context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)).unwrap();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        match (staged_numeric_execution(source, false, &mut context, &mut scope, &mut values), expected) {
+            (Ok(EvalControl::Return(value)), Some(expected)) => {
+                assert_eq!(values.get(value), expected, "{source}");
+                values.release(value).unwrap();
+            }
+            (Err(EvalStatus::UncaughtThrowable), None) => {
+                let error = context.take_pending_throw().expect("reduction failure owns its Throwable");
+                assert!(values.object_is_a(error, "ArithmeticError", false).unwrap(), "{source}");
+                values.release(error).unwrap();
+            }
+            _ => panic!("unexpected reduction result: {source}"),
+        }
+        for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+        for (id, count) in &values.cell_owners { assert_eq!(*count, 0, "{source}: {:?}", values.values[id]); }
+    }
+}

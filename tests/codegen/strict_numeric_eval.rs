@@ -100,3 +100,55 @@ restore_error_handler();
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+
+/// Reduction callbacks keep input arrays alive and retire partial carries across native exceptions.
+#[test]
+fn test_strict_eval_reductions_staged_native_callback_ownership() {
+    let source = r#"<?php
+extern class ReductionCell { public int $tag; public int $low; public int $high; }
+extern class ReductionOutput { public ptr $cell; }
+extern function malloc(int $size): ptr;
+extern function free(ptr $memory): void;
+extern function __elephc_eval_value_array_new(int $capacity): ptr;
+extern function __elephc_eval_value_array_set(ptr $array, ptr $index, ptr $value): ptr;
+extern function __elephc_eval_value_int(int $value): ptr;
+extern function __elephc_eval_checked_numeric_v1(int $op, ptr $left, ptr $right, ptr $output): int;
+extern function __elephc_eval_value_take_pending_throwable_v2(): ptr;
+extern function __elephc_eval_value_release_v3(ptr $cell, ptr $error): int;
+$error = malloc(8); ptr_set($error, 0);
+$output = ptr_cast<ReductionOutput>(malloc(8));
+foreach ([5, 6] as $op) {
+    $array = __elephc_eval_value_array_new(2);
+    $zero = __elephc_eval_value_int(0); $one = __elephc_eval_value_int(1);
+    $first = __elephc_eval_value_int(3); $second = __elephc_eval_value_int(4);
+    __elephc_eval_value_array_set($array, $zero, $first);
+    __elephc_eval_value_array_set($array, $one, $second);
+    __elephc_eval_value_release_v3($first, $error); __elephc_eval_value_release_v3($second, $error);
+    ptr_set($output, 123);
+    echo __elephc_eval_checked_numeric_v1($op, $array, $array, $output), ':';
+    $result = ptr_cast<ReductionCell>($output->cell); echo $result->tag, ':', $result->low, ':';
+    echo __elephc_eval_value_release_v3($output->cell, $error), '|';
+    $first = __elephc_eval_value_int(PHP_INT_MAX);
+    $second = __elephc_eval_value_int($op === 5 ? 1 : 2);
+    __elephc_eval_value_array_set($array, $zero, $first);
+    __elephc_eval_value_array_set($array, $one, $second);
+    __elephc_eval_value_release_v3($first, $error); __elephc_eval_value_release_v3($second, $error);
+    ptr_set($output, 123);
+    echo __elephc_eval_checked_numeric_v1($op, $array, $array, $output), ':', ptr_get($output), ':';
+    $thrown = __elephc_eval_value_take_pending_throwable_v2();
+    echo __elephc_eval_value_release_v3($thrown, $error), ':';
+    echo __elephc_eval_value_release_v3($array, $error), '|';
+    __elephc_eval_value_release_v3($zero, $error); __elephc_eval_value_release_v3($one, $error);
+}
+free($output); free($error);
+if ($argc < 0) { throw new ArithmeticError('reduction callback metadata'); }
+"#;
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "0:0:7:0|2:123:0:0|0:0:12:0|2:123:0:0|", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

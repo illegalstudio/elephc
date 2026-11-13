@@ -28,11 +28,11 @@ pub(in crate::interpreter) fn eval_array_sum_declared_call(
 /// Dispatches evaluated-argument eval calls for the `array_sum` array builtin.
 pub(in crate::interpreter) fn eval_array_sum_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [array] = evaluated_args else { return Err(EvalStatus::RuntimeFatal); };
-    eval_array_aggregate_result("array_sum", *array, values)
+    eval_array_aggregate_result("array_sum", *array, context, values)
 }
 
 /// Evaluates PHP array aggregate builtins over one eval array expression.
@@ -46,16 +46,27 @@ pub(in crate::interpreter) fn eval_builtin_array_aggregate(
     let [array] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    let array = eval_expr(array, context, scope, values)?;
-    eval_array_aggregate_result(name, array, values)
+    with_eval_operands(&[array], context, scope, values, |args, context, _, values| {
+        eval_array_aggregate_result(name, args[0], context, values)
+    })
 }
 
 /// Computes `array_sum()` or `array_product()` through eval's numeric value hooks.
 pub(in crate::interpreter) fn eval_array_aggregate_result(
     name: &str,
     array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Overflow) {
+        use elephc_semantics::numeric::CheckedNumericOp;
+        let op = match name {
+            "array_sum" => CheckedNumericOp::ArraySum,
+            "array_product" => CheckedNumericOp::ArrayProduct,
+            _ => return Err(EvalStatus::UnsupportedConstruct),
+        };
+        return crate::interpreter::checked_numeric::apply(op, array, array, context, values);
+    }
     let len = values.array_len(array)?;
     let mut result = match name {
         "array_sum" => values.int(0)?,

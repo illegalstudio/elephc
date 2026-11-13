@@ -14,7 +14,7 @@ pub const INTEGER_OVERFLOW_MESSAGE: &str = "--strict-overflow: integer arithmeti
 /// Version-one checked numeric callback selectors, independent of PHP implementation operations.
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CheckedNumericOp { Add = 0, Sub = 1, Mul = 2, Pow = 3, Abs = 4 }
+pub enum CheckedNumericOp { Add = 0, Sub = 1, Mul = 2, Pow = 3, Abs = 4, ArraySum = 5, ArrayProduct = 6 }
 
 /// Integer arithmetic with an integer result contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

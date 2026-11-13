@@ -34,6 +34,8 @@ fn body(emitter: &mut Emitter) {
         (CheckedNumericOp::Mul, "__rt_strict_mixed_numeric_mul"),
         (CheckedNumericOp::Pow, "__rt_strict_mixed_numeric_pow"),
         (CheckedNumericOp::Abs, "__rt_strict_abs_mixed"),
+        (CheckedNumericOp::ArraySum, "__rt_strict_array_sum_boxed"),
+        (CheckedNumericOp::ArrayProduct, "__rt_strict_array_product_boxed"),
     ];
     if supported {
         abi::emit_load_temporary_stack_slot(emitter, result, TRY_HANDLER_SLOT_SIZE);
@@ -86,6 +88,9 @@ mod tests {
                     assert_eq!(asm.contains(&format!("__rt_strict_mixed_numeric_{entry}")), checked, "{name}");
                 }
                 assert_eq!(asm.contains("__rt_strict_abs_mixed"), checked, "{name}");
+                for op in ["sum", "product"] {
+                    assert_eq!(asm.contains(&format!("__rt_strict_array_{op}_boxed")), checked, "{name}");
+                }
             }
         }
     }
