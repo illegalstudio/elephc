@@ -84,7 +84,7 @@ pub(super) fn lower_min_max(ctx: &mut FunctionContext<'_>, inst: &Instruction, o
     // -- compare two integer tags exactly and any other numeric pair as PHP doubles --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("orr {combined}, {left_tag}, {right_tag}"));// a zero combined tag means both payloads are PHP integers
+            ctx.emitter.instruction(&format!("orr {combined}, {left_tag}, {right_tag}")); // a zero combined tag means both payloads are PHP integers
             ctx.emitter.instruction(&format!("cbz {combined}, {integer}"));     // compare two integers without a lossy double conversion
         }
         Arch::X86_64 => {
@@ -173,11 +173,11 @@ fn unordered_max(
     let right_integer = ctx.next_label("stack_min_max_nan_right");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbnz {left_tag}, {right_integer}"));// a float left operand leaves the right one to check
+            ctx.emitter.instruction(&format!("cbnz {left_tag}, {right_integer}")); // a float left operand leaves the right one to check
             representable_or(ctx, left, scratch, take_left);
             ctx.emit_branch(take_right);
             ctx.emitter.label(&right_integer);
-            ctx.emitter.instruction(&format!("cbnz {right_tag}, {take_right}"));// two floats fail `left >= right`
+            ctx.emitter.instruction(&format!("cbnz {right_tag}, {take_right}")); // two floats fail `left >= right`
             representable_or(ctx, right, scratch, take_left);
         }
         Arch::X86_64 => {
@@ -205,7 +205,7 @@ fn representable_or(ctx: &mut FunctionContext<'_>, value: &str, scratch: &str, o
             ctx.emitter.instruction(&format!("fcvtzs {scratch}, d2"));          // convert the double back to an integer
             ctx.emitter.instruction(&format!("cmp {scratch}, {value}"));        // did the round trip preserve the integer?
             ctx.emitter.instruction(&format!("b.ne {otherwise}"));              // a double cannot represent this integer
-            ctx.emitter.instruction(&format!("mov {scratch}, #0x7fffffffffffffff"));// the largest integer rounds up to 2^63 and saturates back
+            ctx.emitter.instruction(&format!("mov {scratch}, #0x7fffffffffffffff")); // the largest integer rounds up to 2^63 and saturates back
             ctx.emitter.instruction(&format!("cmp {value}, {scratch}"));        // is this that unrepresentable integer?
             ctx.emitter.instruction(&format!("b.eq {otherwise}"));              // a double cannot represent the largest integer either
         }
@@ -256,7 +256,7 @@ pub(super) fn store_guarded(ctx: &mut FunctionContext<'_>, inst: &Instruction, o
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {payload}, {payload}"));     // is the winner a null cell pointer?
             ctx.emitter.instruction(&format!("jz {owned}"));                    // a null cell is materialized as PHP null on the heap
-            ctx.emitter.instruction(&format!("mov {tag}, QWORD PTR [{payload}]"));// load the winner's runtime tag
+            ctx.emitter.instruction(&format!("mov {tag}, QWORD PTR [{payload}]")); // load the winner's runtime tag
             ctx.emitter.instruction(&format!("test {tag}, {tag}"));             // is the winner an integer?
             ctx.emitter.instruction(&format!("jz {numeric}"));                  // an integer winner fits the frame cell
             ctx.emitter.instruction(&format!("cmp {tag}, 2"));                  // is the winner a float?
