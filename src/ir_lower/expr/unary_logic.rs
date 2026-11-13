@@ -33,6 +33,9 @@ pub(super) fn lower_numeric_unary(
     match value.ir_type {
         IrType::F64 => ctx.emit_value(float_op, vec![value.value], None, PhpType::Float, float_op.default_effects(), Some(expr.span)),
         IrType::I64 => {
+            if int_op == Op::INeg && crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).checked_overflow() {
+                return crate::ir_lower::checked_arithmetic::negate(ctx, value, expr.span);
+            }
             // Check if the type checker promoted this to Mixed (non-constant int negate
             // can overflow PHP_INT_MIN to float).
             let result_php_type = fallback_expr_type(expr);
@@ -45,6 +48,9 @@ pub(super) fn lower_numeric_unary(
         }
         IrType::TaggedScalar => {
             let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
+            if int_op == Op::INeg && crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).checked_overflow() {
+                return crate::ir_lower::checked_arithmetic::negate(ctx, narrowed, expr.span);
+            }
             ctx.emit_value(int_op, vec![narrowed.value], None, PhpType::Int, int_op.default_effects(), Some(expr.span))
         }
         _ if int_op == Op::INeg => {

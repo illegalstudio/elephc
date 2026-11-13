@@ -10,6 +10,7 @@
 #[allow(unused_imports)]
 pub use elephc_semantics::{SemanticProfile, StrictFeature, StrictRequests, FEATURES};
 
+pub(crate) mod numeric;
 mod validation;
 pub use validation::validate_source;
 

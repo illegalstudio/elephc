@@ -17,11 +17,28 @@ pub(super) fn require(
     ctx: &mut LoweringContext<'_, '_>, condition: LoweredValue,
     failure: Op, message: &str, span: Option<Span>,
 ) {
+    require_condition(ctx, condition, true, failure, message, span);
+}
+
+/// Throws when a failure predicate is true, allowing native overflow-branch fusion.
+pub(super) fn require_false(
+    ctx: &mut LoweringContext<'_, '_>, condition: LoweredValue,
+    failure: Op, message: &str, span: Option<Span>,
+) {
+    require_condition(ctx, condition, false, failure, message, span);
+}
+
+/// Shares failure/continuation construction without a redundant boolean negation.
+fn require_condition(
+    ctx: &mut LoweringContext<'_, '_>, condition: LoweredValue, accept_when_true: bool,
+    failure: Op, message: &str, span: Option<Span>,
+) {
     let success = ctx.builder.create_named_block("strict.accepted", Vec::new());
     let rejected = ctx.builder.create_named_block("strict.rejected", Vec::new());
+    let (then_target, else_target) = if accept_when_true { (success, rejected) } else { (rejected, success) };
     ctx.builder.terminate(Terminator::CondBr {
-        cond: condition.value, then_target: success, then_args: Vec::new(),
-        else_target: rejected, else_args: Vec::new(),
+        cond: condition.value, then_target, then_args: Vec::new(),
+        else_target, else_args: Vec::new(),
     });
     ctx.builder.position_at_end(rejected);
     let message = ctx.intern_string(message);

@@ -170,6 +170,12 @@ fn lower_numeric_binary_values(
             return result;
         }
     }
+    let policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
+    if policy.checked_overflow() && lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
+        if let Some(operation @ (MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)) = mixed_numeric_op(op) {
+            return crate::ir_lower::checked_arithmetic::binary(ctx, lhs, operation, rhs, expr.span);
+        }
+    }
     let numeric_ty = numeric_binary_result_type(
         op,
         lhs.ir_type,

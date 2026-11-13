@@ -557,3 +557,24 @@ native setter rejection followed by successful matching installation, and PHP/LF
 eval visibility compatibility. The compiler build and assembly-comment checks
 passed. The native handshake fixture confirms a rejected profile does not pin
 or contaminate an otherwise unused context.
+
+
+### Checked scalar arithmetic core
+
+A compact neutral ArithmeticPolicy resolves Overflow, Arithmetic and Coercions
+independently. The compiler adapter selects permissive operations for trusted
+Internal statements while retaining the immutable module profile. User integer
+addition, subtraction, multiplication and unary negation now lower through a
+reusable scalar kernel: wrapping operation, IOverflows and a typed ArithmeticError
+failure edge before the result escapes. The shared guard builder supports a
+failure predicate directly, preserving the existing all-target overflow-branch
+fusion without an extra boolean negation.
+
+The public Overflow feature remains staged. Boxed operations, powers, updates,
+compound/reference stores, builtin boundaries, source diagnostics, optimizer
+effects and eval parity must be completed before accepting the flag.
+
+Validation: four focused tests passed after recovery from the daemon restart:
+independent neutral policy bits, PHP/LFC scalar guards and emission on every
+supported target, trusted internal PHP operations, and existing boolean guards.
+Compiler build, diff hygiene, module preambles and writing checks passed.
