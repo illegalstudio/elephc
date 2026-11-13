@@ -19,7 +19,7 @@ fn strict_profile_builtin_inputs_reach_direct_and_callable_lowering_on_all_targe
         for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
             // A public callback contract must not impose its source mode on argument expressions.
             let condition = if mode == SourceMode::Internal { "1" } else { "true" };
-            let source = format!("<?php $direct = __semantic_profile_probe(); $callback = __semantic_profile_probe(...); $indirect = $callback({condition} ? 1 : 2); $cuf = call_user_func('__semantic_profile_probe', {condition} ? 1 : 2); $cufa = call_user_func_array('__semantic_profile_probe', [{condition} ? 1 : 2]); echo $direct; echo $indirect; echo $cuf; echo $cufa;");
+            let source = format!("<?php $direct = __semantic_profile_probe(); $callback = __semantic_profile_probe(...); $indirect = $callback({condition} ? 1 : 2); $cuf = call_user_func('__semantic_profile_probe', {condition} ? 1 : 2); $cufa = call_user_func_array('__semantic_profile_probe', [{condition} ? 1 : 2]); $prepared = __prepared_semantic_profile_probe(...); $prepared_result = $prepared(); echo $direct; echo $indirect; echo $cuf; echo $cufa; echo $prepared_result;");
             let tokens = crate::lexer::tokenize(&source).unwrap();
             let program = crate::parser::parse_with_mode(&tokens, mode).unwrap();
             for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -30,7 +30,7 @@ fn strict_profile_builtin_inputs_reach_direct_and_callable_lowering_on_all_targe
                 let direct = if profile.contains(StrictFeature::Bools) && mode != SourceMode::Internal { PhpType::Int } else { PhpType::Float };
                 let indirect = if profile.contains(StrictFeature::Bools) { PhpType::Int } else { PhpType::Float };
                 assert_eq!(checked.global_env.get("direct"), Some(&direct), "{name} {profile:?} {mode:?}");
-                for variable in ["indirect", "cuf", "cufa"] {
+                for variable in ["indirect", "cuf", "cufa", "prepared_result"] {
                     assert_eq!(checked.global_env.get(variable), Some(&indirect), "{name} {profile:?} {mode:?} {variable}");
                 }
                 let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();

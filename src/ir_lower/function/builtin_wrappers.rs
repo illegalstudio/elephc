@@ -127,6 +127,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
     );
     function.params = function_params(signature);
     function.signature = Some(signature.clone());
+    function.flags.is_builtin_contract_wrapper = true;
     // Prefer the emitted signatures so a call into an injected prelude helper also sees the
     // hidden `func_args` ABI slots `capture_all_frames` appended to it. Without this map the
     // builtin lowering at the bottom of this wrapper cannot tell the helper needs a collector.

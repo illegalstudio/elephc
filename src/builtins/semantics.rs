@@ -117,6 +117,8 @@ pub type CallableSourceFn = for<'a> fn(Option<&'a PhpType>) -> bool;
 pub enum BuiltinCallablePolicy {
     /// Direct, first-class, and runtime-known dynamic callable paths are supported.
     Dynamic(CallableSourceFn),
+    /// Dynamic dispatch needs the full lowering context for object and numeric operator graphs.
+    Prepared(CallableSourceFn),
     /// Only direct calls work; PHP forbids first-class and generic dynamic invocation.
     DirectOnly(&'static str),
     /// Dynamic dispatch eligibility is defined by the typed builtin target descriptor.
@@ -316,6 +318,12 @@ pub trait BuiltinLoweringContext {
 
     /// Identifies whether the operation implements a user builtin contract or trusted PHP code.
     fn source_mode(&self) -> crate::source::SourceMode;
+
+    /// Lowers an operator graph over borrowed operands after argument evaluation has finished.
+    fn emit_numeric_binary(
+        &mut self, left: ValueId, operation: crate::parser::ast::BinOp, right: ValueId,
+        source_mode: crate::source::SourceMode, span: Span,
+    ) -> Result<LoweredBuiltinValue, BuiltinLoweringError>;
 
     /// Returns the current source path when the lowering owns a user-written call site.
     fn source_path(&self) -> Option<&str> {

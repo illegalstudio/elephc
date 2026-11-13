@@ -355,3 +355,33 @@ echo strict_abs_value(true), strict_abs_value(null);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+
+/// Direct and descriptor powers retain integer overflow checks and independent numeric owners.
+#[test]
+fn test_strict_pow_staged_builtin_calls_preserve_integer_kinds() {
+    let source = r#"<?php
+function strict_builtin_power(mixed $base, mixed $exponent): mixed { return pow($base, $exponent); }
+function strict_typed_power(int $base, int $exponent): mixed { return pow($base, $exponent); }
+$maximum = $argc > 0 ? PHP_INT_MAX : 0;
+try { strict_builtin_power($maximum, 2); } catch (ArithmeticError $error) { echo 'M'; }
+try { strict_typed_power($maximum, 2); } catch (ArithmeticError $error) { echo 'I'; }
+$callback = pow(...);
+try { $callback($maximum, 2); } catch (ArithmeticError $error) { echo 'F'; }
+try { call_user_func('pow', $maximum, 2); } catch (ArithmeticError $error) { echo 'C'; }
+try { call_user_func_array('pow', [$maximum, 2]); } catch (ArithmeticError $error) { echo 'A'; }
+$name = $argc > 0 ? 'pow' : 'fdiv';
+try { $name($maximum, 2); } catch (ArithmeticError $error) { echo 'D'; }
+echo ':', strict_builtin_power(-2, 63), ':', strict_typed_power(-2, 63);
+echo ':', strict_builtin_power(2, -1), ':', strict_typed_power(2, -1);
+echo ':', is_int($callback(2, 3)), ':', is_int(strict_builtin_power(2, 3));
+echo ':', is_float(strict_builtin_power(2.0, 3));
+"#;
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE.with(elephc_semantics::StrictFeature::Overflow, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "MIFCAD:-9223372036854775808:-9223372036854775808:0.5:0.5:1:1:1", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

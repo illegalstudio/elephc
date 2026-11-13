@@ -731,3 +731,26 @@ final shared-identity refactor passes the same four new unit tests, four prior
 constant-evidence tests, both native optimization modes and the compiler build.
 Overflow remains staged until power, reductions, conversions, storage contracts
 and eval parity are complete.
+
+
+### Checked builtin power and prepared callable contracts
+
+The pow home now reuses numeric operator graphs under checked overflow, including
+GMP dispatch and integer-versus-float result selection. Already evaluated SSA
+operands receive explicit Borrow views; fresh intermediate boxes keep independent
+ownership. The original Mixed parameter contract already preserves numeric kinds,
+so no new argument strategy or signature projection is needed.
+
+A Prepared callable policy routes graph-dependent builtins through the full EIR
+lowering context. Generated function metadata marks public builtin invocations
+separately from the physical source mode of nested implementation statements.
+This preserves checked callable results without imposing user syntax rules on
+argument evaluation or generated guards.
+
+Validation: two power units and two profile propagation units pass, including
+all five target emitters and all source modes. The native power fixture passes
+with both optimizer settings and a clean heap across direct, typed, first-class,
+CUF/CUFA and runtime-selected calls. Compiler/exporter builds and the complete generated docs/architecture audits
+pass, as do the focused permissive PHP scalar and GMP controls.
+Numeric-string power normalization and pre-fold source proofs follow
+before exposing the complete overflow guarantee.

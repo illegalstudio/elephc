@@ -167,7 +167,7 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
         }
     }
     if !is_extern && !is_user_function {
-        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr, ctx.source_mode) {
+        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr, ctx.builtin_source_mode()) {
             return call;
         }
     }
@@ -446,7 +446,7 @@ pub(super) fn emit_builtin_call_value(
     span: Span,
     eval_literal: Option<&str>,
 ) -> LoweredValue {
-    let source_mode = ctx.source_mode;
+    let source_mode = ctx.builtin_source_mode();
     emit_builtin_call_value_with_source_mode(ctx, name, operands, php_type, span, eval_literal, source_mode)
 }
 
@@ -780,7 +780,7 @@ pub(super) fn resolve_registry_builtin_result_type(
     span: Span,
     checked: Option<PhpType>,
 ) -> Option<PhpType> {
-    resolve_registry_builtin_result_type_with_source_mode(ctx, name, args, operands, span, checked, ctx.source_mode)
+    resolve_registry_builtin_result_type_with_source_mode(ctx, name, args, operands, span, checked, ctx.builtin_source_mode())
 }
 
 /// Resolves the invocation contract without adopting the argument expressions' source policy.

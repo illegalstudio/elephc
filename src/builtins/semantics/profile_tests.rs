@@ -23,6 +23,23 @@ builtin! {
     internal: false,
 }
 
+builtin! {
+    name: "__prepared_semantic_profile_probe",
+    area: Types,
+    params: [],
+    returns: Mixed,
+    semantics: prepared_probe_semantics(),
+    summary: "test-only prepared invocation contract probe",
+    internal: false,
+}
+
+/// Exercises nested generated Return statements through the full lowering context.
+const fn prepared_probe_semantics() -> BuiltinSemantics {
+    let mut semantics = probe_semantics();
+    semantics.callable = BuiltinCallablePolicy::Prepared(callable_accepts_any_source);
+    semantics
+}
+
 /// Builds a test-only descriptor whose result exposes the selected source policy.
 const fn probe_semantics() -> BuiltinSemantics {
     let mut semantics = test_probe_semantics();

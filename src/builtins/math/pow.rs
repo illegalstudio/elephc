@@ -6,7 +6,8 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - Scalar calls keep the existing `RuntimeFnId::Pow` backend unchanged.
+//! - Permissive scalar calls retain the existing `RuntimeFnId::Pow` backend.
+//! - Checked calls share numeric operator graphs, including callable and GMP dispatch.
 //! - A statically known `GMP` operand dispatches through GMP's `**` adapter, so
 //!   `pow($gmp, 10)` and `$gmp ** 10` share coercion rules and diagnostics.
 
@@ -42,6 +43,9 @@ fn gmp_pow_result(input: &BuiltinSemanticInput<'_>) -> PhpType {
         PhpType::Object("GMP".to_string())
     } else if input.arg_types.iter().any(is_dynamic) {
         PhpType::Mixed
+    } else if crate::semantics::numeric::operation_policy(input.semantic_profile, input.source_mode).checked_overflow()
+        && !input.arg_types.iter().any(|ty| ty.codegen_repr() == PhpType::Float) {
+        PhpType::Mixed
     } else {
         PhpType::Float
     }
@@ -67,18 +71,22 @@ const fn pow_semantics() -> BuiltinSemantics {
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(RuntimeFnId::Pow),
         argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced,
-        callable: BuiltinCallablePolicy::Dynamic(
+        callable: BuiltinCallablePolicy::Prepared(
             crate::builtins::semantics::callable_accepts_any_source,
         ),
         lowering: BuiltinLowering::Eir(lower_pow),
     }
 }
 
-/// Lowers scalar `pow()` to its runtime backend and GMP operands to the `**` adapter.
+/// Shares checked operator graphs while retaining ordinary scalar and GMP runtime paths.
 fn lower_pow(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+    if crate::semantics::numeric::operation_policy(call.semantic_profile, call.source_mode).checked_overflow() {
+        return ctx.emit_numeric_binary(call.operand(0)?, crate::parser::ast::BinOp::Pow,
+            call.operand(1)?, call.source_mode, call.span);
+    }
     let has_static_gmp = call
         .operands
         .iter()

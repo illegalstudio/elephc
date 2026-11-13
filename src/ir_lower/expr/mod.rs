@@ -42,6 +42,7 @@ mod scalar_literals;
 mod local_values;
 use local_values::lower_local_value;
 mod numeric_binary;
+pub(super) mod builtin_numeric;
 mod prepared_binary;
 mod integer_destinations;
 pub(crate) use integer_destinations::{

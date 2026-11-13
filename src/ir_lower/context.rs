@@ -5551,6 +5551,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
+    /// Keeps public builtin invocation contracts separate from generated implementation expressions.
+    pub(crate) fn builtin_source_mode(&self) -> crate::source::SourceMode {
+        if self.builder.function().flags.is_builtin_contract_wrapper { crate::source::SourceMode::Php }
+        else { self.source_mode }
+    }
+
     /// Emits a value-producing opcode with computed storage and ownership metadata.
     pub(crate) fn emit_value(
         &mut self,
@@ -5760,8 +5766,8 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
     /// Preserves the semantic identity received from the checker.
     fn semantic_profile(&self) -> elephc_semantics::SemanticProfile { self.semantic_profile }
 
-    /// Preserves the physical source of the operation being lowered.
-    fn source_mode(&self) -> crate::source::SourceMode { self.source_mode }
+    /// Preserves the invocation contract independently of generated statement source modes.
+    fn source_mode(&self) -> crate::source::SourceMode { self.builtin_source_mode() }
 
     /// Returns the source file associated with the enclosing lowered function.
     fn source_path(&self) -> Option<&str> {
@@ -5805,6 +5811,15 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
     /// Returns PHP metadata already attached to an EIR operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
         self.builder.value_php_type(value)
+    }
+
+    /// Shares scalar and internal-object operator semantics without evaluating arguments twice.
+    fn emit_numeric_binary(
+        &mut self, left: ValueId, operation: crate::parser::ast::BinOp, right: ValueId,
+        source_mode: crate::source::SourceMode, span: Span,
+    ) -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        let result = super::expr::builtin_numeric::lower(self, left, operation, right, source_mode, span);
+        Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
     }
 
     /// Reports whether one of the program's declared classes is the named internal class.

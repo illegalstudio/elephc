@@ -732,3 +732,5 @@ echo checks($argc);
 }
 
 mod strict_abs;
+
+mod strict_pow;

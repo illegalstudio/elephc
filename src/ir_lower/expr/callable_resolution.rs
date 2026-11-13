@@ -774,7 +774,7 @@ pub(super) fn source_prefers_extension_builtin(name: &str) -> bool {
 
 /// Looks up a PHP builtin call signature using the normalized global builtin name.
 pub(super) fn builtin_call_signature(ctx: &LoweringContext<'_, '_>, name: &str) -> Option<FunctionSig> {
-    crate::types::builtin_call_sig_with_semantics(&php_symbol_key(name.trim_start_matches('\\')), ctx.semantic_profile, ctx.source_mode)
+    crate::types::builtin_call_sig_with_semantics(&php_symbol_key(name.trim_start_matches('\\')), ctx.semantic_profile, ctx.builtin_source_mode())
 }
 
 /// Looks up precise first-class builtin metadata using the normalized global builtin name.

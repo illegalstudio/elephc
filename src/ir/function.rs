@@ -309,6 +309,8 @@ pub enum LocalKind {
 pub struct FunctionFlags {
     /// Whether compiler-internal source declared this function rather than the user's program.
     pub is_internal: bool,
+    /// Generated implementation statements invoke a public builtin contract for caller values.
+    pub is_builtin_contract_wrapper: bool,
     pub is_main: bool,
     pub is_method: bool,
     pub is_closure: bool,

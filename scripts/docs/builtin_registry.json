@@ -120661,7 +120661,8 @@
     "semantics": {
       "argument_lowering": "preserve_uncoerced",
       "callable": {
-        "kind": "dynamic"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "static",

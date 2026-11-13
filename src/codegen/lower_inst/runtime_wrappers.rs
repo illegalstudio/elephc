@@ -262,8 +262,9 @@ fn build_runtime_call_wrapper_function(
         // body through the generic wrapper path, so widening this predicate would duplicate
         // their allocation graph (for example `gc_status`).
         let prepared_eir_lowering = crate::builtins::registry::lookup(name).is_some_and(|def| {
-            def.spec.semantics.runtime_functions
-                == crate::builtins::semantics::BuiltinRuntimeFunctions::None
+            matches!(def.spec.semantics.callable, crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_))
+                || def.spec.semantics.runtime_functions
+                    == crate::builtins::semantics::BuiltinRuntimeFunctions::None
                 && matches!(
                     def.spec.semantics.lowering,
                     crate::builtins::semantics::BuiltinLowering::Eir(_)
@@ -492,6 +493,14 @@ impl crate::builtins::semantics::BuiltinLoweringContext
 
     /// Synthetic callable bodies implement public builtin contracts despite being generated code.
     fn source_mode(&self) -> crate::source::SourceMode { crate::source::SourceMode::Php }
+
+    /// Refuses graph lowering in the flat adapter, which Prepared descriptors bypass explicitly.
+    fn emit_numeric_binary(
+        &mut self, _left: ValueId, _operation: crate::parser::ast::BinOp, _right: ValueId,
+        _source_mode: crate::source::SourceMode, _span: crate::span::Span,
+    ) -> std::result::Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        Err(crate::builtins::semantics::BuiltinLoweringError::new("numeric operator graphs require a prepared builtin wrapper"))
+    }
 
     /// Returns PHP metadata attached to one synthetic-wrapper operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
