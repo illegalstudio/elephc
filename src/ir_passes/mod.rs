@@ -44,6 +44,7 @@ mod hash_algos_count_hoist;
 mod hash_const_sink;
 mod iconv_mime_literal_sink;
 mod iconv_position_const_sink;
+mod mb_constant_fold;
 mod mb_parse_str_literal_sink;
 mod mb_strlen_const_local_sink;
 mod mb_chr_len_local_sink;

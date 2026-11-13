@@ -376,7 +376,7 @@ fn int_array_arg(function: &Function, inst: &Instruction, index: usize) -> bool 
 /// The proof follows the load/store wrapper chain, requires exactly four packed
 /// pushes with those constants, and rejects any other use of the array value so
 /// a later mutation cannot invalidate the map.
-fn full_decimal_map(function: &Function, map: ValueId) -> bool {
+pub(super) fn full_decimal_map(function: &Function, map: ValueId) -> bool {
     let mut value = map;
     let array = loop {
         let Some(inst) = defining_instruction(function, value) else {

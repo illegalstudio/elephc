@@ -55,6 +55,7 @@ use super::hash_algos_count_hoist::HashAlgosCountHoist;
 use super::hash_const_sink::HashConstSink;
 use super::iconv_mime_literal_sink::IconvMimeLiteralSink;
 use super::iconv_position_const_sink::IconvPositionConstSink;
+use super::mb_constant_fold::MbConstantFold;
 use super::mb_parse_str_literal_sink::MbParseStrLiteralSink;
 use super::mb_strlen_const_local_sink::MbStrlenConstLocalSink;
 use super::mb_chr_len_local_sink::MbChrLenLocalSink;
@@ -203,6 +204,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(HashConstSink),
         Box::new(IconvMimeLiteralSink),
         Box::new(IconvPositionConstSink),
+        Box::new(MbConstantFold),
         Box::new(MbParseStrLiteralSink),
         Box::new(MbStrlenConstLocalSink),
         Box::new(MbChrLenLocalSink),

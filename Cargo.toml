@@ -50,6 +50,10 @@ path = "tools/gen_builtins.rs"
 [dependencies]
 elephc-generics = { path = "crates/elephc-generics" }
 elephc-builtin-contract = { path = "crates/elephc-builtin-contract" }
+# The shared mbstring engine's pure text routines are also used to fold constant
+# mb_* calls at compile time; emitted programs still link the staticlib only when
+# the program requires it.
+elephc-mbstring = { path = "crates/elephc-mbstring" }
 elephc-monitoring-contract = { path = "crates/elephc-monitoring-contract" }
 # Shares the native validation ABI layout with its independently linked runtime bridge.
 elephc-reference = { path = "crates/elephc-reference" }
