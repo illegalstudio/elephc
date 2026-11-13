@@ -41,21 +41,23 @@ def command_output(command: list[str]) -> str | None:
     return lines[0] if result.returncode == 0 and lines else None
 
 
-def run_process(command: list[str], cwd: Path, timeout: float = 120) -> str:
-    """Run a command and retain its diagnostics when it fails."""
-    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+def run_process(command: list[str], cwd: Path, timeout: float = 120,
+                env: dict | None = None) -> str:
+    """Run a command with an optional environment override and retain its diagnostics."""
+    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True,
+                            timeout=timeout, env=env)
     if result.returncode:
         raise RuntimeError(f"command failed: {' '.join(command)}\n{result.stdout}\n{result.stderr}")
     return result.stdout
 
 
 def measure(command: list[str], cwd: Path, expected: str, iterations: int,
-            warmup: int, timeout: float) -> dict:
+            warmup: int, timeout: float, env: dict | None = None) -> dict:
     """Measure execution only, checking output on both warmup and measured runs."""
     samples = []
     for index in range(warmup + iterations):
         start = time.perf_counter()
-        output = run_process(command, cwd, timeout)
+        output = run_process(command, cwd, timeout, env=env)
         elapsed = (time.perf_counter() - start) * 1000
         if output != expected:
             raise RuntimeError(f"unexpected stdout for {' '.join(command)}: "
@@ -97,6 +99,9 @@ def require_baselines(cases: dict[str, list[dict]]) -> None:
             missing.append(problem)
     if "c" in kinds and not any(shutil.which(tool) for tool in ("cc", "clang", "gcc")):
         missing.append("C compiler (cc, clang, or gcc)")
+    if any(kind.startswith("frankenphp") for kind in kinds) and not (
+            os.environ.get("FRANKENPHP_BIN") or shutil.which("frankenphp")):
+        missing.append("FrankenPHP (frankenphp)")
     if missing:
         raise ValueError("required benchmark baseline unavailable: " + ", ".join(missing))
 
@@ -140,6 +145,20 @@ def run_case(case: dict, compiler: Path, iterations: int, warmup: int,
                 binary = cwd / "baseline_c"
                 run_process([cc, "-O2", source, "-o", str(binary)], cwd, timeout)
                 command = [str(binary)]
+            elif kind in ("frankenphp", "frankenphp-jit"):
+                frankenphp = os.environ.get("FRANKENPHP_BIN") or shutil.which("frankenphp")
+                if not frankenphp:
+                    results[label] = skipped("FrankenPHP unavailable")
+                    continue
+                environment = os.environ.copy()
+                ini_key = "FRANKENPHP_JIT_PHPRC" if kind == "frankenphp-jit" else "FRANKENPHP_PHPRC"
+                ini = os.environ.get(ini_key)
+                if ini:
+                    environment["PHPRC"] = ini
+                command = [frankenphp, "php-cli", source]
+                results[label] = measure(command, cwd, expected, iterations, warmup,
+                                        timeout, env=environment)
+                continue
             else:
                 run_process([str(compiler), str(cwd / source)], cwd, timeout)
                 command = [str((cwd / source).with_suffix(""))]
