@@ -1299,3 +1299,36 @@ Internal lexer before runtime verification. Compiler build, the prebuilt target
 architecture gate, assembly comment checks and diff hygiene pass. No public
 feature admission changes. Builtin domains, conversion/binding contracts and the
 remaining strict families are still active implementation work.
+
+### Original numeric builtin parameter domains
+
+BuiltinArgumentLowering::NumericParameters resolves preparation from the immutable
+profile and invocation source before evaluating arguments. Numeric domains use
+original values and public callable Mixed storage; permissive and Internal paths
+keep their declared PHP signature/preparation. A reusable rooted EIR guard method
+serves both direct calls and prepared builtin bodies. Abs already owns a neutral
+Mixed parameter; intdiv's strict public adapter must retain the original value
+instead of first binding it to an int. Public invocation contracts remain separate
+from physically generated statements.
+
+Abs accepts int/float operands under Arithmetic or Coercions. Intdiv requires int
+operands. Both guards precede PHP conversion, while Overflow independently controls
+abs(PHP_INT_MIN) and ordinary integer division retains its catchable value errors.
+Source proofs preserve each original parameter kind before folding. Intdiv checks
+each known parameter even when another is unknown, including unreachable source.
+It does not reuse binary validation that defers mixed operands for object overloads.
+Magician shares the same domains on walker, VM, named and indirect calls. Its fake
+abs kernel now models PHP's integer-minimum promotion instead of wrapping.
+
+Two selected-frontend units pass, covering source diagnostics, explicit casts,
+callable signatures, three source modes, all five targets and both optimizers.
+The eval unit covers both domains with Overflow on/off, failed-result atomicity,
+call surfaces and balanced owners. Eight native profile/optimizer runs pass for
+direct/named/spread/FCC/callback calls, failed destinations, dynamic tags, integer
+minimum and signed zero, with clean heaps. Existing checked abs all-target,
+permissive abs native, checked abs/intdiv native and eval intdiv controls pass.
+Compiler and curl exporter builds, complete generated-doc workflow and audits,
+assembly comments, example PHP syntax and diff hygiene pass. Generated internal
+abs/intdiv pages and registry metadata are included. Public feature admission is
+unchanged. Numeric aggregate domains, conversion/binding guarantees and all
+remaining strict families continue before full umbrella admission.

@@ -45,3 +45,47 @@ try { domainSum(domainOwned($argc), domainOwned($argc + 1)); } catch (TypeError 
         }
     }
 }
+
+
+/// Direct, spread, prepared and indirect numeric builtins guard original kinds and preserve owners.
+#[test]
+fn test_strict_numeric_parameters_native_call_surfaces_and_failed_results() {
+    let source = r#"<?php
+function numericAbs(mixed $value): mixed { return abs($value); }
+function numericIntdiv(mixed $left, mixed $right): int { return intdiv($left, $right); }
+function numericValue(mixed $value): mixed { return $value; }
+echo numericAbs(-3), ':', numericAbs(-2.5), ':', numericIntdiv(9, 2), '|';
+echo abs(num: -4), ':', intdiv(...[9, 2]), '|';
+$absolute = abs(...); $divide = intdiv(...);
+echo $absolute(-5), ':', $divide(11, 2), '|';
+echo call_user_func('abs', -6), ':', call_user_func_array('intdiv', [13, 2]), '|';
+$result = 23;
+try { $result = numericAbs('2'); } catch (TypeError $error) { echo 'S'; }
+try { numericAbs(true); } catch (TypeError $error) { echo 'B'; }
+try { numericAbs(null); } catch (TypeError $error) { echo 'N'; }
+try { numericAbs([1]); } catch (TypeError $error) { echo 'A'; }
+try { numericIntdiv(9.0, 2); } catch (TypeError $error) { echo 'F'; }
+try { numericIntdiv(9, '2'); } catch (TypeError $error) { echo 'D'; }
+try { $absolute(numericValue('2')); } catch (TypeError $error) { echo 'P'; }
+try { $divide(numericValue(true), 2); } catch (TypeError $error) { echo 'Q'; }
+try { call_user_func('abs', numericValue('2')); } catch (TypeError $error) { echo 'C'; }
+try { call_user_func_array('intdiv', [numericValue('9'), 2]); } catch (TypeError $error) { echo 'R'; }
+echo ':', $result, '|';
+try { numericIntdiv(PHP_INT_MIN, -1); } catch (ArithmeticError $error) { echo 'I'; }
+try { $magnitude = numericAbs(PHP_INT_MIN); echo is_float($magnitude) ? 'F' : 'X'; }
+catch (ArithmeticError $error) { echo 'O'; }
+echo '|', fdiv(1.0, numericAbs(-0.0)) > 0.0 ? 'Z' : 'X';
+"#;
+    for feature in [StrictFeature::Arithmetic, StrictFeature::Coercions] {
+        for overflow in [false, true] {
+            let expected = format!("3:2.5:4|4:4|5:5|6:6|SBNAFDPQCR:23|I{}|Z", if overflow { "O" } else { "F" });
+            for optimize in [false, true] {
+                let profile = SemanticProfile::PERMISSIVE.with(feature, true).with(StrictFeature::Overflow, overflow);
+                let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+                assert!(output.success, "{feature:?}, overflow={overflow}, opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+                assert_eq!(output.stdout, expected, "{feature:?}, overflow={overflow}, opt={optimize}");
+                assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{feature:?}, overflow={overflow}, opt={optimize}: {}", output.stderr);
+            }
+        }
+    }
+}

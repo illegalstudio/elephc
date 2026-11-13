@@ -25,7 +25,7 @@ description: "Compiler internals for abs(): lowering path, type checks, and runt
 - **Result ownership**: `fresh`
 - **Effects**: `shared`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `dynamic_target`
+- **Callable policy**: `dynamic`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

@@ -312,10 +312,14 @@ fn builtin_number(
     }
     if operation == RuntimeFnId::Intdiv {
         let [left, right] = normalized.as_slice() else { return Ok(None); };
-        let Some(left) = evaluate(left, checked, class, definitions, &mut call_evidence)?
-            .and_then(|value| value.integer_parameter(evidence.strict_types)) else { return Ok(None); };
-        let Some(right) = evaluate(right, checked, class, definitions, &mut call_evidence)?
-            .and_then(|value| value.integer_parameter(evidence.strict_types)) else { return Ok(None); };
+        let left = evaluate(left, checked, class, definitions, &mut call_evidence)?;
+        let right = evaluate(right, checked, class, definitions, &mut call_evidence)?;
+        for value in [left, right].into_iter().flatten() {
+            validate_numeric_parameter(expr, value, elephc_semantics::numeric_domains::NumericOperator::Modulo, checked, evidence.profile)?;
+        }
+        let (Some(left), Some(right)) = (left, right) else { return Ok(None); };
+        let (Some(left), Some(right)) = (left.integer_parameter(evidence.strict_types),
+            right.integer_parameter(evidence.strict_types)) else { return Ok(None); };
         return match checked_integer(IntegerOp::Div, left, right) {
             Ok(value) => Ok(Some(Number::Int(value))),
             Err(NumericFailure::Overflow) if checked && evidence.profile.contains(StrictFeature::Overflow) => Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
@@ -334,6 +338,7 @@ fn builtin_number(
     }
     let [argument] = normalized.as_slice() else { return Ok(None); };
     let Some(value) = evaluate(argument, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
+    validate_numeric_parameter(expr, value, elephc_semantics::numeric_domains::NumericOperator::Unary, checked, evidence.profile)?;
     if !value.valid_numeric_parameter(evidence.strict_types) { return Ok(None); }
     Ok(match value.numeric() {
         Number::Int(value) => match value.checked_abs() {
@@ -344,6 +349,18 @@ fn builtin_number(
         Number::Float(value) => Some(Number::Float(value.abs())),
         _ => unreachable!("numeric normalization removes string evidence"),
     })
+}
+
+/// Rejects a proven original parameter kind before PHP numeric normalization can erase it.
+fn validate_numeric_parameter(expr: &Expr, value: Number,
+    operator: elephc_semantics::numeric_domains::NumericOperator, checked: bool, profile: SemanticProfile)
+    -> Result<(), CompileError> {
+    if checked {
+        if let Some(rule) = super::numeric::operator_rule(profile, SourceMode::Php, operator) {
+            if !rule.domain.allows(value.value_kind()) { return Err(CompileError::new(expr.span, &rule.message())); }
+        }
+    }
+    Ok(())
 }
 
 /// Retains source evaluation, first-insertion order and last-write values through shared key planning.

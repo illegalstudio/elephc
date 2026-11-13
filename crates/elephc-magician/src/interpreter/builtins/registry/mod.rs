@@ -359,9 +359,14 @@ fn call_shared_runtime_builtin(
     let numeric_policy = elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(context.semantic_profile());
     if !numeric_policy.is_permissive() {
         match (id, args) {
-            (elephc_builtin_contract::RuntimeBuiltinId::Abs, [value]) if numeric_policy.checked_overflow() =>
-                return crate::interpreter::checked_numeric::apply(elephc_semantics::numeric::CheckedNumericOp::Abs,
-                    *value, *value, context, values).map(Some),
+            (elephc_builtin_contract::RuntimeBuiltinId::Abs, [value]) => {
+                crate::interpreter::numeric_domains::require_unary(
+                    elephc_semantics::numeric_domains::NumericOperator::Unary, *value, context, values)?;
+                if numeric_policy.checked_overflow() {
+                    return crate::interpreter::checked_numeric::apply(elephc_semantics::numeric::CheckedNumericOp::Abs,
+                        *value, *value, context, values).map(Some);
+                }
+            }
             (elephc_builtin_contract::RuntimeBuiltinId::Pow, [base, exponent]) => {
                 if let Some(result) = crate::interpreter::checked_numeric::binary(EvalBinOp::Pow, *base, *exponent, context, values)? {
                     return Ok(Some(result));

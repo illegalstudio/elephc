@@ -52,7 +52,10 @@ impl FakeOps {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match self.get(value) {
             FakeValue::Float(value) => self.float(value.abs()),
-            value => self.int(self.fake_int(&value).wrapping_abs()),
+            value => match self.fake_int(&value).checked_abs() {
+                Some(value) => self.int(value),
+                None => self.float(9_223_372_036_854_775_808.0),
+            },
         }
     }
     /// Computes fake PHP ceiling through numeric conversion as a float result.

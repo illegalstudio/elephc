@@ -11,6 +11,8 @@ echo "b % a = " . ($b % $a) . "\n";
 echo "2 + 3 * 4 = " . (2 + 3 * 4) . "\n";
 echo "(2 + 3) * 4 = " . ((2 + 3) * 4) . "\n";
 
+echo "abs(-3) = " . abs(-3) . ", intdiv(9, 2) = " . intdiv(9, 2) . "\n";
+
 $power = pow(2, 3);
 echo "pow(2, 3) = " . $power . " (" . gettype($power) . ")\n";
 

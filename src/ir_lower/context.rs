@@ -5813,6 +5813,23 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         self.builder.value_php_type(value)
     }
 
+    /// Validates every borrowed argument before numeric builtin conversion or calculation.
+    fn emit_numeric_domain_guard(
+        &mut self, operator: elephc_semantics::numeric_domains::NumericOperator, operands: &[ValueId],
+        source_mode: crate::source::SourceMode, span: Span,
+    ) -> Result<(), crate::builtins::semantics::BuiltinLoweringError> {
+        let previous = self.source_mode;
+        self.source_mode = source_mode;
+        let pins = super::expr::pin_in_flight_owners(self, operands, span);
+        for operand in operands {
+            let value = LoweredValue { value: *operand, ir_type: self.builder.value_type(*operand) };
+            super::numeric_domains::unary(self, value, operator, span);
+        }
+        super::expr::unpin_in_flight_owners(self, pins, span);
+        self.source_mode = previous;
+        Ok(())
+    }
+
     /// Shares scalar and internal-object operator semantics without evaluating arguments twice.
     fn emit_numeric_binary(
         &mut self, left: ValueId, operation: crate::parser::ast::BinOp, right: ValueId,

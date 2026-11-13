@@ -173,6 +173,8 @@ pub enum BuiltinArgumentLowering {
     PreserveValues,
     /// Keep source storage without scalar binding or runtime-parser capture allocations.
     PreserveUncoerced,
+    /// Preserve original numeric argument kinds only when a numeric domain guarantee applies.
+    NumericParameters(elephc_semantics::numeric_domains::NumericOperator),
     /// Materialize every regular default through shared planning, including positional calls.
     MaterializeDefaults,
     /// Drop the unsupported statically-default count mode after shared planning.
@@ -233,6 +235,21 @@ pub enum BuiltinArgumentLowering {
     /// receiver to a plain local and pairs it with a compiler-allocated cursor slot
     /// instead of passing the array alone.
     ArrayInternalPointer(ArrayPointerOp),
+}
+
+impl BuiltinArgumentLowering {
+    /// Resolves profile-sensitive preparation before any source argument can be coerced.
+    pub(crate) fn with_semantics(self, profile: elephc_semantics::SemanticProfile,
+        source_mode: crate::source::SourceMode) -> Self {
+        match self {
+            Self::NumericParameters(operator) => {
+                if crate::semantics::numeric::operator_rule(profile, source_mode, operator).is_some() {
+                    Self::PreserveUncoerced
+                } else { Self::Standard }
+            }
+            other => other,
+        }
+    }
 }
 
 /// One PHP internal-array-pointer operation, selected by the registry declaration.
@@ -322,6 +339,14 @@ pub trait BuiltinLoweringContext {
 
     /// Identifies whether the operation implements a user builtin contract or trusted PHP code.
     fn source_mode(&self) -> crate::source::SourceMode;
+
+    /// Guards original numeric argument kinds through the full rooted EIR control-flow path.
+    fn emit_numeric_domain_guard(
+        &mut self, _operator: elephc_semantics::numeric_domains::NumericOperator, _operands: &[ValueId],
+        _source_mode: crate::source::SourceMode, _span: Span,
+    ) -> Result<(), BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("numeric argument guards require a prepared builtin wrapper"))
+    }
 
     /// Lowers an operator graph over borrowed operands after argument evaluation has finished.
     fn emit_numeric_binary(

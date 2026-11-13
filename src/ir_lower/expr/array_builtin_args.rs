@@ -364,7 +364,7 @@ fn lower_planned_builtin_call_args(
         return lower_eval_args(ctx, sig, args);
     }
     let argument_lowering = crate::builtins::registry::lookup(&canonical)
-        .map(|def| def.spec.semantics.argument_lowering)
+        .map(|def| def.spec.semantics.argument_lowering.with_semantics(ctx.semantic_profile, ctx.builtin_source_mode()))
         .unwrap_or(crate::builtins::semantics::BuiltinArgumentLowering::Standard);
     let output_locals = prepare_write_only_output_locals(ctx, &canonical, sig, args);
     let capture_regex_output = (canonical == "preg_match" || canonical == "preg_match_all")
@@ -404,6 +404,8 @@ fn lower_planned_builtin_call_args(
         }
     }
     let lowered = match argument_lowering {
+        crate::builtins::semantics::BuiltinArgumentLowering::NumericParameters(_) =>
+            unreachable!("numeric argument preparation was resolved before source evaluation"),
         crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced => {
             let storage = sig.cloned().map(|mut sig| {
                 sig.declared_params.fill(false);

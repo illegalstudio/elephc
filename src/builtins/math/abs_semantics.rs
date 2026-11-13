@@ -24,6 +24,10 @@ pub(super) const fn semantics() -> BuiltinSemantics {
     semantics.lowering = BuiltinLowering::Eir(lower);
     semantics.effects = BuiltinEffects::Shared(effects);
     semantics.target_strategy = BuiltinTargetStrategy::EirGraph;
+    semantics.argument_lowering = crate::builtins::semantics::BuiltinArgumentLowering::NumericParameters(
+        elephc_semantics::numeric_domains::NumericOperator::Unary);
+    semantics.callable = crate::builtins::semantics::BuiltinCallablePolicy::Prepared(
+        crate::builtins::semantics::callable_accepts_any_source);
     semantics
 }
 
@@ -34,7 +38,7 @@ fn effects(input: &BuiltinSemanticInput<'_>) -> Effects {
 
 /// Projects the reviewed runtime kernel effects without changing ordinary PHP calls.
 fn numeric_effects(policy: ArithmeticPolicy) -> Effects {
-    if policy.checked_overflow() {
+    if !policy.is_permissive() {
         Op::ThrowArithmeticError.default_effects() | Effects::READS_HEAP | Effects::ALLOC_HEAP | Effects::REFCOUNT_OP
     } else { RuntimeFnId::Abs.effects() }
 }
@@ -44,6 +48,10 @@ fn lower(
     ctx: &mut dyn BuiltinLoweringContext, call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
     let policy = crate::semantics::numeric::operation_policy(call.semantic_profile, call.source_mode);
+    let operator = elephc_semantics::numeric_domains::NumericOperator::Unary;
+    if crate::semantics::numeric::operator_rule(call.semantic_profile, call.source_mode, operator).is_some() {
+        ctx.emit_numeric_domain_guard(operator, &call.operands, call.source_mode, call.span)?;
+    }
     let target = if policy.checked_overflow() {
         RuntimeCallTarget::NumericFunction { target: RuntimeFnId::Abs, policy }
     } else { RuntimeCallTarget::Function(RuntimeFnId::Abs) };

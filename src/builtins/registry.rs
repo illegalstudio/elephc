@@ -277,8 +277,12 @@ pub fn function_sig_with_semantics(name: &str, semantic_profile: elephc_semantic
         }
         _ => def.return_type.clone(),
     };
+    let preserve_numeric = matches!(def.spec.semantics.argument_lowering,
+        crate::builtins::semantics::BuiltinArgumentLowering::NumericParameters(_))
+        && def.spec.semantics.argument_lowering.with_semantics(semantic_profile, source_mode)
+            == crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced;
     Some(FunctionSig {
-        params: def.params.clone(),
+        params: def.params.iter().map(|(name, ty)| (name.clone(), if preserve_numeric { PhpType::Mixed } else { ty.clone() })).collect(),
         param_type_exprs: vec![None; def.params.len()],
         param_attributes: vec![Vec::new(); def.params.len()],
         defaults: def.defaults.clone(),

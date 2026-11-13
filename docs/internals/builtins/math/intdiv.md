@@ -20,12 +20,12 @@ description: "Compiler internals for intdiv(): lowering path, type checks, and r
 ## Semantic descriptor
 
 - **Target strategy**: `eir_graph`
-- **Validation**: `signature`
+- **Validation**: `shared`
 - **Result type source**: `declared`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `dynamic_target`
+- **Callable policy**: `dynamic`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary

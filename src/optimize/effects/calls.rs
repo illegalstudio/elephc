@@ -101,7 +101,8 @@ fn semantic_optimizer_arg_types(
             // A runtime conversion descriptor consumes the original PHP value, so a
             // checked parameter type cannot describe a non-literal source expression.
             _ if matches!(def.spec.semantics.argument_lowering,
-                crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced) => PhpType::Mixed,
+                crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced
+                    | crate::builtins::semantics::BuiltinArgumentLowering::NumericParameters(_)) => PhpType::Mixed,
             _ => def
                 .params
                 .get(index)

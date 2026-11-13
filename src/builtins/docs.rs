@@ -190,6 +190,7 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::Standard => "standard",
         BuiltinArgumentLowering::PreserveValues => "preserve_values",
         BuiltinArgumentLowering::PreserveUncoerced => "preserve_uncoerced",
+        BuiltinArgumentLowering::NumericParameters(_) => "numeric_parameters",
         BuiltinArgumentLowering::MaterializeDefaults => "materialize_defaults",
         BuiltinArgumentLowering::Count => "count",
         BuiltinArgumentLowering::Date => "date",

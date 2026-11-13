@@ -33,6 +33,10 @@ builtin! {
 /// Returns the most precise result type for `abs($num)` based on the argument type.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    if let Some(rule) = crate::semantics::numeric::operator_rule(cx.checker.semantic_profile, cx.source_mode,
+        elephc_semantics::numeric_domains::NumericOperator::Unary) {
+        crate::semantics::numeric::validate_unary_type(rule, &ty, cx.span)?;
+    }
     let checked = crate::semantics::numeric::operation_policy(cx.checker.semantic_profile, cx.source_mode).checked_overflow();
     Ok(match ty {
         PhpType::Int if checked => PhpType::Int,

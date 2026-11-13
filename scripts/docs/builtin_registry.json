@@ -16592,10 +16592,10 @@
     "module": "standard",
     "name": "abs",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "numeric_parameters",
       "callable": {
-        "kind": "dynamic_target",
-        "target": "abs"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "shared"
@@ -80943,10 +80943,10 @@
     "module": "standard",
     "name": "intdiv",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "numeric_parameters",
       "callable": {
-        "kind": "dynamic_target",
-        "target": "intdiv"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "static",
@@ -80994,7 +80994,7 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "shared"
       }
     },
     "sig": {

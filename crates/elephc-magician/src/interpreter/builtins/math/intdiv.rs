@@ -37,6 +37,7 @@ pub(in crate::interpreter) fn eval_intdiv_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    crate::interpreter::numeric_domains::require_binary(EvalBinOp::Mod, left, right, context, values)?;
     let left = eval_int_value(left, values)?;
     let right = eval_int_value(right, values)?;
     if right == 0 {
