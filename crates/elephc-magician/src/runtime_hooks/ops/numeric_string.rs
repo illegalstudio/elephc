@@ -66,6 +66,18 @@ macro_rules! impl_numeric_string_ops {
         Self::handle(result)
     }
 
+    /// Uses the exact protected unary entry with an explicit per-operation contract.
+    fn numeric_unary(
+        &mut self, op: elephc_semantics::numeric_unary::NumericUnaryOp,
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy, value: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut result = core::ptr::null_mut();
+        let status = unsafe { __elephc_eval_numeric_unary_v1(op as u64, policy.requirements().bits(), value.as_ptr(), &mut result) };
+        if status == 1 { return Err(EvalStatus::UnsupportedConstruct); }
+        self.handle_native_cleanup_status(status)?;
+        Self::handle(result)
+    }
+
     /// Adds two boxed Mixed cells using elephc runtime numeric semantics.
     fn add_raw(
         &mut self,

@@ -57,6 +57,14 @@ impl RuntimeValueOps for FakeOps {
         self.runtime_checked_numeric(op, left, right)
     }
 
+    /// Models the exact unary bridge, including independent result ownership and pending failures.
+    fn numeric_unary(
+        &mut self, op: elephc_semantics::numeric_unary::NumericUnaryOp,
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy, value: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_numeric_unary(op, policy, value)
+    }
+
     impl_fake_collection_call_ops!();
     impl_fake_reflection_ops!();
     impl_fake_construction_raw_ops!();

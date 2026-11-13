@@ -13,6 +13,8 @@ mod borrowed_numeric;
 mod calls;
 mod call_operand_scope;
 mod frame;
+mod floats;
+pub(crate) use floats::emit_negate_float_result;
 pub(crate) use frame::emit_sp_address;
 pub(crate) mod immediate;
 mod registers;

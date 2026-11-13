@@ -46,6 +46,24 @@ impl FakeOps {
         Err(EvalStatus::UncaughtThrowable)
     }
 
+    /// Snapshots a normalized value before warnings and applies the shared unary result contract.
+    pub(super) fn runtime_numeric_unary(
+        &mut self, op: elephc_semantics::numeric_unary::NumericUnaryOp,
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy, value: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        use elephc_semantics::numeric_unary::{apply, NumericValue};
+        let Some((number, warning)) = self.checked_number(value) else {
+            return self.checked_error("TypeError", "Unsupported operand types for numeric arithmetic");
+        };
+        if warning { self.warning("Warning: A non-numeric value encountered\n")?; }
+        let number = match number { Number::Int(value) => NumericValue::Int(value), Number::Float(value) => NumericValue::Float(value) };
+        match apply(op, number, policy.checked_overflow()) {
+            Ok(NumericValue::Int(value)) => self.int(value),
+            Ok(NumericValue::Float(value)) => self.float(value),
+            Err(_) => self.checked_error("ArithmeticError", INTEGER_OVERFLOW_MESSAGE),
+        }
+    }
+
     /// Checks scalar numeric results without relying on the fake's deliberately limited PHP hooks.
     pub(super) fn runtime_checked_numeric(
         &mut self, op: CheckedNumericOp, left: RuntimeCellHandle, right: RuntimeCellHandle,

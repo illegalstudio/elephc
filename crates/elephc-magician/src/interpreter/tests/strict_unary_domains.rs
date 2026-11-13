@@ -89,3 +89,27 @@ fn strict_unary_domain_eval_update_boundaries_preserve_independent_overflow() {
         }
     }
 }
+
+
+/// Both interpreter engines preserve floating sign bits through exact unary hooks.
+#[test]
+fn strict_unary_ieee_eval_walker_vm_preserve_zero_signs_and_integer_overflow() {
+    for feature in [None, Some(StrictFeature::Overflow), Some(StrictFeature::Arithmetic), Some(StrictFeature::Coercions)] {
+        for vm in [false, true] {
+            for (source, bits) in [("$zero = -0.0; return +$zero;", 1_u64 << 63),
+                ("$zero = 0.0; return -$zero;", 1_u64 << 63), ("$zero = -0.0; return -$zero;", 0)] {
+                let mut context = ElephcEvalContext::new();
+                let profile = feature.map_or(SemanticProfile::PERMISSIVE, |feature| SemanticProfile::PERMISSIVE.with(feature, true));
+                context.install_semantic_profile(profile).unwrap();
+                let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+                let outcome = staged_numeric_execution(source, vm, &mut context, &mut scope, &mut values);
+                let Ok(EvalControl::Return(value)) = outcome else { panic!("{source}, {feature:?}, vm={vm}"); };
+                let FakeValue::Float(number) = values.get(value) else { panic!("floating kind changed"); };
+                assert_eq!(number.to_bits(), bits, "{source}, {feature:?}, vm={vm}");
+                values.release(value).unwrap();
+                for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+                for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "{source}: {:?}", values.values[id]); }
+            }
+        }
+    }
+}

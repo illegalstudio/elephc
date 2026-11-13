@@ -17,7 +17,6 @@ pub(super) const FRAME: usize = 80;
 /// Emits the strict boxed entry alongside the unchanged PHP power helper.
 pub(super) fn emit(emitter: &mut Emitter) {
     if !emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow) { return; }
-    super::strict_numeric_operand::emit(emitter);
     emit_entry(emitter, MixedNumericOp::Pow);
     super::strict_numeric_div::emit(emitter);
     super::strict_numeric_mod::emit(emitter);
@@ -179,10 +178,11 @@ mod tests {
                 let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, checked);
                 let mut emitter = Emitter::new(Target::parse(name).unwrap());
                 emitter.semantic_profile = profile;
+                super::super::strict_numeric_operand::emit(&mut emitter);
                 emit(&mut emitter);
                 let asm = emitter.output();
-                assert_eq!(asm.contains("__rt_strict_numeric_operand:"), checked, "{name}");
-                assert_eq!(super::super::strict_numeric_operand::data(profile).is_empty(), !checked, "{name}");
+                assert!(asm.contains("__rt_strict_numeric_operand:"), "{name}");
+                assert!(!super::super::strict_numeric_operand::data().is_empty(), "{name}");
                 if !checked { continue; }
                 let entry = asm.split("__rt_strict_mixed_numeric_pow:\n").nth(1).unwrap()
                     .split("__rt_strict_mixed_numeric_pow_done:\n").next().unwrap();
@@ -205,6 +205,7 @@ mod tests {
                 let mut emitter = Emitter::new(Target::parse(name).unwrap());
                 emitter.semantic_profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, checked);
                 emit_basic(&mut emitter);
+                super::super::strict_numeric_operand::emit(&mut emitter);
                 emit(&mut emitter);
                 let asm = emitter.output();
                 for op in ["add", "sub", "mul", "pow"] {

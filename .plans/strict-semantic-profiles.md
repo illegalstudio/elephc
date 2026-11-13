@@ -1188,3 +1188,27 @@ with both optimizers and a clean heap. Compiler build, prebuilt architecture aud
 assembly alignment and diff hygiene pass. The wider prefix-plus/Mixed unary IEEE
 regression remains pending for the next step and is intentionally not part of this
 verified scalar fix. Public feature admission is unchanged.
+
+
+### Exact unary numeric normalization and protected eval boundary
+
+A neutral NumericUnaryOp and NumericValue contract now preserves integer identity,
+signed zero and NaN payloads. Unary integer minimum promotes only without the
+Overflow guarantee. Shared target ABI sign flipping serves scalar codegen and
+boxed helpers. The exact borrowed operand classifier and its diagnostics are
+emitted for PHP unary normalization as well as checked binary arithmetic.
+
+The versioned __elephc_eval_numeric_unary_v1 callback validates its selector and
+numeric policy subset against the linked runtime before reading the input. It
+snapshots the normalized payload before warning callbacks, returns pending
+Throwable status beneath Rust frames, and publishes an independent result only
+after success. Walker and VM use this protected hook after native-class handlers
+and domain validation. Bytecode serialization is unchanged.
+
+Focused tests pass for neutral IEEE bits, walker/VM ownership, all-five-target
+protected emission, native callback payload/capability/overflow cases and callback
+mutation/throw atomicity with both optimizers and clean heaps. Existing unary eval,
+numeric domain and exact-power classification controls pass. The wider compiler
+prefix-plus/Mixed unary regression remains the next integration step: its source
+AST still needs explicit unary-plus provenance and a typed EIR runtime target.
+Public feature admission remains Locals, Bools, DynamicCode and Opcache.

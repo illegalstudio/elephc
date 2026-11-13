@@ -48,6 +48,7 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
     release_boundary::emit(emitter);
     bit_not::emit(emitter);
     checked_numeric::emit(emitter);
+    numeric_unary::emit(emitter);
     diagnostics::emit(emitter);
     array_reference_query::emit_array_entry_reference_query(emitter);
     resources::emit_resource_inventory_wrapper(emitter);
@@ -141,6 +142,7 @@ mod gc_boundary;
 mod release_boundary;
 mod bit_not;
 mod checked_numeric;
+mod numeric_unary;
 mod diagnostics;
 mod scope_release;
 mod owner_frames;

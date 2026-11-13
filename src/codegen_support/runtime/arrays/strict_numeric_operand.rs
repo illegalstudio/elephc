@@ -10,7 +10,6 @@
 //! - The caller snapshots both results before a warning callback can mutate source storage.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
-use elephc_semantics::{SemanticProfile, StrictFeature};
 
 const TYPE_MESSAGE: &str = "Unsupported operand types for numeric arithmetic";
 const TYPE_LABEL: &str = "_strict_numeric_operand_type_message";
@@ -19,10 +18,13 @@ pub(super) const PREFIX_WARNING: &str = "Warning: A non-numeric value encountere
 pub(super) const PREFIX_LABEL: &str = "_strict_numeric_prefix_warning";
 
 /// Emits diagnostics from the same byte strings used to materialize runtime lengths.
-pub(in crate::codegen_support::runtime) fn data(profile: SemanticProfile) -> String {
-    if !profile.contains(StrictFeature::Overflow) { return String::new(); }
-    format!("\n.data\n{TYPE_LABEL}:\n.ascii {TYPE_MESSAGE:?}\n{PREFIX_LABEL}:\n.ascii {PREFIX_WARNING:?}\n{}",
-        super::strict_numeric_div::data() + &super::strict_numeric_mod::data())
+pub(in crate::codegen_support::runtime) fn data() -> String {
+    format!("\n.data\n{TYPE_LABEL}:\n.ascii {TYPE_MESSAGE:?}\n{PREFIX_LABEL}:\n.ascii {PREFIX_WARNING:?}\n")
+}
+
+/// Adds diagnostics for checked binary kernels only when their runtime capability is linked.
+pub(in crate::codegen_support::runtime) fn checked_data() -> String {
+    super::strict_numeric_div::data() + &super::strict_numeric_mod::data()
 }
 
 /// Borrows one cell and returns numeric tag/payload plus status zero, prefix one or invalid two.

@@ -13,12 +13,13 @@ use elephc_semantics::{SemanticProfile, StrictFeature, numeric::INTEGER_OVERFLOW
 
 /// Emits the checked overflow message only when its runtime policy is present.
 pub(crate) fn data(profile: SemanticProfile) -> String {
-    if !profile.contains(StrictFeature::Overflow) { return String::new(); }
-    let mut data = format!("\n.data\n_strict_integer_overflow_message:\n.ascii \"{INTEGER_OVERFLOW_MESSAGE}\"\n");
+    let mut data = super::arrays::strict_numeric_operand::data();
+    if !profile.contains(StrictFeature::Overflow) { return data; }
+    data.push_str(&format!("\n.data\n_strict_integer_overflow_message:\n.ascii \"{INTEGER_OVERFLOW_MESSAGE}\"\n"));
     data.push_str(&format!("\n_strict_eval_null_decrement_warning:\n.ascii {:?}\n",
         elephc_semantics::numeric::NULL_DECREMENT_WARNING));
     data.push_str(&super::arrays::strict_abs::data(profile));
-    data.push_str(&super::arrays::strict_numeric_operand::data(profile));
+    data.push_str(&super::arrays::strict_numeric_operand::checked_data());
     data
 }
 

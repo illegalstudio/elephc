@@ -216,6 +216,7 @@ mod iterable_write_stdout;
 mod mixed_abs;
 pub(super) mod strict_abs;
 mod mixed_bit_not;
+pub(crate) mod numeric_unary;
 mod mixed_cast_array;
 mod mixed_clone;
 mod mixed_reference;

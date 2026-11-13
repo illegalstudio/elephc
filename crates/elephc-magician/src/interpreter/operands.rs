@@ -50,36 +50,23 @@ pub(in crate::interpreter) fn eval_unary_value(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match op {
         EvalUnaryOp::Plus | EvalUnaryOp::Negate => {
-            if op == EvalUnaryOp::Negate {
-                let tag = values.type_tag(value)?;
-                if tag == EVAL_TAG_FLOAT {
-                    let bits = values.raw_value_word(value)? ^ (1_u64 << 63);
-                    return values.raw_word_value(EVAL_TAG_FLOAT, bits);
-                }
-                if tag == EVAL_TAG_OBJECT {
-                    if let Some(result) = runtime_ops::object_operators::negate(values, value)? {
-                        return Ok(result);
-                    }
+            use elephc_semantics::numeric_unary::NumericUnaryOp;
+            let numeric = if op == EvalUnaryOp::Plus { NumericUnaryOp::Plus } else { NumericUnaryOp::Negate };
+            if values.type_tag(value)? == EVAL_TAG_OBJECT {
+                if op == EvalUnaryOp::Negate {
+                    if let Some(result) = runtime_ops::object_operators::negate(values, value)? { return Ok(result); }
+                } else {
+                    let zero = values.int(0)?;
+                    let result = runtime_ops::object_operators::arithmetic(values,
+                        elephc_builtin_contract::ObjectArithmetic::Add, zero, value)
+                        .and_then(|result| match result {
+                            Some(result) => Ok(result),
+                            None => checked_numeric::unary(numeric, value, context, values),
+                        });
+                    return finish_synthesized_method_arguments(result, [zero], context, values);
                 }
             }
-            if op == EvalUnaryOp::Negate {
-                numeric_domains::require_unary(elephc_semantics::numeric_domains::NumericOperator::Unary, value, context, values)?;
-            }
-            let zero = values.int(0)?;
-            let result = if op == EvalUnaryOp::Plus {
-                eval_binary_result(EvalBinOp::Add, zero, value, context, values)
-            } else {
-                eval_binary_result(EvalBinOp::Sub, zero, value, context, values)
-            };
-            let released = values.release(zero);
-            match (result, released) {
-                (Err(status), _) => Err(status),
-                (Ok(result), Err(status)) => {
-                    if !result.is_borrowed() { let _ = values.release(result); }
-                    Err(status)
-                }
-                (Ok(result), Ok(())) => Ok(result),
-            }
+            checked_numeric::unary(numeric, value, context, values)
         }
         EvalUnaryOp::LogicalNot => {
             let truthy = eval_boolean_condition(value, context, values)?;

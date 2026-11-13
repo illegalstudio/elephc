@@ -54,6 +54,22 @@ pub(super) fn apply(
 }
 
 
+/// Normalizes a unary scalar once and transfers protected native failures into eval's catch state.
+pub(super) fn unary(
+    op: elephc_semantics::numeric_unary::NumericUnaryOp, value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    numeric_domains::require_unary(elephc_semantics::numeric_domains::NumericOperator::Unary, value, context, values)?;
+    let policy = elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(context.semantic_profile());
+    match values.numeric_unary(op, policy, value) {
+        Err(EvalStatus::UncaughtThrowable) => {
+            if let Some(thrown) = values.take_pending_runtime_throwable()? { context.set_pending_throw(thrown); }
+            Err(EvalStatus::UncaughtThrowable)
+        }
+        result => result,
+    }
+}
+
 /// Checks a scalar update before writeback and preserves internal-class arithmetic adapters.
 pub(super) fn update(
     current: RuntimeCellHandle, increment: bool,

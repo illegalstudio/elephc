@@ -123,6 +123,27 @@ pub trait RuntimeValueOps {
         Err(EvalStatus::UnsupportedConstruct)
     }
 
+    /// Borrows one scalar for exact unary arithmetic; strict hosts must provide the protected hook.
+    fn numeric_unary(
+        &mut self, op: elephc_semantics::numeric_unary::NumericUnaryOp,
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy, value: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        if !policy.is_permissive() { return Err(EvalStatus::UnsupportedConstruct); }
+        let zero = self.int(0)?;
+        let result = match op {
+            elephc_semantics::numeric_unary::NumericUnaryOp::Plus => self.add_raw(zero, value),
+            elephc_semantics::numeric_unary::NumericUnaryOp::Negate => self.sub_raw(zero, value),
+        };
+        match (result, self.release(zero)) {
+            (Err(status), _) => Err(status),
+            (Ok(result), Err(status)) => {
+                if !result.is_borrowed() { let _ = self.release(result); }
+                Err(status)
+            }
+            (Ok(result), Ok(())) => Ok(result),
+        }
+    }
+
     /// Applies the shared internal-class handler before scalar runtime arithmetic.
     fn add(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         if let Some(result) = object_operators::arithmetic(self, elephc_builtin_contract::ObjectArithmetic::Add, left, right)? {

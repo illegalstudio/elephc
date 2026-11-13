@@ -240,16 +240,7 @@ pub(super) fn lower_float_pow(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 pub(super) fn lower_float_neg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let value = expect_operand(inst, 0)?;
     require_float(ctx.load_value_to_result(value)?, inst)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("fneg d0, d0");                             // negate the loaded floating-point operand
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("pcmpeqd xmm1, xmm1");                      // fill both scratch lanes with one bits without using a GPR
-            ctx.emitter.instruction("psllq xmm1, 63");                          // retain the sign bit in each 64-bit lane
-            ctx.emitter.instruction("xorpd xmm0, xmm1");                        // flip the sign while preserving signed zero and NaN payloads
-        }
-    }
+    abi::emit_negate_float_result(ctx.emitter);
     store_if_result(ctx, inst)
 }
 
