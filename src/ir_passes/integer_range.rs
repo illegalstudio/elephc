@@ -508,10 +508,20 @@ pub(super) fn main_argc_slot(function: &Function, slot: crate::ir::LocalSlotId) 
     if !function.flags.is_main {
         return false;
     }
-    let Some(local) = function.locals.get(slot.as_raw() as usize) else {
-        return false;
-    };
-    if local.name.as_deref() != Some("argc") {
+    let local_name = function
+        .locals
+        .get(slot.as_raw() as usize)
+        .and_then(|local| local.name.as_deref());
+    let param_name = function
+        .params
+        .get(slot.as_raw() as usize)
+        .map(|param| param.name.as_str());
+    if !matches!(
+        (local_name, param_name),
+        (Some("argc"), _) | (_, Some("argc"))
+            | (Some(crate::func_args::HIDDEN_ARGC_PARAM), _)
+            | (_, Some(crate::func_args::HIDDEN_ARGC_PARAM))
+    ) {
         return false;
     }
     !function.instructions.iter().any(|inst| {

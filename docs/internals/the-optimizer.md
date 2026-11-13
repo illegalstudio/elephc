@@ -532,6 +532,12 @@ every addressable load/store of the candidate slot. `IntegerRange` must then
 turn every introduced checked update into a plain integer add/subtract before
 the trial replaces the original function.
 
+The executable main's `$argc` local is a non-negative C `int`; `IntegerRange`
+uses that fact to prove a `N + $argc` loop bound even though it is not a direct
+load. A `PhpRelCmp` with one mixed/tagged operand may narrow its other operand,
+so the bound becomes a raw `IAdd` and the induction counter promotes to `I64`
+with an `ICmp` loop test.
+
 The proof preserves the physical ABI of eligible by-value, nonvariadic `mixed`
 call parameters by rematerializing their integer arguments at the existing call
 boundary. It does not authorize a different closure call or change dispatch.

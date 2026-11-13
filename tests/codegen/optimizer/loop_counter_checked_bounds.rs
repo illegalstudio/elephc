@@ -258,6 +258,73 @@ fn test_checked_bound_cell_pair_counters_are_integers() {
     assert_eq!(op_lines(body, "ichecked_sub_to_int").len(), 1, "an unboxed `$end - 1`:\n{body}");
 }
 
+/// Reassigning `$argc` disables the original non-negative C-int range fact, so a
+/// negative user value keeps PHP's bound arithmetic and loop result.
+#[test]
+fn test_top_level_reassigned_argc_bound_keeps_php_semantics() {
+    let source = r#"<?php
+$argc = -5;
+$n = 0;
+for ($i = 0; $i < 10 + $argc; $i++) {
+    $n += $i;
+}
+echo $n, "\n";
+"#;
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized, true), "10\n");
+    }
+}
+
+/// Top-level `$argc`-bounded loops preserve zero-trip, inclusive and descending
+/// PHP behavior with IR optimization on and off.
+#[test]
+fn test_top_level_argc_bound_loop_edge_bounds() {
+    let source = r#"<?php
+$n = 0;
+for ($i = 0; $i < 1000 + $argc; $i++) { $n += $i; }
+echo $n, "|";
+$n = 0;
+for ($i = 0; $i <= 10 + $argc; $i++) { $n += $i; }
+echo $n, "|";
+$n = 9;
+for ($i = 0; $i < $argc - 1; $i++) { $n += $i; }
+echo $n, "|";
+$n = 0;
+for ($i = 100 + $argc; $i > 0; $i--) { $n += $i; }
+echo $n, "\n";
+"#;
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized, true), "500500|66|9|5151\n");
+    }
+}
+
+/// A top-level counter bounded by `$argc + constant` is raw: the runtime argument
+/// count is a non-negative C int, so the checked bound add is proven and the loop
+/// compares and increments plain integers.
+#[test]
+fn test_top_level_argc_bound_counter_is_integer() {
+    let source = r#"<?php
+$sum = 0;
+for ($i = 0; $i < 1000 + $argc; $i++) {
+    $sum += 42;
+}
+echo $sum, "\n";
+"#;
+    let ir = optimized_ir(source);
+    let body = function_body(&ir, "main");
+    assert!(op_lines(body, "str_inc_dec").is_empty(), "boxed update remains:\n{body}");
+    assert!(op_lines(body, "php_rel_cmp").is_empty(), "boxed compare remains:\n{body}");
+    assert!(!body.contains("ichecked_add"), "boxed bound add remains:\n{body}");
+    assert!(!op_lines(body, "icmp").is_empty(), "raw counter compare missing:\n{body}");
+    assert!(
+        op_lines(body, "iadd").iter().any(|line| line.contains("origin: integer_range")),
+        "range-proven counter update missing:\n{body}"
+    );
+    for optimized in [false, true] {
+        assert_eq!(run(source, optimized, true), "42042\n");
+    }
+}
+
 /// A compound-assignment counter (`$i += 1`) is proven raw integer exactly like `$i++`.
 #[test]
 fn test_compound_assignment_counter_is_raw_integer() {
@@ -743,5 +810,53 @@ fn test_checked_bound_counters_emit_on_all_supported_targets() {
             assert!(!fs::read_to_string(path.with_extension("s")).unwrap().is_empty());
             fs::remove_dir_all(dir).unwrap();
         }
+    }
+}
+
+/// Every supported target lowers the top-level `$argc + constant` bound to a raw
+/// integer compare and counter update, not a boxed `php_rel_cmp`/`str_inc_dec`.
+#[test]
+fn test_top_level_argc_bound_counter_emits_all_supported_targets() {
+    let source = r#"<?php
+$sum = 0;
+for ($i = 0; $i < 1000 + $argc; $i++) {
+    $sum += $i;
+}
+echo $sum, "\n";
+"#;
+    for target in [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64",
+    ] {
+        let dir = make_cli_test_dir("elephc_argc_counter_target");
+        let path = dir.join("main.php");
+        fs::write(&path, source).unwrap();
+        let mut command = elephc_cli_command(&dir);
+        command.args(["--emit-asm", "--target", target]);
+        if target.starts_with("ios-") {
+            command.args(["--emit", "staticlib"]);
+        }
+        let output = command.arg(&path).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{target}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let assembly = fs::read_to_string(path.with_extension("s")).unwrap();
+        assert!(!assembly.is_empty(), "{target}: empty assembly");
+        // Apple's staticlib assembly stream omits the EIR op comments used by the
+        // Mach-O/Linux text emitters. The target-independent EIR test already
+        // pins the raw icmp/iadd shape; here every supported target must compile
+        // the same optimized source and emit a nonempty body.
+        if !target.starts_with("ios-") {
+            assert!(assembly.contains("op=icmp"), "{target}: missing raw compare\n{assembly}");
+            assert!(assembly.contains("op=iadd"), "{target}: missing raw counter update\n{assembly}");
+            assert!(!assembly.contains("op=str_inc_dec"), "{target}: boxed update remains\n{assembly}");
+            assert!(!assembly.contains("op=php_rel_cmp"), "{target}: boxed compare remains\n{assembly}");
+        }
+        fs::remove_dir_all(dir).unwrap();
     }
 }
