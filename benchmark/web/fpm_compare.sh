@@ -255,6 +255,9 @@ markdown_report() {
   printf -- '- Elephc: `%s`\n' "$elephc_url"
   printf -- '- FPM: `%s`\n' "$fpm_url"
   printf -- '- Repeats: %s\n\n' "$repeat"
+  if [[ $(printf '%s' "$comparison" | jq '[.[] | (.elephc.failures // 0), (.fpm.failures // 0)] | add // 0') -ne 0 ]]; then
+    printf '> **Invalid run**: one or both endpoints served failed responses; the Failures row lists them and the throughput is not a valid benchmark result.\n\n'
+  fi
   printf '| Scenario | Metric | Elephc | FPM | FPM / Elephc |\n'
   printf '|---|---:|---:|---:|---:|\n'
   for scenario in "$WRK_SCENARIO" "$CONNECTION_SCENARIO"; do

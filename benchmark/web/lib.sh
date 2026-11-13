@@ -234,6 +234,10 @@ wrk_failure_count() {
 }
 
 # Runs one wrk process with a watchdog and parses its report.
+#
+# Returns success when wrk itself ran and produced a report. Response failures
+# stay in `wrk_non_2xx` / `wrk_socket_errors` so callers can save the reports
+# before rejecting the run; only a missing or malformed report is an error here.
 run_wrk_one() {
   local url=$1 threads=$2 connections=$3 duration=$4 timeout=$5 output=$6
   local pid watchdog status
@@ -257,13 +261,6 @@ run_wrk_one() {
     return 1
   fi
   parse_wrk_file "$output"
-  local failures
-  failures=$(wrk_failure_count)
-  if [[ $failures -ne 0 ]]; then
-    printf 'wrk reported %s failed response(s) or socket error(s):\n' "$failures" >&2
-    cat "$output" >&2
-    return 1
-  fi
 }
 
 # Runs one wrk round (possibly several concurrent clients) and writes:
