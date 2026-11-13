@@ -929,7 +929,8 @@ impl ExceptionFlowAnalysis {
             ExprKind::BinaryOp { left, op, right } => {
                 let mut thrown = operand(left)
                     .combined(operand(right));
-                if self.has_internal_object_operators && effects::internal_arithmetic_candidate(left, op, right) {
+                if super::semantic_context::checked_power_conversion_may_dispatch(expr)
+                    || self.has_internal_object_operators && effects::internal_arithmetic_candidate(left, op, right) {
                     thrown = thrown.combined(ThrownTypes::unknown());
                 } else if matches!(op, BinOp::And | BinOp::Or | BinOp::Xor) {
                     thrown = thrown.combined(self.internal_conversion_throws(left))

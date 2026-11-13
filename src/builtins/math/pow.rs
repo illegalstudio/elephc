@@ -84,8 +84,9 @@ fn lower_pow(
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
     if crate::semantics::numeric::operation_policy(call.semantic_profile, call.source_mode).checked_overflow() {
-        return ctx.emit_numeric_binary(call.operand(0)?, crate::parser::ast::BinOp::Pow,
-            call.operand(1)?, call.source_mode, call.span);
+        let result = ctx.emit_numeric_binary(call.operand(0)?, crate::parser::ast::BinOp::Pow,
+            call.operand(1)?, call.source_mode, call.span)?;
+        return Ok(crate::builtins::semantics::normalize_numeric_result(ctx, result, call.result_type, call.span));
     }
     let has_static_gmp = call
         .operands

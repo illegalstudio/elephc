@@ -231,9 +231,8 @@ fn builtin_number(
 ) -> Result<Option<Number>, CompileError> {
     use crate::builtins::semantics::BuiltinRuntimeFunctions;
     let Some(def) = crate::builtins::registry::lookup(name.trim_start_matches('\\')) else { return Ok(None); };
-    if def.spec.semantics.runtime_functions != BuiltinRuntimeFunctions::One(crate::ir::RuntimeFnId::Abs) {
-        return Ok(None);
-    }
+    let BuiltinRuntimeFunctions::One(operation) = def.spec.semantics.runtime_functions else { return Ok(None); };
+    if !matches!(operation, crate::ir::RuntimeFnId::Abs | crate::ir::RuntimeFnId::Pow) { return Ok(None); }
     // Only the profile-independent parameter shape is consumed here, never its result type.
     let Some(signature) = crate::builtins::registry::function_sig(def.name) else { return Ok(None); };
     let Ok(plan) = crate::types::call_args::plan_call_args(&signature, args, expr.span, true, false) else { return Ok(None); };
@@ -244,10 +243,19 @@ fn builtin_number(
             else { return Ok(None); };
         expanded_plan.normalized_args()
     } else { plan.normalized_args() };
-    let [argument] = normalized.as_slice() else { return Ok(None); };
     // The planner owns cloned AST nodes. Do not retain their addresses in the source-tree memo.
     // Carry the active declaration guard so a constant cycle through a builtin stays unknown.
     let mut call_evidence = Evidence { active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
+    if operation == crate::ir::RuntimeFnId::Pow {
+        let [left, right] = normalized.as_slice() else { return Ok(None); };
+        let Some(left) = evaluate(left, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
+        let Some(right) = evaluate(right, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
+        // Mixed pow parameters follow operator conversion even with PHP strict_types enabled.
+        // The existing permissive/Internal builtin implementation always returns a float.
+        return if checked { binary(expr, &BinOp::Pow, left, right, checked) }
+            else { Ok(Some(Number::Float(left.as_float().powf(right.as_float())))) };
+    }
+    let [argument] = normalized.as_slice() else { return Ok(None); };
     let Some(value) = evaluate(argument, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
     if !value.valid_numeric_parameter(evidence.strict_types) { return Ok(None); }
     Ok(match value.numeric() {
@@ -299,6 +307,33 @@ mod tests {
     fn parse(source: &str) -> Program {
         let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
         crate::parser::parse(&crate::lexer::tokenize_with_semantics(source, SourceMode::Php, 0, profile).unwrap()).unwrap()
+    }
+
+    /// Power evidence uses Mixed operand rules, planned arguments and lexical source contracts.
+    #[test]
+    fn strict_pow_source_constants_share_operator_evidence_and_argument_planning() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+        for source in [
+            "<?php if (false) { pow(2, 63); }",
+            "<?php POW(exponent: 2, num: PHP_INT_MAX);",
+            "<?php pow(...[PHP_INT_MAX, 2]);",
+            "<?php declare(strict_types=1); pow('9223372036854775807', 2);",
+            "<?php const BASE = '9223372036854775807'; pow(BASE, 2);",
+            "<?php pow('9223372036854775807x', true + 1);",
+            "<?php eval('pow(2, 63);');",
+        ] {
+            let error = super::super::validate_source(&parse(source), profile).expect_err(source);
+            assert!(error.message.contains("strict-overflow"), "{source}: {error:?}");
+        }
+        for source in [
+            "<?php pow(-2, 63); pow(2, -1); pow('9223372036854775808', 2);",
+            "<?php const LOOP = pow(LOOP, 2); pow(LOOP, 2);",
+            "<?php function pow($n, $e) { return 0; } pow(PHP_INT_MAX, 2);",
+            "<?php pow(num: 0, 2);",
+        ] { assert!(super::super::validate_source(&parse(source), profile).is_ok(), "{source}"); }
+        let mut program = parse("<?php const BASE = pow(PHP_INT_MAX, 2); echo BASE + 1;");
+        program[0].source_mode = SourceMode::Internal;
+        assert!(validate(&program, profile).is_ok());
     }
 
     /// Provable overflow is rejected in dead syntax, exact-width literals and scalar coercions.

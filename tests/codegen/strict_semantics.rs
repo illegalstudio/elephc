@@ -385,3 +385,47 @@ echo ':', is_float(strict_builtin_power(2.0, 3));
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Numeric strings retain exact integer powers, callback snapshots and exceptional cleanup.
+#[test]
+fn test_strict_pow_staged_numeric_strings_and_warning_ownership() {
+    let source = r#"<?php
+function strict_string_power(mixed $base, mixed $exponent): mixed { return pow($base, $exponent); }
+function strict_string_operator(mixed $base, mixed $exponent): mixed { return $base ** $exponent; }
+function strict_string_float_power(string $base, float $exponent): float { return pow($base, $exponent); }
+function strict_discard_prefix_power(mixed $base): void {
+    try { $base ** 2.0; } catch (RuntimeException $error) { echo 'Q'; }
+}
+$maximum = $argc > 0 ? '9223372036854775807' : '0';
+try { strict_string_power($maximum, 2); } catch (ArithmeticError $error) { echo 'M'; }
+try { strict_string_operator($maximum, 2); } catch (ArithmeticError $error) { echo 'S'; }
+$callback = pow(...);
+try { $callback($maximum, 2); } catch (ArithmeticError $error) { echo 'F'; }
+try { call_user_func('pow', $maximum, 2); } catch (ArithmeticError $error) { echo 'C'; }
+try { call_user_func_array('pow', [$maximum, 2]); } catch (ArithmeticError $error) { echo 'A'; }
+$name = $argc > 0 ? 'pow' : 'fdiv';
+try { $name($maximum, 2); } catch (ArithmeticError $error) { echo 'D'; }
+echo ':', is_int(strict_string_power('2', '3'));
+echo ':', is_int(strict_string_power(true, 2)), ':', is_int(strict_string_power(null, 2));
+echo ':', is_int(strict_string_power(false, 0));
+echo ':', is_float(strict_string_power('2.0', 3)), ':', is_float(strict_string_power('9223372036854775808', 2));
+echo ':', strict_string_power(2, '-1'), ':', is_float(strict_string_float_power('2', 3.0));
+$prefix = $argc > 0 ? '2x' : '0'; $exponent = 3;
+set_error_handler(function (int $severity, string $message) use (&$exponent): bool { $exponent = 63; echo 'W'; return true; });
+echo ':', strict_string_power($prefix, $exponent), ':', $exponent;
+restore_error_handler();
+set_error_handler(function (int $severity, string $message): bool { throw new RuntimeException('numeric prefix'); });
+try { strict_string_power($prefix . '', 3); } catch (RuntimeException $error) { echo ':E'; } finally { echo 'Z'; }
+strict_discard_prefix_power($prefix);
+restore_error_handler();
+try { strict_string_power('invalid', 2); } catch (TypeError $error) { echo 'T'; }
+try { strict_string_operator('invalid', 2.0); } catch (TypeError $error) { echo 'O'; }
+"#;
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE.with(elephc_semantics::StrictFeature::Overflow, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "MSFCAD:1:1:1:1:1:1:0.5:1:W8:63:EZQTO", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

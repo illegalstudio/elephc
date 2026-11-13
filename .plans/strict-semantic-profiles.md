@@ -754,3 +754,28 @@ CUF/CUFA and runtime-selected calls. Compiler/exporter builds and the complete g
 pass, as do the focused permissive PHP scalar and GMP controls.
 Numeric-string power normalization and pre-fold source proofs follow
 before exposing the complete overflow guarantee.
+
+
+### Exact numeric power normalization and source evidence
+
+Checked boxed powers classify both operands through a reusable bounded numeric
+parser adapter before dispatching warning callbacks. Integer-form strings, bools
+and null keep integer power and overflow checks; floating-form and out-of-range
+strings retain float kinds. Invalid kinds raise TypeError. Warning handlers cannot
+replace an already captured operand. PHP entries remain separate.
+
+A shared numeric result helper unboxes and releases implementation cells only
+when the checker promises an Int or Float contract. Abs and checked pow consume
+the same helper. AST effects, throw summaries, global-fact invalidation and EIR
+effects preserve warning callbacks and discarded checked powers. Source evidence
+now covers pow through its typed inventory and common named/spread planner. Its
+Mixed parameters retain operator conversion rules even with PHP strict_types.
+
+Four focused units pass, including all targets and source modes, constant proofs
+and typed string/float result normalization. Both native power fixtures pass with
+AST/EIR optimization enabled and disabled, exact result kinds, source mutation
+from a warning callback, thrown callbacks, discarded results and clean heaps.
+Compiler/exporter builds and the complete docs/architecture audits pass. Four
+abs units, its native fixture and the earlier boxed arithmetic/power fixture
+also pass after sharing the numeric result helper. The pre-existing permissive typed-string
+pow backend gap is tracked separately as journal task 85c52504.

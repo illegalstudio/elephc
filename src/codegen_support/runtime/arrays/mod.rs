@@ -234,6 +234,7 @@ mod int_checked_binops;
 mod int_pow_checked;
 mod mixed_numeric_pow;
 mod strict_mixed_pow;
+pub(super) mod strict_numeric_operand;
 mod mixed_strict_eq;
 mod in_array_boxed;
 mod mixed_unbox;

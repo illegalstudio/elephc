@@ -18,6 +18,10 @@ use crate::parser::ast::Expr;
 use crate::span::Span;
 use crate::types::PhpType;
 
+#[path = "semantics/numeric.rs"]
+mod numeric;
+pub use numeric::normalize_numeric_result;
+
 #[cfg(test)]
 #[path = "semantics/profile_tests.rs"]
 mod profile_tests;

@@ -137,6 +137,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
         )),
         ExprKind::BinaryOp { left, right, .. } => {
             expr_invalidation(left).union(expr_invalidation(right))
+                .union(top_level_globals_guard(expr_effect(expr)))
         }
         ExprKind::InstanceOf { value, target } => {
             let target_inv = match target {

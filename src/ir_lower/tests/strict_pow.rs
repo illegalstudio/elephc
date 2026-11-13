@@ -16,10 +16,13 @@ use elephc_semantics::{SemanticProfile, StrictFeature};
 #[test]
 fn strict_pow_builtin_lowering_reuses_operator_policies_on_all_targets() {
     let source = "<?php function strict_pow_builtin_probe(mixed $left, mixed $right): mixed { return pow($left, $right); } $f = pow(...); echo strict_pow_builtin_probe($argc, $argc); echo $f($argc, $argc);";
-    let tokens = crate::lexer::tokenize(source).unwrap();
     for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
-        let program = crate::parser::parse_with_mode(&tokens, mode).unwrap();
         for checked in [false, true] {
+            let source = if checked && mode != SourceMode::Internal {
+                format!("{source} function strict_pow_string_float_probe(string $left, float $right): float {{ return pow($left, $right); }} echo strict_pow_string_float_probe('2', 3.0);")
+            } else { source.to_string() };
+            let tokens = crate::lexer::tokenize(&source).unwrap();
+            let program = crate::parser::parse_with_mode(&tokens, mode).unwrap();
             for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
                 let target = crate::codegen::platform::Target::parse(name).unwrap();
                 let mut types = crate::types::check_with_target(&program, target).unwrap();

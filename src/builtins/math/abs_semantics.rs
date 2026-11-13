@@ -52,11 +52,5 @@ fn lower(
     let result_type = if boxed { PhpType::Mixed } else { call.result_type.clone() };
     let result = ctx.emit_runtime_call(target, call.operands.to_vec(), result_type,
         numeric_effects(policy), Some(call.span));
-    if !boxed || matches!(call.result_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
-        return Ok(result);
-    }
-    let scalar = ctx.emit_value(Op::MixedUnbox, vec![result.value], None,
-        call.result_type.clone(), Op::mixed_unbox_effects(call.result_type), Some(call.span));
-    ctx.emit_void(Op::Release, vec![result.value], None, Op::Release.default_effects(), Some(call.span));
-    Ok(scalar)
+    Ok(crate::builtins::semantics::normalize_numeric_result(ctx, result, call.result_type, call.span))
 }

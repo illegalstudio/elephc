@@ -324,7 +324,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::BinaryOp { left, op, right } => {
             let operands = expr_effect(left).combine(expr_effect(right));
-            if matches!(op, BinOp::Eq | BinOp::NotEq)
+            if super::semantic_context::checked_power_conversion_may_dispatch(expr)
+                || matches!(op, BinOp::Eq | BinOp::NotEq)
                 && (!literal_scalar_operand(left) || !literal_scalar_operand(right))
             {
                 // Object-to-number warnings can call a handler that mutates globals or throws.
