@@ -1230,6 +1230,7 @@ fn cannot_fall_through(lines: &Lines<'_>, index: usize) -> bool {
             || line.starts_with(".byte")
             || line.starts_with(".ascii")
             || line.starts_with(".space")
+            || line.starts_with(".zero")
             || line.starts_with(".comm")
             || is_section_directive(line);
     }

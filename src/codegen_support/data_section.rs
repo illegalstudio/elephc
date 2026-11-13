@@ -120,6 +120,38 @@ fn words_content_label(words: &[DataWord]) -> u64 {
     content_label(b"w", &encoded)
 }
 
+/// Writes a word table's directives: one `.quad` per word, except that a run of two or more
+/// zero words is one `.zero` of the run's bytes. The sparse hashed lookup tables are mostly
+/// empty buckets: 9.4 M of the Symfony demo console's 121 M assembly lines were `.quad 0`.
+fn write_words(out: &mut String, words: &[DataWord]) {
+    use std::fmt::Write as _;
+    let mut index = 0;
+    while index < words.len() {
+        match &words[index] {
+            DataWord::U64(0) => {
+                let run = words[index..]
+                    .iter()
+                    .take_while(|word| matches!(word, DataWord::U64(0)))
+                    .count();
+                if run >= 2 {
+                    let _ = writeln!(out, "    .zero {}", run * 8);
+                } else {
+                    out.push_str("    .quad 0x0000000000000000\n");
+                }
+                index += run;
+                continue;
+            }
+            DataWord::U64(value) => {
+                let _ = writeln!(out, "    .quad 0x{:016x}", value);
+            }
+            DataWord::Symbol(symbol) => {
+                let _ = writeln!(out, "    .quad {}", symbol);
+            }
+        }
+        index += 1;
+    }
+}
+
 /// Stops the build when one label names two different contents across merged sections.
 fn assert_same_content<T: PartialEq + ?Sized>(label: &str, kept: &T, other: &T) {
     assert!(
@@ -588,16 +620,7 @@ impl DataSection {
         }
         for (label, words) in &self.word_entries {
             let _ = write!(out, ".p2align 3\n{}:\n", label);
-            for word in words {
-                match word {
-                    DataWord::U64(value) => {
-                        let _ = write!(out, "    .quad 0x{:016x}\n", value);
-                    }
-                    DataWord::Symbol(symbol) => {
-                        let _ = write!(out, "    .quad {}\n", symbol);
-                    }
-                }
-            }
+            write_words(&mut out, words);
         }
         out
     }
@@ -657,6 +680,23 @@ mod tests {
         assert!(!asm.contains(&format!(".globl {}\n", label)));
         assert!(asm.contains("    .quad 0x0000000000000001\n"));
         assert!(asm.contains("    .quad _fn_demo\n"));
+    }
+
+    /// A run of zero words is one `.zero` directive of the run's bytes and a lone zero stays a
+    /// `.quad`, so the table keeps its exact byte layout in fewer lines.
+    #[test]
+    fn test_zero_word_runs_emit_one_zero_directive() {
+        use super::DataWord::{Symbol, U64};
+        let words = vec![U64(5), U64(0), U64(0), U64(0), Symbol("_fn_demo".to_string()), U64(0), U64(7), U64(0), U64(0)];
+        let mut data = DataSection::new();
+        let label = data.add_words(words);
+        let asm = data.emit(macos());
+        let block = asm.split(&format!("{label}:\n")).nth(1).expect("the table is emitted");
+        assert_eq!(
+            block,
+            "    .quad 0x0000000000000005\n    .zero 24\n    .quad _fn_demo\n    .quad 0x0000000000000000\n    .quad 0x0000000000000007\n    .zero 16\n"
+        );
+        assert_eq!(block.lines().count(), 6, "nine words in six directives");
     }
 
     /// Verifies `.comm` asks each object format for the same 8-byte alignment in the spelling
