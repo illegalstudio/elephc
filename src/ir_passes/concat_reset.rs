@@ -801,6 +801,10 @@ impl<'a> ConcatInertAnalysis<'a> {
                             | Op::ZeroLocalSlot
                             | Op::PushCallOperandOwner
                             | Op::PopCallOperandOwner
+                            // A key fetch that names its variable's slot only moves the
+                            // scalar cell the slot holds into its result (or leaves the
+                            // slot alone): it never stores a new value there.
+                            | Op::IterCurrentKey
                     ) {
                         slot_disqualified[s_idx] = true;
                     }
