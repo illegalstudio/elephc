@@ -34,7 +34,7 @@ Physical source (.php or .lfc)
   -> hash-prelude       inject the incremental HashContext/hash_* prelude when used
   -> testing-prelude    inject the Elephc\Testing runtime when used (forced by elephc test)
   -> curl-prelude       inject the curl prelude when used
-  -> xml-prelude        inject the XML/XMLWriter prelude when used
+  -> xml-prelude        inject the XML/XMLWriter/SimpleXML prelude when used
   -> fileinfo-prelude   inject the finfo class prelude when used
   -> dom-html-prelude   inject the DOM HTML fragment-walker prelude when used
   -> web-prelude        inject the web runtime prelude with --web
@@ -89,7 +89,7 @@ Physical source (.php or .lfc)
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   mysqli, timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
-  OPcache, image processing, incremental hash contexts, curl, XML/XMLWriter, fileinfo,
+  OPcache, image processing, incremental hash contexts, curl, XML/XMLWriter/SimpleXML, fileinfo,
   the [DOM HTML subset](../php/dom-html.md),
   object-cast `stdClass`, and the PHP version/SAPI surface are injected only
   when referenced. The web runtime

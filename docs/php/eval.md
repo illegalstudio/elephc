@@ -32,7 +32,7 @@ elephc chooses the narrowest execution path it can prove safe:
 | Eligible string literal with no caller-scope access | Parsed at compile time and lowered as an internal EIR function | No eval scope, eval context, or Magician bridge |
 | Eligible string literal with read-only caller values | Lowered as an internal EIR function with boxed `Mixed` parameters | No eval scope, eval context, or Magician bridge |
 | Eligible string literal with known scope writes | Lowered as an internal scope-aware EIR function using `EvalScopeGet` / `EvalScopeSet` | Core eval scope only; no interpreter bridge |
-| Dynamic string, runtime declaration, include, reference, dynamic dispatch, or unsupported literal construct | Parsed into EvalIR and interpreted at runtime | Persistent eval context, synchronized scopes, and `elephc_magician` |
+| Dynamic string, runtime declaration, include, reference, dynamic dispatch, or unsupported literal construct | Parsed into EvalIR, then executed by the admitted bytecode slice or the tree walker | Persistent eval context, synchronized scopes, and `elephc_magician` |
 
 The compiler makes this decision per literal call. A program may therefore use
 `eval()` without linking Magician when every call is fully handled by the AOT
@@ -53,8 +53,14 @@ the materialization required for the statically known reads and writes.
 Interpreter fallback parses dynamic source into EvalIR. Exact source strings
 up to 64 KiB share a process-wide FIFO cache of 256 immutable parse results;
 larger fragments bypass the cache. The cache avoids repeated tokenization and
-parsing, but execution remains interpreted. Repeated native function activations
-also share an immutable catalog of the module's native callable signatures,
+parsing. Eligible scalar/control-flow fragments and simple exact-arity positional
+functions also share a separate source-keyed bytecode cache and execute on an
+explicit activation stack. Unsupported fragments keep the ordinary EvalIR tree
+walker. Both paths run declarations, effects and scope writes on every execution;
+only the executable form is cached. See the
+[bytecode subset](../internals/eval-runtime.md#magician-bytecode-slice) for its
+limits. Repeated native function activations also share an immutable catalog of
+the module's native callable signatures,
 class metadata and constants. Each thread retains up to eight module catalogs;
 activation scopes, dynamic declarations, references, handlers and materialized
 default values remain separate. On a catalog cache miss, short numeric-only

@@ -1866,6 +1866,66 @@ These helpers implement PHP 8.1-style cooperative coroutines. They are emitted b
 | `__rt_fiber_get_return` | Read the terminal return payload from a terminated fiber | `Fiber*` | boxed `mixed` payload |
 | `__rt_fiber_state_eq` | Shared predicate helper for `isStarted()`, `isSuspended()`, `isRunning()`, and `isTerminated()` | `Fiber*`, state id | bool |
 
+## Additional runtime entry points
+
+The following public helper entries and shared internal labels complement the
+family descriptions above. Shared bodies retain the ownership and diagnostic
+setup selected by their callers. Target-specific labels use their emitter's ABI;
+they are internal assembly interfaces.
+
+| Entries | Source under `src/codegen_support/runtime/` | Responsibility |
+|---|---|---|
+| `__rt_array_filter_int_direct` | `arrays/array_filter_int_direct.rs` | Filter packed integers with a capture-free typed predicate while preserving keys. |
+| `__rt_array_map_body` | `arrays/array_map.rs` | Shared indexed-map body after public entry setup. |
+| `__rt_array_reduce_int_direct` | `arrays/array_reduce_int_direct.rs` | Reduce packed integers through a capture-free typed integer callback. |
+| `__rt_array_set_mixed_key_entry`, `__rt_array_set_mixed_key_owned_refusal`, `__rt_array_set_mixed_key_owned_refusal_already_diagnosed` | `arrays/array_set_mixed_key.rs` | Shared boxed-key write entry and owned-value refusal cleanup, including an already-reported diagnostic. |
+| `__rt_array_to_mixed_entry` | `arrays/array_to_mixed.rs` | Shared indexed-array widening entry after source ownership setup. |
+| `__rt_array_unbox_slots` | `arrays/array_unbox_slots.rs` | Build raw payload slots from a boxed indexed array for typed writeback. |
+| `__rt_call_argument_collect_entry` | `arrays/call_argument_unpack.rs` | Shared ordered collection body for validated named and positional unpacking. |
+| `__rt_gc_phpext_scan_begin` | `arrays/gc_host_roots.rs` | Start the native-owner scan used by the PHP extension producer profile. |
+| `__rt_gc_visit_children` | `arrays/gc_mark_reachable.rs` | Visit child edges during runtime graph traversal. |
+| `__rt_hash_set_entry`, `__rt_hash_set_owned_refusal` | `arrays/hash_set.rs` | Shared hash insertion entry and cleanup of a refused owned value. |
+| `__rt_hash_spread_entry` | `arrays/hash_spread.rs` | Shared hash-copy entry for spread and object-property projection modes. |
+| `__rt_hash_to_mixed_box_owned`, `__rt_hash_to_mixed_x86_box_owned` | `arrays/hash_to_mixed.rs` | Box owned entry payloads during associative-array widening on each architecture. |
+| `__rt_hash_write_guard_inspect` | `arrays/hash_write_guard.rs` | Inspect protected construction-time hash owners for claim and ownership queries. |
+| `__rt_array_map_sum_add_body` | `arrays/keyed_kernels.rs` | Shared mapped-integer sum body with the original checked-add fallback. |
+| `__rt_mixed_from_owned_string` | `arrays/mixed_from_value.rs` | Box a transferred string owner without borrowing its bytes. |
+| `__rt_callable_descriptor_release_owned` | `callables/descriptor_release.rs` | Retire a transferred callable descriptor and its owned captures. |
+| `__rt_callable_owned_args_enter` | `callables/invoke_owned_args.rs` | Enter the protected invocation that owns temporary boxed arguments. |
+| `__rt_mixed_loose_eq_common` | `compare/mixed_loose_eq.rs` | Shared PHP loose-equality dispatch after operand setup. |
+| `__rt_eval_native_callable_chain_previous` | `eval_bridge/callable_adapter.rs` | Preserve the previous Throwable chain across an eval-to-native callable boundary. |
+| `__rt_eval_owner_frame_noop` | `eval_bridge/owner_frames.rs` | No-op cleanup entry for a Rust-owned temporary visitor record. |
+| `__rt_cleanup_print_r_capture` | `io/print_r_buffer.rs` | Release abandoned growable print_r capture storage during unwinding. |
+| `__rt_print_r_indexed`, `__rt_print_r_int_key`, `__rt_print_r_spaces`, `__rt_print_r_str_key`, `__rt_print_r_value` | `io/print_r_walk.rs` | Render indentation, indexed entries, keys and individual values for print_r. |
+| `__rt_simplexml_wrapper_failure` | `io/simplexml_wrapper_failure.rs` | Raise the chained TypeError produced by a SimpleXML stream-wrapper context assignment. |
+| `__rt_abs_int` | `numeric.rs` | Compute the raw integer absolute-value fast path. |
+| `__rt_pr_debuginfo_object`, `__rt_vd_debuginfo_object` | `objects/debug_info.rs` | Render user __debugInfo projections through var_dump and print_r. |
+| `__rt_cleanup_native_debug`, `__rt_try_native_debug_object` | `objects/native_debug.rs` | Probe native debug projections and release protected snapshot owners. |
+| `__rt_print_r_object_header` | `objects/print_r_object.rs` | Render the class or enum header preceding print_r object fields. |
+| `__rt_reference_argument_pin_enter`, `__rt_reference_argument_pins_staging` | `reference_cells/argument_pins.rs` | Stage and activate source leases until the exact native formal parameter claims them. |
+| `__rt_reference_cell_promote_mixed`, `__rt_reference_cell_retain_mixed` | `reference_cells/mixed_payload.rs` | Retain canonical Mixed reference payloads and lazily promote their storage. |
+| `__rt_reference_parameter_acquire` | `reference_cells/parameter_bindings.rs` | Transfer an incoming reference binding into its formal parameter owner. |
+| `__rt_reference_property_unset` | `reference_cells/property_unset.rs` | Publish an uninitialized property cell before retiring its old owner. |
+| `__rt_reference_source_associate_native`, `__rt_reference_sources_bind_object` | `reference_cells/source_lifecycle.rs` | Associate canonical native cells with weak declaration-source metadata. |
+| `__rt_reference_validation_coerce` | `reference_cells/validation_coercion.rs` | Run declaration coercion below a protected native Throwable boundary. |
+| `__rt_reference_validation_identical`, `__rt_reference_validation_is_current`, `__rt_reference_validation_release` | `reference_cells/validation_ops.rs` | Probe current physical storage, compare PHP identity and retire validation owners. |
+| `__rt_reference_validation_pin_enter`, `__rt_reference_validation_pin_leave`, `__rt_reference_validation_pin_take` | `reference_cells/validation_pins.rs` | Enter, remove or transfer validation roots without changing PHP alias sharing. |
+| `__rt_mb_is_ascii` | `strings/mbstring/ascii_case.rs` | Screen a subject for allocation-free ASCII case-conversion paths. |
+| `__rt_mb_strstr_len_utf8` | `strings/mbstring/ascii_strstr_len.rs` | Compute an admitted UTF-8 ASCII substring result length without building the string. |
+| `__rt_mbstring_callback_resolve_body` | `strings/mbstring/callback/resolve.rs` | Resolve and transfer one callback owner into the protected mbregex arena. |
+| `__rt_mb_convert_kana_k_utf8` | `strings/mbstring/kana.rs` | Convert the admitted half-width katakana subset for explicit UTF-8 K-mode calls. |
+| `__rt_mb_mime_b64_utf8` | `strings/mbstring/mime_b64.rs` | Encode the admitted short UTF-8 MIME Base64 subset. |
+| `__rt_mb_decode_numericentity_len`, `__rt_mb_encode_numericentity_len` | `strings/mbstring/numericentity_len.rs` | Compute admitted full-range numeric-entity encode or decode lengths. |
+| `__rt_mb_utf8_to_latin1` | `strings/mbstring/utf8_latin1.rs` | Convert admitted UTF-8 codepoints to ISO-8859-1 bytes. |
+| `__rt_mb_strlen_utf8` | `strings/mbstring/utf8_strlen.rs` | Count valid UTF-8 codepoints, returning the fallback sentinel for invalid input. |
+| `__rt_mbstring_status_diagnostics` | `strings/mbstring.rs` | Translate bridge status into ordinary runtime diagnostics after the Rust state borrow ends. |
+| `__rt_str_transient_base` | `strings/str_persist.rs` | Authenticate an exact live transient-string payload base before adopting it. |
+| `__rt_str_dup_owned` | `strings/strcopy.rs` | Allocate an independent owned copy of string bytes. |
+| `__rt_trim_warning` | `strings/trim_warnings.rs` | Build the caller-named invalid character-range warning. |
+| `__rt_unser_allowed_classes_entry_metadata_error`, `__rt_unser_allowed_classes_entry_null_error`, `__rt_unser_allowed_classes_entry_object_error`, `__rt_unser_allowed_classes_entry_type_error`, `__rt_unser_allowed_classes_policy_type_error`, `__rt_unser_options_type_error` | `system/unserialize/allowed_classes_aarch64.rs` | Raise the AArch64 allowed_classes and options validation errors before hydration. |
+| `__rt_unser_depth_fatal` | `system/unserialize/decoder_aarch64.rs` | Raise the guarded AArch64 unserialize depth failure. |
+| `__rt_unser_type_error_ready`, `__rt_unser_type_error_ready_x` | `system/unserialize/diagnostics.rs` | Enter the prepared target-specific unserialize TypeError path. |
+
 ## How routines are emitted
 
 **File:** `src/codegen_support/runtime/emitters.rs`
@@ -2136,3 +2196,19 @@ Version-gated prelude deprecations use the corresponding
 `E_DEPRECATED`. Public buffer wrappers inspect the actual source argument count
 before calling their native engine helper, so an omitted context stays distinct
 from an explicitly supplied null context.
+
+### Variadic selection and integer foreach keys
+
+| Entry label | Source | Responsibility |
+|---|---|---|
+| `__rt_mixed_min_max_select` | `src/codegen_support/runtime/arrays/mixed_min_max.rs` | Selects the winning variadic operand with PHP numeric/generic comparison modes; callers copy the winning value into owned or eligible frame storage. |
+| `__rt_mixed_reuse_int_cell` | `src/codegen_support/runtime/arrays/mixed_reuse_int_cell.rs` | Reuses an exclusively owned scalar key cell for an integer array key; shared cells and other key representations preserve their existing values. |
+
+### Additional shared runtime entries
+
+| Entry label | Source | Responsibility |
+|---|---|---|
+| `__elephc_eval_key_normalize` | `src/codegen_support/runtime/eval_bridge/` | Classifies boxed eval keys and normalizes their string or integer representation before native array access. |
+| `__rt_heap_allocation_failed` | `src/codegen_support/runtime/arrays/heap_alloc.rs` | Shared heap-exhaustion entry, including native-library recovery boundaries. |
+| `__rt_mixed_bit_not` | `src/codegen_support/runtime/arrays/mixed_bit_not.rs` | Builds an independently owned bitwise-complement result from a borrowed boxed value, preserving integer, byte-string and conversion diagnostics. |
+| `__rt_warning_append` | `src/codegen_support/runtime/warning_dispatch.rs` | Shared continuation that appends a full warning or fragment to the pending diagnostic buffer. |
