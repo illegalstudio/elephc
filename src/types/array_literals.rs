@@ -82,15 +82,7 @@ pub(crate) fn fold_spreadless_mixed_array_literal(
 /// Converts a float key using PHP's signed modulo-2^64 integer conversion.
 /// Non-finite values become zero; diagnostics remain the caller's responsibility.
 pub(crate) fn php_float_array_key(value: f64) -> i64 {
-    if !value.is_finite() { return 0; }
-    let word = value.trunc() % 18_446_744_073_709_551_616.0;
-    if word >= 9_223_372_036_854_775_808.0 {
-        (word - 18_446_744_073_709_551_616.0) as i64
-    } else if word < -9_223_372_036_854_775_808.0 {
-        (word + 18_446_744_073_709_551_616.0) as i64
-    } else {
-        word as i64
-    }
+    elephc_semantics::numeric::php_float_to_int(value)
 }
 
 #[cfg(test)]

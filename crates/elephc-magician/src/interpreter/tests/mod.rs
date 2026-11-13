@@ -68,6 +68,7 @@ mod classes;
 mod closures;
 mod control_flow;
 mod strict_semantics;
+mod strict_modulo;
 mod core;
 mod dynamic_calls;
 mod enums;

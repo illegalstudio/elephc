@@ -35,7 +35,7 @@ impl FakeOps {
     }
 
     /// Constructs one owned pending exception after retiring its constructor arguments.
-    fn checked_error(&mut self, class: &str, message: &str) -> Result<RuntimeCellHandle, EvalStatus> {
+    fn checked_error<T>(&mut self, class: &str, message: &str) -> Result<T, EvalStatus> {
         let error = self.new_object(class)?;
         let message = self.string(message)?;
         let code = self.int(0)?;
@@ -55,6 +55,16 @@ impl FakeOps {
         }
         if matches!(op, CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct) {
             return self.runtime_checked_aggregate(op, left);
+        }
+        if op == CheckedNumericOp::Mod {
+            let left_source = self.get(left);
+            let right_source = self.get(right);
+            let left_number = self.checked_number(left);
+            let right_number = self.checked_number(right);
+            let left = self.checked_modulo_operand(&left_source, left_number)?;
+            let right = self.checked_modulo_operand(&right_source, right_number)?;
+            if right == 0 { return self.checked_error("DivisionByZeroError", "Modulo by zero"); }
+            return self.int(if right == -1 { 0 } else { left % right });
         }
         let left_number = self.checked_number(left);
         let right_number = self.checked_number(right);
@@ -83,7 +93,7 @@ impl FakeOps {
         let integer_op = match op {
             CheckedNumericOp::Add => IntegerOp::Add, CheckedNumericOp::Sub => IntegerOp::Sub,
             CheckedNumericOp::Mul => IntegerOp::Mul, CheckedNumericOp::Pow => IntegerOp::Pow,
-            CheckedNumericOp::Div | CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
+            CheckedNumericOp::Mod | CheckedNumericOp::Div | CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
                 | CheckedNumericOp::Increment | CheckedNumericOp::Decrement =>
                 unreachable!("unary and reduction operations were handled above"),
         };
@@ -100,10 +110,39 @@ impl FakeOps {
             CheckedNumericOp::Sub => left.float() - right.float(),
             CheckedNumericOp::Mul => left.float() * right.float(),
             CheckedNumericOp::Pow => left.float().powf(right.float()),
-            CheckedNumericOp::Div | CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
+            CheckedNumericOp::Mod | CheckedNumericOp::Div | CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
                 | CheckedNumericOp::Increment | CheckedNumericOp::Decrement =>
                 unreachable!("unary and reduction operations were handled above"),
         })
+    }
+
+    /// Models operand-ordered modulo conversion, retaining numeric-string capping and diagnostics.
+    fn checked_modulo_operand(&mut self, source: &FakeValue, number: Option<(Number, bool)>) -> Result<i64, EvalStatus> {
+        let Some((number, prefix)) = number else { return self.checked_error("TypeError", "Unsupported operand types"); };
+        if prefix { self.warning("Warning: A non-numeric value encountered\n")?; }
+        let value = match number { Number::Int(value) => return Ok(value), Number::Float(value) => value };
+        let text = match source {
+            FakeValue::String(text) => Some(text.clone()),
+            FakeValue::Bytes(bytes) => Some(String::from_utf8_lossy(bytes).into_owned()),
+            _ => None,
+        };
+        if let Some(text) = text {
+            let converted = if value.is_finite() { value as i64 } else { 0 };
+            if value != converted as f64 {
+                self.warning(&format!("Deprecated: Implicit conversion from float-string \"{text}\" to int loses precision\n"))?;
+            }
+            return Ok(converted);
+        }
+        let converted = elephc_semantics::numeric::php_float_to_int(value);
+        if !value.is_finite() || !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&value) {
+            self.warning(&format!("Warning: The float {value} is not representable as an int, cast occurred\n"))?;
+        }
+        if value.is_nan() || (value.is_finite()
+            && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&value)
+            && value != converted as f64) {
+            self.warning(&format!("Deprecated: Implicit conversion from float {value} to int loses precision\n"))?;
+        }
+        Ok(converted)
     }
 
     /// Preserves PHP string update domains while checking integer steps before any replacement.

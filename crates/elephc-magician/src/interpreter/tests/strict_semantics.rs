@@ -144,7 +144,7 @@ fn strict_profile_native_hooks_require_matching_semantic_policy() {
 
 
 /// Exercises staged numeric consumers without enabling an incomplete profile at host entry points.
-fn staged_numeric_execution(
+pub(super) fn staged_numeric_execution(
     source: &str, vm: bool, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut FakeOps,
 ) -> Result<EvalControl, EvalStatus> {

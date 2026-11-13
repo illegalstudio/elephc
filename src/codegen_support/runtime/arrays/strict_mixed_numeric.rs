@@ -20,6 +20,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     super::strict_numeric_operand::emit(emitter);
     emit_entry(emitter, MixedNumericOp::Pow);
     super::strict_numeric_div::emit(emitter);
+    super::strict_numeric_mod::emit(emitter);
 }
 
 /// Emits independent checked kernels without altering the ordinary PHP-promoting entries.

@@ -14,7 +14,7 @@ pub const INTEGER_OVERFLOW_MESSAGE: &str = "--strict-overflow: integer arithmeti
 /// Version-one checked numeric callback selectors, independent of PHP implementation operations.
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CheckedNumericOp { Add = 0, Sub = 1, Mul = 2, Pow = 3, Abs = 4, ArraySum = 5, ArrayProduct = 6, Increment = 7, Decrement = 8, Div = 9 }
+pub enum CheckedNumericOp { Add = 0, Sub = 1, Mul = 2, Pow = 3, Abs = 4, ArraySum = 5, ArrayProduct = 6, Increment = 7, Decrement = 8, Div = 9, Mod = 10 }
 
 /// Shared diagnostic for the preserved PHP null-decrement no-op.
 pub const NULL_DECREMENT_WARNING: &str = "Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n";
@@ -53,6 +53,18 @@ fn checked_power(mut base: i64, exponent: i64) -> Result<i64, NumericFailure> {
         if exponent != 0 { base = base.checked_mul(base).ok_or(NumericFailure::Overflow)?; }
     }
     Ok(result)
+}
+
+/// Converts a PHP float value modulo 2^64; numeric strings instead require capped conversion.
+/// Nonfinite values become zero, while diagnostics remain owned by the conversion site.
+pub fn php_float_to_int(value: f64) -> i64 {
+    if !value.is_finite() { return 0; }
+    let word = value.trunc() % 18_446_744_073_709_551_616.0;
+    if word >= 9_223_372_036_854_775_808.0 {
+        (word - 18_446_744_073_709_551_616.0) as i64
+    } else if word < -9_223_372_036_854_775_808.0 {
+        (word + 18_446_744_073_709_551_616.0) as i64
+    } else { word as i64 }
 }
 
 /// Truncates an explicitly converted finite float only when its value fits signed 64-bit.
@@ -109,4 +121,23 @@ pub fn checked_string_to_int(value: &str) -> Result<i64, NumericFailure> {
     if remaining > 18 { return Err(NumericFailure::Overflow); }
     for _ in 0..remaining { result = result.checked_mul(10).ok_or(NumericFailure::Overflow)?; }
     if negative { Ok(result) } else { result.checked_neg().ok_or(NumericFailure::Overflow) }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PHP value conversion wraps finite floats while checked casts retain their range contract.
+    #[test]
+    fn strict_eval_modulo_scalar_conversion_keeps_php_value_and_checked_domains_distinct() {
+        for (value, expected) in [(1.0e20, 7_766_279_631_452_241_920),
+            (18_446_744_073_709_551_616.0, 0), (-18_446_744_073_709_551_616.0, 0),
+            (-9_223_372_036_854_775_808.0, i64::MIN), (7.5, 7), (-7.5, -7),
+            (f64::INFINITY, 0), (f64::NEG_INFINITY, 0), (f64::NAN, 0)] {
+            assert_eq!(php_float_to_int(value), expected, "{value}");
+        }
+        assert!(checked_float_to_int(1.0e20).is_err());
+        assert_eq!(checked_float_to_int(7.5), Ok(7));
+    }
 }

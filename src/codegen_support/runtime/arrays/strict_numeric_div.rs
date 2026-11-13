@@ -52,14 +52,18 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_frame_restore(emitter, FRAME);
     abi::emit_return(emitter);
     emitter.label(&zero);
-    // Calling the shared throw emitter creates the standard Throwable with existing unwind roots.
+    emit_zero_failure(emitter, ZERO_LABEL, ZERO_MESSAGE.len());
+}
+
+/// Shares catchable zero-divisor construction and the jump-only x86 alignment adaptation.
+pub(super) fn emit_zero_failure(emitter: &mut Emitter, message: &str, length: usize) {
     match emitter.target.arch {
         Arch::AArch64 => super::value_error::emit_throw_static_message_aarch64(
-            emitter, "_spl_division_by_zero_error_class_id", ZERO_LABEL, ZERO_MESSAGE.len()),
+            emitter, "_spl_division_by_zero_error_class_id", message, length),
         Arch::X86_64 => {
             emitter.instruction("sub rsp, 8");                                  // adapt the jump-only failure to the shared throw emitter's call alignment
             super::value_error::emit_throw_static_message_x86_64(
-                emitter, "_spl_division_by_zero_error_class_id", ZERO_LABEL, ZERO_MESSAGE.len());
+                emitter, "_spl_division_by_zero_error_class_id", message, length);
         }
     }
 }

@@ -1006,3 +1006,28 @@ float-value and float-string conversions), arithmetic/coercion/cast domains,
 stable bindings and the remaining public activation checks. Reference-PHP
 conversion and diagnostic-order discoveries are recorded in journal entries
 72b2ec1c and 43dc4a07. The public integration mask is unchanged.
+
+
+### Protected eval modulo and guarded conversion snapshots
+
+The append-only checked `Mod` selector now serves both eval engines. The native
+kernel owns two detached operand snapshots through existing exception guards,
+then interleaves each operand's prefix and precision diagnostics. Numeric strings
+reuse capped `str_to_int` conversion and quote the original bytes; float values
+reuse the shared modulo conversion and precision/range diagnostics. Zero throws
+`DivisionByZeroError`; signed-minimum modulo minus one returns zero without a
+hardware divide trap. Successful results own one independent integer box.
+
+The dependency-neutral numeric module now owns the PHP float-value conversion
+previously private to literal array keys, reused by compiler key planning and the
+fake eval adapter. Checked explicit-cast conversion remains a separate function.
+One scalar boundary unit, one walker/VM matrix, one all-five-target emitter unit
+and one both-optimizer native fixture pass. Native coverage includes capped
+versus float conversion, alternating diagnostics, callback input mutation,
+throwing handlers, zero and kind failures, unchanged output sentinels and clean
+heaps. Six directly affected compatibility controls and the compiler build pass.
+
+This completes the eval kernel step only. AOT mixed division/modulo still need
+explicit operation policy and matching conversion/callback behavior before the
+public numeric flags can be activated. Continue the numeric domains, binding
+contracts and remaining catalog guarantees; do not expose a partial umbrella.
