@@ -967,3 +967,25 @@ echo containsMixed(false, ["value" => 0], true) ? "1" : "0";
     );
     assert_eq!(out, "1110");
 }
+
+/// Constant string keys of a literal are normalized like php's: canonical integers become int
+/// keys, while `-0`, `-`, empty, leading-zero, non-digit and out-of-range spellings stay strings.
+/// Keys that cannot be integers skip the runtime check, the others still take it.
+#[test]
+fn test_constant_literal_keys_normalize_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ['10' => 'a', '-7' => 'b', '-0' => 'c', '-' => 'd', '' => 'e', '007' => 'f', '0' => 'g', 'x1' => 'h', '1x' => 'i', '9223372036854775808' => 'j', 'nested' => ['5' => ['k', 'l'], 'm' => 'n']];
+foreach ($a as $key => $value) {
+    echo gettype($key), ':', $key, '=', is_array($value) ? json_encode($value) : $value, "\n";
+}
+$a[10] .= '!';
+$a['-7'] .= '?';
+echo $a[10], $a[-7], count($a), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "integer:10=a\ninteger:-7=b\nstring:-0=c\nstring:-=d\nstring:=e\nstring:007=f\ninteger:0=g\nstring:x1=h\nstring:1x=i\nstring:9223372036854775808=j\nstring:nested={\"5\":[\"k\",\"l\"],\"m\":\"n\"}\na!b?11\n"
+    );
+}

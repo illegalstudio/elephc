@@ -34,6 +34,9 @@ pub(super) fn lower_assoc_array_literal_as(
     guarded: bool,
     hash_ty: PhpType,
 ) -> LoweredValue {
+    if !guarded && assoc_literal_cannot_throw(pairs, expr) {
+        return lower_assoc_array_literal_direct(ctx, pairs, expr, hash_ty);
+    }
     let hash = ctx.emit_value(
         Op::HashNew,
         Vec::new(),
@@ -68,6 +71,60 @@ pub(super) fn lower_assoc_array_literal_as(
         }
     }
     take_published_container(ctx, owner, hash_ty, expr.span)
+}
+
+/// Whether no key or value of an associative literal can throw, so nothing can strand the
+/// partially built hash or an entry evaluated ahead of its insertion.
+fn assoc_literal_cannot_throw(pairs: &[(Expr, Expr)], expr: &Expr) -> bool {
+    !crate::ir_lower::function::contains_deferred_error(expr)
+        && pairs.iter().all(|(key, value)| {
+            !matches!(value.kind, ExprKind::ArrayReference(_))
+                && !crate::optimize::expr_may_throw(key)
+                && !crate::optimize::expr_may_throw(value)
+        })
+}
+
+/// Lowers an associative literal none of whose entries can throw, in the direct SSA form the
+/// indexed and mixed literals use: no unwind-visible construction slot for the hash and no rooted
+/// slot per entry. Publishing them cost every nested literal an owner push, pop, retire and throw
+/// check: the 1,306 `symfony/intl` data files (`return ['Names' => ['AED' => ['AED', '…'], …]]`)
+/// were 10.3 M of the Symfony demo console's assembly lines.
+fn lower_assoc_array_literal_direct(
+    ctx: &mut LoweringContext<'_, '_>,
+    pairs: &[(Expr, Expr)],
+    expr: &Expr,
+    hash_ty: PhpType,
+) -> LoweredValue {
+    let hash = ctx.emit_value(
+        Op::HashNew,
+        Vec::new(),
+        Some(Immediate::Capacity(pairs.len() as u32)),
+        hash_ty.clone(),
+        Op::HashNew.default_effects(),
+        Some(expr.span),
+    );
+    for (key, value) in pairs {
+        let key = lower_expr(ctx, key);
+        let value_span = value.span;
+        let value = lower_expr(ctx, value);
+        // A packed record address or `null` stored as a pointer value is the pointer word.
+        let value = match &hash_ty {
+            PhpType::AssocArray { value: value_ty, .. } => {
+                ctx.retype_packed_address_for_pointer_sink(value, value_ty, Some(value_span))
+            }
+            _ => value,
+        };
+        ctx.emit_void(
+            Op::HashSet,
+            vec![hash.value, key.value, value.value],
+            None,
+            Op::HashSet.default_effects(),
+            Some(expr.span),
+        );
+        release_string_after_hash_insert(ctx, value, expr.span);
+        release_key_after_hash_insert(ctx, key, expr.span);
+    }
+    hash
 }
 
 /// Releases an owned string a `HashSet` has just stored.

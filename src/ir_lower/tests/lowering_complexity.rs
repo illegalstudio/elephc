@@ -809,3 +809,30 @@ fn mixed_reads_of_one_name_search_the_program_once() {
     assert!(small > 0, "the fixture no longer reaches the named read");
     assert_eq!(small, large, "arm searches grew with the sites: {small} vs {large}");
 }
+
+/// Unwind-visible owner registrations in function `name` of the lowered `source`.
+fn owner_pushes_in(source: &str, name: &str) -> usize {
+    let module = lower_source(source);
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .unwrap_or_else(|| panic!("function {name} was not lowered"));
+    function
+        .instructions
+        .iter()
+        .filter(|inst| inst.op == crate::ir::Op::PushCallOperandOwner)
+        .count()
+}
+
+/// A nested literal none of whose entries can throw is built in the direct SSA form: no entry
+/// can strand the partial hash, so it registers no unwind owner. Every nested array of the
+/// `symfony/intl` data files paid an owner push, pop, retire and throw check.
+#[test]
+fn constant_nested_literals_register_no_unwind_owner() {
+    let constant = "<?php\nfunction data() {\n    return ['Names' => ['AED' => ['AED', 'dirham'], 'AOA' => ['AOA', 'kwanza']], 'Version' => 3];\n}\necho count(data()), \"\\n\";\n";
+    assert_eq!(owner_pushes_in(constant, "data"), 0);
+    // A value that can throw still publishes the hash under construction.
+    let throwing = "<?php\nfunction pick(int $n): string { if ($n > 3) { throw new Exception('x'); } return 'p'; }\nfunction data(int $n) {\n    return ['Names' => ['AED' => ['AED', 'dirham']], 'Pick' => pick($n)];\n}\necho count(data($argc)), \"\\n\";\n";
+    assert!(owner_pushes_in(throwing, "data") > 0, "a throwing entry lost its unwind owner");
+}

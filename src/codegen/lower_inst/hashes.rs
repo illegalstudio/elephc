@@ -1003,7 +1003,9 @@ pub(super) fn materialize_hash_key_aarch64_with(
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "x1", "x2")?;
-            if normalization != HashKeyNormalization::RawString {
+            // A constant key that cannot be a canonical integer is already its own normalized
+            // form: the runtime check hands such a string back untouched.
+            if normalization != HashKeyNormalization::RawString && !ctx.is_constant_string_key(key) {
                 abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
             }
             Ok(())
@@ -1061,7 +1063,8 @@ pub(super) fn materialize_hash_key_x86_64_with(
     match ctx.value_php_type(key)? {
         PhpType::Str => {
             ctx.load_string_value_to_regs(key, "rax", "rdx")?;
-            if normalization != HashKeyNormalization::RawString {
+            // See the AArch64 twin: a constant non-integer key skips the runtime check.
+            if normalization != HashKeyNormalization::RawString && !ctx.is_constant_string_key(key) {
                 abi::emit_call_label(ctx.emitter, "__rt_hash_normalize_key");
             }
             ctx.emitter.instruction("mov rsi, rax");                            // move the string-or-integer key low word into the hash ABI register

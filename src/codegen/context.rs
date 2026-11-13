@@ -760,6 +760,31 @@ impl<'a> FunctionContext<'a> {
         })
     }
 
+    /// Whether `value` is a `ConstStr` that `__rt_hash_normalize_key` would hand back unchanged as
+    /// a string key: empty, or holding a byte that is not a digit (past one leading `-`). Any
+    /// other constant may be a canonical integer and still goes through the runtime check.
+    pub(super) fn is_constant_string_key(&self, value: ValueId) -> bool {
+        let Some(ValueDef::Instruction { inst, .. }) = self.function.value(value).map(|value| value.def)
+        else {
+            return false;
+        };
+        let Some(inst) = self.function.instruction(inst) else {
+            return false;
+        };
+        if inst.op != Op::ConstStr {
+            return false;
+        }
+        let Some(Immediate::Data(data_id)) = inst.immediate else {
+            return false;
+        };
+        let Some(source) = self.module.data.strings.get(data_id.as_raw() as usize) else {
+            return false;
+        };
+        let bytes = crate::string_bytes::literal_bytes(source);
+        let digits = bytes.strip_prefix(b"-").unwrap_or(&bytes);
+        bytes.is_empty() || !digits.iter().all(u8::is_ascii_digit) || digits.is_empty()
+    }
+
     /// Resolves a value produced by `LoadLocal` to its source slot.
     fn loaded_local_slot(&self, value: ValueId) -> Option<LocalSlotId> {
         let value_ref = self.function.value(value)?;
