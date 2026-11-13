@@ -1485,7 +1485,7 @@ impl Op {
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
             ConcatReset => E::WRITES_GLOBAL,
             Cast => {
-                E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL | E::MAY_THROW
+                E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
             }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             // Rewrites the (possibly split) array's slots and releases the boxed cells it replaces.
