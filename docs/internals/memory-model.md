@@ -36,6 +36,9 @@ at their request/call boundaries. See [PHP extensions](../beyond-php/phpext.md).
 │     String buffer            │  _concat_buf: heap-sized, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
+│ Numeric formatter spill rings│  _itoa_spill_ring: 8 x 32B
+│  (bounded scratch windows)   │  _float_spill_ring: 4 x 64B
+├─────────────────────────────┤
 │   Output capture buffers     │  _print_r_ptr/_cap: growable heap capture,
 │  (print_r rendering, ob_*    │  _ob_ptrs/_lens/_caps + handler tables:
 │   buffer-stack bookkeeping)  │  64 slots x 8B each (ob buffer bodies
@@ -1835,6 +1838,7 @@ borrowed pointers rather than a second copy of the runtime heap.
 
 | Symbols | Size | Purpose |
 |---|---|---|
+| `_itoa_spill_ring`, `_float_spill_ring` | 256 bytes each | Eight 32-byte integer-formatting slots and four 64-byte float-formatting slots when the concat arena cannot reserve a formatter window |
 | `_itoa_spill_index`, `_float_spill_index` | 8 bytes each | Current positions in the integer and floating-point formatting spill rings |
 | `_ser_stream`, `_unser_call_line` | 8 bytes each | Active growable serialization-stream descriptor and source line for unserialization diagnostics |
 | `_elephc_eval_inventory_context` | 8 bytes | Eval context used while registering the module's native metadata |
@@ -1981,6 +1985,7 @@ read the same uniform heap header, including on the iOS targets.
 |---|---|---|
 | Stack | OS default (~8MB) | Stack overflow (crash) |
 | String buffer | `--heap-size` (default 128 MB) | Resets each statement, bounded by the program budget |
+| Numeric formatting spill rings | `_itoa_spill_ring` and `_float_spill_ring` = 256 bytes each; their indices = 8 bytes each | Slots wrap after eight integer or four float results; escaping results need ordinary owned string storage |
 | print_r capture | `_print_r_ptr`, `_print_r_cap`, `_print_r_mode`, `_print_r_off` = 8 bytes each | Both return and echo modes render into growable raw heap storage. Finish persists the result with string metadata, frees the raw buffer, and clears state; cleanup releases abandoned captures |
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |

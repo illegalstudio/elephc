@@ -174,7 +174,7 @@ status   = "partial"
 php      = "https://www.php.net/manual/en/book.mysqli.php"
 docs     = "docs/php/mysqli.md"
 evidence = "tests/codegen/mysqli.rs"
-notes    = "Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page"
+notes    = "Complete selected-profile function, class, method and constant surface over the elephc-pdo bridge; behavioral divergences remain documented on the mysqli page"
 modules  = ["mysqli"]
 
 [[extensions]]
@@ -292,7 +292,7 @@ notes    = "Compiled-script manifest plus a runtime parsed-script cache for dyna
 
 [[limitations]]
 title = "eval() coverage of the prelude-implemented modules"
-notes = "The generated eval() counts are zero for gd, exif, mysqli, PDO, and session because their functions use injected PHP preludes without interpreter bindings. OPcache has a separate supported route through native prelude declarations or dedicated interpreter handlers, including the live script cache and API restrictions. The remaining module gaps are tracked by mysqli #746, PDO #748, session #1211, gd and exif #1212, with #906 as the umbrella; call those functions from compiled code and pass the results into the fragment until their eval() surfaces are implemented."
+notes = "Generated eval() counts track explicit interpreter bindings and supported contract routes; a zero for a prelude module does not by itself mean its linked declarations are unavailable at runtime. In particular, eval() can call the PDO and mysqli surface linked into the compiled program. Use --with-pdo or --with-mysqli when only opaque eval source names that surface. OPcache also has native prelude and dedicated interpreter routes. Consult each module page for its runtime availability, required capabilities and remaining limitations."
 
 [[limitations]]
 title = "Static subset, AOT only"
