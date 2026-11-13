@@ -140,7 +140,7 @@ fn collect_chain(
             let Some(Immediate::MixedNumericOp(operation)) = definition.immediate else {
                 return None;
             };
-            if matches!(operation, MixedNumericOp::Pow) {
+            if !operation.supports_checked_chain() {
                 return None;
             }
             let (chain, scalar) = if value_is_i64(function, rhs) {

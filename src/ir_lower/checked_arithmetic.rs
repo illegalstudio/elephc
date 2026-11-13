@@ -20,7 +20,7 @@ pub(super) fn binary(
 ) -> LoweredValue {
     let opcode = match operation {
         MixedNumericOp::Add => Op::IAdd, MixedNumericOp::Sub => Op::ISub, MixedNumericOp::Mul => Op::IMul,
-        MixedNumericOp::Pow => unreachable!("power uses a checked multiplication loop"),
+        MixedNumericOp::Pow | MixedNumericOp::Div | MixedNumericOp::Mod => unreachable!("checked scalar arithmetic accepts add/sub/mul only"),
     };
     let operands = vec![left.value, right.value];
     let result = ctx.emit_value(opcode, operands.clone(), None, PhpType::Int, opcode.default_effects(), Some(span));

@@ -33,7 +33,8 @@ pub(super) fn emit_basic(emitter: &mut Emitter) {
 fn emit_entry(emitter: &mut Emitter, op: MixedNumericOp) {
     let result = abi::int_result_reg(emitter);
     let name = match op { MixedNumericOp::Add => "add", MixedNumericOp::Sub => "sub",
-        MixedNumericOp::Mul => "mul", MixedNumericOp::Pow => "pow" };
+        MixedNumericOp::Mul => "mul", MixedNumericOp::Pow => "pow",
+        MixedNumericOp::Div | MixedNumericOp::Mod => unreachable!("division and remainder have dedicated kernels") };
     let prefix = format!("__rt_strict_mixed_numeric_{name}");
     let floating = format!("{prefix}_floating");
     let done = format!("{prefix}_done");
@@ -62,6 +63,7 @@ fn emit_entry(emitter: &mut Emitter, op: MixedNumericOp) {
         MixedNumericOp::Add => ins(emitter, "fadd d0, d0, d1", "addsd xmm0, xmm1"),
         MixedNumericOp::Sub => ins(emitter, "fsub d0, d0, d1", "subsd xmm0, xmm1"),
         MixedNumericOp::Mul => ins(emitter, "fmul d0, d0, d1", "mulsd xmm0, xmm1"),
+        MixedNumericOp::Div | MixedNumericOp::Mod => unreachable!("division and remainder have dedicated kernels"),
         MixedNumericOp::Pow => emitter.bl_c("pow"),                              // preserve IEEE-754 power for explicitly floating operands
     }
     ins(emitter, "fmov x1, d0", "movq rdi, xmm0");
@@ -127,7 +129,7 @@ fn checked_integer(emitter: &mut Emitter, op: MixedNumericOp) {
                 abi::emit_branch_if_overflow_wide(emitter, "__rt_strict_integer_overflow_fail");
             }
         }
-        MixedNumericOp::Pow => unreachable!("power uses its reviewed integer kernel"),
+        MixedNumericOp::Pow | MixedNumericOp::Div | MixedNumericOp::Mod => unreachable!("only add/sub/mul use the inline integer kernel"),
     }
     if op != MixedNumericOp::Mul {
         abi::emit_branch_if_overflow_wide(emitter, "__rt_strict_integer_overflow_fail");

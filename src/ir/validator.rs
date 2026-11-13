@@ -787,13 +787,18 @@ fn validate_instruction_immediate(
             matches!(imm, Imm::CmpPredicate(_))
         }),
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
-            matches!(imm, Imm::MixedNumericOp(_) | Imm::NumericOperation { .. })
+            match imm {
+                Imm::MixedNumericOp(op) => !matches!(op, crate::ir::MixedNumericOp::Div | crate::ir::MixedNumericOp::Mod),
+                Imm::NumericOperation { op, policy } => !matches!(op, crate::ir::MixedNumericOp::Div | crate::ir::MixedNumericOp::Mod)
+                    || policy.checked_overflow(),
+                _ => false,
+            }
         }),
         ICheckedNumericChainToInt => {
             require_immediate(inst_id, inst, "checked numeric chain", |imm| {
                 matches!(imm, Imm::CheckedNumericChain(chain) if !chain.operations().is_empty()
                     && chain.operations().iter()
-                        .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
+                        .all(|op| op.supports_checked_chain()))
             })
         }
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {

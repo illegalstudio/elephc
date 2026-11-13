@@ -179,6 +179,18 @@ fn lower_numeric_binary_values(
             return crate::ir_lower::checked_arithmetic::binary(ctx, lhs, operation, rhs, expr.span);
         }
     }
+    if policy.checked_overflow() && matches!(op, BinOp::Div | BinOp::Mod)
+        && (should_use_mixed_numeric_binop(lhs.ir_type, rhs.ir_type)
+            || (matches!(op, BinOp::Mod) && (lhs.ir_type != IrType::I64 || rhs.ir_type != IrType::I64))) {
+        let operation = if matches!(op, BinOp::Div) { MixedNumericOp::Div } else { MixedNumericOp::Mod };
+        let expected = if operation == MixedNumericOp::Div { PhpType::Float } else { PhpType::Int };
+        let result = crate::ir_lower::checked_arithmetic::boxed(ctx, lhs, operation, rhs, policy, expr.span);
+        let result = crate::builtins::semantics::normalize_numeric_result(ctx,
+            crate::builtins::semantics::LoweredBuiltinValue { value: result.value }, &expected, expr.span);
+        release_binary_operand_temporary(ctx, lhs, expr.span);
+        if rhs.value != lhs.value { release_binary_operand_temporary(ctx, rhs, expr.span); }
+        return LoweredValue { value: result.value, ir_type: ctx.builder.value_type(result.value) };
+    }
     let numeric_ty = numeric_binary_result_type(
         op,
         lhs.ir_type,

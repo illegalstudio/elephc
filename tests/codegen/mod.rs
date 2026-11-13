@@ -39,6 +39,7 @@ mod strict_numeric_eval;
 mod strict_eval_diagnostics;
 mod strict_eval_division;
 mod strict_eval_modulo;
+mod strict_division_modulo;
 mod testing;
 mod testing_command;
 mod testing_generic_functions;

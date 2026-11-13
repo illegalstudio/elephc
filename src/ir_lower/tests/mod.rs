@@ -736,3 +736,4 @@ mod strict_abs;
 mod strict_pow;
 mod strict_numeric_aggregates;
 mod strict_numeric_builtins;
+mod strict_division_modulo;

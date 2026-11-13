@@ -130,7 +130,9 @@ impl Checker {
                 self.check_arithmetic_string_operands(left, &lt, right, &rt, expr)?;
                 // Division always returns float (PHP compat: 10/3 → 3.333...); keep that
                 // policy even when an operand is a numeric string.
-                if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
+                if *op == BinOp::Mod {
+                    Ok(PhpType::Int)
+                } else if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
                     if uses_mixed_numeric_dispatch(&lt)

@@ -502,6 +502,8 @@ pub enum MixedNumericOp {
     Sub,
     Mul,
     Pow,
+    Div,
+    Mod,
 }
 
 /// php's fetch mode for one object property access, php-src's `BP_VAR_R` vs `BP_VAR_IS`.
@@ -592,6 +594,9 @@ impl PhpTypePredicate {
 }
 
 impl MixedNumericOp {
+    /// Identifies the operations supported by sequential PHP-promoting integer overflow chains.
+    pub fn supports_checked_chain(self) -> bool { matches!(self, Self::Add | Self::Sub | Self::Mul) }
+
     /// Returns the lower-case textual spelling used by the EIR printer.
     pub fn as_eir(self) -> &'static str {
         match self {
@@ -599,6 +604,8 @@ impl MixedNumericOp {
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
             MixedNumericOp::Pow => "pow",
+            MixedNumericOp::Div => "div",
+            MixedNumericOp::Mod => "mod",
         }
     }
 }

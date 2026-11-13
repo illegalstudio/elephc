@@ -645,8 +645,9 @@ pub(super) fn lower_mixed_numeric_binop(
         match op {
             MixedNumericOp::Add => "__rt_strict_mixed_numeric_add", MixedNumericOp::Sub => "__rt_strict_mixed_numeric_sub",
             MixedNumericOp::Mul => "__rt_strict_mixed_numeric_mul", MixedNumericOp::Pow => "__rt_strict_mixed_numeric_pow",
+            MixedNumericOp::Div => "__rt_strict_mixed_numeric_div", MixedNumericOp::Mod => "__rt_strict_mixed_numeric_mod",
         }
-    } else { mixed_numeric_helper(op) };
+    } else { mixed_numeric_helper(op)? };
     abi::emit_call_label(ctx.emitter, helper);
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     if left_box_temp {
@@ -727,11 +728,13 @@ fn expect_mixed_numeric_op(inst: &Instruction) -> Result<MixedNumericOp> {
 }
 
 /// Maps a mixed numeric operation to the target-aware runtime helper label.
-fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
-    match op {
+fn mixed_numeric_helper(op: MixedNumericOp) -> Result<&'static str> {
+    Ok(match op {
         MixedNumericOp::Add => "__rt_mixed_numeric_add",
         MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
         MixedNumericOp::Pow => "__rt_mixed_numeric_pow",
-    }
+        MixedNumericOp::Div | MixedNumericOp::Mod => return Err(CodegenIrError::invalid_module(
+            "boxed division and remainder require an explicit checked numeric policy")),
+    })
 }

@@ -81,7 +81,11 @@ pub(super) fn integer_overflow_may_throw(expr: &crate::parser::ast::Expr) -> boo
 pub(super) fn checked_numeric_conversion_may_dispatch(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::{BinOp, ExprKind};
     if !enabled(StrictFeature::Overflow) { return false; }
-    let ExprKind::BinaryOp { left, op: BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Pow, right } = &expr.kind else { return false; };
+    let ExprKind::BinaryOp { left, op: operation @ (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Pow | BinOp::Div | BinOp::Mod), right } = &expr.kind else { return false; };
+    if matches!(operation, BinOp::Mod) {
+        return [left, right].into_iter().any(|operand| !matches!(operand.kind,
+            ExprKind::IntLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::Null));
+    }
     [left, right].into_iter().any(|operand| match &operand.kind {
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::Null => false,
         ExprKind::StringLiteral(value) => !crate::numeric_string::scan_numeric_prefix(value)

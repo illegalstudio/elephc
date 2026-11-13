@@ -1031,3 +1031,33 @@ This completes the eval kernel step only. AOT mixed division/modulo still need
 explicit operation policy and matching conversion/callback behavior before the
 public numeric flags can be activated. Continue the numeric domains, binding
 contracts and remaining catalog guarantees; do not expose a partial umbrella.
+
+
+### Explicit AOT division and modulo policies
+
+EIR numeric operation metadata now represents `Div` and `Mod`. Staged checked
+AOT dynamic division and non-integer remainder operands share the reviewed eval
+kernels with explicit ownership roots. Existing scalar division/remainder guards
+remain available. Scalar result normalization reuses the existing backend-neutral
+builtin lowering interface already implemented by `LoweringContext`, including
+temporary-box retirement. Trusted Internal operations keep their prior entries.
+
+Unprofiled boxed division/remainder fail EIR validation. The shared checked-chain
+predicate accepts only add/subtract/multiply, preventing the new operations from
+entering a promoting fused chain or raw-loop specialization. Modulo type inference
+now returns Int before operand-driven float promotion, agreeing with EIR storage.
+AST callback effects and exception analysis include dynamic division and modulo
+precision diagnostics, preserving discarded expressions and handler mutations.
+
+Two focused compiler units and two native tests pass. Coverage includes all five
+targets, PHP/LFC/Internal source, optimizer on/off, malformed operation metadata,
+unsupported fused chains, global warning-handler mutation, catch retention,
+reference failure atomicity and successful integer/float writeback, default-mode
+remainder result kinds and clean heaps. Six directly affected runtime/optimizer
+controls pass, along with compiler check/build, architecture audit and assembly/
+diff hygiene. The architecture audit was rerun under the build lock with a fresh
+prebuilt exporter after an accidental indirect Cargo invocation was detected.
+
+The next numeric work is shared arithmetic/coercion/cast domain planning and
+stable bindings, followed by the remaining semantic families. The integrated
+public mask remains unchanged until the complete guarantees are enforced.
