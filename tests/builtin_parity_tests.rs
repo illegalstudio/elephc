@@ -71,7 +71,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
     // the prelude-provided functions outside `ext/curl` (including XML, SimpleXML, fileinfo,
     // the tokenizer surface, the random surface, and the full mysqli procedural surface),
     // and the 54 date/calendar functions the name resolver rewrites.
-    assert_eq!(exceptional.len(), 450);
+    assert_eq!(exceptional.len(), 453);
 
     let mut language_constructs = 0;
     let mut dedicated_syntax = 0;
@@ -113,7 +113,7 @@ fn non_registry_surfaces_have_complete_backend_contracts() {
         BTreeSet::from(["func_get_arg", "func_get_args", "func_num_args"])
     );
     assert_eq!(rewrites, 54);
-    assert_eq!(preludes.len(), 387);
+    assert_eq!(preludes.len(), 390);
     for name in [
         "hash_copy",
         "hash_final",
