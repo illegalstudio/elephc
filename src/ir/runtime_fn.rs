@@ -656,6 +656,8 @@ pub enum RuntimeFnId {
     Htmlentities,
     Htmlspecialchars,
     Implode,
+    /// Alias of implode with its own PHP diagnostic name.
+    Join,
     InetNtop,
     InetPton,
     /// Allocation-free `strlen(inet_pton(...))` packed-address length.
@@ -1473,7 +1475,7 @@ impl RuntimeFnId {
             // arbitrary PHP. Discarded calls must retain these observable effects.
             // I/O inside those callbacks is monitored at its own runtime boundary;
             // the join itself does not perform a network or blocking operation.
-            RuntimeFnId::Implode | RuntimeFnId::ArrayFlip | RuntimeFnId::StripTags => crate::ir::Effects::from_bits_retain(
+            RuntimeFnId::Implode | RuntimeFnId::Join | RuntimeFnId::ArrayFlip | RuntimeFnId::StripTags => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
                     & !crate::ir::Effects::NETWORK_IO.bits(),
@@ -3037,6 +3039,7 @@ impl RuntimeFnId {
                 // The join lowerer persists every result before retiring normalized
                 // input values, so destructor reentry cannot overwrite returned bytes.
                 | RuntimeFnId::Implode
+                | RuntimeFnId::Join
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
@@ -3697,6 +3700,7 @@ impl RuntimeFnId {
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",
+            RuntimeFnId::Join => "join",
             RuntimeFnId::InetNtop => "inet_ntop",
             RuntimeFnId::InetPton => "inet_pton",
             RuntimeFnId::Ip2long => "ip2long",

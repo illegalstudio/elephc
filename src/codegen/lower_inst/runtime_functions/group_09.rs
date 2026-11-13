@@ -128,8 +128,8 @@ pub(super) fn lower(
         RuntimeFnId::Htmlspecialchars => Some({
             crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlspecialchars")
         }),
-        RuntimeFnId::Implode => Some({
-            crate::codegen::lower_inst::builtins::strings::lower_implode(ctx, inst)
+        RuntimeFnId::Implode | RuntimeFnId::Join => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_implode(ctx, inst, target.as_eir())
         }),
         RuntimeFnId::InetNtop => Some({
             crate::codegen::lower_inst::builtins::strings::lower_inet(

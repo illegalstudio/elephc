@@ -331,7 +331,14 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     }
     let eval_literal = eval_literal_fragment(canonical, args);
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
-    let call = emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal);
+    // Zend's direct positional implode fast path treats the operand as the array;
+    // named, unpacked and callable invocations use the ordinary separator overload.
+    let positional_implode = canonical_builtin_function_name(canonical).as_deref() == Some("implode")
+        && args.len() == 1 && plain_positional_call_args(args);
+    let call = emit_builtin_call_value_with_target(
+        ctx, canonical, operands, php_type, expr.span, eval_literal,
+        positional_implode.then_some(crate::ir::RuntimeCallTarget::PositionalImplode),
+    );
     retire_call_argument_intermediates(ctx, &evaluation_intermediates);
     unbox_raw_word_builtin_result(ctx, call, expr.span)
 }
@@ -446,6 +453,19 @@ pub(super) fn emit_builtin_call_value(
     span: Span,
     eval_literal: Option<&str>,
 ) -> LoweredValue {
+    emit_builtin_call_value_with_target(ctx, name, operands, php_type, span, eval_literal, None)
+}
+
+/// Retains source-form overload selection while sharing builtin argument ownership handling.
+fn emit_builtin_call_value_with_target(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType,
+    span: Span,
+    eval_literal: Option<&str>,
+    target: Option<crate::ir::RuntimeCallTarget>,
+) -> LoweredValue {
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let mut operands = operands;
@@ -456,22 +476,30 @@ pub(super) fn emit_builtin_call_value(
             // in the unwind chain for the duration of the call so a caught guard releases them
             // exactly once instead of stranding them.
             let pins = pin_throwing_builtin_operands(ctx, def, &operands, &roots, &php_type, span);
-            let lowered = crate::builtins::semantics::lower_registry_call(
-                ctx,
-                def,
-                &operands,
-                &php_type,
-                span,
-            )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
-                    def.name,
-                    span.line,
-                    span.col,
-                    error,
+            let lowered = if let Some(target) = target {
+                let value = ctx.emit_value(
+                    Op::RuntimeCall, operands.clone(), Some(Immediate::RuntimeCall(target)),
+                    php_type.clone(), crate::ir::RuntimeFnId::Implode.effects(), Some(span),
+                );
+                crate::builtins::semantics::LoweredBuiltinValue { value: value.value }
+            } else {
+                crate::builtins::semantics::lower_registry_call(
+                    ctx,
+                    def,
+                    &operands,
+                    &php_type,
+                    span,
                 )
-            });
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "checked builtin {} failed backend-neutral EIR lowering at {}:{}: {}",
+                        def.name,
+                        span.line,
+                        span.col,
+                        error,
+                    )
+                })
+            };
             let raw_call = LoweredValue {
                 value: lowered.value,
                 ir_type: ctx.builder.value_type(lowered.value),

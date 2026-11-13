@@ -80113,7 +80113,7 @@
     "module": "standard",
     "name": "implode",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_uncoerced",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -86443,9 +86443,36 @@
     "canonical_name": "join",
     "description": "Joins array elements into a single string using a separator (alias of implode).",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/join.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "separator",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "array",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
@@ -86458,7 +86485,7 @@
       "codegen_function": "lower_registry_call",
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.implode` through `BuiltinLoweringContext`.",
+        "Emits the typed EIR target `runtime.join` through `BuiltinLoweringContext`.",
         "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
       ],
       "runtime_helpers": [],
@@ -86468,7 +86495,7 @@
     "module": "standard",
     "name": "join",
     "semantics": {
-      "argument_lowering": "standard",
+      "argument_lowering": "preserve_uncoerced",
       "callable": {
         "kind": "static_only",
         "reason": "typed backend operation has no runtime-selected wrapper contract"
@@ -86478,7 +86505,7 @@
       },
       "lowering": {
         "kind": "runtime_call",
-        "target": "implode"
+        "target": "join"
       },
       "ownership": {
         "argument_indexes": [],
@@ -86490,7 +86517,7 @@
       },
       "result_type": "declared",
       "runtime_functions": [
-        "implode"
+        "join"
       ],
       "target_strategy": "runtime_call",
       "target_support": [

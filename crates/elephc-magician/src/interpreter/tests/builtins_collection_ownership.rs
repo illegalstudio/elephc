@@ -56,7 +56,7 @@ fn implode_releases_traversal_keys_and_values_on_every_exit() {
         let source = values.alloc(FakeValue::Array(vec![first, second]));
         let existing = values.values.keys().copied().collect::<Vec<_>>();
         if fail_release { values.fail_release_call = Some(0); }
-        let result = eval_implode_result(separator, source, &mut context, &mut values);
+        let result = eval_implode_result("implode", Some(separator), source, &mut context, &mut values);
         if fail_release {
             assert_eq!(result, Err(EvalStatus::UncaughtThrowable));
         } else {

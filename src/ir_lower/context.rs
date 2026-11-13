@@ -4822,7 +4822,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ),
             Some(Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::UnaryString(_)
-                | crate::ir::RuntimeCallTarget::StringOffsetSet,
+                | crate::ir::RuntimeCallTarget::StringOffsetSet
+                | crate::ir::RuntimeCallTarget::PositionalImplode,
             )) => true,
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ArrayUnpackToHash)) => true,
             Some(Immediate::Data(name_id) | Immediate::ProfiledData { data: name_id, .. })
@@ -5869,6 +5870,8 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                         | crate::ir::RuntimeFnId::IsCallable
                         | crate::ir::RuntimeFnId::ObStart
                         | crate::ir::RuntimeFnId::StripTags
+                        | crate::ir::RuntimeFnId::Implode
+                        | crate::ir::RuntimeFnId::Join
                 ) || target.string_callback_operand_index().is_some()
                     || target.uses_mbstring_runtime() =>
             {
@@ -6095,6 +6098,7 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
         return true;
     }
     match (op, immediate) {
+        (Op::RuntimeCall, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::PositionalImplode))) => true,
         (
             Op::RuntimeCall,
             Some(Immediate::RuntimeCall(
@@ -6110,6 +6114,7 @@ pub(super) fn opcode_has_opaque_user_code_target(op: Op, immediate: Option<&Imme
                     | crate::ir::RuntimeFnId::Serialize
                     | crate::ir::RuntimeFnId::Unserialize
                     | crate::ir::RuntimeFnId::Implode
+                    | crate::ir::RuntimeFnId::Join
                     | crate::ir::RuntimeFnId::ArrayFlip
                     | crate::ir::RuntimeFnId::ArraySum
                     | crate::ir::RuntimeFnId::ArrayProduct
