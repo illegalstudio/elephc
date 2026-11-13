@@ -320,7 +320,7 @@ Key invariants:
   checker-resident (`numeric`/`arrays` `check_builtin`), not in the registry.
   `buffer_new` is catalog-name-only (its call form is dedicated syntax); `buffer_len`
   and `buffer_free` are ordinary registry builtins.
-- **elephc-only contracts declare `extension: true`** so `--strict-php` hides them from
+- **elephc-only contracts declare `extension: true`** so `--php-only` hides them from
   AOT and eval without a second pinned list. Injected preludes must call
   `internal: true` `__elephc_*` aliases instead of PHP-visible extension builtins; a
   parity gate scans the prelude sources to enforce this.

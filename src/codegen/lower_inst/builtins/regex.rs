@@ -198,7 +198,7 @@ pub(crate) fn lower_preg_replace_callback(
     let callback_target = preg_replace_callback_target(ctx, callback)?;
     let env_bytes = callback_target.reserve_env(
         ctx,
-        super::super::instruction_strict_php_profile(inst),
+        super::super::instruction_php_only_profile(inst),
     )?;
     // `[$obj, 'method']` and a runtime string name allocate a descriptor this
     // call owns. The helper's setjmp records the cleanup chain as it stands on
@@ -248,9 +248,9 @@ impl PregReplaceCallbackTarget {
     fn reserve_env(
         &self,
         ctx: &mut FunctionContext<'_>,
-        strict_php: bool,
+        php_only: bool,
     ) -> Result<usize> {
-        self.env.reserve(ctx, strict_php)
+        self.env.reserve(ctx, php_only)
     }
 
     /// Releases any reserved callback environment while preserving the regex result.
@@ -271,11 +271,11 @@ enum PregReplaceCallbackEnv {
 
 impl PregReplaceCallbackEnv {
     /// Reserves the stack environment expected by the deferred regex callback wrapper.
-    fn reserve(&self, ctx: &mut FunctionContext<'_>, strict_php: bool) -> Result<usize> {
+    fn reserve(&self, ctx: &mut FunctionContext<'_>, php_only: bool) -> Result<usize> {
         match self {
             Self::Descriptor(callback) => reserve_descriptor_callback_env(ctx, *callback),
             Self::RuntimeString(callback) => {
-                reserve_runtime_string_descriptor_callback_env(ctx, *callback, strict_php)
+                reserve_runtime_string_descriptor_callback_env(ctx, *callback, php_only)
             }
             Self::CallableArray {
                 callable,
@@ -411,7 +411,7 @@ fn reserve_descriptor_callback_env(
 fn reserve_runtime_string_descriptor_callback_env(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<usize> {
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     let descriptor_reg = abi::int_result_reg(ctx.emitter).to_string();
@@ -420,7 +420,7 @@ fn reserve_runtime_string_descriptor_callback_env(
         callable,
         &descriptor_reg,
         "preg_replace_callback",
-        strict_php,
+        php_only,
     )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

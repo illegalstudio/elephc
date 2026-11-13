@@ -355,8 +355,8 @@ src/
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
-├── strict_php.rs              `--strict-php` mode state and audit entry point
-├── strict_php/                Strict-mode AST audit pass rejecting elephc-only syntax extensions
+├── php_only.rs              `--php-only` mode state and audit entry point
+├── php_only/                Strict-mode AST audit pass rejecting elephc-only syntax extensions
 ├── autoload/                  Composer/SPL AOT autoload indexing, rule interpretation, and file insertion
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── eval_aot.rs                Target-independent literal eval planning and fallback classification

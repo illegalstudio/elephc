@@ -398,7 +398,7 @@ typed locals are checked at runtime. Binding and specialized contract failures t
 Class and constructor arguments may be written together, such as `Pair<int, string>`, before
 any inferred instantiation, including in parent references. Typed arrays validate float and bool
 keys as their stored integer type, following PHP array-key normalization.
-Native syntax requires ordinary mode; PHPDoc templates also work under `--strict-php`.
+Native syntax requires ordinary mode; PHPDoc templates also work under `--php-only`.
 
 Specialization reuses the existing call binder and boxed value ABI. It does not change the
 supported expression subset or give interpreted calls AOT's native storage representation.
@@ -1086,7 +1086,7 @@ and `get_defined_constants(true)` reports that under `user` as PHP does.
 
 The eval interpreter is a separate crate that cannot read `--php-version`
 itself, so the compiler forwards the profile to it: generated code sets it
-before every eval dispatch, exactly as it forwards `--strict-php`. A binary
+before every eval dispatch, exactly as it forwards `--php-only`. A binary
 compiled `--php-version 8.2` therefore reports `PHP_VERSION` `"8.2.0"`,
 `PHP_VERSION_ID` `80200` and `phpversion()` `"8.2.0"` from inside `eval()`, the
 same values it reports natively. `PHP_MAJOR_VERSION`, `PHP_RELEASE_VERSION` and
@@ -1104,7 +1104,7 @@ dispatch, `call_user_func()`, `call_user_func_array()`, and `function_exists()`
 where listed below unless a note says otherwise.
 
 > **Strict mode:** in binaries compiled with
-> [`--strict-php`](../compiling/cli-reference.md#strict-php-mode), the
+> [`--php-only`](../compiling/cli-reference.md#php-only-mode), the
 > elephc-extension builtins below — the whole "Raw memory and buffers" row plus
 > `class_attribute_names()`, `class_attribute_args()`, and
 > `class_get_attributes()` — do not exist inside eval'd code either: calling one

@@ -30,6 +30,7 @@ pub(crate) mod pcntl_runtime;
 mod reference_metadata;
 mod reflection_registry;
 mod runtime_state;
+mod semantic_profile;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

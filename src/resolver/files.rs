@@ -40,6 +40,7 @@ pub(super) fn parse_file(
     path: &Path,
     include_span: Span,
     defines: &std::collections::HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
 ) -> Result<Vec<Stmt>, CompileError> {
     let source = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
@@ -66,5 +67,5 @@ pub(super) fn parse_file(
         parser::parse_with_mode(&tokens, mode)
     })
     .map_err(|e| e.with_file(file))?;
-    crate::source::finalize_physical_program(parsed, &source, path, mode, defines)
+    crate::source::finalize_physical_program_with_semantics(parsed, &source, path, mode, defines, semantic_profile)
 }

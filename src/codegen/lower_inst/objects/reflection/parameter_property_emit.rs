@@ -27,7 +27,7 @@ fn reflection_declaring_function_dump(
     name: &str,
 ) -> Option<String> {
     let Some(class_name) = declaring_class_name else {
-        // A source declaration shadows extension builtins, including in strict-php mode. Consult
+        // A source declaration shadows extension builtins, including in php-only mode. Consult
         // the builtin signature table only when no generated function with this name exists.
         if let Some(function) = ctx.function_by_name(name) {
             let signature = function.signature.as_ref()?;

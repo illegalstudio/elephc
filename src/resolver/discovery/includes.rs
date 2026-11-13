@@ -88,7 +88,7 @@ pub(super) fn discover_include(
         ));
     }
 
-    let included_stmts = parse_file(&resolved, span, &state.conditional_defines)?;
+    let included_stmts = parse_file(&resolved, span, &state.conditional_defines, state.semantic_profile)?;
 
     let included_dir = resolved.parent().unwrap_or(base_dir);
     let mut declaration_state = state.clone();

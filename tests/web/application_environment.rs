@@ -116,7 +116,7 @@ class Application implements Elephc\Web\WorkerApplication {
 $config = (string) $_ENV['ELEPHC_WEB_TEST_ENV'] . '/' . (string) $_SERVER['ELEPHC_WEB_TEST_ENV'];
 $_SERVER['bootstrap_local'] = 'bootstrap';
 Elephc\Web\Worker::register(new Application($config, $_ENV));
-"#, "app", &["--web-lifecycle=application", "--strict-php"]);
+"#, "app", &["--web-lifecycle=application", "--php-only"]);
     let addr = format!("127.0.0.1:{}", free_port());
     let _server = environment_server(&binary, &addr, true);
     for path in ["/", "/fail", "/", "/"] {
@@ -145,7 +145,7 @@ class Application implements Elephc\Web\WorkerApplication {
     public function shutdown(): void {}
 }
 Elephc\Web\Worker::register(new Application((string) $_SERVER['ELEPHC_WEB_TEST_ENV']));
-"#, "app", &["--web-lifecycle=application", "--strict-php"]);
+"#, "app", &["--web-lifecycle=application", "--php-only"]);
     let addr = format!("127.0.0.1:{}", free_port());
     let _server = environment_server(&binary, &addr, false);
     for _ in 0..3 {
@@ -177,7 +177,7 @@ class Application implements \Elephc\Web\WorkerApplication {
 "#).unwrap();
     let binary = compile_web_with_flags(&dir.0,
         "<?php \\Elephc\\Web\\Worker::register(new \\AppEnv\\Application());",
-        "app", &["--web-lifecycle=application", "--strict-php"]);
+        "app", &["--web-lifecycle=application", "--php-only"]);
     let addr = format!("127.0.0.1:{}", free_port());
     let _server = environment_server(&binary, &addr, false);
     for _ in 0..3 {
@@ -207,7 +207,7 @@ class Application implements Elephc\Web\WorkerApplication {
     public function shutdown(): void {}
 }
 Elephc\Web\Worker::register(new Application());
-"#, "app", &["--web-lifecycle=application", "--strict-php"]);
+"#, "app", &["--web-lifecycle=application", "--php-only"]);
     let addr = format!("127.0.0.1:{}", free_port());
     let _server = Command::new(&binary)
         .env_clear().env("PATH", "/usr/bin:/bin")

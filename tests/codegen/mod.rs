@@ -32,12 +32,13 @@ mod null_sentinel;
 mod case_insensitive_symbols;
 mod cli;
 mod repl;
-mod strict_php;
+mod php_only;
+mod strict_semantics;
 mod testing;
 mod testing_command;
 mod testing_generic_functions;
 mod testing_generics;
-mod strict_php_source_guards;
+mod php_only_source_guards;
 mod lfc;
 mod benchmarks;
 #[path = "perf_regressions.rs"]

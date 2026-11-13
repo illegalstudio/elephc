@@ -152,13 +152,13 @@ pub(in crate::codegen) fn emit_runtime_builtin_wrapper_inline(
     ctx: &mut FunctionContext<'_>,
     name: &str,
     sig: &FunctionSig,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<String> {
     emit_runtime_call_wrapper_inline(
         ctx,
         name,
         sig,
-        RuntimeCallWrapperKind::Builtin { strict_php },
+        RuntimeCallWrapperKind::Builtin { php_only },
     )
 }
 
@@ -187,7 +187,7 @@ pub(in crate::codegen) fn emit_runtime_extern_wrapper_inline(
 /// Kind of call instruction used by a descriptor entry wrapper.
 #[derive(Clone, Copy)]
 enum RuntimeCallWrapperKind {
-    Builtin { strict_php: bool },
+    Builtin { php_only: bool },
     Extern,
 }
 
@@ -199,8 +199,8 @@ fn emit_runtime_call_wrapper_inline(
     kind: RuntimeCallWrapperKind,
 ) -> Result<String> {
     let cached = match kind {
-        RuntimeCallWrapperKind::Builtin { strict_php } => {
-            ctx.shared.runtime_builtin_wrapper(name, sig, strict_php)
+        RuntimeCallWrapperKind::Builtin { php_only } => {
+            ctx.shared.runtime_builtin_wrapper(name, sig, php_only)
         }
         RuntimeCallWrapperKind::Extern => ctx.shared.runtime_extern_wrapper(name, sig),
     };
@@ -217,9 +217,9 @@ fn emit_runtime_call_wrapper_inline(
     // emitted. Publishing the reservation here makes that recursion reuse this entry
     // instead of recursively cloning and lowering the same wrapper forever.
     match kind {
-        RuntimeCallWrapperKind::Builtin { strict_php } => {
+        RuntimeCallWrapperKind::Builtin { php_only } => {
             ctx.shared
-                .cache_runtime_builtin_wrapper(name, sig, strict_php, &label)
+                .cache_runtime_builtin_wrapper(name, sig, php_only, &label)
         }
         RuntimeCallWrapperKind::Extern => {
             ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
@@ -256,7 +256,7 @@ fn build_runtime_call_wrapper_function(
     sig: &FunctionSig,
     kind: RuntimeCallWrapperKind,
 ) -> Result<Function> {
-    if let RuntimeCallWrapperKind::Builtin { strict_php } = kind {
+    if let RuntimeCallWrapperKind::Builtin { php_only } = kind {
         // GMP's homes lower through the prelude helper graph, which first-class callable
         // wrappers must reproduce. Other EIR-graph homes already build their own callable
         // body through the generic wrapper path, so widening this predicate would duplicate
@@ -276,7 +276,7 @@ fn build_runtime_call_wrapper_function(
             crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
         )) {
             let function = crate::ir_lower::lower_prepared_builtin_callable(
-                module, label, name, sig, strict_php,
+                module, label, name, sig, php_only,
             );
             crate::ir::validate_function(&function).map_err(|error|
                 CodegenIrError::invalid_module(format!("prepared builtin callable: {error:?}")))?;
@@ -289,7 +289,7 @@ fn build_runtime_call_wrapper_function(
         if packed_merge {
             // Keep the public variadic signature, but validate and unpack it before
             // crossing the two-operand backend boundary. Full body lowering owns the pack.
-            let function = crate::ir_lower::lower_array_merge_callable(module, label, sig, strict_php);
+            let function = crate::ir_lower::lower_array_merge_callable(module, label, sig, php_only);
             crate::ir::validate_function(&function).map_err(|error| {
                 CodegenIrError::invalid_module(format!("array merge callable wrapper: {error:?}"))
             })?;
@@ -302,7 +302,7 @@ fn build_runtime_call_wrapper_function(
         if boxed_user_sort {
             // The graph owns reference capture and normal/exceptional publication. A raw
             // RuntimeCall would bypass that graph and treat a Mixed cell as an array header.
-            let function = crate::ir_lower::lower_boxed_usort_callable(module, label, sig, strict_php);
+            let function = crate::ir_lower::lower_boxed_usort_callable(module, label, sig, php_only);
             crate::ir::validate_function(&function).map_err(|error| {
                 CodegenIrError::invalid_module(format!("boxed sort callable wrapper: {error:?}"))
             })?;
@@ -360,7 +360,7 @@ fn build_runtime_call_wrapper_function(
         operands.push(decode_invocation_scope(&mut builder, profile));
     }
     let result = match kind {
-        RuntimeCallWrapperKind::Builtin { strict_php } => {
+        RuntimeCallWrapperKind::Builtin { php_only } => {
             let def = crate::builtins::registry::lookup(name).ok_or_else(|| {
                 CodegenIrError::invalid_module(format!(
                     "callable wrapper {} is not registry-backed",
@@ -370,7 +370,7 @@ fn build_runtime_call_wrapper_function(
             let mut lowering = WrapperBuiltinLoweringContext {
                 builder: &mut builder,
                 data: &mut module.data,
-                strict_php,
+                php_only,
             };
             let result = crate::builtins::semantics::lower_registry_call(
                 &mut lowering,
@@ -479,7 +479,7 @@ fn wrapper_result_ownership(
 struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
     data: &'a mut crate::ir::DataPool,
-    strict_php: bool,
+    php_only: bool,
 }
 
 impl crate::builtins::semantics::BuiltinLoweringContext
@@ -568,7 +568,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
                     arguments: crate::ir::RuntimeArgumentLayout::Values,
-                    strict_php: self.strict_php,
+                    php_only: self.php_only,
                     strict_types: None,
                 }
             }
@@ -695,7 +695,7 @@ mod tests {
                 "clone_scope_probe",
                 "clone",
                 &sig,
-                RuntimeCallWrapperKind::Builtin { strict_php: false },
+                RuntimeCallWrapperKind::Builtin { php_only: false },
             )
             .unwrap();
             assert_eq!(sig.params.len(), 2, "{target}");
@@ -736,7 +736,7 @@ mod tests {
                 "debug_backtrace_array_probe",
                 "debug_backtrace",
                 &sig,
-                RuntimeCallWrapperKind::Builtin { strict_php: false },
+                RuntimeCallWrapperKind::Builtin { php_only: false },
             ).unwrap();
             assert_eq!(wrapper.return_php_type, expected, "{target}");
             assert_eq!(
@@ -767,7 +767,7 @@ mod tests {
             let sig = crate::builtins::registry::first_class_callable_sig("gc_status").unwrap();
             let wrapper = build_runtime_call_wrapper_function(
                 &mut module, "gc_status_owner_probe", "gc_status", &sig,
-                RuntimeCallWrapperKind::Builtin { strict_php: false },
+                RuntimeCallWrapperKind::Builtin { php_only: false },
             ).unwrap();
             let allocations: Vec<_> = wrapper.instructions.iter()
                 .filter(|inst| matches!(inst.op, Op::HashNew | Op::MixedBox))

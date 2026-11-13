@@ -35,7 +35,7 @@ if ($_SERVER['REQUEST_URI'] === '/minimal') {
         'ok' => true,
     ], JSON_THROW_ON_ERROR);
 }
-"#, "app", &["--strict-php", &flag]);
+"#, "app", &["--php-only", &flag]);
     let diagnostics_path = fixture.0.join("server.stderr");
     let diagnostics = fs::File::create(&diagnostics_path).unwrap();
     let addr = format!("127.0.0.1:{}", free_port());

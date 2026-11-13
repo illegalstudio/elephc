@@ -77,9 +77,11 @@ mod repl;
 mod runtime_cache;
 mod debug_info;
 mod source;
+mod semantics;
 mod source_map;
 mod span;
-mod strict_php;
+mod ast_visit;
+mod php_only;
 mod string_bytes;
 mod superglobals;
 #[allow(dead_code)]

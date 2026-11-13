@@ -94,7 +94,7 @@ The command reads the invoking project's PHP profile and `elephc.toml` INI setti
 Command-line overrides follow normal compiler precedence:
 
 ```bash
-elephc repl --php-version 8.4 --strict-php
+elephc repl --php-version 8.4 --php-only
 elephc repl --ini precision=10 --heap-size=16777216
 elephc repl --with-pdo
 ```

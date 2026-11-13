@@ -15,7 +15,7 @@ fn run_guard_project(files: &[(&str, &str)], entry: &str, strict_locals: bool) -
     let dir = make_cli_test_dir("elephc_source_guard");
     for (name, source) in files { fs::write(dir.join(name), source).unwrap(); }
     let mut command = elephc_cli_command(&dir);
-    command.arg("--strict-php");
+    command.arg("--php-only");
     if strict_locals { command.arg("--strict-locals"); }
     let compile = command.arg(dir.join(entry)).output().unwrap();
     let run = compile.status.success().then(|| run_binary(&dir.join(entry).with_extension(""), &dir));
@@ -29,7 +29,7 @@ fn run_guard_project(files: &[(&str, &str)], entry: &str, strict_locals: bool) -
 
 /// A physical LFC guard narrows without spurious mixed-storage advice in either local mode.
 #[test]
-fn test_strict_php_source_guards_lfc_narrow_without_mixed_warning() {
+fn test_php_only_source_guards_lfc_narrow_without_mixed_warning() {
     let source = r#"$value = "s";
 if (is_real($value)) { $value = 1.5; }
 echo $value;"#;
@@ -42,7 +42,7 @@ echo $value;"#;
 
 /// PHP bodies keep a user function's non-guard semantics even when first resolved from LFC.
 #[test]
-fn test_strict_php_source_guards_php_body_is_independent_of_lfc_caller() {
+fn test_php_only_source_guards_php_body_is_independent_of_lfc_caller() {
     let source = r#"<?php
 function is_real(mixed $input): bool { return false; }
 function php_body(): void {

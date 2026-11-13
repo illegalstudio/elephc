@@ -843,7 +843,7 @@ class Builtin:
     # profile has it.
     since: Optional[str] = None
     # True for elephc extensions with no PHP equivalent (ptr_*, buffer_*,
-    # class_attribute_*); `--strict-php` hides them from user programs.
+    # class_attribute_*); `--php-only` hides them from user programs.
     is_extension: bool = False
     # Backend-neutral compiler semantics exported directly by `gen_builtins`.
     semantics: Optional[dict] = None

@@ -82,9 +82,9 @@ where
     S: EirStaticCallSupport,
 {
     let short_name = php_symbol_key(name.trim_start_matches('\\'));
-    if crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+    if crate::types::checker::builtins::catalog::php_only_hidden_builtin_for_profile(
         &short_name,
-        support.strict_php(),
+        support.php_only(),
     ) {
         return false;
     }
@@ -419,7 +419,7 @@ where
                     facts,
                     scope_reads,
                 )
-                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, support.strict_php())
+                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, support.php_only())
                     .is_some()
                 || support.function_supported(name.as_str(), args)
         }

@@ -41,7 +41,7 @@ on first use and reused from the existing per-user cache root. See
 | Option | Meaning |
 |---|---|
 | `--php-version VERSION` | Select the PHP profile; otherwise use project detection. Also accepts `--php-version=VERSION`. |
-| `--strict-php` | Hide elephc extension builtins in evaluated code. |
+| `--php-only` | Hide elephc extension builtins in evaluated code. |
 | `--with-<capability>` | Enable an optional eval capability at host build time. Web and monitoring modes are unavailable. |
 | `--ini KEY=VALUE` | Override project INI settings; repeatable, last value wins. Also accepts `--ini=KEY=VALUE`. Nonempty `opcache.preload` is unsupported. |
 | `--heap-size=BYTES` | Set session heap size, using the compiler's normal limits/default. |
@@ -68,7 +68,7 @@ the report format.
 | `--timeout SECONDS` | Seconds an isolated test may run before `SIGALRM` ends it and it is reported as an error. Default `60`; `0` disables. Also accepts `--timeout=SECONDS`. |
 | `--junit FILE` | Write a JUnit XML report to `FILE`, resolved against the working directory. Also accepts `--junit=FILE`. |
 | `--help`, `-h` | Show the subcommand usage. |
-| compile options | `--strict-php`, `--with-<crate>`, `--heap-size`, `--php-version`, `--define`, `--ini`, `--quiet`, and the other ordinary options are forwarded to the compiler. |
+| compile options | `--php-only`, `--with-<crate>`, `--heap-size`, `--php-version`, `--define`, `--ini`, `--quiet`, and the other ordinary options are forwarded to the compiler. |
 
 The project root is the nearest directory, starting at `PATH` itself, that holds a
 `composer.json`; both its `autoload` and `autoload-dev` sections resolve project and
@@ -309,7 +309,7 @@ services. See [Profiling](../beyond-php/profiling.md) for both in full.
 | `--emit-asm` | — | off | Write generated assembly and stop before runtime-object preparation, native assembly, or linking; no target assembler is required. |
 | `--emit-ir` | — | off | Print the EIR textual form and stop. |
 | `--check` | — | off | Run checks and write nothing; exported code also receives EIR cdylib call-graph safety validation. |
-| `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
+| `--php-only` | - | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [PHP-only mode](#php-only-mode). |
 | `--strict-locals` | — | off | Make an incompatible local retype (e.g. int then string) a compile error instead of a warning. See [Strict locals mode](#strict-locals-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
@@ -538,20 +538,20 @@ See [Linking, heap, and conditional compilation](linking-and-conditional-compila
 | `--heap-size=BYTES` | integer ≥ 65536 | `134217728` (128 MB, PHP's default `memory_limit`) | Size of the program's runtime heap. It is reserved as zero-filled memory, so pages the program never touches cost nothing. Also sizes the shared string-result arena, so string-producing builtins are bounded by this budget rather than a fixed 64 KiB cap. |
 | `--define SYMBOL` / `--define=SYMBOL` | symbol name | — | Define a compile-time symbol for `ifdef` (repeatable). |
 
-## Strict PHP mode
+## PHP-only mode
 
 | Flag | Values | Default | Description |
 |---|---|---|---|
-| `--strict-php` | — | off | Accept only PHP-compatible constructs in PHP-mode user files; LFC and compiler-generated source remain extension-enabled. |
+| `--php-only` | - | off | Accept only PHP-compatible constructs in PHP-mode user files; LFC and compiler-generated source remain extension-enabled. |
 
-Under `--strict-php` the compiler rejects the
+Under `--php-only` the compiler rejects the
 [beyond-PHP extensions](../beyond-php/pointers.md) at the source level in every
 physical PHP-mode file:
 
 - extension syntax — `ifdef` blocks, `packed class`, `extern` declarations,
   `ptr_cast<T>(...)`, `buffer_new<T>(...)`, typed local variable declarations
   (`int $x = 5;`), and `ptr`/`buffer<T>` type annotations — is reported with a
-  `rejected by --strict-php` diagnostic, one error per violation, wherever the
+  `rejected by --php-only` diagnostic, one error per violation, wherever the
   construct appears (statement bodies, closures, class members, and PHP
   attribute arguments alike);
 - extension builtins (`ptr_*`, `zval_*`, `buffer_*`, `class_attribute_*`) behave
@@ -568,29 +568,67 @@ physical PHP-mode file:
 
 The audit covers a PHP entry plus every PHP-mode `include`/`require`d and
 autoloaded user file. Physical `.lfc` files are always extension-enabled, even
-when reached from a strict PHP entry; conversely, PHP included by an LFC entry
+when reached from a PHP-only entry; conversely, PHP included by an LFC entry
 is still audited. Compiler-injected preludes (PDO, timezone, image, web, …) are
-exempt, so programs using those PHP-level APIs keep compiling in strict mode.
+exempt, so programs using those PHP-level APIs keep compiling in PHP-only mode.
 This same call-site profile controls direct and dynamic calls,
 `function_exists()`, `is_callable()`, first-class callables, and `eval()`.
 
-Strict mode also reaches `eval()`, matching PHP's runtime semantics for eval'd
-code: the compiled binary marks the eval bridge as strict, so extension
-builtins do not exist inside eval'd fragments either — calling one is a runtime
+PHP-only mode also reaches `eval()`, matching PHP's runtime semantics for eval'd
+code: the compiled binary marks the eval bridge as PHP-only, so extension
+builtins do not exist inside eval'd fragments either, calling one is a runtime
 fatal (like any unknown function in eval), `function_exists()`/`is_callable()`
 report them as missing, and extension syntax in a fragment is a runtime parse
 error. Fragments are never rejected at compile time: PHP only fails eval'd code
-when it actually executes, and strict mode preserves that. User functions that
+when it actually executes, and PHP-only mode preserves that. User functions that
 shadow extension names remain callable from eval'd code.
 
-`--strict-php` may be combined with `--define`. LFC `ifdef` blocks consume the
+`--php-only` may be combined with `--define`. LFC `ifdef` blocks consume the
 symbol normally, while a PHP-mode file containing `ifdef` is rejected by the
-strict audit before conditional compilation can remove either branch. Supplying
+PHP-only audit before conditional compilation can remove either branch. Supplying
 an otherwise unused define is valid.
 
-Strict mode guarantees that the *constructs* used are PHP-compatible; it does
-not change elephc's static-subset semantics. A strict-valid program can still be
+PHP-only mode guarantees that the *constructs* used are PHP-compatible; it does
+not change elephc's static-subset semantics. A PHP-only-valid program can still be
 rejected by the type checker in places where the PHP interpreter would run it.
+
+`--strict-php` has been renamed to `--php-only`; the old option is rejected.
+Semantic strictness is configured separately through the `--strict-*` family.
+Enabling `--php-only` does not enable semantic strictness, and semantic strictness
+does not restrict LFC syntax.
+
+## Strict semantic profiles
+
+The shared option catalog resolves independent `--strict-<feature>` requests.
+`--strict` selects the complete catalog, including `--strict-opcache`.
+An explicit `--no-strict-<feature>` overrides the umbrella in either argument
+order. Repeating an explicit feature option uses the last value.
+
+Integration is in progress. This build accepts the existing strict-locals and
+strict-opcache rules plus strict-dynamic-code. Other registered guarantees,
+including the complete umbrella, fail explicitly until their enforcement is
+complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
+tracks the remaining work.
+
+### Strict dynamic code
+
+`--strict-dynamic-code` requires source to be verified during compilation.
+Ordinary static includes keep their existing compilation path. `eval()` accepts
+literal source only, and the fragment must be compilable ahead of time. A literal
+fragment that still needs the interpreter is rejected with a diagnostic.
+Opaque source and nested runtime includes/eval cannot bypass this restriction
+through the eval bridge. Source validation also checks unreachable branches and
+nested literal fragments before constant folding.
+
+```php
+<?php
+// elephc --strict-dynamic-code main.php
+eval('echo "Verified source", PHP_EOL;');
+```
+
+The REPL needs runtime source execution, so strict-dynamic-code cannot be enabled
+for its generated host. Other independently available flags can be forwarded
+without enabling strict-dynamic-code.
 
 ## Strict locals mode
 
@@ -946,7 +984,7 @@ The other 36 directives of the PHP 8.5 set are runtime-overridable.
 > file-granularity (`PHPRC`, `PHP_INI_SCAN_DIR`); `PHP_INI_opcache_jit=…`,
 > `opcache_jit=…` and `opcache.jit=…` in the environment all do nothing
 > (verified on PHP 8.5.6). `ELEPHC_INI_*` is elephc's answer to `-d` for an AOT
-> binary whose `php.ini` is compiled in, and `--strict-php` does not reject it
+> binary whose `php.ini` is compiled in, and `--php-only` does not reject it
 > because it is not a language construct.
 
 ## Diagnostics and debugging

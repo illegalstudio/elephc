@@ -31,7 +31,7 @@ fn lower_callable_descriptor(ctx: &mut LoweringContext<'_, '_>, target: &Callabl
         Vec::new(),
         Some(Immediate::ProfiledData {
             data,
-            strict_php: crate::strict_php::is_enabled(),
+            php_only: crate::php_only::is_enabled(),
         }),
         PhpType::Callable,
         op.default_effects(),
@@ -53,14 +53,14 @@ fn lower_instance_callable_descriptor(
     let data = ctx.intern_string(&format!("object::{method}"));
     ctx.emit_value(
         op, vec![receiver.value],
-        Some(Immediate::ProfiledData { data, strict_php: crate::strict_php::is_enabled() }),
+        Some(Immediate::ProfiledData { data, php_only: crate::php_only::is_enabled() }),
         PhpType::Callable, op.default_effects(), Some(span),
     )
 }
 
 /// Returns the strict-PHP visibility profile attached to runtime callable selection.
 pub(super) fn callable_profile_immediate() -> Option<Immediate> {
-    Some(Immediate::Bool(crate::strict_php::is_enabled()))
+    Some(Immediate::Bool(crate::php_only::is_enabled()))
 }
 
 /// Lowers a pointer cast.

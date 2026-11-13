@@ -718,7 +718,7 @@ pub(crate) fn check_files_diagnostics(
         let check_result = elephc::types::check_with_target_and_options(
             &resolved,
             target(),
-            elephc::types::CheckOptions { strict_locals },
+            elephc::types::CheckOptions { strict_locals, ..Default::default() },
             &elephc::generics::GenericContext::default(),
         )
         .map_err(|e| e.message.clone())?;

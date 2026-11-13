@@ -124,7 +124,7 @@ where
                     facts,
                     scope_reads,
                 )
-                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, support.strict_php())
+                || fold_static_builtin_int_call(name.as_str().trim_start_matches('\\'), args, support.php_only())
                     .is_some()
                 || support.function_supported(name.as_str(), args)
         }
@@ -185,7 +185,7 @@ where
     static_callback_function_name(callback).is_some_and(|callback_name| {
         let short_callback = callback_name.trim_start_matches('\\');
         eir_runtime_builtin_call_is_safe(short_callback, callback_args, support, facts, scope_reads)
-            || fold_static_builtin_call(short_callback, callback_args, support.strict_php()).is_some()
+            || fold_static_builtin_call(short_callback, callback_args, support.php_only()).is_some()
             || support.function_supported(short_callback, callback_args)
     })
 }

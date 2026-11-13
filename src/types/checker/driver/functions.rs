@@ -41,7 +41,7 @@ impl Checker {
                     ));
                     continue;
                 }
-                let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
+                let builtin = crate::php_only::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
                         .filter(|builtin| {
                             crate::types::checker::builtins::catalog::builtin_is_available_for_target(
@@ -81,7 +81,7 @@ impl Checker {
                     ));
                     continue;
                 }
-                let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
+                let builtin = crate::php_only::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
                         .filter(|builtin| {
                             crate::types::checker::builtins::catalog::builtin_is_available_for_target(

@@ -766,8 +766,8 @@ pub(super) fn call_signature(
 
 /// Returns whether the active source profile must prefer an elephc extension over a shadow.
 pub(super) fn source_prefers_extension_builtin(name: &str) -> bool {
-    !crate::strict_php::is_enabled()
-        && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+    !crate::php_only::is_enabled()
+        && crate::types::checker::builtins::catalog::php_only_hidden_builtin_for_profile(
             &php_symbol_key(name.trim_start_matches('\\')),
             true,
         )

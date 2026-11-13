@@ -68,12 +68,32 @@ pub unsafe extern "C" fn __elephc_eval_context_retain(ctx: *mut ElephcEvalContex
 /// introspection, matching the PHP interpreter where those names do not exist.
 ///
 /// Generated code emits this call while initializing the eval context, only in
-/// binaries compiled with `elephc --strict-php`. The flag is thread-local and
+/// binaries compiled with `elephc --php-only`. The flag is thread-local and
 /// elephc programs run every eval on the initializing thread, so one call
 /// covers the program lifetime.
 #[no_mangle]
-pub extern "C" fn __elephc_eval_set_strict_php(enabled: u8) {
-    crate::strict_php_mode::set_strict_php_mode(enabled != 0);
+pub extern "C" fn __elephc_eval_set_php_only(enabled: u8) {
+    crate::php_only_mode::set_php_only_mode(enabled != 0);
+}
+
+/// Installs a versioned semantic profile on a newly created native eval context.
+///
+/// # Safety
+/// `ctx` must be null or a live context allocated by the eval bridge.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_set_semantic_profile(
+    ctx: *mut ElephcEvalContext, version: u32, bits: u64,
+) -> i32 {
+    if version != elephc_semantics::SEMANTICS_ABI_VERSION { return EvalStatus::AbiMismatch.code(); }
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_bits(bits) else {
+        return EvalStatus::AbiMismatch.code();
+    };
+    let Some(context) = (unsafe { ctx.as_mut() }) else { return EvalStatus::RuntimeFatal.code(); };
+    if context.abi_version() != ABI_VERSION { return EvalStatus::AbiMismatch.code(); }
+    match context.install_semantic_profile(profile) {
+        Ok(()) => EvalStatus::Ok.code(),
+        Err(status) => status.code(),
+    }
 }
 
 /// Selects the PHP language profile eval reports, so that a binary compiled

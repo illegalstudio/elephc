@@ -27,7 +27,7 @@ use super::Checker;
 pub(crate) use catalog::{
     all_supported_builtin_function_names, canonical_builtin_function_name,
     is_php_visible_builtin_function_for_profile, is_php_visible_builtin_function_for_target,
-    is_supported_builtin_function, strict_php_hidden_builtin,
+    is_supported_builtin_function, php_only_hidden_builtin,
     supported_builtin_function_names_for_profile, supported_builtin_function_names_for_target,
 };
 #[cfg(test)]
@@ -116,12 +116,12 @@ impl Checker {
         {
             return Ok(None);
         }
-        // `--strict-php` hides extension builtins entirely: the call must fall
+        // `--php-only` hides extension builtins entirely: the call must fall
         // through to user-function resolution and the standard undefined-function
         // diagnostics, mirroring PHP where these names do not exist. This must
         // run before argument normalization so the hidden builtin's signature is
         // never applied to the call.
-        if catalog::strict_php_hidden_builtin(&builtin_key) {
+        if catalog::php_only_hidden_builtin(&builtin_key) {
             return Ok(None);
         }
         let is_lazy_construct = matches!(builtin_key.as_str(), "isset" | "unset");

@@ -27,8 +27,8 @@ const MAX_STATIC_STRING_FOLD_BYTES: usize = 1_048_576;
 
 /// Static call support available while classifying eval fragments for EIR AOT.
 trait EirStaticCallSupport {
-    /// Returns whether the literal fragment uses the strict PHP builtin surface.
-    fn strict_php(&self) -> bool;
+    /// Returns whether the literal fragment uses the PHP-only builtin surface.
+    fn php_only(&self) -> bool;
 
     /// Returns true when a function call can be lowered inside an EIR AOT fragment.
     fn function_supported(&self, name: &str, args: &[Expr]) -> bool;
@@ -46,7 +46,7 @@ trait EirStaticCallSupport {
 struct EirStaticCallPredicates<'a, F, M> {
     function: &'a F,
     static_method: &'a M,
-    strict_php: bool,
+    php_only: bool,
 }
 
 impl<F, M> EirStaticCallSupport for EirStaticCallPredicates<'_, F, M>
@@ -55,8 +55,8 @@ where
     M: Fn(&StaticReceiver, &str, &[Expr]) -> bool,
 {
     /// Returns the literal fragment's builtin visibility profile.
-    fn strict_php(&self) -> bool {
-        self.strict_php
+    fn php_only(&self) -> bool {
+        self.php_only
     }
 
     /// Delegates function-call eligibility to the caller-provided predicate.

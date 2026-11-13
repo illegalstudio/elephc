@@ -88,7 +88,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
                 callback_elem_ty.clone(),
-                super::super::super::instruction_strict_php_profile(inst),
+                super::super::super::instruction_php_only_profile(inst),
                 "array_map",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -525,7 +525,7 @@ pub(super) fn lower_runtime_string_descriptor_callback<F>(
     source_arg_ty: Option<&PhpType>,
     visible_arg_types: Vec<PhpType>,
     return_ty: PhpType,
-    strict_php: bool,
+    php_only: bool,
     owner: &str,
     mut emit_call: F,
 ) -> Result<()>
@@ -550,7 +550,7 @@ where
         ctx,
         specialization_ty,
         candidate_names.as_deref(),
-        strict_php,
+        php_only,
     )?;
 
     let done_label = ctx.next_label(&format!("{}_runtime_string_callback_done", owner));

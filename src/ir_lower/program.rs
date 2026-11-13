@@ -104,6 +104,7 @@ fn lower_on_compiler_stack(
     let _closure_param_hints =
         crate::ir_lower::closure_param_hints::install(&check_result.closure_param_hints);
     let mut module = Module::new(target);
+    module.semantic_profile = check_result.semantic_profile;
     module.source_path = source_path.map(canonical_source_path);
     module.web = web;
     let constants = crate::codegen::collect_constants(program, target);
@@ -150,6 +151,7 @@ fn lower_on_compiler_stack(
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
+    validate_dynamic_source_policy(&module)?;
     function::lower_eval_native_default_helpers(
         &mut module,
         check_result,
@@ -194,6 +196,7 @@ fn lower_on_compiler_stack(
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
+    validate_dynamic_source_policy(&module)?;
     validate_module(&module).map_err(|error| super::validation_context::describe(&module, error))?;
     Ok(module)
 }

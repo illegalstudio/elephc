@@ -140,8 +140,8 @@ pub(in crate::codegen::lower_inst) fn emit_branch_if_saved_string_matches_ci(
 /// Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers.
 pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_callable", 1)?;
-    let strict_php = super::instruction_strict_php_profile(inst);
-    set_is_callable_strict_profile(ctx, strict_php);
+    let php_only = super::instruction_php_only_profile(inst);
+    set_is_callable_strict_profile(ctx, php_only);
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
     if has_eval_context(ctx) && value_ty != PhpType::Callable {
@@ -156,7 +156,7 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 } else {
                     emit_static_bool(
                         ctx,
-                        callable_name_exists(ctx, &function_name, strict_php),
+                        callable_name_exists(ctx, &function_name, php_only),
                     );
                 }
             } else {
@@ -211,16 +211,16 @@ pub(in crate::codegen::lower_inst) fn emit_is_callable_pointer_lookup(ctx: &mut 
 }
 
 /// Stores the current `is_callable()` call site's builtin visibility for nested runtime helpers.
-pub(in crate::codegen::lower_inst) fn set_is_callable_strict_profile(ctx: &mut FunctionContext<'_>, strict_php: bool) {
+pub(in crate::codegen::lower_inst) fn set_is_callable_strict_profile(ctx: &mut FunctionContext<'_>, php_only: bool) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_symbol_address(ctx.emitter, "x9", "_callable_strict_profile");
-            abi::emit_load_int_immediate(ctx.emitter, "x10", i64::from(strict_php));
+            abi::emit_load_int_immediate(ctx.emitter, "x10", i64::from(php_only));
             ctx.emitter.instruction("str x10, [x9]");                           // publish the call-site builtin visibility for nested string probes
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "r10", "_callable_strict_profile");
-            abi::emit_load_int_immediate(ctx.emitter, "r11", i64::from(strict_php));
+            abi::emit_load_int_immediate(ctx.emitter, "r11", i64::from(php_only));
             ctx.emitter.instruction("mov QWORD PTR [r10], r11");                // publish the call-site builtin visibility for nested string probes
         }
     }

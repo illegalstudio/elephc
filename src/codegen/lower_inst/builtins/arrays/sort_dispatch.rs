@@ -364,7 +364,7 @@ pub(super) fn lower_user_sort_static_callback(
                 Some(&PhpType::Array(Box::new(callback_arg_types[0].clone()))),
                 callback_arg_types.to_vec(),
                 PhpType::Int,
-                super::super::instruction_strict_php_profile(inst),
+                super::super::instruction_php_only_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);

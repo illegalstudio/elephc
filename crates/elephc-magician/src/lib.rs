@@ -32,7 +32,7 @@ mod mbregex_provider;
 pub mod runtime_hooks;
 pub mod scope;
 pub mod script_cache;
-mod strict_php_mode;
+mod php_only_mode;
 mod stream_resources;
 mod stream_wrappers;
 pub mod value;

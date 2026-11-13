@@ -69,7 +69,7 @@ function word(): string { echo "v"; return "abc"; }
 function number(): int { echo "n"; return 1; }
 echo box(...["v" => word(), "n" => number()]);
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "vnabc");
     }
 }

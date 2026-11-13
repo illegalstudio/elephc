@@ -116,7 +116,7 @@ struct RuntimeCallableInvokerCacheEntry {
 struct RuntimeCallWrapperCacheEntry {
     name: String,
     signature: FunctionSig,
-    strict_php: bool,
+    php_only: bool,
     label: String,
 }
 
@@ -264,14 +264,14 @@ impl SharedCodegenState {
         &self,
         source_arg_ty: Option<&PhpType>,
         candidate_names: Option<&[String]>,
-        strict_php: bool,
+        php_only: bool,
     ) -> Option<Vec<RuntimeCallableCase>> {
         self.runtime_string_descriptor_cases
             .iter()
-            .find(|(cached_ty, cached_names, cached_strict_php, _)| {
+            .find(|(cached_ty, cached_names, cached_php_only, _)| {
                 cached_ty.as_ref() == source_arg_ty
                     && cached_names.as_deref() == candidate_names
-                    && *cached_strict_php == strict_php
+                    && *cached_php_only == php_only
             })
             .map(|(_, _, _, cases)| cases.clone())
     }
@@ -281,13 +281,13 @@ impl SharedCodegenState {
         &mut self,
         source_arg_ty: Option<&PhpType>,
         candidate_names: Option<&[String]>,
-        strict_php: bool,
+        php_only: bool,
         cases: &[RuntimeCallableCase],
     ) {
         self.runtime_string_descriptor_cases.push((
             source_arg_ty.cloned(),
             candidate_names.map(|names| names.to_vec()),
-            strict_php,
+            php_only,
             cases.to_vec(),
         ));
     }
@@ -420,13 +420,13 @@ impl SharedCodegenState {
         &self,
         name: &str,
         signature: &FunctionSig,
-        strict_php: bool,
+        php_only: bool,
     ) -> Option<String> {
         cached_runtime_call_wrapper(
             &self.runtime_builtin_wrappers,
             name,
             signature,
-            strict_php,
+            php_only,
         )
     }
 
@@ -435,14 +435,14 @@ impl SharedCodegenState {
         &mut self,
         name: &str,
         signature: &FunctionSig,
-        strict_php: bool,
+        php_only: bool,
         label: &str,
     ) {
         cache_runtime_call_wrapper(
             &mut self.runtime_builtin_wrappers,
             name,
             signature,
-            strict_php,
+            php_only,
             label,
         );
     }
@@ -478,14 +478,14 @@ fn cached_runtime_call_wrapper(
     entries: &[RuntimeCallWrapperCacheEntry],
     name: &str,
     signature: &FunctionSig,
-    strict_php: bool,
+    php_only: bool,
 ) -> Option<String> {
     entries
         .iter()
         .find(|entry| {
             entry.name == name
                 && entry.signature == *signature
-                && entry.strict_php == strict_php
+                && entry.php_only == php_only
         })
         .map(|entry| entry.label.clone())
 }
@@ -495,13 +495,13 @@ fn cache_runtime_call_wrapper(
     entries: &mut Vec<RuntimeCallWrapperCacheEntry>,
     name: &str,
     signature: &FunctionSig,
-    strict_php: bool,
+    php_only: bool,
     label: &str,
 ) {
     entries.push(RuntimeCallWrapperCacheEntry {
         name: name.to_string(),
         signature: signature.clone(),
-        strict_php,
+        php_only,
         label: label.to_string(),
     });
 }

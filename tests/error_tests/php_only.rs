@@ -1,5 +1,5 @@
 //! Purpose:
-//! Integration tests for `--strict-php` diagnostics: extension builtins hidden
+//! Integration tests for `--php-only` diagnostics: extension builtins hidden
 //! from user programs, user redeclaration of extension names, and the
 //! undefined-function hint pointing at the disabled extension. Covers the syntax audit
 //! and PHPDoc generic semantics after physical-file processing.
@@ -27,7 +27,7 @@ fn test_strict_user_is_real_does_not_narrow_to_float() {
 #[test]
 fn test_strict_hidden_extension_callable_reports_hint() {
     for source in ["<?php $f = is_real(...);", "<?php $value = 1 |> is_real(...);"] {
-        expect_strict_error(source, "is_real() exists as an elephc extension; it is disabled by --strict-php");
+        expect_strict_error(source, "is_real() exists as an elephc extension; it is disabled by --php-only");
     }
     assert!(check_source_strict("<?php function is_real($value): bool { return true; } $f = is_real(...); echo $f(1);").is_ok());
 }
@@ -35,7 +35,7 @@ fn test_strict_hidden_extension_callable_reports_hint() {
 /// Runs [`check_source`] with strict-PHP mode enabled for the duration.
 /// The RAII guard restores the previous state even when the checked pipeline panics.
 fn check_source_strict(src: &str) -> Result<(), String> {
-    let _guard = elephc::strict_php::scoped_enable();
+    let _guard = elephc::php_only::scoped_enable();
     check_source(src)
 }
 
@@ -43,7 +43,7 @@ fn check_source_strict(src: &str) -> Result<(), String> {
 fn expect_strict_error(src: &str, expected_substr: &str) {
     match check_source_strict(src) {
         Ok(_) => panic!(
-            "Expected strict-php error containing '{}', but got Ok",
+            "Expected php-only error containing '{}', but got Ok",
             expected_substr
         ),
         Err(msg) => {
@@ -86,7 +86,7 @@ fn test_strict_error_elephc_only_catalog_functions_are_undefined() {
 fn test_strict_error_extension_builtin_call_carries_hint() {
     expect_strict_error(
         "<?php $x = ptr_get(1);",
-        "ptr_get() exists as an elephc extension; it is disabled by --strict-php",
+        "ptr_get() exists as an elephc extension; it is disabled by --php-only",
     );
 }
 
@@ -95,11 +95,11 @@ fn test_strict_error_extension_builtin_call_carries_hint() {
 fn test_strict_error_pcntl_daemon_is_undefined() {
     expect_strict_error(
         "<?php pcntl_daemon();",
-        "pcntl_daemon() exists as an elephc extension; it is disabled by --strict-php",
+        "pcntl_daemon() exists as an elephc extension; it is disabled by --php-only",
     );
     assert!(
         check_source_strict("<?php posix_setpgid(0, 0); posix_setsid();").is_ok(),
-        "PHP POSIX helpers must remain visible under --strict-php",
+        "PHP POSIX helpers must remain visible under --php-only",
     );
 }
 
@@ -140,7 +140,7 @@ fn test_strict_allows_user_declared_ptr_get() {
     );
     assert!(
         result.is_ok(),
-        "user-declared ptr_get must compile under --strict-php, got: {result:?}",
+        "user-declared ptr_get must compile under --php-only, got: {result:?}",
     );
 }
 
@@ -160,7 +160,7 @@ fn test_strict_keeps_php_builtins_working() {
     let result = check_source_strict("<?php echo strlen('abc');");
     assert!(
         result.is_ok(),
-        "strlen must keep working under --strict-php, got: {result:?}",
+        "strlen must keep working under --php-only, got: {result:?}",
     );
 }
 
@@ -168,7 +168,7 @@ fn test_strict_keeps_php_builtins_working() {
 fn strict_audit_messages(src: &str) -> Vec<String> {
     let tokens = tokenize(src).expect("audit fixtures must tokenize");
     let ast = parse(&tokens).expect("audit fixtures must parse");
-    elephc::strict_php::check(&ast)
+    elephc::php_only::check(&ast)
         .into_iter()
         .map(|e| e.message)
         .collect()
@@ -256,7 +256,7 @@ fn test_audit_rejects_generic_methods() {
 
 /// Supported PHPDoc generics on functions, classes and members stay active in either strict mode.
 #[test]
-fn test_docblock_generics_remain_active_with_and_without_strict_php() {
+fn test_docblock_generics_remain_active_with_and_without_php_only() {
     let source = r#"<?php
 /**
  * @template U
@@ -293,7 +293,7 @@ $static_number = Identity::copy(9);
 $static_text = Identity::copy("nine");
 "#;
     for strict in [false, true] {
-        let _guard = strict.then(elephc::strict_php::scoped_enable);
+        let _guard = strict.then(elephc::php_only::scoped_enable);
         let ast = parse(&tokenize(source).expect("tokenizes")).expect("parses");
         let ast = elephc::source::finalize_physical_program(
             ast,
@@ -331,7 +331,7 @@ $static_text = Identity::copy("nine");
     }
 }
 
-/// A `@template` docblock is valid PHP — the annotations are comments — so `--strict-php` must
+/// A `@template` docblock is valid PHP — the annotations are comments — so `--php-only` must
 /// accept it even though it compiles to generics.
 ///
 /// This is the whole reason the docblock surface exists, and it only holds because the
@@ -531,7 +531,7 @@ fn resolve_files_strict(
     let base_dir = php_path.parent().unwrap();
 
     let result = {
-        let _guard = elephc::strict_php::scoped_enable();
+        let _guard = elephc::php_only::scoped_enable();
         (|| -> Result<(), elephc::errors::CompileError> {
             let tokens = tokenize(&source)?;
             let ast = parse(&tokens)?;
@@ -737,7 +737,7 @@ fn test_audit_rejects_a_generic_instanceof_target() {
     );
 }
 
-/// A caught class is the fifth place a generic type can be written, and `--strict-php` has to
+/// A caught class is the fifth place a generic type can be written, and `--php-only` has to
 /// reject it there too — a file that only CATCHES one is still not PHP.
 #[test]
 fn test_audit_rejects_a_generic_catch_type() {

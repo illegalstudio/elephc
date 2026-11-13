@@ -79,7 +79,7 @@ where
             fold_static_builtin_int_call(
                 name.as_str().trim_start_matches('\\'),
                 args,
-                support.strict_php(),
+                support.php_only(),
             )
             .is_some()
         }

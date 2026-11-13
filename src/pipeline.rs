@@ -136,7 +136,6 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         counters,
         instrument,
         heap_debug,
-        strict_opcache,
         emit_ir,
         null_repr,
         emit_asm,
@@ -157,8 +156,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         extra_link_paths,
         extra_frameworks,
         defines,
-        strict_php,
-        strict_locals,
+        php_only,
+        semantic_profile,
         web,
         web_isolation,
         web_application,
@@ -166,6 +165,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         quiet,
         ini_overrides,
     } = config;
+    let strict_opcache = semantic_profile.contains(crate::semantics::StrictFeature::Opcache);
+    let pending_guarantees = crate::semantics::pending_guarantees(semantic_profile);
+    if !pending_guarantees.is_empty() {
+        eprintln!("error: strict guarantees are not yet available in this build: {}",
+            pending_guarantees.join(", "));
+        process::exit(1);
+    }
     let filename = filename.as_str();
     crate::progress::init(quiet);
     // Reject incompatible options before check/EIR output can return without the backend.
@@ -185,7 +191,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     codegen::set_compile_profile(php_version, web);
     codegen::set_ini_overrides(ini_overrides.clone());
     crate::superglobals::set_compiling_for_web(web);
-    crate::strict_php::set_enabled(strict_php);
+    crate::php_only::set_enabled(php_only);
     let parent = Path::new(filename).parent().unwrap_or(Path::new("."));
     let source_mode = SourceMode::from_path(Path::new(filename));
     let output_paths = output_paths(entry.output().unwrap_or(filename), target, emit);
@@ -212,7 +218,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     Span::register_source_path(0, filename.to_string());
     let parsed = frontend::read_and_parse(
         filename, source_mode, &defines, &mut timings,
-        entry.generated_source(),
+        entry.generated_source(), semantic_profile,
     );
 
     // `opcache.preload` becomes an implicit `require_once` at the very top of the entry program,
@@ -252,7 +258,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // `resolve_collecting_includes` also hands back the canonical path of every file the
     // resolver statically inlined — group 2 of the OPcache script manifest.
     let (ast, opcache_included_files) =
-        match resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines) {
+        match resolver::resolve_collecting_includes_with_semantics(parsed, parent, &defines, semantic_profile) {
         Ok(resolved) => resolved,
         Err(e) => {
             crate::progress::clear();
@@ -731,11 +737,12 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // include targets: group 3 of the OPcache script manifest, and the last one to become
     // knowable.
     let (ast, opcache_autoloaded_files) =
-        match autoload::run_collecting_included_with_defines(
+        match autoload::run_collecting_included_with_semantics(
             ast,
             parent,
             &autoload_registry,
             &defines,
+            semantic_profile,
         ) {
             Ok(resolved) => resolved,
             Err(e) => {
@@ -880,12 +887,17 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
+    if let Err(error) = crate::semantics::validate_source(&ast, semantic_profile) {
+        crate::progress::clear();
+        errors::report(&error);
+        process::exit(1);
+    }
     let ast = optimize::fold_constants_for_target(ast, target);
     timings.record_since("opt-fold", phase_started);
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();
-    let check_options = types::CheckOptions { strict_locals };
+    let check_options = types::CheckOptions { semantic_profile, ..Default::default() };
     // Type checking runs to a generic-instantiation fixpoint, so every reachable template has
     // become an ordinary monomorphic declaration before anything downstream sees the program.
     let (mut ast, mut check_result) = match crate::generics::monomorphize(ast, |program, bounds| {

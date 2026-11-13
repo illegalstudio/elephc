@@ -89,8 +89,20 @@ pub fn run_collecting_included_with_defines(
     registry: &Registry,
     defines: &HashSet<String>,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    run_collecting_included_with_semantics(program, base_dir, registry, defines,
+        elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Loads every autoloaded physical file and nested include under the selected semantic profile.
+pub fn run_collecting_included_with_semantics(
+    program: Program,
+    base_dir: &Path,
+    registry: &Registry,
+    defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        run_collecting_included_on_compiler_stack(program, base_dir, registry, defines)
+        run_collecting_included_on_compiler_stack(program, base_dir, registry, defines, semantic_profile)
     })
 }
 
@@ -100,6 +112,7 @@ fn run_collecting_included_on_compiler_stack(
     base_dir: &Path,
     registry: &Registry,
     defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     if registry.is_empty() {
         return Ok((program, Vec::new()));
@@ -117,7 +130,7 @@ fn run_collecting_included_on_compiler_stack(
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if included.insert(canonical.clone()) {
             let (loaded, loaded_includes) =
-                load_autoloaded_file(&canonical, base_dir, defines)?;
+                load_autoloaded_file(&canonical, base_dir, defines, semantic_profile)?;
             nested_includes.extend(loaded_includes);
             prefix.extend(loaded);
         }
@@ -140,7 +153,7 @@ fn run_collecting_included_on_compiler_stack(
                 let canonical = path.canonicalize().unwrap_or(path);
                 if included.insert(canonical.clone()) {
                     let (loaded, loaded_includes) =
-                        load_autoloaded_file(&canonical, base_dir, defines)?;
+                        load_autoloaded_file(&canonical, base_dir, defines, semantic_profile)?;
                     nested_includes.extend(loaded_includes);
                     insertions.push((stmt_idx, loaded));
                 }
@@ -206,6 +219,7 @@ fn load_autoloaded_file(
     path: &Path,
     base_dir: &Path,
     defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
 ) -> Result<(Program, Vec<PathBuf>), CompileError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
@@ -228,13 +242,14 @@ fn load_autoloaded_file(
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed =
-        crate::source::finalize_physical_program(parsed, &content, path, source_mode, defines)?;
+        crate::source::finalize_physical_program_with_semantics(parsed, &content, path, source_mode, defines, semantic_profile)?;
     // `continuing`, not the root entry: the root one rewinds the source identities, which handed
     // this file's includes the identities of the entry program's includes.
-    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_continuing(
+    let (resolved, nested_includes) = crate::resolver::resolve_collecting_includes_continuing_with_semantics(
         parsed,
         path.parent().unwrap_or(base_dir),
         defines,
+        semantic_profile,
     )?;
     let resolved = collect_aliases(resolved).map_err(|e| e.with_file(file_label.clone()))?;
     let canonicalized: Vec<Stmt> = crate::name_resolver::resolve(resolved)?;

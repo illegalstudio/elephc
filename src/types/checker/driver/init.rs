@@ -159,6 +159,7 @@ impl Checker {
             loop_storage_scope_spans: HashMap::new(),
             string_incdec_locals: HashSet::new(),
             strict_locals: false,
+            semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),
             definitely_bound_locals: HashSet::new(),

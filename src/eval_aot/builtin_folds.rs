@@ -13,9 +13,9 @@ use super::*;
 pub(crate) fn fold_static_builtin_int_call(
     short_name: &str,
     args: &[Expr],
-    strict_php: bool,
+    php_only: bool,
 ) -> Option<i64> {
-    let ExprKind::IntLiteral(value) = fold_static_builtin_call(short_name, args, strict_php)? else {
+    let ExprKind::IntLiteral(value) = fold_static_builtin_call(short_name, args, php_only)? else {
         return None;
     };
     Some(value)
@@ -25,11 +25,11 @@ pub(crate) fn fold_static_builtin_int_call(
 pub(super) fn fold_static_builtin_call(
     short_name: &str,
     args: &[Expr],
-    strict_php: bool,
+    php_only: bool,
 ) -> Option<ExprKind> {
     let name = php_symbol_key(short_name);
-    if crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
-        &name, strict_php,
+    if crate::types::checker::builtins::catalog::php_only_hidden_builtin_for_profile(
+        &name, php_only,
     ) {
         return None;
     }

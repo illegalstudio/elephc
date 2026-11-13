@@ -1,12 +1,12 @@
 <?php
-// Compile with: elephc --strict-php examples/strict-php/main.php
+// Compile with: elephc --php-only examples/php-only/main.php
 //
-// Under --strict-php the compiler accepts only PHP-compatible constructs:
+// Under --php-only the compiler accepts only PHP-compatible constructs:
 // elephc extensions (ifdef, packed class, extern, ptr/buffer, extension
 // builtins) become compile errors, so everything below also runs unchanged
-// under the PHP interpreter: php examples/strict-php/main.php
+// under the PHP interpreter: php examples/php-only/main.php
 //
-// Extension builtins do not exist in strict mode, exactly like in PHP —
+// Extension builtins do not exist in PHP-only mode, exactly like in PHP —
 // a program may even declare its own function using one of those names.
 
 function ptr_get(array $slots, int $index): string

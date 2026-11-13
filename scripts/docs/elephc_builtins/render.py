@@ -309,9 +309,9 @@ def _availability_section(b: dict) -> str:
             )
     if b.get("is_extension"):
         notes.append(
-            "Hidden in strict PHP mode: this builtin is an elephc extension with no "
+            "Hidden in PHP-only mode: this builtin is an elephc extension with no "
             "PHP equivalent, so programs compiled with "
-            "[`--strict-php`](../../../compiling/cli-reference.md#strict-php-mode) "
+            "[`--php-only`](../../../compiling/cli-reference.md#php-only-mode) "
             "treat the name as nonexistent, in compiled code and inside eval'd code."
         )
     if notes:

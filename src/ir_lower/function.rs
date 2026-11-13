@@ -85,6 +85,7 @@ pub(crate) fn lower_main(
     );
     let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -241,6 +242,7 @@ pub(crate) fn lower_user_function(
         signature.is_generator,
     );
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -373,6 +375,7 @@ pub(crate) fn lower_class_method(
         signature.is_generator,
     );
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -503,6 +506,7 @@ pub(crate) fn lower_eval_aot_function(
     // An eval fragment was never checked, so no promotion decision exists for its locals.
     let promotable_arrays = crate::types::PromotableArrays::default();
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -642,6 +646,7 @@ pub(crate) fn lower_eval_aot_scope_function(
     // An eval fragment was never checked, so no promotion decision exists for its locals.
     let promotable_arrays = crate::types::PromotableArrays::default();
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -768,6 +773,7 @@ pub(crate) fn lower_property_init_thunk(
     env.insert("this".to_string(), this_type.clone());
     let params = vec![("this".to_string(), this_type)];
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         Some(class_info),
         &mut module.data,
@@ -1142,6 +1148,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     }
     let web = module.web;
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -1272,6 +1279,7 @@ pub(crate) fn lower_clone_override_function(
     }
     let web = module.web;
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,
@@ -1446,6 +1454,7 @@ pub(crate) fn lower_eval_native_default_helpers(
         // The helper inherits class scope through `current_class` below. It must not enter the
         // separate property-initializer path, which skips `body` and expects an object receiver.
         let closures = lower_body_into_function(
+            module.semantic_profile,
             &mut function,
             None,
             &mut module.data,
@@ -1700,6 +1709,7 @@ fn lower_closure_function_with_signature(
         ),
     });
     let closures = lower_body_into_function(
+        parent.semantic_profile,
         &mut function,
         None,
         parent.data,
@@ -1759,6 +1769,7 @@ fn lower_closure_function_with_signature(
 
 /// Lowers the supplied statements into `function` and appends a default terminator if needed.
 fn lower_body_into_function(
+    semantic_profile: elephc_semantics::SemanticProfile,
     function: &mut Function,
     property_initializers: Option<&ClassInfo>,
     data: &mut crate::ir::DataPool,
@@ -1849,6 +1860,7 @@ fn lower_body_into_function(
             signature.by_ref_return = false;
         }
         eager_validators.extend(lower_body_into_function(
+            semantic_profile,
             &mut validator, None, data, &[], env.clone(), top_level_env.clone(), functions,
             extern_functions, extern_globals, callable_param_sigs, return_alias_summaries,
             fiber_return_sigs, classes, enums, interfaces, declared_trait_names,
@@ -1908,6 +1920,7 @@ fn lower_body_into_function(
     builder.set_entry(entry);
     builder.position_at_end(entry);
     let mut ctx = LoweringContext::new(
+        semantic_profile,
         builder,
         data,
         env,

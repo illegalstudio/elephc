@@ -35,6 +35,7 @@ pub(super) fn ensure_eval_context_handle(ctx: &mut FunctionContext<'_>) -> Resul
     let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_context_new_with_native_catalog");
     abi::emit_call_label(ctx.emitter, &symbol);
     abi::store_at_offset(ctx.emitter, result, offset);
+    install_context_semantics(ctx, offset);
     // The shared runtime wrapper must follow the currently entered loaded module.
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, scratch,
@@ -44,6 +45,20 @@ pub(super) fn ensure_eval_context_handle(ctx: &mut FunctionContext<'_>) -> Resul
     abi::load_at_offset(ctx.emitter, result, offset);
     abi::emit_store_to_sp(ctx.emitter, result, EVAL_CONTEXT_HANDLE_OFFSET);
     Ok(())
+}
+
+/// Installs explicit guarantees once while keeping permissive context creation unchanged.
+fn install_context_semantics(ctx: &mut FunctionContext<'_>, offset: usize) {
+    if ctx.module.semantic_profile.bits() == 0 { return; }
+    let context_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::load_at_offset(ctx.emitter, context_arg, offset);
+    let version = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, version, i64::from(elephc_semantics::SEMANTICS_ABI_VERSION));
+    let flags = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    abi::emit_load_int_immediate(ctx.emitter, flags, ctx.module.semantic_profile.bits() as i64);
+    let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_set_semantic_profile");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    emit_eval_status_check(ctx);
 }
 
 /// Registers a missing catalog even when a prior scalar fragment already created this context.
@@ -209,6 +224,35 @@ mod tests {
                 assert_eq!(EVAL_SCOPE_ACCESS_MASK_OFFSET + 8, EVAL_CATALOG_PHASE_OFFSET);
                 assert!(EVAL_CATALOG_PHASE_OFFSET + 8 <= EVAL_BRIDGE_STACK_BYTES);
                 assert_eq!(EVAL_BRIDGE_STACK_BYTES % 16, 0);
+            }
+        }
+    }
+
+    /// Installs the same explicit profile before first use on every supported target ABI.
+    #[test]
+    fn strict_profile_native_context_installation_covers_supported_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for profile in [elephc_semantics::SemanticProfile::PERMISSIVE, elephc_semantics::SemanticProfile::all()] {
+                let target = Target::parse(name).unwrap();
+                let mut module = Module::new(target);
+                module.semantic_profile = profile;
+                module.required_runtime_features.eval_bridge = true;
+                let mut function = helper_function("profile_probe", PhpType::Void);
+                function.add_local(Some("context".into()), IrType::I64, PhpType::Int, LocalKind::EvalContext);
+                let layout = frame::layout_for_function(&function, target, false, false, false);
+                let mut emitter = Emitter::new(target);
+                let mut data = DataSection::new();
+                let mut shared = SharedCodegenState::default();
+                {
+                    let mut context = FunctionContext::new(&module, &function, &mut emitter, &mut data,
+                        &mut shared, layout, false, false, false, None);
+                    ensure_eval_context_handle(&mut context).unwrap();
+                }
+                let asm = emitter.output();
+                let creation = asm.find("__elephc_eval_context_new_with_native_catalog").unwrap();
+                let installation = asm.find("__elephc_eval_set_semantic_profile");
+                assert_eq!(installation.is_some(), profile.bits() != 0, "{name}");
+                if let Some(installation) = installation { assert!(creation < installation, "{name}"); }
             }
         }
     }

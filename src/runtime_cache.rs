@@ -18,7 +18,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::codegen;
 use crate::codegen::platform::Target;
 use crate::codegen::{Emit, RuntimeFeatures};
 
@@ -85,20 +84,30 @@ pub fn prepare_runtime_object(
 ///
 /// A static library uses direct relocations (`pic = false`) but still needs the
 /// recoverable host boundary enabled in runtime fatal paths.
+#[allow(dead_code)]
 pub fn prepare_runtime_object_for_emit(
     heap_size: usize,
     target: Target,
     features: RuntimeFeatures,
     emit: Emit,
 ) -> Result<PreparedRuntimeObject, String> {
+    prepare_runtime_object_for_emit_with_semantics(heap_size, target, features, emit,
+        elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Prepares a runtime object partitioned by its effective semantic guarantees.
+pub fn prepare_runtime_object_for_emit_with_semantics(
+    heap_size: usize, target: Target, features: RuntimeFeatures, emit: Emit,
+    semantic_profile: elephc_semantics::SemanticProfile,
+) -> Result<PreparedRuntimeObject, String> {
     match emit {
         Emit::Executable => {
-            prepare_runtime_object_with_mode(heap_size, target, features, false, false)
+            prepare_runtime_object_with_semantics(heap_size, target, features, false, false, semantic_profile)
         }
         Emit::Phpext => Err("PHP extensions build an isolated combined runtime object".to_string()),
-        Emit::Cdylib => prepare_runtime_object_with_mode(heap_size, target, features, true, true),
+        Emit::Cdylib => prepare_runtime_object_with_semantics(heap_size, target, features, true, true, semantic_profile),
         Emit::Staticlib => {
-            prepare_runtime_object_with_mode(heap_size, target, features, false, true)
+            prepare_runtime_object_with_semantics(heap_size, target, features, false, true, semantic_profile)
         }
     }
 }
@@ -110,6 +119,15 @@ fn prepare_runtime_object_with_mode(
     features: RuntimeFeatures,
     pic: bool,
     library_boundary: bool,
+) -> Result<PreparedRuntimeObject, String> {
+    prepare_runtime_object_with_semantics(heap_size, target, features, pic, library_boundary,
+        elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Implements runtime preparation for explicit semantic, relocation, and library policies.
+fn prepare_runtime_object_with_semantics(
+    heap_size: usize, target: Target, features: RuntimeFeatures, pic: bool,
+    library_boundary: bool, semantic_profile: elephc_semantics::SemanticProfile,
 ) -> Result<PreparedRuntimeObject, String> {
     let cache_dir = runtime_cache_dir();
     fs::create_dir_all(&cache_dir)
@@ -129,6 +147,7 @@ fn prepare_runtime_object_with_mode(
         library_boundary,
         env!("ELEPHC_RUNTIME_BUILD_ID").as_bytes(),
     );
+    let cache_key = identity::partition_semantic_profile(cache_key, semantic_profile);
     let cache_path = cache_dir.join(runtime_cache_file_name(heap_size, target, cache_key));
     let integrity_path = cache_dir.join(format!(
         "{}.integrity",
@@ -145,12 +164,13 @@ fn prepare_runtime_object_with_mode(
         }
     }
 
-    let runtime_asm = codegen::generate_runtime_with_features_mode(
+    let runtime_asm = crate::codegen_support::generate_runtime_with_semantics(
         heap_size,
         target,
         features,
         pic,
         library_boundary,
+        semantic_profile,
     );
 
     let unique = format!(

@@ -26,6 +26,9 @@ pub(super) fn eval_nested_eval(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::DynamicCode) {
+        return throwables::eval_throw_error("Runtime eval is disabled by --strict-dynamic-code", context, values);
+    }
     let [code] = args else {
         return Err(EvalStatus::RuntimeFatal);
     };
@@ -51,6 +54,9 @@ pub(super) fn eval_include_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::DynamicCode) {
+        return throwables::eval_throw_error("Runtime include is disabled by --strict-dynamic-code", context, values);
+    }
     let path = eval_expr(path, context, scope, values)?;
     let path = eval_path_string(path, values)?;
     let resolved_path = eval_resolve_include_path(&path, context);

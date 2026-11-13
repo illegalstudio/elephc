@@ -20,7 +20,7 @@ pub(in crate::interpreter) fn execute_program_statements(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    if program.native_generic_syntax() && crate::strict_php_mode::strict_php_mode() {
+    if program.native_generic_syntax() && crate::php_only_mode::php_only_mode() {
         return Err(EvalStatus::ParseError);
     }
     seed_named_cli_superglobals(program, context, scope, values)?;

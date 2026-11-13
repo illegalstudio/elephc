@@ -579,7 +579,7 @@ pub(super) fn emit_builtin_call_value(
             Op::EvalLiteralCall,
             Some(Immediate::ProfiledData {
                 data: ctx.intern_string(fragment),
-                strict_php: crate::strict_php::is_enabled(),
+                php_only: crate::php_only::is_enabled(),
             }),
             Op::EvalLiteralCall.default_effects(),
         )
@@ -588,7 +588,7 @@ pub(super) fn emit_builtin_call_value(
         let immediate = if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
             Immediate::ProfiledData {
                 data,
-                strict_php: crate::strict_php::is_enabled(),
+                php_only: crate::php_only::is_enabled(),
             }
         } else {
             Immediate::Data(data)

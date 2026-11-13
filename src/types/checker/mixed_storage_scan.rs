@@ -785,7 +785,7 @@ fn type_guard_subject(condition: &Expr) -> Option<(&str, PhpType)> {
             {
                 "is_int" | "is_integer" | "is_long" => PhpType::Int,
                 "is_float" | "is_double" => PhpType::Float,
-                "is_real" if !crate::strict_php::is_enabled() => PhpType::Float,
+                "is_real" if !crate::php_only::is_enabled() => PhpType::Float,
                 "is_string" => PhpType::Str,
                 "is_bool" => PhpType::Bool,
                 "is_null" => PhpType::Void,
@@ -853,7 +853,7 @@ fn guarded_variable_name(expr: &Expr) -> Option<&str> {
 /// (conditions, `for` update and loop subjects included). The one exception is a `for`
 /// initializer, which runs unconditionally and is checked at the statement's own depth.
 fn collect_stmt(checker: &Checker, stmt: &Stmt, depth: u32, facts: &mut Facts) {
-    crate::strict_php::with_source_mode(stmt.source_mode, || {
+    crate::php_only::with_source_mode(stmt.source_mode, || {
         collect_stmt_in_current_source_mode(checker, stmt, depth, facts);
     });
 }
@@ -1572,7 +1572,7 @@ mod tests {
         }, crate::span::Span::dummy());
         assert!(matches!(type_guard_subject(&condition), Some(("value", PhpType::Float))));
         {
-            let _guard = crate::strict_php::scoped_enable();
+            let _guard = crate::php_only::scoped_enable();
             assert!(type_guard_subject(&condition).is_none());
         }
         assert!(type_guard_subject(&condition).is_some());

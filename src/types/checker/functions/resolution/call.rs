@@ -76,16 +76,16 @@ impl Checker {
             };
             return CompileError::new(span, &message);
         }
-        // Under `--strict-php`, a name that would resolve to an extension builtin
+        // Under `--php-only`, a name that would resolve to an extension builtin
         // lands here as undefined. Name the disabled extension so users understand
         // why a working non-strict program stopped compiling.
         let bare = name.rsplit('\\').next().unwrap_or(name);
         let key = crate::names::php_symbol_key(bare);
-        if crate::types::checker::builtins::strict_php_hidden_builtin(&key) {
+        if crate::types::checker::builtins::php_only_hidden_builtin(&key) {
             return CompileError::new(
                 span,
                 &format!(
-                    "Undefined function: {} ({}() exists as an elephc extension; it is disabled by --strict-php)",
+                    "Undefined function: {} ({}() exists as an elephc extension; it is disabled by --php-only)",
                     name, key
                 ),
             );

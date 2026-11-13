@@ -250,7 +250,7 @@ pub(crate) fn lower_iterator_apply(
     emit_apply_callback_state(
         ctx,
         &callback,
-        super::super::instruction_strict_php_profile(inst),
+        super::super::instruction_php_only_profile(inst),
     )?;
 
     ctx.load_value_to_result(source)?;
@@ -272,7 +272,7 @@ pub(crate) fn lower_iterator_apply(
 fn emit_apply_callback_state(
     ctx: &mut FunctionContext<'_>,
     callback: &IteratorApplyCallback,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<()> {
     match callback {
         IteratorApplyCallback::DynamicString { callable, .. } => {
@@ -293,7 +293,7 @@ fn emit_apply_callback_state(
                 *callable,
                 abi::int_result_reg(ctx.emitter),
                 "iterator_apply",
-                strict_php,
+                php_only,
             )?;
             abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
             Ok(())

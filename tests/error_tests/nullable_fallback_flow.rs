@@ -1208,7 +1208,7 @@ fn test_nullable_fallback_flow_review_plain_loop_nullability() {
 /// Loop exits preserve the complement on the path that reaches the following statement.
 #[test]
 fn test_nullable_fallback_flow_review_loop_exit_complements() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for header in ["foreach ($xs as $x)", "while ($flag)", "for (; $flag; $flag = false)", "do"] {
         for exit in ["continue", "break"] {
             let tail = if header == "do" { " while ($flag);" } else { "" };
@@ -1224,7 +1224,7 @@ fn test_nullable_fallback_flow_review_loop_exit_complements() {
 /// Nullable writes on back edges retire both spellings of an earlier coalescing view.
 #[test]
 fn test_nullable_fallback_flow_review_loop_entry_writes() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for coalesce in ["$value ??= 1;", "$value = $value ?? 1;"] {
         for body in [
             "foreach ($xs as $x) { need($value); $value = null; }",
@@ -1288,7 +1288,7 @@ fn test_nullable_fallback_flow_review_loop_tail_bindings() {
 /// Switch breaks and level-one continues publish terminal writes to the switch exit.
 #[test]
 fn test_nullable_fallback_flow_review_switch_exits() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for prefix in ["$value ??= 3;", "$value = $value ?? 3;", "if ($value === null) { return 0; }"] {
         for exit in ["break", "continue"] {
             let source = format!("<?php function run(?int $value, int $key): int {{ {prefix} switch ($key) {{ case 1: if ($key > 0) {{ $value = null; {exit}; }} break; }} return $value; }}");
@@ -1304,7 +1304,7 @@ fn test_nullable_fallback_flow_review_switch_exits() {
 /// Break values remain visible after the loop and retain their reference ABI.
 #[test]
 fn test_nullable_fallback_flow_review_loop_exit_storage() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for body in [
         "foreach ($xs as $x) { if (is_int($value)) { $value = null; break; } } need($value);",
         "foreach ($xs as $x) { if ($value === null) { $value = 0; continue; } } need($value);",
@@ -1322,7 +1322,7 @@ fn test_nullable_fallback_flow_review_loop_exit_storage() {
 /// Compound and nested guards expose non-null integer and boolean fallback parameters.
 #[test]
 fn test_nullable_fallback_flow_and_guards() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for (ty, fallback) in [("int", "0"), ("bool", "false")] {
         for guard in [
             "if ($raw === null && $default !== null) { return $default; }",
@@ -1340,7 +1340,7 @@ fn test_nullable_fallback_flow_and_guards() {
 /// Every operand of a false OR guard holds on its non-divergent fallthrough path.
 #[test]
 fn test_nullable_fallback_flow_or_fallthrough() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for guard in [
         "$closed || $value === null",
         "$value === null || $closed",
@@ -1355,7 +1355,7 @@ fn test_nullable_fallback_flow_or_fallthrough() {
 /// A coalesced receiver assignment removes only the null member, including in expression form.
 #[test]
 fn test_nullable_fallback_flow_coalesced_receiver() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for assignment in ["$options = $options ?? new Options();", "$options ??= new Options();", "consume(($options = $options ?? new Options())->path);"] {
         let source = format!("<?php final class Options {{ public readonly string $path; public function __construct() {{ $this->path = 'ok'; }} }} function consume(string $path): void {{}} function run(?Options $options = null): void {{ {assignment} consume($options->path); }}");
         check_source(&source).unwrap_or_else(|error| panic!("{assignment}: {error}"));
@@ -1365,7 +1365,7 @@ fn test_nullable_fallback_flow_coalesced_receiver() {
 /// OR-true and AND-false paths do not prove that either nullable operand is non-null.
 #[test]
 fn test_nullable_fallback_flow_unsafe_joins() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for body in [
         "if ($flag || $value !== null) { return $value; } return 0;",
         "if ($flag && $value === null) { throw new Exception('missing'); } return $value;",
@@ -1383,7 +1383,7 @@ fn test_nullable_fallback_flow_unsafe_joins() {
 /// A later operand may replace a local directly or through a reference-taking call.
 #[test]
 fn test_nullable_fallback_flow_operand_mutation() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for condition in [
         "$value !== null && (($value = null) === null)",
         "$value !== null && resetValue($value)",
@@ -1399,7 +1399,7 @@ fn test_nullable_fallback_flow_operand_mutation() {
 /// Short-circuit operands, ternaries, elseif complements and while bodies share guard facts.
 #[test]
 fn test_nullable_fallback_flow_expression_paths() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for body in [
         "return $value !== null && positive($value);",
         "return $value === null || positive($value);",
@@ -1416,14 +1416,14 @@ fn test_nullable_fallback_flow_expression_paths() {
 /// Refining a nullable binding does not forbid assigning null again later.
 #[test]
 fn test_nullable_fallback_flow_coalesce_reassignment() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     check_source("<?php function fallback(?int $value): int { $value ??= 0; $value = null; $value ??= 1; return $value; }").unwrap();
 }
 
 /// Reference-taking calls see the underlying nullable slot, including after coalescing.
 #[test]
 fn test_nullable_fallback_flow_reference_storage() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     check_source("<?php function resetValue(?int &$value): bool { $value = null; return true; } function fallback(?int $value): bool { return $value !== null && resetValue($value); }").unwrap();
     check_source("<?php function resetValue(?int &$value): void { $value = null; } function fallback(?int $value): void { $value ??= 0; resetValue($value); }").unwrap();
 }
@@ -1431,7 +1431,7 @@ fn test_nullable_fallback_flow_reference_storage() {
 /// A scalar read view cannot turn a nullable boxed binding into raw reference storage.
 #[test]
 fn test_nullable_fallback_flow_review_reference_boundaries() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for (ty, value) in [("string", "'changed'"), ("float", "3.0"), ("int", "2"), ("bool", "true")] {
         for body in [
             "if ($closed || $value === null) { return; } change($value);",
@@ -1449,7 +1449,7 @@ fn test_nullable_fallback_flow_review_reference_boundaries() {
 /// Unset, foreach destinations and reference rebinding end the previous coalescing contract.
 #[test]
 fn test_nullable_fallback_flow_review_binding_lifecycle() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for body in [
         "unset($value); $value = 'abc'; return $value;",
         "foreach (['a'] as $value) {} $value = 'b'; return $value;",
@@ -1464,7 +1464,7 @@ fn test_nullable_fallback_flow_review_binding_lifecycle() {
 /// Retained read facts do not replace the binding's strict assignment or widening decisions.
 #[test]
 fn test_nullable_fallback_flow_review_widening_contract() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     let source = "<?php function run(?int $value): void { $value ??= 0; $value = 1.5; echo $value; }";
     let error = check_source_strict(source).unwrap_err();
     assert!(error.contains("cannot reassign $value from int|null to float"), "{error}");
@@ -1476,7 +1476,7 @@ fn test_nullable_fallback_flow_review_widening_contract() {
 /// Aliases and global/static rebinding cannot retain a coalescing non-null guarantee.
 #[test]
 fn test_nullable_fallback_flow_review_alias_barriers() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for body in [
         "$value ??= new Service(); $alias =& $value; $alias = null; return $value;",
         "$alias =& $value; $value ??= new Service(); $alias = null; return $value;",
@@ -1490,7 +1490,7 @@ fn test_nullable_fallback_flow_review_alias_barriers() {
 /// Long associative chains retain every guaranteed fact without repeated prefix inference.
 #[test]
 fn test_nullable_fallback_flow_review_long_chains() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     let params = (0..400).map(|index| format!("?int $a{index}")).collect::<Vec<_>>().join(", ");
     for (operator, comparison, body) in [
         (" && ", " !== null", "if (CONDITION && $closed) { return $a399; } return 0;"),
@@ -1506,7 +1506,7 @@ fn test_nullable_fallback_flow_review_long_chains() {
 /// Guard-complement storage does not undo compatible ordinary stores or their precise read types.
 #[test]
 fn test_nullable_fallback_flow_review_guarded_stores() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for source in [
         "<?php function run(?string $value): string { if ($value === null) { return ''; } $value = trim($value); return $value; }",
         "<?php function run(?int $value): int { if ($value === null) { throw new Exception(); } $value = 0; return $value; }",
@@ -1523,7 +1523,7 @@ fn test_nullable_fallback_flow_review_guarded_stores() {
 /// Object alternatives retain a usable Throwable supertype on ambiguous boolean outcomes.
 #[test]
 fn test_nullable_fallback_flow_review_throwable_joins() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for body in [
         "if ($error instanceof A || $error instanceof B) { throw $error; }",
         "if ($error instanceof A && $closed) { return; } throw $error;",
@@ -1537,7 +1537,7 @@ fn test_nullable_fallback_flow_review_throwable_joins() {
 /// Both direct and nested reference captures invalidate facts in their enclosing frame.
 #[test]
 fn test_nullable_fallback_flow_review_reference_captures() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for body in [
         "$callback = function () use (&$value) { $value = null; }; $callback();",
         "$callbacks = [function () use (&$value) { $value = null; }]; $callbacks[0]();",
@@ -1550,7 +1550,7 @@ fn test_nullable_fallback_flow_review_reference_captures() {
 /// Widening effects cannot leave a nullable reference contract attached to a boxed value.
 #[test]
 fn test_nullable_fallback_flow_review_storage_effects() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for effect in ["widen($value);", "settype($value, 'string');", "++$value;", "$value++;", "--$value;", "$value--;"] {
         for body in [
             "$value ??= 1; EFFECT resetValue($value);",
@@ -1656,7 +1656,7 @@ fn test_nullable_fallback_flow_review_finally_continuation() {
 /// Conditional writes invalidate a non-null read on every expression control-flow surface.
 #[test]
 fn test_nullable_fallback_flow_review_conditional_effects() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for prefix in ["$value ??= 1;", "if ($n > 0 || $value === null) { return 0; }"] {
         for body in [
             "$flag && resetValue($value);", "$flag || resetValue($value);",
@@ -1698,7 +1698,7 @@ fn test_nullable_fallback_flow_review_coalesce_default_effects() {
 /// Alternatives retain entry storage for reference checks and preserve their result precision.
 #[test]
 fn test_nullable_fallback_flow_review_conditional_reference_contracts() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for body in [
         "$r = $flag ? widen($value) : change($value);",
         "$r = $flag ? $value++ : change($value);",
@@ -1721,7 +1721,7 @@ fn test_nullable_fallback_flow_review_conditional_reference_contracts() {
 /// Destructuring and catch bindings retire the previous guard before validating later stores.
 #[test]
 fn test_nullable_fallback_flow_review_rebinding_destinations() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for prefix in [
         "$value ??= 1;", "if ($value === null) { return; }",
         "if ($value !== null) { echo ''; }",
@@ -1751,7 +1751,7 @@ fn test_nullable_fallback_flow_review_rebinding_destinations() {
 /// Stores under a redundant guard must invalidate a coalesced non-null read view.
 #[test]
 fn test_nullable_fallback_flow_review_guarded_null_stores() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for prefix in ["$value ??= 1;", "if ($value === null) { return 0; }"] {
         for body in [
             "if (is_int($value)) { $value = null; }",
@@ -1787,7 +1787,7 @@ fn test_nullable_fallback_flow_review_guarded_null_stores() {
 /// A nested guard keeps the nullable slot ABI for raw and matching nullable references.
 #[test]
 fn test_nullable_fallback_flow_review_nested_reference_storage() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for (ty, default, predicate) in [
         ("int", "1", "is_int"), ("float", "1.5", "is_float"),
         ("bool", "true", "is_bool"), ("string", "'str'", "is_string"),
@@ -1811,7 +1811,7 @@ fn test_nullable_fallback_flow_review_nested_reference_storage() {
 /// A fresh guard cannot restore tagged reference storage after an increment boxed the local.
 #[test]
 fn test_nullable_fallback_flow_review_fresh_guard_widening() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for update in ["$value++;", "++$value;", "$value--;", "--$value;"] {
         for body in [
             "if ($value !== null) { UPDATE }",
@@ -1836,7 +1836,7 @@ fn test_nullable_fallback_flow_review_fresh_guard_widening() {
 /// Multiple scalar alternatives stay opaque, while a proven float needs an explicit int cast.
 #[test]
 fn test_nullable_fallback_flow_review_union_coercion_diagnostic() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     let source = "<?php function toInt(int $value): int { return $value; } function run(mixed $value): int { if (is_float($value) || is_bool($value)) { return toInt($value); } return 0; }";
     check_source(source).unwrap();
     let single = source.replace("is_float($value) || is_bool($value)", "is_float($value)");
@@ -1849,7 +1849,7 @@ fn test_nullable_fallback_flow_review_union_coercion_diagnostic() {
 /// Loop headers reject tagged references before a later checked update boxes the same slot.
 #[test]
 fn test_nullable_fallback_flow_review_loop_reference_storage() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for prefix in ["", "$value ??= 1;"] {
         for (header, tail) in [
             ("foreach ([1, 2, 3] as $i)", ""),
@@ -1874,7 +1874,7 @@ fn test_nullable_fallback_flow_review_loop_reference_storage() {
 /// Fixed tagged updates remain compatible with later nullable reference calls and captures.
 #[test]
 fn test_nullable_fallback_flow_review_fixed_reference_continuation() {
-    let _strict = elephc::strict_php::scoped_enable();
+    let _strict = elephc::php_only::scoped_enable();
     for update in ["$value++;", "++$value;", "$value--;", "--$value;"] {
         let source = format!("<?php function resetValue(?int &$value): void {{ $value = null; }} function incoming(?int &$value): void {{ if ($value !== null) {{ {update} }} resetValue($value); }} function captured(?int $value): void {{ $show = function () use (&$value) {{ var_dump($value); }}; if ($value !== null) {{ {update} }} resetValue($value); $show(); }} function capturedLoop(?int $value): void {{ $show = function () use (&$value) {{ var_dump($value); }}; foreach ([1, 2] as $i) {{ resetValue($value); $value = $i; if ($value !== null) {{ {update} }} $show(); }} }}");
         check_source(&source).unwrap_or_else(|error| panic!("{source}: {error}"));

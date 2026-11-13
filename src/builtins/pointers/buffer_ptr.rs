@@ -12,7 +12,7 @@
 //!   every scalar, width, and pointer element type.
 //! - The address is the payload the descriptor owns at that moment: it stays valid until
 //!   `buffer_free()`, and a stale handle reports the use-after-free diagnostic.
-//! - `extension: true`: buffers have no PHP equivalent, so `--strict-php` hides this
+//! - `extension: true`: buffers have no PHP equivalent, so `--php-only` hides this
 //!   builtin from user programs.
 
 use crate::builtins::spec::BuiltinCheckCtx;

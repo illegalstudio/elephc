@@ -41,7 +41,7 @@ pub(in crate::interpreter) fn try_execute(
 ) -> Result<Option<EvalControl>, EvalStatus> {
     let cache_key = cache::copy_current_key();
     if let Some(code) = cache_key.as_deref() {
-        if let Some(cached) = cache::lookup_executable(code) {
+        if let Some(cached) = cache::lookup_executable(code, context.semantic_profile()) {
             return match cached {
                 Ok(module) => execute_module(&module, context, scope, values).map(|(control, _)| Some(control)),
                 Err(_) => {
@@ -54,13 +54,13 @@ pub(in crate::interpreter) fn try_execute(
     match compile::compile_program(program) {
         Ok(module) => {
             if let Some(code) = cache_key.as_deref() {
-                cache::store_executable(code, Ok(std::sync::Arc::clone(&module)));
+                cache::store_executable(code, context.semantic_profile(), Ok(std::sync::Arc::clone(&module)));
             }
             execute_module(&module, context, scope, values).map(|(control, _)| Some(control))
         }
         Err(gap) => {
             if let Some(code) = cache_key.as_deref() {
-                cache::store_executable(code, Err(gap));
+                cache::store_executable(code, context.semantic_profile(), Err(gap));
             }
             vm::mark_tree_walk();
             Ok(None)

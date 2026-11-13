@@ -650,7 +650,7 @@ impl Scanner<'_> {
     pub(super) fn literal_eval_or_hazard(&mut self, expr: Option<&Expr>) {
         if let Some(Expr { kind: ExprKind::StringLiteral(source), .. }) = expr {
             if let Some(fragment) =
-                crate::eval_aot::parse_literal_fragment(source, crate::strict_php::is_enabled())
+                crate::eval_aot::parse_literal_fragment(source, crate::php_only::is_enabled())
             {
                 let outer = std::mem::replace(&mut self.in_eval_fragment, true);
                 self.scan_nested(&fragment, true);

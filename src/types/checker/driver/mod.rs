@@ -89,7 +89,11 @@ pub(super) fn check_types_impl(
     generics: &crate::generics::GenericContext,
 ) -> Result<(Checker, TypeEnv), CompileError> {
     let mut checker = Checker::new(target);
-    checker.strict_locals = options.strict_locals;
+    checker.semantic_profile = options.semantic_profile.with(
+        elephc_semantics::StrictFeature::Locals,
+        options.strict_locals || options.semantic_profile.contains(elephc_semantics::StrictFeature::Locals),
+    );
+    checker.strict_locals = checker.semantic_profile.contains(elephc_semantics::StrictFeature::Locals);
     // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
     // Empty on every path that does not run `generics::monomorphize`, which is what makes those
     // paths behave exactly as they did before this feature.

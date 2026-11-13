@@ -110,10 +110,13 @@ pub(crate) mod prelude_prune;
 pub mod resolver;
 /// Physical source-file classification and per-file language profiles.
 pub mod source;
+/// Shared semantic-profile types and compiler policy adapters.
+pub mod semantics;
 /// Source span tracking.
 pub mod span;
-/// `--strict-php` mode state and PHP-compatibility audit pass.
-pub mod strict_php;
+/// `--php-only` mode state and PHP-compatibility audit pass.
+pub mod ast_visit;
+pub mod php_only;
 mod string_bytes;
 /// Canonical HTTP-request superglobal set and shared type helper.
 pub mod superglobals;

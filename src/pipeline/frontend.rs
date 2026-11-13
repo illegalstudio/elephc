@@ -18,6 +18,7 @@ pub(super) fn read_and_parse(
     defines: &HashSet<String>,
     timings: &mut CompileTimings,
     generated_source: Option<&str>,
+    semantic_profile: crate::semantics::SemanticProfile,
 ) -> parser::ast::Program {
     crate::progress::phase("read");
     let phase_started = Instant::now();
@@ -66,14 +67,15 @@ pub(super) fn read_and_parse(
     crate::progress::phase("magic-constants");
     let phase_started = Instant::now();
     let main_file_path = Path::new(filename).to_path_buf();
-    let parsed = match crate::source::finalize_physical_program(
+    let parsed = match crate::source::finalize_physical_program_with_semantics(
         parsed,
         &source,
         &main_file_path,
         // The embedded host owns extern declarations, but its parsed PHP statements keep
-        // their PHP source profile so eval still receives the user's --strict-php setting.
+        // their PHP source profile so eval still receives the user's --php-only setting.
         if generated_source.is_some() { SourceMode::Internal } else { source_mode },
         &defines,
+        semantic_profile,
     ) {
         Ok(parsed) => parsed,
         Err(e) => {

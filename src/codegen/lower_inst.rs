@@ -173,7 +173,7 @@ pub(in crate::codegen) use arithmetic::{emit_fused_overflow, OverflowBranch};
 pub(super) use direct_calls::{
     coerce_loaded_value_to_tagged_scalar, materialize_direct_call_args,
 };
-pub(super) use instruction_helpers::instruction_strict_php_profile;
+pub(super) use instruction_helpers::instruction_php_only_profile;
 pub(super) use local_loads::coerce_loaded_local_to_result_type;
 pub(super) use runtime_wrappers::{
     emit_runtime_builtin_wrapper_inline, emit_runtime_extern_wrapper_inline,

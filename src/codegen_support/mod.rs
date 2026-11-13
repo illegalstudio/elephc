@@ -64,6 +64,7 @@ pub(crate) use driver_support::{emit_write_current_string_stderr, emit_write_lit
 pub use driver_support::{
     generate_runtime, generate_runtime_with_features, generate_runtime_with_features_mode,
     generate_runtime_with_features_pic,
+    generate_runtime_with_semantics,
 };
 use emitted_classes::collect_emitted_class_names;
 pub(crate) use prescan::collect_constants;

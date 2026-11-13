@@ -32,6 +32,8 @@ pub enum EvalPcntlSignalHandler {
 /// back to the eval bridge. Keeping a concrete Rust type here lets the bridge
 /// grow dynamic registries without exposing them to generated assembly.
 pub struct ElephcEvalContext {
+    /// Installed once by generated code; standalone embedders default to permissive.
+    pub(super) semantic_profile: Option<elephc_semantics::SemanticProfile>,
     pub(super) abi_version: u32,
     pub(super) abi_owner_count: usize,
     pub(super) teardown_active: bool,
@@ -142,6 +144,7 @@ impl ElephcEvalContext {
     pub fn new() -> Self {
         Self {
             abi_version: ABI_VERSION,
+            semantic_profile: None,
             abi_owner_count: 1,
             teardown_active: false,
             native_catalog_generation: 0,
@@ -246,6 +249,7 @@ impl ElephcEvalContext {
     pub fn for_abi_version(abi_version: u32) -> Self {
         Self {
             abi_version,
+            semantic_profile: None,
             abi_owner_count: 1,
             teardown_active: false,
             native_catalog_generation: 0,

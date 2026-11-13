@@ -139,7 +139,7 @@ elephc hello.lfc
 ./hello
 ```
 
-LFC files always expose elephc extensions. In mixed projects, `--strict-php`
+LFC files always expose elephc extensions. In mixed projects, `--php-only`
 still audits every physical `.php` file while included or autoloaded `.lfc`
 files keep their extension-enabled profile. See
 [LFC source files](docs/beyond-php/lfc-source-files.md).
@@ -300,7 +300,7 @@ elephc repl --php-version 8.4 --no-history
 
 # Compile the test suite under tests/ to a native binary and run it
 elephc test
-elephc test tests/Unit --filter CounterTest --strict-php
+elephc test tests/Unit --filter CounterTest --php-only
 elephc test --junit report.xml --timeout 30
 
 # Print the compiler version
@@ -336,7 +336,7 @@ elephc --counters app.php
 elephc --define DEBUG app.php
 
 # Reject elephc extensions in every physical PHP file (.lfc stays extension-enabled)
-elephc --strict-php app.php
+elephc --php-only app.php
 
 # Make an incompatible local retype a compile error instead of a warning
 elephc --strict-locals app.php
@@ -584,7 +584,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **OPcache**: the API reports the compiled script manifest and a live cache for dynamic `include`/`require` through `eval()`, with optional persistent file caching, revalidation, admission limits, blacklists, and preloading; see the [OPcache guide](docs/php/opcache.md)
 - **Environment**: `getenv()` answers a single variable or the whole environment, `putenv()` sets and removes, and `$_ENV` / `$_SERVER` carry the process environment plus `$_SERVER['argv']` in ordinary CLI programs
 - **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
-- **Generics**: compile-time specialization of functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables; native syntax is rejected by `--strict-php`, while supported PHPDoc templates affect compilation in both modes. See [Generics](docs/beyond-php/generics.md).
+- **Generics**: compile-time specialization of functions, classes, interfaces, methods, and traits, with inference, bounds, defaults, variance, typed arrays and callables; native syntax is rejected by `--php-only`, while supported PHPDoc templates affect compilation in both modes. See [Generics](docs/beyond-php/generics.md).
 - **Testing**: a native test runtime inside the compiler (`Elephc\Testing\TestCase` with a PHPUnit-compatible assertion subset, `Runner`, and a `PHPUnit\Framework\TestCase` alias so plain-PHP suites compile unchanged) and `elephc test`, which discovers the test classes under a path at compile time, builds the suite into a native binary, and runs it. See [Testing](docs/beyond-php/testing.md).
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_ptr()`, `buffer_free()`
 

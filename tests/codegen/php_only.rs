@@ -1,5 +1,5 @@
 //! Purpose:
-//! End-to-end CLI tests for `--strict-php`: plain PHP compiles and runs
+//! End-to-end CLI tests for `--php-only`: plain PHP compiles and runs
 //! identically, user code may shadow extension builtin names, `function_exists`
 //! reports extensions as missing, extension constructs fail with the strict
 //! diagnostics, and injected preludes keep working.
@@ -14,7 +14,7 @@
 
 use crate::support::*;
 
-/// Compiles `source` through the CLI with `--strict-php`, runs the binary, and
+/// Compiles `source` through the CLI with `--php-only`, runs the binary, and
 /// returns its stdout. Panics if compilation or the run fails.
 fn compile_strict_cli_and_run(source: &str) -> String {
     let dir = make_cli_test_dir("elephc_cli_strict");
@@ -22,13 +22,13 @@ fn compile_strict_cli_and_run(source: &str) -> String {
     fs::write(&php_path, source).unwrap();
 
     let compile_out = elephc_cli_command(&dir)
-        .args(["--strict-php"])
+        .args(["--php-only"])
         .arg(&php_path)
         .output()
         .expect("failed to run elephc CLI");
     assert!(
         compile_out.status.success(),
-        "elephc --strict-php failed: {}",
+        "elephc --php-only failed: {}",
         String::from_utf8_lossy(&compile_out.stderr)
     );
 
@@ -65,9 +65,9 @@ fn compile_cli_expect_error(source: &str, flags: &[&str]) -> String {
 }
 
 /// Verifies a plain PHP program produces the same output with and without
-/// `--strict-php`: strict mode must not change the semantics of PHP code.
+/// `--php-only`: strict mode must not change the semantics of PHP code.
 #[test]
-fn test_strict_php_plain_program_runs_identically() {
+fn test_php_only_plain_program_runs_identically() {
     let source = r#"<?php
 function fizzbuzz(int $n): string {
     if ($n % 15 == 0) { return "FizzBuzz"; }
@@ -89,7 +89,7 @@ for ($i = 1; $i <= 15; $i++) {
 /// builtin under strict mode — the name does not exist in PHP, so this is plain
 /// userland code and the call must dispatch to the user function.
 #[test]
-fn test_strict_php_user_declared_ptr_get_runs() {
+fn test_php_only_user_declared_ptr_get_runs() {
     let out = compile_strict_cli_and_run(
         r#"<?php
 function ptr_get(int $x): int { return $x + 1; }
@@ -101,7 +101,7 @@ echo ptr_get(41);
 
 /// Reflection of a user declaration wins over an Elephc-only builtin signature with the same name.
 #[test]
-fn test_strict_php_reflection_uses_shadowing_user_signature() {
+fn test_php_only_reflection_uses_shadowing_user_signature() {
     let out = compile_strict_cli_and_run(
         r#"<?php
 function ptr_get(int $left, int $right): int { return $left + $right; }
@@ -116,9 +116,9 @@ echo (new ReflectionParameter("ptr_get", 0))->getDeclaringFunction()->isInternal
     assert_eq!(out, "2LRUU");
 }
 
-/// Reflection keeps a strict-php user declaration's signature when it shadows an extension name.
+/// Reflection keeps a php-only user declaration's signature when it shadows an extension name.
 #[test]
-fn test_strict_php_reflection_dump_uses_shadowing_user_signature() {
+fn test_php_only_reflection_dump_uses_shadowing_user_signature() {
     let out = compile_strict_cli_and_run(
         r#"<?php
 function ptr_get(int $left, int $right): int { return $left + $right; }
@@ -138,11 +138,11 @@ echo strpos($dump, "<user>") !== false ? "U" : "u";
 ///
 /// The five forms are a direct call, a variable holding the name, `call_user_func()` with
 /// that variable, `call_user_func()` with the literal name, and a first-class callable.
-/// `ptr_is_null` is an extension builtin `--strict-php` hides, so only the user function is
+/// `ptr_is_null` is an extension builtin `--php-only` hides, so only the user function is
 /// visible here and all five must answer `7`. Pinned on its own so the rule does not depend
 /// on the mixed PHP/LFC include-graph fixture in `tests/codegen/lfc.rs`.
 #[test]
-fn test_strict_php_user_shadowed_extension_name_dispatches_the_same_from_every_call_form() {
+fn test_php_only_user_shadowed_extension_name_dispatches_the_same_from_every_call_form() {
     let out = compile_strict_cli_and_run(
         r#"<?php
 function ptr_is_null(int $value): int { return $value + 7; }
@@ -161,7 +161,7 @@ echo $callable(0);
 /// Verifies `function_exists()` reports extension builtins as missing under
 /// strict mode (matching the PHP interpreter) while user-shadowed names exist.
 #[test]
-fn test_strict_php_function_exists_hides_extensions() {
+fn test_php_only_function_exists_hides_extensions() {
     let out = compile_strict_cli_and_run(
         r#"<?php
 function ptr_get(int $x): int { return $x; }
@@ -199,35 +199,35 @@ echo var_export(function_exists('is_real'), true), "\n";
 /// Verifies a call to an extension builtin fails under strict mode with the
 /// undefined-function diagnostic carrying the disabled-extension hint.
 #[test]
-fn test_strict_php_extension_call_fails_with_hint() {
+fn test_php_only_extension_call_fails_with_hint() {
     let stderr = compile_cli_expect_error(
         "<?php $p = ptr_null();",
-        &["--strict-php"],
+        &["--php-only"],
     );
     assert!(
         stderr.contains("Undefined function: ptr_null")
-            && stderr.contains("disabled by --strict-php"),
+            && stderr.contains("disabled by --php-only"),
         "unexpected stderr: {stderr}",
     );
 }
 
 /// Rejects a hidden extension in a pipe with the disabled-extension diagnostic.
 #[test]
-fn test_strict_php_pipe_rejects_hidden_is_real() {
+fn test_php_only_pipe_rejects_hidden_is_real() {
     let stderr = compile_cli_expect_error(
         "<?php echo 1.5 |> is_real(...);",
-        &["--strict-php"],
+        &["--php-only"],
     );
     assert!(
         stderr.contains("Undefined function: is_real")
-            && stderr.contains("disabled by --strict-php"),
+            && stderr.contains("disabled by --php-only"),
         "unexpected stderr: {stderr}",
     );
 }
 
 /// Dispatches a strict-mode pipe to a user function that shadows the hidden builtin.
 #[test]
-fn test_strict_php_pipe_uses_user_declared_is_real() {
+fn test_php_only_pipe_uses_user_declared_is_real() {
     let out = compile_strict_cli_and_run(
         "<?php function is_real(float $value): bool { return false; } echo (int)(1.5 |> is_real(...));",
     );
@@ -236,10 +236,10 @@ fn test_strict_php_pipe_uses_user_declared_is_real() {
 
 /// Verifies extension syntax fails under strict mode with the audit diagnostic.
 #[test]
-fn test_strict_php_extension_syntax_fails() {
+fn test_php_only_extension_syntax_fails() {
     let stderr = compile_cli_expect_error(
         "<?php packed class P { public int $x; }",
-        &["--strict-php"],
+        &["--php-only"],
     );
     assert!(
         stderr.contains("`packed class` is an elephc extension"),
@@ -249,10 +249,10 @@ fn test_strict_php_extension_syntax_fails() {
 
 /// Verifies strict PHP accepts an otherwise unused define for mixed PHP/LFC projects.
 #[test]
-fn test_strict_php_with_unused_define_is_valid() {
+fn test_php_only_with_unused_define_is_valid() {
     let output = compile_cli_file_and_run(
         "<?php echo 1;",
-        &["--strict-php", "--define", "FEATURE"],
+        &["--php-only", "--define", "FEATURE"],
     );
     assert_eq!(output, "1");
 }
@@ -261,7 +261,7 @@ fn test_strict_php_with_unused_define_is_valid() {
 /// elephc-PHP prelude) still compiles and runs under strict mode: injected
 /// compiler code is exempt from the audit and uses internal builtin aliases.
 #[test]
-fn test_strict_php_prelude_program_runs() {
+fn test_php_only_prelude_program_runs() {
     let out = compile_strict_cli_and_run(
         r#"<?php
 echo var_export(true, true), "\n";
@@ -274,13 +274,13 @@ var_export([1, 2]);
     );
 }
 
-/// Verifies `--check --strict-php` reports strict violations without emitting
+/// Verifies `--check --php-only` reports strict violations without emitting
 /// artifacts, so strict mode composes with check-only runs.
 #[test]
-fn test_strict_php_composes_with_check_mode() {
+fn test_php_only_composes_with_check_mode() {
     let stderr = compile_cli_expect_error(
         "<?php int $x = 5;",
-        &["--check", "--strict-php"],
+        &["--check", "--php-only"],
     );
     assert!(
         stderr.contains("typed local variable declarations are an elephc extension"),
@@ -288,7 +288,7 @@ fn test_strict_php_composes_with_check_mode() {
     );
 }
 
-/// Compiles `source` with `--strict-php`, runs the binary expecting a runtime
+/// Compiles `source` with `--php-only`, runs the binary expecting a runtime
 /// failure, and returns its combined stdout+stderr for message assertions.
 fn compile_strict_cli_and_run_expect_failure(source: &str) -> String {
     let dir = make_cli_test_dir("elephc_cli_strict_rt");
@@ -296,13 +296,13 @@ fn compile_strict_cli_and_run_expect_failure(source: &str) -> String {
     fs::write(&php_path, source).unwrap();
 
     let compile_out = elephc_cli_command(&dir)
-        .arg("--strict-php")
+        .arg("--php-only")
         .arg(&php_path)
         .output()
         .expect("failed to run elephc CLI");
     assert!(
         compile_out.status.success(),
-        "elephc --strict-php failed: {}",
+        "elephc --php-only failed: {}",
         String::from_utf8_lossy(&compile_out.stderr)
     );
 
@@ -324,7 +324,7 @@ fn compile_strict_cli_and_run_expect_failure(source: &str) -> String {
 /// Verifies dynamic (runtime-string) eval hides extension builtins under
 /// strict mode: the call behaves like any unknown function in eval'd code.
 #[test]
-fn test_strict_php_dynamic_eval_hides_extension_builtins() {
+fn test_php_only_dynamic_eval_hides_extension_builtins() {
     let out = compile_strict_cli_and_run_expect_failure(
         r#"<?php
 $code = '$b = buffer_new(' . $argc . '); return buffer_len($b);';
@@ -340,7 +340,7 @@ echo eval($code);
 /// Verifies a literal eval fragment calling an extension builtin fails the
 /// same way under strict mode instead of dispatching through the bridge.
 #[test]
-fn test_strict_php_literal_eval_hides_extension_builtins() {
+fn test_php_only_literal_eval_hides_extension_builtins() {
     let out = compile_strict_cli_and_run_expect_failure(
         r#"<?php
 echo eval('$b = buffer_new(4); return buffer_len($b);');
@@ -354,7 +354,7 @@ echo eval('$b = buffer_new(4); return buffer_len($b);');
 
 /// Keeps literal eval from folding a strict-hidden extension builtin into a boolean.
 #[test]
-fn test_strict_php_literal_eval_rejects_hidden_is_real() {
+fn test_php_only_literal_eval_rejects_hidden_is_real() {
     let out = compile_strict_cli_and_run_expect_failure(
         "<?php echo eval('return is_real(1.5);');",
     );
@@ -366,7 +366,7 @@ fn test_strict_php_literal_eval_rejects_hidden_is_real() {
 
 /// Resolves a literal eval call to a user function instead of folding the hidden builtin.
 #[test]
-fn test_strict_php_literal_eval_uses_user_declared_is_real() {
+fn test_php_only_literal_eval_uses_user_declared_is_real() {
     let out = compile_strict_cli_and_run(
         "<?php function is_real(float $value): bool { return false; } echo (int) eval('return is_real(1.5);');",
     );
@@ -376,7 +376,7 @@ fn test_strict_php_literal_eval_uses_user_declared_is_real() {
 /// Verifies introspection inside dynamic eval agrees with the AOT surface
 /// under strict mode: extension builtins report as missing, PHP builtins stay.
 #[test]
-fn test_strict_php_eval_introspection_matches_aot_surface() {
+fn test_php_only_eval_introspection_matches_aot_surface() {
     let out = compile_strict_cli_and_run(
         r#"<?php
 $code = '$n = ' . $argc . ';
@@ -411,7 +411,7 @@ echo eval($code);
 /// from dynamic eval under strict mode: magician hides the builtin and falls
 /// through to the AOT native-function table, matching the PHP interpreter.
 #[test]
-fn test_strict_php_eval_calls_user_shadowed_extension_name() {
+fn test_php_only_eval_calls_user_shadowed_extension_name() {
     let out = compile_strict_cli_and_run(
         r#"<?php
 function ptr_get(int $x): int { return $x + 1; }

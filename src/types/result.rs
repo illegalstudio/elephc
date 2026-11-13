@@ -104,6 +104,8 @@ pub struct ArrayPushPropertyPlan {
 /// class metadata, warnings, FFI data, and required libraries forward to optimizer,
 /// codegen, and linker setup.
 pub struct CheckResult {
+    /// Effective semantic guarantees consumed by lowering and code generation.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
     /// Every instantiation a call site asked for, as (template name, type arguments).
     ///
     /// The pipeline splices one declaration per entry into the program and re-checks, because

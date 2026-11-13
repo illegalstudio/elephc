@@ -136,7 +136,7 @@ pub(in crate::ir_lower) fn eval_demand(module: &Module) -> EvalDemand {
             };
             let Some(program) = crate::eval_aot::parse_literal_fragment(
                 &fragment,
-                eval_literal_strict_profile(inst),
+                eval_literal_php_only_profile(inst),
             ) else {
                 return EvalDemand::Everything;
             };

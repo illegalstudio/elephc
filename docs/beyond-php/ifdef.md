@@ -8,9 +8,9 @@ sidebar:
 `ifdef` selectively includes or excludes code based on compile-time symbols.
 
 > **Strict mode:** `ifdef` is an elephc extension with no PHP equivalent.
-> [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects it in
+> [`--php-only`](../compiling/cli-reference.md#php-only-mode) rejects it in
 > physical PHP files. Tagless [LFC source](lfc-source-files.md) remains
-> extension-enabled, so `--strict-php --define FEATURE app.lfc` is valid.
+> extension-enabled, so `--php-only --define FEATURE app.lfc` is valid.
 
 ## Syntax
 ```php
@@ -50,7 +50,7 @@ ifdef DEBUG {
 ```bash
 elephc --define DEBUG app.php
 elephc --define DEBUG --define USE_SDL app.php
-elephc --strict-php --define DEBUG app.lfc
+elephc --php-only --define DEBUG app.lfc
 ```
 
 ## Nesting

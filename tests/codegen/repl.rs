@@ -269,7 +269,7 @@ fn test_repl_cache_keeps_one_host_per_profile() {
 
 /// Strict mode reaches eval while compiler-owned extern declarations remain valid in the host.
 #[test]
-fn test_repl_strict_php_and_heap_ownership() {
+fn test_repl_php_only_and_heap_ownership() {
     let fixture = Fixture::new();
     let output = fixture.run(concat!(
         "function_exists('ptr_null')\n",
@@ -279,7 +279,7 @@ fn test_repl_strict_php_and_heap_ownership() {
         "$items['owned'] = 'new';\n",
         "strlen($alias['owned'])\n",
         "unset($s, $items, $alias);\n",
-    ), &["--strict-php", "--heap-debug"]);
+    ), &["--php-only", "--heap-debug"]);
     let out = stdout(&output);
     assert!(out.starts_with("bool(false)\n"), "{out}");
     assert!(out.ends_with("int(100)\n"), "{out}");

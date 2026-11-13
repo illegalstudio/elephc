@@ -318,6 +318,8 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 
 /// Mutable state for one function body while it is lowered.
 pub(crate) struct LoweringContext<'m, 'f> {
+    /// Immutable semantic policy inherited by ordinary and synthetic functions.
+    pub(crate) semantic_profile: elephc_semantics::SemanticProfile,
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
     pub local_slots: HashMap<String, LocalSlotId>,
@@ -594,6 +596,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
 impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Creates a lowering context over one function builder and shared module data.
     pub(crate) fn new(
+        semantic_profile: elephc_semantics::SemanticProfile,
         builder: Builder<'f>,
         data: &'m mut DataPool,
         env: TypeEnv,
@@ -664,6 +667,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         );
         let return_type = return_ir_type(&return_php_type);
         Self {
+            semantic_profile,
             builder,
             data,
             local_slots: HashMap::new(),
@@ -5849,7 +5853,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
                 crate::ir::RuntimeCallTarget::ProfiledFunction {
                     target,
                     arguments: crate::ir::RuntimeArgumentLayout::Values,
-                    strict_php: crate::strict_php::is_enabled(),
+                    php_only: crate::php_only::is_enabled(),
                     strict_types: Some(crate::source::current_strict_types()),
                 }
             }

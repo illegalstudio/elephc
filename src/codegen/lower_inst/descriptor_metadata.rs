@@ -111,7 +111,7 @@ pub(super) struct FirstClassCallableDescriptor {
 pub(super) fn first_class_callable_descriptor(
     ctx: &mut FunctionContext<'_>,
     target: &str,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<Option<FirstClassCallableDescriptor>> {
     if let Some((receiver_label, method_name)) = target.rsplit_once("::") {
         return Ok(first_class_static_method_descriptor(
@@ -132,7 +132,7 @@ pub(super) fn first_class_callable_descriptor(
             ),
         }));
     }
-    if let Some(descriptor) = first_class_builtin_descriptor(ctx, target, strict_php)? {
+    if let Some(descriptor) = first_class_builtin_descriptor(ctx, target, php_only)? {
         return Ok(Some(descriptor));
     }
     if let Some(callee) = ctx.callable_function_by_name(target) {
@@ -181,12 +181,12 @@ pub(super) fn builtin_returns_owned_string(name: &str) -> bool {
 pub(super) fn first_class_builtin_descriptor(
     ctx: &mut FunctionContext<'_>,
     target: &str,
-    strict_php: bool,
+    php_only: bool,
 ) -> Result<Option<FirstClassCallableDescriptor>> {
     let name = php_symbol_key(target.trim_start_matches('\\'));
     if !crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(
         &name,
-        strict_php,
+        php_only,
     ) {
         return Ok(None);
     }
@@ -209,7 +209,7 @@ pub(super) fn first_class_builtin_descriptor(
     let owns_string_return = wrapper_sig.return_type.codegen_repr() == PhpType::Str
         && builtin_returns_owned_string(&name);
     let entry_label =
-        emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig, strict_php)?;
+        emit_runtime_builtin_wrapper_inline(ctx, &name, &wrapper_sig, php_only)?;
     Ok(Some(FirstClassCallableDescriptor {
         entry_label: Some(entry_label),
         owns_string_return,

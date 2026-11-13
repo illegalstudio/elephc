@@ -75,7 +75,7 @@ fn repl_cache_identity_tracks_configuration() {
     let baseline = identity(&compiler, &root.0, &[], 80500, &[]).unwrap();
     assert_eq!(baseline, identity(&compiler, &root.0, &[], 80500, &[]).unwrap());
     assert_ne!(baseline, identity(&compiler, &root.0, &[], 80400, &[]).unwrap());
-    assert_ne!(baseline, identity(&compiler, &root.0, &["--strict-php".into()], 80500, &[]).unwrap());
+    assert_ne!(baseline, identity(&compiler, &root.0, &["--php-only".into()], 80500, &[]).unwrap());
     assert_ne!(baseline, identity(&compiler, &root.0, &[], 80500, &[("precision".into(), "7".into())]).unwrap());
     fs::write(root.0.join("elephc.toml"), "[ini]\nprecision = 7\n").unwrap();
     assert_ne!(baseline, identity(&compiler, &root.0, &[], 80500, &[]).unwrap());

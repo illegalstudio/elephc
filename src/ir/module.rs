@@ -99,6 +99,8 @@ pub struct ClosureScopeVariant {
 /// Complete EIR module for one compile target.
 #[derive(Debug, Clone)]
 pub struct Module {
+    /// Immutable PHP-visible semantic policy for this compilation.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
     pub target: Target,
     pub source_path: Option<String>,
     /// Optional mbstring startup arguments: effective core encodings followed by raw INI pairs.
@@ -173,6 +175,7 @@ impl Module {
     /// Creates an empty module for the given target.
     pub fn new(target: Target) -> Self {
         Self {
+            semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
             target,
             source_path: None,
             mbstring_startup: None,

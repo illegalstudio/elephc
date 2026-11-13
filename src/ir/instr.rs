@@ -235,7 +235,7 @@ pub enum Immediate {
         /// Referenced string or name data.
         data: DataId,
         /// Whether strict PHP is effective at this call site.
-        strict_php: bool,
+        php_only: bool,
     },
     LocalSlot(LocalSlotId),
     LocalSlotPair {

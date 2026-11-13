@@ -9,7 +9,7 @@
 //!   be a plain local variable (never `$this`, a by-ref parameter, a `global`, or a
 //!   `static`) of type `buffer<T>`, because lowering nulls the local slot after the
 //!   free so use-after-free traps deterministically.
-//! - `extension: true`: buffers have no PHP equivalent, so `--strict-php` hides this
+//! - `extension: true`: buffers have no PHP equivalent, so `--php-only` hides this
 //!   builtin from user programs.
 
 use crate::builtins::spec::BuiltinCheckCtx;

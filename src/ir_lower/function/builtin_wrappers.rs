@@ -14,7 +14,7 @@ use super::*;
 
 /// Gives a registry argument strategy the same rooted EIR path as a direct builtin call.
 pub(crate) fn lower_prepared_builtin_callable(
-    module: &mut Module, label: &str, name: &str, signature: &FunctionSig, strict_php: bool,
+    module: &mut Module, label: &str, name: &str, signature: &FunctionSig, php_only: bool,
 ) -> Function {
     let span = Span::dummy();
     let call = Expr::new(ExprKind::FunctionCall {
@@ -42,7 +42,7 @@ pub(crate) fn lower_prepared_builtin_callable(
         then_body: vec![strict_return], elseif_clauses: Vec::new(),
         else_body: Some(vec![weak_return]),
     }, span);
-    lower_builtin_callable_body(module, label, &internal_signature, strict_php, vec![branch])
+    lower_builtin_callable_body(module, label, &internal_signature, php_only, vec![branch])
 }
 
 /// Lowers a boxed usort wrapper through the same checked body boundary as a direct PHP call.
@@ -50,7 +50,7 @@ pub(crate) fn lower_boxed_usort_callable(
     module: &mut Module,
     label: &str,
     signature: &FunctionSig,
-    strict_php: bool,
+    php_only: bool,
 ) -> Function {
     let span = Span::dummy();
     let call = Expr::new(ExprKind::FunctionCall {
@@ -60,7 +60,7 @@ pub(crate) fn lower_boxed_usort_callable(
         }).collect(),
     }, span);
     lower_builtin_callable_body(
-        module, label, signature, strict_php, vec![Stmt::new(StmtKind::ExprStmt(call), span)],
+        module, label, signature, php_only, vec![Stmt::new(StmtKind::ExprStmt(call), span)],
     )
 }
 
@@ -69,7 +69,7 @@ pub(crate) fn lower_array_merge_callable(
     module: &mut Module,
     label: &str,
     signature: &FunctionSig,
-    strict_php: bool,
+    php_only: bool,
 ) -> Function {
     let span = Span::dummy();
     let arguments = Expr::new(ExprKind::Variable(
@@ -100,7 +100,7 @@ pub(crate) fn lower_array_merge_callable(
         }, span)).collect(),
     }, span);
     lower_builtin_callable_body(
-        module, label, signature, strict_php,
+        module, label, signature, php_only,
         vec![guard, Stmt::new(StmtKind::Return(Some(merge)), span)],
     )
 }
@@ -110,10 +110,10 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
     module: &mut Module,
     label: &str,
     signature: &FunctionSig,
-    strict_php: bool,
+    php_only: bool,
     mut statements: Vec<Stmt>,
 ) -> Function {
-    let source_mode = if strict_php {
+    let source_mode = if php_only {
         crate::source::SourceMode::Php
     } else {
         crate::source::SourceMode::Lfc
@@ -141,6 +141,7 @@ pub(in crate::ir_lower) fn lower_builtin_callable_body(
         })
         .collect::<std::collections::HashMap<_, _>>();
     let closures = lower_body_into_function(
+        module.semantic_profile,
         &mut function,
         None,
         &mut module.data,

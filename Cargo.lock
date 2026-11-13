@@ -835,6 +835,7 @@ dependencies = [
  "elephc-probe",
  "elephc-random",
  "elephc-reference",
+ "elephc-semantics",
  "elephc-tls",
  "elephc-tz",
  "elephc-web",
@@ -956,6 +957,7 @@ dependencies = [
  "elephc-pcntl",
  "elephc-phar",
  "elephc-process-context",
+ "elephc-semantics",
  "elephc-tokenizer-engine",
  "flate2",
  "inventory",
@@ -1053,6 +1055,10 @@ version = "0.1.0"
 
 [[package]]
 name = "elephc-reference"
+version = "0.1.0"
+
+[[package]]
+name = "elephc-semantics"
 version = "0.1.0"
 
 [[package]]

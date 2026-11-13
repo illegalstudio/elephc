@@ -1,5 +1,5 @@
 //! Purpose:
-//! Owns the `--strict-php` compilation mode: the thread-local enablement state
+//! Owns the `--php-only` compilation mode: the thread-local enablement state
 //! consulted by the builtin catalog and checker, and (in later sections) the
 //! AST audit pass that rejects elephc-only syntax extensions.
 //!
@@ -12,7 +12,7 @@
 //! - The state is a thread-local `Cell`, mirroring `codegen_support`'s
 //!   `AUTOLOAD_RULE_COUNT` precedent, so parallel test runs cannot interfere
 //!   (the compile pipeline runs on a single thread per invocation).
-//! - Strict mode must never hide `internal: true` builtins: injected compiler
+//! - PHP-only mode must never hide `internal: true` builtins: injected compiler
 //!   preludes call them, and they are already invisible to user programs.
 
 mod audit;
@@ -22,27 +22,27 @@ pub use audit::check;
 use std::cell::Cell;
 
 thread_local! {
-    /// Whether `--strict-php` was requested for the compilation running on this thread.
-    static STRICT_PHP: Cell<bool> = const { Cell::new(false) };
+    /// Whether `--php-only` was requested for the compilation running on this thread.
+    static PHP_ONLY: Cell<bool> = const { Cell::new(false) };
 
     /// Language mode of the physical source currently being resolved or checked.
     static SOURCE_MODE: Cell<crate::source::SourceMode> =
         const { Cell::new(crate::source::SourceMode::Php) };
 }
 
-/// Enables or disables strict-PHP mode for the current thread's compilation.
+/// Enables or disables PHP-only mode for the current thread's compilation.
 pub fn set_enabled(enabled: bool) {
-    STRICT_PHP.with(|cell| cell.set(enabled));
+    PHP_ONLY.with(|cell| cell.set(enabled));
 }
 
-/// Returns whether strict PHP was requested for the current thread's compilation.
+/// Returns whether PHP-only was requested for the current thread's compilation.
 pub fn is_requested() -> bool {
-    STRICT_PHP.with(|cell| cell.get())
+    PHP_ONLY.with(|cell| cell.get())
 }
 
-/// Returns whether strict PHP is effective for the source currently being processed.
+/// Returns whether PHP-only is effective for the source currently being processed.
 pub fn is_enabled() -> bool {
-    SOURCE_MODE.with(|mode| mode.get().strict_php_is_effective(is_requested()))
+    SOURCE_MODE.with(|mode| mode.get().php_only_is_effective(is_requested()))
 }
 
 /// RAII guard restoring the previous physical-source mode on drop.
@@ -69,41 +69,41 @@ pub fn with_source_mode<T>(
     operation()
 }
 
-/// RAII guard restoring the previous strict-mode state on drop.
+/// RAII guard restoring the previous PHP-only state on drop.
 ///
-/// Test fixtures that enable strict mode must hold one of these instead of
+/// Test fixtures that enable PHP-only mode must hold one of these instead of
 /// calling `set_enabled` in pairs: if an assertion panics mid-fixture, the
 /// guard's `Drop` still runs during unwinding, so later fixtures on the same
-/// thread (e.g. the examples corpus loop) can never inherit stale strict state.
+/// thread (e.g. the examples corpus loop) can never inherit stale PHP-only state.
 ///
 /// Constructed only by lib unit tests and integration tests; the compiler
 /// binary sets the flag once from the CLI and never scopes it, hence the
 /// dead-code allowance for the bin target.
 #[allow(dead_code)]
-pub struct StrictModeGuard {
+pub struct PhpOnlyGuard {
     previous: bool,
 }
 
-impl Drop for StrictModeGuard {
-    /// Restores the strict-mode state captured when the guard was created.
+impl Drop for PhpOnlyGuard {
+    /// Restores the PHP-only state captured when the guard was created.
     fn drop(&mut self) {
         set_enabled(self.previous);
     }
 }
 
-/// Enables strict mode and returns a guard that restores the previous state on drop.
+/// Enables PHP-only mode and returns a guard that restores the previous state on drop.
 ///
-/// Used by lib unit tests and integration tests only (see `StrictModeGuard`).
+/// Used by lib unit tests and integration tests only (see `PhpOnlyGuard`).
 #[allow(dead_code)]
-pub fn scoped_enable() -> StrictModeGuard {
+pub fn scoped_enable() -> PhpOnlyGuard {
     let previous = is_requested();
     set_enabled(true);
-    StrictModeGuard { previous }
+    PhpOnlyGuard { previous }
 }
 
-/// Audits one user source file's parsed statements when strict mode is active.
+/// Audits one user source file's parsed statements when PHP-only mode is active.
 ///
-/// No-op (always `Ok`) when strict mode is off. Violations are bundled into a
+/// No-op (always `Ok`) when PHP-only mode is off. Violations are bundled into a
 /// single `CompileError` (primary + related) attributed to `file`, so callers
 /// that parse user files mid-pipeline — the include resolver and the autoloader
 /// — can propagate every violation through their existing single-error paths.
@@ -127,7 +127,7 @@ pub fn check_file_with_mode(
     file: &str,
     mode: crate::source::SourceMode,
 ) -> Result<(), crate::errors::CompileError> {
-    if !mode.strict_php_is_effective(is_requested()) {
+    if !mode.php_only_is_effective(is_requested()) {
         return Ok(());
     }
     let violations = check(program);
@@ -141,13 +141,13 @@ pub fn check_file_with_mode(
 mod tests {
     use super::*;
 
-    /// Verifies strict mode defaults to off so ordinary compiles are unaffected.
+    /// Verifies PHP-only mode defaults to off so ordinary compiles are unaffected.
     #[test]
     fn strict_mode_defaults_off() {
         assert!(!is_enabled());
     }
 
-    /// Verifies enabling and disabling strict mode round-trips on the same thread.
+    /// Verifies enabling and disabling PHP-only mode round-trips on the same thread.
     #[test]
     fn strict_mode_set_and_clear_roundtrip() {
         set_enabled(true);
@@ -160,7 +160,7 @@ mod tests {
 
     /// Verifies the RAII guard restores the previous state on drop, including
     /// when dropped during a panic unwind, so panicking fixtures cannot leak
-    /// strict state to later fixtures on the same thread.
+    /// PHP-only state to later fixtures on the same thread.
     #[test]
     fn scoped_enable_restores_on_drop_and_panic() {
         {
@@ -177,7 +177,7 @@ mod tests {
         assert!(!is_enabled(), "guard must restore state during unwinding");
     }
 
-    /// Verifies strict mode is thread-local: enabling it on another thread must
+    /// Verifies PHP-only mode is thread-local: enabling it on another thread must
     /// not leak into this thread's compilation state.
     #[test]
     fn strict_mode_is_thread_local() {

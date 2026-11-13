@@ -538,6 +538,8 @@ pub(crate) struct Checker {
     /// and leave the existing hard "cannot reassign" error / no-marking behavior in place
     /// instead of rebinding-with-warning or marking-with-warning.
     pub strict_locals: bool,
+    /// Immutable guarantees selected for this type-checking invocation.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
     /// Nesting depth of conditional statements (`if`/`switch`/loops/`try`/…) in the body being
     /// checked. Only depth 0 is straight-line code that unconditionally dominates everything
     /// after it, which is what makes a binding kill or re-bind safe to lower.
@@ -1428,13 +1430,16 @@ impl Checker {
 
 /// Options controlling type-checker behavior beyond its default permissive rules.
 ///
-/// Threaded from `CliConfig::strict_locals` (the `--strict-locals` flag) down to the
-/// `Checker`. All fields default to today's behavior, so a caller that does not opt in
+/// Carries the CLI's resolved semantic profile down to the `Checker`.
+/// All fields default to today's behavior, so a caller that does not opt in
 /// (`CheckOptions::default()`) sees no change.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CheckOptions {
+    /// Independently selected semantic guarantees; empty preserves PHP behavior.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
     /// Make an incompatible local retype (e.g. a variable assigned `int` then later
-    /// `string`) a compile error instead of a warning.
+    /// `string`) a compile error instead of a warning. Retained for Rust API callers;
+    /// new callers should enable `StrictFeature::Locals` in `semantic_profile`.
     pub strict_locals: bool,
 }
 
@@ -1548,9 +1553,15 @@ pub fn check_types_with_options(
     options: CheckOptions,
     generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
+    let pending = crate::semantics::pending_guarantees(options.semantic_profile);
+    if !pending.is_empty() {
+        return Err(CompileError::new(crate::span::Span::dummy(), &format!(
+            "strict guarantees are not yet available in this build: {}", pending.join(", "))));
+    }
     // Every `check*` spelling funnels through here, so this is the one place the checker needs
     // the stack its own recursion depth implies (issue #686).
     crate::compiler_stack::with_compiler_stack(|| {
+        crate::semantics::validate_source(program, options.semantic_profile)?;
         check_types_on_compiler_stack(program, target, options, generics)
     })
 }
@@ -1623,6 +1634,7 @@ fn check_types_on_compiler_stack(
     )?;
 
     Ok(CheckResult {
+        semantic_profile: checker.semantic_profile,
         requested_instantiations: checker.requested_instantiations,
         requested_promotable_clones: checker.requested_promotable_clones,
         generic_call_sites: checker.generic_call_sites,

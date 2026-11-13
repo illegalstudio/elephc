@@ -7,7 +7,7 @@ sidebar:
 
 `buffer<T>` is a fixed-size contiguous array of POD values or packed records. Designed for game loops, renderers, and performance-critical code where hash table overhead is unacceptable.
 
-> **Strict mode:** buffers are an elephc extension with no PHP equivalent. Compiling with [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects the `buffer<T>` type, `buffer_new<T>`, `buffer_len()`, `buffer_ptr()`, and `buffer_free()`.
+> **Strict mode:** buffers are an elephc extension with no PHP equivalent. Compiling with [`--php-only`](../compiling/cli-reference.md#php-only-mode) rejects the `buffer<T>` type, `buffer_new<T>`, `buffer_len()`, `buffer_ptr()`, and `buffer_free()`.
 
 ## Why not PHP arrays?
 

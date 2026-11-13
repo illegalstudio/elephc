@@ -849,7 +849,7 @@ still require separate work. These boundaries are not yet full cleanup parity.
 Direct mbstring EIR calls now retain the physical file's `strict_types` state,
 including included functions and arrow functions. Generated callable wrappers
 mark this state as inherited from the invoking caller. This parameter-coercion
-profile is independent of `--strict-php` extension visibility and is visible in
+profile is independent of `--php-only` extension visibility and is visible in
 textual EIR. Direct AOT adapters consume it when invoking the shared parameter
 planner. Callable wrappers still apply their existing descriptor validation and
 pass weak mode when this inherited profile has not been resolved.

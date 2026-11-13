@@ -7,7 +7,7 @@
 //!   registry.
 //!
 //! Key details:
-//! - `internal: true`: never PHP-visible, so `--strict-php` (which hides
+//! - `internal: true`: never PHP-visible, so `--php-only` (which hides
 //!   PHP-visible extension builtins from user programs) does not affect it and
 //!   prelude-injected code keeps compiling in strict mode.
 //! - Delegates `check` and the lowering emitter to the `zval_unpack` home so the

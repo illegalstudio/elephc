@@ -28,7 +28,7 @@ pub(crate) struct CompileGap {
 
 impl CompileGap {
     /// Names one unsupported EvalIR construct.
-    const fn new(what: &'static str) -> Self {
+    pub(super) const fn new(what: &'static str) -> Self {
         Self { what }
     }
 

@@ -181,7 +181,7 @@ pub enum RuntimeCallTarget {
         /// Physical operand layout, without changing the PHP-visible function signature.
         arguments: RuntimeArgumentLayout,
         /// Whether strict PHP is effective at the physical call site.
-        strict_php: bool,
+        php_only: bool,
         /// PHP parameter strictness at a direct call site; None inherits the invoking caller.
         /// Generated callable wrappers defer this choice instead of capturing their creation site.
         strict_types: Option<bool>,

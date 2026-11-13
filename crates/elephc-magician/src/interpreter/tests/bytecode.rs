@@ -47,11 +47,11 @@ fn bytecode_slice_caches_the_executable_form() {
     with_executable_cache_key(positive, || {
         execute_program(&positive_program, &mut scope, &mut values).expect("execute");
     });
-    let first = bytecode::lookup_executable(positive).expect("cached module").expect("module");
+    let first = bytecode::lookup_executable(positive, elephc_semantics::SemanticProfile::PERMISSIVE).expect("cached module").expect("module");
     with_executable_cache_key(positive, || {
         execute_program(&positive_program, &mut scope, &mut values).expect("execute again");
     });
-    let second = bytecode::lookup_executable(positive).expect("cached module").expect("module");
+    let second = bytecode::lookup_executable(positive, elephc_semantics::SemanticProfile::PERMISSIVE).expect("cached module").expect("module");
     assert!(std::sync::Arc::ptr_eq(&first, &second));
     assert_eq!(values.output, "11");
 
@@ -60,7 +60,7 @@ fn bytecode_slice_caches_the_executable_form() {
     with_executable_cache_key(negative, || {
         let _ = execute_program(&negative_program, &mut scope, &mut values);
     });
-    let gap = bytecode::lookup_executable(negative).expect("cached gap").expect_err("gap");
+    let gap = bytecode::lookup_executable(negative, elephc_semantics::SemanticProfile::PERMISSIVE).expect("cached gap").expect_err("gap");
     assert_eq!(gap.what(), "PropertyGet");
     assert!(!bytecode::last_execution_used_vm());
 }

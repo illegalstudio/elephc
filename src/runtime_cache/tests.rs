@@ -10,6 +10,20 @@
 
 use super::*;
 
+/// Every strict guarantee partitions cached runtime objects and equivalent profiles reuse them.
+#[test]
+fn strict_profile_runtime_cache_identity_covers_all_features() {
+    use elephc_semantics::{SemanticProfile, FEATURES};
+    let base = identity::partition_semantic_profile(42, SemanticProfile::PERMISSIVE);
+    let mut keys = std::collections::HashSet::from([base]);
+    for feature in FEATURES {
+        let profile = SemanticProfile::PERMISSIVE.with(feature.feature, true);
+        let key = identity::partition_semantic_profile(42, profile);
+        assert!(keys.insert(key), "{} must partition runtime entries", feature.flag);
+        assert_eq!(key, identity::partition_semantic_profile(42, profile));
+    }
+}
+
     /// Verifies the cache key changes with runtime-emitter build identity even
     /// when compiler version, target, heap, features, and PIC mode are identical.
     #[test]

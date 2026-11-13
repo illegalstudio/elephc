@@ -131,8 +131,10 @@ Modes:
   --web                   Compile as a prefork HTTP server
   --web-isolation MODE    worker (default) | pool | request; requires --web
   --web-lifecycle MODE    request (default) | application; application requires worker isolation
-  --strict-php            Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
-  --strict-locals         Make an incompatible local retype (e.g. int then string) a compile error instead of a warning
+  --php-only              Reject elephc extensions in tagged PHP source; .lfc remains extension-enabled
+  --strict                Enable every strict semantic guarantee
+{STRICT_FEATURES}
+  --no-strict-<feature>   Override a guarantee enabled by --strict
 
 Output modes:
   --check                 Type-check only, no codegen (mutually exclusive with --emit-ir/--emit-asm)
@@ -168,7 +170,6 @@ Codegen:
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
   --ini KEY=VALUE         Bake an INI directive override (OPcache and mbstring startup)
-  --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
   --link LIB, -l LIB      Extra library to link
@@ -206,13 +207,6 @@ pub(crate) struct CliConfig {
     /// their caller, exactly as with `--counters`.
     pub(crate) instrument: crate::codegen::Instrumentation,
     pub(crate) heap_debug: bool,
-    /// Opt-in: make the one documented OPcache divergence (D5) LOUD instead of silent.
-    ///
-    /// Code compiled into the binary cannot be evicted, so `opcache_invalidate()` on a
-    /// manifest member can never do what the caller is asking for. Off (the default) it
-    /// reports success exactly as reference PHP does; on, it throws so a program that
-    /// RELIES on invalidation fails loudly rather than silently running stale code.
-    pub(crate) strict_opcache: bool,
     pub(crate) emit_ir: bool,
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
@@ -242,10 +236,9 @@ pub(crate) struct CliConfig {
     pub(crate) defines: HashSet<String>,
     /// Accept only PHP-compatible constructs: elephc extensions (`ptr`, `buffer<T>`,
     /// `packed class`, `extern`, `ifdef`, extension builtins) become compile errors.
-    pub(crate) strict_php: bool,
-    /// Make an incompatible local retype (e.g. a variable assigned `int` then
-    /// later `string`) a compile error instead of a warning.
-    pub(crate) strict_locals: bool,
+    pub(crate) php_only: bool,
+    /// Resolved independently selectable strict guarantees.
+    pub(crate) semantic_profile: elephc_semantics::SemanticProfile,
     pub(crate) web: bool,
     /// Process-isolation architecture baked into a `--web` executable.
     pub(crate) web_isolation: WebIsolation,
@@ -368,7 +361,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut counters = false;
     let mut instrument = crate::codegen::Instrumentation::Off;
     let mut heap_debug = false;
-    let mut strict_opcache = false;
+    let mut strict_requests = crate::semantics::StrictRequests::default();
     let mut emit_ir = false;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
@@ -387,8 +380,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut extra_link_paths: Vec<String> = Vec::new();
     let mut extra_frameworks: Vec<String> = Vec::new();
     let mut defines: HashSet<String> = HashSet::new();
-    let mut strict_php = false;
-    let mut strict_locals = false;
+    let mut php_only = false;
     let mut web = false;
     let mut web_isolation = WebIsolation::default();
     let mut web_isolation_explicit = false;
@@ -420,7 +412,9 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut i = 1;
     while i < args.len() {
         let arg = &args[i];
-        if let Some(val) = arg.strip_prefix("--heap-size=") {
+        if strict_requests.apply_arg(arg) {
+            // The shared catalog owns strict options and umbrella precedence.
+        } else if let Some(val) = arg.strip_prefix("--heap-size=") {
             heap_size = parse_heap_size(val);
         } else if arg == "--target" {
             i += 1;
@@ -467,8 +461,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             with_crates.extend(MONITORING_BRIDGES.iter().map(|s| s.to_string()));
         } else if arg == "--heap-debug" {
             heap_debug = true;
-        } else if arg == "--strict-opcache" {
-            strict_opcache = true;
+
         } else if arg == "--emit-ir" {
             emit_ir = true;
         } else if arg == "--emit-asm" {
@@ -557,10 +550,9 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
                 i,
                 "Missing framework name after --framework",
             ));
-        } else if arg == "--strict-php" {
-            strict_php = true;
-        } else if arg == "--strict-locals" {
-            strict_locals = true;
+        } else if arg == "--php-only" {
+            php_only = true;
+
         } else if arg == "--web" {
             web = true;
         } else if arg == "--web-lifecycle" {
@@ -688,7 +680,6 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         counters,
         instrument,
         heap_debug,
-        strict_opcache,
         emit_ir,
         null_repr,
         emit_asm,
@@ -709,8 +700,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         extra_link_paths,
         extra_frameworks,
         defines,
-        strict_php,
-        strict_locals,
+        php_only,
+        semantic_profile: strict_requests.resolve(),
         web,
         web_isolation,
         web_application,
@@ -744,7 +735,11 @@ fn with_flag_names() -> Vec<&'static str> {
 
 /// Renders `HELP` with the accepted `--with-<name>` list substituted in.
 pub(crate) fn help_text() -> String {
+    let strict_help = crate::semantics::FEATURES.iter()
+        .map(|spec| format!("  --{:<22}{}", spec.flag, spec.help))
+        .collect::<Vec<_>>().join("\n");
     HELP.replace("{CAPABILITIES}", &with_flag_names().join(", "))
+        .replace("{STRICT_FEATURES}", &strict_help)
 }
 
 /// Reports every optional capability this binary accepts, and the bridge
@@ -1451,34 +1446,34 @@ mod tests {
         assert!(no_ini.ini_overrides.is_empty());
     }
 
-    /// Verifies `--strict-php` sets the strict-PHP flag on the parsed config.
+    /// Verifies `--php-only` sets the strict-PHP flag on the parsed config.
     #[test]
-    fn strict_php_flag_sets_strict() {
-        let args = vec!["elephc".into(), "--strict-php".into(), "app.php".into()];
+    fn php_only_flag_sets_strict() {
+        let args = vec!["elephc".into(), "--php-only".into(), "app.php".into()];
         let config = compile_config(&args);
-        assert!(config.strict_php);
+        assert!(config.php_only);
     }
 
-    /// Verifies the absence of `--strict-php` leaves strict mode off.
+    /// Verifies the absence of `--php-only` leaves strict mode off.
     #[test]
-    fn no_strict_php_flag_defaults_off() {
+    fn no_php_only_flag_defaults_off() {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = compile_config(&args);
-        assert!(!config.strict_php);
+        assert!(!config.php_only);
     }
 
     /// Verifies strict mode and conditional symbols may coexist for mixed PHP/LFC projects.
     #[test]
-    fn strict_php_with_define_is_accepted() {
+    fn php_only_with_define_is_accepted() {
         let args = vec![
             "elephc".into(),
-            "--strict-php".into(),
+            "--php-only".into(),
             "--define".into(),
             "FEATURE".into(),
             "app.lfc".into(),
         ];
         let config = compile_config(&args);
-        assert!(config.strict_php);
+        assert!(config.php_only);
         assert!(config.defines.contains("FEATURE"));
     }
 
@@ -1487,7 +1482,7 @@ mod tests {
     fn strict_locals_flag_sets_strict_locals() {
         let args = vec!["elephc".into(), "--strict-locals".into(), "app.php".into()];
         let config = compile_config(&args);
-        assert!(config.strict_locals);
+        assert!(config.semantic_profile.contains(crate::semantics::StrictFeature::Locals));
     }
 
     /// Verifies the absence of `--strict-locals` defaults to permissive local retyping.
@@ -1495,7 +1490,25 @@ mod tests {
     fn no_strict_locals_flag_defaults_off() {
         let args = vec!["elephc".into(), "app.php".into()];
         let config = compile_config(&args);
-        assert!(!config.strict_locals);
+        assert!(!config.semantic_profile.contains(crate::semantics::StrictFeature::Locals));
+    }
+
+    /// Resolves strict overrides in either order while keeping PHP-only policy separate.
+    #[test]
+    fn strict_profile_cli_override_precedence_and_php_only_separation() {
+        use crate::semantics::{SemanticProfile, StrictFeature};
+        for flags in [
+            ["--strict", "--no-strict-overflow", "--php-only"],
+            ["--no-strict-overflow", "--php-only", "--strict"],
+        ] {
+            let args = ["elephc", flags[0], flags[1], flags[2], "app.php"].map(String::from);
+            let config = compile_config(&args);
+            assert_eq!(config.semantic_profile, SemanticProfile::all().with(StrictFeature::Overflow, false));
+            assert!(config.php_only);
+        }
+        let config = compile_config(&["elephc", "--strict", "app.php"].map(String::from));
+        assert!(!config.php_only);
+        assert!(config.semantic_profile.contains(StrictFeature::Opcache));
     }
 
     /// Verifies `--quiet` sets the quiet flag.

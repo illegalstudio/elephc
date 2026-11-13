@@ -147,34 +147,7 @@ pub(crate) fn array_key_type_from_value_type(raw_ty: PhpType) -> PhpType {
 ///
 /// Used to determine whether a string literal should be treated as an integer key.
 pub(crate) fn is_php_integer_array_key(value: &str) -> bool {
-    if value == "0" {
-        return true;
-    }
-    let bytes = value.as_bytes();
-    if bytes.is_empty() {
-        return false;
-    }
-    let (start, negative) = if bytes[0] == b'-' {
-        if bytes.len() == 1 || bytes[1] == b'0' {
-            return false;
-        }
-        (1, true)
-    } else {
-        if bytes[0] == b'0' {
-            return false;
-        }
-        (0, false)
-    };
-    let digits = &bytes[start..];
-    if digits.is_empty() || !digits.iter().all(|b| b.is_ascii_digit()) {
-        return false;
-    }
-    let limit = if negative {
-        "9223372036854775808"
-    } else {
-        "9223372036854775807"
-    };
-    digits.len() < limit.len() || (digits.len() == limit.len() && digits <= limit.as_bytes())
+    elephc_semantics::array_keys::php_integer_key(value.as_bytes()).is_some()
 }
 
 /// Parses a string literal as a PHP string-offset index, returning the integer value.

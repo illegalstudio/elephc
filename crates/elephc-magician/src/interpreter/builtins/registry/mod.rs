@@ -215,7 +215,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_spec(
     let spec = &registry.specs[index];
     builtin_is_available(
         spec,
-        crate::strict_php_mode::strict_php_mode(),
+        crate::php_only_mode::php_only_mode(),
         crate::regex_provider::regex_provider_available(),
         crate::mbregex_provider::available(),
     )
@@ -225,11 +225,11 @@ pub(in crate::interpreter) fn eval_declared_builtin_spec(
 /// Returns whether one builtin is visible under the active runtime capabilities.
 fn builtin_is_available(
     spec: &EvalBuiltinSpec,
-    strict_php: bool,
+    php_only: bool,
     regex_available: bool,
     mbregex_available: bool,
 ) -> bool {
-    !(strict_php && spec.is_extension())
+    !(php_only && spec.is_extension())
         && (!matches!(spec.area(), EvalArea::Regex) || regex_available)
         && (!spec.runtime_builtin.is_some_and(RuntimeBuiltinId::is_mbregex) || mbregex_available)
         && (!matches!(spec.area(), EvalArea::Pcntl)

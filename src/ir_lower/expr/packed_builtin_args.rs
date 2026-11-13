@@ -56,7 +56,7 @@ pub(super) fn lower_packed_builtin_call(
     let call = ctx.emit_value(Op::RuntimeCall, vec![array.value],
         Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
             target, arguments: RuntimeArgumentLayout::IndexedArray,
-            strict_php: crate::strict_php::is_enabled(),
+            php_only: crate::php_only::is_enabled(),
             strict_types: Some(crate::source::current_strict_types()),
         })), result_type, effects, Some(expr.span));
     ctx.unguard_call_argument(array.value, expr.span);

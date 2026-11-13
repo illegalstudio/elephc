@@ -1898,7 +1898,7 @@ jobs:
         shell: elephc-ci-shell {0}
         run: |
           bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(test_tokenizer_)'
-          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(=codegen::lfc::lfc_and_strict_php_eval_calls_do_not_leak_profiles)'
+          bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(=codegen::lfc::lfc_and_php_only_eval_calls_do_not_leak_profiles)'
           bash scripts/ci/run_prebuilt_tests.sh 'binary(=error_tests) and test(tokenizer_)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=ir_lower::tests::corpus::lowers_tokenizer_example_on_every_target)'
           bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc) and kind(lib) and test(=autoload::prelude_probe::tests::probe_detects_tokenizer_in_autoloaded_classes)'

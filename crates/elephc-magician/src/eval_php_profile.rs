@@ -12,7 +12,7 @@
 //!   opcache builtins whose directive set is profile-gated).
 //!
 //! Key details:
-//! - Thread-local, mirroring `crate::strict_php_mode`: the profile is a property
+//! - Thread-local, mirroring `crate::php_only_mode`: the profile is a property
 //!   of the whole compiled binary, and elephc programs execute the setter and
 //!   every eval fragment on one thread (fibers switch stacks, not OS threads),
 //!   while parallel `cargo test` threads stay isolated.

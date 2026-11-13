@@ -19,7 +19,7 @@ Physical source (.php or .lfc)
   -> tokenize          Lexer: text -> tokens
   -> parse             Parser: tokens -> AST (Pratt expression parsing)
   -> magic-constants   lower __FILE__, __DIR__, __LINE__, __FUNCTION__, ...
-  -> (strict-audit)    reject elephc-only constructs (with --strict-php)
+  -> (strict-audit)    reject elephc-only constructs (with --php-only)
   -> (conditional)     apply compiler ifdef branches from --define
   -> autoload-build    discover autoload rules
   -> resolve           resolve include/require and declarations
@@ -77,7 +77,7 @@ Physical source (.php or .lfc)
   source into tokens and the [Parser](../internals/the-parser.md) builds the AST.
 - **magic-constants** — magic constants such as `__DIR__` and `__LINE__` are
   substituted before any later pass sees them.
-- **strict-PHP audit** — with [`--strict-php`](cli-reference.md#strict-php-mode),
+- **strict-PHP audit** - with [`--php-only`](cli-reference.md#php-only-mode),
   each freshly parsed PHP-mode AST is audited and every elephc-only construct is
   reported before any later pass runs. Included and autoloaded files are
   classified where they are parsed (inside resolve / autoload-run); LFC and

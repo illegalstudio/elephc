@@ -234,7 +234,7 @@ const UNCONTRACTED_PRELUDE_DECLARATIONS: &[(&str, &str)] = &[(
 
 /// Verifies no injected compiler prelude calls a PHP-visible extension builtin.
 ///
-/// `--strict-php` hides extension builtins at the catalog level with no notion of code origin,
+/// `--php-only` hides extension builtins at the catalog level with no notion of code origin,
 /// so a prelude calling one (instead of its `internal: true` `__elephc_*` alias) would break
 /// strict-mode compiles of programs that trigger that prelude's injection.
 ///

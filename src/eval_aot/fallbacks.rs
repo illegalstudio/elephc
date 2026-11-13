@@ -70,12 +70,12 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
             expr_fallback_reason(expr)
         }
         StmtKind::Assign { value, .. } => expr_fallback_reason(value),
-        // Typed local declarations are an elephc extension: under `--strict-php`
+        // Typed local declarations are an elephc extension: under `--php-only`
         // the fragment must reach the runtime bridge, whose parser rejects the
         // syntax like the PHP interpreter would (runtime parse error), instead
         // of being AOT-compiled and silently executing non-PHP code.
         StmtKind::TypedAssign { value, .. } => {
-            if crate::strict_php::is_enabled() {
+            if crate::php_only::is_enabled() {
                 return Some(EvalAotFallbackReason::UnsupportedConstruct);
             }
             expr_fallback_reason(value)
@@ -140,10 +140,10 @@ pub(super) fn stmt_fallback_reason(stmt: &Stmt) -> Option<EvalAotFallbackReason>
             else_body,
             ..
         } => {
-            // `ifdef` is an elephc extension: under `--strict-php` the fragment
+            // `ifdef` is an elephc extension: under `--php-only` the fragment
             // must reach the runtime bridge, whose parser rejects the syntax
             // like the PHP interpreter would, instead of being AOT-compiled.
-            if crate::strict_php::is_enabled() {
+            if crate::php_only::is_enabled() {
                 return Some(EvalAotFallbackReason::UnsupportedConstruct);
             }
             then_body.iter().find_map(stmt_fallback_reason).or_else(|| {

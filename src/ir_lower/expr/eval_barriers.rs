@@ -17,7 +17,7 @@ pub(super) fn eval_literal_needs_barrier(ctx: &LoweringContext<'_, '_>, fragment
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.source_path(),
-        crate::strict_php::is_enabled(),
+        crate::php_only::is_enabled(),
         static_call_supported,
         |receiver, method, args| {
             eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)
@@ -62,7 +62,7 @@ pub(super) fn eval_literal_scope_barrier_writes(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.source_path(),
-        crate::strict_php::is_enabled(),
+        crate::php_only::is_enabled(),
         static_call_supported,
         |receiver, method, args| {
             eval_literal_static_method_supported_by_lowering(ctx, receiver, method, args)

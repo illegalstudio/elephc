@@ -61,7 +61,7 @@ impl Checker {
             | StmtKind::StaticPropertyArrayAssign { .. })).then(|| self.snapshot_flow_exit(env));
         let outer_strict_types = self.strict_types;
         self.strict_types = stmt.strict_types;
-        let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
+        let result = crate::php_only::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
         });
         // Global bindings record retirement separately before each source-order alias change.

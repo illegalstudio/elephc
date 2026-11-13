@@ -1894,7 +1894,7 @@ impl FunctionBuilder {
 /// a gate the PHP-text preludes get from a textual scan of their source.
 ///
 /// UNLIKE `reads_of`, THIS MUST NOT BE CONSERVATIVE. A node it silently skipped would hide
-/// a forbidden call and turn the gate green while the prelude breaks `--strict-php`
+/// a forbidden call and turn the gate green while the prelude breaks `--php-only`
 /// compiles. So it panics on any node these builders are not known to produce: adding a
 /// helper above without teaching this function about it fails loudly instead of quietly
 /// narrowing the audit.

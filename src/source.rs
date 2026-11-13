@@ -89,7 +89,7 @@ impl SourceMode {
     }
 
     /// Returns whether an invocation-level strict-PHP request applies to this source.
-    pub fn strict_php_is_effective(self, requested: bool) -> bool {
+    pub fn php_only_is_effective(self, requested: bool) -> bool {
         requested && matches!(self, Self::Php)
     }
 }
@@ -168,6 +168,7 @@ pub(crate) fn declare_strict_types(enabled: bool) {
 /// Magic constants retain the real path, strict PHP audits the unfiltered physical
 /// program, and conditional compilation runs last so inactive extension syntax in a
 /// PHP file cannot evade the audit.
+#[allow(dead_code)] // Default-profile compatibility entry point for library callers and tests.
 pub fn finalize_physical_program(
     program: Program,
     source: &str,
@@ -175,11 +176,26 @@ pub fn finalize_physical_program(
     mode: SourceMode,
     defines: &HashSet<String>,
 ) -> Result<Program, CompileError> {
+    finalize_physical_program_with_semantics(program, source, path, mode, defines,
+        elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Finalizes physical source with immutable semantic validation before any source pruning.
+pub fn finalize_physical_program_with_semantics(
+    program: Program,
+    source: &str,
+    path: &Path,
+    mode: SourceMode,
+    defines: &HashSet<String>,
+    semantic_profile: elephc_semantics::SemanticProfile,
+) -> Result<Program, CompileError> {
     let program = crate::magic_constants::substitute_file_and_scope_constants(program, path);
-    crate::strict_php::check_file_with_mode(&program, &path.display().to_string(), mode)?;
+    crate::php_only::check_file_with_mode(&program, &path.display().to_string(), mode)?;
+    crate::semantics::validate_source(&program, semantic_profile)
+        .map_err(|error| error.with_file(path.display().to_string()))?;
     // Generic doc-comment annotations are applied AFTER the strict audit, and that order is the
     // whole point of the surface: a `@template` file is valid PHP — the annotations are
-    // comments — so `--strict-php` must keep accepting it. Applying them first made the audit
+    // comments - so `--php-only` must keep accepting it. Applying them first made the audit
     // see the injected `<T>` and `array<T>` and reject a file php-src parses happily.
     //
     // Per physical file, because the lexer discards comments and they are recovered from the
@@ -255,10 +271,10 @@ mod tests {
 
     /// Verifies strict PHP applies only to PHP-mode user source.
     #[test]
-    fn strict_php_is_source_mode_aware() {
-        assert!(SourceMode::Php.strict_php_is_effective(true));
-        assert!(!SourceMode::Php.strict_php_is_effective(false));
-        assert!(!SourceMode::Lfc.strict_php_is_effective(true));
-        assert!(!SourceMode::Internal.strict_php_is_effective(true));
+    fn php_only_is_source_mode_aware() {
+        assert!(SourceMode::Php.php_only_is_effective(true));
+        assert!(!SourceMode::Php.php_only_is_effective(false));
+        assert!(!SourceMode::Lfc.php_only_is_effective(true));
+        assert!(!SourceMode::Internal.php_only_is_effective(true));
     }
 }

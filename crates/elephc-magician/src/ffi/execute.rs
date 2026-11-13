@@ -144,6 +144,15 @@ unsafe fn execute_eval_inner(
     if !ctx.is_null() && (*ctx).abi_version() != ABI_VERSION {
         return EvalStatus::AbiMismatch.code();
     }
+    if !ctx.is_null() {
+        let profile = (*ctx).activate_semantic_profile();
+        if profile.contains(elephc_semantics::StrictFeature::DynamicCode)
+            || profile.bits() & !elephc_semantics::INTEGRATED_FEATURE_BITS != 0
+        {
+            clear_result(out);
+            return EvalStatus::UnsupportedConstruct.code();
+        }
+    }
     if code_len > 0 && code_ptr.is_null() {
         return EvalStatus::RuntimeFatal.code();
     }

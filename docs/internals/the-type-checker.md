@@ -755,7 +755,7 @@ where claiming independence would be a use-after-free rather than a leak.
 Inside an `if` (or ternary) guarded by a type predicate, the checker narrows the guarded binding's type for each branch. `is_int`/`is_integer`/`is_long`, `is_float`/`is_double`, `is_string`, and `is_bool` narrow to the corresponding scalar; `$x instanceof Class` narrows to that class; `is_null($x)` and the strict comparisons `$x === null` and `$x === false` (in either operand order) narrow to `null` and to the literal `False` subtype respectively. `$x !== null` / `$x !== false` and single-operand `isset($x)` are the same guards with the branches swapped, so a leading `!` on them cancels out. The then-branch sees the guarded type and the else-branch sees the complement (a `Union` drops the matched members); a leading `!` swaps the two. The false-sentinel case preserves the literal `false`: after `if ($x === false) { throw ...; }`, an `int|false` value continues as plain `int`, while a full `bool` member is not stripped.
 
 `is_real` is an extension float guard only where extensions are enabled. A physical PHP
-statement under `--strict-php` does not narrow through a user function named `is_real`;
+statement under `--php-only` does not narrow through a user function named `is_real`;
 LFC statements retain the builtin guard even under that flag. Both statement checking
 and the mixed-storage pre-scan install each statement's `source_mode`, so a function's
 guards and boxing warnings do not depend on whether its caller was written in PHP or LFC.

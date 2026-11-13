@@ -100,8 +100,8 @@ fn lowers_examples_corpus_part_3() { verify_examples_corpus(3); }
 
 /// Verifies one disjoint part of the example corpus without changing its fixture coverage.
 ///
-/// The `strict-php` example is lowered with strict-PHP mode enabled, matching
-/// its documented `elephc --strict-php` invocation: it deliberately declares a
+/// The `php-only` example is lowered with strict-PHP mode enabled, matching
+/// its documented `elephc --php-only` invocation: it deliberately declares a
 /// user function named after an extension builtin, which only PHP-compatible
 /// (strict) resolution accepts.
 fn verify_examples_corpus(part: usize) {
@@ -116,11 +116,11 @@ fn verify_examples_corpus(part: usize) {
         let strict = fixture
             .parent()
             .and_then(|dir| dir.file_name())
-            .is_some_and(|name| name == "strict-php");
+            .is_some_and(|name| name == "php-only");
         // RAII guard: if lowering a strict fixture panics, the guard still
         // restores the state during unwinding, so no later fixture can
         // accidentally run with strict mode inherited.
-        let _guard = strict.then(crate::strict_php::scoped_enable);
+        let _guard = strict.then(crate::php_only::scoped_enable);
         let module = super::lower_file(&fixture);
         assert!(
             !module.functions.is_empty(),

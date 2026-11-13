@@ -1,7 +1,7 @@
 //! Purpose:
 //! Registry tests for strict-PHP mode: extension builtins must disappear from
 //! declarative lookup (and therefore from dispatch, `function_exists`, and
-//! `is_callable`) when the compiled binary was built with `--strict-php`.
+//! `is_callable`) when the compiled binary was built with `--php-only`.
 //!
 //! Called from:
 //! - `cargo test -p elephc-magician` through Rust's test harness.
@@ -12,7 +12,7 @@
 //!   thread-local keeps parallel unit tests isolated from each other.
 
 use super::*;
-use crate::strict_php_mode::{scoped_enable, strict_php_mode};
+use crate::php_only_mode::{scoped_enable, php_only_mode};
 
 /// Verifies strict mode hides extension builtins from declarative lookup while
 /// genuine PHP builtins stay resolvable. The RAII guard restores the previous
@@ -50,7 +50,7 @@ fn strict_mode_hides_extension_builtins_from_lookup() {
 /// binaries keep the full extension surface.
 #[test]
 fn strict_mode_defaults_off_and_guard_restores() {
-    assert!(!strict_php_mode(), "strict mode must default to off");
+    assert!(!php_only_mode(), "strict mode must default to off");
     assert!(
         eval_declared_builtin_spec("ptr_get").is_some(),
         "extension builtins stay visible without strict mode"
@@ -61,7 +61,7 @@ fn strict_mode_defaults_off_and_guard_restores() {
     );
     {
         let _guard = scoped_enable();
-        assert!(strict_php_mode(), "scoped_enable must be observable");
+        assert!(php_only_mode(), "scoped_enable must be observable");
     }
-    assert!(!strict_php_mode(), "dropping the guard must restore the state");
+    assert!(!php_only_mode(), "dropping the guard must restore the state");
 }

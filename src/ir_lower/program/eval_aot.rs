@@ -9,6 +9,28 @@
 
 use super::*;
 
+/// Refuses source execution that cannot be compiled and verified ahead of time.
+pub(super) fn validate_dynamic_source_policy(module: &Module) -> Result<(), LoweringError> {
+    if !module.semantic_profile.contains(crate::semantics::StrictFeature::DynamicCode) {
+        return Ok(());
+    }
+    for function in all_lowered_functions(module) {
+        for (index, inst) in function.instructions.iter().enumerate() {
+            let runtime_source = match inst.op {
+                Op::LanguageConstructCall => language_construct_call_requires_eval(module, inst),
+                Op::EvalLiteralCall => eval_literal_call_requires_bridge(module, function, index, inst),
+                _ => false,
+            };
+            if runtime_source {
+                return Err(LoweringError::Unsupported(crate::errors::CompileError::new(
+                    inst.span.unwrap_or_else(crate::span::Span::dummy),
+                    "--strict-dynamic-code requires eval source fully verified and compiled ahead of time; this fragment needs the interpreter")));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Adds internal EIR functions for literal eval fragments accepted by the EIR AOT subset.
 pub(super) fn lower_literal_eval_aot_functions(
     module: &mut Module,
@@ -88,7 +110,7 @@ pub(super) fn collect_literal_eval_aot_function_candidates(
                 crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
                     &fragment,
                     module.source_path.as_deref(),
-                    eval_literal_strict_profile(inst),
+                    eval_literal_php_only_profile(inst),
                     |name, args| {
                         eval_literal_static_function_supported_by_module(module, name, args)
                     },
@@ -149,12 +171,12 @@ pub(crate) fn eval_literal_fragment_from_inst(
     module.data.strings.get(data.as_raw() as usize).cloned()
 }
 
-/// Returns the strict-PHP source profile attached to one literal eval instruction.
-pub(super) fn eval_literal_strict_profile(inst: &crate::ir::Instruction) -> bool {
+/// Returns the PHP-only source profile attached to one literal eval instruction.
+pub(super) fn eval_literal_php_only_profile(inst: &crate::ir::Instruction) -> bool {
     matches!(
         inst.immediate,
         Some(Immediate::ProfiledData {
-            strict_php: true,
+            php_only: true,
             ..
         })
     )

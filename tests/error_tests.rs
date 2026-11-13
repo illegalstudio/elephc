@@ -43,6 +43,7 @@ fn check_source_strict(src: &str) -> Result<(), String> {
         &[],
         types::CheckOptions {
             strict_locals: true,
+            ..types::CheckOptions::default()
         },
     )
 }
@@ -321,8 +322,8 @@ mod extensions;
 mod buffer_merges;
 #[path = "error_tests/data_widths.rs"]
 mod data_widths;
-#[path = "error_tests/strict_php.rs"]
-mod strict_php;
+#[path = "error_tests/php_only.rs"]
+mod php_only;
 #[path = "error_tests/math_builtins.rs"]
 mod math_builtins;
 #[path = "error_tests/random.rs"]

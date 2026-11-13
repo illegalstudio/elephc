@@ -9,10 +9,10 @@ Generic functions, classes and methods, compiled rather than erased: each type y
 its own specialized version, so a container costs what writing it out by hand costs.
 
 > **Strict mode:** the native syntax is an elephc extension with no PHP equivalent, and
-> [`--strict-php`](../compiling/cli-reference.md#strict-php-mode) rejects it. The PHPStan
+> [`--php-only`](../compiling/cli-reference.md#php-only-mode) rejects it. The PHPStan
 > docblock form below is valid PHP and is accepted. **Supported generic PHPDoc annotations are
 > compiler input:** they affect type checking, storage selection and specialization with or
-> without `--strict-php`. An unannotated bare `array` hint is untouched either way.
+> without `--php-only`. An unannotated bare `array` hint is untouched either way.
 
 ## Quick start
 
@@ -61,7 +61,7 @@ $lengths = (new Box("hello"))->map(fn(string $s): int => strlen($s));   // Box<i
 ```
 
 **The same thing in plain PHP.** Annotations are comments, so the file still runs on php-src
-and still passes `--strict-php` — see [Writing it in plain PHP](#writing-it-in-plain-php):
+and still passes `--php-only` - see [Writing it in plain PHP](#writing-it-in-plain-php):
 
 ```php
 <?php
@@ -83,7 +83,7 @@ Two rules are worth knowing before you start:
 
 - An instantiation is a real class. `Box<int>` and `Box<string>` are two distinct classes, and
   the template itself does not exist at runtime — `class_exists('Box')` is `false`.
-- Everything here is an elephc extension except the docblock form. `--strict-php` rejects the
+- Everything here is an elephc extension except the docblock form. `--php-only` rejects the
   native syntax and accepts the annotations.
 
 ## Native storage widths as type arguments
@@ -170,7 +170,7 @@ uses their declared defaults for any omitted trailing slots.
 
 Missing or conflicting arguments, violated bounds, invalid variance declarations, and rejected
 specialized argument/return contracts raise catchable `TypeError` values. Native generic syntax
-is rejected before execution under `--strict-php`; supported PHPDoc annotations work in both
+is rejected before execution under `--php-only`; supported PHPDoc annotations work in both
 modes. Typed local declarations also retain their substituted contracts during assignment.
 References share those contracts: writes through aliases, reference parameters, closure captures,
 and references returned inside arrays must satisfy every typed alias. Independent value copies
@@ -385,7 +385,7 @@ function firstOf<T>(array<T> $xs): T { return $xs[0]; }
 function pairUp<K, V>(K $key, V $value): string { return $key . '=' . $value; }
 ```
 
-> **Strict mode:** generic functions are an elephc extension. `--strict-php` rejects them.
+> **Strict mode:** generic functions are an elephc extension. `--php-only` rejects them.
 
 ### Each call site gets its own function
 
@@ -1003,7 +1003,7 @@ here nothing was taken.
 
 elephc reads supported generic `@template`, `@param` and `@return` annotations directly. php-src
 ignores these docblocks as comments; elephc gives them compilation semantics in both ordinary
-mode and `--strict-php`. They drive type checking and generate specialized functions and classes,
+mode and `--php-only`. They drive type checking and generate specialized functions and classes,
 including their concrete storage layouts and the [runtime class identities](#a-class) described
 below. The annotated source stays valid PHP:
 
@@ -1126,7 +1126,7 @@ echo $identity->copy(7), '|', $identity->copy('seven');   // 7|seven
 ```
 
 The two calls specialize `copy<int>` and `copy<string>`. This works with and without
-`--strict-php`, including static methods and methods declared in traits and enums. Method
+`--php-only`, including static methods and methods declared in traits and enums. Method
 templates also support bounds, defaults and variadic annotations such as `@param T ...$values`.
 A doc comment binds to the declaration that follows it, including one on the same line after
 `*/` (`/** @template T */ class Box`).

@@ -254,9 +254,9 @@ pub(crate) fn eval_literal_call_requires_bridge(
     inst_index: usize,
     inst: &crate::ir::Instruction,
 ) -> bool {
-    let (data, strict_php) = match inst.immediate {
+    let (data, php_only) = match inst.immediate {
         Some(Immediate::Data(data)) => (data, false),
-        Some(Immediate::ProfiledData { data, strict_php }) => (data, strict_php),
+        Some(Immediate::ProfiledData { data, php_only }) => (data, php_only),
         _ => return true,
     };
     let Some(fragment) = module.data.strings.get(data.as_raw() as usize) else {
@@ -265,7 +265,7 @@ pub(crate) fn eval_literal_call_requires_bridge(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         module.source_path.as_deref(),
-        strict_php,
+        php_only,
         |name, args| eval_literal_static_function_supported_by_module(module, name, args),
         |receiver, method, args| {
             eval_literal_static_method_supported_by_module(module, receiver, method, args)

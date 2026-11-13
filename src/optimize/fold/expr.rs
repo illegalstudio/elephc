@@ -252,12 +252,12 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                         let user_function = active_fold_user_function_exists(candidate);
                         let profile_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_profile(
                             candidate,
-                            crate::strict_php::is_enabled(),
+                            crate::php_only::is_enabled(),
                         );
                         if user_function || profile_builtin || date_alias {
                             let target_builtin = crate::types::checker::builtins::is_php_visible_builtin_function_for_target(
                                 candidate,
-                                crate::strict_php::is_enabled(),
+                                crate::php_only::is_enabled(),
                                 target,
                             );
                             if user_function || target_builtin || date_alias || active_target_guard_condition() {

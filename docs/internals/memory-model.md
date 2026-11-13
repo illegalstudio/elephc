@@ -1334,7 +1334,7 @@ usage. It cannot shrink the arena, so the reserved-byte peak stays constant.
 The elephc extensions `memory_get_allocations(): int` and `memory_get_frees(): int`
 read cumulative successful allocation and release counts. Reusing a cached or
 free-list block counts as an allocation. These counters survive peak resets and
-are hidden by `--strict-php`. All five native operations take constant time and
+are hidden by `--php-only`. All five native operations take constant time and
 allocate no memory, allowing before/after samples around frame phases. See
 `examples/memory-phases/main.php` for a 10,000-entity example.
 
@@ -1732,7 +1732,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_resource_id_keys`, `_resource_id_vals` — open-addressed native-resource-to-PHP-id map; resource ids and object handles deliberately use separate numbering spaces
 - `_vd_indent`, `_vd_seen`, `_vd_seen_n` — current `var_dump()` indentation and its bounded recursion-detection stack
 - `_debuginfo_guard`, `_debuginfo_pad` — set around a run-time `__debugInfo()` call made by `var_dump()`/`print_r()`. `_debuginfo_guard` holds the exception-handler top at the call (tagged with bit 0): a throw that reaches it without a newer handler is reported as PHP's uncaught warning, then `__debuginfo() must return an array`, exit 255, as in PHP. `_debuginfo_pad` says whether `var_dump()` had already written the value's indent before that report. `__rt_obj_debuginfo_fetch` saves both, with `_debuginfo_call_line`, in its frame and restores them after the call, so a dump nested inside `__debugInfo()` does not leak its values into the enclosing one.
-- `_callable_strict_profile` — selects the strict-PHP callable builtin table when `--strict-php` is active
+- `_callable_strict_profile` - selects the strict-PHP callable builtin table when `--php-only` is active
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
 - `_filetype_*`, `_stat_key_*`, `_dirname_*`, `_pathinfo_key_*`, `_tmpfile_template` — file metadata, path, stat-array, and temporary-file lookup strings used by I/O helpers
 - `_locale_utf8_name`, `_locale_env_name` — locale selectors used by runtime helpers that need host locale fallback

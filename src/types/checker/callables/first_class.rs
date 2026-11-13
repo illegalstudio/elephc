@@ -42,8 +42,8 @@ impl Checker {
                 let function_name = canonical_function_name.as_str();
                 let function_key =
                     crate::names::php_symbol_key(function_name.trim_start_matches('\\'));
-                let prefer_extension_builtin = !crate::strict_php::is_enabled()
-                    && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+                let prefer_extension_builtin = !crate::php_only::is_enabled()
+                    && crate::types::checker::builtins::catalog::php_only_hidden_builtin_for_profile(
                         &function_key,
                         true,
                 );
@@ -121,7 +121,7 @@ impl Checker {
                         });
                 }
                 let bare_key = crate::names::php_symbol_key(function_name.rsplit('\\').next().unwrap_or(function_name));
-                if crate::types::checker::builtins::strict_php_hidden_builtin(&bare_key) {
+                if crate::types::checker::builtins::php_only_hidden_builtin(&bare_key) {
                     return Err(self.unresolved_function_call_error(function_name, span));
                 }
                 Err(CompileError::new(

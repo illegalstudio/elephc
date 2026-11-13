@@ -78,7 +78,7 @@ new Printer(8);
 new Printer("eight");
 echo $number->value + 1, "|", strtoupper($text->value);
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         assert_eq!(compile_cli_file_and_run_with_flags(source, flags), "8|eight|8|SEVEN");
     }
 }
@@ -111,7 +111,7 @@ class Box {
 }
 new Box("seven");
 "#;
-    for flags in [&[][..], &["--strict-php"][..]] {
+    for flags in [&[][..], &["--php-only"][..]] {
         let error = compile_cli_file_with_flags_expect_failure(source, flags);
         assert!(error.contains("<T>") && error.contains("does not satisfy"), "{error}");
     }

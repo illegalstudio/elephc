@@ -40,8 +40,7 @@ fn hash_rust_sources(root: &Path, state: &mut u64) {
             continue;
         }
         let relative = path
-            .strip_prefix("src")
-            .expect("runtime identity source stays under src");
+            .strip_prefix(".").unwrap_or(&path);
         println!("cargo:rerun-if-changed={}", path.display());
         hash_bytes(state, relative.to_string_lossy().as_bytes());
         hash_bytes(state, &fs::read(&path).unwrap_or_else(|err| {
@@ -68,6 +67,8 @@ fn main() {
     // invalidates the cache when a runtime source is added or removed.
     println!("cargo:rerun-if-changed=src");
     hash_rust_sources(Path::new("src"), &mut state);
+    println!("cargo:rerun-if-changed=crates/elephc-semantics/src");
+    hash_rust_sources(Path::new("crates/elephc-semantics/src"), &mut state);
     println!("cargo:rustc-env=ELEPHC_RUNTIME_BUILD_ID={state:016x}");
 
     println!("cargo:rerun-if-changed=crates/elephc-zend/src");

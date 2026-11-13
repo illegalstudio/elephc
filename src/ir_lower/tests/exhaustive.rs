@@ -123,6 +123,7 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
         requested_instantiations: Vec::new(),
         requested_promotable_clones: Vec::new(),
         requested_class_instantiations: Vec::new(),
