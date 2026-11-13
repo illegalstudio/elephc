@@ -230,12 +230,12 @@ pub enum Immediate {
     /// hash instead of zero-filling the gap, as PHP does.
     PromotableArray,
     Data(DataId),
-    /// Data-pool reference carrying the strict-PHP profile of its physical call site.
+    /// Data-pool reference carrying the complete source policy of its physical call site.
     ProfiledData {
         /// Referenced string or name data.
         data: DataId,
-        /// Whether strict PHP is effective at this call site.
-        php_only: bool,
+        /// Immutable syntax visibility and semantic guarantees.
+        profile: crate::source::EvalSourceProfile,
     },
     LocalSlot(LocalSlotId),
     LocalSlotPair {

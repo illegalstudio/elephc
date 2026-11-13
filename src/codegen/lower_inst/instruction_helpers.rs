@@ -141,12 +141,19 @@ pub(super) fn expect_bool(inst: &Instruction) -> Result<bool> {
 /// Returns the strict-PHP profile carried by a source-sensitive EIR instruction.
 pub(in crate::codegen) fn instruction_php_only_profile(inst: &Instruction) -> bool {
     match inst.immediate {
-        Some(Immediate::Bool(php_only))
-        | Some(Immediate::ProfiledData { php_only, .. })
-        | Some(Immediate::RuntimeCall(
+        Some(Immediate::ProfiledData { profile, .. }) => profile.php_only(),
+        Some(Immediate::Bool(php_only)) | Some(Immediate::RuntimeCall(
             crate::ir::RuntimeCallTarget::ProfiledFunction { php_only, .. },
         )) => php_only,
         _ => false,
+    }
+}
+
+/// Returns literal eval's explicit source policy, preserving legacy unprofiled EIR defaults.
+pub(in crate::codegen) fn instruction_eval_source_profile(inst: &Instruction, semantics: elephc_semantics::SemanticProfile) -> crate::source::EvalSourceProfile {
+    match inst.immediate {
+        Some(Immediate::ProfiledData { profile, .. }) => profile,
+        _ => crate::source::EvalSourceProfile::new(instruction_php_only_profile(inst), semantics),
     }
 }
 

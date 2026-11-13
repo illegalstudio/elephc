@@ -556,13 +556,7 @@ pub(super) fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
 /// Writing both true and false prevents a strict eval from leaking its profile into
 /// a later LFC eval that reuses the same persistent bridge context.
 pub(super) fn mark_eval_php_only(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
-    let php_only = matches!(
-        inst.immediate,
-        Some(Immediate::ProfiledData {
-            php_only: true,
-            ..
-        })
-    );
+    let php_only = super::super::instruction_php_only_profile(inst);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     abi::emit_load_int_immediate(ctx.emitter, arg_reg, i64::from(php_only));
     let symbol = ctx

@@ -663,6 +663,19 @@ including when compiled callable cells share a function with opaque eval.
 Receiver, converted-name and result owners remain published through these checks
 and through normal cleanup.
 
+Literal eval AOT plans receive an immutable `EvalSourceProfile` containing the
+physical call site's PHP-only visibility and the compilation's semantic profile.
+The same profile travels on source-sensitive EIR data references, and internal
+fragment names include the semantic ABI and profile bits. EIR validation refuses
+metadata that disagrees with its module.
+
+`EvalProgram` retains the semantic policy used during tokenization. Hosts using
+`parse_fragment_with_semantics()` must install the same profile on the execution
+context. Pre-parsed execution returns `AbiMismatch` before running a mismatched
+program. Runtime includes apply the same check, including the direct walker replay
+path. This prevents reuse of already-normalized literals or interpolation keys
+under different guarantees.
+
 ## Runtime script cache
 
 **Sources:** `crates/elephc-magician/src/script_cache/`, the
@@ -746,7 +759,8 @@ same configuration. The blacklist is loaded once per process.
   bits, the canonical path's raw bytes, the mtime, the size and the writer's
   `revalidate`. A read checks the
   header on the raw bytes before decoding, bounds the decode by the file size,
-  and treats every failure as a miss.
+  verifies the decoded program's own parser profile, and treats every failure as
+  a miss.
 - Identity is unconditional (path bytes, semantic ABI and profile must match).
   Memory entries follow the same profile rule. Each path has one slot; a request
   with a different profile reparses and replaces it. Fragment and uncached-file

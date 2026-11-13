@@ -149,7 +149,7 @@ pub(super) fn emit_eval_literal_aot_marker(ctx: &mut FunctionContext<'_>, inst: 
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         &fragment,
         ctx.module.source_path.as_deref(),
-        super::super::instruction_php_only_profile(inst),
+        super::super::instruction_eval_source_profile(inst, ctx.module.semantic_profile),
         |name, args| eval_literal_static_function_supported_by_codegen(ctx, name, args),
         |receiver, method, args| {
             eval_literal_static_method_supported_by_codegen(ctx, receiver, method, args)

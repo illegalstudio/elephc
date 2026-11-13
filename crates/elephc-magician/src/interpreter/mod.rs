@@ -146,6 +146,16 @@ pub fn execute_program_with_context(
     }
 }
 
+/// Validates immutable parser/context compatibility before either execution engine runs.
+pub(crate) fn validate_program_semantics(context: &mut ElephcEvalContext, program: &EvalProgram) -> Result<(), EvalStatus> {
+    let profile = context.activate_semantic_profile();
+    if profile.bits() & !elephc_semantics::INTEGRATED_FEATURE_BITS != 0 {
+        return Err(EvalStatus::UnsupportedConstruct);
+    }
+    if !program.matches_semantic_profile(profile) { return Err(EvalStatus::AbiMismatch); }
+    Ok(())
+}
+
 /// Executes an EvalIR program and preserves escaping Throwable cells.
 ///
 /// A fragment that fits the bytecode slice runs there. Any named gap, or a cached
@@ -156,10 +166,7 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    let profile = context.activate_semantic_profile();
-    if profile.bits() & !elephc_semantics::INTEGRATED_FEATURE_BITS != 0 {
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
+    validate_program_semantics(context, program)?;
     let executed = match bytecode::try_execute(context, program, scope, values) {
         Ok(Some(control)) => Ok(control),
         Ok(None) => execute_program_statements(program, context, scope, values),

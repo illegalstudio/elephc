@@ -51,7 +51,7 @@ pub fn parse_fragment_with_semantics(code: &[u8], profile: elephc_semantics::Sem
     with_parser_stack(|| {
         let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
         let tokens = tokenize_with_semantics(source, profile)?;
-        Parser::new(tokens, code.len()).parse_program()
+        Parser::new(tokens, code.len()).parse_program().map(|program| program.with_semantic_profile(profile))
     })
 }
 
@@ -60,11 +60,19 @@ pub fn parse_fragment_with_semantics(code: &[u8], profile: elephc_semantics::Sem
 /// An included file's stream is built from several blocks and the inline HTML between them
 /// (`crate::script_cache::segments::parse_script`), and has to reach the grammar as one
 /// program so that a block may span the tags. `source_len` is the whole file's length.
+#[cfg(test)]
 pub(crate) fn parse_tokens(
     tokens: Vec<crate::lexer::Token>,
     source_len: usize,
 ) -> Result<EvalProgram, EvalParseError> {
-    with_parser_stack(|| Parser::new(tokens, source_len).parse_program())
+    parse_tokens_with_semantics(tokens, source_len, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Parses already-profiled script tokens while retaining their normalization provenance.
+pub(crate) fn parse_tokens_with_semantics(
+    tokens: Vec<crate::lexer::Token>, source_len: usize, profile: elephc_semantics::SemanticProfile,
+) -> Result<EvalProgram, EvalParseError> {
+    with_parser_stack(|| Parser::new(tokens, source_len).parse_program().map(|program| program.with_semantic_profile(profile)))
 }
 
 /// Uses an explicit stack because native coroutine switches do not update OS-thread stack bounds.

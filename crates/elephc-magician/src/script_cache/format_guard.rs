@@ -108,7 +108,8 @@ mod tests {
     /// BUMPED TO 28: function metadata carries a skipped bytecode cache. The source guard
     /// requires a new identity even though the serialized field layout is unchanged.
     /// BUMPED TO 29: checked literals, profile-aware segments and semantic cache headers.
-    const RECORDED_FINGERPRINT: u64 = 1710764393745517537;
+    /// BUMPED TO 30: parsed programs retain their semantic normalization provenance.
+    const RECORDED_FINGERPRINT: u64 = 3110961241602077184;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

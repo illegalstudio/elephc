@@ -250,7 +250,7 @@ fn args_select_subject(args: &[Expr], target: Symbol<'_>) -> bool {
         }
         ArgFilter::EvalBridge => crate::eval_aot::plan_literal_fragment_with_static_calls(
             value,
-            crate::php_only::is_enabled(),
+            crate::source::EvalSourceProfile::permissive(crate::php_only::is_enabled()),
             |_, _| false,
         )
         .requires_runtime_eval_bridge(),

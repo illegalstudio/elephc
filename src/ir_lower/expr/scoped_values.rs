@@ -31,7 +31,7 @@ fn lower_callable_descriptor(ctx: &mut LoweringContext<'_, '_>, target: &Callabl
         Vec::new(),
         Some(Immediate::ProfiledData {
             data,
-            php_only: crate::php_only::is_enabled(),
+            profile: crate::source::EvalSourceProfile::new(crate::php_only::is_enabled(), ctx.semantic_profile),
         }),
         PhpType::Callable,
         op.default_effects(),
@@ -53,7 +53,7 @@ fn lower_instance_callable_descriptor(
     let data = ctx.intern_string(&format!("object::{method}"));
     ctx.emit_value(
         op, vec![receiver.value],
-        Some(Immediate::ProfiledData { data, php_only: crate::php_only::is_enabled() }),
+        Some(Immediate::ProfiledData { data, profile: crate::source::EvalSourceProfile::new(crate::php_only::is_enabled(), ctx.semantic_profile) }),
         PhpType::Callable, op.default_effects(), Some(span),
     )
 }

@@ -129,12 +129,12 @@ fn exclude_eval_literal_read_slots(
         if inst.op != Op::EvalLiteralCall {
             continue;
         }
-        let (data_id, php_only) = match inst.immediate {
-            Some(Immediate::Data(data_id)) => (data_id, false),
+        let (data_id, profile) = match inst.immediate {
+            Some(Immediate::Data(data_id)) => (data_id, crate::source::EvalSourceProfile::permissive(false)),
             Some(Immediate::ProfiledData {
                 data: data_id,
-                php_only,
-            }) => (data_id, php_only),
+                profile,
+            }) => (data_id, profile),
             _ => continue,
         };
         let Some(fragment) = data.strings.get(data_id.as_raw() as usize) else {
@@ -142,7 +142,7 @@ fn exclude_eval_literal_read_slots(
         };
         let plan = crate::eval_aot::plan_literal_fragment_with_static_calls(
             fragment,
-            php_only,
+            profile,
             |_, _| false,
         );
         for name in plan.reads() {

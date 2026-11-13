@@ -20,6 +20,7 @@ pub(in crate::interpreter) fn execute_program_statements(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    crate::interpreter::validate_program_semantics(context, program)?;
     if program.native_generic_syntax() && crate::php_only_mode::php_only_mode() {
         return Err(EvalStatus::ParseError);
     }

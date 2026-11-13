@@ -87,6 +87,11 @@ fn strict_cache_disk_headers_require_matching_semantics() {
     let directory = std::fs::read_dir(fixture.dir.join("cache")).unwrap().next().unwrap().unwrap().path();
     let entry = std::fs::read_dir(directory).unwrap().next().unwrap().unwrap().path();
     let mut bytes = std::fs::read(&entry).unwrap();
+    bytes[16..24].copy_from_slice(&0_u64.to_le_bytes());
+    std::fs::write(&entry, &bytes).unwrap();
+    assert!(file_store::load_entry_with_semantics(&config, &fixture.source, None, 0, SemanticProfile::PERMISSIVE).is_none(),
+        "a matching header must not disguise an AST parsed under another policy");
+    bytes[16..24].copy_from_slice(&profile.bits().to_le_bytes());
     bytes[12..16].copy_from_slice(&(elephc_semantics::SEMANTICS_ABI_VERSION + 1).to_le_bytes());
     std::fs::write(&entry, bytes).unwrap();
     assert!(file_store::load_entry_with_semantics(&config, &fixture.source, None, 0, profile).is_none());

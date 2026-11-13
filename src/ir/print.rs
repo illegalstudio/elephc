@@ -212,12 +212,14 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         Immediate::RuntimeRef(id) => {
             let _ = write!(out, " runtime#{}", id.0);
         }
-        Immediate::ProfiledData { data: id, php_only } => {
+        Immediate::ProfiledData { data: id, profile } => {
             let _ = write!(
                 out,
-                " data#{} profile={}",
+                " data#{} profile={} semantics=v{}:{:016x}",
                 id.as_raw(),
-                if *php_only { "php-only" } else { "elephc" }
+                if profile.php_only() { "php-only" } else { "elephc" },
+                elephc_semantics::SEMANTICS_ABI_VERSION,
+                profile.semantics().bits()
             );
         }
         Immediate::RuntimeCall(target) => {

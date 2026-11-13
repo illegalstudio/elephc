@@ -79,8 +79,8 @@ pub(super) fn lower_eval_literal_eir_function(
     inst: &Instruction,
     fragment: &str,
 ) -> Result<bool> {
-    let php_only = super::super::instruction_php_only_profile(inst);
-    let function_name = crate::eval_aot::eir_function_name(fragment, php_only);
+    let profile = super::super::instruction_eval_source_profile(inst, ctx.module.semantic_profile);
+    let function_name = crate::eval_aot::eir_function_name(fragment, profile);
     if let Some(callee) = ctx.callable_function_by_name(&function_name) {
         if callee.params.is_empty() && callee.return_php_type.codegen_repr() == PhpType::Mixed {
             ctx.emitter
@@ -102,8 +102,8 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     inst: &Instruction,
     fragment: &str,
 ) -> Result<bool> {
-    let php_only = super::super::instruction_php_only_profile(inst);
-    let function_name = crate::eval_aot::eir_scope_function_name(fragment, php_only);
+    let profile = super::super::instruction_eval_source_profile(inst, ctx.module.semantic_profile);
+    let function_name = crate::eval_aot::eir_scope_function_name(fragment, profile);
     let Some(callee) = ctx.callable_function_by_name(&function_name) else {
         return Ok(false);
     };
@@ -116,7 +116,7 @@ pub(super) fn lower_eval_literal_scope_eir_function(
     let plan = crate::eval_aot::plan_literal_fragment_with_source_path_and_static_and_method_calls(
         fragment,
         ctx.module.source_path.as_deref(),
-        php_only,
+        profile,
         |name, args| eval_literal_static_function_supported_by_codegen(ctx, name, args),
         |receiver, method, args| {
             eval_literal_static_method_supported_by_codegen(ctx, receiver, method, args)

@@ -61,6 +61,11 @@ pub(crate) enum ScriptSegment {
 }
 
 impl ScriptSegment {
+    /// Confirms that a cached AST was normalized under the header's semantic policy.
+    pub(crate) fn matches_semantic_profile(&self, profile: SemanticProfile) -> bool {
+        match self { Self::Code(program) => program.matches_semantic_profile(profile), Self::ParseError(_) => true }
+    }
+
     /// Returns the byte footprint this segment contributes to the cache budget.
     ///
     /// A parsed file is charged its source length, which is the same accounting
@@ -120,7 +125,7 @@ pub(crate) fn parse_script_with_semantics(bytes: &[u8], profile: SemanticProfile
     }
     line += newlines(&bytes[counted..]);
     tokens.push(Token::new(TokenKind::Eof, line));
-    parser::parse_tokens(tokens, bytes.len())
+    parser::parse_tokens_with_semantics(tokens, bytes.len(), profile)
 }
 
 /// One piece of an included file, as its tags cut it.

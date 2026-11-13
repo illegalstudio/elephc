@@ -2,6 +2,7 @@
 //! Defines the per-file source profile: the language mode selected from a physical input path
 //! plus the `declare(strict_types=1)` state that file opted into.
 //! Centralizes `.lfc` classification so every file loader agrees on tag and strict-mode semantics.
+//! Carries independent eval visibility and semantic guarantees into source-sensitive EIR data.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` for the entry source.
@@ -58,6 +59,37 @@ impl SourceProfile {
             mode,
             strict_types: false,
         }
+    }
+}
+
+/// Immutable policy attached to a literal eval source or a source-sensitive EIR value.
+/// PHP-only visibility is lexical; semantic guarantees belong to the compilation.
+/// The compact word keeps recursive EIR instructions within their stack-size budget.
+/// The constructor refuses unrepresentable future semantic bits; it never truncates them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct EvalSourceProfile(u32);
+
+impl EvalSourceProfile {
+    const PHP_ONLY_BIT: u32 = 1 << 31;
+
+    /// Joins independently resolved visibility and guarantees without truncating any bits.
+    pub const fn new(php_only: bool, semantics: elephc_semantics::SemanticProfile) -> Self {
+        assert!(semantics.bits() < Self::PHP_ONLY_BIT as u64);
+        Self(semantics.bits() as u32 | if php_only { Self::PHP_ONLY_BIT } else { 0 })
+    }
+
+    /// Returns the lexical builtin visibility without changing semantic guarantees.
+    pub const fn php_only(self) -> bool { self.0 & Self::PHP_ONLY_BIT != 0 }
+
+    /// Recovers the validated neutral profile stored by the constructor.
+    pub fn semantics(self) -> elephc_semantics::SemanticProfile {
+        elephc_semantics::SemanticProfile::from_bits(u64::from(self.0 & !Self::PHP_ONLY_BIT))
+            .expect("source profiles contain only validated semantic bits")
+    }
+
+    /// Makes conservative declaration scans explicit about their permissive parser policy.
+    pub const fn permissive(php_only: bool) -> Self {
+        Self::new(php_only, elephc_semantics::SemanticProfile::PERMISSIVE)
     }
 }
 

@@ -19,6 +19,7 @@ use crate::parser::ast::{
     StmtKind,
 };
 use crate::span::Span;
+use crate::source::EvalSourceProfile;
 use crate::types::call_args::{has_named_args, plan_call_args};
 use crate::types::{builtin_call_sig, is_php_integer_array_key, FunctionSig, PhpType};
 
@@ -46,7 +47,7 @@ trait EirStaticCallSupport {
 struct EirStaticCallPredicates<'a, F, M> {
     function: &'a F,
     static_method: &'a M,
-    php_only: bool,
+    profile: EvalSourceProfile,
 }
 
 impl<F, M> EirStaticCallSupport for EirStaticCallPredicates<'_, F, M>
@@ -56,7 +57,7 @@ where
 {
     /// Returns the literal fragment's builtin visibility profile.
     fn php_only(&self) -> bool {
-        self.php_only
+        self.profile.php_only()
     }
 
     /// Delegates function-call eligibility to the caller-provided predicate.

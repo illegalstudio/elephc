@@ -33,6 +33,8 @@ pub fn eval_scope_name_mask(name: &str) -> u64 {
 /// Parsed eval fragment lowered into dynamic by-name statements.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
 pub struct EvalProgram {
+    /// Parser policy provenance, serialized without coupling the neutral crate to serde.
+    semantic_profile_bits: u64,
     native_generic_syntax: bool,
     source_len: usize,
     statements: Vec<EvalStmt>,
@@ -77,12 +79,24 @@ impl EvalProgram {
     /// Creates an EvalIR program for a source fragment and statement list.
     pub fn new(source_len: usize, statements: Vec<EvalStmt>) -> Self {
         Self {
+            semantic_profile_bits: 0,
             native_generic_syntax: false,
             source_len,
             statements,
             scope_access_mask: EVAL_SCOPE_ACCESS_ALL,
             cli_superglobals: Vec::new(),
         }
+    }
+
+    /// Stamps the policy used by the lexer before any literal or key normalization.
+    pub(crate) fn with_semantic_profile(mut self, profile: elephc_semantics::SemanticProfile) -> Self {
+        self.semantic_profile_bits = profile.bits();
+        self
+    }
+
+    /// Checks parser provenance before a pre-parsed program enters an execution context.
+    pub fn matches_semantic_profile(&self, profile: elephc_semantics::SemanticProfile) -> bool {
+        self.semantic_profile_bits == profile.bits()
     }
 
     /// Records the conservative caller-scope names used by this parsed fragment.

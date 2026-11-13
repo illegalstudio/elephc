@@ -15,7 +15,7 @@ use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKin
 
 /// Validates syntax-dependent guarantees without pruning any branch or declaration.
 pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
-    if !profile.contains(StrictFeature::DynamicCode) && !profile.contains(StrictFeature::Bools) { return Ok(()); }
+    if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
     crate::compiler_stack::with_compiler_stack(|| {
         let mut validator = SourceValidator { depth: 0, error: None, profile, source_modes: Vec::new() };
         walk_program(program, &mut validator);
@@ -74,13 +74,15 @@ impl AstVisitor for SourceValidator {
                 "--strict-dynamic-code requires literal eval source verified during compilation"));
             return;
         };
-        let verification_flag = if self.profile.contains(StrictFeature::DynamicCode) { "strict-dynamic-code" } else { "strict-bools" };
+        let verification_flag = [StrictFeature::DynamicCode, StrictFeature::Overflow, StrictFeature::Bools].into_iter()
+            .find(|feature| self.profile.contains(*feature)).expect("source verification was requested").flag();
         if self.depth >= 64 {
             self.error = Some(CompileError::new(expr.span,
                 &format!("--{verification_flag} literal eval nesting exceeds 64 levels")));
             return;
         }
-        let parsed = crate::lexer::tokenize(&format!("<?php {source}"))
+        let parsed = crate::lexer::tokenize_with_semantics(&format!("<?php {source}"),
+            crate::source::SourceMode::Php, crate::span::Span::fresh_synthetic_source_id(), self.profile)
             .and_then(|tokens| crate::parser::parse_with_mode(&tokens, crate::source::SourceMode::Php));
         match parsed {
             Ok(program) => {

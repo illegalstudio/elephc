@@ -102,7 +102,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 28 records bytecode-backed function metadata in the conservative source guard,
 /// even though serde omits the executable cache from the stored payload.
 /// Format 29 adds checked integer tokens, overflow parse errors and semantic profile headers.
-pub(crate) const FORMAT_VERSION: u32 = 29;
+/// Format 30 retains parser profile provenance inside EvalProgram.
+pub(crate) const FORMAT_VERSION: u32 = 30;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
@@ -294,7 +295,9 @@ pub(crate) fn load_entry_with_semantics(
     // the cache is authoritative. MEASURED across two processes sharing a cache directory
     // with the source rewritten between them — reference runs the STORED version, elephc
     // re-read the new one, which is the opposite of what the directive asks for.
-    if cached.path != path_bytes(canonical) {
+    if cached.path != path_bytes(canonical)
+        || !cached.segments.iter().all(|segment| segment.matches_semantic_profile(profile))
+    {
         return None;
     }
     // The TIMESTAMP ALONE, for the same reason as the in-memory path: php-src validates a
@@ -553,6 +556,14 @@ mod tests {
     use super::super::file_cache::{set_file_cache_config, FileCacheConfig};
     use super::super::segments::{segment_script, ParseMode};
     use super::*;
+
+    /// Owns a test-created directory through assertion failures as well as successful reads.
+    struct OwnedTestDirectory(PathBuf);
+
+    impl Drop for OwnedTestDirectory {
+        /// Removes exactly the directory assigned by this test's configuration helper.
+        fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+    }
 
     /// Points the thread's file cache at a fresh directory and returns it.
     fn configure(name: &str, read_only: bool) -> (ScriptCacheConfig, PathBuf) {
@@ -867,7 +878,8 @@ mod tests {
     /// parses the script, rather than half-decoding one into execution.
     #[test]
     fn a_hostile_length_prefix_is_refused_not_allocated() {
-        let (config, _dir) = configure("hostile", false);
+        let (config, fixture_dir) = configure("hostile", false);
+        let _cleanup = OwnedTestDirectory(fixture_dir);
         let dir = cache_dir(&config).expect("cache dir configured");
         std::fs::create_dir_all(&dir).expect("entry dir");
         let path = Path::new("/tmp/elephc-file-store-hostile.php");
@@ -875,7 +887,9 @@ mod tests {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&MAGIC.to_le_bytes());
         bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
-        // A `String` length of 2^60: the decoder would reserve it before reading a byte of it.
+        bytes.extend_from_slice(&elephc_semantics::SEMANTICS_ABI_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&0_u64.to_le_bytes());
+        // A path length of 2^60: the decoder would reserve it before reading a byte of it.
         bytes.extend_from_slice(&(1u64 << 60).to_le_bytes());
         bytes.extend_from_slice(b"short");
         std::fs::write(entry_path(&dir, path), &bytes).expect("hostile entry written");

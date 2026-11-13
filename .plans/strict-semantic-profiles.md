@@ -509,3 +509,31 @@ capacity, disabled/enabled script caches, profile and ABI disk headers, native
 FFI refusals, hidden arguments on every supported target, the serialized format
 guard, and native/eval OPcache parity with a runtime-created include. Compiler
 builds, builtin docs regeneration/audits and assembly-comment checks passed.
+
+
+### AOT and pre-parsed source provenance step
+
+Literal eval planners receive the composite immutable EvalSourceProfile, joining
+lexical PHP-only visibility with the compilation's semantic guarantees. Source-
+sensitive EIR data retains that profile and module validation rejects incompatible
+metadata. Internal fragment names include semantic ABI and profile bits. The
+compact checked u32 representation preserves Instruction's existing 112-byte
+stack budget; native and disk boundaries retain the full neutral u64 encoding.
+Checked literal parsing now applies to AOT fragments and raw recursive literal
+eval validation before folding. Dependency-only scans explicitly use conservative
+permissive parsing; actual lowering, liveness and codegen use the attached profile.
+
+EvalProgram retains parser-profile provenance, including through serialization.
+A shared execution guard validates context compatibility and supported guarantees
+before either bytecode or walker execution, including direct included-file replay.
+Native deferred-default expression parsing inherits its context profile. Disk
+cache headers must also agree with the decoded AST's profile. Format 30 records
+this new EvalProgram shape. The hostile-length regression includes the new header
+fields and owns its scratch directory through unwinding.
+
+Validation: 17 focused tests passed, including three AOT profile tests (all five
+targets), direct host/walker provenance refusal, existing boolean and dynamic-code
+engine cases, cache identity/format/hostile-length guards, native literal eval in
+both optimization modes, opaque eval, runtime-created cached includes, and PHP/LFC
+visibility isolation. The compiler build, builtin exporter/docs audits and five
+assembly-comment checks passed. No generated builtin documentation changed.

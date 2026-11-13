@@ -64,6 +64,7 @@ pub enum ValidationError {
         expected: &'static str,
     },
     UnexpectedImmediate(InstId),
+    SemanticProfileMismatch { inst: InstId, expected: u64, actual: u64 },
     InvalidStringAppendTransfer(InstId),
     UnknownRuntimeCallSignature(InstId),
     EffectMismatch {
@@ -117,6 +118,16 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
         .chain(module.runtime_callable_invokers.iter())
     {
         validate_function(function)?;
+        for (index, inst) in function.instructions.iter().enumerate() {
+            if let Some(Immediate::ProfiledData { profile, .. }) = inst.immediate {
+                if profile.semantics() != module.semantic_profile {
+                    return Err(ValidationError::SemanticProfileMismatch {
+                        inst: InstId::from_raw(index as u32), expected: module.semantic_profile.bits(),
+                        actual: profile.semantics().bits(),
+                    });
+                }
+            }
+        }
     }
     Ok(())
 }
