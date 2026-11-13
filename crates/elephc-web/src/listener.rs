@@ -323,12 +323,27 @@ impl Drop for SharedTcp {
 /// descriptor to a worker.
 #[cfg(target_vendor = "apple")]
 fn accept_loop(shared: Arc<SharedTcp>) {
+    // The acceptor is the latency-critical path for a new TCP connection.
+    // Raise its QoS so a loaded macOS host schedules it ahead of bulk work.
+    unsafe {
+        libc::pthread_set_qos_class_self_np(
+            libc::qos_class_t::QOS_CLASS_USER_INITIATED,
+            0,
+        );
+    }
     let mut last_error_log: Option<Instant> = None;
+    let mut last_expiry = Instant::now();
+    // Reused by the ack poll and the worker-writability poll so the acceptor
+    // does not allocate on every accepted connection.
+    let mut pollfds = Vec::with_capacity(shared.master_ends.len());
     while !shared.stop.load(Ordering::SeqCst) {
+        let expire = last_expiry.elapsed() >= Duration::from_secs(1);
         {
             let _gate = lock_fork_gate();
-            shared.drain_acks();
-            shared.expire_pending();
+            shared.drain_acks(&mut pollfds, expire);
+        }
+        if expire {
+            last_expiry = Instant::now();
         }
         // Only accept when a connection is pending AND at least one worker can
         // receive a descriptor. Connections that cannot be handed off stay in
@@ -337,7 +352,7 @@ fn accept_loop(shared: Arc<SharedTcp>) {
         if !poll_fd(shared.listener, libc::POLLIN, 100) {
             continue;
         }
-        if !shared.wait_for_writable_worker(100) {
+        if !shared.wait_for_writable_worker(&mut pollfds, 100) {
             continue;
         }
         // Keep accept + handoff under the fork gate so a respawned worker never
@@ -400,51 +415,70 @@ fn accept_loop(shared: Arc<SharedTcp>) {
 
 impl SharedTcp {
     /// Waits until at least one worker descriptor channel accepts a write.
+    ///
+    /// `pollfds` is caller-owned scratch space so the acceptor does not
+    /// allocate a fresh vector for every accepted connection.
     #[cfg(target_vendor = "apple")]
-    fn wait_for_writable_worker(&self, timeout_ms: libc::c_int) -> bool {
-        let mut fds: Vec<libc::pollfd> = self
-            .master_ends
-            .iter()
-            .map(|&socket| libc::pollfd {
-                fd: socket,
-                events: libc::POLLOUT,
-                revents: 0,
-            })
-            .collect();
-        let result = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as _, timeout_ms) };
+    fn wait_for_writable_worker(
+        &self,
+        pollfds: &mut Vec<libc::pollfd>,
+        timeout_ms: libc::c_int,
+    ) -> bool {
+        pollfds.clear();
+        pollfds.extend(self.master_ends.iter().map(|&socket| libc::pollfd {
+            fd: socket,
+            events: libc::POLLOUT,
+            revents: 0,
+        }));
+        let result = unsafe {
+            libc::poll(pollfds.as_mut_ptr(), pollfds.len() as _, timeout_ms)
+        };
         if result <= 0 {
             return false;
         }
-        fds.iter()
+        pollfds
+            .iter()
             .any(|entry| entry.revents & libc::POLLOUT != 0)
     }
 
-    /// Closes pending descriptors that no worker acknowledged before the
-    /// timeout, bounding a handoff lost to a crash.
-    #[cfg(target_vendor = "apple")]
-    fn expire_pending(&self) {
-        let now = Instant::now();
-        let mut pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        pending.retain(|_, (_, _, queued_at)| {
-            now.duration_since(*queued_at) < PENDING_TIMEOUT
-        });
-    }
-
     /// Retires every acked descriptor whose worker installed its own copy.
+    ///
+    /// Polls the channels first: an idle worker then costs one `poll` instead
+    /// of one `recv` syscall per loop. The pending map is locked only when an
+    /// ack is ready or the periodic expiry sweep is due.
     #[cfg(target_vendor = "apple")]
-    fn drain_acks(&self) {
+    fn drain_acks(&self, pollfds: &mut Vec<libc::pollfd>, expire: bool) {
+        pollfds.clear();
+        pollfds.extend(self.master_ends.iter().map(|&socket| libc::pollfd {
+            fd: socket,
+            events: libc::POLLIN,
+            revents: 0,
+        }));
+        let ready = unsafe {
+            libc::poll(pollfds.as_mut_ptr(), pollfds.len() as _, 0)
+        };
+        if ready <= 0 {
+            if expire {
+                let mut pending = self
+                    .pending
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                expire_pending_locked(&mut pending);
+            }
+            return;
+        }
         let mut pending = self
             .pending
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        for &socket in &self.master_ends {
+        for entry in pollfds.iter() {
+            if entry.revents & libc::POLLIN == 0 {
+                continue;
+            }
             let mut id = [0u8; 8];
             loop {
                 let read = unsafe {
-                    libc::recv(socket, id.as_mut_ptr().cast(), id.len(), 0)
+                    libc::recv(entry.fd, id.as_mut_ptr().cast(), id.len(), 0)
                 };
                 if read == 8 {
                     pending.remove(&u64::from_ne_bytes(id));
@@ -462,6 +496,9 @@ impl SharedTcp {
                 }
                 break;
             }
+        }
+        if expire {
+            expire_pending_locked(&mut pending);
         }
     }
 
@@ -485,6 +522,20 @@ impl SharedTcp {
         }
         false
     }
+}
+
+/// Drops pending descriptors older than the handoff timeout.
+///
+/// The caller holds the pending-map lock. The periodic sweep is throttled by
+/// [`accept_loop`], so a lost handoff is closed at most one second late.
+#[cfg(target_vendor = "apple")]
+fn expire_pending_locked(
+    pending: &mut HashMap<u64, (usize, std::net::TcpStream, Instant)>,
+) {
+    let now = Instant::now();
+    pending.retain(|_, (_, _, queued_at)| {
+        now.duration_since(*queued_at) < PENDING_TIMEOUT
+    });
 }
 
 /// Polls one descriptor for `events` and reports whether it is ready.
@@ -683,6 +734,14 @@ fn receive_tcp_connections(
     sender: tokio::sync::mpsc::Sender<std::net::TcpStream>,
     master_pid: libc::pid_t,
 ) {
+    // The receiver thread sits on the new-connection path between the master
+    // acceptor and the Tokio runtime; keep it latency-sensitive under load.
+    unsafe {
+        libc::pthread_set_qos_class_self_np(
+            libc::qos_class_t::QOS_CLASS_USER_INITIATED,
+            0,
+        );
+    }
     loop {
         let (fd, id) = match recv_fd(&socket) {
             Ok(descriptor) => descriptor,
@@ -1345,7 +1404,7 @@ mod tests {
             .into_iter()
             .map(|handle| handle.join().unwrap())
             .collect::<Vec<_>>();
-        shared.drain_acks();
+        shared.drain_acks(&mut Vec::new(), false);
         assert!(
             shared.pending.lock().unwrap().is_empty(),
             "every acked descriptor must be released"
@@ -1408,7 +1467,7 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(id, 0);
-        shared.drain_acks();
+        shared.drain_acks(&mut Vec::new(), false);
         assert!(shared.pending.lock().unwrap().is_empty());
     }
 
@@ -1432,7 +1491,7 @@ mod tests {
                     .unwrap_or_else(Instant::now);
             }
         }
-        shared.expire_pending();
+        shared.drain_acks(&mut Vec::new(), true);
         assert!(shared.pending.lock().unwrap().is_empty());
     }
 
