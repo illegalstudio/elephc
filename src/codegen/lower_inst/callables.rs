@@ -142,8 +142,31 @@ fn php_argument_type_name(ty: &PhpType) -> String {
 /// The signature is shared: every callable-array site of a module selects from the same
 /// module-wide candidate list, and cloning each candidate's signature per site was a large part
 /// of a Symfony build's codegen.
+///
+/// One shared allocation per candidate: every class scope keeps its own list of the module's
+/// candidates, and cloning (then dropping) five `Arc`s per candidate per scope was ~1,500 samples
+/// of a sampled Symfony demo console build -- most of it when the codegen state was dropped.
 #[derive(Clone)]
-pub(in crate::codegen) struct RuntimeArrayInstanceMethodTarget {
+pub(in crate::codegen) struct RuntimeArrayInstanceMethodTarget(
+    std::sync::Arc<RuntimeArrayInstanceMethodTargetData>,
+);
+
+impl RuntimeArrayInstanceMethodTarget {
+    fn new(data: RuntimeArrayInstanceMethodTargetData) -> Self {
+        Self(std::sync::Arc::new(data))
+    }
+}
+
+impl std::ops::Deref for RuntimeArrayInstanceMethodTarget {
+    type Target = RuntimeArrayInstanceMethodTargetData;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// The fields of one [`RuntimeArrayInstanceMethodTarget`].
+pub(in crate::codegen) struct RuntimeArrayInstanceMethodTargetData {
     // Shared names: every callable-array site clones its scope's view of the module-wide target
     // list, and four fresh strings per target per site were most of that copy.
     class_name: std::sync::Arc<str>,
@@ -2973,7 +2996,7 @@ fn emit_runtime_subclass_invokable_descriptor_value(
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
             class_method_body_exists(ctx, &impl_class, method_key).then(|| {
-                RuntimeArrayInstanceMethodTarget {
+                RuntimeArrayInstanceMethodTarget::new(RuntimeArrayInstanceMethodTargetData {
                     class_name: class_name.as_str().into(),
                     class_id: class_info.class_id,
                     public: method_is_public(ctx.module, class_name, method_key),
@@ -2981,7 +3004,7 @@ fn emit_runtime_subclass_invokable_descriptor_value(
                     method_name: method_key.into(),
                     impl_class: impl_class.into(),
                     sig: std::sync::Arc::new(sig.clone()),
-                }
+                })
             })
         })
         .collect::<Vec<_>>();
@@ -3710,7 +3733,7 @@ fn scope_private_method_overrides(
                 continue;
             }
             shadowed.insert((class_name.clone(), method_key.clone()));
-            targets.push(RuntimeArrayInstanceMethodTarget {
+            targets.push(RuntimeArrayInstanceMethodTarget::new(RuntimeArrayInstanceMethodTargetData {
                 class_name: class_name.as_str().into(),
                 class_id: class_info.class_id,
                 public: method_is_public(ctx.module, class_name, method_name.as_str()),
@@ -3718,7 +3741,7 @@ fn scope_private_method_overrides(
                 method_name: method_name.as_str().into(),
                 impl_class: impl_class.into(),
                 sig: std::sync::Arc::new(sig),
-            });
+            }));
         }
     }
     (targets, shadowed)
@@ -3786,7 +3809,7 @@ fn instance_method_target_base(ctx: &FunctionContext<'_>) -> Vec<RuntimeArrayIns
             if !class_method_already_emitted(ctx, &impl_class, &method_key, false) {
                 continue;
             }
-            targets.push(RuntimeArrayInstanceMethodTarget {
+            targets.push(RuntimeArrayInstanceMethodTarget::new(RuntimeArrayInstanceMethodTargetData {
                 class_name: class_name.as_str().into(),
                 class_id: class_info.class_id,
                 public: method_is_public(ctx.module, class_name, method_name.as_str()),
@@ -3794,7 +3817,7 @@ fn instance_method_target_base(ctx: &FunctionContext<'_>) -> Vec<RuntimeArrayIns
                 method_name: method_name.as_str().into(),
                 impl_class: impl_class.into(),
                 sig: std::sync::Arc::new(sig.clone()),
-            });
+            }));
         }
     }
     targets
@@ -4205,7 +4228,7 @@ fn runtime_array_instance_method_targets(
             if !class_method_already_emitted(ctx, &impl_class, &method_key, false) {
                 continue;
             }
-            targets.push(RuntimeArrayInstanceMethodTarget {
+            targets.push(RuntimeArrayInstanceMethodTarget::new(RuntimeArrayInstanceMethodTargetData {
                 class_name: class_name.as_str().into(),
                 class_id: class_info.class_id,
                 public: method_is_public(ctx.module, class_name, method_name.as_str()),
@@ -4213,7 +4236,7 @@ fn runtime_array_instance_method_targets(
                 method_name: method_name.as_str().into(),
                 impl_class: impl_class.into(),
                 sig: std::sync::Arc::new(sig),
-            });
+            }));
         }
     }
     targets.extend(overrides);
