@@ -1058,6 +1058,26 @@ mod tests {
         assert!(shared.worker_receiver(2).is_err());
     }
 
+    /// A forked worker releases the master descriptors exactly once and keeps
+    /// its receiver duplicate open.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn close_in_worker_is_idempotent_and_keeps_the_receiver() {
+        let shared = install_shared("127.0.0.1:0".parse().unwrap(), 1)
+            .unwrap()
+            .expect("Apple targets install a shared listener");
+        let receiver = shared.worker_receiver(0).unwrap();
+        shared.close_in_worker();
+        assert!(!shared.owns_descriptors.load(Ordering::SeqCst));
+        // A second call must not close a reused descriptor.
+        shared.close_in_worker();
+        let receiver_flags = unsafe { libc::fcntl(receiver.as_raw_fd(), libc::F_GETFD) };
+        assert!(
+            receiver_flags >= 0,
+            "the worker receiver duplicate must stay open"
+        );
+    }
+
     /// SCM_RIGHTS transfers a live descriptor and its id between the two ends.
     #[cfg(target_vendor = "apple")]
     #[test]
