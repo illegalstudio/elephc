@@ -623,6 +623,7 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
         retired_type: Option<&PhpType>, reference_write: Option<bool>,
     ) -> ThrownTypes {
+        let _semantics = super::semantic_context::scoped_source_mode(stmt.source_mode);
         // The checker publishes switch comparison throws at each evaluated label prefix.
         if !include_operands && !matches!(stmt.kind,
             StmtKind::Echo(_) | StmtKind::ExprStmt(_) | StmtKind::StaticVar { .. }
@@ -888,7 +889,10 @@ impl ExceptionFlowAnalysis {
         let operands = |values: &[Expr]| if include_operands {
             self.expr_list_throws(values, bindings, class_context)
         } else { ThrownTypes::default() };
-        match &expr.kind {
+        let overflow = if super::semantic_context::integer_overflow_may_throw(expr) {
+            ThrownTypes::exact("ArithmeticError")
+        } else { ThrownTypes::default() };
+        overflow.combined(match &expr.kind {
             ExprKind::Throw(inner) => operand(inner)
                 .combined(self.thrown_value_types(inner, bindings, class_context)),
             ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
@@ -1142,7 +1146,7 @@ impl ExceptionFlowAnalysis {
                 ExprKind::NamedArg { .. }) => ThrownTypes::default(),
             _ if expr_effect(expr).may_throw => ThrownTypes::unknown(),
             _ => ThrownTypes::default(),
-        }
+        })
     }
 
     /// Reuses a declaration's canonical spelling for PHP's case-insensitive function lookup.

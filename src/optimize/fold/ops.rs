@@ -22,6 +22,8 @@ use super::scalar::{
 /// `-PHP_INT_MIN` is not representable as an `i64`; PHP promotes it to the float
 /// `9223372036854775808.0` rather than wrapping, so the fold does the same.
 pub(super) fn try_fold_negate(expr: &Expr) -> Option<ExprKind> {
+    if super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Overflow)
+        && matches!(expr.kind, ExprKind::IntLiteral(i64::MIN)) { return None; }
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(match value.checked_neg() {
             Some(negated) => ExprKind::IntLiteral(negated),
@@ -160,6 +162,10 @@ fn try_fold_int_div(left: i64, right: i64) -> Option<ExprKind> {
 /// A negative exponent is plain `pow((double) base, (double) exp)` in PHP. A non-finite result
 /// declines, leaving the operation on the runtime path.
 fn try_fold_int_pow(left: i64, right: i64) -> Option<ExprKind> {
+    if right >= 0 && super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Overflow) {
+        return elephc_semantics::numeric::checked_integer(elephc_semantics::numeric::IntegerOp::Pow, left, right)
+            .ok().map(ExprKind::IntLiteral);
+    }
     if right < 0 {
         let result = (left as f64).powf(right as f64);
         return result.is_finite().then_some(ExprKind::FloatLiteral(result));
@@ -208,6 +214,7 @@ fn finite_float_literal(value: f64) -> Option<ExprKind> {
 /// Converts overflowed integer add/sub/mul operations to float to match PHP's numeric coercion.
 /// Returns `None` if the resulting float is non-finite.
 fn fold_int_overflow_to_float(op: &BinOp, left: i64, right: i64) -> Option<ExprKind> {
+    if super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Overflow) { return None; }
     let result = match op {
         BinOp::Add => left as f64 + right as f64,
         BinOp::Sub => left as f64 - right as f64,

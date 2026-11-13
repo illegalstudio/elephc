@@ -603,3 +603,21 @@ covering add/sub/mul, scalar and boxed power, signed minimum, negative exponents
 mixed scalar operands and nested owned temporaries. Both runs report a clean
 heap. The public Overflow option remains staged while the remaining source,
 update, builtin and eval boundaries are implemented.
+
+### Checked arithmetic through AST optimization
+
+The AST optimizer keeps its immutable semantic profile separate from a scoped
+statement source mode. Folding, propagation, pruning, DCE, effect analysis and
+exception summaries now restore that source mode on every nested return. An
+Internal wrapper therefore keeps PHP implementation semantics without erasing
+the strict policy of a nested user statement.
+
+Checked addition, subtraction, multiplication, power and unary negation no longer
+fold an overflowing integer to a float. The effect model retains potential
+ArithmeticError even when an expression result is discarded. Callable exception
+summaries carry the same failure so DCE preserves the matching catch clauses.
+
+Validation: the focused folding regression passes for PHP, LFC, Internal and a
+mixed nested wrapper. The native arithmetic/ownership fixture now runs both AST
+and EIR optimizers when enabled, including unused addition and negation results
+inside catches. Both optimization settings pass and report a clean heap.

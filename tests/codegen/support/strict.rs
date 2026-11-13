@@ -68,9 +68,17 @@ impl StrictFixture {
     ) -> ProgramOutput {
         let source = fs::read_to_string(self.directory.join("main.php")).unwrap();
         let tokens = elephc::lexer::tokenize_with_semantics(&source, elephc::source::SourceMode::Php, 0, profile).unwrap();
-        let program = elephc::parser::parse(&tokens).unwrap();
+        let mut program = elephc::parser::parse(&tokens).unwrap();
         let mut checked = elephc::types::check_with_target(&program, target()).unwrap();
         checked.semantic_profile = profile;
+        let _semantics = elephc::optimize::scoped_semantic_profile(profile);
+        if optimize {
+            program = elephc::optimize::fold_constants_for_target(program, target());
+            program = elephc::optimize::propagate_constants(program, checked.mixed_storage_local_names(), checked.buffer_read_sites.clone());
+            program = elephc::optimize::prune_constant_control_flow(program, checked.local_binding_decision_spans());
+            program = elephc::optimize::normalize_control_flow(program, checked.local_binding_decision_spans());
+            program = elephc::optimize::eliminate_dead_code(program, checked.local_binding_decision_spans());
+        }
         let mut module = elephc::ir_lower::lower_program(&program, &checked, target(), false).unwrap();
         if optimize { elephc::ir_passes::optimize_module(&mut module); }
         elephc::ir::validate_module(&module).unwrap();

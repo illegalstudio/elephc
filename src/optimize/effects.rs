@@ -95,6 +95,7 @@ pub(super) fn stmt_may_throw(stmt: &Stmt) -> bool {
 /// Computes the combined `Effect` for a single statement, including all nested expressions.
 /// Covers all `StmtKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions.
 pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
+    let _semantics = super::semantic_context::scoped_source_mode(stmt.source_mode);
     match &stmt.kind {
         StmtKind::Synthetic(stmts) => block_effect(stmts),
         StmtKind::IncludeOnceMark { .. } => Effect::PURE.with_side_effects(),
@@ -298,7 +299,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::This => Effect::PURE,
         ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
             let effect = expr_effect(inner);
-            if internal_object_operators_available() && !literal_scalar_operand(inner) {
+            if super::semantic_context::integer_overflow_may_throw(expr)
+                || (internal_object_operators_available() && !literal_scalar_operand(inner)) {
                 effect.with_may_throw()
             } else { effect }
         }
@@ -327,7 +329,7 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             {
                 // Object-to-number warnings can call a handler that mutates globals or throws.
                 operands.with_side_effects().with_may_throw().with_writes_globals()
-            } else if binary_op_may_throw(op, right)
+            } else if super::semantic_context::integer_overflow_may_throw(expr) || binary_op_may_throw(op, right)
                 || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right))
                 || (matches!(op, BinOp::And | BinOp::Or | BinOp::Xor)
                     && (internal_conversion_may_throw(left) || internal_conversion_may_throw(right)
@@ -372,6 +374,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             let effect = Effect::PURE.with_side_effects();
             if is_reference_volatile(name) {
                 effect.with_may_throw().with_writes_globals()
+            } else if super::semantic_context::integer_overflow_may_throw(expr) {
+                effect.with_may_throw()
             } else { effect }
         }
         ExprKind::FunctionCall { name, args } => combine_effects(args.iter().map(expr_effect))

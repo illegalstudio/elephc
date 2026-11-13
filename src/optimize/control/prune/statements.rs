@@ -36,6 +36,7 @@ pub(crate) fn prune_block(body: Vec<Stmt>) -> Vec<Stmt> {
 /// expression statements. Returns a vec to allow statement expansion (e.g., a
 /// do-while with false condition becoming just its body).
 pub(crate) fn prune_stmt(stmt: Stmt) -> Vec<Stmt> {
+    let _semantics = crate::optimize::semantic_context::scoped_source_mode(stmt.source_mode);
     let profile = stmt.profile();
     crate::source::with_parse_mode(profile, || prune_stmt_in_source_mode(stmt))
 }

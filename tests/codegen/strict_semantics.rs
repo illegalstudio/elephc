@@ -20,6 +20,12 @@ function strict_pow(mixed $a, mixed $b): mixed { return $a ** $b; }
 function strict_int_pow(int $a, int $b): mixed { return $a ** $b; }
 function strict_scalar_rhs(mixed $a, int $b): mixed { return $a + $b; }
 function strict_scalar_lhs(int $a, mixed $b): mixed { return $a * $b; }
+function strict_discard(int $a, int $b): void {
+    try { $a + $b; } catch (ArithmeticError $e) { echo 'D'; }
+}
+function strict_discard_negate(int $a): void {
+    try { (-$a); } catch (ArithmeticError $e) { echo 'N'; }
+}
 try { strict_add(9223372036854775807, 1); } catch (ArithmeticError $e) { echo 'A'; }
 try { strict_sub(-9223372036854775808, 1); } catch (ArithmeticError $e) { echo 'S'; }
 try { strict_mul(9223372036854775807, 2); } catch (ArithmeticError $e) { echo 'M'; }
@@ -28,6 +34,7 @@ try { strict_int_pow(2, 63); } catch (ArithmeticError $e) { echo 'I'; }
 try { strict_scalar_rhs(strict_add(9223372036854775807, 0), 1); } catch (ArithmeticError $e) { echo 'R'; }
 try { strict_scalar_lhs(2, strict_add(9223372036854775807, 0)); } catch (ArithmeticError $e) { echo 'L'; }
 try { (strict_add(9223372036854775807, 0) + strict_add(1, 0)) * 2; } catch (ArithmeticError $e) { echo 'T'; }
+strict_discard(9223372036854775807, 1); strict_discard_negate(-9223372036854775808);
 echo ':', strict_add(20, 22), ':', strict_sub(-20, 22), ':', strict_mul(-6, 7);
 echo ':', strict_pow(-2, 63), ':', strict_int_pow(-2, 63);
 echo ':', strict_pow(2, -1), ':', strict_int_pow(2, -1), ':', strict_pow(2.0, 3);
@@ -36,7 +43,7 @@ echo ':', strict_pow(2, -1), ':', strict_int_pow(2, -1), ':', strict_pow(2.0, 3)
     for optimize in [false, true] {
         let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
         assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
-        assert_eq!(output.stdout, "ASMPIRLT:42:-42:-42:-9223372036854775808:-9223372036854775808:0.5:0.5:8", "opt={optimize}");
+        assert_eq!(output.stdout, "ASMPIRLTDN:42:-42:-42:-9223372036854775808:-9223372036854775808:0.5:0.5:8", "opt={optimize}");
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
