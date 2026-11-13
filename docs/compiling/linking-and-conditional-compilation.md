@@ -35,8 +35,10 @@ requirements against the nearest project's `elephc.toml`, deterministic
 `elephc.lock`, and verified target/toolchain cache receipt. It passes exact
 static archive paths to the linker; compilation never downloads or builds them.
 
-The current catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2
-1.70.0, libssh2 1.11.1, curl 8.21.0, and libxml2 2.15.3. Regex use links PCRE2's
+The current catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, the
+libcrypto-only `openssl-crypto` 3.6.4 package, nghttp2 1.70.0, libssh2 1.11.1,
+curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, GMP 6.3.0, and libmagic 5.46.
+Regex use links PCRE2's
 managed archives in the fixed shim/POSIX/8-bit order and has no production
 system-library fallback:
 
@@ -52,9 +54,8 @@ integration, not an automatic replacement for arbitrary `extern "z"` and `-lz`
 workflows.
 
 curl is the first catalog package with non-empty dependencies: adding it also
-declares OpenSSL (curl's TLS backend only — `openssl_encrypt()`/`hash()` stay
-on the separate `crypto` bridge) and zlib, and a final curl link resolves all
-three in the fixed `libcurl.a -> libssl.a -> libcrypto.a -> libz.a` order with
+declares libssh2, nghttp2, OpenSSL and zlib. A final curl link resolves
+`libcurl.a -> libssh2.a -> libssl.a -> libcrypto.a -> libz.a -> libnghttp2.a` with
 the same no-system-fallback contract (no Homebrew/distro `-lcurl`/`-lssl`):
 
 ```bash
@@ -74,6 +75,10 @@ SDK's `libiconv`, which glibc already provides on Linux:
 elephc native add libxml2
 elephc app.php --with-xml
 ```
+
+Symmetric `openssl_*` calls use the separate `openssl` bridge and managed
+`openssl-crypto` 3.6.4 package. Its libcrypto archive is distinct from curl's
+OpenSSL 3.5.8 dependency; `hash()` remains on the `crypto` bridge.
 
 See [Native dependencies](native-dependencies.md) for the full workflow.
 
@@ -116,14 +121,18 @@ See [FFI & Extern](../beyond-php/extern.md).
 Some optional features are implemented as Rust *bridge crates* (`staticlib`
 archives) that elephc links into the program: `pdo` (database access), `tls`
 (`https://`/`ftps://` streams), `crypto` (the `hash()`/`md5()`/`sha1()` family),
+`openssl` (managed OpenSSL symmetric ciphers),
 `bcmath` (exact arbitrary-precision decimal arithmetic),
+`gmp` (managed arbitrary-precision integers), `random` (engines and secure bytes),
+`fileinfo` (managed libmagic), `tokenizer` (PHP source inspection),
 `mbstring` (the shared multibyte string engine),
 `iconv` (character-set conversion and the character-oriented `iconv_*` functions),
 `phar` (Phar archives), `tz` (timezone introspection), `image` (GD/Imagick image
 processing), `pcntl` (Unix process control and signals), `xml` (the `ext/xml`
-SAX parser and `ext/xmlwriter`), `eval` (the Magician interpreter fallback for
+SAX parser, `ext/xmlwriter` and SimpleXML), `eval` (the Magician interpreter fallback for
 dynamic `eval()`), `web` (the `--web` server), and `curl` (the libcurl-backed
-`ext/curl` surface).
+`ext/curl` surface). `zend` hosts declared PECL/PIE extensions through Elephc's
+PHP extension ABI; `reference` supplies native property-reference validation.
 
 By default a bridge is linked **only when the program uses it** — using a hash
 function pulls in `crypto`, opening an `https://` stream pulls in `tls`,
@@ -196,7 +205,7 @@ injecting the PDO classes; there is no separate `elephc_mysqli` bridge.
 `--with-curl` is a bridge flag, like `--with-pdo`, but it is also the first one
 that itself needs a managed native package: force-linking the whole
 `elephc_curl` archive only satisfies the Rust side, and the final link also
-needs the `curl` package's `libcurl.a`/`libssl.a`/`libcrypto.a`/`libz.a`
+needs `libcurl.a`, `libssh2.a`, `libssl.a`, `libcrypto.a`, `libz.a` and `libnghttp2.a`
 declared and installed with `elephc native add curl` (see
 [Managed native packages](#managed-native-packages) above). There is no
 `--with-regex`-style split between a runtime capability and the bridge here:
@@ -209,7 +218,7 @@ elephc app.php --with-curl
 ```
 
 `--with-xml` is the second such flag. The `elephc_xml` archive carries the
-PHP-facing `XMLParser` / `XMLWriter` implementation, but its parser is libxml2
+PHP-facing `XMLParser`, `XMLWriter` and SimpleXML implementation, but its parser is libxml2
 itself, so the final link also needs the `libxml2` package's
 `libelephc_libxml2_shim.a` and `libxml2.a`, declared and installed with
 `elephc native add libxml2`. Auto-detected xml use requires the package just the
@@ -231,9 +240,11 @@ since the whole archive is included.
 Bridge crates are Elephc's optional Rust workspace components. They are not
 installed or versioned by `elephc native`. A bridge or runtime-capability flag
 may require a separately declared managed package: `--with-regex` requires
-`pcre2`, `--with-curl` requires `curl` (which in turn declares `openssl` and
-`zlib`), `--with-mbstring` requires `oniguruma` and `pcre2`, and `--with-xml`
-requires `libxml2`. Ordinary mbstring and opaque eval use the contract-owned
+`pcre2`, `--with-curl` requires `curl` (which declares `libssh2`, `nghttp2`,
+`openssl` and `zlib`), `--with-mbstring` requires `oniguruma` and `pcre2`, and `--with-xml`
+requires `libxml2`. `--with-gmp` requires `gmp`, `--with-fileinfo` requires
+`libmagic`, and `--with-openssl` requires `openssl-crypto` (with its zlib
+dependency). Ordinary mbstring and opaque eval use the contract-owned
 default MIME matcher without PCRE2. Custom MIME expressions in opaque eval need
 the complete `--with-mbstring` capability. These flags do not
 install the packages. Composer dependencies are

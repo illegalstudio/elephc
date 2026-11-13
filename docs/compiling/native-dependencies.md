@@ -11,7 +11,8 @@ records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
 The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
-libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, and GMP 6.3.0.
+libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, GMP 6.3.0,
+libmagic 5.46, and the libcrypto-only `openssl-crypto` 3.6.4 package.
 Programs using `preg_*`, `RegexIterator`, or `RecursiveRegexIterator` require
 PCRE2 at final link time. Mbstring uses the same managed package only when a
 program selects its custom output MIME-pattern provider. The contract-owned
@@ -44,6 +45,13 @@ library php-src links, with no system `-lgmp` fallback and no catalog
 dependencies. The pinned tarball is verified by SHA-256 and size before it is
 built; a missing package fails closed with the `elephc native add gmp`
 recovery.
+
+libmagic 5.46 backs fileinfo and embeds its compiled magic database in the
+program. `openssl-crypto` 3.6.4 supplies the default-provider cipher engine
+used by symmetric `openssl_*` calls, with zlib as its catalog dependency.
+Declare them with `elephc native add libmagic` or
+`elephc native add openssl-crypto`; their force-enable flags are
+`--with-fileinfo` and `--with-openssl`.
 
 `elephc native add oniguruma` installs the pinned Oniguruma library and the
 versioned mbregex provider, with the provider archive before `libonig.a` in link
