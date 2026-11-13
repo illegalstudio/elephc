@@ -30,6 +30,9 @@ pub(super) fn lower_numeric_unary(
             return result;
         }
     }
+    if matches!(value.ir_type, IrType::F64 | IrType::I64 | IrType::TaggedScalar) {
+        crate::ir_lower::numeric_domains::unary(ctx, value, elephc_semantics::numeric_domains::NumericOperator::Unary, expr.span);
+    }
     match value.ir_type {
         IrType::F64 => ctx.emit_value(float_op, vec![value.value], None, PhpType::Float, float_op.default_effects(), Some(expr.span)),
         IrType::I64 => {
@@ -57,6 +60,7 @@ pub(super) fn lower_numeric_unary(
             let zero = lower_int_literal(ctx, 0, expr);
             if let Some(result) = object_operators::lower_dynamic_object_negate(
                 ctx, zero, value, expr, |ctx| {
+                    crate::ir_lower::numeric_domains::unary(ctx, value, elephc_semantics::numeric_domains::NumericOperator::Unary, expr.span);
                     let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
                     release_binary_operand_temporary(ctx, value, expr.span);
                     result
@@ -64,6 +68,7 @@ pub(super) fn lower_numeric_unary(
             ) {
                 return result;
             }
+            crate::ir_lower::numeric_domains::unary(ctx, value, elephc_semantics::numeric_domains::NumericOperator::Unary, expr.span);
             let result = lower_mixed_numeric_binary(ctx, zero, value, MixedNumericOp::Sub, expr);
             // Mirror the binary mixed-op path: an owning boxed operand (e.g.
             // `-($i * 7 + 1)`, issue #500) must be released once consumed.
@@ -94,6 +99,9 @@ pub(super) fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, o
             return result;
         }
     }
+    if matches!(value.ir_type, IrType::I64 | IrType::TaggedScalar) {
+        crate::ir_lower::numeric_domains::unary(ctx, value, elephc_semantics::numeric_domains::NumericOperator::BitNot, expr.span);
+    }
     let result_ty = int_unary_result_type(value.ir_type);
     if value.ir_type == IrType::I64 {
         ctx.emit_value(op, vec![value.value], None, result_ty, op.default_effects(), Some(expr.span))
@@ -101,8 +109,25 @@ pub(super) fn lower_int_unary(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, o
         let narrowed = lower_tagged_scalar_to_int(ctx, value, Some(expr.span));
         ctx.emit_value(op, vec![narrowed.value], None, result_ty, op.default_effects(), Some(expr.span))
     } else {
-        ctx.emit_value(Op::RuntimeCall, vec![value.value], None, result_ty, Effects::all(), Some(expr.span))
+        lower_boxed_bitnot(ctx, value, Some(expr.span))
     }
+}
+
+/// Computes scalar boxed bit-not after native handlers, retaining all exceptional operand owners.
+pub(super) fn lower_boxed_bitnot(ctx: &mut LoweringContext<'_, '_>, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+    let at = span.unwrap_or_else(Span::dummy);
+    crate::ir_lower::numeric_domains::unary(ctx, input, elephc_semantics::numeric_domains::NumericOperator::BitNot, at);
+    let originals = pin_in_flight_owners(ctx, &[input.value], at);
+    let operand = crate::ir_lower::numeric_operands::box_value(ctx, input, at);
+    let pins = if operand.value != input.value { pin_in_flight_owners(ctx, &[operand.value], at) } else { Vec::new() };
+    let result = ctx.emit_owned_value(Op::RuntimeCall, vec![operand.value],
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::MixedBitNot)), PhpType::Mixed,
+        Effects::all(), span);
+    unpin_in_flight_owners(ctx, pins, at);
+    if operand.value != input.value { release_binary_operand_temporary(ctx, operand, at); }
+    unpin_in_flight_owners(ctx, originals, at);
+    release_binary_operand_temporary(ctx, input, at);
+    result
 }
 
 /// Lowers a tagged scalar into PHP int semantics, coercing null to zero.

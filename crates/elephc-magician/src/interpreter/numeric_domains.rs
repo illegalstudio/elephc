@@ -32,6 +32,14 @@ fn value_kind(tag: u64) -> ValueKind {
     }
 }
 
+/// Guards a unary or update value after its explicit native-class adapter was excluded.
+pub(super) fn require_unary(operator: NumericOperator, value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<(), EvalStatus> {
+    let Some(rule) = policy::operand_rule(context.semantic_profile(), operator) else { return Ok(()); };
+    if rule.domain.allows(value_kind(values.type_tag(value)?)) { return Ok(()); }
+    throwables::eval_throw_type_error(&rule.message(), context, values)
+}
+
 /// Rejects kind and integer-power violations without changing either borrowed operand.
 pub(super) fn require_binary(
     op: EvalBinOp, left: RuntimeCellHandle, right: RuntimeCellHandle,

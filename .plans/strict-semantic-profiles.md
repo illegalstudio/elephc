@@ -1137,3 +1137,39 @@ folding with both numeric domains, both optimizers and clean heaps. The existing
 PHP integer-folding and eval domain controls pass, along with the compiler build,
 prebuilt architecture audit and source/diff hygiene. No serialized syntax, native
 ABI or target emitter changes are needed. Public feature admission is unchanged.
+
+
+### Unary and update operand domains
+
+Numeric operator domains now guard negation, bit-not and updates before scalar
+coercion and writeback. Native class adapters retain precedence. Coercions alone
+permits bytewise string complement; Arithmetic requires an integer complement.
+Original literal and constant-alias kinds are audited before folding, and typed
+parameters/locals are checked by the real frontend. A cfg(test)-only staged checker
+shares the complete source/type pipeline without weakening public admission.
+
+Both eval engines apply the same unary/update rules and preserve source values on
+failure. Statement updates still use Magician's existing supported syntax; local
+increment expressions remain its existing parser gap, with native tests covering
+postfix expression results. Non-overflow updates retain PHP promotion, while the
+independent Overflow flag rejects the boundary. The fake runtime now models
+promoting integer subtraction and bytewise string complement for these controls.
+
+Scalar boxed bit-not uses the existing typed MixedBitNot target in every path,
+including ordinary typed strings. Canonical boxing moves into numeric_operands
+and explicitly owns fresh boxes. Existing source operands are rooted before box
+allocation, and postfix old-result owners stay rooted for every guarded numeric
+profile. Effects and exception-flow summaries retain unary failures and callbacks
+under AST optimization. Nonnumeric source evidence remains unknown for permissive
+numeric proofs rather than hitting an impossible-state assertion.
+
+Six new focused tests pass: raw/typed frontend diagnostics, all-five-target
+source/optimizer EIR coverage, two walker/VM value/overflow/owner matrices, native
+storage/postfix/catch behavior across both domains with optional Overflow and both
+optimizers, and a default string-complement control. Five focused compatibility
+controls cover checked boxed arithmetic, source proofs, updates, numeric callback
+owners and native class fallback. Compiler/Magician checks, compiler build, the
+prebuilt architecture audit, assembly alignment and diff hygiene pass.
+
+Further unary IEEE value/provenance work, builtin domains and binding semantics
+remain before feature admission; the public integration mask is unchanged.

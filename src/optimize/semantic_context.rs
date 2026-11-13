@@ -79,8 +79,16 @@ pub(super) fn integer_overflow_may_throw(expr: &crate::parser::ast::Expr) -> boo
 
 /// Domain failures can unwind owned operands and must survive pruning and exception summaries.
 pub(super) fn numeric_domain_may_throw(expr: &crate::parser::ast::Expr) -> bool {
-    let crate::parser::ast::ExprKind::BinaryOp { op, .. } = &expr.kind else { return false; };
-    crate::semantics::numeric::operand_rule(active_profile(), active_source_mode(), op).is_some()
+    use crate::parser::ast::ExprKind;
+    use elephc_semantics::numeric_domains::NumericOperator;
+    let unary = match &expr.kind {
+        ExprKind::BinaryOp { op, .. } => return crate::semantics::numeric::operand_rule(active_profile(), active_source_mode(), op).is_some(),
+        ExprKind::Negate(_) => NumericOperator::Unary,
+        ExprKind::BitNot(_) => NumericOperator::BitNot,
+        ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_) | ExprKind::PreDecrement(_) | ExprKind::PostDecrement(_) => NumericOperator::Update,
+        _ => return false,
+    };
+    crate::semantics::numeric::operator_rule(active_profile(), active_source_mode(), unary).is_some()
 }
 
 /// Checked arithmetic may reject numeric operands or invoke a warning handler during conversion.
@@ -103,7 +111,8 @@ pub(super) fn checked_numeric_conversion_may_dispatch(expr: &crate::parser::ast:
 /// Dynamic checked updates may diagnose values or enter arbitrary warning callbacks.
 pub(super) fn checked_update_may_dispatch(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::ExprKind;
-    enabled(StrictFeature::Overflow) && matches!(expr.kind, ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_)
+    !crate::semantics::numeric::operation_policy(active_profile(), active_source_mode()).is_permissive()
+        && matches!(expr.kind, ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_)
         | ExprKind::PreDecrement(_) | ExprKind::PostDecrement(_))
 }
 

@@ -22,6 +22,18 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        if let ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name)
+            | ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) = &expr.kind {
+            if let Some(ty) = env.get(name) {
+                if crate::types::object_operators::binary_plan_with_classes(
+                    &crate::parser::ast::BinOp::Add, ty, &PhpType::Int, &self.classes).is_none() {
+                    if let Some(rule) = crate::semantics::numeric::operator_rule(self.semantic_profile, self.semantic_source_mode,
+                        elephc_semantics::numeric_domains::NumericOperator::Update) {
+                        crate::semantics::numeric::validate_unary_type(rule, ty, expr.span)?;
+                    }
+                }
+            }
+        }
         match &expr.kind {
             ExprKind::IncludeValue { .. } => unreachable!(
                 "ExprKind::IncludeValue must be expanded by the resolver"
@@ -58,6 +70,10 @@ impl Checker {
                     &crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty, &self.classes,
                 ) {
                     return Ok(plan.result_type(&crate::parser::ast::BinOp::Sub));
+                }
+                if let Some(rule) = crate::semantics::numeric::operator_rule(self.semantic_profile, self.semantic_source_mode,
+                    elephc_semantics::numeric_domains::NumericOperator::Unary) {
+                    crate::semantics::numeric::validate_unary_type(rule, &ty, expr.span)?;
                 }
                 match ty {
                     PhpType::Int => {

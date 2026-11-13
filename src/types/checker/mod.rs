@@ -1556,12 +1556,26 @@ pub fn check_types_with_options(
     options: CheckOptions,
     generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
-    let _optimizer_semantics = crate::optimize::scoped_semantic_profile(options.semantic_profile);
     let pending = crate::semantics::pending_guarantees(options.semantic_profile);
     if !pending.is_empty() {
         return Err(CompileError::new(crate::span::Span::dummy(), &format!(
             "strict guarantees are not yet available in this build: {}", pending.join(", "))));
     }
+    check_profiled_program(program, target, options, generics)
+}
+
+/// Exercises the complete frontend for staged guarantees without weakening any public admission gate.
+#[cfg(test)]
+pub(crate) fn check_staged_semantics(program: &Program, target: Target, profile: elephc_semantics::SemanticProfile)
+    -> Result<CheckResult, CompileError> {
+    check_profiled_program(program, target, CheckOptions { semantic_profile: profile, strict_locals: false },
+        &crate::generics::GenericContext::default())
+}
+
+/// Shares source auditing and complete type checking after the caller admitted the profile.
+fn check_profiled_program(program: &Program, target: Target, options: CheckOptions,
+    generics: &crate::generics::GenericContext) -> Result<CheckResult, CompileError> {
+    let _optimizer_semantics = crate::optimize::scoped_semantic_profile(options.semantic_profile);
     // Every `check*` spelling funnels through here, so this is the one place the checker needs
     // the stack its own recursion depth implies (issue #686).
     crate::compiler_stack::with_compiler_stack(|| {

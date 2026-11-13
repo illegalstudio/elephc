@@ -45,9 +45,9 @@ pub(super) fn boxed(
 ) -> LoweredValue {
     use super::expr::call_operand_owners::{pin_in_flight_owners, unpin_in_flight_owners};
     let originals = pin_in_flight_owners(ctx, &[left.value, right.value], span);
-    let boxed_left = boxed_operand(ctx, left, span);
+    let boxed_left = super::numeric_operands::box_value(ctx, left, span);
     let left_root = if boxed_left.value != left.value { pin_in_flight_owners(ctx, &[boxed_left.value], span) } else { Vec::new() };
-    let boxed_right = boxed_operand(ctx, right, span);
+    let boxed_right = super::numeric_operands::box_value(ctx, right, span);
     let right_root = if boxed_right.value != right.value { pin_in_flight_owners(ctx, &[boxed_right.value], span) } else { Vec::new() };
     let result = ctx.emit_value(Op::MixedNumericBinop, vec![boxed_left.value, boxed_right.value],
         Some(Immediate::NumericOperation { op: operation, policy }), PhpType::Mixed,
@@ -60,14 +60,6 @@ pub(super) fn boxed(
     result
 }
 
-/// Creates an independent box without consuming the source owner's normal-path release.
-fn boxed_operand(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Span) -> LoweredValue {
-    use crate::ir::{IrHeapKind, IrType};
-    if value.ir_type == IrType::Heap(IrHeapKind::Mixed) { return value; }
-    let op = if value.ir_type == IrType::Heap(IrHeapKind::Union) { Op::MixedClone } else { Op::MixedBox };
-    ctx.emit_value(op, vec![value.value], None, PhpType::Mixed, op.default_effects(), Some(span))
-}
-
 /// Roots a checked PHP update operand without hidden backend boxing or ownership transfers.
 pub(super) fn update(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, increment: bool,
@@ -75,7 +67,7 @@ pub(super) fn update(
 ) -> LoweredValue {
     use super::expr::call_operand_owners::{pin_in_flight_owners, unpin_in_flight_owners};
     let originals = pin_in_flight_owners(ctx, &[value.value], span);
-    let operand = if value.ir_type == crate::ir::IrType::Str { value } else { boxed_operand(ctx, value, span) };
+    let operand = if value.ir_type == crate::ir::IrType::Str { value } else { super::numeric_operands::box_value(ctx, value, span) };
     let boxed_root = if operand.value != value.value { pin_in_flight_owners(ctx, &[operand.value], span) } else { Vec::new() };
     let result = ctx.emit_value(Op::StrIncDec, vec![operand.value], Some(Immediate::NumericUpdate { increment, policy }),
         PhpType::Mixed, Op::StrIncDec.arithmetic_effects(policy), Some(span));

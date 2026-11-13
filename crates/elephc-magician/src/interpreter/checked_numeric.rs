@@ -65,6 +65,12 @@ pub(super) fn update(
             .and_then(|value| value.ok_or(EvalStatus::UnsupportedConstruct));
         return finish_synthesized_method_arguments(result, [one], context, values);
     }
+    numeric_domains::require_unary(elephc_semantics::numeric_domains::NumericOperator::Update, current, context, values)?;
+    if !context.semantic_profile().contains(StrictFeature::Overflow) {
+        let one = values.int(1)?;
+        let result = eval_binary_result(if increment { EvalBinOp::Add } else { EvalBinOp::Sub }, current, one, context, values);
+        return finish_synthesized_method_arguments(result, [one], context, values);
+    }
     let op = if increment { CheckedNumericOp::Increment } else { CheckedNumericOp::Decrement };
     apply(op, current, current, context, values)
 }

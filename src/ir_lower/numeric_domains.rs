@@ -13,25 +13,38 @@ use crate::ir::{CmpPredicate, Immediate, IrType, Op, PhpTypePredicate, Terminato
 use crate::parser::ast::BinOp;
 use crate::span::Span;
 use crate::types::PhpType;
-use elephc_semantics::{numeric_domains::{NumericDomain, NEGATIVE_INTEGER_POWER_MESSAGE}, StrictFeature};
+use elephc_semantics::{numeric_domains::{NumericDomain, NumericOperator, NEGATIVE_INTEGER_POWER_MESSAGE}, StrictFeature};
 
 /// Validates both already-evaluated operands before scalar coercion or arithmetic can run.
 pub(super) fn binary(ctx: &mut LoweringContext<'_, '_>, left: LoweredValue, op: &BinOp, right: LoweredValue, span: Span) {
     let Some(rule) = crate::semantics::numeric::operand_rule(ctx.semantic_profile, ctx.source_mode, op) else { return; };
     let pins = super::expr::call_operand_owners::pin_in_flight_owners(ctx, &[left.value, right.value], span);
-    let predicates: &[PhpTypePredicate] = match rule.domain {
-        NumericDomain::Number => &[PhpTypePredicate::Int, PhpTypePredicate::Float],
-        NumericDomain::Integer => &[PhpTypePredicate::Int],
-        NumericDomain::IntegerOrString => &[PhpTypePredicate::Int, PhpTypePredicate::String],
-    };
     for value in [left, right] {
-        let accepted = semantic_guards::matches_any_kind(ctx, value, predicates, Some(span));
+        let accepted = semantic_guards::matches_any_kind(ctx, value, predicates(rule.domain), Some(span));
         semantic_guards::require(ctx, accepted, Op::ThrowTypeError, &rule.message(), Some(span));
     }
     if *op == BinOp::Pow && ctx.semantic_profile.contains(StrictFeature::Arithmetic) {
         require_integer_power_domain(ctx, left, right, span);
     }
     super::expr::call_operand_owners::unpin_in_flight_owners(ctx, pins, span);
+}
+
+/// Guards a scalar unary/update operand before mutation or any PHP scalar conversion.
+pub(super) fn unary(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, operator: NumericOperator, span: Span) {
+    let Some(rule) = crate::semantics::numeric::operator_rule(ctx.semantic_profile, ctx.source_mode, operator) else { return; };
+    let pins = super::expr::call_operand_owners::pin_in_flight_owners(ctx, &[value.value], span);
+    let accepted = semantic_guards::matches_any_kind(ctx, value, predicates(rule.domain), Some(span));
+    semantic_guards::require(ctx, accepted, Op::ThrowTypeError, &rule.message(), Some(span));
+    super::expr::call_operand_owners::unpin_in_flight_owners(ctx, pins, span);
+}
+
+/// Projects neutral domains into noncoercive EIR predicates once for all numeric guards.
+fn predicates(domain: NumericDomain) -> &'static [PhpTypePredicate] {
+    match domain {
+        NumericDomain::Number => &[PhpTypePredicate::Int, PhpTypePredicate::Float],
+        NumericDomain::Integer => &[PhpTypePredicate::Int],
+        NumericDomain::IntegerOrString => &[PhpTypePredicate::Int, PhpTypePredicate::String],
+    }
 }
 
 /// Rejects a negative exponent only on the integer/integer path, retaining floating power.

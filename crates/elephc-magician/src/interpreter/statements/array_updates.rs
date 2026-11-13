@@ -16,7 +16,7 @@ pub(in crate::interpreter) fn eval_inc_dec_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Overflow) {
+    if !elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(context.semantic_profile()).is_permissive() {
         return crate::interpreter::checked_numeric::update(current, increment, context, values);
     }
     if !increment && values.is_null(current)? {

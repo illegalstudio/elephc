@@ -110,7 +110,11 @@ impl Checker {
                     }
                     return Ok(PhpType::Object(class.name.to_string()));
                 }
-                if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+                if let Some(rule) = crate::semantics::numeric::operator_rule(self.semantic_profile, self.semantic_source_mode,
+                    elephc_semantics::numeric_domains::NumericOperator::BitNot) {
+                    crate::semantics::numeric::validate_unary_type(rule, &ty, expr.span)?;
+                }
+                if matches!(ty, PhpType::Mixed | PhpType::Union(_) | PhpType::Str) {
                     return Ok(PhpType::Mixed);
                 }
                 if !matches!(ty, PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void) {

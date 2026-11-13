@@ -46,6 +46,7 @@ mod scoped_writes;
 mod semantic_guards;
 mod checked_arithmetic;
 mod numeric_domains;
+mod numeric_operands;
 mod throwable_constructors;
 mod validation_context;
 mod core_methods;

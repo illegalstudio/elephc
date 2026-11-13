@@ -9,7 +9,6 @@
 //! - Fresh results cannot alias operands; strict identity never invokes these handlers.
 
 use super::*;
-use crate::ir::RuntimeCallTarget;
 
 /// Distinguishes possible PHP objects from scalar unions that merely use boxed storage.
 pub(super) fn can_contain_object(ty: &PhpType) -> bool {
@@ -523,16 +522,7 @@ fn lower_dynamic_numeric_cast(
 ) -> LoweredValue {
     let Some((class, method)) = handlers.first() else {
         if bit_not {
-            let at = span.unwrap_or_else(Span::dummy);
-            let operand = box_operand(ctx, input, at);
-            let pins = pin_in_flight_owners(ctx, &[input.value, operand.value], at);
-            let result = ctx.emit_owned_value(Op::RuntimeCall, vec![operand.value],
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::MixedBitNot)), PhpType::Mixed,
-                Effects::all(), span);
-            unpin_in_flight_owners(ctx, pins, at);
-            if operand.value != input.value { release_binary_operand_temporary(ctx, operand, at); }
-            release_binary_operand_temporary(ctx, input, at);
-            return result;
+            return super::unary_logic::lower_boxed_bitnot(ctx, input, span);
         }
         let at = span.unwrap_or_else(Span::dummy);
         let operand = if matches!(ctx.builder.value_php_type(input.value), PhpType::Object(_)) {

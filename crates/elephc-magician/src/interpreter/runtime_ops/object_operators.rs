@@ -151,7 +151,7 @@ pub(super) fn bitwise_result(
 }
 
 /// Applies PHP's internal-class `~$value` identity as `0 - value - 1`.
-pub(super) fn bit_not(
+pub(in crate::interpreter) fn bit_not(
     values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let Some(class) = operator_class(values, value)? else { return Ok(None) };

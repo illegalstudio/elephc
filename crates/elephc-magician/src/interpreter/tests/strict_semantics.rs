@@ -148,9 +148,11 @@ pub(super) fn staged_numeric_execution(
     source: &str, vm: bool, context: &mut ElephcEvalContext,
     scope: &mut ElephcEvalScope, values: &mut FakeOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile()).unwrap();
+    let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile())
+        .unwrap_or_else(|error| panic!("staged numeric source {source:?}: {error:?}"));
     if vm {
-        let module = bytecode::compile_program(&program).expect("numeric fixture fits the VM");
+        let module = bytecode::compile_program(&program)
+            .unwrap_or_else(|error| panic!("staged numeric VM source {source:?}: {error:?}"));
         bytecode::execute_module(&module, context, scope, values).map(|(control, _)| control)
     } else {
         execute_statements(program.statements(), context, scope, values)

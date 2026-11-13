@@ -790,7 +790,9 @@ pub(super) fn lower_inc_dec(
     crate::ir_lower::entry_locals::prepare_process_local_for_write(ctx, name);
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
-    let checked_update = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).checked_overflow();
+    let update_policy = crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode);
+    let checked_update = update_policy.checked_overflow();
+    let guarded_update = !update_policy.is_permissive();
     let op = if increment { BinOp::Add } else { BinOp::Sub };
     if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
         &op, &existing_type, &PhpType::Int, ctx.classes,
@@ -798,7 +800,7 @@ pub(super) fn lower_inc_dec(
         let return_old = if post {
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, old, Some(expr.span))
         } else { old };
-        let old_pins = if checked_update && post { pin_in_flight_owners(ctx, &[return_old.value], expr.span) } else { Vec::new() };
+        let old_pins = if guarded_update && post { pin_in_flight_owners(ctx, &[return_old.value], expr.span) } else { Vec::new() };
         let one = lower_int_literal(ctx, 1, expr);
         let new = object_operators::lower_object_binary_values(ctx, old, &op, one, expr)
             .or_else(|| object_operators::lower_dynamic_object_binary(ctx, old, &op, one, expr, true,
@@ -810,6 +812,9 @@ pub(super) fn lower_inc_dec(
             return if post { return_old } else { ctx.load_local(name, Some(expr.span)) };
         }
         unpin_in_flight_owners(ctx, old_pins, expr.span);
+    }
+    if !matches!(existing_type.codegen_repr(), PhpType::Mixed | PhpType::Str) {
+        crate::ir_lower::numeric_domains::unary(ctx, old, elephc_semantics::numeric_domains::NumericOperator::Update, expr.span);
     }
     if matches!(existing_type.codegen_repr(), PhpType::Void) {
         if increment {
@@ -826,7 +831,7 @@ pub(super) fn lower_inc_dec(
         } else {
             old
         };
-        let old_pins = if checked_update && post { pin_in_flight_owners(ctx, &[return_old.value], expr.span) } else { Vec::new() };
+        let old_pins = if guarded_update && post { pin_in_flight_owners(ctx, &[return_old.value], expr.span) } else { Vec::new() };
         let one = lower_int_literal(ctx, 1, expr);
         let op = if increment { BinOp::Add } else { BinOp::Sub };
         let new = object_operators::lower_dynamic_object_binary(ctx, old, &op, one, expr, true,

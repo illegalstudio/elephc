@@ -62,6 +62,9 @@ pub(in crate::interpreter) fn eval_unary_value(
                     }
                 }
             }
+            if op == EvalUnaryOp::Negate {
+                numeric_domains::require_unary(elephc_semantics::numeric_domains::NumericOperator::Unary, value, context, values)?;
+            }
             let zero = values.int(0)?;
             let result = if op == EvalUnaryOp::Plus {
                 eval_binary_result(EvalBinOp::Add, zero, value, context, values)
@@ -82,7 +85,11 @@ pub(in crate::interpreter) fn eval_unary_value(
             let truthy = eval_boolean_condition(value, context, values)?;
             values.bool_value(!truthy)
         }
-        EvalUnaryOp::BitNot => values.bit_not_dispatch(value),
+        EvalUnaryOp::BitNot => {
+            if let Some(result) = runtime_ops::object_operators::bit_not(values, value)? { return Ok(result); }
+            numeric_domains::require_unary(elephc_semantics::numeric_domains::NumericOperator::BitNot, value, context, values)?;
+            values.bit_not(value)
+        }
     }
 }
 

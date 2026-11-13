@@ -68,6 +68,18 @@ impl AstVisitor for SourceValidator {
             }
         }
         if self.source_modes.last() != Some(&crate::source::SourceMode::Internal) {
+            let unary = match &expr.kind {
+                ExprKind::Negate(inner) => Some((inner, elephc_semantics::numeric_domains::NumericOperator::Unary)),
+                ExprKind::BitNot(inner) => Some((inner, elephc_semantics::numeric_domains::NumericOperator::BitNot)),
+                _ => None,
+            };
+            if let Some((inner, operator)) = unary {
+                if let (Some(rule), Some(ty)) = (super::numeric::operator_rule(self.profile, crate::source::SourceMode::Php, operator), literal_type(inner)) {
+                    if let Err(error) = super::numeric::validate_unary_type(rule, &ty, expr.span) {
+                        self.error = Some(error); return;
+                    }
+                }
+            }
             if let ExprKind::BinaryOp { left, op, right } = &expr.kind {
                 if let Some(rule) = super::numeric::operand_rule(self.profile, crate::source::SourceMode::Php, op) {
                     if let (Some(left), Some(right)) = (literal_type(left), literal_type(right)) {

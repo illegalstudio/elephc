@@ -26,6 +26,16 @@ enum Number {
 }
 
 impl Number {
+    /// Retains source PHP kinds before arithmetic normalization can erase them.
+    fn value_kind(self) -> elephc_semantics::conversions::ValueKind {
+        use elephc_semantics::conversions::ValueKind;
+        match self {
+            Self::Int(_) => ValueKind::Integer, Self::Float(_) => ValueKind::Float,
+            Self::Bool(_) => ValueKind::Boolean, Self::Null => ValueKind::Null,
+            Self::StringInt { .. } | Self::StringFloat { .. } | Self::NonNumericString => ValueKind::String,
+        }
+    }
+
     /// Adapts an operand only after its operator has selected a floating result.
     fn as_float(self) -> f64 {
         match self.numeric() { Self::Int(value) => value as f64, Self::Float(value) => value, _ => unreachable!() }
@@ -192,15 +202,19 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
             };
             match class { Some(class) => constant(&ConstantKey::Class(class, name.clone()), definitions, evidence)?, None => None }
         }
-        ExprKind::Negate(inner) => match evaluate(inner, checked, class, definitions, evidence)?.map(Number::numeric) {
+        ExprKind::Negate(inner) => match unary_operand(expr, inner, checked, class, definitions, evidence,
+            elephc_semantics::numeric_domains::NumericOperator::Unary)?.map(Number::numeric) {
             Some(Number::Int(value)) => match value.checked_neg() {
                 Some(value) => Some(Number::Int(value)),
                 None if checked && evidence.profile.contains(StrictFeature::Overflow) => return Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
                 None => Some(Number::Float(-(value as f64))),
             },
             Some(Number::Float(value)) => Some(Number::Float(-value)),
-            None => None,
-            _ => unreachable!("numeric normalization removes string evidence"),
+            _ => None,
+        },
+        ExprKind::BitNot(inner) => match unary_operand(expr, inner, checked, class, definitions, evidence,
+            elephc_semantics::numeric_domains::NumericOperator::BitNot)? {
+            Some(Number::Int(value)) => Some(Number::Int(!value)), _ => None,
         },
         ExprKind::FunctionCall { name, args } if !definitions.unresolved_namespaces
             && !definitions.functions.contains(&crate::names::php_symbol_key(name.as_str().trim_start_matches('\\'))) =>
@@ -228,6 +242,18 @@ fn constant(key: &ConstantKey, definitions: &Definitions, evidence: &mut Evidenc
     evidence.strict_types = previous_strict_types;
     evidence.active.remove(key);
     result
+}
+
+/// Audits a proven unary operand before conversion while preserving declaration-cycle evidence.
+fn unary_operand(expr: &Expr, inner: &Expr, checked: bool, class: Option<&str>, definitions: &Definitions,
+    evidence: &mut Evidence, operator: elephc_semantics::numeric_domains::NumericOperator) -> Result<Option<Number>, CompileError> {
+    let value = evaluate(inner, checked, class, definitions, evidence)?;
+    if checked {
+        if let (Some(value), Some(rule)) = (value, super::numeric::operator_rule(evidence.profile, SourceMode::Php, operator)) {
+            if !rule.domain.allows(value.value_kind()) { return Err(CompileError::new(expr.span, &rule.message())); }
+        }
+    }
+    Ok(value)
 }
 
 /// Classifies PHP numeric strings without changing full-width integer values through float rounding.
@@ -358,14 +384,7 @@ fn array_numbers(
 fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, profile: SemanticProfile, source_operator: bool) -> Result<Option<Number>, CompileError> {
     if checked && source_operator {
         if let Some(rule) = super::numeric::operand_rule(profile, SourceMode::Php, op) {
-            let kind = |value| match value {
-                Number::Int(_) => elephc_semantics::conversions::ValueKind::Integer,
-                Number::Float(_) => elephc_semantics::conversions::ValueKind::Float,
-                Number::Bool(_) => elephc_semantics::conversions::ValueKind::Boolean,
-                Number::Null => elephc_semantics::conversions::ValueKind::Null,
-                Number::StringInt { .. } | Number::StringFloat { .. } | Number::NonNumericString => elephc_semantics::conversions::ValueKind::String,
-            };
-            if !rule.domain.allows(kind(left)) || !rule.domain.allows(kind(right)) {
+            if !rule.domain.allows(left.value_kind()) || !rule.domain.allows(right.value_kind()) {
                 return Err(CompileError::new(expr.span, &rule.message()));
             }
         }

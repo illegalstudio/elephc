@@ -900,7 +900,8 @@ impl ExceptionFlowAnalysis {
                 .combined(self.thrown_value_types(inner, bindings, class_context)),
             ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
                 let thrown = operand(inner);
-                if self.has_internal_object_operators && !effects::literal_scalar_operand(inner) {
+                if super::semantic_context::numeric_domain_may_throw(expr)
+                    || self.has_internal_object_operators && !effects::literal_scalar_operand(inner) {
                     thrown.combined(ThrownTypes::unknown())
                 } else { thrown }
             }

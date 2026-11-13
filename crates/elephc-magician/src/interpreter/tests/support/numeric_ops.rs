@@ -130,7 +130,9 @@ impl FakeOps {
         right: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         match (self.get(left), self.get(right)) {
-            (FakeValue::Int(left), FakeValue::Int(right)) => self.int(left - right),
+            (FakeValue::Int(left), FakeValue::Int(right)) => match left.checked_sub(right) {
+                Some(value) => self.int(value), None => self.float(left as f64 - right as f64),
+            },
             (left, right) => self.float(self.fake_numeric(&left) - self.fake_numeric(&right)),
         }
     }
@@ -223,13 +225,16 @@ impl FakeOps {
         };
         self.int(value)
     }
-    /// Applies fake integer bitwise NOT for interpreter tests.
+    /// Applies integer or bytewise string bitwise NOT for interpreter tests.
     pub(super) fn runtime_bit_not(
         &mut self,
         value: RuntimeCellHandle,
     ) -> Result<RuntimeCellHandle, EvalStatus> {
-        let value = self.fake_int(&self.get(value));
-        self.int(!value)
+        match self.get(value) {
+            FakeValue::String(value) => self.string_bytes_value(&value.bytes().map(|byte| !byte).collect::<Vec<_>>()),
+            FakeValue::Bytes(value) => self.string_bytes_value(&value.into_iter().map(|byte| !byte).collect::<Vec<_>>()),
+            value => self.int(!self.fake_int(&value)),
+        }
     }
     /// Concatenates fake cells with byte-preserving string conversion for interpreter tests.
     pub(super) fn runtime_concat(

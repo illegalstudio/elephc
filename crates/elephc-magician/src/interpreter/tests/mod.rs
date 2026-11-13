@@ -72,6 +72,7 @@ mod strict_modulo;
 mod strict_numeric_domains;
 mod strict_intdiv;
 mod strict_integer_power;
+mod strict_unary_domains;
 mod core;
 mod dynamic_calls;
 mod enums;

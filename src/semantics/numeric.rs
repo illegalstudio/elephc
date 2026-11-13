@@ -44,8 +44,13 @@ pub(crate) fn integer_bit_op(op: &BinOp) -> Option<elephc_semantics::numeric_dom
 
 /// Resolves one user operator's domain while leaving trusted implementation arithmetic alone.
 pub(crate) fn operand_rule(profile: SemanticProfile, source: SourceMode, op: &BinOp) -> Option<NumericDomainRule> {
+    operator_rule(profile, source, operator(op)?)
+}
+
+/// Resolves an operator signature without changing the source's immutable profile.
+pub(crate) fn operator_rule(profile: SemanticProfile, source: SourceMode, operator: NumericOperator) -> Option<NumericDomainRule> {
     if source == SourceMode::Internal { return None; }
-    elephc_semantics::numeric_domains::operand_rule(profile, operator(op)?)
+    elephc_semantics::numeric_domains::operand_rule(profile, operator)
 }
 
 /// Maps concrete scalar checker types without conflating boolean and integer storage.
@@ -67,5 +72,13 @@ pub(crate) fn validate_binary_types(
     // Dynamic alternatives may select an explicit native-class operator at execution time.
     if left == ValueKind::Dynamic || right == ValueKind::Dynamic { return Ok(()); }
     if rule.domain.allows(left) && rule.domain.allows(right) { return Ok(()); }
+    Err(crate::errors::CompileError::new(span, &rule.message()))
+}
+
+/// Rejects a known unary operand kind after native object overload selection.
+pub(crate) fn validate_unary_type(rule: NumericDomainRule, value: &PhpType, span: crate::span::Span)
+    -> Result<(), crate::errors::CompileError> {
+    let kind = value_kind(value);
+    if kind == ValueKind::Dynamic || rule.domain.allows(kind) { return Ok(()); }
     Err(crate::errors::CompileError::new(span, &rule.message()))
 }
