@@ -56,6 +56,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             value: Box::new(walk_expr(*value, pass)),
             target: walk_instanceof_target(target, pass, span),
         },
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(walk_expr(*inner, pass))),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(walk_expr(*inner, pass))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(walk_expr(*inner, pass))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(walk_expr(*inner, pass))),

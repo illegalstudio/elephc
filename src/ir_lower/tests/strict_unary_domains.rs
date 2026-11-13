@@ -89,3 +89,59 @@ fn strict_unary_ieee_scalar_negation_uses_sign_preserving_target_instructions() 
         }
     }
 }
+
+
+/// Source proofs and standalone folding retain unary-plus domain violations before optimization.
+#[test]
+fn strict_unary_ieee_plus_frontend_retains_original_kinds_and_fold_guards() {
+    for feature in [StrictFeature::Arithmetic, StrictFeature::Coercions] {
+        let profile = SemanticProfile::PERMISSIVE.with(feature, true);
+        for source in ["<?php if (false) { echo +true; }", "<?php const BAD_PLUS = '2'; echo +BAD_PLUS;",
+            "<?php function numericPlus(string $value): mixed { return +$value; }"] {
+            let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+            let error = crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile).expect_err(source);
+            assert!(error.message.contains(feature.flag()), "{source}: {error:?}");
+        }
+        let program = crate::parser::parse(&crate::lexer::tokenize("<?php echo +true;").unwrap()).unwrap();
+        let _policy = crate::optimize::scoped_semantic_profile(profile);
+        let folded = crate::optimize::fold_constants(program);
+        assert!(format!("{folded:?}").contains("UnaryPlus"), "{feature:?}: a fold erased its domain guard");
+    }
+}
+
+/// Typed unary calls retain their explicit policy through every target and optimizer configuration.
+#[test]
+fn strict_unary_ieee_eir_metadata_profile_validation_and_native_lowering() {
+    use crate::ir::{Immediate, RuntimeCallTarget};
+    let source = "<?php function mixedIeeePlus(mixed $value): mixed { return +$value; } function mixedIeeeNegate(mixed $value): mixed { return -$value; }";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        for feature in [None, Some(StrictFeature::Overflow), Some(StrictFeature::Arithmetic), Some(StrictFeature::Coercions)] {
+            let profile = feature.map_or(SemanticProfile::PERMISSIVE, |feature| SemanticProfile::PERMISSIVE.with(feature, true));
+            for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
+                let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
+                let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+                let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+                for optimize in [false, true] {
+                    let mut module = module.clone();
+                    if optimize { crate::ir_passes::optimize_module(&mut module); }
+                    crate::ir::validate_module(&module).unwrap();
+                    let calls = module.functions.iter().flat_map(|function| function.instructions.iter()).filter_map(|inst| {
+                        if let Some(Immediate::RuntimeCall(RuntimeCallTarget::NumericUnary { policy, .. })) = inst.immediate { Some(policy) } else { None }
+                    }).collect::<Vec<_>>();
+                    assert_eq!(calls.len(), 2, "{name}, {mode:?}, {feature:?}, opt={optimize}");
+                    let expected = if mode == SourceMode::Internal { SemanticProfile::PERMISSIVE } else { profile };
+                    assert!(calls.iter().all(|policy| policy.requirements() == expected));
+                    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+                    assert!(asm.contains("__rt_numeric_unary_plus"), "{name}");
+                    let negate = if expected.contains(StrictFeature::Overflow) { "__rt_strict_numeric_unary_negate" } else { "__rt_numeric_unary_negate" };
+                    assert!(asm.contains(negate), "{name}");
+                    if mode != SourceMode::Internal && feature.is_some() {
+                        module.semantic_profile = SemanticProfile::PERMISSIVE;
+                        assert!(matches!(crate::ir::validate_module(&module), Err(crate::ir::ValidationError::SemanticProfileMismatch { .. })));
+                    }
+                }
+            }
+        }
+    }
+}

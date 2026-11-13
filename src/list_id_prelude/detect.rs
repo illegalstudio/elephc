@@ -179,7 +179,7 @@ fn expr_refs_listid(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_refs_listid(value) || instanceof_target_refs_listid(target)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

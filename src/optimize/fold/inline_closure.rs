@@ -117,7 +117,7 @@ fn count_uses(expr: &Expr, name: &str) -> usize {
     match &expr.kind {
         ExprKind::Variable(n) if n == name => 1,
         ExprKind::BinaryOp { left, right, .. } => count_uses(left, name) + count_uses(right, name),
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Cast { expr: inner, .. } => count_uses(inner, name),
@@ -157,7 +157,7 @@ fn expr_contains_call(expr: &Expr) -> bool {
         ExprKind::BinaryOp { left, right, .. } => {
             expr_contains_call(left) || expr_contains_call(right)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Cast { expr: inner, .. } => expr_contains_call(inner),
@@ -199,6 +199,7 @@ fn substitute(expr: &Expr, name: &str, with: &Expr) -> Option<Expr> {
             op: op.clone(),
             right: Box::new(substitute(right, name, with)?),
         },
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(substitute(inner, name, with)?)),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(substitute(inner, name, with)?)),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(substitute(inner, name, with)?)),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(substitute(inner, name, with)?)),

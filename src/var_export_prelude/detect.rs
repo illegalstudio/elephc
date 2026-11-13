@@ -160,7 +160,7 @@ fn expr_refs_ve(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_refs_ve(value) || instanceof_target_refs_ve(target)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

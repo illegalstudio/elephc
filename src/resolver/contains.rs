@@ -140,7 +140,7 @@ fn expr_has_includes(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_has_includes(value) || instanceof_target_has_includes(target)
         }
-        ExprKind::Negate(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)

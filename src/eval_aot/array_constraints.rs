@@ -138,7 +138,7 @@ pub(super) fn collect_expr_array_scope_read_constraints(
     constraints: &mut ArrayScopeReadConstraintSets,
 ) {
     match &expr.kind {
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)

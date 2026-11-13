@@ -272,6 +272,8 @@ fn parse_stmt_dispatch(
         | Token::LParen
         | Token::LBracket
         | Token::Tilde
+        | Token::Plus
+        | Token::Minus
         | Token::Match => parse_expression_led_stmt(tokens, pos, span),
         // Control flow — delegated to control.rs
         Token::Switch => control::parse_switch(tokens, pos, span),

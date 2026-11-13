@@ -115,7 +115,7 @@ fn expr_uses_backing_slot(value: &Expr, property: &str) -> bool {
                 InstanceOfTarget::Expr(target) => expr(target),
             }
         }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::Throw(value) | ExprKind::ErrorSuppress(value) | ExprKind::Print(value)
         | ExprKind::Spread(value) | ExprKind::Clone(value) | ExprKind::YieldFrom(value)
         | ExprKind::Cast { expr: value, .. } | ExprKind::PtrCast { expr: value, .. }

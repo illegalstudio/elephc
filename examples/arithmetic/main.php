@@ -59,3 +59,7 @@ function pick_index(): int
 
 $scores = [7, 8];
 echo "scores[pick_index()]++ = " . $scores[pick_index()]++ . ", now " . $scores[0] . "\n";
+
+// Unary plus keeps a floating value's sign, including negative zero.
+$negative_zero = -0.0;
+echo 'unary plus preserves negative zero = ' . (fdiv(1.0, +$negative_zero) < 0.0 ? 'yes' : 'no') . "\n";

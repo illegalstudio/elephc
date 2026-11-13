@@ -86,7 +86,7 @@ pub(super) fn reflection_arg_expr_can_track(expr: &Expr) -> bool {
         | ExprKind::ClassConstant { .. }
         | ExprKind::ScopedConstantAccess { .. }
         | ExprKind::MagicConstant(_) => true,
-        ExprKind::Negate(inner) => matches!(
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => matches!(
             &inner.kind,
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
         ),

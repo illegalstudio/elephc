@@ -241,7 +241,7 @@ fn expr_contains_subexpr(expr: &Expr, target: &Expr) -> bool {
     }
 
     match &expr.kind {
-        ExprKind::Not(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+        ExprKind::Not(inner) | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
             expr_contains_subexpr(inner, target)
         }
         ExprKind::BinaryOp { left, right, .. } => {

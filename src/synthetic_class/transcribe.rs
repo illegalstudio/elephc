@@ -926,6 +926,7 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::PreIncrement(name) => format!("e_pre_inc({})", lit(name)),
         ExprKind::PostDecrement(name) => format!("e_post_dec({})", lit(name)),
         ExprKind::PreDecrement(name) => format!("e_pre_dec({})", lit(name)),
+        ExprKind::UnaryPlus(inner) => format!("e_pos({})", expr(inner, depth)),
         ExprKind::Negate(inner) => format!("e_neg({})", expr(inner, depth)),
         ExprKind::Not(inner) => format!("e_not({})", expr(inner, depth)),
         ExprKind::ErrorSuppress(inner) => format!("e_error_suppress({})", expr(inner, depth)),

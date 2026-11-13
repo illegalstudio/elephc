@@ -1212,3 +1212,43 @@ numeric domain and exact-power classification controls pass. The wider compiler
 prefix-plus/Mixed unary regression remains the next integration step: its source
 AST still needs explicit unary-plus provenance and a typed EIR runtime target.
 Public feature admission remains Locals, Bools, DynamicCode and Opcache.
+
+
+### Explicit unary AST, EIR policy and scalar normalization
+
+Numeric unary plus is now an ExprKind::UnaryPlus node with its own span and the
+same exponentiation/multiplication precedence. Numeric unary statements are
+accepted directly. All structural visitors, rewriting passes, source proofs,
+constant/default consumers, reflection renderers and synthetic-source builders
+retain the node. A warning-free literal normalizer serves these adapters after
+source-domain validation; the optimizer refuses to erase stricter source-kind
+guards. Known nonnumeric literals reuse the existing arithmetic diagnostic.
+
+RuntimeCallTarget::NumericUnary carries a compact operator and ArithmeticPolicy.
+Its canonical Mixed signature, owning result, conservative effects, printed
+policy and module capability checks are explicit. Scalar identities are limited
+to matching PHP kinds and physical scalar storage. Boxed and narrowed values use
+exact normalization with original and newly boxed operand roots. Native object
+handlers share the existing dispatch graph without re-entering its binary scalar
+fast path. Floating negation uses the shared target sign operation, and unchecked
+integer-minimum negation retains PHP promotion.
+
+Default PHP unary conversions now contribute warning, exception and global-write
+boundaries to AST effects and exception-flow analysis. Unused results therefore
+retain warning-handler mutations and catches. Module-aware constant resolution
+preserves enum-read effects and resolves unary-plus aliases for native constant
+inventories. Literal eval and static array-key probes retain AOT support, including
+strict-dynamic-code, rather than requiring permissive runtime fallback.
+
+Focused verification covers four library tests, including five-target emitter
+and policy checks, plus the complete AST variant smoke test, lexer tokens, precedence and unary statements, malformed and
+nonnumeric diagnostics, the existing negation diagnostic controls, native typed,
+Mixed and narrowed IEEE signs, exact strings, domain guards, discarded warnings,
+callback mutation/throw cleanup, defaults, reflection, arrays and literal eval.
+Native class, nullable-value and regression-500 ownership controls pass. New
+native tests use both optimizer settings and report clean heaps. The compiler and
+builtin exporter build, generated-doc workflow, architecture gate, all changed
+assembly comment checks, example PHP syntax and diff hygiene pass. Generated
+builtin registries and pages have no content changes. Public feature admission
+is unchanged; builtin numeric domains, conversion/binding guarantees and the
+remaining strict families still precede full umbrella admission.

@@ -107,6 +107,7 @@ pub enum ExprKind {
     },
     BoolLiteral(bool),
     Null,
+    UnaryPlus(Box<Expr>),
     Negate(Box<Expr>),
     Not(Box<Expr>),
     BitNot(Box<Expr>),
@@ -578,6 +579,11 @@ impl Expr {
     /// Constructs a negation expression for the given expression.
     pub fn negate(inner: Expr) -> Self {
         Self::new(ExprKind::Negate(Box::new(inner)), Span::dummy())
+    }
+
+    /// Creates an explicit numeric unary-plus expression without synthetic zero addition.
+    pub fn unary_plus(inner: Expr) -> Self {
+        Self::new(ExprKind::UnaryPlus(Box::new(inner)), Span::dummy())
     }
 
     /// Constructs a `print` expression that outputs the given expression's value.

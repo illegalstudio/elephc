@@ -305,6 +305,7 @@ fn lowers_every_expr_variant_smoke() {
         }),
         bool_lit(true),
         expr(ExprKind::Null),
+        expr(ExprKind::UnaryPlus(Box::new(int(1)))),
         expr(ExprKind::Negate(Box::new(int(1)))),
         expr(ExprKind::Not(Box::new(bool_lit(false)))),
         expr(ExprKind::BitNot(Box::new(int(1)))),

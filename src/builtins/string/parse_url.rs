@@ -79,6 +79,8 @@ fn parse_url_static_component(component: &Expr) -> Option<i64> {
             "PHP_URL_FRAGMENT" => Some(7),
             _ => None,
         },
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| parse_url_static_component(&number)),
         ExprKind::Negate(inner) => parse_url_static_component(inner).map(|value| -value),
         ExprKind::BinaryOp { left, op, right } => {
             let left = parse_url_static_component(left)?;

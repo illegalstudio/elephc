@@ -108,6 +108,9 @@ pub(super) fn fold_static_builtin_calls_in_expr(expr: Expr, php_only: bool) -> E
         |expr| fold_static_builtin_calls_in_expr(expr, php_only);
     let span = expr.span;
     let kind = match expr.kind {
+        ExprKind::UnaryPlus(inner) => {
+            ExprKind::UnaryPlus(Box::new(fold_static_builtin_calls_in_expr(*inner)))
+        }
         ExprKind::Negate(inner) => {
             ExprKind::Negate(Box::new(fold_static_builtin_calls_in_expr(*inner)))
         }

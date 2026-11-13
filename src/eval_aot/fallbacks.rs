@@ -164,7 +164,7 @@ pub(super) fn expr_fallback_reason(expr: &Expr) -> Option<EvalAotFallbackReason>
         | ExprKind::Variable(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null => None,
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)

@@ -53,6 +53,14 @@ pub(super) fn resolve_expr(
             value: Box::new(resolve_expr(*value, base_dir, declared_once, include_chain, state, function_variants)?),
             target: resolve_instanceof_target(target, base_dir, declared_once, include_chain, state, function_variants)?,
         },
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(resolve_expr(
+            *inner,
+            base_dir,
+            declared_once,
+            include_chain,
+            state,
+            function_variants,
+        )?)),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(resolve_expr(
             *inner,
             base_dir,

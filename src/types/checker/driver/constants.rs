@@ -39,7 +39,7 @@ fn known_tree(checker: &Checker, expression: &Expr) -> bool {
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::StringLiteral(_)
             | ExprKind::BoolLiteral(_) | ExprKind::Null => true,
         ExprKind::ConstRef(name) => checker.constants.contains_key(name.as_str()),
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
             | ExprKind::Spread(value) | ExprKind::Cast { expr: value, .. } => known_tree(checker, value),
         ExprKind::BinaryOp { left, right, .. } => known_tree(checker, left) && known_tree(checker, right),
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } =>

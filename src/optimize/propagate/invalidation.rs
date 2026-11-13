@@ -118,7 +118,7 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
                 Invalidation::none()
             }
         },
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

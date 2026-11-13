@@ -134,6 +134,8 @@ fn fold_attr_value(expr: &Expr) -> Option<AttrArgValue> {
             receiver: StaticReceiver::Named(name),
         } => Some(AttrArgValue::Str(name.as_str().to_string())),
         ExprKind::ClassConstant { .. } => None,
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| fold_attr_value(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(n) => Some(AttrArgValue::Int(n.wrapping_neg())),
             ExprKind::FloatLiteral(n) => Some(AttrArgValue::Float((-*n).to_bits())),
@@ -170,6 +172,8 @@ fn fold_attr_key(expr: &Expr) -> Option<AttrKey> {
             Some(AttrKey::Str(name.as_str().to_string()))
         }
         ExprKind::IntLiteral(value) => Some(AttrKey::Int(*value)),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| fold_attr_key(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(n) => Some(AttrKey::Int(n.wrapping_neg())),
             _ => None,

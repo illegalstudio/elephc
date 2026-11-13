@@ -467,6 +467,9 @@ pub fn e_error_suppress(value: Expr) -> Expr {
     Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
 }
 
+/// Constructs the explicit numeric unary-plus form used by generated preludes.
+pub fn e_pos(value: Expr) -> Expr { Expr::unary_plus(value) }
+
 /// `-value`, the unary minus.
 ///
 /// A NEGATIVE LITERAL IS THIS TOO. The parser does NOT fold `-3` into `IntLiteral(-3)`; it
@@ -1360,7 +1363,7 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
-        | ExprKind::Negate(inner)
+        | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::ErrorSuppress(inner) => walk_expr(inner, out),
         ExprKind::Match { subject, arms, default } => {
             walk_expr(subject, out);
@@ -2187,7 +2190,7 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
-        | ExprKind::Negate(inner)
+        | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::ErrorSuppress(inner) => audit_expr(inner, out),
         ExprKind::Match { subject, arms, default } => {
             audit_expr(subject, out);

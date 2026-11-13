@@ -78,7 +78,7 @@ impl Checker {
             ExprKind::Variable(name) => self.array_push_plain_local(name)
                 && env.get(name).is_some_and(|ty| matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool)
                     || ty.is_int_float_union()),
-            ExprKind::Negate(expr) | ExprKind::Cast { target: CastType::Float, expr } =>
+            ExprKind::UnaryPlus(expr) | ExprKind::Negate(expr) | ExprKind::Cast { target: CastType::Float, expr } =>
                 self.array_push_numeric_expression(expr, env),
             ExprKind::Not(expr)
             | ExprKind::Cast { target: CastType::Int | CastType::Bool, expr } =>
@@ -107,6 +107,8 @@ impl Checker {
             ExprKind::Cast { target: CastType::Int, expr } => self.array_push_integer_range(expr, env),
             ExprKind::Not(expr) | ExprKind::Cast { target: CastType::Bool, expr } =>
                 self.array_push_integer_range(expr, env).map(|_| (0, 1)),
+            ExprKind::UnaryPlus(expr) => crate::semantics::numeric::literal_unary_plus(expr)
+                .and_then(|number| self.array_push_integer_range(&number, env)),
             ExprKind::Negate(expr) => negate_range(self.array_push_integer_range(expr, env)?),
             ExprKind::BinaryOp { left, op, right } if comparison(op) =>
                 (self.array_push_numeric_expression(left, env) && self.array_push_numeric_expression(right, env)).then_some((0, 1)),
@@ -227,6 +229,8 @@ fn local_integer(value: &Expr, locals: &Locals) -> Option<Range> {
         ExprKind::IntLiteral(value) => Some((*value, *value)),
         ExprKind::BoolLiteral(value) => Some((i64::from(*value), i64::from(*value))),
         ExprKind::Variable(name) => match locals.get(name)? { LocalValue::Integer(range) => Some(*range), _ => None },
+        ExprKind::UnaryPlus(value) => crate::semantics::numeric::literal_unary_plus(value)
+            .and_then(|number| local_integer(&number, locals)),
         ExprKind::Negate(value) => negate_range(local_integer(value, locals)?),
         ExprKind::BinaryOp { left, op, right } =>
             integer_binary(local_integer(left, locals)?, op, local_integer(right, locals)?),

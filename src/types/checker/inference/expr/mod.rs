@@ -48,7 +48,7 @@ impl Checker {
             | ExprKind::IntLiteral(_)
             | ExprKind::FloatLiteral(_)
             | ExprKind::Variable(_)
-            | ExprKind::Negate(_)
+            | ExprKind::UnaryPlus(_) | ExprKind::Negate(_)
             | ExprKind::Not(_)
             | ExprKind::ErrorSuppress(_)
             | ExprKind::Print(_)

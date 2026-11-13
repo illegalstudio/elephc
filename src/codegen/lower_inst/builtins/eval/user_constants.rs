@@ -122,6 +122,8 @@ fn eval_native_user_constant_element_value(
         }
         // AOT negates with wrapping semantics, so `-PHP_INT_MIN` stays `PHP_INT_MIN`
         // here too instead of dropping the whole constant.
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| eval_native_user_constant_element_value(&number.kind, depth)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => Some(eval_native_int_default(value.wrapping_neg())),
             ExprKind::FloatLiteral(value) => Some(eval_native_float_default(-value)),
@@ -146,6 +148,8 @@ fn eval_native_user_constant_key(key: &ExprKind) -> Option<EvalNativeCallableArr
         ExprKind::BoolLiteral(value) => {
             Some(EvalNativeCallableArrayDefaultKey::Int(i64::from(*value)))
         }
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| eval_native_user_constant_key(&number.kind)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => Some(EvalNativeCallableArrayDefaultKey::Int(
                 value.wrapping_neg(),

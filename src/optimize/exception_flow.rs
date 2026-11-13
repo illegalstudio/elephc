@@ -898,9 +898,10 @@ impl ExceptionFlowAnalysis {
         overflow.combined(update).combined(match &expr.kind {
             ExprKind::Throw(inner) => operand(inner)
                 .combined(self.thrown_value_types(inner, bindings, class_context)),
-            ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+            ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
                 let thrown = operand(inner);
                 if super::semantic_context::numeric_domain_may_throw(expr)
+                    || super::semantic_context::unary_numeric_conversion_may_dispatch(expr)
                     || self.has_internal_object_operators && !effects::literal_scalar_operand(inner) {
                     thrown.combined(ThrownTypes::unknown())
                 } else { thrown }

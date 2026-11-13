@@ -319,6 +319,11 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
         ExprKind::BoolLiteral(false) => PhpType::False,
         ExprKind::BoolLiteral(true) => PhpType::Bool,
         ExprKind::Null => PhpType::Void,
+        ExprKind::UnaryPlus(inner) => {
+            if let Some(number) = crate::semantics::numeric::literal_unary_plus(inner) { return infer_expr_type_syntactic(&number); }
+            match infer_expr_type_syntactic(inner) { PhpType::Float => PhpType::Float, _ => PhpType::Mixed }
+        }
+
         ExprKind::Cast {
             target: CastType::String,
             ..

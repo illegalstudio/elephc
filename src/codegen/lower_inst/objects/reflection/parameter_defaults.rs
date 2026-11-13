@@ -162,6 +162,8 @@ pub(super) fn reflection_literal_parameter_default_value(
             .collect::<Option<Vec<_>>>()
             .map(ReflectionParameterDefaultValue::Array),
         ExprKind::ArrayLiteralAssoc(entries) => reflection_assoc_array_default_value(entries),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| reflection_literal_parameter_default_value(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value
                 .checked_neg()
@@ -204,6 +206,8 @@ pub(super) fn reflection_default_array_key(key: &Expr) -> Option<ReflectionDefau
         }
         ExprKind::StringLiteral(value) => reflection_default_string_array_key(value),
         ExprKind::Null => Some(ReflectionDefaultArrayKey::Str(String::new())),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| reflection_default_array_key(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value.checked_neg().map(ReflectionDefaultArrayKey::Int),
             ExprKind::FloatLiteral(value) => {

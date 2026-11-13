@@ -15,6 +15,8 @@ use super::*;
 pub(crate) fn const_int_expr(expr: &Expr) -> Option<i64> {
     match &expr.kind {
         ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| const_int_expr(&number)),
         ExprKind::Negate(inner) => const_int_expr(inner)?.checked_neg(),
         _ => None,
     }
@@ -28,6 +30,8 @@ pub(super) fn const_finite_numeric_expr(expr: &Expr) -> Option<f64> {
             *value as f64
         }
         ExprKind::FloatLiteral(value) => *value,
+        ExprKind::UnaryPlus(inner) => return crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| const_finite_numeric_expr(&number)),
         ExprKind::Negate(inner) => -const_finite_numeric_expr(inner)?,
         _ => return None,
     };

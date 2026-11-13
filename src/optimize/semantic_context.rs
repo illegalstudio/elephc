@@ -83,7 +83,7 @@ pub(super) fn numeric_domain_may_throw(expr: &crate::parser::ast::Expr) -> bool 
     use elephc_semantics::numeric_domains::NumericOperator;
     let unary = match &expr.kind {
         ExprKind::BinaryOp { op, .. } => return crate::semantics::numeric::operand_rule(active_profile(), active_source_mode(), op).is_some(),
-        ExprKind::Negate(_) => NumericOperator::Unary,
+        ExprKind::UnaryPlus(_) | ExprKind::Negate(_) => NumericOperator::Unary,
         ExprKind::BitNot(_) => NumericOperator::BitNot,
         ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_) | ExprKind::PreDecrement(_) | ExprKind::PostDecrement(_) => NumericOperator::Update,
         _ => return false,
@@ -177,5 +177,16 @@ mod tests {
         assert!(matches!(&children[0].kind, StmtKind::Echo(expr) if matches!(expr.kind, ExprKind::FloatLiteral(_))));
         assert!(matches!(&children[1].kind, StmtKind::Echo(expr) if matches!(expr.kind, ExprKind::BinaryOp { .. })));
         assert!(enabled(StrictFeature::Overflow));
+    }
+}
+
+/// Unary scalar conversion may diagnose a source or invoke a PHP warning handler in any profile.
+pub(super) fn unary_numeric_conversion_may_dispatch(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::ExprKind;
+    let (ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)) = &expr.kind else { return false; };
+    match &inner.kind {
+        ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) | ExprKind::Null => false,
+        ExprKind::StringLiteral(value) => !crate::numeric_string::scan_numeric_prefix(value).is_some_and(|scan| scan.is_fully_numeric()),
+        _ => true,
     }
 }

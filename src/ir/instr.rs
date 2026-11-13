@@ -110,7 +110,8 @@ impl Instruction {
     pub fn arithmetic_policy(&self) -> elephc_semantics::arithmetic_policy::ArithmeticPolicy {
         match self.immediate {
             Some(Immediate::NumericOperation { policy, .. } | Immediate::NumericUpdate { policy, .. }
-                | Immediate::RuntimeCall(RuntimeCallTarget::NumericFunction { policy, .. })) => policy,
+                | Immediate::RuntimeCall(RuntimeCallTarget::NumericFunction { policy, .. }
+                    | RuntimeCallTarget::NumericUnary { policy, .. })) => policy,
             _ => elephc_semantics::arithmetic_policy::ArithmeticPolicy::PERMISSIVE,
         }
     }

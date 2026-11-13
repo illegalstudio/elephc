@@ -1479,6 +1479,12 @@ fn validate_typed_runtime_call(
     let Some(Immediate::RuntimeCall(target)) = inst.immediate else {
         return Ok(());
     };
+    if matches!(target, crate::ir::RuntimeCallTarget::NumericUnary { .. })
+        && (!inst.effects.contains(Effects::MAY_THROW)
+            || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
+            || inst.result_php_type != PhpType::Mixed) {
+        return Err(ValidationError::UnexpectedImmediate(inst_id));
+    }
     if let crate::ir::RuntimeCallTarget::NumericFunction { target, policy } = target {
         if !matches!(target, crate::ir::RuntimeFnId::Abs | crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct)
             || !policy.checked_overflow()

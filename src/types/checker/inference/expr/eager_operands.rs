@@ -69,7 +69,7 @@ impl Checker {
             | ExprKind::ConstRef(_) | ExprKind::This | ExprKind::MagicConstant(_)
             | ExprKind::ClassConstant { .. } | ExprKind::StaticPropertyAccess { .. }
             | ExprKind::ScopedConstantAccess { .. }
-            | ExprKind::BinaryOp { .. } | ExprKind::Negate(_) | ExprKind::Not(_)
+            | ExprKind::BinaryOp { .. } | ExprKind::UnaryPlus(_) | ExprKind::Negate(_) | ExprKind::Not(_)
             | ExprKind::BitNot(_) | ExprKind::Throw(_) | ExprKind::ErrorSuppress(_)
             | ExprKind::Print(_) | ExprKind::NullCoalesce { .. } | ExprKind::Pipe { .. }
             | ExprKind::Assignment { .. } | ExprKind::PreIncrement(_) | ExprKind::PostIncrement(_)

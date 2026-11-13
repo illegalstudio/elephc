@@ -117,6 +117,8 @@ fn static_preserve_keys(expr: &Expr) -> Option<bool> {
         ExprKind::FloatLiteral(value) => Some(*value != 0.0),
         ExprKind::StringLiteral(value) => Some(!value.is_empty() && value != "0"),
         ExprKind::Null => Some(false),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| static_preserve_keys(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => Some(*value != 0),
             ExprKind::FloatLiteral(value) => Some(*value != 0.0),
@@ -395,7 +397,7 @@ fn is_static_callback_arg_literal(expr: &Expr) -> bool {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null => true,
-        ExprKind::Negate(inner) => matches!(
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => matches!(
             inner.kind,
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
         ),

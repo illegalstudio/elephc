@@ -246,6 +246,11 @@ pub(super) fn reflection_constant_value(
     expr: &Expr,
     depth: usize,
 ) -> Result<ReflectionConstantValue> {
+    if let ExprKind::UnaryPlus(inner) = &expr.kind {
+        if let Some(number) = crate::semantics::numeric::literal_unary_plus(inner) {
+            return reflection_constant_value(ctx, current_class, current_info, &number, depth + 1);
+        }
+    }
     if depth > 16 {
         return Err(CodegenIrError::unsupported(
             "deep recursive ReflectionClass constant metadata",

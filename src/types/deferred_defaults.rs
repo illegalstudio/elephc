@@ -59,7 +59,7 @@ fn contains_scoped_constant(expr: &Expr) -> bool {
         ExprKind::Ternary { condition, then_expr, else_expr } =>
             contains_scoped_constant(condition) || contains_scoped_constant(then_expr)
                 || contains_scoped_constant(else_expr),
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
         | ExprKind::Cast { expr: inner, .. } => contains_scoped_constant(inner),
         _ => false,
     }
@@ -89,7 +89,7 @@ pub(crate) fn contains_deferred_error(expr: &Expr) -> bool {
             || arms.iter().any(|(conditions, result)|
                 conditions.iter().any(contains_deferred_error) || contains_deferred_error(result))
             || default.as_deref().is_some_and(contains_deferred_error),
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
         | ExprKind::NamedArg { value: inner, .. } | ExprKind::Spread(inner)
         | ExprKind::Cast { expr: inner, .. } =>
             contains_deferred_error(inner),
@@ -138,7 +138,7 @@ pub(crate) fn unconditional_error_message(default: &Expr) -> Option<&str> {
         }
         ExprKind::ShortTernary { value, default } => unconditional_error_message(value)
             .or_else(|| (!literal_truthiness(value)?).then(|| unconditional_error_message(default)).flatten()),
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
         | ExprKind::Cast { expr: inner, .. } | ExprKind::Spread(inner) =>
             unconditional_error_message(inner),
         _ => None,
@@ -209,7 +209,7 @@ pub(crate) fn prune_literal_branches(expr: &mut Expr) {
         ExprKind::ArrayAccess { array, index } => {
             prune_literal_branches(array); prune_literal_branches(index);
         }
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
         | ExprKind::NamedArg { value: inner, .. } | ExprKind::Spread(inner)
         | ExprKind::Cast { expr: inner, .. } =>
             prune_literal_branches(inner),

@@ -166,7 +166,7 @@ pub(super) fn collect_expr_float_predicate_scope_read_constraints(
     constraints: &mut BTreeSet<String>,
 ) {
     match &expr.kind {
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)
@@ -279,7 +279,7 @@ pub(super) fn collect_scope_read_variables_in_expr(
                 variables.insert(name.clone());
             }
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)

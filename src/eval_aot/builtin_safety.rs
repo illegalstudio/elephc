@@ -200,6 +200,8 @@ pub(super) fn eir_array_key_exists_static_key_is_safe(key: &Expr) -> bool {
         | ExprKind::StringLiteral(_)
         | ExprKind::Null => true,
         ExprKind::FloatLiteral(_) => static_integral_float_array_key_value(key).is_some(),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .is_some_and(|number| eir_array_key_exists_static_key_is_safe(&number)),
         ExprKind::Negate(inner) => {
             matches!(inner.kind, ExprKind::IntLiteral(_))
                 || static_integral_float_array_key_value(key).is_some()
@@ -351,7 +353,7 @@ where
                 || facts.is_int_local(name)
                 || facts.is_float_local(name)
         }
-        ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
             eir_float_predicate_arg_is_safe(inner, support, facts, scope_reads)
         }
         ExprKind::Cast { target, expr }
@@ -396,7 +398,7 @@ where
             scope_reads.is_some_and(|reads| reads.contains(name))
                 || (facts.is_assigned(name) && !facts.is_array_local(name))
         }
-        ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
             eir_scalar_cast_arg_is_safe(inner, support, facts, scope_reads)
         }
         ExprKind::Cast { target, expr }

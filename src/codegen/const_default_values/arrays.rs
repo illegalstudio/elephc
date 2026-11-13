@@ -207,6 +207,8 @@ pub(in crate::codegen) fn resolve_literal_array_const_default_key(
         ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int(crate::types::php_float_array_key(*value))),
         ExprKind::StringLiteral(value) => const_default_string_array_key(value),
         ExprKind::Null => Some(ConstDefaultArrayKey::String(String::new())),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| resolve_literal_array_const_default_key(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value.checked_neg().map(ConstDefaultArrayKey::Int),
             ExprKind::FloatLiteral(value) => Some(ConstDefaultArrayKey::Int(crate::types::php_float_array_key(-*value))),

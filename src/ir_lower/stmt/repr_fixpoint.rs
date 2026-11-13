@@ -751,7 +751,7 @@ impl<'a> ConversionScan<'a> {
                     self.expr(target);
                 }
             }
-            ExprKind::Negate(inner)
+            ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::Throw(inner)

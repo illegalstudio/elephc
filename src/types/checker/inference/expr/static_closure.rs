@@ -140,7 +140,7 @@ fn expr_uses_this(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_uses_this(value) || instanceof_target_uses_this(target)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -364,7 +364,7 @@ fn expr_must_not_use_this(expr: &Expr, span: Span) -> Result<(), CompileError> {
             expr_must_not_use_this(value, span)?;
             instanceof_target_must_not_use_this(target, span)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

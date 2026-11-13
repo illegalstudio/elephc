@@ -77,6 +77,7 @@ impl DefaultExporter<'_> {
             // A dump exports syntax without evaluating it, even if resolving the constant
             // later would fail. Builtin and user references use the same resolved spelling.
             ExprKind::ConstRef(name) => Some(reflection_dump_text(name.as_str().trim_start_matches('\\'))),
+            ExprKind::UnaryPlus(inner) => Some(format!("+{}", self.export(inner)?)),
             ExprKind::Negate(inner) => Some(format!("-{}", self.export(inner)?)),
             ExprKind::ScopedConstantAccess { receiver, name } => {
                 let receiver = match receiver {
@@ -164,9 +165,8 @@ impl DefaultExporter<'_> {
             | ExprKind::StringLiteral(_)
             | ExprKind::BoolLiteral(_)
             | ExprKind::Null => true,
-            ExprKind::Negate(inner) => {
-                matches!(inner.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_))
-            }
+            ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner).is_some(),
+            ExprKind::Negate(inner) => matches!(inner.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)),
             ExprKind::ClassConstant { receiver } => self.class_name_of(receiver).is_some(),
             ExprKind::ArrayLiteral(items) => items.iter().all(|item| self.is_literal(item)),
             ExprKind::ArrayLiteralAssoc(pairs) => pairs
@@ -209,6 +209,8 @@ impl DefaultExporter<'_> {
             ExprKind::StringLiteral(value) => Some(export_php_string(value)),
             ExprKind::BoolLiteral(value) => Some(value.to_string()),
             ExprKind::Null => Some("null".to_string()),
+            ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+                .and_then(|number| self.export_literal(&number)),
             ExprKind::Negate(inner) => match inner.kind {
                 ExprKind::IntLiteral(value) => Some(value.checked_neg()?.to_string()),
                 ExprKind::FloatLiteral(value) => Some(reflection_dump_float(-value)),
@@ -271,6 +273,8 @@ impl DefaultExporter<'_> {
     fn literal_key(&self, key: &Expr) -> Option<LiteralKey> {
         match &key.kind {
             ExprKind::IntLiteral(value) => Some(LiteralKey::Int(*value)),
+            ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+                .and_then(|number| self.literal_key(&number)),
             ExprKind::Negate(inner) => match inner.kind {
                 ExprKind::IntLiteral(value) => Some(LiteralKey::Int(value.checked_neg()?)),
                 ExprKind::FloatLiteral(value) => integral_float_key(-value).map(LiteralKey::Int),

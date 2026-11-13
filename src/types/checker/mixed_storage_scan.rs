@@ -1234,7 +1234,7 @@ fn collect_expr(checker: &Checker, expr: &Expr, depth: u32, facts: &mut Facts) {
         }
         ExprKind::YieldFrom(inner)
         | ExprKind::Clone(inner)
-        | ExprKind::Negate(inner)
+        | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

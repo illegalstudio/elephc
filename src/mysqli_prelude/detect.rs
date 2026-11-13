@@ -249,7 +249,7 @@ fn expr_refs_mysqli(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_refs_mysqli(value) || instanceof_target_refs_mysqli(target)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

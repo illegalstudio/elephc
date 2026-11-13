@@ -185,7 +185,7 @@ fn bind_scope(mut expr: Expr, class: &str) -> Expr {
             **left = bind_scope((**left).clone(), class);
             **right = bind_scope((**right).clone(), class);
         }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value) | ExprKind::Spread(value) | ExprKind::Cast { expr: value, .. } => {
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value) | ExprKind::Spread(value) | ExprKind::Cast { expr: value, .. } => {
             **value = bind_scope((**value).clone(), class);
         }
         ExprKind::NullCoalesce { value, default } | ExprKind::ShortTernary { value, default } => {
@@ -267,7 +267,7 @@ fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
             **left = resolve((**left).clone(), constants, active, depth + 1)?;
             **right = resolve((**right).clone(), constants, active, depth + 1)?;
         }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value) | ExprKind::Spread(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value) | ExprKind::Spread(value)
             | ExprKind::Cast { expr: value, .. } => {
             **value = resolve((**value).clone(), constants, active, depth + 1)?;
         }

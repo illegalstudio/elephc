@@ -75,6 +75,22 @@ pub(crate) fn lower_dynamic_object_binary(
     Some(lower_dynamic_operator_plans(ctx, lhs, op, rhs, expr, consume, &plans, false, scalar))
 }
 
+/// Selects native unary-plus handlers before the exact scalar unary kernel.
+pub(super) fn lower_dynamic_object_plus(
+    ctx: &mut LoweringContext<'_, '_>, zero: LoweredValue, value: LoweredValue,
+    expr: &Expr, scalar: impl FnOnce(&mut LoweringContext<'_, '_>) -> LoweredValue,
+) -> Option<LoweredValue> {
+    let ty = ctx.builder.value_php_type(value.value);
+    if !can_contain_object(&ty) { return None; }
+    let mut plans = ctx.classes.keys().filter_map(|name|
+        crate::types::object_operators::binary_plan(&BinOp::Add, &PhpType::Int, &PhpType::Object(name.clone())))
+        .collect::<Vec<_>>();
+    plans.sort_unstable_by_key(|plan| plan.class.name);
+    plans.dedup_by_key(|plan| plan.class.name);
+    if plans.is_empty() { return None; }
+    Some(lower_dynamic_operator_plans(ctx, zero, &BinOp::Add, value, expr, true, &plans, false, scalar))
+}
+
 /// Negates numeric-result classes with multiplication while retaining other classes' subtraction.
 pub(super) fn lower_dynamic_object_negate(
     ctx: &mut LoweringContext<'_, '_>, zero: LoweredValue, value: LoweredValue,

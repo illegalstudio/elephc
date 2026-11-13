@@ -626,6 +626,10 @@ fn encode_default_value(data: &mut DataSection, default: Option<&Expr>) -> Encod
         ExprKind::ArrayLiteral(items) if items.is_empty() => {
             encoded_default(CALLABLE_DESC_DEFAULT_EMPTY_ARRAY, DataWord::U64(0), 0)
         }
+        ExprKind::UnaryPlus(inner) => match crate::semantics::numeric::literal_unary_plus(inner) {
+            Some(number) => encode_default_value(data, Some(&number)),
+            None => encoded_default(CALLABLE_DESC_DEFAULT_COMPLEX, DataWord::U64(0), 0),
+        },
         ExprKind::Negate(inner) => encode_negated_default(data, inner),
         _ => encoded_default(CALLABLE_DESC_DEFAULT_COMPLEX, DataWord::U64(0), 0),
     }

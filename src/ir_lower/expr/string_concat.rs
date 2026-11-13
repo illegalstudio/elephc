@@ -149,7 +149,7 @@ pub(super) fn expr_can_reset_concat_storage(expr: &Expr) -> bool {
             expr_can_reset_concat_storage(value)
                 || matches!(target, InstanceOfTarget::Expr(inner) if expr_can_reset_concat_storage(inner))
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

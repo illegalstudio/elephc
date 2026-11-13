@@ -350,7 +350,7 @@ pub(super) fn collect_arrow_expr_captures(
                 collect_arrow_expr_captures(target_expr, bound, seen, captures);
             }
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

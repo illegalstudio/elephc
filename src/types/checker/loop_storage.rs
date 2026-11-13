@@ -1415,7 +1415,7 @@ pub(super) fn visit_child_expressions<'a>(expr: &'a Expr, visitor: &mut dyn FnMu
         | ExprKind::Spread(value)
         | ExprKind::ErrorSuppress(value)
         | ExprKind::Print(value)
-        | ExprKind::Negate(value)
+        | ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::BitNot(value)
         | ExprKind::Not(value)
         | ExprKind::Clone(value)

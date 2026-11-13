@@ -272,7 +272,7 @@ fn collect_in_expr(expr: &Expr, names: &mut HashSet<String>) {
             collect_in_expr(right, names);
         }
         ExprKind::InstanceOf { value, .. }
-        | ExprKind::Negate(value)
+        | ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)

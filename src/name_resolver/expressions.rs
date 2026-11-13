@@ -126,6 +126,9 @@ pub(super) fn resolve_expr(
         ExprKind::Not(inner) => {
             ExprKind::Not(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
         }
+        ExprKind::UnaryPlus(inner) => {
+            ExprKind::UnaryPlus(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
+        }
         ExprKind::Negate(inner) => {
             ExprKind::Negate(Box::new(resolve_expr(inner, current_namespace, imports, symbols)))
         }

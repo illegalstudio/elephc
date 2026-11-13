@@ -70,7 +70,7 @@ pub(super) fn expr_is_eir_constant_array_value_safe(expr: &Expr) -> bool {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null => true,
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner) => {
             expr_is_eir_constant_array_value_safe(inner)
         }
         ExprKind::ArrayLiteral(items) => items.iter().all(expr_is_eir_constant_array_value_safe),
@@ -97,6 +97,8 @@ fn expr_is_eir_constant_array_key(expr: &Expr) -> bool {
         | ExprKind::StringLiteral(_)
         | ExprKind::Null => true,
         ExprKind::FloatLiteral(_) => static_integral_float_array_key_value(expr).is_some(),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .is_some_and(|number| expr_is_eir_constant_array_key(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(_) => static_integer_array_key_value(expr).is_some(),
             ExprKind::FloatLiteral(_) => static_integral_float_array_key_value(expr).is_some(),
@@ -207,6 +209,8 @@ pub(super) fn static_integer_array_key_value(key: &Expr) -> Option<i64> {
         ExprKind::BoolLiteral(value) => Some(i64::from(*value)),
         ExprKind::FloatLiteral(_) => static_integral_float_array_key_value(key),
         ExprKind::StringLiteral(value) if is_php_integer_array_key(value) => value.parse().ok(),
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| static_integer_array_key_value(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value.checked_neg(),
             ExprKind::FloatLiteral(_) => static_integral_float_array_key_value(key),
@@ -220,6 +224,8 @@ pub(super) fn static_integer_array_key_value(key: &Expr) -> Option<i64> {
 pub(super) fn static_integral_float_array_key_value(key: &Expr) -> Option<i64> {
     let value = match &key.kind {
         ExprKind::FloatLiteral(value) => *value,
+        ExprKind::UnaryPlus(inner) => return crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| static_integral_float_array_key_value(&number)),
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::FloatLiteral(value) => -*value,
             _ => return None,

@@ -160,6 +160,10 @@ pub(crate) fn literal_default_value(
     expr: &ExprKind,
     op_name: &str,
 ) -> Result<LiteralDefaultValue> {
+    if let ExprKind::UnaryPlus(inner) = expr {
+        let number = crate::semantics::numeric::literal_unary_plus(inner).ok_or_else(|| unsupported_literal_default(context, php_type, op_name))?;
+        return literal_default_value(context, php_type, &number.kind, op_name);
+    }
     if let Some(folded) = fold_named_class_constant(expr) {
         return literal_default_value(context, php_type, &folded, op_name);
     }
@@ -580,6 +584,10 @@ fn literal_array_element(
     expr: &ExprKind,
     op_name: &str,
 ) -> Result<LiteralArrayElement> {
+    if let ExprKind::UnaryPlus(inner) = expr {
+        let number = crate::semantics::numeric::literal_unary_plus(inner).ok_or_else(|| unsupported_literal_default(context, elem_type, op_name))?;
+        return literal_array_element(context, elem_type, &number.kind, op_name);
+    }
     if let Some(folded) = fold_named_class_constant(expr) {
         return literal_array_element(context, elem_type, &folded, op_name);
     }
@@ -693,6 +701,10 @@ fn literal_assoc_entries(
 /// string key, and numeric strings are normalized to integer keys later at emit time. Unsupported
 /// key forms fall through to the shared unsupported-default error rather than miscompiling.
 fn literal_array_key(context: &str, expr: &ExprKind, op_name: &str) -> Result<LiteralArrayKey> {
+    if let ExprKind::UnaryPlus(inner) = expr {
+        let number = crate::semantics::numeric::literal_unary_plus(inner).ok_or_else(|| unsupported_literal_default(context, &PhpType::Int, op_name))?;
+        return literal_array_key(context, &number.kind, op_name);
+    }
     if let Some(folded) = fold_named_class_constant(expr) {
         return literal_array_key(context, &folded, op_name);
     }

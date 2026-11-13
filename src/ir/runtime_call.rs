@@ -150,6 +150,13 @@ pub enum RuntimeCallTarget {
     MixedCellClone,
     /// Complements a borrowed PHP value, preserving string bytes and implicit float diagnostics.
     MixedBitNot,
+    /// Normalizes one borrowed scalar and computes an exact, independently owned unary number.
+    NumericUnary {
+        /// Source operator retained without synthetic binary arithmetic.
+        operator: elephc_semantics::numeric_unary::NumericUnaryOp,
+        /// Explicit operation contract, checked against the enclosing module's capabilities.
+        policy: elephc_semantics::arithmetic_policy::ArithmeticPolicy,
+    },
     /// Registers an owner after the supplied guard (zero means chain head), returning its guard token.
     ExceptionGuardOwned,
     /// Removes an owned-value guard without releasing the value on the normal path.
@@ -300,7 +307,8 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::MixedCellClone
             | RuntimeCallTarget::MixedCellResolveForWrite
             | RuntimeCallTarget::MixedCellCopyForWrite
-            | RuntimeCallTarget::MixedBitNot => Some(RuntimeCallSignature::Fixed {
+            | RuntimeCallTarget::MixedBitNot
+            | RuntimeCallTarget::NumericUnary { .. } => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
@@ -406,6 +414,10 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
             RuntimeCallTarget::MixedBitNot => "mixed.bit_not",
+            RuntimeCallTarget::NumericUnary { operator, .. } => match operator {
+                elephc_semantics::numeric_unary::NumericUnaryOp::Plus => "numeric.unary_plus",
+                elephc_semantics::numeric_unary::NumericUnaryOp::Negate => "numeric.unary_negate",
+            },
             RuntimeCallTarget::ExceptionGuardOwned => "exception.guard_owned",
             RuntimeCallTarget::ExceptionUnguardOwned => "exception.unguard_owned",
             RuntimeCallTarget::ExceptionUpdateArrayGuard => "exception.update_array_guard",

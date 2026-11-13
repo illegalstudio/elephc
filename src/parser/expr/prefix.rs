@@ -81,13 +81,7 @@ pub(super) fn parse_prefix(
     }
 
     match &tokens[*pos].0 {
-        Token::Plus => parse_unary(tokens, pos, span, |inner| {
-            ExprKind::BinaryOp {
-                left: Box::new(Expr::new(ExprKind::IntLiteral(0), inner.span)),
-                op: crate::parser::ast::BinOp::Add,
-                right: inner,
-            }
-        }, 35),
+        Token::Plus => parse_unary(tokens, pos, span, ExprKind::UnaryPlus, 35),
         Token::Minus if matches!(tokens.get(*pos + 1), Some((Token::MinimumIntegerMagnitude, _)))
             && !matches!(tokens.get(*pos + 2), Some((Token::StarStar | Token::LParen | Token::LBracket
                 | Token::Arrow | Token::QuestionArrow | Token::DoubleColon | Token::PlusPlus | Token::MinusMinus, _))) => {

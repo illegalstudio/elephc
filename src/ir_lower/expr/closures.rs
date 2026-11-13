@@ -615,7 +615,7 @@ fn expr_writes_local(expr: &Expr, name: &str) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_writes_local(value, name) || instance_of_target_writes_local(target, name)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)
@@ -869,7 +869,7 @@ pub(super) fn expr_contains_eval_call(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_contains_eval_call(value) || instance_of_target_contains_eval_call(target)
         }
-        ExprKind::Negate(expr)
+        ExprKind::UnaryPlus(expr) | ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)

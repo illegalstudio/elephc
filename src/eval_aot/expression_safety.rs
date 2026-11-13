@@ -28,7 +28,7 @@ where
         ExprKind::Variable(name) => {
             facts.is_assigned(name) || scope_reads.is_some_and(|reads| reads.contains(name))
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::ErrorSuppress(inner)

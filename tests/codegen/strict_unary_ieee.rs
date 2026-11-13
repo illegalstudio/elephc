@@ -10,6 +10,35 @@
 use crate::support::*;
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Typed and boxed unary plus/negation keep the same signed-zero semantics with both optimizers.
+#[test]
+fn test_strict_unary_ieee_signed_zero_survives_typed_and_mixed_operators() {
+    let source = r#"<?php
+function ieeeTypedPlus(float $value): float { return +$value; }
+function ieeeMixedPlus(mixed $value): mixed { return +$value; }
+function ieeeTypedNegate(float $value): float { return -$value; }
+function ieeeMixedNegate(mixed $value): mixed { return -$value; }
+function ieeeNarrowedPlus(mixed $value): float { if (is_float($value)) { return +$value; } return 0.0; }
+function ieeeNarrowedNegate(mixed $value): float { if (is_float($value)) { return -$value; } return 0.0; }
+function ieeeZeroSign(mixed $value): string { return fdiv(1.0, $value) < 0.0 ? 'N' : 'P'; }
+$negative = $argc > 0 ? -0.0 : 1.0;
+$positive = $argc > 0 ? 0.0 : 1.0;
+echo ieeeZeroSign(ieeeTypedPlus($negative)), ieeeZeroSign(ieeeMixedPlus($negative)),
+    ieeeZeroSign(ieeeTypedNegate($positive)), ieeeZeroSign(ieeeMixedNegate($positive)),
+    ieeeZeroSign(ieeeNarrowedPlus($negative)), ieeeZeroSign(ieeeNarrowedNegate($positive));
+"#;
+    for feature in [None, Some(StrictFeature::Overflow), Some(StrictFeature::Arithmetic), Some(StrictFeature::Coercions)] {
+        let profile = feature.map_or(SemanticProfile::PERMISSIVE, |feature| SemanticProfile::PERMISSIVE.with(feature, true));
+        for optimize in [false, true] {
+            let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+            assert!(output.success, "{profile:?}, opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+            assert_eq!(output.stdout, "NNNNNN", "{profile:?}, opt={optimize}");
+            assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{profile:?}, opt={optimize}: {}", output.stderr);
+        }
+    }
+}
+
+
 /// The versioned native unary ABI keeps exact payloads, atomic failures and borrowed owners.
 #[test]
 fn test_strict_unary_ieee_callback_payloads_capabilities_and_owners() {
@@ -99,5 +128,76 @@ restore_error_handler(); free($input); free($bytes); free($output); free($error)
         assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
         assert_eq!(output.stdout, "W0:2:-9223372036854775808|2:123:0", "opt={optimize}");
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
+
+/// Unary domain guards and PHP warning paths keep discarded results observable and owners balanced.
+#[test]
+fn test_strict_unary_ieee_plus_domains_warning_effects_and_temporary_owners() {
+    let source = r#"<?php
+function exactUnaryPlus(mixed $value): mixed { return +$value; }
+function unaryPlusArray(): mixed { return ['owned', str_repeat('x', 20)]; }
+foreach ([false, null, '9007199254740993'] as $input) {
+    try { $result = exactUnaryPlus($input); echo gettype($result), ':', $result, '|'; }
+    catch (TypeError $error) { echo 'T|'; }
+}
+try { exactUnaryPlus(unaryPlusArray()); } catch (TypeError $error) { echo 'A|'; }
+$prefix = $argc > 0 ? '5x' : '0';
+set_error_handler(function (int $severity, string $message): bool { global $unaryPlusState; $unaryPlusState = 9; echo 'W'; return true; });
+$unaryPlusState = 1;
+try { +$prefix; } catch (TypeError $error) { echo 'T'; }
+echo ':', $unaryPlusState, '|'; restore_error_handler();
+set_error_handler(function (int $severity, string $message): bool { throw new RuntimeException('unary warning'); });
+try { +str_repeat('5x', 2); } catch (RuntimeException $error) { echo 'Q'; } catch (TypeError $error) { echo 'T'; }
+restore_error_handler();
+"#;
+    for feature in [None, Some(StrictFeature::Overflow), Some(StrictFeature::Arithmetic), Some(StrictFeature::Coercions)] {
+        let profile = feature.map_or(SemanticProfile::PERMISSIVE, |feature| SemanticProfile::PERMISSIVE.with(feature, true));
+        let expected = if matches!(feature, Some(StrictFeature::Arithmetic | StrictFeature::Coercions)) {
+            "T|T|T|A|T:1|T"
+        } else { "integer:0|integer:0|integer:9007199254740993|A|W:9|Q" };
+        for optimize in [false, true] {
+            let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+            assert!(output.success, "{profile:?}, opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+            assert_eq!(output.stdout, expected, "{profile:?}, opt={optimize}");
+            assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{profile:?}, opt={optimize}: {}", output.stderr);
+        }
+    }
+}
+
+
+/// Defaults, constants, closures, arrays and literal eval share the explicit unary-plus value contract.
+#[test]
+fn test_strict_unary_ieee_plus_literal_defaults_reflection_and_eval() {
+    let source = r#"<?php
+const UNARY_SOURCE_ZERO = -0.0;
+const UNARY_PLUS_ZERO = +UNARY_SOURCE_ZERO;
+function ieeeDefault(float $number = +UNARY_SOURCE_ZERO): float { return +$number; }
+function ieeeBoolDefault(mixed $number = +false): mixed { return $number; }
+$exact = fn(mixed $number = +'9007199254740993'): mixed => +$number;
+class IeeePlusDefaults {
+    public mixed $number = +'9007199254740993';
+    public const ZERO = +UNARY_SOURCE_ZERO;
+}
+function defaultIeeeSign(mixed $number): string { return fdiv(1.0, $number) < 0.0 ? 'N' : 'P'; }
+echo defaultIeeeSign(UNARY_PLUS_ZERO), defaultIeeeSign(ieeeDefault());
+$parameter = (new ReflectionFunction('ieeeDefault'))->getParameters()[0];
+echo defaultIeeeSign($parameter->getDefaultValue());
+$object = new IeeePlusDefaults(); echo ':', $object->number, ':', $exact();
+$metadata = new ReflectionClass('IeeePlusDefaults'); echo ':', defaultIeeeSign($metadata->getConstant('ZERO'));
+$array = [(array)+(-0.0)]; echo ':', defaultIeeeSign($array[0][0]);
+echo ':', defaultIeeeSign(eval('return +"-0.0";'));
+echo ':', eval('return array_key_exists(+0, [+0 => +"5"]);');
+echo ':', str_contains((string)new ReflectionFunction('ieeeBoolDefault'), '$number = 0');
+"#;
+    for dynamic in [false, true] {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::DynamicCode, dynamic);
+        for optimize in [false, true] {
+            let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+            assert!(output.success, "dynamic={dynamic}, opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+            assert_eq!(output.stdout, "NNN:9007199254740993:9007199254740993:N:N:N:1:1", "dynamic={dynamic}, opt={optimize}");
+            assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "dynamic={dynamic}, opt={optimize}: {}", output.stderr);
+        }
     }
 }

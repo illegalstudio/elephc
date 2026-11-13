@@ -3740,3 +3740,17 @@ class FollowupBadStrictCounter implements FollowupStrictCounter {
 }
 "#, "incompatible return type string (interface returns int)");
 }
+
+
+/// Unary plus requires a source operand and cannot silently become a malformed binary expression.
+#[test]
+fn test_error_unary_plus_missing_operand() {
+    assert!(check_source("<?php echo +;").is_err());
+}
+
+
+/// Numeric unary plus reuses the existing arithmetic diagnostic for a known nonnumeric string.
+#[test]
+fn test_error_unary_plus_nonnumeric_literal() {
+    expect_error("<?php echo +'bad';", "Arithmetic operators require numeric operands");
+}

@@ -863,6 +863,7 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::PreIncrement(name) => (format!("++${name}"), ATOM),
         ExprKind::PostDecrement(name) => (format!("${name}--"), ATOM),
         ExprKind::PreDecrement(name) => (format!("--${name}"), ATOM),
+        ExprKind::UnaryPlus(inner) => (format!("+{}", at(inner, 85)), 85),
         ExprKind::Negate(inner) => (format!("-{}", at(inner, 85)), 85),
         ExprKind::Not(inner) => (format!("!{}", at(inner, 75)), 75),
         ExprKind::ErrorSuppress(inner) => (format!("@{}", at(inner, 35)), 35),

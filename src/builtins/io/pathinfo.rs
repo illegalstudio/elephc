@@ -81,6 +81,8 @@ fn pathinfo_static_flag_value(flag: &Expr) -> Option<i64> {
             "PATHINFO_ALL" => Some(15),
             _ => None,
         },
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| pathinfo_static_flag_value(&number)),
         ExprKind::Negate(inner) => pathinfo_static_flag_value(inner).map(|value| -value),
         ExprKind::BinaryOp { left, op, right } => {
             let left = pathinfo_static_flag_value(left)?;

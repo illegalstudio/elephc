@@ -284,7 +284,7 @@ impl Checker {
                 self.infer_type_with_assignment_effects(index, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::Negate(inner)
+            ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
             | ExprKind::Not(inner)
             | ExprKind::BitNot(inner)
             | ExprKind::ErrorSuppress(inner)

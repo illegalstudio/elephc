@@ -172,7 +172,7 @@ fn scan_expr(expr: &Expr, receivers: &mut Vec<String>) {
             scan_expr(value, receivers);
             scan_expr(callable, receivers);
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

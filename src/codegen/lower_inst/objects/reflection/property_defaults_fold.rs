@@ -82,7 +82,7 @@ fn fold(expr: &mut Expr, context: &ConstDefaultContext<'_>) {
             }
             if let Some(default) = default { fold(default, context); }
         }
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner)
         | ExprKind::Spread(inner) | ExprKind::Cast { expr: inner, .. } => fold(inner, context),
         _ => {}
     }

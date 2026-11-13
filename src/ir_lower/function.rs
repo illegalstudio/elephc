@@ -1520,7 +1520,7 @@ fn eval_native_default_helper_literal(expr: &ExprKind) -> bool {
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::StringLiteral(_) => true,
-        ExprKind::Negate(inner) => matches!(
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => matches!(
             &inner.kind,
             ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)
         ),

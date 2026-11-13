@@ -64,26 +64,28 @@ impl Checker {
                 self.record_local_value_read(name, expr.span, &ty, env);
                 Ok(ty)
             }
-            ExprKind::Negate(inner) => {
+            ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => {
+                let negate = matches!(expr.kind, ExprKind::Negate(_));
                 let ty = self.infer_type(inner, env)?;
+                let operation = if negate { crate::parser::ast::BinOp::Sub } else { crate::parser::ast::BinOp::Add };
                 if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(
-                    &crate::parser::ast::BinOp::Sub, &PhpType::Int, &ty, &self.classes,
-                ) {
-                    return Ok(plan.result_type(&crate::parser::ast::BinOp::Sub));
-                }
+                    &operation, &PhpType::Int, &ty, &self.classes,
+                ) { return Ok(plan.result_type(&operation)); }
                 if let Some(rule) = crate::semantics::numeric::operator_rule(self.semantic_profile, self.semantic_source_mode,
                     elephc_semantics::numeric_domains::NumericOperator::Unary) {
                     crate::semantics::numeric::validate_unary_type(rule, &ty, expr.span)?;
                 }
+                if !negate { self.check_arithmetic_string_operand(inner, &ty, expr)?; }
                 match ty {
                     PhpType::Int => {
-                        if matches!(&inner.kind, ExprKind::IntLiteral(_)) {
+                        if !negate || matches!(&inner.kind, ExprKind::IntLiteral(value) if *value != i64::MIN) {
                             Ok(PhpType::Int)
                         } else {
                             Ok(PhpType::Mixed)
                         }
                     }
                     PhpType::Float => Ok(PhpType::Float),
+                    PhpType::Str if !negate => Ok(PhpType::Mixed),
                     PhpType::Mixed | PhpType::Bool | PhpType::False | PhpType::Void => {
                         Ok(PhpType::Mixed)
                     }
@@ -93,7 +95,7 @@ impl Checker {
                     ref ty if ty.is_int_float_union() => Ok(ty.clone()),
                     _ => Err(CompileError::new(
                         expr.span,
-                        "Cannot negate a non-numeric value",
+                        if negate { "Cannot negate a non-numeric value" } else { "Cannot apply unary plus to a non-numeric value" },
                     )),
                 }
             }

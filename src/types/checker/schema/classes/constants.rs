@@ -168,6 +168,9 @@ fn rewrite_expr(
             value: Box::new(rewrite_expr(value, class_name, parent_name)?),
             target: rewrite_instanceof_target(target, class_name, parent_name)?,
         },
+        ExprKind::UnaryPlus(inner) => {
+            ExprKind::UnaryPlus(Box::new(rewrite_expr(inner, class_name, parent_name)?))
+        }
         ExprKind::Negate(inner) => {
             ExprKind::Negate(Box::new(rewrite_expr(inner, class_name, parent_name)?))
         }

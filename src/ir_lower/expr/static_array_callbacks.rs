@@ -769,7 +769,7 @@ fn statically_int_expr(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::IntLiteral(_) => true,
         ExprKind::Variable(name) => ctx.local_type(name).codegen_repr() == PhpType::Int,
-        ExprKind::Negate(inner) | ExprKind::BitNot(inner) => statically_int_expr(ctx, inner),
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => statically_int_expr(ctx, inner),
         ExprKind::Cast { target: CastType::Int, .. } => true,
         ExprKind::BinaryOp { left, op, right } => {
             matches!(

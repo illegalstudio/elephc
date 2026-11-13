@@ -290,6 +290,10 @@ pub(super) fn eval_native_global_constant_abi_value(
     value: &ExprKind,
     ty: &PhpType,
 ) -> Result<(i64, i64, Option<String>)> {
+    if let ExprKind::UnaryPlus(inner) = value {
+        let number = crate::semantics::numeric::literal_unary_plus(inner).ok_or_else(|| CodegenIrError::unsupported("nonliteral unary-plus eval global constant"))?;
+        return eval_native_global_constant_abi_value(&number.kind, ty);
+    }
     match value {
         ExprKind::Null => Ok((NATIVE_GLOBAL_CONSTANT_NULL, 0, None)),
         ExprKind::BoolLiteral(value) => Ok((

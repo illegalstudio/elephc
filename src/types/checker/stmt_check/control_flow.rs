@@ -1136,6 +1136,8 @@ impl Checker {
     pub(in crate::types::checker) fn eval_static_int_expr(&self, expr: &Expr) -> Option<i64> {
         match &expr.kind {
             ExprKind::IntLiteral(value) => Some(*value),
+            ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+                .and_then(|number| self.eval_static_int_expr(&number)),
             ExprKind::Negate(inner) => self.eval_static_int_expr(inner).map(|value| -value),
             ExprKind::BitNot(inner) => self.eval_static_int_expr(inner).map(|value| !value),
             ExprKind::BinaryOp { left, op, right } => {

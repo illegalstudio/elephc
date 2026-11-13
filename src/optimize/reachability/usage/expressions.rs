@@ -170,7 +170,7 @@ impl Scanner<'_> {
                 self.scan_expr(property);
             }
             ExprKind::BinaryOp { left, right, .. } => { self.scan_expr(left); self.scan_expr(right); }
-            ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
+            ExprKind::UnaryPlus(e) | ExprKind::Negate(e) | ExprKind::Not(e) | ExprKind::BitNot(e) | ExprKind::Throw(e)
             | ExprKind::Clone(e) | ExprKind::ErrorSuppress(e) | ExprKind::Print(e)
             | ExprKind::Spread(e) | ExprKind::YieldFrom(e) => self.scan_expr(e),
             // `ptr_cast<T>` may be the only mention of a packed or extern class `T`, and field

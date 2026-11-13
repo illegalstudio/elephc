@@ -943,7 +943,7 @@ fn expr_alias(expr: &Expr, state: &AliasState<'_>) -> ReturnArgAlias {
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
         | ExprKind::InstanceOf { .. }
-        | ExprKind::Negate(_)
+        | ExprKind::UnaryPlus(_) | ExprKind::Negate(_)
         | ExprKind::Not(_)
         | ExprKind::BitNot(_)
         | ExprKind::PtrCast { .. }
@@ -1215,7 +1215,7 @@ fn apply_expr_effects(expr: &Expr, state: &mut AliasState<'_>) {
                 apply_expr_effects(target, state);
             }
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

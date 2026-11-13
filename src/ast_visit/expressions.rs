@@ -54,7 +54,7 @@ pub(super) fn walk_expr(expr: &Expr, visitor: &mut impl AstVisitor) {
                 InstanceOfTarget::Expr(target_expr) => walk_expr(target_expr, visitor),
             }
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

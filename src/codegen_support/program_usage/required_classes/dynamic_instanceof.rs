@@ -153,7 +153,7 @@ fn expr_has_dynamic_instanceof(expr: &Expr) -> bool {
         ExprKind::BinaryOp { left, right, .. } => {
             expr_has_dynamic_instanceof(left) || expr_has_dynamic_instanceof(right)
         }
-        ExprKind::Negate(expr)
+        ExprKind::UnaryPlus(expr) | ExprKind::Negate(expr)
         | ExprKind::Not(expr)
         | ExprKind::BitNot(expr)
         | ExprKind::Throw(expr)

@@ -44,7 +44,7 @@ where
     match &expr.kind {
         ExprKind::IntLiteral(_) => true,
         ExprKind::Variable(name) => facts.is_int_local(name),
-        ExprKind::Negate(inner) | ExprKind::BitNot(inner) | ExprKind::ErrorSuppress(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) | ExprKind::ErrorSuppress(inner) => {
             expr_is_eir_int_value_safe(inner, support, facts, scope_reads)
         }
         ExprKind::Print(inner) => expr_is_eir_function_safe(inner, support, facts, scope_reads),
@@ -100,7 +100,7 @@ where
     match &expr.kind {
         ExprKind::FloatLiteral(_) => true,
         ExprKind::Variable(name) => facts.is_float_local(name),
-        ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::ErrorSuppress(inner) => {
             expr_is_eir_float_value_safe(inner, support, facts, scope_reads)
         }
         ExprKind::Cast { target, expr } if matches!(target, CastType::Float) => {

@@ -1153,7 +1153,7 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 }
             }
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

@@ -69,7 +69,7 @@ impl AstVisitor for SourceValidator {
         }
         if self.source_modes.last() != Some(&crate::source::SourceMode::Internal) {
             let unary = match &expr.kind {
-                ExprKind::Negate(inner) => Some((inner, elephc_semantics::numeric_domains::NumericOperator::Unary)),
+                ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => Some((inner, elephc_semantics::numeric_domains::NumericOperator::Unary)),
                 ExprKind::BitNot(inner) => Some((inner, elephc_semantics::numeric_domains::NumericOperator::BitNot)),
                 _ => None,
             };
@@ -140,7 +140,7 @@ fn literal_type(expr: &Expr) -> Option<crate::types::PhpType> {
         ExprKind::BoolLiteral(_) => PhpType::Bool, ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::Null => PhpType::Void,
         ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => PhpType::Array(Box::new(PhpType::Never)),
-        ExprKind::Negate(inner) => match literal_type(inner)? { value @ (PhpType::Int | PhpType::Float) => value, _ => return None },
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) => match literal_type(inner)? { value @ (PhpType::Int | PhpType::Float) => value, _ => return None },
         ExprKind::Cast { target, .. } => match target {
             CastType::Int => PhpType::Int, CastType::Float => PhpType::Float,
             CastType::Bool => PhpType::Bool, CastType::String => PhpType::Str,
@@ -161,7 +161,7 @@ impl SourceValidator {
             ExprKind::BinaryOp { op, .. } => matches!(op,
                 BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow
                 | BinOp::Concat | BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::ShiftLeft | BinOp::ShiftRight | BinOp::Spaceship),
-            ExprKind::Negate(_) | ExprKind::BitNot(_) => true,
+            ExprKind::UnaryPlus(_) | ExprKind::Negate(_) | ExprKind::BitNot(_) => true,
             _ => false,
         };
         if nonboolean && self.error.is_none() {

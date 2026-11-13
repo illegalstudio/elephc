@@ -202,6 +202,11 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
             };
             match class { Some(class) => constant(&ConstantKey::Class(class, name.clone()), definitions, evidence)?, None => None }
         }
+        ExprKind::UnaryPlus(inner) => match unary_operand(expr, inner, checked, class, definitions, evidence,
+            elephc_semantics::numeric_domains::NumericOperator::Unary)?.map(Number::numeric) {
+            value @ Some(Number::Int(_) | Number::Float(_)) => value,
+            _ => None,
+        },
         ExprKind::Negate(inner) => match unary_operand(expr, inner, checked, class, definitions, evidence,
             elephc_semantics::numeric_domains::NumericOperator::Unary)?.map(Number::numeric) {
             Some(Number::Int(value)) => match value.checked_neg() {

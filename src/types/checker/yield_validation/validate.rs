@@ -280,7 +280,7 @@ fn visit_expr(expr: &Expr, st: &mut State) {
             visit_expr(right, st);
         }
         ExprKind::InstanceOf { value, .. } => visit_expr(value, st),
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

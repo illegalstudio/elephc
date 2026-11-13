@@ -135,7 +135,7 @@ fn bind_constants(
             if let Some(default) = default { visit(default); }
         }
         ExprKind::ArrayAccess { array, index } => { visit(array); visit(index); }
-        ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::NamedArg { value, .. } | ExprKind::Spread(value) | ExprKind::Cast { expr: value, .. } => visit(value),
         _ => {}
     }

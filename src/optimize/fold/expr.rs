@@ -12,7 +12,7 @@ use super::super::*;
 use super::super::{fold_block, try_prune_match_expr};
 use super::casts::try_fold_cast;
 use super::ops::{
-    try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate, try_fold_not,
+    try_fold_array_access, try_fold_binary_op, try_fold_bit_not, try_fold_negate, try_fold_not, try_fold_unary_plus,
     try_fold_null_coalesce, try_fold_short_ternary, try_fold_ternary,
 };
 
@@ -131,6 +131,10 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
+        ExprKind::UnaryPlus(inner) => {
+            let inner = fold_expr(*inner);
+            try_fold_unary_plus(&inner).unwrap_or_else(|| ExprKind::UnaryPlus(Box::new(inner)))
+        }
         ExprKind::Negate(inner) => {
             let inner = fold_expr(*inner);
             try_fold_negate(&inner).unwrap_or_else(|| ExprKind::Negate(Box::new(inner)))

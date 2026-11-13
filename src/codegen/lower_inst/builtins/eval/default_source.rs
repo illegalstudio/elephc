@@ -120,6 +120,7 @@ fn expression(expr: &Expr, context: &EvalNativeDefaultContext<'_>) -> Option<Str
             receiver_name(receiver, context)?, arguments(args, context)?),
         ExprKind::NamedArg { name, value } => format!("{name}: {}", expression(value, context)?),
         ExprKind::Spread(value) => format!("...{}", expression(value, context)?),
+        ExprKind::UnaryPlus(value) => format!("(+{})", expression(value, context)?),
         ExprKind::Negate(value) => format!("(-{})", expression(value, context)?),
         ExprKind::Not(value) => format!("(!{})", expression(value, context)?),
         ExprKind::BitNot(value) => format!("(~{})", expression(value, context)?),

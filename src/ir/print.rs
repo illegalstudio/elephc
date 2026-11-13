@@ -224,7 +224,8 @@ fn print_immediate(out: &mut String, data: &DataPool, immediate: &Immediate) {
         }
         Immediate::RuntimeCall(target) => {
             let _ = write!(out, " runtime.{}", target.as_eir());
-            if let crate::ir::RuntimeCallTarget::NumericFunction { policy, .. } = target {
+            if let crate::ir::RuntimeCallTarget::NumericFunction { policy, .. }
+                | crate::ir::RuntimeCallTarget::NumericUnary { policy, .. } = target {
                 let _ = write!(out, " numeric-policy={:016x}", policy.requirements().bits());
             }
             if let crate::ir::RuntimeCallTarget::ReferencePropertyCoerce { class_id, slot, is_static } = target {

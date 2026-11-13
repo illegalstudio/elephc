@@ -280,6 +280,14 @@ fn resolve_constant_expression_const_default(
         ExprKind::BinaryOp { left, op, right } => {
             resolve_binary_expression_default(left, op, right, context, depth + 1)
         }
+        ExprKind::UnaryPlus(inner) => {
+            let value = resolve_const_default_at(inner, context, depth + 1)?;
+            let mut reads = Vec::new();
+            collect_enum_reads(&value, &mut reads);
+            let kind = resolved_scalar_literal(without_enum_effects(value))?;
+            let number = crate::semantics::numeric::literal_unary_plus(&Expr::new(kind, inner.span))?;
+            Some(with_enum_reads(resolve_literal_const_default(&number)?, reads))
+        }
         ExprKind::Not(inner) => {
             let value = resolve_const_default_at(inner, context, depth + 1)?;
             let mut reads = Vec::new();
@@ -536,6 +544,8 @@ pub(in crate::codegen) fn resolve_literal_const_default(expr: &Expr) -> Option<C
                 payload: 0,
             })
         }
+        ExprKind::UnaryPlus(inner) => crate::semantics::numeric::literal_unary_plus(inner)
+            .and_then(|number| resolve_literal_const_default(&number)),
         ExprKind::Negate(inner) => resolve_negated_literal_default(inner),
         _ => None,
     }

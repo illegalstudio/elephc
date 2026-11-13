@@ -17,6 +17,14 @@ use super::scalar::{
     strict_eq, ScalarValue,
 };
 
+/// Folds exact numeric identity while retaining any source conversion, warning or domain guard.
+pub(super) fn try_fold_unary_plus(expr: &Expr) -> Option<ExprKind> {
+    if crate::semantics::numeric::operator_rule(super::super::semantic_context::active_profile(),
+        super::super::semantic_context::active_source_mode(), elephc_semantics::numeric_domains::NumericOperator::Unary).is_some()
+        && !matches!(expr.kind, ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_)) { return None; }
+    crate::semantics::numeric::literal_unary_plus(expr).map(|value| value.kind)
+}
+
 /// Returns the negated literal if the expression is an int or float literal.
 ///
 /// `-PHP_INT_MIN` is not representable as an `i64`; PHP promotes it to the float

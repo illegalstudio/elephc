@@ -421,7 +421,7 @@ fn collect_expr(
             collect_expr(right, carried, ctx, found);
         }
         ExprKind::InstanceOf { value, .. }
-        | ExprKind::Negate(value)
+        | ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)

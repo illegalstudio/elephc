@@ -256,7 +256,7 @@ impl Checker {
     }
 
     /// Classifies one arithmetic string-literal operand (see `check_arithmetic_string_operands`).
-    fn check_arithmetic_string_operand(
+    pub(super) fn check_arithmetic_string_operand(
         &mut self,
         operand: &Expr,
         ty: &PhpType,

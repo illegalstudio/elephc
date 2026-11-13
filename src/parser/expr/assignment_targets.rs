@@ -702,7 +702,7 @@ fn collect_assignment_target_dependencies(expr: &Expr, dependencies: &mut HashSe
             collect_assignment_target_dependencies(value, dependencies);
             collect_instanceof_target_dependencies(target, dependencies);
         }
-        ExprKind::Negate(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -846,7 +846,7 @@ fn expr_may_write_dependency(expr: &Expr, dependencies: &HashSet<String>) -> boo
             expr_may_write_dependency(value, dependencies)
                 || instanceof_target_may_write_dependency(target, dependencies)
         }
-        ExprKind::Negate(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)
@@ -1067,7 +1067,7 @@ fn expr_contains_equivalent(expr: &Expr, needle: &Expr) -> bool {
             expr_contains_equivalent(value, needle)
                 || instanceof_target_contains_equivalent(target, needle)
         }
-        ExprKind::Negate(value)
+        ExprKind::UnaryPlus(value) | ExprKind::Negate(value)
         | ExprKind::Not(value)
         | ExprKind::BitNot(value)
         | ExprKind::Throw(value)

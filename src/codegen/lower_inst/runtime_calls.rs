@@ -121,6 +121,11 @@ pub(super) fn lower(
         | RuntimeCallTarget::CallArgumentCollectPositionals
         | RuntimeCallTarget::CallArgumentCollectNamed => super::call_argument_unpack::lower(ctx, inst, target),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
+        RuntimeCallTarget::NumericUnary { operator, policy } => {
+            ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+            abi::emit_call_label(ctx.emitter, crate::codegen_support::runtime::numeric_unary_symbol(operator, policy.checked_overflow()));
+            store_if_result(ctx, inst)
+        }
         RuntimeCallTarget::StringOffsetSet => lower_string_offset_set(ctx, inst),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)

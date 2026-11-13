@@ -297,9 +297,10 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         | ExprKind::Null
         | ExprKind::ConstRef(_)
         | ExprKind::This => Effect::PURE,
-        ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::BitNot(inner) => {
             let effect = expr_effect(inner);
-            if super::semantic_context::numeric_domain_may_throw(expr) {
+            if super::semantic_context::numeric_domain_may_throw(expr)
+                || super::semantic_context::unary_numeric_conversion_may_dispatch(expr) {
                 effect.with_side_effects().with_may_throw().with_writes_globals()
             } else if super::semantic_context::integer_overflow_may_throw(expr)
                 || (internal_object_operators_available() && !literal_scalar_operand(inner)) {

@@ -1138,6 +1138,7 @@ Builtin calls use the checker's result recorded for their call span.
 | `FunctionVariantCall(group, args)` (reserved) | normalized args | return type | retained in the IR vocabulary and analyses; current lowering uses `Call` to the public include-variant dispatcher, and codegen has no lowering arm for this op |
 | `LanguageConstructCall(name, args)` | normalized args | construct-specific return | compiler-resident construct effect summary |
 | `RuntimeCall(target, args)` | normalized typed operands | target-declared return | descriptor/typed-target effect summary |
+| `RuntimeCall(NumericUnary { operator, policy }, value)` | one `Heap(Mixed)` numeric operand | independently owned `Heap(Mixed)` | conservative conversion, warning and exception effects; explicit numeric policy is validated against module capabilities |
 | `ExternCall(name, args)` | C ABI args | extern return | conservative FFI effects |
 | `ClosureNew` | captures | `I64` callable descriptor | `alloc_heap`, `refcount_op` |
 | `ClosureCall` | descriptor/local callable, args | return type | target effect summary or conservative |

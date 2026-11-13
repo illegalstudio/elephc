@@ -478,7 +478,7 @@ fn collect_refs_expr(expr: &Expr, out: &mut HashSet<String>) {
             collect_refs_expr(left, out);
             collect_refs_expr(right, out);
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

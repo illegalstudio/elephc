@@ -408,7 +408,7 @@ fn expr_refs_image(expr: &Expr) -> bool {
         ExprKind::InstanceOf { value, target } => {
             expr_refs_image(value) || instanceof_target_refs_image(target)
         }
-        ExprKind::Negate(inner)
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

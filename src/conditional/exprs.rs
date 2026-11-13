@@ -34,6 +34,7 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
             op,
             right: Box::new(rewrite_expr(*right, defines)),
         },
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(rewrite_expr(*inner, defines))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(rewrite_expr(*inner, defines))),

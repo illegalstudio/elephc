@@ -39,6 +39,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         },
         ExprKind::BoolLiteral(value) => ExprKind::BoolLiteral(value),
         ExprKind::Null => ExprKind::Null,
+        ExprKind::UnaryPlus(inner) => ExprKind::UnaryPlus(Box::new(prune_expr(*inner))),
         ExprKind::Negate(inner) => ExprKind::Negate(Box::new(prune_expr(*inner))),
         ExprKind::Not(inner) => ExprKind::Not(Box::new(prune_expr(*inner))),
         ExprKind::BitNot(inner) => ExprKind::BitNot(Box::new(prune_expr(*inner))),

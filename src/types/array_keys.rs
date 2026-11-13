@@ -26,6 +26,11 @@ pub(crate) fn literal_array_key(
         ExprKind::BoolLiteral(value) if !exact => Some(StringKey::Integer(i64::from(*value))),
         ExprKind::FloatLiteral(value) if !exact => Some(StringKey::Integer(super::php_float_array_key(*value))),
         ExprKind::Null if !exact => Some(StringKey::String(b"")),
+        ExprKind::UnaryPlus(inner) => match crate::semantics::numeric::literal_unary_plus(inner)?.kind {
+            ExprKind::IntLiteral(value) => Some(StringKey::Integer(value)),
+            ExprKind::FloatLiteral(value) if !exact => Some(StringKey::Integer(super::php_float_array_key(value))),
+            _ => None,
+        },
         ExprKind::Negate(inner) => match &inner.kind {
             ExprKind::IntLiteral(value) => value.checked_neg().map(StringKey::Integer),
             ExprKind::FloatLiteral(value) if !exact => Some(StringKey::Integer(super::php_float_array_key(-*value))),

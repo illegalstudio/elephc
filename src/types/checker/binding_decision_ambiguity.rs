@@ -462,7 +462,7 @@ fn count_expr(expr: &Expr, tally: &mut Tally) {
         }
         ExprKind::YieldFrom(inner)
         | ExprKind::Clone(inner)
-        | ExprKind::Negate(inner)
+        | ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner)
         | ExprKind::Not(inner)
         | ExprKind::BitNot(inner)
         | ExprKind::Throw(inner)

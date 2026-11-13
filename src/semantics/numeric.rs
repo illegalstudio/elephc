@@ -82,3 +82,25 @@ pub(crate) fn validate_unary_type(rule: NumericDomainRule, value: &PhpType, span
     if kind == ValueKind::Dynamic || rule.domain.allows(kind) { return Ok(()); }
     Err(crate::errors::CompileError::new(span, &rule.message()))
 }
+
+/// Resolves only warning-free literal unary-plus values after source-domain validation.
+/// Callers retain validation of the original kind; this helper does not authorize coercion.
+pub(crate) fn literal_unary_plus(inner: &crate::parser::ast::Expr) -> Option<crate::parser::ast::Expr> {
+    use crate::parser::ast::{Expr, ExprKind};
+    let kind = match &inner.kind {
+        ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => inner.kind.clone(),
+        ExprKind::BoolLiteral(value) => ExprKind::IntLiteral(i64::from(*value)),
+        ExprKind::Null => ExprKind::IntLiteral(0),
+        ExprKind::UnaryPlus(value) => return literal_unary_plus(value),
+        ExprKind::StringLiteral(value) => {
+            let scan = elephc_semantics::numeric_string::scan_numeric_prefix(value)?;
+            if !scan.is_fully_numeric() { return None; }
+            if !scan.is_float {
+                if let Ok(value) = scan.text.parse::<i64>() { return Some(Expr::new(ExprKind::IntLiteral(value), inner.span)); }
+            }
+            ExprKind::FloatLiteral(scan.text.parse().ok()?)
+        }
+        _ => return None,
+    };
+    Some(Expr::new(kind, inner.span))
+}

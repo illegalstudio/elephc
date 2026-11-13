@@ -298,7 +298,7 @@ pub(super) fn static_array_value_is_fold_safe(expr: &Expr) -> bool {
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null => true,
-        ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner) => {
+        ExprKind::UnaryPlus(inner) | ExprKind::Negate(inner) | ExprKind::Not(inner) | ExprKind::BitNot(inner) => {
             static_array_value_is_fold_safe(inner)
         }
         ExprKind::ArrayLiteral(items) => items.iter().all(static_array_value_is_fold_safe),

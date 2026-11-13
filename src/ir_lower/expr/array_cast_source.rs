@@ -61,6 +61,10 @@ pub(super) fn array_cast_source_type_for_ir(
         ExprKind::ErrorSuppress(inner) => array_cast_source_type_for_ir(ctx, inner),
         ExprKind::Clone(inner) => clone_source_type(ctx, inner),
         ExprKind::Assignment { value, .. } => array_cast_source_type_for_ir(ctx, value),
+        ExprKind::UnaryPlus(inner) => match array_cast_source_type_for_ir(ctx, inner) {
+            ty @ (PhpType::Int | PhpType::Float) => ty,
+            _ => PhpType::Mixed,
+        },
         ExprKind::Negate(inner) => negate_source_type(ctx, inner),
         ExprKind::Not(_) => PhpType::Bool,
         ExprKind::BitNot(inner) => bitnot_source_type(ctx, inner),

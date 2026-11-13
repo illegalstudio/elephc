@@ -29,7 +29,7 @@ impl ExceptionFlowAnalysis {
             | ExprKind::ArrayLiteralAssoc(_)
             | ExprKind::BinaryOp { .. }
             | ExprKind::InstanceOf { .. }
-            | ExprKind::Negate(_)
+            | ExprKind::UnaryPlus(_) | ExprKind::Negate(_)
             | ExprKind::Not(_)
             | ExprKind::BitNot(_)
             | ExprKind::Print(_)
