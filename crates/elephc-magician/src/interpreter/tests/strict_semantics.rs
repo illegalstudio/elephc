@@ -389,3 +389,31 @@ fn strict_eval_division_staged_walker_vm_values_and_errors() {
         }
     }
 }
+
+
+/// Invalid right operands cannot suppress an earlier warning in either eval engine.
+#[test]
+fn strict_numeric_diagnostics_staged_walker_vm_preserves_operand_order() {
+    for operator in ["+", "-", "*", "**", "/"] {
+        for reverse in [false, true] {
+            for vm in [false, true] {
+                let (left, right) = if reverse { ("bad", "5x") } else { ("5x", "bad") };
+                let source = format!("return '{left}' {operator} '{right}';");
+                let mut context = ElephcEvalContext::new();
+                context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)).unwrap();
+                let mut scope = ElephcEvalScope::new();
+                let mut values = FakeOps::default();
+                assert!(matches!(staged_numeric_execution(&source, vm, &mut context, &mut scope, &mut values),
+                    Err(EvalStatus::UncaughtThrowable)), "{source}, vm={vm}");
+                assert_eq!(values.warnings.len(), usize::from(!reverse), "{source}, vm={vm}");
+                let error = context.take_pending_throw().expect("kind failure owner");
+                assert!(values.object_is_a(error, "TypeError", false).unwrap(), "{source}");
+                values.release(error).unwrap();
+                for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+                for (id, owners) in &values.cell_owners {
+                    assert_eq!(*owners, 0, "{source}, vm={vm}: {:?}", values.values[id]);
+                }
+            }
+        }
+    }
+}

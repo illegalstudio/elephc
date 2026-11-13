@@ -983,3 +983,26 @@ prefix handler, signed zero, invalid operand kinds and untouched output sentinel
 on failure, with both optimizer settings and clean heaps. Existing arithmetic
 snapshot, power and callback-boundary units and a native arithmetic control pass.
 The public integration mask remains unchanged.
+
+
+### Ordered numeric diagnostic dispatch
+
+Numeric snapshot classification now returns invalid status as data. A shared
+ordered dispatcher emits each operand's prefix warning or kind failure only
+after both numeric values have been captured. This preserves PHP's observable
+warning-before-error behavior without allowing callbacks to change the operands.
+The fake runtime follows the same split, and the capture-only helper can support
+modulo's per-operand prefix and precision diagnostics.
+
+A new walker/VM matrix, all-five-target classification unit and native callback
+fixture pass across add/subtract/multiply/power/division. Reversed operands fail
+without the later warning; throwing first handlers retain priority. Native tests
+pass with both optimizer settings and clean heaps. Existing arithmetic, power
+and division controls also pass. Emitter assertions now identify actual calls
+rather than counting matching failure-symbol declarations or branches.
+
+Remaining numeric audit includes protected modulo (MIN modulo -1, zero, distinct
+float-value and float-string conversions), arithmetic/coercion/cast domains,
+stable bindings and the remaining public activation checks. Reference-PHP
+conversion and diagnostic-order discoveries are recorded in journal entries
+72b2ec1c and 43dc4a07. The public integration mask is unchanged.

@@ -56,7 +56,9 @@ impl FakeOps {
         if matches!(op, CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct) {
             return self.runtime_checked_aggregate(op, left);
         }
-        let Some((left, left_warning)) = self.checked_number(left) else {
+        let left_number = self.checked_number(left);
+        let right_number = self.checked_number(right);
+        let Some((left, left_warning)) = left_number else {
             return self.checked_error("TypeError", "Unsupported operand types");
         };
         if op == CheckedNumericOp::Abs {
@@ -69,12 +71,11 @@ impl FakeOps {
                 Number::Float(value) => self.float(value.abs()),
             };
         }
-        let Some((right, right_warning)) = self.checked_number(right) else {
+        if left_warning { self.warning("Warning: A non-numeric value encountered\n")?; }
+        let Some((right, right_warning)) = right_number else {
             return self.checked_error("TypeError", "Unsupported operand types");
         };
-        for warn in [left_warning, right_warning] {
-            if warn { self.warning("Warning: A non-numeric value encountered\n")?; }
-        }
+        if right_warning { self.warning("Warning: A non-numeric value encountered\n")?; }
         if op == CheckedNumericOp::Div {
             if right.float() == 0.0 { return self.checked_error("DivisionByZeroError", "Division by zero"); }
             return self.float(left.float() / right.float());

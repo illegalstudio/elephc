@@ -70,9 +70,9 @@ fn emit_entry(emitter: &mut Emitter, op: MixedNumericOp) {
     abi::emit_return(emitter);
 }
 
-/// Captures borrowed inputs and both exact numeric payloads before any PHP warning callback.
+/// Captures borrowed inputs and exact numeric payloads without warning or kind-error callbacks.
 /// The caller reserves FRAME bytes; captured payload/tag pairs occupy 16/24 and 32/40.
-pub(super) fn capture_operands(emitter: &mut Emitter, prefix: &str) {
+pub(super) fn capture_values(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let (low, high) = match emitter.target.arch { Arch::AArch64 => ("x1", "x2"), Arch::X86_64 => ("rdi", "rdx") };
     abi::emit_store_to_sp(emitter, result, 0);
@@ -84,16 +84,27 @@ pub(super) fn capture_operands(emitter: &mut Emitter, prefix: &str) {
         abi::emit_store_to_sp(emitter, result, tag);
         abi::emit_store_to_sp(emitter, high, status);
     }
-    for status in [48, 56] {
-        let next = format!("{prefix}_warning_{status}_done");
-        abi::emit_load_temporary_stack_slot(emitter, result, status);
-        abi::emit_branch_if_int_result_zero(emitter, &next);
-        let (pointer, length) = if emitter.target.arch == Arch::AArch64 { ("x1", "x2") } else { ("rdi", "rsi") };
-        abi::emit_symbol_address(emitter, pointer, super::strict_numeric_operand::PREFIX_LABEL);
-        abi::emit_load_int_immediate(emitter, length, super::strict_numeric_operand::PREFIX_WARNING.len() as i64);
-        abi::emit_call_label(emitter, "__rt_diag_warning");
-        emitter.label(&next);
-    }
+}
+
+/// Delivers each original operand's warning or kind failure after both values were captured.
+pub(super) fn capture_operands(emitter: &mut Emitter, prefix: &str) {
+    capture_values(emitter);
+    for status in [48, 56] { dispatch_operand_status(emitter, prefix, status); }
+}
+
+/// Preserves left-to-right diagnostics, including a warning followed by the other operand's error.
+pub(super) fn dispatch_operand_status(emitter: &mut Emitter, prefix: &str, status: usize) {
+    let result = abi::int_result_reg(emitter);
+    let next = format!("{prefix}_warning_{status}_done");
+    abi::emit_load_temporary_stack_slot(emitter, result, status);
+    ins(emitter, "cmp x0, #2", "cmp rax, 2");
+    abi::emit_branch_if_equal_wide(emitter, super::strict_numeric_operand::TYPE_FAIL);
+    abi::emit_branch_if_int_result_zero(emitter, &next);
+    let (pointer, length) = if emitter.target.arch == Arch::AArch64 { ("x1", "x2") } else { ("rdi", "rsi") };
+    abi::emit_symbol_address(emitter, pointer, super::strict_numeric_operand::PREFIX_LABEL);
+    abi::emit_load_int_immediate(emitter, length, super::strict_numeric_operand::PREFIX_WARNING.len() as i64);
+    abi::emit_call_label(emitter, "__rt_diag_warning");
+    emitter.label(&next);
 }
 
 /// Computes exact integer payloads and throws before boxing when signed arithmetic overflows.
@@ -172,7 +183,7 @@ mod tests {
                 if !checked { continue; }
                 let entry = asm.split("__rt_strict_mixed_numeric_pow:\n").nth(1).unwrap()
                     .split("__rt_strict_mixed_numeric_pow_done:\n").next().unwrap();
-                let normalized = entry.match_indices("__rt_strict_numeric_operand").map(|(index, _)| index).collect::<Vec<_>>();
+                let normalized = entry.match_indices(" __rt_strict_numeric_operand\n").map(|(index, _)| index).collect::<Vec<_>>();
                 assert_eq!(normalized.len(), 2, "{name}");
                 assert!(normalized[1] < entry.find("__rt_diag_warning").unwrap(), "{name}");
                 for helper in ["__rt_str_numeric_value", "__rt_int_pow_or_throw", "_spl_type_error_class_id"] {
@@ -199,7 +210,7 @@ mod tests {
                     if !checked { continue; }
                     let entry = asm.split(&format!("{prefix}:\n")).nth(1).unwrap()
                         .split(&format!("{prefix}_done:\n")).next().unwrap();
-                    let inputs = entry.match_indices("__rt_strict_numeric_operand").map(|(index, _)| index).collect::<Vec<_>>();
+                    let inputs = entry.match_indices(" __rt_strict_numeric_operand\n").map(|(index, _)| index).collect::<Vec<_>>();
                     assert_eq!(inputs.len(), 2, "{name}, {op}");
                     assert!(inputs[1] < entry.find("__rt_diag_warning").unwrap(), "{name}, {op}");
                     assert!(entry.contains("__rt_mixed_from_value"), "{name}, {op}");

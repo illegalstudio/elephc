@@ -5,7 +5,7 @@
 //! - Checked boxed arithmetic before computation and warning dispatch.
 //!
 //! Key details:
-//! - Returns canonical numeric tag, payload and string-prefix status without boxing.
+//! - Returns canonical numeric tag, payload and prefix/invalid status without boxing.
 //! - Complete numeric strings and arithmetic prefixes share the existing bounded parser.
 //! - The caller snapshots both results before a warning callback can mutate source storage.
 
@@ -25,7 +25,7 @@ pub(in crate::codegen_support::runtime) fn data(profile: SemanticProfile) -> Str
         super::strict_numeric_div::data())
 }
 
-/// Borrows one Mixed cell and returns tag, exact numeric payload and prefix status.
+/// Borrows one cell and returns numeric tag/payload plus status zero, prefix one or invalid two.
 pub(super) fn emit(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
     let (low, high) = match emitter.target.arch { Arch::AArch64 => ("x1", "x2"), Arch::X86_64 => ("rdi", "rdx") };
@@ -35,6 +35,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     let null = format!("{prefix}_null");
     let string = format!("{prefix}_string");
     let done = format!("{prefix}_done");
+    let invalid = format!("{prefix}_invalid");
     emitter.label_global(prefix);
     abi::emit_frame_prologue(emitter, 16);
     abi::emit_call_label(emitter, "__rt_mixed_unbox");
@@ -42,7 +43,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
         ins(emitter, &format!("cmp x0, #{tag}"), &format!("cmp rax, {tag}"));
         abi::emit_branch_if_equal_wide(emitter, label);
     }
-    abi::emit_jump(emitter, TYPE_FAIL);
+    abi::emit_jump(emitter, &invalid);
     emitter.label(&null);
     abi::emit_load_int_immediate(emitter, low, 0);
     emitter.label(&boolean);
@@ -55,7 +56,11 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), high);
     abi::emit_call_label(emitter, "__rt_str_numeric_value");
     ins(emitter, "cmp x2, #2", "cmp rdx, 2");
-    abi::emit_branch_if_equal_wide(emitter, TYPE_FAIL);
+    abi::emit_branch_if_not_equal_wide(emitter, &done);
+    emitter.label(&invalid);
+    abi::emit_load_int_immediate(emitter, result, 0);
+    abi::emit_load_int_immediate(emitter, low, 0);
+    abi::emit_load_int_immediate(emitter, high, 2);
     emitter.label(&done);
     abi::emit_frame_restore(emitter, 16);
     abi::emit_return(emitter);
@@ -74,4 +79,25 @@ pub(super) fn emit(emitter: &mut Emitter) {
 /// Emits equivalent instructions without duplicating the numeric classification graph.
 fn ins(emitter: &mut Emitter, arm: &str, x86: &str) {
     emitter.instruction(if emitter.target.arch == Arch::AArch64 { arm } else { x86 }); // preserve exact numeric kinds on every target
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Snapshot classification returns invalid status as data without dispatching an early failure.
+    #[test]
+    fn strict_numeric_diagnostics_runtime_classification_defers_kind_failures() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut emitter = Emitter::new(Target::parse(name).unwrap());
+            emit(&mut emitter);
+            let asm = emitter.output();
+            let classifier = asm.split(&format!(".globl {TYPE_FAIL}\n")).next().unwrap();
+            assert!(!classifier.lines().any(|line| !line.trim_start().starts_with('.')
+                && line.contains(TYPE_FAIL)), "{name}");
+            assert!(!classifier.contains("__rt_diag_warning"), "{name}");
+            assert!(classifier.contains("__rt_strict_numeric_operand_invalid:"), "{name}");
+        }
+    }
 }

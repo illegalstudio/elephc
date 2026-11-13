@@ -76,7 +76,7 @@ mod tests {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit(&mut emitter);
             let asm = emitter.output();
-            let inputs = asm.match_indices("__rt_strict_numeric_operand").map(|(index, _)| index).collect::<Vec<_>>();
+            let inputs = asm.match_indices(" __rt_strict_numeric_operand\n").map(|(index, _)| index).collect::<Vec<_>>();
             assert_eq!(inputs.len(), 2, "{name}");
             assert!(inputs[1] < asm.find("__rt_diag_warning").unwrap(), "{name}");
             assert!(asm.contains("_spl_division_by_zero_error_class_id"), "{name}");

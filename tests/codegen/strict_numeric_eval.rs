@@ -238,3 +238,40 @@ strictInvalidUpdate([1]);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+
+/// Left prefix diagnostics precede a right kind failure, while an invalid left operand stops first.
+#[test]
+fn test_strict_numeric_diagnostics_native_ordered_kind_failures_and_owners() {
+    let source = r#"<?php
+extern function malloc(int $size): ptr;
+extern function free(ptr $memory): void;
+extern function __elephc_eval_value_string(string $value, int $length): ptr;
+extern function __elephc_eval_checked_numeric_v1(int $op, ptr $left, ptr $right, ptr $output): int;
+extern function __elephc_eval_value_take_pending_throwable_v2(): ptr;
+extern function __elephc_eval_value_release_v3(ptr $cell, ptr $error): int;
+$output = malloc(8); $error = malloc(8); ptr_set($error, 0);
+$prefix = __elephc_eval_value_string('5x', 2); $bad = __elephc_eval_value_string('bad', 3);
+set_error_handler(function (int $severity, string $message): bool { echo 'W'; return true; });
+foreach ([0, 1, 2, 3, 9] as $op) {
+    ptr_set($output, 123); echo __elephc_eval_checked_numeric_v1($op, $prefix, $bad, $output), ':', ptr_get($output), ':';
+    $thrown = __elephc_eval_value_take_pending_throwable_v2(); echo __elephc_eval_value_release_v3($thrown, $error), '|';
+    ptr_set($output, 123); echo __elephc_eval_checked_numeric_v1($op, $bad, $prefix, $output), ':', ptr_get($output), ':';
+    $thrown = __elephc_eval_value_take_pending_throwable_v2(); echo __elephc_eval_value_release_v3($thrown, $error), ';';
+}
+restore_error_handler();
+set_error_handler(function (int $severity, string $message): bool { echo 'X'; throw new RuntimeException('first diagnostic'); });
+ptr_set($output, 123); echo __elephc_eval_checked_numeric_v1(0, $prefix, $bad, $output), ':', ptr_get($output), ':';
+$thrown = __elephc_eval_value_take_pending_throwable_v2(); echo __elephc_eval_value_release_v3($thrown, $error);
+restore_error_handler();
+__elephc_eval_value_release_v3($prefix, $error); __elephc_eval_value_release_v3($bad, $error);
+free($output); free($error);
+"#;
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true), optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, format!("{}X2:123:0", "W2:123:0|2:123:0;".repeat(5)), "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
