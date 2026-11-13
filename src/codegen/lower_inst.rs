@@ -24,7 +24,7 @@ use crate::names::{
     function_symbol, ir_global_symbol, method_symbol, php_symbol_key,
     static_method_symbol,
 };
-use crate::types::{callable_wrapper_sig, first_class_callable_builtin_sig, FunctionSig, PhpType};
+use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 
 use super::context::FunctionContext;
 use super::function_variants;

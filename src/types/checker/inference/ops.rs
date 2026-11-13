@@ -1195,7 +1195,7 @@ impl Checker {
         }
         // Ask the builtin contract at this first-class call site so argument-dependent results
         // such as array_slice preserve their checked storage layout.
-        let result = match self.check_builtin(name.as_str(), args, span, env) {
+        let result = match self.check_builtin_callable(name.as_str(), args, span, env) {
             Ok(Some(result)) => result,
             Ok(None) => return Ok(None),
             // An argument the backend needs as a compile-time literal (a `preserve_keys` flag,

@@ -371,6 +371,7 @@ fn build_runtime_call_wrapper_function(
                 builder: &mut builder,
                 data: &mut module.data,
                 php_only,
+                semantic_profile: module.semantic_profile,
             };
             let result = crate::builtins::semantics::lower_registry_call(
                 &mut lowering,
@@ -480,11 +481,18 @@ struct WrapperBuiltinLoweringContext<'a, 'f> {
     builder: &'a mut Builder<'f>,
     data: &'a mut crate::ir::DataPool,
     php_only: bool,
+    semantic_profile: elephc_semantics::SemanticProfile,
 }
 
 impl crate::builtins::semantics::BuiltinLoweringContext
     for WrapperBuiltinLoweringContext<'_, '_>
 {
+    /// Uses the containing module's profile rather than a permissive synthetic default.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile { self.semantic_profile }
+
+    /// Synthetic callable bodies implement public builtin contracts despite being generated code.
+    fn source_mode(&self) -> crate::source::SourceMode { crate::source::SourceMode::Php }
+
     /// Returns PHP metadata attached to one synthetic-wrapper operand.
     fn value_php_type(&self, value: ValueId) -> PhpType {
         self.builder.value_php_type(value)

@@ -249,6 +249,12 @@ pub fn names() -> impl Iterator<Item = &'static str> {
 ///
 /// Returns `None` if the builtin is not registered.
 pub fn function_sig(name: &str) -> Option<FunctionSig> {
+    function_sig_with_semantics(name, elephc_semantics::SemanticProfile::PERMISSIVE, crate::source::SourceMode::Php)
+}
+
+/// Resolves a builtin signature without discarding the caller's semantic and source policies.
+pub fn function_sig_with_semantics(name: &str, semantic_profile: elephc_semantics::SemanticProfile,
+    source_mode: crate::source::SourceMode) -> Option<FunctionSig> {
     let def = lookup(name)?;
     // A neutral PHP array declaration does not distinguish indexed arrays from
     // hashes. When checker and EIR share result typing, callable signatures must
@@ -261,6 +267,8 @@ pub fn function_sig(name: &str) -> Option<FunctionSig> {
         ) => {
             let arg_types = def.params.iter().map(|(_, ty)| ty.clone()).collect::<Vec<_>>();
             resolve(&crate::builtins::semantics::BuiltinSemanticInput {
+                semantic_profile,
+                source_mode,
                 name: def.name,
                 args: &[],
                 arg_types: &arg_types,
@@ -321,6 +329,12 @@ fn php_type_may_be_callable(ty: &PhpType) -> bool {
 ///
 /// Returns `None` if the builtin is not registered.
 pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
+    first_class_callable_sig_with_semantics(name, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Derives a public builtin callable signature using its module's immutable guarantees.
+pub fn first_class_callable_sig_with_semantics(name: &str,
+    semantic_profile: elephc_semantics::SemanticProfile) -> Option<FunctionSig> {
     let def = lookup(name)?;
     if matches!(
         def.spec.semantics.callable,
@@ -328,7 +342,7 @@ pub fn first_class_callable_sig(name: &str) -> Option<FunctionSig> {
     ) {
         return None;
     }
-    let sig = function_sig(def.name)?;
+    let sig = function_sig_with_semantics(def.name, semantic_profile, crate::source::SourceMode::Php)?;
     let mut fcc_sig = callable_wrapper_sig(&sig);
     truncate_callable_sig_to_enforced_arity(def, &mut fcc_sig);
     refine_first_class_callable_sig(def, &mut fcc_sig);

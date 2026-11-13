@@ -25,7 +25,7 @@ pub(super) fn zero_arity_call_signature(name: &str, sig: Option<&FunctionSig>) -
     if let Some(sig) = sig {
         return is_zero_arity_signature(sig);
     }
-    builtin_call_signature(name)
+    crate::types::builtin_call_sig(name)
         .as_ref()
         .is_some_and(is_zero_arity_signature)
 }

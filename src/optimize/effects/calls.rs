@@ -22,6 +22,8 @@ pub(in crate::optimize) fn function_call_effect(name: &str, args: &[Expr]) -> Ef
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let arg_types = semantic_optimizer_arg_types(def, args);
             let input = crate::builtins::semantics::BuiltinSemanticInput {
+                semantic_profile: crate::optimize::semantic_context::active_profile(),
+                source_mode: crate::optimize::semantic_context::active_source_mode(),
                 name: def.name,
                 args,
                 arg_types: &arg_types,

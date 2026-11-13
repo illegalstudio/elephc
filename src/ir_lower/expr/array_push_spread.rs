@@ -26,7 +26,7 @@ pub(super) fn lower_array_push_spread(
     if !matches!(ctx.local_type(receiver).codegen_repr(),
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Union(_))
     { return None; }
-    let sig = crate::types::builtin_call_sig(canonical)?;
+    let sig = crate::types::builtin_call_sig_with_semantics(canonical, ctx.semantic_profile, ctx.source_mode)?;
     let plan = crate::types::call_args::plan_call_args(&sig, args, expr.span, false, false).ok()?;
     begin_call_argument_evaluation(ctx);
     let named = ctx.declare_synthetic_php_local(PhpType::Bool);

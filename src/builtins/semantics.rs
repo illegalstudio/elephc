@@ -7,7 +7,7 @@
 //! - `crate::types::checker::builtins` and `crate::ir_lower::expr` while consuming it.
 //!
 //! Key details:
-//! - Semantic hooks only see PHP types, AST arguments, EIR values/opcodes, and source spans.
+//! - Semantic hooks see PHP types, AST arguments, EIR values/opcodes, profiles and source spans.
 //! - Assembly contexts, physical registers, frame layout, ABI details, and raw symbols are absent.
 
 use std::fmt;
@@ -18,6 +18,10 @@ use crate::parser::ast::Expr;
 use crate::span::Span;
 use crate::types::PhpType;
 
+#[cfg(test)]
+#[path = "semantics/profile_tests.rs"]
+mod profile_tests;
+
 pub use crate::builtins::requirements::{
     file_get_contents_requirements, file_put_contents_requirements, fopen_requirements,
     stream_filter_requirements, unlink_requirements, BuiltinRequirement,
@@ -27,6 +31,10 @@ pub use crate::builtins::requirements::{
 /// Inputs shared by backend-neutral validation, result-type, and effect resolvers.
 #[allow(dead_code)]
 pub struct BuiltinSemanticInput<'a> {
+    /// Immutable guarantees selected for this compilation and its runtime.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
+    /// Invocation contract policy, independent of the physical mode of argument expressions.
+    pub source_mode: crate::source::SourceMode,
     /// Canonical lower-case PHP builtin name.
     pub name: &'a str,
     /// Source-order argument expressions after common call normalization.
@@ -303,6 +311,12 @@ impl fmt::Display for BuiltinLoweringError {
 
 /// Minimal EIR construction surface exposed to builtin semantic lowering.
 pub trait BuiltinLoweringContext {
+    /// Returns the immutable semantic identity of the compiled module.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile;
+
+    /// Identifies whether the operation implements a user builtin contract or trusted PHP code.
+    fn source_mode(&self) -> crate::source::SourceMode;
+
     /// Returns the current source path when the lowering owns a user-written call site.
     fn source_path(&self) -> Option<&str> {
         None
@@ -397,6 +411,10 @@ pub trait BuiltinLoweringContext {
 
 /// Normalized builtin call consumed by backend-neutral EIR lowering.
 pub struct NormalizedBuiltinCall<'a> {
+    /// Immutable module guarantees retained through callable dispatch.
+    pub semantic_profile: elephc_semantics::SemanticProfile,
+    /// Contract source policy selected before evaluating this call's arguments.
+    pub source_mode: crate::source::SourceMode,
     /// Canonical lower-case PHP builtin name.
     pub name: &'a str,
     /// EIR operands after shared named/positional/spread planning.
@@ -735,11 +753,24 @@ pub fn lower_registry_call(
     result_type: &PhpType,
     span: Span,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+    let source_mode = ctx.source_mode();
+    lower_registry_call_with_source_mode(ctx, def, operands, result_type, span, source_mode)
+}
+
+/// Applies an explicit invocation contract without changing how argument expressions are lowered.
+pub fn lower_registry_call_with_source_mode(
+    ctx: &mut dyn BuiltinLoweringContext,
+    def: &crate::builtins::registry::BuiltinDef,
+    operands: &[ValueId], result_type: &PhpType, span: Span,
+    source_mode: crate::source::SourceMode,
+) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
     let arg_types = operands
         .iter()
         .map(|operand| ctx.value_php_type(*operand))
         .collect::<Vec<_>>();
     let semantic_input = BuiltinSemanticInput {
+        semantic_profile: ctx.semantic_profile(),
+        source_mode,
         name: def.name,
         args: &[],
         arg_types: &arg_types,
@@ -752,6 +783,8 @@ pub fn lower_registry_call(
         BuiltinResultType::Shared(resolve) => resolve(&semantic_input),
     };
     let normalized = NormalizedBuiltinCall {
+        semantic_profile: semantic_input.semantic_profile,
+        source_mode,
         name: def.name,
         operands,
         result_type: &resolved_result_type,

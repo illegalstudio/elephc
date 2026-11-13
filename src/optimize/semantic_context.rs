@@ -42,6 +42,12 @@ pub(super) fn scoped_source_mode(mode: SourceMode) -> SourceModeGuard {
     SourceModeGuard(SOURCE_MODE.with(|slot| slot.replace(mode)))
 }
 
+/// Projects the already resolved identity into legacy builtin optimizer inputs.
+pub(super) fn active_profile() -> SemanticProfile { PROFILE.with(Cell::get) }
+
+/// Projects the current statement policy without replacing its full module identity.
+pub(super) fn active_source_mode() -> SourceMode { SOURCE_MODE.with(Cell::get) }
+
 /// Tests one policy while keeping the immutable profile owned by the caller.
 pub(super) fn enabled(feature: StrictFeature) -> bool {
     SOURCE_MODE.with(|slot| slot.get() != SourceMode::Internal)

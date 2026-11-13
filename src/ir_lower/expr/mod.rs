@@ -676,7 +676,7 @@ fn static_callable_builtin_result_type(
     } else {
         None
     };
-    resolve_registry_builtin_result_type(ctx, name, &[], operands, span, checked)
+    resolve_registry_builtin_result_type_with_source_mode(ctx, name, &[], operands, span, checked, crate::source::SourceMode::Php)
         .unwrap_or_else(|| call_return_type(ctx, name, operands))
 }
 

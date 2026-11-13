@@ -387,6 +387,8 @@ mod tests {
     #[test]
     fn result_type_families_are_distinct() {
         let empty = BuiltinSemanticInput {
+            semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
+            source_mode: crate::source::SourceMode::Php,
             name: "gmp_add",
             args: &[],
             arg_types: &[],

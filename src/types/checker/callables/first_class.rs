@@ -54,7 +54,7 @@ impl Checker {
                     {
                         return Err(CompileError::new(span, message));
                     }
-                    return crate::types::first_class_callable_builtin_sig(&function_key)
+                    return crate::types::first_class_callable_builtin_sig_with_semantics(&function_key, self.semantic_profile)
                         .ok_or_else(|| {
                             CompileError::new(
                                 span,
@@ -109,7 +109,7 @@ impl Checker {
                     {
                         return Err(CompileError::new(span, message));
                     }
-                    return crate::types::first_class_callable_builtin_sig(function_name)
+                    return crate::types::first_class_callable_builtin_sig_with_semantics(function_name, self.semantic_profile)
                         .ok_or_else(|| {
                             CompileError::new(
                                 span,

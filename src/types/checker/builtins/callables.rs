@@ -1155,7 +1155,7 @@ fn check_callback_builtin_call_in_engine_frame(
             if let Some(message) = crate::builtins::registry::first_class_callable_rejection(&key) {
                 return Err(CompileError::new(span, message));
             }
-            if let Some(sig) = crate::types::first_class_callable_builtin_sig(&key) {
+            if let Some(sig) = crate::types::first_class_callable_builtin_sig_with_semantics(&key, checker.semantic_profile) {
                 checker.require_first_class_callable_builtin_libraries(&key);
                 return checker.check_known_callable_call(&sig, callback_args, span, env, label);
             }
@@ -1581,21 +1581,21 @@ pub(crate) fn check_call_user_func_array(
         }
         if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
             if let Some(elems) = static_args.as_deref() {
-                if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name) {
+                if let Some(sig) = crate::types::first_class_callable_builtin_sig_with_semantics(&builtin_name, checker.semantic_profile) {
                     validate_static_cufa_reference_arguments(
                         &sig,
                         elems,
                         "call_user_func_array() callback",
                     )?;
                 }
-                if let Some(ret_ty) = checker.check_builtin(&builtin_name, elems, span, env)? {
+                if let Some(ret_ty) = checker.check_builtin_callable(&builtin_name, elems, span, env)? {
                     checker
                         .first_class_builtin_call_types
                         .insert(span, ret_ty.clone());
                     return Ok(ret_ty);
                 }
             }
-            if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name)
+            if let Some(sig) = crate::types::first_class_callable_builtin_sig_with_semantics(&builtin_name, checker.semantic_profile)
             {
                 return Ok(sig.return_type);
             }
@@ -1871,7 +1871,7 @@ pub(crate) fn check_call_user_func(
         }
         if let Some(builtin_name) = canonical_builtin_function_name(cb_name) {
             if let Some(ret_ty) =
-                checker.check_builtin(&builtin_name, &args[1..], span, env)?
+                checker.check_builtin_callable(&builtin_name, &args[1..], span, env)?
             {
                 // Lowering resolves this literal callee to the same builtin and asks for its
                 // result by span. Without the entry it falls back to the DECLARED return type,

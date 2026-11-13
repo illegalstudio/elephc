@@ -103,6 +103,21 @@ impl Checker {
         span: crate::span::Span,
         env: &TypeEnv,
     ) -> Result<Option<PhpType>, CompileError> {
+        self.check_builtin_with_source_mode(name, args, span, env, self.semantic_source_mode)
+    }
+
+    /// Applies the public callable contract while evaluating arguments in their physical source mode.
+    pub(crate) fn check_builtin_callable(
+        &mut self, name: &str, args: &[Expr], span: crate::span::Span, env: &TypeEnv,
+    ) -> Result<Option<PhpType>, CompileError> {
+        self.check_builtin_with_source_mode(name, args, span, env, crate::source::SourceMode::Php)
+    }
+
+    /// Checks one builtin invocation without changing the source policy of argument expressions.
+    fn check_builtin_with_source_mode(
+        &mut self, name: &str, args: &[Expr], span: crate::span::Span, env: &TypeEnv,
+        source_mode: crate::source::SourceMode,
+    ) -> Result<Option<PhpType>, CompileError> {
         // `isset`/`unset` are lazy language constructs: their operands may be an
         // undeclared property routed to `__isset`/`__unset`, which must not be
         // eagerly inferred by argument normalization. Their handlers inspect the
@@ -131,7 +146,7 @@ impl Checker {
         let normalized_args;
         let mut builtin_arg_plan = None;
         let args = if let Some(sig) =
-            (!is_lazy_construct).then(|| crate::types::builtin_call_sig(name)).flatten()
+            (!is_lazy_construct).then(|| crate::types::builtin_call_sig_with_semantics(name, self.semantic_profile, source_mode)).flatten()
         {
             normalized_args = if forwards_callback_names {
                 self.normalize_named_call_args(&sig, args, span, &format!("Builtin '{}'", name), env)?
@@ -160,7 +175,7 @@ impl Checker {
         let args = static_positional_args.as_deref().unwrap_or(args);
         let mut spread_type_error = None;
         let indexed_spread_args = (!is_lazy_construct && !forwards_callback_names
-            && crate::types::builtin_call_sig(name)
+            && crate::types::builtin_call_sig_with_semantics(name, self.semantic_profile, source_mode)
                 .is_some_and(|sig| !sig.ref_params.iter().any(|by_ref| *by_ref)))
             .then(|| crate::types::call_args::coalesce_planned_indexed_spreads(args, |source| {
                 match self.infer_type(source, env) {
@@ -323,6 +338,8 @@ impl Checker {
                 }
                 reject_array_at_string_param(name, &def.params, def.variadic.is_some(), args, &arg_types)?;
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
+                    semantic_profile: self.semantic_profile,
+                    source_mode,
                     name: &builtin_key,
                     args,
                     arg_types: &arg_types,
@@ -381,6 +398,7 @@ impl Checker {
             }
             let mut cx = crate::builtins::spec::BuiltinCheckCtx {
                 checker: self,
+                source_mode,
                 name,
                 args,
                 argument_plan: builtin_arg_plan.as_ref(),

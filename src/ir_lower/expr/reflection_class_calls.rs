@@ -264,7 +264,7 @@ pub(super) fn lower_reflection_function_invoke_call(
             expr,
         ));
     };
-    if let Some(signature) = first_class_builtin_signature(&function_name) {
+    if let Some(signature) = first_class_builtin_signature(ctx, &function_name) {
         return Some(lower_reflection_builtin_function_call(
             ctx,
             &function_name,

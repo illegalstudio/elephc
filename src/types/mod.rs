@@ -120,7 +120,8 @@ pub(crate) use defined::{
     defined_late_static_member,
 };
 pub(crate) use signatures::{
-    builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
+    builtin_call_sig, builtin_call_sig_with_semantics, callable_wrapper_sig, first_class_callable_builtin_sig,
+    first_class_callable_builtin_sig_with_semantics,
 };
 pub use signatures::FunctionSig;
 

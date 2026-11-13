@@ -39,7 +39,7 @@ pub(super) fn resolve_known_reflection_function_name(
 /// Resolves a supported callable builtin name for `ReflectionFunction`.
 pub(super) fn resolve_known_reflection_builtin_name(function_name: &str) -> Option<String> {
     let canonical = canonical_builtin_function_name(function_name.trim_start_matches('\\'))?;
-    first_class_builtin_signature(&canonical).map(|_| canonical)
+    crate::builtins::registry::first_class_callable_sig(&canonical).map(|_| canonical)
 }
 
 /// Extracts the known class and property name from an inline ReflectionProperty constructor.

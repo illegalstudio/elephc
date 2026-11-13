@@ -18,7 +18,7 @@ pub(crate) fn capture_check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, Compile
     let input_count = contract.params.iter().position(|parameter| parameter.by_ref).unwrap_or(contract.params.len());
     let mut inputs = BuiltinCheckCtx {
         checker: cx.checker, name: cx.name, args: &cx.args[..cx.args.len().min(input_count)],
-        argument_plan: cx.argument_plan, span: cx.span, env: cx.env,
+        source_mode: cx.source_mode, argument_plan: cx.argument_plan, span: cx.span, env: cx.env,
     };
     check(&mut inputs)
 }

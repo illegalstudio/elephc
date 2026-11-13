@@ -190,7 +190,7 @@ pub(super) fn first_class_builtin_descriptor(
     ) {
         return Ok(None);
     }
-    let Some(sig) = first_class_callable_builtin_sig(&name) else {
+    let Some(sig) = crate::types::first_class_callable_builtin_sig_with_semantics(&name, ctx.module.semantic_profile) else {
         return Ok(None);
     };
     if matches!(name.as_str(), "get_class_vars" | "get_class_methods") {

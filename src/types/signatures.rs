@@ -335,7 +335,13 @@ pub(crate) fn promote_variadic_to_descriptor_container(sig: &mut FunctionSig) ->
 /// - first-class callable builtin sig construction
 /// - optimizer effect modeling for builtins
 pub(crate) fn builtin_call_sig(name: &str) -> Option<FunctionSig> {
-    crate::builtins::registry::function_sig(name)
+    builtin_call_sig_with_semantics(name, elephc_semantics::SemanticProfile::PERMISSIVE, crate::source::SourceMode::Php)
+}
+
+/// Resolves source builtin contracts under the same profile as their checker and EIR consumers.
+pub(crate) fn builtin_call_sig_with_semantics(name: &str, semantic_profile: elephc_semantics::SemanticProfile,
+    source_mode: crate::source::SourceMode) -> Option<FunctionSig> {
+    crate::builtins::registry::function_sig_with_semantics(name, semantic_profile, source_mode)
         .or_else(|| compiler_resident_builtin_call_sig(name))
 }
 
@@ -376,6 +382,12 @@ fn with_return_type(mut signature: FunctionSig, return_type: PhpType) -> Functio
 /// - first-class callable lowering for builtin references
 pub(crate) fn first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
     crate::builtins::registry::first_class_callable_sig(name)
+}
+
+/// Preserves semantic identity while preparing user-visible builtin callable metadata.
+pub(crate) fn first_class_callable_builtin_sig_with_semantics(name: &str,
+    semantic_profile: elephc_semantics::SemanticProfile) -> Option<FunctionSig> {
+    crate::builtins::registry::first_class_callable_sig_with_semantics(name, semantic_profile)
 }
 
 /// Constructs a signature with all parameters required (no defaults).

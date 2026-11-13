@@ -1556,6 +1556,7 @@ pub fn check_types_with_options(
     options: CheckOptions,
     generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
+    let _optimizer_semantics = crate::optimize::scoped_semantic_profile(options.semantic_profile);
     let pending = crate::semantics::pending_guarantees(options.semantic_profile);
     if !pending.is_empty() {
         return Err(CompileError::new(crate::span::Span::dummy(), &format!(

@@ -67,6 +67,8 @@ fn lower(
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
     let operand = call.operand(0)?;
     let input = BuiltinSemanticInput {
+        semantic_profile: call.semantic_profile,
+        source_mode: call.source_mode,
         name: call.name,
         args: &[],
         arg_types: &[ctx.value_php_type(operand)],

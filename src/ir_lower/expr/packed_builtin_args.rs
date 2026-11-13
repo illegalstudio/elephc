@@ -16,7 +16,7 @@ use crate::ir::{RuntimeArgumentLayout, RuntimeCallTarget};
 /// Preserves actual positional arity for a shared runtime builtin with indexed spread arguments.
 pub(super) fn lower_packed_builtin_call(
     ctx: &mut LoweringContext<'_, '_>, name: &str, sig: Option<&FunctionSig>,
-    args: &[Expr], expr: &Expr,
+    args: &[Expr], expr: &Expr, source_mode: crate::source::SourceMode,
 ) -> Option<LoweredValue> {
     let def = crate::builtins::registry::lookup(name)?;
     if def.spec.semantics.argument_lowering != BuiltinArgumentLowering::PreserveValues
@@ -35,10 +35,10 @@ pub(super) fn lower_packed_builtin_call(
             _ => {},
         }
     }
-    let result_type = registry_builtin_result_type(ctx, name, args, &[], expr.span)
+    let result_type = resolve_registry_builtin_result_type_with_source_mode(ctx, name, args, &[], expr.span, None, source_mode)
         .unwrap_or_else(|| def.return_type.clone());
     let effects = crate::builtins::semantics::resolve_builtin_effects(def,
-        &BuiltinSemanticInput { name: def.name, args, arg_types: &[], span: expr.span });
+        &BuiltinSemanticInput { semantic_profile: ctx.semantic_profile, source_mode, name: def.name, args, arg_types: &[], span: expr.span });
     ctx.begin_argument_guard_scope();
     let array = ctx.emit_owned_value(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(4)),
         PhpType::Array(Box::new(PhpType::Mixed)), Op::ArrayNew.default_effects(), Some(expr.span));

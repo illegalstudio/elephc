@@ -279,7 +279,7 @@ pub(crate) fn check_iterator_apply_dynamic_callback(
             }
         }
         if let Some(builtin_name) = super::canonical_builtin_function_name(cb_name) {
-            if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_name) {
+            if let Some(sig) = crate::types::first_class_callable_builtin_sig_with_semantics(&builtin_name, checker.semantic_profile) {
                 reject_dynamic_ref_args(&sig, span)?;
                 checker.require_boolean_type(&sig.return_type, callback.span)?;
                 return Ok(());

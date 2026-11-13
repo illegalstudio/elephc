@@ -985,7 +985,7 @@ fn runtime_builtin_descriptor_cases_at_arity(
         {
             continue;
         }
-        let Some(sig) = crate::types::first_class_callable_builtin_sig(name) else {
+        let Some(sig) = crate::types::first_class_callable_builtin_sig_with_semantics(name, ctx.module.semantic_profile) else {
             continue;
         };
         let wrapper_sig =

@@ -45,7 +45,7 @@ fn reflection_declaring_function_dump(
             ));
         }
 
-        let (_, signature) = reflection_builtin_function_signature(name)?;
+        let (_, signature) = reflection_builtin_function_signature(ctx, name)?;
         let parameters = reflection_parameter_members_with_declaring_function(
             ctx, &signature, "", None, None, None, &[], None,
         )

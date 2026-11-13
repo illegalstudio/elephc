@@ -130,7 +130,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
     let owner = publish_constructed_container(ctx, hash, span);
     let state = begin_descriptor_unpack(ctx, owner, hash_ty.clone(), span);
     let mb_variables = sig.is_some_and(|signature| {
-        crate::types::first_class_callable_builtin_sig("mb_convert_variables").as_ref()
+        crate::types::first_class_callable_builtin_sig_with_semantics("mb_convert_variables", ctx.semantic_profile).as_ref()
             == Some(signature)
     });
     // The runtime key counter owns the argument numbering. This compile-time index only

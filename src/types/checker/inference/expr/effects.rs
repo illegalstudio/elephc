@@ -338,7 +338,7 @@ impl Checker {
                     let contextual_sig = if contextual_callbacks.is_empty() {
                         None
                     } else {
-                        crate::types::signatures::builtin_call_sig(builtin_name)
+                        crate::types::builtin_call_sig_with_semantics(builtin_name, self.semantic_profile, self.semantic_source_mode)
                     };
                     for (idx, arg) in expanded_args.iter().enumerate() {
                         let param_idx = match &arg.kind {

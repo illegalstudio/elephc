@@ -668,3 +668,28 @@ properties, array elements, compound stores and typed buffers. Failed operations
 leave values unchanged, successful updates preserve their expected results, and
 both runs report a clean heap. Compiler build, assembly-comment alignment and
 diff hygiene pass. Builtin numeric contracts and eval parity remain next.
+
+
+### Builtin invocation profile propagation
+
+Builtin semantic inputs, checker hooks and normalized EIR calls now retain the
+immutable semantic profile and an explicit invocation source contract. Numeric
+policies remain available to shared semantic hooks. Profile-aware signature entry points
+cover checking, EIR, reflection and generated callable descriptors; legacy audit
+entry points select permissive PHP semantics explicitly.
+
+Public builtin callables use the user contract even when invoked by an Internal
+statement. Their argument expressions still use the physical statement mode.
+Known callable inference, result resolution, exceptional operand rooting and
+packed argument effects share this separation; lowering never temporarily changes
+the source policy while evaluating arguments. Generated wrappers copy the module
+profile instead of silently defaulting to permissive semantics.
+
+Validation: the two focused profile tests pass, including direct, first-class,
+call_user_func and call_user_func_array paths on all five targets and all three
+source modes. Internal-only argument conditions verify that callable contract
+selection does not leak into expression checking. Architecture and assembly
+comment audits pass. Compiler and docs-exporter builds pass, and the generated
+builtin docs audits pass with no generated changes. Three unused convenience
+methods were removed after the compiler reported them; a final binary warning
+check is queued. Numeric builtin operations and eval parity remain next.

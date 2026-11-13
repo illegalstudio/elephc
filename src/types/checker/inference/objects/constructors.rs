@@ -688,7 +688,7 @@ impl Checker {
     ) -> Result<Option<FunctionSig>, CompileError> {
         let lookup_name = function_name.trim_start_matches('\\');
         let builtin_key = php_symbol_key(lookup_name);
-        if let Some(sig) = crate::types::first_class_callable_builtin_sig(&builtin_key) {
+        if let Some(sig) = crate::types::first_class_callable_builtin_sig_with_semantics(&builtin_key, self.semantic_profile) {
             return Ok(Some(sig));
         }
         let canonical =

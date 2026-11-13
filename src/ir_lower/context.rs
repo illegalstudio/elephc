@@ -5757,6 +5757,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 }
 
 impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, '_> {
+    /// Preserves the semantic identity received from the checker.
+    fn semantic_profile(&self) -> elephc_semantics::SemanticProfile { self.semantic_profile }
+
+    /// Preserves the physical source of the operation being lowered.
+    fn source_mode(&self) -> crate::source::SourceMode { self.source_mode }
+
     /// Returns the source file associated with the enclosing lowered function.
     fn source_path(&self) -> Option<&str> {
         self.source_path.as_deref()

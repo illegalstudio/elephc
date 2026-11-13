@@ -95,7 +95,7 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
         && !ctx.extern_functions.contains_key(canonical)
     {
         let callback = Expr::new(ExprKind::StringLiteral("mb_convert_variables".to_string()), expr.span);
-        let sig = crate::types::first_class_callable_builtin_sig("mb_convert_variables");
+        let sig = crate::types::first_class_callable_builtin_sig_with_semantics("mb_convert_variables", ctx.semantic_profile);
         return lower_call_user_func_descriptor_invoke(ctx, &callback, args, sig.as_ref(), expr)
             .expect("mb_convert_variables descriptor invocation");
     }
@@ -167,7 +167,7 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
         }
     }
     if !is_extern && !is_user_function {
-        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr) {
+        if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr, ctx.source_mode) {
             return call;
         }
     }
@@ -446,6 +446,15 @@ pub(super) fn emit_builtin_call_value(
     span: Span,
     eval_literal: Option<&str>,
 ) -> LoweredValue {
+    let source_mode = ctx.source_mode;
+    emit_builtin_call_value_with_source_mode(ctx, name, operands, php_type, span, eval_literal, source_mode)
+}
+
+/// Emits a builtin with a separate invocation contract while retaining physical argument semantics.
+pub(super) fn emit_builtin_call_value_with_source_mode(
+    ctx: &mut LoweringContext<'_, '_>, name: &str, operands: Vec<crate::ir::ValueId>,
+    php_type: PhpType, span: Span, eval_literal: Option<&str>, source_mode: crate::source::SourceMode,
+) -> LoweredValue {
     if eval_literal.is_none() {
         if let Some(def) = crate::builtins::registry::lookup(name) {
             let mut operands = operands;
@@ -455,13 +464,14 @@ pub(super) fn emit_builtin_call_value(
             // straight to __rt_throw_current while these operands are still pure SSA. Pin them
             // in the unwind chain for the duration of the call so a caught guard releases them
             // exactly once instead of stranding them.
-            let pins = pin_throwing_builtin_operands(ctx, def, &operands, &roots, &php_type, span);
-            let lowered = crate::builtins::semantics::lower_registry_call(
+            let pins = pin_throwing_builtin_operands(ctx, def, &operands, &roots, &php_type, span, source_mode);
+            let lowered = crate::builtins::semantics::lower_registry_call_with_source_mode(
                 ctx,
                 def,
                 &operands,
                 &php_type,
                 span,
+                source_mode,
             )
             .unwrap_or_else(|error| {
                 panic!(
@@ -770,6 +780,14 @@ pub(super) fn resolve_registry_builtin_result_type(
     span: Span,
     checked: Option<PhpType>,
 ) -> Option<PhpType> {
+    resolve_registry_builtin_result_type_with_source_mode(ctx, name, args, operands, span, checked, ctx.source_mode)
+}
+
+/// Resolves the invocation contract without adopting the argument expressions' source policy.
+pub(super) fn resolve_registry_builtin_result_type_with_source_mode(
+    ctx: &LoweringContext<'_, '_>, name: &str, args: &[Expr], operands: &[crate::ir::ValueId],
+    span: Span, checked: Option<PhpType>, source_mode: crate::source::SourceMode,
+) -> Option<PhpType> {
     let def = crate::builtins::registry::lookup(name)?;
     debug_assert!(
         declared_type_is_a_safe_fallback(&def.return_type, checked.as_ref())
@@ -786,6 +804,8 @@ pub(super) fn resolve_registry_builtin_result_type(
         .map(|operand| ctx.builder.value_php_type(*operand))
         .collect::<Vec<_>>();
     let input = crate::builtins::semantics::BuiltinSemanticInput {
+        semantic_profile: ctx.semantic_profile,
+        source_mode,
         name: def.name,
         args,
         arg_types: &arg_types,

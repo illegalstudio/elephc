@@ -1103,12 +1103,15 @@ pub(super) fn pin_throwing_builtin_operands(
     rooted: &[(usize, crate::ir::LocalSlotId)],
     result_type: &PhpType,
     span: Span,
+    source_mode: crate::source::SourceMode,
 ) -> Vec<PinnedInFlightOwner> {
     let arg_types = operands
         .iter()
         .map(|operand| ctx.builder.value_php_type(*operand))
         .collect::<Vec<_>>();
     let input = crate::builtins::semantics::BuiltinSemanticInput {
+        semantic_profile: ctx.semantic_profile,
+        source_mode,
         name: def.name,
         args: &[],
         arg_types: &arg_types,
