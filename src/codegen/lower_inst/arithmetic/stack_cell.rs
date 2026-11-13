@@ -232,6 +232,50 @@ pub(super) fn store_selected(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
     store_if_result(ctx, inst)
 }
 
+/// Stores the operand selected by `__rt_mixed_min_max_select` for a runtime-typed selection
+/// whose result is only read.
+///
+/// A winner holding an integer or a float is copied into the selection's own frame cell,
+/// whose address becomes the result, so the common numeric call allocates nothing. Any other
+/// winner (a string, a bool, null, a nested box) becomes an owned heap cell through
+/// `__rt_mixed_min_max_own`. Users of the result read it through the pointer either way,
+/// and its release ignores the frame cell because it lies outside the managed heap.
+pub(super) fn store_guarded(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: usize, staging: usize) -> Result<()> {
+    let (payload, _, _, _, tag) = registers(ctx);
+    let numeric = ctx.next_label("guarded_min_max_numeric");
+    let owned = ctx.next_label("guarded_min_max_owned");
+    let done = ctx.next_label("guarded_min_max_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {payload}, {owned}"));        // a null cell is materialized as PHP null on the heap
+            ctx.emitter.instruction(&format!("ldr {tag}, [{payload}]"));        // load the winner's runtime tag
+            ctx.emitter.instruction(&format!("cbz {tag}, {numeric}"));          // an integer winner fits the frame cell
+            ctx.emitter.instruction(&format!("cmp {tag}, #2"));                 // is the winner a float?
+            ctx.emitter.instruction(&format!("b.eq {numeric}"));                // a float winner fits the frame cell
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {payload}, {payload}"));     // is the winner a null cell pointer?
+            ctx.emitter.instruction(&format!("jz {owned}"));                    // a null cell is materialized as PHP null on the heap
+            ctx.emitter.instruction(&format!("mov {tag}, QWORD PTR [{payload}]"));// load the winner's runtime tag
+            ctx.emitter.instruction(&format!("test {tag}, {tag}"));             // is the winner an integer?
+            ctx.emitter.instruction(&format!("jz {numeric}"));                  // an integer winner fits the frame cell
+            ctx.emitter.instruction(&format!("cmp {tag}, 2"));                  // is the winner a float?
+            ctx.emitter.instruction(&format!("je {numeric}"));                  // a float winner fits the frame cell
+        }
+    }
+    ctx.emitter.label(&owned);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_min_max_own");
+    abi::emit_release_temporary_stack(ctx.emitter, staging);
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&numeric);
+    abi::emit_load_from_address(ctx.emitter, payload, payload, 8);
+    abi::emit_release_temporary_stack(ctx.emitter, staging);
+    write_cell(ctx, offset, payload, CellTag::Register(tag));
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
 /// Updates a proven numeric increment cell while retaining float promotion across iterations.
 pub(in crate::codegen::lower_inst) fn lower_increment(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: usize) -> Result<()> {
     let value = expect_operand(inst, 0)?;

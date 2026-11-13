@@ -515,8 +515,9 @@ pub(super) fn emit_builtin_call_value(
             } else {
                 raw_call
             };
-            // A lowering hook that ends in a min/max selection returns a detached copy of the
-            // winner, whatever the builtin's static contract says about its other forms.
+            // A lowering hook that ends in a min/max selection returns the winner with a
+            // reference of its own (retained or copied), whatever the builtin's static contract
+            // says about its other forms, so every owned argument is still released here.
             let detached_copy = ctx.builder.value_defining_op(call.value) == Some(Op::MixedMinMax);
             // Consumers make lifetime decisions during lowering, before final
             // ownership refinement. In particular, Fresh strings already own

@@ -1027,11 +1027,14 @@ pub enum Op {
     FPow,
     FNeg,
     MixedNumericBinop,
-    /// Selects the PHP `min()`/`max()` of two operands and returns it as a fresh Mixed cell.
+    /// Selects the PHP `min()`/`max()` of its operands and returns the winner as an owned
+    /// Mixed value.
     ///
     /// Operands are raw `int`/`float` scalars or boxed Mixed cells, which are only read. The
     /// `I64` immediate is a [`MinMaxRule`] discriminant fixing the direction and the tie/NaN
-    /// policy. The result never aliases an operand: it is a detached copy of the winner.
+    /// policy. The result owns one reference: the backend retains a winner that already is a
+    /// heap cell and copies any other one, so it may share that cell with the operand, as a
+    /// function returning its argument does. It is never the operand's own reference.
     MixedMinMax,
     StrIncDec,
     ICmp,
@@ -1724,9 +1727,10 @@ impl Op {
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
             StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
-            // Reads both operand cells, compares them through `__rt_php_compare` (which saves
-            // and restores the concat cursor around any number-to-string leg) and boxes a
-            // detached copy of the winner, retaining a string, array or object payload.
+            // Reads the operand cells, compares non-numeric ones through `__rt_php_compare`
+            // (which saves and restores the concat cursor around any number-to-string leg)
+            // and returns the winner retained, or copied into a new cell when it is not a
+            // heap cell.
             MixedMinMax => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             IterCurrentValueRef | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT

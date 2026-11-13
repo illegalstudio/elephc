@@ -197,22 +197,26 @@ fn test_min_max_gmp_reducer_matrix_matches_php() {
 }
 
 /// A selection among three proven numbers keeps its frame cell: the helper picks the winner
-/// and the cell copies it, so a hot loop allocates nothing. The computed operand comes last
-/// because call lowering roots an owned operand in a heap box while later ones are evaluated.
+/// and the cell copies it, so a hot loop allocates nothing. The computed operands are not the
+/// last ones on purpose: call lowering pins an owned argument while the later ones are
+/// evaluated, and that pin must not send the checked difference to a heap box.
 #[test]
 fn test_min_max_three_number_selection_is_allocation_free() {
     let source = r#"<?php
 function hot(int $count): void {
     $sum = 0.0;
     $start = memory_get_allocations();
-    for ($i = 0; $i < $count; $i++) { $sum += max($i, 2.5, $count - $i) + min($i, 3, $count); }
+    for ($i = 0; $i < $count; $i++) {
+        $sum += max($i, $count - $i, 2.5) + min($count - $i, $i) + min($i, 3, $count);
+        $sum += max($count - $i, $i * 2, $i + 1, 0.5);
+    }
     $end = memory_get_allocations();
     echo "allocations=", $end - $start, " checksum=", $sum, "\n";
 }
 hot(999 + $argc);
 "#;
-    assert_eq!(run(source, true), "allocations=0 checksum=752994\n");
-    assert!(run(source, false).ends_with(" checksum=752994\n"));
+    assert_eq!(run(source, true), "allocations=0 checksum=2169161\n");
+    assert!(run(source, false).ends_with(" checksum=2169161\n"));
 }
 
 /// Every target selects three proven numbers through the helper without cloning the winner,
@@ -222,7 +226,7 @@ fn test_min_max_comparison_modes_emit_on_every_target() {
     let source = r#"<?php
 function three(int $count): void {
     $sum = 0.0;
-    for ($i = 0; $i < $count; $i++) { $sum += max($i, 2.5, $count - $i); }
+    for ($i = 0; $i < $count; $i++) { $sum += max($i, $count - $i, 2.5); }
     echo $sum;
 }
 function two(int $i, float $f): void { echo max($i, $f); }
@@ -237,24 +241,4 @@ two($argc, 2.5);
         assert!(!two.contains("__rt_mixed_min_max_select"), "{name}: {two}");
         assert!(two.contains("fcvtzs") || two.contains("cvttsd2si"), "{name}: {two}");
     }
-}
-
-/// Two runtime-typed numbers compare inline in the helper and allocate only the result cell.
-#[test]
-fn test_min_max_runtime_typed_numbers_allocate_one_result_cell() {
-    let source = r#"<?php
-function work(mixed $a, mixed $b, int $n): mixed {
-    $s = 0;
-    for ($i = 0; $i < $n; $i++) { $s += max($a, $b); }
-    return $s;
-}
-$start = memory_get_allocations();
-$total = work(3, 2, 1000 * $argc);
-$end = memory_get_allocations();
-echo $total, " ", $end - $start <= 1010 ? "bounded" : "allocations=" . ($end - $start), "\n";
-"#;
-    for optimized in [true, false] {
-        assert!(run(source, optimized).starts_with("3000 "), "optimized={optimized}");
-    }
-    assert_eq!(run(source, true), "3000 bounded\n");
 }

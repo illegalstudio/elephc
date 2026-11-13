@@ -49,6 +49,9 @@ pub(super) struct NumericFrame {
     #[cfg(test)]
     pub(super) cells: Vec<ValueId>,
     pub(super) cell_groups: Vec<Vec<ValueId>>,
+    /// Runtime-typed `min()`/`max()` selections whose result is only read: each owns one
+    /// frame cell that holds the winner when it is a number (`Proof::guarded_selection`).
+    pub(super) guarded: Vec<ValueId>,
     /// Proven numeric locals whose raw scalar seed stores write a dedicated frame cell.
     pub(super) seed_slots: Vec<LocalSlotId>,
     pub(super) locals: HashSet<LocalSlotId>,
@@ -165,12 +168,20 @@ pub(super) fn plan(function: &Function) -> NumericFrame {
         .into_iter()
         .filter(|&value| proof.producer(value))
         .collect();
+    let guarded: Vec<_> = function
+        .instructions
+        .iter()
+        .filter(|inst| domain::min_max(inst))
+        .filter_map(|inst| inst.result)
+        .filter(|value| !cells.contains(value) && proof.guarded_selection(*value))
+        .collect();
     let cell_groups = placement::storage_groups(&proof, &cells);
     let seed_slots = seed_slots(&mut proof);
     NumericFrame {
         #[cfg(test)]
         cells,
         cell_groups,
+        guarded,
         seed_slots,
         proven_values: proof.domain.into_inner().into_proven_values(),
         locals: proof
@@ -241,6 +252,76 @@ impl Proof<'_> {
             && inst.operands.len() == 1
             && inst.result_type == IrType::Heap(IrHeapKind::Mixed)
             && self.numeric_inputs(&inst.operands)
+    }
+
+    /// Recognizes the by-value copy of a numeric `min()`/`max()` selection.
+    ///
+    /// `MixedClone` of a numeric cell copies its two words, into a frame cell
+    /// (`stack_cell::lower_clone`) or through `__rt_mixed_clone` into a heap box, and never
+    /// retains or frees the source. Other producers reach their destination through the
+    /// fresh-transfer pass instead, so only a selection is admitted here.
+    fn selection_copy(&self, producer: InstId, user: &crate::ir::Instruction) -> bool {
+        user.operands.len() == 1
+            && self.function.instructions.get(producer.as_raw() as usize).is_some_and(domain::min_max)
+    }
+
+    /// Recognizes a selection over unproven operands whose result is only read, never kept.
+    ///
+    /// Such a result may point at a frame cell when the winner is a number and at an owned
+    /// heap cell otherwise, so every user must work for both: it reads the tag and payload
+    /// through the pointer and never stores, retains or returns it. The users are not
+    /// required to be numeric; they keep their generic lowering.
+    ///
+    /// The cell is this selection's alone, so it holds the value until the selection runs
+    /// again, and every instruction user is dominated by that latest run: users may sit in
+    /// later blocks (the versioned paths of a lazily boxed accumulator). A branch argument
+    /// would carry the pointer into a block parameter, so a terminator use is refused.
+    fn guarded_selection(&self, value: ValueId) -> bool {
+        definition(self.function, value)
+            .is_some_and(|(producer, _)| self.locations.contains_key(&producer))
+            && self.guarded_uses(value, &mut HashSet::new())
+    }
+
+    /// Checks every user of a guarded selection result, following its transparent owners.
+    ///
+    /// Refcount traffic is safe for either pointer: the acquire and release helpers ignore an
+    /// address outside the managed heap, and retain or free an owned heap cell as usual. That
+    /// covers the pin call lowering takes while later arguments are evaluated and the hidden
+    /// slot it publishes it in (`max(min($v, 10), 0)`), which is why only a scoped operand
+    /// slot may store the pointer.
+    fn guarded_uses(&self, value: ValueId, seen: &mut HashSet<ValueId>) -> bool {
+        if !seen.insert(value) {
+            return true;
+        }
+        if self.terminator_uses.contains(&value) {
+            return false;
+        }
+        self.uses.get(&value).is_none_or(|uses| {
+            uses.iter().all(|id| {
+                if !self.locations.contains_key(id) {
+                    return false;
+                }
+                let user = &self.function.instructions[id.as_raw() as usize];
+                match user.op {
+                    Op::Release | Op::MixedClone => user.operands.len() == 1,
+                    Op::EchoValue | Op::PrintValue => output_observation(user),
+                    Op::Cast => scalar_observation(user),
+                    Op::Acquire | Op::Borrow if transparent_owner(user) => user
+                        .result
+                        .is_some_and(|result| self.guarded_uses(result, seen)),
+                    Op::StoreLocal => matches!(
+                        user.immediate,
+                        Some(Immediate::LocalSlot(slot)) if self.scoped_temp(slot)
+                    ),
+                    _ => {
+                        tag_or_payload_copy(user)
+                            || domain::mixed(user)
+                            || domain::comparison(user)
+                            || domain::min_max(user)
+                    }
+                }
+            })
+        })
     }
 
     /// Recognizes every box that can be written straight into one local's frame cell.
@@ -323,11 +404,14 @@ impl Proof<'_> {
                 match user.op {
                     Op::PropertyBoundaryCheckedToInt => int_property_observation(user),
                     Op::Release => true,
-                    Op::Acquire | Op::Borrow if user.immediate.is_none() => user
+                    Op::Acquire | Op::Borrow if transparent_owner(user) => user
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
                     Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
                     Op::EchoValue | Op::PrintValue => output_observation(user),
+                    // The assignment copy of a selection (`$m = max($a, $b)`) only reads the
+                    // cell's tag and payload into its own cell or box.
+                    Op::MixedClone => self.selection_copy(producer, user),
                     _ if key_observation(user, value) => true,
                     _ if (domain::comparison(user) || domain::identity(user))
                         && self.numeric_inputs(&user.operands) => true,
@@ -457,7 +541,7 @@ impl Proof<'_> {
             };
             match inst.op {
                 Op::Acquire if numeric_box(self.function, inst) => return true,
-                Op::Acquire if inst.immediate.is_none() => {
+                Op::Acquire if transparent_owner(inst) => {
                     let Some(&source) = inst.operands.first() else {
                         return false;
                     };
@@ -580,10 +664,12 @@ fn checked(op: Op) -> bool {
 ///
 /// An `acquire` boxes too when range analysis has narrowed the checked producer it retained to a
 /// raw scalar (`$j = $i - 1` into an `int|float` local): its lowering allocates the same cell.
+/// So does the lifetime pin call lowering takes on such an argument while it evaluates the
+/// later ones (`max($a - $i, $i + 1, 0.5)` with a narrowed `$i + 1`).
 pub(super) fn numeric_box(function: &Function, inst: &crate::ir::Instruction) -> bool {
     (inst.op == Op::MixedBox
         || (inst.op == Op::Acquire
-            && inst.immediate.is_none()
+            && transparent_owner(inst)
             && inst.result_type == IrType::Heap(IrHeapKind::Mixed)))
         && inst.operands.len() == 1
         && function
@@ -696,6 +782,22 @@ fn definition(function: &Function, value: ValueId) -> Option<(InstId, &crate::ir
     Some((inst, function.instruction(inst)?))
 }
 
+/// Recognizes an `Acquire` or `Borrow` that only forwards a frame cell's address.
+///
+/// A plain acquire and a borrow add an owner or a view of the same pointer. A lifetime pin
+/// (`Acquire` with `Bool(true)`) is what call lowering emits to keep an owned argument alive
+/// in a hidden slot while the later arguments are evaluated: a frame cell cannot be freed
+/// in that interval, so the pin forwards the address as well, and every user of its result
+/// is still checked like a user of the cell itself. Without it a computed argument that is
+/// not the last one (`max($i, $count - $i, 2.5)`) would be boxed on the heap just to be pinned.
+fn transparent_owner(inst: &crate::ir::Instruction) -> bool {
+    match inst.op {
+        Op::Borrow => inst.immediate.is_none(),
+        Op::Acquire => matches!(inst.immediate, None | Some(Immediate::Bool(true))),
+        _ => false,
+    }
+}
+
 /// Recognizes only transparent retains of a selected stack cell.
 pub(super) fn is_stack_value(
     function: &Function,
@@ -709,7 +811,7 @@ pub(super) fn is_stack_value(
         let Some((_, inst)) = definition(function, value) else {
             return false;
         };
-        if !matches!(inst.op, Op::Acquire | Op::Borrow) || inst.immediate.is_some() {
+        if !transparent_owner(inst) {
             return false;
         }
         let Some(&source) = inst.operands.first() else {

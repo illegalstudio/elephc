@@ -244,7 +244,7 @@ fn finish_reducer_result(
 /// one argument leaves for the following ones (see `MinMaxRule`). Raw `int`/`float` operands
 /// and boxed cells are passed as they are, because the selection only reads them. Every
 /// other representation (a string, a bool, null, a nullable scalar) is boxed for the call
-/// and released after it; the result is a detached copy of the winner.
+/// and released after it; the result owns its own reference to the winner's value.
 ///
 /// No operand can hold a GMP object here (`lower` keeps those calls on the reducer), so the
 /// comparison runs no PHP code and cannot throw between a box and its release.

@@ -142,7 +142,8 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | IDiv | ISDiv | ISMod
             | IPow | INeg | IBitAnd | IBitOr | IBitXor
             | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
-            // A min/max selection reads both operands and returns a detached copy of the winner.
+            // A min/max selection reads its operands' cells by value and returns the winner's
+            // value; like `Acquire`, it never takes a source slot's address.
             | MixedMinMax
             // Comparisons.
             | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq

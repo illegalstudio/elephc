@@ -176,12 +176,14 @@ returned. A variadic call with an array or an object argument (other than GMP) i
 at compile time. `max($f, 0)` with a `float $f` is therefore `mixed` (it can be
 `int(0)`); write `max($f, 0.0)` to keep a `float` result in registers.
 
-A `mixed` result is a boxed value. When the compiler can prove that every argument is a
-number and the result is only read as a number (added to a sum, compared, cast, echoed),
-the selection stays on the stack and allocates nothing. With runtime-typed arguments
-(`mixed` parameters, array elements) each call allocates one small cell for its result,
-even when both arguments turn out to be integers. In a hot loop, declare the operands as
-`int` or `float` to avoid that allocation.
+A `mixed` result is a boxed value, but the call itself rarely allocates one. A result that
+is only read where it is computed (added to a sum, compared, cast, echoed, assigned to a
+variable) stays on the stack whenever a number wins, also with runtime-typed arguments such
+as `mixed` parameters or array elements. A result that is returned, stored in an array or
+passed on shares the winning argument's own cell when that argument already is a boxed
+value; only a raw `int`, `float` or `bool` that wins such a call is boxed. Assigning the
+result of a call with runtime-typed arguments to a variable copies it into that variable's
+own cell, as assigning any `mixed` value does.
 
 ## Math constants
 
