@@ -11,6 +11,13 @@ use super::*;
 use std::path::PathBuf;
 use std::process::Output;
 
+/// Optional setup for staged runtime capabilities and native Number-class coverage.
+#[derive(Default)]
+struct StagedRuntimeOptions {
+    eval_bridge: bool,
+    bcmath: bool,
+}
+
 /// A PHP entry with optional include or Composer/autoload companions.
 pub(crate) struct StrictFixture {
     directory: PathBuf,
@@ -66,23 +73,36 @@ impl StrictFixture {
     pub(crate) fn capture_staged_lowering(
         &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
     ) -> ProgramOutput {
-        self.capture_staged_runtime(profile, optimize, false)
+        self.capture_staged_runtime(profile, optimize, StagedRuntimeOptions::default())
     }
 
     /// Links the native eval callback ABI while its public semantic profile remains staged.
     pub(crate) fn capture_staged_eval_runtime(
         &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
     ) -> ProgramOutput {
-        self.capture_staged_runtime(profile, optimize, true)
+        self.capture_staged_runtime(profile, optimize, StagedRuntimeOptions { eval_bridge: true, ..Default::default() })
+    }
+
+    /// Exercises native decimal operators with the same prelude injection and names as the compiler.
+    pub(crate) fn capture_staged_bcmath(
+        &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
+    ) -> ProgramOutput {
+        self.capture_staged_runtime(profile, optimize, StagedRuntimeOptions { bcmath: true, ..Default::default() })
     }
 
     /// Shares isolated assembly/link/heap validation with an explicitly requested eval runtime.
     fn capture_staged_runtime(
-        &self, profile: elephc_semantics::SemanticProfile, optimize: bool, eval_runtime: bool,
+        &self, profile: elephc_semantics::SemanticProfile, optimize: bool, options: StagedRuntimeOptions,
     ) -> ProgramOutput {
         let source = fs::read_to_string(self.directory.join("main.php")).unwrap();
         let tokens = elephc::lexer::tokenize_with_semantics(&source, elephc::source::SourceMode::Php, 0, profile).unwrap();
         let mut program = elephc::parser::parse(&tokens).unwrap();
+        if options.bcmath {
+            let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
+            program = elephc::core_prelude::inject_if_used(program, &mut inventory);
+            program = elephc::bcmath_prelude::inject_if_used(program, false, &mut inventory);
+            program = elephc::name_resolver::resolve(program).unwrap();
+        }
         let mut checked = elephc::types::check_with_target(&program, target()).unwrap();
         checked.semantic_profile = profile;
         let _semantics = elephc::optimize::scoped_semantic_profile(profile);
@@ -94,7 +114,7 @@ impl StrictFixture {
             program = elephc::optimize::eliminate_dead_code(program, checked.local_binding_decision_spans());
         }
         let mut module = elephc::ir_lower::lower_program(&program, &checked, target(), false).unwrap();
-        module.required_runtime_features.eval_bridge |= eval_runtime;
+        module.required_runtime_features.eval_bridge |= options.eval_bridge;
         if optimize { elephc::ir_passes::optimize_module(&mut module); }
         elephc::ir::validate_module(&module).unwrap();
         let generated = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(

@@ -23,6 +23,8 @@ enum Number {
     StringInt { value: i64, fully_numeric: bool },
     StringFloat { value: f64, fully_numeric: bool },
     NonNumericString,
+    /// A known array kind whose payload is outside scalar numeric evidence.
+    Array,
 }
 
 impl Number {
@@ -33,6 +35,7 @@ impl Number {
             Self::Int(_) => ValueKind::Integer, Self::Float(_) => ValueKind::Float,
             Self::Bool(_) => ValueKind::Boolean, Self::Null => ValueKind::Null,
             Self::StringInt { .. } | Self::StringFloat { .. } | Self::NonNumericString => ValueKind::String,
+            Self::Array => ValueKind::NonScalar,
         }
     }
 
@@ -49,7 +52,7 @@ impl Number {
 
     /// Builtin numeric parameters accept full numeric strings rather than arithmetic prefixes.
     fn valid_numeric_parameter(self, strict_types: bool) -> bool {
-        match self { Self::NonNumericString => false,
+        match self { Self::NonNumericString | Self::Array => false,
             Self::StringInt { fully_numeric, .. } | Self::StringFloat { fully_numeric, .. } => fully_numeric && !strict_types,
             Self::Bool(_) | Self::Null => !strict_types, _ => true }
     }
@@ -188,6 +191,7 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
         ExprKind::BoolLiteral(value) => Some(Number::Bool(*value)),
         ExprKind::Null => Some(Number::Null),
         ExprKind::StringLiteral(value) => string_number(value),
+        ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => Some(Number::Array),
         ExprKind::ConstRef(name) if !definitions.unresolved_namespaces => {
             let name = name.as_str().trim_start_matches('\\');
             let key = ConstantKey::Global(name.to_string());
@@ -322,11 +326,11 @@ fn builtin_number(
         let [left, right] = normalized.as_slice() else { return Ok(None); };
         let Some(left) = evaluate(left, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
         let Some(right) = evaluate(right, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
-        if matches!(left, Number::NonNumericString) || matches!(right, Number::NonNumericString) { return Ok(None); }
         // Mixed pow parameters follow operator conversion even with PHP strict_types enabled.
-        // The existing permissive/Internal builtin implementation always returns a float.
-        return if checked { binary(expr, &BinOp::Pow, left, right, checked, evidence.profile, false) }
-            else { Ok(Some(Number::Float(left.as_float().powf(right.as_float())))) };
+        // Public numeric profiles share source kinds and integer-power domains with the operator.
+        if checked { return binary(expr, &BinOp::Pow, left, right, checked, evidence.profile, true); }
+        if matches!(left, Number::NonNumericString | Number::Array) || matches!(right, Number::NonNumericString | Number::Array) { return Ok(None); }
+        return Ok(Some(Number::Float(left.as_float().powf(right.as_float()))));
     }
     let [argument] = normalized.as_slice() else { return Ok(None); };
     let Some(value) = evaluate(argument, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
@@ -387,6 +391,10 @@ fn array_numbers(
 
 /// Applies checked integer kernels only when PHP would actually choose integer arithmetic.
 fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, profile: SemanticProfile, source_operator: bool) -> Result<Option<Number>, CompileError> {
+    // A literal-array union is an explicit nonnumeric overload, before scalar-domain checks.
+    if source_operator && *op == BinOp::Add && matches!((left, right), (Number::Array, Number::Array)) {
+        return Ok(Some(Number::Array));
+    }
     if checked && source_operator {
         if let Some(rule) = super::numeric::operand_rule(profile, SourceMode::Php, op) {
             if !rule.domain.allows(left.value_kind()) || !rule.domain.allows(right.value_kind()) {
@@ -409,7 +417,7 @@ fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, p
             _ => None,
         });
     }
-    if matches!(left, Number::NonNumericString) || matches!(right, Number::NonNumericString) { return Ok(None); }
+    if matches!(left, Number::NonNumericString | Number::Array) || matches!(right, Number::NonNumericString | Number::Array) { return Ok(None); }
     let (left, right) = (left.numeric(), right.numeric());
     if checked && profile.contains(StrictFeature::Arithmetic) && matches!(op, BinOp::Div) {
         let (left, right) = (left.as_float(), right.as_float());

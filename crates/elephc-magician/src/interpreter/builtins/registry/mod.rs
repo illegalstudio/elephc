@@ -356,13 +356,17 @@ fn call_shared_runtime_builtin(
     // `pow()` is PHP's one math builtin whose operand overload reaches internal value objects.
     // The generated runtime adapter works on scalars only, so route an object operand through
     // the same `RuntimeValueOps::pow` default that `**` uses.
-    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Overflow) {
-        use elephc_semantics::numeric::CheckedNumericOp;
+    let numeric_policy = elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(context.semantic_profile());
+    if !numeric_policy.is_permissive() {
         match (id, args) {
-            (elephc_builtin_contract::RuntimeBuiltinId::Abs, [value]) =>
-                return crate::interpreter::checked_numeric::apply(CheckedNumericOp::Abs, *value, *value, context, values).map(Some),
-            (elephc_builtin_contract::RuntimeBuiltinId::Pow, [base, exponent]) =>
-                return crate::interpreter::checked_numeric::binary(EvalBinOp::Pow, *base, *exponent, context, values),
+            (elephc_builtin_contract::RuntimeBuiltinId::Abs, [value]) if numeric_policy.checked_overflow() =>
+                return crate::interpreter::checked_numeric::apply(elephc_semantics::numeric::CheckedNumericOp::Abs,
+                    *value, *value, context, values).map(Some),
+            (elephc_builtin_contract::RuntimeBuiltinId::Pow, [base, exponent]) => {
+                if let Some(result) = crate::interpreter::checked_numeric::binary(EvalBinOp::Pow, *base, *exponent, context, values)? {
+                    return Ok(Some(result));
+                }
+            }
             _ => (),
         }
     }

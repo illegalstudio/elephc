@@ -1252,3 +1252,28 @@ assembly comment checks, example PHP syntax and diff hygiene pass. Generated
 builtin registries and pages have no content changes. Public feature admission
 is unchanged; builtin numeric domains, conversion/binding guarantees and the
 remaining strict families still precede full umbrella admission.
+
+### Independent numeric policies for builtin power
+
+Public pow invocations now select the shared operator graph for Arithmetic and
+Coercions independently of Overflow. Original operand kinds and integer-negative
+exponents are validated before destructive folding, including named/spread calls
+and forbidden array operands in dead branches. Array-union evidence remains an
+explicit nonnumeric overload. Known native-class power results follow the shared
+operator contract, including BcMath\Number with a floating exponent; unresolved
+objects retain boxed result storage. Internal calls keep their reviewed PHP path.
+
+Magician applies the same independent policy through direct and indirect builtin
+calls, retaining ordinary runtime fallback when no specialized scalar result was
+produced. Focused tests pass for source diagnostics, callable signatures, exact
+integer results, permitted promotion, floats, domain failures, failed-result
+atomicity and owners. Walker and VM cover both numeric profiles with Overflow on
+and off. Real selected-profile frontend tests validate native Number results and
+EIR emission on all five targets with both optimizer settings. Native mixed
+fixtures exercise direct/named/descriptor/callback calls and native Number results
+with clean heaps. Existing integer-power, source-proof, exact-array reduction and
+eval builtin-boundary controls pass. Generated docs and architecture audits,
+assembly comment alignment, example PHP syntax and diff hygiene pass. Compiler
+and exporter builds also pass. Public feature admission
+remains unchanged. Next verify caller policy across outlined boxed helpers before
+continuing builtin domains and the remaining strict families.

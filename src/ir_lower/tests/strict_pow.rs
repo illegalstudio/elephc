@@ -55,3 +55,77 @@ fn strict_pow_builtin_callable_signatures_preserve_numeric_kinds() {
     let internal = crate::builtins::registry::function_sig_with_semantics("pow", profile, SourceMode::Internal).unwrap();
     assert!(internal.params.iter().all(|(_, ty)| *ty == PhpType::Mixed));
 }
+
+
+/// Each independent numeric profile selects the same guarded power graph on every supported target.
+#[test]
+fn strict_numeric_builtin_pow_independent_profiles_and_target_graphs() {
+    let source = "<?php function profiledPow(mixed $base, mixed $exponent): mixed { return pow($base, $exponent); } $f = pow(...); echo $f($argc, 3);";
+    for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
+        let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
+        for feature in [StrictFeature::Arithmetic, StrictFeature::Coercions] {
+            for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+                let target = crate::codegen::platform::Target::parse(name).unwrap();
+                let checked = crate::types::checker::check_staged_semantics(&program, target,
+                    SemanticProfile::PERMISSIVE.with(feature, true)).unwrap();
+                let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+                for optimize in [false, true] {
+                    let mut module = module.clone(); if optimize { crate::ir_passes::optimize_module(&mut module); }
+                    crate::ir::validate_module(&module).unwrap();
+                    let function = module.functions.iter().find(|function| function.name == "profiledPow").unwrap();
+                    assert_eq!(function.instructions.iter().any(|instruction| matches!(instruction.immediate,
+                        Some(Immediate::NumericOperation { op: MixedNumericOp::Pow, policy }) if policy.requirements().contains(feature))),
+                        mode != SourceMode::Internal, "{name}, {mode:?}, {feature:?}, opt={optimize}");
+                    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+                }
+            }
+        }
+    }
+}
+
+/// Literal proofs and typed parameters reject implicit power operands before destructive folding.
+#[test]
+fn strict_numeric_builtin_pow_source_domains_named_spread_and_parameter_types() {
+    for feature in [StrictFeature::Arithmetic, StrictFeature::Coercions] {
+        let profile = SemanticProfile::PERMISSIVE.with(feature, true);
+        for source in ["<?php if (false) { pow('2', 3); }", "<?php pow(exponent: 3, num: true);",
+            "<?php const POW_VALUE = 'bad'; pow(POW_VALUE, 3);", "<?php pow(...[null, 3]);",
+            "<?php if (false) { pow([1], 2); }",
+            "<?php function parameterPow(bool $value): mixed { return pow($value, 2); }"] {
+            let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+            let error = crate::types::checker::check_staged_semantics(&program, crate::codegen::platform::Target::detect_host(), profile)
+                .expect_err(source);
+            assert!(error.message.contains(feature.flag()), "{source}: {error:?}");
+        }
+        let arrays = crate::parser::parse(&crate::lexer::tokenize("<?php $values = [1] + [2];").unwrap()).unwrap();
+        assert!(crate::types::checker::check_staged_semantics(&arrays, crate::codegen::platform::Target::detect_host(), profile).is_ok());
+        let negative = crate::parser::parse(&crate::lexer::tokenize("<?php if (false) { pow(2, -1); }").unwrap()).unwrap();
+        assert_eq!(crate::types::checker::check_staged_semantics(&negative,
+            crate::codegen::platform::Target::detect_host(), profile).is_err(), feature == StrictFeature::Arithmetic);
+    }
+}
+
+
+/// Known decimal results use the native operator's object contract even with a floating exponent.
+#[test]
+fn strict_numeric_builtin_pow_native_class_results_follow_operator_contracts() {
+    let source = r"<?php function typedNumberPow(): BcMath\Number { return pow(new BcMath\Number('2'), 3.0); }";
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+    let program = crate::core_prelude::inject_if_used(program, &mut inventory);
+    let program = crate::bcmath_prelude::inject_if_used(program, false, &mut inventory);
+    let program = crate::name_resolver::resolve(program).unwrap();
+    for feature in [StrictFeature::Arithmetic, StrictFeature::Coercions] {
+        let profile = SemanticProfile::PERMISSIVE.with(feature, true);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+            let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            for optimize in [false, true] {
+                let mut module = module.clone(); if optimize { crate::ir_passes::optimize_module(&mut module); }
+                crate::ir::validate_module(&module).unwrap();
+                crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            }
+        }
+    }
+}

@@ -37,22 +37,31 @@ fn is_dynamic(value: &PhpType) -> bool {
     matches!(value.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
 }
 
-/// Reports whether the call has a GMP operand and therefore returns GMP.
+/// Resolves scalar and native-class results under the selected numeric operation contract.
 fn gmp_pow_result(input: &BuiltinSemanticInput<'_>) -> PhpType {
-    if input.arg_types.iter().any(is_static_gmp) {
-        PhpType::Object("GMP".to_string())
-    } else if input.arg_types.iter().any(is_dynamic) {
-        PhpType::Mixed
-    } else if crate::semantics::numeric::operation_policy(input.semantic_profile, input.source_mode).checked_overflow()
-        && !input.arg_types.iter().any(|ty| ty.codegen_repr() == PhpType::Float) {
-        PhpType::Mixed
-    } else {
-        PhpType::Float
+    if input.arg_types.iter().any(is_static_gmp) { return PhpType::Object("GMP".to_string()); }
+    if input.arg_types.iter().any(is_dynamic) { return PhpType::Mixed; }
+    let policy = crate::semantics::numeric::operation_policy(input.semantic_profile, input.source_mode);
+    if !policy.is_permissive() {
+        if let [left, right] = input.arg_types {
+            if let Some(plan) = crate::types::object_operators::binary_plan(&crate::parser::ast::BinOp::Pow, left, right) {
+                return plan.result_type(&crate::parser::ast::BinOp::Pow);
+            }
+        }
+        if input.arg_types.iter().any(|ty| matches!(ty, PhpType::Object(_))) { return PhpType::Mixed; }
+        return if input.arg_types.iter().any(|ty| *ty == PhpType::Float) { PhpType::Float } else { PhpType::Mixed };
     }
+    PhpType::Float
 }
 
-/// Accepts the scalar contract and GMP's runtime-owned operand rules.
-fn validate(_input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
+/// Rejects known scalar kind failures while native and boxed object dispatch retains its contract.
+fn validate(input: &BuiltinSemanticInput<'_>) -> Result<(), CompileError> {
+    let [left, right] = input.arg_types else { return Ok(()); };
+    if matches!(left, PhpType::Object(_)) || matches!(right, PhpType::Object(_)) { return Ok(()); }
+    if let Some(rule) = crate::semantics::numeric::operand_rule(input.semantic_profile, input.source_mode,
+        &crate::parser::ast::BinOp::Pow) {
+        crate::semantics::numeric::validate_binary_types(rule, left, right, input.span)?;
+    }
     Ok(())
 }
 
@@ -78,12 +87,12 @@ const fn pow_semantics() -> BuiltinSemantics {
     }
 }
 
-/// Shares checked operator graphs while retaining ordinary scalar and GMP runtime paths.
+/// Shares every selected numeric operator policy while retaining ordinary PHP runtime paths.
 fn lower_pow(
     ctx: &mut dyn BuiltinLoweringContext,
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
-    if crate::semantics::numeric::operation_policy(call.semantic_profile, call.source_mode).checked_overflow() {
+    if !crate::semantics::numeric::operation_policy(call.semantic_profile, call.source_mode).is_permissive() {
         let result = ctx.emit_numeric_binary(call.operand(0)?, crate::parser::ast::BinOp::Pow,
             call.operand(1)?, call.source_mode, call.span)?;
         return Ok(crate::builtins::semantics::normalize_numeric_result(ctx, result, call.result_type, call.span));
