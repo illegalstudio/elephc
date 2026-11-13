@@ -66,22 +66,45 @@ impl Process {
     /// `fclose()` or scope exit still closes. Closing it here would free the number for the
     /// next `fopen()`, and that stale `fclose()` would then close an unrelated file. So the
     /// pipe end is replaced in place by `/dev/null` (`dup2`), which drops the pipe — the
-    /// child sees EOF or `EPIPE` — while the number stays reserved. `close()` is only the
-    /// fallback when `/dev/null` cannot be opened.
+    /// child sees EOF or `EPIPE` — while the number stays reserved.
+    ///
+    /// When the descriptor table is full (`EMFILE`), `/dev/null` cannot be opened up front.
+    /// The first pipe end is then closed and `/dev/null` reopened at once: `open()` takes
+    /// the lowest free number, which is the one just freed, so it stays reserved and serves
+    /// as the placeholder source for the remaining ends.
     fn close_pipes(&mut self) {
-        let null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
+        let owned = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
+        let mut source = owned;
         for ((_, fd), spawned) in self.pipes.drain(..).zip(self.identities.drain(..)) {
             if spawned.is_none() || identity(fd) != spawned {
                 continue;
             }
-            if null >= 0 && unsafe { libc::dup2(null, fd) } == fd {
+            if source < 0 {
+                crate::spawn::close_quietly(fd);
+                let reopened =
+                    unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
+                if reopened == fd {
+                    // The PHP stream owns this number; only borrow it as the source.
+                    source = fd;
+                } else if reopened >= 0 {
+                    if unsafe { libc::dup2(reopened, fd) } == fd {
+                        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+                        source = fd;
+                    }
+                    crate::spawn::close_quietly(reopened);
+                }
+                continue;
+            }
+            if unsafe { libc::dup2(source, fd) } == fd {
                 // dup2 clears close-on-exec on the target; keep the placeholder private.
                 unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
             } else {
                 crate::spawn::close_quietly(fd);
             }
         }
-        crate::spawn::close_quietly(null);
+        if owned >= 0 {
+            crate::spawn::close_quietly(owned);
+        }
     }
 
     /// php-src's `waitpid_cached()`: answers the cached status when there is one, else

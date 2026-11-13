@@ -263,3 +263,89 @@ fn close_leaves_a_reused_descriptor_number_alone() {
     }
     unsafe { libc::close(reused) };
 }
+
+/// Runs `body` in a fresh copy of this test binary, so a lowered descriptor limit and a
+/// full descriptor table never leak into the other tests running in parallel.
+fn in_isolated_process(name: &str, body: impl FnOnce()) {
+    const MARKER: &str = "ELEPHC_PROC_ISOLATED_TEST";
+    if std::env::var(MARKER).as_deref() == Ok(name) {
+        body();
+        return;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([name, "--exact", "--test-threads=1", "--nocapture"])
+        .env(MARKER, name)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{name} failed in its isolated process:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Lowers the soft descriptor limit and opens `/dev/null` until `EMFILE`, so the next
+/// descriptor allocation fails. The filler descriptors are leaked: the process exits.
+fn exhaust_descriptor_table() {
+    let limit = libc::rlimit { rlim_cur: 128, rlim_max: libc::RLIM_INFINITY };
+    let mut current = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+    assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, current.as_mut_ptr()) }, 0);
+    let limit = libc::rlimit { rlim_max: unsafe { current.assume_init() }.rlim_max, ..limit };
+    assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) }, 0);
+    loop {
+        let fd = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+        if fd < 0 {
+            assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(libc::EMFILE));
+            break;
+        }
+    }
+}
+
+/// When a child end cannot be moved above the target numbers (`EMFILE`), the spawn fails
+/// instead of letting an earlier `dup2` overwrite a later one's source.
+#[test]
+fn spawn_fails_when_a_child_end_cannot_be_moved() {
+    in_isolated_process("tests::spawn_fails_when_a_child_end_cannot_be_moved", || {
+        let builder = elephc_proc_builder_new();
+        unsafe {
+            elephc_proc_builder_shell(builder, c"exit 0".as_ptr());
+            // Target 10 puts the floor at 11, above the pipe's freshly allocated ends.
+            assert_eq!(elephc_proc_builder_pipe(builder, 10, c"w".as_ptr()), 1, "{}", last_error());
+        }
+        exhaust_descriptor_table();
+        assert_eq!(elephc_proc_spawn(builder), 0, "the spawn must not proceed");
+        assert!(
+            last_error().starts_with("proc_open(): Failed to dup() for descriptor 10: "),
+            "{}",
+            last_error()
+        );
+    });
+}
+
+/// With the descriptor table full, `proc_close()` still keeps every pipe end's number
+/// reserved (now `/dev/null`) instead of freeing it for an unrelated `fopen()`.
+#[test]
+fn close_keeps_pipe_numbers_reserved_when_the_table_is_full() {
+    in_isolated_process("tests::close_keeps_pipe_numbers_reserved_when_the_table_is_full", || {
+        let builder = elephc_proc_builder_new();
+        unsafe {
+            elephc_proc_builder_arg(builder, c"cat".as_ptr());
+            elephc_proc_builder_pipe(builder, 0, c"r".as_ptr());
+            elephc_proc_builder_pipe(builder, 1, c"w".as_ptr());
+        }
+        let process = elephc_proc_spawn(builder);
+        assert!(process > 0, "{}", last_error());
+        let stdin = elephc_proc_pipe_fd(process, 0) as c_int;
+        let stdout = elephc_proc_pipe_fd(process, 1) as c_int;
+        let spawned = (inode(stdin), inode(stdout));
+        exhaust_descriptor_table();
+        assert_eq!(elephc_proc_close(process), 0);
+        for (fd, before) in [(stdin, spawned.0), (stdout, spawned.1)] {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            assert!(flags >= 0, "descriptor {fd} must stay open");
+            assert_ne!(flags & libc::FD_CLOEXEC, 0, "descriptor {fd} must stay close-on-exec");
+            assert_ne!(inode(fd), before, "descriptor {fd} must no longer be the pipe");
+        }
+    });
+}
