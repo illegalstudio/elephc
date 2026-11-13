@@ -46,6 +46,10 @@ services:
 
   edge:
     image: nginx:1.27-alpine
+    # nginx workers run as the image's `nginx` user, not uid 10001. The shared
+    # socket directory is 0770 and the origin socket is 0660, both group 10001.
+    group_add:
+      - "10001"
     ports:
       - "80:80"
     volumes:

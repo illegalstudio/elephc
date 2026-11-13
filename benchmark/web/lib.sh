@@ -52,16 +52,25 @@ max_values() {
 }
 
 # Escapes one string for embedding in JSON.
+#
+# The character loop avoids `gsub` replacement-string rules, which differ
+# between BSD awk and the Linux awks and can leave a single backslash before an
+# arbitrary character.
 json_escape() {
   awk '
     BEGIN { ORS = "" }
     {
       if (NR > 1) printf "\\n"
-      gsub(/\\/, "\\\\")
-      gsub(/"/, "\\\"")
-      gsub(/\t/, "\\t")
-      gsub(/\r/, "\\r")
-      printf "%s", $0
+      out = ""
+      for (i = 1; i <= length($0); i += 1) {
+        c = substr($0, i, 1)
+        if (c == "\\") out = out "\\\\"
+        else if (c == "\"") out = out "\\\""
+        else if (c == "\t") out = out "\\t"
+        else if (c == "\r") out = out "\\r"
+        else out = out c
+      }
+      printf "%s", out
     }'
 }
 
@@ -118,6 +127,7 @@ parse_wrk_file() {
   wrk_requests_per_sec=""
   wrk_transfer_per_sec=""
   wrk_socket_errors=""
+  wrk_non_2xx=""
   wrk_summary=""
   wrk_requests=""
   while IFS=$'\t' read -r key value; do
@@ -133,6 +143,7 @@ parse_wrk_file() {
       requests_per_sec) wrk_requests_per_sec=$value ;;
       transfer_per_sec) wrk_transfer_per_sec=$value ;;
       socket_errors) wrk_socket_errors=$value ;;
+      non_2xx) wrk_non_2xx=$value ;;
       summary) wrk_summary=$value ;;
       requests) wrk_requests=$value ;;
     esac
@@ -161,9 +172,12 @@ parse_wrk_file() {
       } else if (part[1] == "Transfer/sec:") {
         sub(/^Transfer\/sec:[ \t]*/, "", line)
         print "transfer_per_sec\t" line
-      } else if (part[1] == "Socket errors:") {
+      } else if (line ~ /^Socket errors:/) {
         sub(/^Socket errors:[ \t]*/, "", line)
         print "socket_errors\t" line
+      } else if (line ~ /^Non-2xx or 3xx responses:/) {
+        sub(/^Non-2xx or 3xx responses:[ \t]*/, "", line)
+        print "non_2xx\t" line
       } else if (index(line, " requests in ") > 0 && index(line, " read") > 0) {
         print "summary\t" line
         print "requests\t" part[1]
@@ -194,6 +208,7 @@ wrk_json_object() {
   [[ -n $wrk_requests_per_sec ]] && json+=", \"requests_per_sec\": $wrk_requests_per_sec"
   [[ -n $wrk_transfer_per_sec ]] && json+=", \"transfer_per_sec\": $(json_string "$wrk_transfer_per_sec")"
   [[ -n $wrk_socket_errors ]] && json+=", \"socket_errors\": $(json_string "$wrk_socket_errors")"
+  [[ -n $wrk_non_2xx ]] && json+=", \"non_2xx\": $wrk_non_2xx"
   [[ -n $wrk_summary ]] && json+=", \"summary\": $(json_string "$wrk_summary")"
   [[ -n $wrk_requests ]] && json+=", \"requests\": $wrk_requests"
   [[ -n $wrk_command ]] && json+=", \"command\": $(json_string "$wrk_command")"
@@ -232,13 +247,45 @@ run_wrk_one() {
 #   round-N.stats     rps<TAB>avg<TAB>p99<TAB>requests
 run_wrk_round() {
   local url=$1 threads=$2 connections=$3 duration=$4 timeout=$5 clients=$6 dir=$7 index=$8
-  local client output json
-  local -a client_jsons
+  local client output i failed=0 json
+  local -a pids outputs client_jsons
   local rps_sum=0 requests_sum=0 avg_sum=0 p99_max=0 avg_count=0 p99_count=0
   local json_out
+  wrk_command="wrk --latency -t$threads -c$connections -d$duration $url"
   for ((client = 1; client <= clients; client += 1)); do
     output="$dir/round-$index-client-$client.txt"
-    run_wrk_one "$url" "$threads" "$connections" "$duration" "$timeout" "$output" || return 1
+    wrk --latency -t "$threads" -c "$connections" -d "$duration" "$url" >"$output" 2>&1 &
+    pids+=("$!")
+    outputs+=("$output")
+  done
+  (
+    sleep "$timeout"
+    for i in "${pids[@]}"; do
+      kill -TERM "$i" 2>/dev/null || true
+    done
+    sleep 1
+    for i in "${pids[@]}"; do
+      kill -KILL "$i" 2>/dev/null || true
+    done
+  ) >/dev/null 2>&1 &
+  local watchdog=$!
+  for ((i = 0; i < clients; i += 1)); do
+    if ! wait "${pids[$i]}"; then
+      failed=1
+    fi
+  done
+  kill -TERM "$watchdog" 2>/dev/null || true
+  wait "$watchdog" 2>/dev/null || true
+  if [[ $failed -ne 0 ]]; then
+    printf 'one or more wrk clients failed:\n' >&2
+    for output in "${outputs[@]}"; do
+      cat "$output" >&2
+    done
+    return 1
+  fi
+  for ((client = 1; client <= clients; client += 1)); do
+    output="$dir/round-$index-client-$client.txt"
+    parse_wrk_file "$output"
     json=$(wrk_json_object)
     client_jsons+=("$json")
     rps_sum=$(awk -v a="$rps_sum" -v b="$wrk_requests_per_sec" 'BEGIN { printf "%.6f", a + b }')
@@ -253,6 +300,7 @@ run_wrk_round() {
     fi
   done
   if [[ $clients -eq 1 ]]; then
+    parse_wrk_file "$dir/round-$index-client-1.txt"
     json_out="${client_jsons[0]%?},\"clients\": 1}"
     printf '%s\n' "$json_out" >"$dir/round-$index.wrk.json"
     printf '%s\t%s\t%s\t%s\n' \

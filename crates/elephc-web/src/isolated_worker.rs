@@ -251,10 +251,10 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                 accepted = listener.accept() => accepted,
             };
             let (stream, peer) = match accepted {
-                Ok(pair) => pair,
+                Ok(Some(pair)) => pair,
                 // The master owns the descriptor channel. EOF means it is gone,
                 // so this worker has no listener and must not spin.
-                Err(error) if error.kind() == std::io::ErrorKind::ConnectionAborted => break,
+                Ok(None) => break,
                 Err(_) => continue,
             };
             // Small response writes must leave immediately; see `worker::serve_inner`.

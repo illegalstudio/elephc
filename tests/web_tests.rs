@@ -1243,6 +1243,49 @@ fn try_http_get(addr: &str, path: &str) -> String {
     normalize_complete_http_response(buf)
 }
 
+/// A SIGKILLed master must not leave workers holding the port, and the workers
+/// must exit so a supervisor restart can bind immediately.
+#[test]
+fn web_master_sigkill_releases_port_and_workers() {
+    let dir = make_test_dir("web_master_sigkill");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server(&bin, &addr, "2");
+    let master = server.id();
+    let workers = wait_for_direct_child_count(master, 2);
+    unsafe { libc::kill(master as libc::pid_t, libc::SIGKILL); }
+    let _ = server.wait();
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let live = workers
+            .iter()
+            .copied()
+            .filter(|pid| process_exists(*pid))
+            .collect::<Vec<_>>();
+        if live.is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            for pid in &live {
+                unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL); }
+            }
+            panic!("workers survived a master SIGKILL: {live:?}");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // A fresh master must bind the same address; the old workers no longer
+    // hold the listener.
+    let mut restarted = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    assert_eq!(raw_response_body(&response).trim(), "ok");
+    let _ = restarted.kill();
+    let _ = restarted.wait();
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies the extern getters are callable from --web PHP and return request data.
 #[test]
 fn web_extern_method_getter() {

@@ -10,9 +10,10 @@
 //! Key details:
 //! - Without `--trusted-proxy`, the socket peer is authoritative and the result
 //!   is byte-identical to the pre-feature behavior.
-//! - RFC 7239 `Forwarded` wins over `X-Forwarded-*` when present and
-//!   well-formed; malformed or obfuscated identifiers fall back to the
-//!   `X-Forwarded-*` family when it is present, then to the peer.
+//! - A present RFC 7239 `Forwarded` header is authoritative: `X-Forwarded-*`
+//!   is only consulted when no `Forwarded` header is present. Malformed or
+//!   obfuscated identifiers keep the socket peer instead of letting a
+//!   client-supplied `X-Forwarded-For` win.
 //! - The chain is walked right-to-left, so only trusted hops are skipped.
 //! - Repeated scalar headers use the last line and its rightmost token, which
 //!   is the value added by the proxy closest to the origin.
@@ -197,8 +198,8 @@ impl ConnectionFacts {
 
 /// Applies trusted forwarded headers to the socket-peer facts.
 ///
-/// Headers from an untrusted peer are ignored entirely. A malformed forwarded
-/// chain also falls back to the socket peer instead of guessing a client.
+/// Headers from an untrusted peer are ignored entirely. A present `Forwarded`
+/// header is authoritative; an incomplete chain keeps the socket peer.
 pub(crate) fn apply(
     peer: &PeerInfo,
     headers: &[(String, String)],
@@ -210,9 +211,10 @@ pub(crate) fn apply(
     }
     if let Some(value) = header_joined(headers, "forwarded") {
         if let Some(forwarded) = ForwardedHeader::parse(&value) {
-            if forwarded.apply(&mut facts, trusted) {
-                return facts;
-            }
+            forwarded.apply(&mut facts, trusted);
+            // Do not consult the client-supplied X-Forwarded family once the
+            // trusted hop has committed to RFC 7239.
+            return facts;
         }
     }
     if let Some(value) = header_joined(headers, "x-forwarded-for") {
@@ -255,6 +257,21 @@ struct ForwardedElement {
     scheme: Option<&'static str>,
     /// The element's `host=` port, when present and valid.
     host_port: Option<u16>,
+}
+
+/// Applies one element's `proto` and `host` without touching the address.
+fn apply_scheme_and_host(facts: &mut ConnectionFacts, element: &ForwardedElement) {
+    if let Some(scheme) = element.scheme {
+        facts.request_scheme = scheme.to_string();
+        facts.https = scheme == "https";
+    }
+    if let Some(port) = element.host_port {
+        facts.server_port = port;
+    } else if element.scheme.is_some() {
+        if let Some(port) = default_port(&facts.request_scheme) {
+            facts.server_port = port;
+        }
+    }
 }
 
 /// One parsed `Forwarded` header, retaining every element in wire order.
@@ -301,34 +318,32 @@ impl ForwardedHeader {
 
     /// Applies the closest untrusted element, including its proto and host.
     ///
-    /// Returns false when no element yields a client address, in which case the
-    /// caller may still fall back to `X-Forwarded-*`.
-    fn apply(&self, facts: &mut ConnectionFacts, trusted: &TrustedProxies) -> bool {
+    /// An unknown, obfuscated, or malformed entry ends the walk and leaves the
+    /// socket peer in place.
+    fn apply(&self, facts: &mut ConnectionFacts, trusted: &TrustedProxies) {
+        let mut closest_trusted = None;
         for element in self.elements.iter().rev() {
             let Some(node) = element.node else {
                 // Unknown, obfuscated, or malformed: stop the walk instead of
                 // trusting anything further left or discarding the whole header.
-                return false;
+                return;
             };
             if trusted.is_trusted_ip(node.ip) {
+                if closest_trusted.is_none() {
+                    closest_trusted = Some(element);
+                }
                 continue;
             }
             facts.remote_addr = normalize_ip(node.ip).to_string();
             facts.remote_port = node.port.unwrap_or(0);
-            if let Some(scheme) = element.scheme {
-                facts.request_scheme = scheme.to_string();
-                facts.https = scheme == "https";
-            }
-            if let Some(port) = element.host_port {
-                facts.server_port = port;
-            } else if element.scheme.is_some() {
-                if let Some(port) = default_port(&facts.request_scheme) {
-                    facts.server_port = port;
-                }
-            }
-            return true;
+            apply_scheme_and_host(facts, element);
+            return;
         }
-        false
+        // The whole chain is trusted: the address stays the socket peer, but
+        // the closest proxy may still publish the client-facing scheme/host.
+        if let Some(element) = closest_trusted {
+            apply_scheme_and_host(facts, element);
+        }
     }
 }
 
@@ -703,6 +718,31 @@ mod tests {
         assert!(!facts.https);
     }
 
+    /// Bare IPv6 entries (the nginx `$proxy_add_x_forwarded_for` form) parse.
+    #[test]
+    fn xff_accepts_bare_ipv6() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("X-Forwarded-For", "2001:db8::1")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "2001:db8::1");
+    }
+
+    /// An all-trusted chain keeps the peer address but uses the closest
+    /// element's proto/host.
+    #[test]
+    fn forwarded_all_trusted_chain_applies_closest_proto() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("Forwarded", "for=10.0.0.5;proto=https;host=example.com:8443")]),
+            &trusted("127.0.0.1/32,10.0.0.0/8"),
+        );
+        assert_eq!(facts.remote_addr, "127.0.0.1");
+        assert_eq!(facts.request_scheme, "https");
+        assert_eq!(facts.server_port, 8443);
+    }
+
     /// A bad entry on the client side must not hide the address the trusted
     /// proxy appended on the right.
     #[test]
@@ -846,9 +886,9 @@ mod tests {
         assert_eq!(facts.server_port, 80);
     }
 
-    /// A malformed Forwarded header falls back to the X-Forwarded-* family.
+    /// A present Forwarded header blocks a client-supplied X-Forwarded family.
     #[test]
-    fn malformed_forwarded_falls_back_to_x_forwarded() {
+    fn forwarded_presence_blocks_x_forwarded_fallback() {
         let facts = apply(
             &peer("127.0.0.1"),
             &headers(&[
@@ -858,9 +898,9 @@ mod tests {
             ]),
             &trusted("127.0.0.1/32"),
         );
-        assert_eq!(facts.remote_addr, "203.0.113.9");
-        assert_eq!(facts.request_scheme, "https");
-        assert!(facts.https);
+        assert_eq!(facts.remote_addr, "127.0.0.1");
+        assert_eq!(facts.request_scheme, "http");
+        assert!(!facts.https);
     }
 
     /// Repeated comma-list headers are merged in wire order.

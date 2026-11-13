@@ -321,6 +321,10 @@ fn run_server(
             }
         },
     };
+    // Make descriptor-map mutation safe across the forks below. A child forked
+    // while the acceptor holds `pending` would inherit a locked pthread mutex.
+    #[cfg(target_vendor = "apple")]
+    listener::install_fork_gate();
     // Fork workers BEFORE creating any tokio runtime. Track each worker's spawn
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
     let mut children: Vec<(libc::pid_t, Instant, usize)> = Vec::new();
@@ -411,10 +415,11 @@ fn run_server(
             }
             #[cfg(target_vendor = "apple")]
             if let Some(shared) = &shared_tcp {
-                // The worker is already reaped, so every descriptor still
-                // waiting for it is lost. Release those clients before the
-                // replacement starts; descriptors sent after this point stay in
-                // the channel and are served by the replacement.
+                // The worker is already reaped, so descriptors still waiting
+                // for it are released before the replacement starts. A
+                // descriptor already queued in the dead worker's channel may
+                // fail fast when the replacement reads it; it is not
+                // re-dispatched.
                 shared.release_worker(worker_index);
             }
             // The worker is gone (crash or recycle): replace it to keep the pool at N.

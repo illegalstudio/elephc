@@ -50,7 +50,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::task::{Context, Poll};
 #[cfg(target_vendor = "apple")]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -58,6 +58,76 @@ use tokio::net::{TcpListener, UnixListener};
 
 /// Pending-connection backlog for each listening socket.
 const LISTEN_BACKLOG: i32 = 1024;
+
+/// Maximum accepted sockets handed to one worker before its channel applies
+/// backpressure to the master.
+const TCP_PASS_QUEUE: usize = 64;
+
+/// Serializes descriptor-map mutation against `fork()`.
+///
+/// A child forked while another thread holds the `pending` mutex inherits a
+/// locked pthread mutex whose owner does not exist. The atfork handlers take
+/// this gate before the fork and release it in both processes, so a respawned
+/// worker can always lock `pending` in `close_in_worker`.
+#[cfg(target_vendor = "apple")]
+struct ForkGate(std::cell::UnsafeCell<libc::pthread_mutex_t>);
+
+#[cfg(target_vendor = "apple")]
+unsafe impl Sync for ForkGate {}
+
+#[cfg(target_vendor = "apple")]
+static FORK_GATE: ForkGate = ForkGate(std::cell::UnsafeCell::new(
+    libc::PTHREAD_MUTEX_INITIALIZER,
+));
+
+/// Installs the atfork handlers that make descriptor-map mutation fork-safe.
+#[cfg(target_vendor = "apple")]
+pub(crate) fn install_fork_gate() {
+    unsafe {
+        libc::pthread_atfork(
+            Some(fork_gate_prepare),
+            Some(fork_gate_release),
+            Some(fork_gate_release),
+        );
+    }
+}
+
+/// Returns the address of the process-wide fork gate mutex.
+#[cfg(target_vendor = "apple")]
+fn fork_gate_ptr() -> *mut libc::pthread_mutex_t {
+    FORK_GATE.0.get()
+}
+
+/// Acquires the fork gate before the process forks.
+#[cfg(target_vendor = "apple")]
+unsafe extern "C" fn fork_gate_prepare() {
+    unsafe { libc::pthread_mutex_lock(fork_gate_ptr()) };
+}
+
+/// Releases the fork gate in the parent and in the child.
+#[cfg(target_vendor = "apple")]
+unsafe extern "C" fn fork_gate_release() {
+    unsafe { libc::pthread_mutex_unlock(fork_gate_ptr()) };
+}
+
+/// Holds the fork gate for one descriptor-map operation.
+#[cfg(target_vendor = "apple")]
+struct ForkGateGuard;
+
+#[cfg(target_vendor = "apple")]
+impl Drop for ForkGateGuard {
+    /// Releases the fork gate.
+    fn drop(&mut self) {
+        unsafe { libc::pthread_mutex_unlock(fork_gate_ptr()) };
+    }
+}
+
+/// Serializes one descriptor-map operation against `fork()`.
+#[cfg(target_vendor = "apple")]
+fn lock_fork_gate() -> ForkGateGuard {
+    unsafe { libc::pthread_mutex_lock(fork_gate_ptr()) };
+    ForkGateGuard
+}
 
 /// Master-owned TCP listener and per-worker descriptor channels.
 ///
@@ -127,6 +197,7 @@ pub(crate) fn install_shared(
         master.set_nonblocking(true)?;
         set_no_sigpipe(master.as_raw_fd())?;
         set_no_sigpipe(worker.as_raw_fd())?;
+        set_recv_timeout(worker.as_raw_fd(), 1)?;
         set_close_on_exec(master.as_raw_fd())?;
         set_close_on_exec(worker.as_raw_fd())?;
         master_ends.push(master.into_raw_fd());
@@ -262,8 +333,12 @@ impl Drop for SharedTcp {
 /// descriptor to a worker.
 #[cfg(target_vendor = "apple")]
 fn accept_loop(shared: Arc<SharedTcp>) {
+    let mut last_error_log: Option<Instant> = None;
     while !shared.stop.load(Ordering::SeqCst) {
-        shared.drain_acks();
+        {
+            let _gate = lock_fork_gate();
+            shared.drain_acks();
+        }
         // Only accept when a connection is pending AND at least one worker can
         // receive a descriptor. Connections that cannot be handed off stay in
         // the kernel accept queue, so the backlog applies backpressure instead
@@ -274,20 +349,51 @@ fn accept_loop(shared: Arc<SharedTcp>) {
         if !shared.wait_for_writable_worker(100) {
             continue;
         }
+        // Keep accept + handoff under the fork gate so a respawned worker never
+        // inherits an accepted socket that is not yet in `pending`.
+        let _gate = lock_fork_gate();
         let accepted = unsafe {
             libc::accept(shared.listener, std::ptr::null_mut(), std::ptr::null_mut())
         };
         if accepted < 0 {
             let error = io::Error::last_os_error();
             match error.kind() {
-                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted => {}
+                io::ErrorKind::WouldBlock
+                | io::ErrorKind::Interrupted
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::BrokenPipe => {}
                 _ => {
-                    // EMFILE/ENFILE/ENOBUFS and transient peer errors must not
-                    // kill the only acceptor. Back off briefly and retry.
-                    eprintln!("elephc-web: accept failed: {error}");
-                    std::thread::sleep(Duration::from_millis(50));
+                    match error.raw_os_error() {
+                        Some(libc::EMFILE)
+                        | Some(libc::ENFILE)
+                        | Some(libc::ENOBUFS)
+                        | Some(libc::ENOMEM) => {
+                            // Resource exhaustion: log at most once per second
+                            // and back off before retrying.
+                            let now = Instant::now();
+                            if last_error_log.map_or(true, |last| {
+                                now.duration_since(last) >= Duration::from_secs(1)
+                            }) {
+                                eprintln!("elephc-web: accept failed: {error}");
+                                last_error_log = Some(now);
+                            }
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                        _ => {
+                            // A permanent listener error cannot be recovered by
+                            // retrying; report it and stop the acceptor.
+                            eprintln!("elephc-web: acceptor stopped: {error}");
+                            break;
+                        }
+                    }
                 }
             }
+            continue;
+        }
+        if let Err(error) = set_close_on_exec(accepted) {
+            eprintln!("elephc-web: accepted socket CLOEXEC failed: {error}");
+            unsafe { libc::close(accepted) };
             continue;
         }
         let stream = unsafe { TcpStream::from_raw_fd(accepted) };
@@ -337,6 +443,11 @@ impl SharedTcp {
                 };
                 if read == 8 {
                     pending.remove(&u64::from_ne_bytes(id));
+                    continue;
+                }
+                if read > 0 {
+                    // A short datagram is not a valid ack; drain past it so
+                    // one bad message cannot wedge later acks.
                     continue;
                 }
                 if read < 0
@@ -457,7 +568,14 @@ fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
         break result;
     };
     if result < 0 {
-        return Err(io::Error::last_os_error());
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::WouldBlock {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "descriptor channel idle",
+            ));
+        }
+        return Err(error);
     }
     if result == 0 {
         return Err(io::Error::new(
@@ -508,6 +626,29 @@ fn send_ack(socket: &UnixDatagram, id: u64) -> io::Result<()> {
     }
 }
 
+/// Bounds a worker-channel read so the receiver can notice a dead master.
+#[cfg(target_vendor = "apple")]
+fn set_recv_timeout(fd: RawFd, seconds: i64) -> io::Result<()> {
+    let timeout = libc::timeval {
+        tv_sec: seconds as libc::time_t,
+        tv_usec: 0,
+    };
+    let result = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_RCVTIMEO,
+            &timeout as *const libc::timeval as *const libc::c_void,
+            std::mem::size_of::<libc::timeval>() as libc::socklen_t,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// Ignores `SIGPIPE` for a descriptor channel; a dead worker is an I/O error,
 /// not a reason to terminate the master.
 #[cfg(target_vendor = "apple")]
@@ -534,19 +675,45 @@ fn set_no_sigpipe(fd: RawFd) -> io::Result<()> {
 #[cfg(target_vendor = "apple")]
 fn receive_tcp_connections(
     socket: UnixDatagram,
-    sender: tokio::sync::mpsc::UnboundedSender<std::net::TcpStream>,
+    sender: tokio::sync::mpsc::Sender<std::net::TcpStream>,
 ) {
+    let parent = unsafe { libc::getppid() };
     loop {
         let (fd, id) = match recv_fd(&socket) {
             Ok(descriptor) => descriptor,
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                // A datagram socket has no EOF. The timeout is how an orphaned
+                // worker notices that its master was killed and exits.
+                if unsafe { libc::getppid() } != parent {
+                    break;
+                }
+                continue;
+            }
             Err(_) => break,
         };
         let stream = unsafe { TcpStream::from_raw_fd(fd) };
         if stream.set_nonblocking(true).is_err() {
             break;
         }
-        if send_ack(&socket, id).is_err() || sender.send(stream).is_err() {
+        if send_ack(&socket, id).is_err() {
             break;
+        }
+        // A bounded queue is the backpressure signal the master's channel
+        // writability check sees. Keep the socket here while the queue is full
+        // so the kernel stops draining new descriptors.
+        let mut pending = stream;
+        loop {
+            match sender.try_send(pending) {
+                Ok(()) => break,
+                Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
+                    pending = returned;
+                    if unsafe { libc::getppid() } != parent {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
+            }
         }
     }
 }
@@ -682,7 +849,7 @@ pub(crate) enum Listener {
     #[cfg(target_vendor = "apple")]
     TcpPassed {
         /// Descriptor receiver filled by the channel thread.
-        receiver: tokio::sync::mpsc::UnboundedReceiver<std::net::TcpStream>,
+        receiver: tokio::sync::mpsc::Receiver<std::net::TcpStream>,
         /// The configured server address.
         server: SocketAddr,
     },
@@ -706,7 +873,7 @@ impl Listener {
             #[cfg(target_vendor = "apple")]
             ListenSource::TcpPassed(receiver, server) => {
                 let (sender, receiver_channel) =
-                    tokio::sync::mpsc::unbounded_channel::<std::net::TcpStream>();
+                    tokio::sync::mpsc::channel::<std::net::TcpStream>(TCP_PASS_QUEUE);
                 std::thread::Builder::new()
                     .name("elephc-tcp-receive".to_string())
                     .spawn(move || receive_tcp_connections(receiver, sender))
@@ -725,40 +892,40 @@ impl Listener {
     }
 
     /// Accepts one connection and returns its stream plus peer/server addresses.
-    pub(crate) async fn accept(&mut self) -> io::Result<(Stream, PeerInfo)> {
+    ///
+    /// `Ok(None)` means the master descriptor channel closed; the worker must
+    /// stop because it no longer has a listener.
+    pub(crate) async fn accept(&mut self) -> io::Result<Option<(Stream, PeerInfo)>> {
         match self {
             Self::Tcp { listener, server } => {
                 let (stream, peer) = listener.accept().await?;
-                Ok((
+                Ok(Some((
                     Stream::Tcp(stream),
                     PeerInfo {
                         remote: Some(peer),
                         server: Some(*server),
                     },
-                ))
+                )))
             }
             Self::Unix { listener } => {
                 let (stream, _) = listener.accept().await?;
-                Ok((Stream::Unix(stream), PeerInfo::unix()))
+                Ok(Some((Stream::Unix(stream), PeerInfo::unix())))
             }
             #[cfg(target_vendor = "apple")]
             Self::TcpPassed { receiver, server } => {
-                let stream = receiver.recv().await.ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::ConnectionAborted,
-                        "TCP descriptor channel closed",
-                    )
-                })?;
+                let Some(stream) = receiver.recv().await else {
+                    return Ok(None);
+                };
                 let peer = stream.peer_addr()?;
                 let local = stream.local_addr().unwrap_or(*server);
                 let stream = tokio::net::TcpStream::from_std(stream)?;
-                Ok((
+                Ok(Some((
                     Stream::Tcp(stream),
                     PeerInfo {
                         remote: Some(peer),
                         server: Some(local),
                     },
-                ))
+                )))
             }
         }
     }

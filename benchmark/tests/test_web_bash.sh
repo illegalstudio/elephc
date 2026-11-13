@@ -68,6 +68,8 @@ Running 1s test @ http://127.0.0.1:8080/
      90%   30.37ms
      99%   77.96ms
   52333 requests in 1.01s, 5.79MB read
+  Socket errors: connect 0, read 2, write 0, timeout 0
+  Non-2xx or 3xx responses: 3
 Requests/sec:  52059.32
 Transfer/sec:      5.76MB
 EOF
@@ -80,6 +82,11 @@ assert_eq "0.112000" "$wrk_latency_p50_ms" "wrk p50"
 assert_eq "77.960000" "$wrk_latency_p99_ms" "wrk p99"
 assert_eq "52333" "$wrk_requests" "wrk requests"
 assert_eq "26.24k" "$wrk_req_per_sec_avg" "wrk req/sec avg"
+assert_eq "3" "$wrk_non_2xx" "wrk non-2xx"
+case $wrk_socket_errors in
+  *"read 2"*) ;;
+  *) printf 'FAIL wrk socket errors: %s\n' "$wrk_socket_errors" >&2; failures=$((failures + 1)) ;;
+esac
 
 if ! "$WEB_DIR/run.sh" --help >/dev/null 2>&1; then
   printf 'FAIL run.sh --help\n' >&2

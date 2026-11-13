@@ -414,9 +414,13 @@ Opt in when the origin should derive the facts itself:
 `--trusted-proxy` is repeatable and accepts comma-separated IPv4/IPv6
 addresses, CIDRs, or the token `unix` for a Unix-domain peer. Only peers in the
 allowlist may supply `Forwarded` or `X-Forwarded-*`; headers from any other peer
-are ignored entirely. RFC 7239 `Forwarded` wins over `X-Forwarded-*` when it is
-present and well-formed. The chain is walked right-to-left, so trusted
-intermediates are skipped and the rightmost untrusted client address is used.
+are ignored entirely. A present RFC 7239 `Forwarded` header is authoritative:
+`X-Forwarded-*` is only consulted when no `Forwarded` header is present. The
+chain is walked right-to-left, so trusted intermediates are skipped and the
+rightmost untrusted client address is used. An entry that does not parse ends
+the walk and keeps the socket peer instead of discarding the whole chain;
+`ip:port` and `[v6]:port` entries are accepted. When the selected client address
+has no source port, `REMOTE_PORT` is `0` rather than the proxy's ephemeral port.
 `X-Forwarded-Proto` drives `REQUEST_SCHEME` and `HTTPS=on` (`HTTPS` is absent for
 HTTP), while `X-Forwarded-Port`, a forwarded `host=` port, or the scheme default
 (443/80) drives `SERVER_PORT`. Repeated scalar headers use the last line and its

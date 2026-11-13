@@ -199,9 +199,9 @@ fn trusted_proxy_same_line_proto_uses_the_rightmost_token() {
     let _ = fs::remove_dir_all(fixture);
 }
 
-/// A malformed RFC 7239 chain falls back to a valid X-Forwarded-* family.
+/// A present RFC 7239 header blocks a client-supplied X-Forwarded family.
 #[test]
-fn trusted_proxy_malformed_forwarded_falls_back_to_x_forwarded() {
+fn trusted_proxy_forwarded_presence_blocks_x_forwarded_fallback() {
     let (fixture, binary) = compile_app(None);
     let (server, addr, _) = serve(&binary, Some("127.0.0.1/32"));
     let response = http_request(
@@ -217,10 +217,9 @@ fn trusted_proxy_malformed_forwarded_falls_back_to_x_forwarded() {
     );
     assert!(response.starts_with("HTTP/1.1 200"), "{response}");
     let body = raw_response_body(&response);
-    assert_eq!(field(body, "REMOTE_ADDR"), "203.0.113.9");
-    assert_eq!(field(body, "REQUEST_SCHEME"), "https");
-    assert_eq!(field(body, "HTTPS"), "on");
-    assert_eq!(field(body, "SERVER_PORT"), "443");
+    assert_eq!(field(body, "REMOTE_ADDR"), "127.0.0.1");
+    assert_eq!(field(body, "REQUEST_SCHEME"), "http");
+    assert_eq!(field(body, "HTTPS"), "<absent>");
     drop(server);
     let _ = fs::remove_dir_all(fixture);
 }

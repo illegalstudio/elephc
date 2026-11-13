@@ -55,6 +55,7 @@ Options:
   --json PATH             Write the JSON report
   --markdown PATH         Write the Markdown report
   --timeout SECONDS       curl timeout for one new connection (default: 5)
+  --wrk-timeout SECONDS   watchdog for one keep-alive sample (default: 120)
   -h, --help              Show this help
 EOF
 }
@@ -128,7 +129,7 @@ measure_wrk() {
     "${wrk_latency_p50_ms:--}" \
     "${wrk_latency_p99_ms:--}" \
     "${wrk_requests:-0}" \
-    "0" \
+    "${wrk_non_2xx:-0}" \
     "0" \
     "${wrk_socket_errors:-none}" >>"${json%/*}/samples.tsv"
   rm -f "$output"
@@ -286,6 +287,7 @@ main() {
   local json_out=""
   local markdown_out=""
   local timeout=5
+  local wrk_timeout=120
   while (($#)); do
     case $1 in
       --elephc-url) elephc_url=$2; shift 2 ;;
@@ -300,6 +302,7 @@ main() {
       --json) json_out=$2; shift 2 ;;
       --markdown) markdown_out=$2; shift 2 ;;
       --timeout) timeout=$2; shift 2 ;;
+      --wrk-timeout) wrk_timeout=$2; shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown argument: $1" ;;
     esac
@@ -330,7 +333,7 @@ main() {
       for sample in "${pair[@]}"; do
         url=${sample%%|*}
         dir=${sample#*|}
-        measure_wrk "$url" "$threads" "$connections" "$duration" "$timeout" "$dir/$((index + 1)).json" || die "wrk failed for $url"
+        measure_wrk "$url" "$threads" "$connections" "$duration" "$wrk_timeout" "$dir/$((index + 1)).json" || die "wrk failed for $url"
         sleep 0.5
       done
     done

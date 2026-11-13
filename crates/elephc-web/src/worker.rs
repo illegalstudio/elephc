@@ -238,10 +238,10 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                 break;
             }
             let (stream, peer) = match accepted {
-                Ok(pair) => pair,
+                Ok(Some(pair)) => pair,
                 // The master owns the descriptor channel. EOF means it is gone,
                 // so this worker has no listener and must not spin.
-                Err(error) if error.kind() == std::io::ErrorKind::ConnectionAborted => break,
+                Ok(None) => break,
                 Err(_) => continue,
             };
             // Small response writes must leave immediately. Without TCP_NODELAY the
