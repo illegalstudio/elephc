@@ -245,9 +245,9 @@ pub(super) fn lower_float_neg(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             ctx.emitter.instruction("fneg d0, d0");                             // negate the loaded floating-point operand
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float register for subtraction
-            ctx.emitter.instruction("subsd xmm1, xmm0");                        // compute 0.0 - operand as floating-point negation
-            ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the negated float back to the result register
+            ctx.emitter.instruction("pcmpeqd xmm1, xmm1");                      // fill both scratch lanes with one bits without using a GPR
+            ctx.emitter.instruction("psllq xmm1, 63");                          // retain the sign bit in each 64-bit lane
+            ctx.emitter.instruction("xorpd xmm0, xmm1");                        // flip the sign while preserving signed zero and NaN payloads
         }
     }
     store_if_result(ctx, inst)

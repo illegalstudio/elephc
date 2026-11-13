@@ -70,3 +70,22 @@ fn test_strict_unary_domain_default_typed_string_complement_control() {
     assert_eq!(output.stdout, "be:be");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+
+/// A floating sign flip survives a call and a second negation without using arithmetic zero.
+#[test]
+fn test_strict_unary_ieee_scalar_negation_preserves_both_zero_signs() {
+    let source = r#"<?php
+function scalarIeeeFlip(float $value): float { return -$value; }
+$positive = $argc > 0 ? 0.0 : 1.0;
+$negative = scalarIeeeFlip($positive);
+echo fdiv(1.0, $negative) < 0.0 ? 'N' : 'P';
+echo fdiv(1.0, scalarIeeeFlip($negative)) < 0.0 ? 'N' : 'P';
+"#;
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_lowering(SemanticProfile::PERMISSIVE, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "NP", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

@@ -65,3 +65,27 @@ fn strict_unary_domain_eir_targets_optimizers_and_internal_source() {
         }
     }
 }
+
+
+/// Every target negates floats by sign, retaining NaN payloads and both zero encodings.
+#[test]
+fn strict_unary_ieee_scalar_negation_uses_sign_preserving_target_instructions() {
+    let source = "<?php function scalarIeeeNegate(float $value): float { return -$value; }";
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        let checked = crate::types::check_with_target(&program, target).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        for optimize in [false, true] {
+            let mut module = module.clone();
+            if optimize { crate::ir_passes::optimize_module(&mut module); }
+            let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            if name.ends_with("x86_64") {
+                for instruction in ["pcmpeqd xmm1, xmm1", "psllq xmm1, 63", "xorpd xmm0, xmm1"] {
+                    assert!(asm.contains(instruction), "{name}, opt={optimize}: {instruction}");
+                }
+                assert!(!asm.contains("subsd xmm1, xmm0"));
+            } else { assert!(asm.contains("fneg d0, d0"), "{name}, opt={optimize}"); }
+        }
+    }
+}

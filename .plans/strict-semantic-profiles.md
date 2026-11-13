@@ -1173,3 +1173,18 @@ prebuilt architecture audit, assembly alignment and diff hygiene pass.
 
 Further unary IEEE value/provenance work, builtin domains and binding semantics
 remain before feature admission; the public integration mask is unchanged.
+
+
+### Scalar IEEE negation target parity
+
+The broader unary signed-zero regression exposed an independent x86_64 scalar
+FNeg defect: subtracting from positive zero loses the required sign and can alter
+NaN payload behavior. x86_64 now builds an SSE2 sign mask with pcmpeqd/psllq and
+applies xorpd, keeping the existing float scratch-register footprint. AArch64
+retains its sign-preserving fneg instruction.
+
+An all-five-target emitter unit and native positive/negative-zero round trip pass
+with both optimizers and a clean heap. Compiler build, prebuilt architecture audit,
+assembly alignment and diff hygiene pass. The wider prefix-plus/Mixed unary IEEE
+regression remains pending for the next step and is intentionally not part of this
+verified scalar fix. Public feature admission is unchanged.
