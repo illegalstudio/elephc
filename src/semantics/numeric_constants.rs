@@ -41,6 +41,17 @@ impl Number {
         match self { Self::StringInt { fully_numeric, .. } | Self::StringFloat { fully_numeric, .. } => fully_numeric && !strict_types,
             Self::Bool(_) | Self::Null => !strict_types, _ => true }
     }
+
+    /// Integer parameters reject float arguments in strict PHP and out-of-range weak conversions.
+    fn integer_parameter(self, strict_types: bool) -> Option<i64> {
+        if strict_types { return if let Self::Int(value) = self { Some(value) } else { None }; }
+        if !self.valid_numeric_parameter(false) { return None; }
+        match self.numeric() {
+            Self::Int(value) => Some(value),
+            Self::Float(value) => elephc_semantics::numeric::checked_float_to_int(value).ok(),
+            _ => unreachable!("numeric normalization removes source-kind evidence"),
+        }
+    }
 }
 
 /// Distinguishes case-sensitive global/constant names from case-insensitive class names.
@@ -103,6 +114,7 @@ impl AstVisitor for FunctionDeclarations<'_> {
 /// Retains evidence only for the lifetime of one immutable source tree and its owned definitions.
 #[derive(Default)]
 struct Evidence {
+    profile: SemanticProfile,
     values: HashMap<(usize, bool, bool), Option<Number>>,
     active: HashSet<ConstantKey>,
     strict_types: bool,
@@ -114,7 +126,7 @@ pub(super) fn validate(program: &Program, profile: SemanticProfile) -> Result<()
     let mut definitions = Definitions::default();
     definitions.collect(program);
     walk_program(program, &mut FunctionDeclarations(&mut definitions.functions));
-    let mut visitor = NumericValidator { definitions, evidence: Evidence::default(), scopes: Vec::new(), error: None };
+    let mut visitor = NumericValidator { definitions, evidence: Evidence { profile, ..Default::default() }, scopes: Vec::new(), error: None };
     walk_program(program, &mut visitor);
     visitor.error.map_or(Ok(()), Err)
 }
@@ -193,7 +205,7 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
         ExprKind::BinaryOp { left, op, right } if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod | BinOp::Pow) => {
             let left = evaluate(left, checked, class, definitions, evidence)?;
             let right = evaluate(right, checked, class, definitions, evidence)?;
-            match (left, right) { (Some(left), Some(right)) => binary(expr, op, left, right, checked)?, _ => None }
+            match (left, right) { (Some(left), Some(right)) => binary(expr, op, left, right, checked, evidence.profile)?, _ => None }
         }
         ExprKind::ErrorSuppress(inner) => evaluate(inner, checked, class, definitions, evidence)?,
         _ => None,
@@ -232,7 +244,9 @@ fn builtin_number(
     use crate::builtins::semantics::BuiltinRuntimeFunctions;
     let Some(def) = crate::builtins::registry::lookup(name.trim_start_matches('\\')) else { return Ok(None); };
     let BuiltinRuntimeFunctions::One(operation) = def.spec.semantics.runtime_functions else { return Ok(None); };
-    if !matches!(operation, crate::ir::RuntimeFnId::Abs | crate::ir::RuntimeFnId::Pow) { return Ok(None); }
+    use crate::ir::RuntimeFnId;
+    if !matches!(operation, RuntimeFnId::Abs | RuntimeFnId::Pow | RuntimeFnId::Intdiv
+        | RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) { return Ok(None); }
     // Only the profile-independent parameter shape is consumed here, never its result type.
     let Some(signature) = crate::builtins::registry::function_sig(def.name) else { return Ok(None); };
     let Ok(plan) = crate::types::call_args::plan_call_args(&signature, args, expr.span, true, false) else { return Ok(None); };
@@ -245,14 +259,38 @@ fn builtin_number(
     } else { plan.normalized_args() };
     // The planner owns cloned AST nodes. Do not retain their addresses in the source-tree memo.
     // Carry the active declaration guard so a constant cycle through a builtin stays unknown.
-    let mut call_evidence = Evidence { active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
+    let mut call_evidence = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
+    if matches!(operation, RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) {
+        let [argument] = normalized.as_slice() else { return Ok(None); };
+        let Some(values) = array_numbers(argument, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
+        let product = operation == RuntimeFnId::ArrayProduct;
+        let mut carry = Number::Int(i64::from(product));
+        for value in values {
+            let Some(next) = binary(expr, if product { &BinOp::Mul } else { &BinOp::Add }, carry, value, checked, evidence.profile)?
+                else { return Ok(None); };
+            carry = next;
+        }
+        return Ok(Some(carry));
+    }
+    if operation == RuntimeFnId::Intdiv {
+        let [left, right] = normalized.as_slice() else { return Ok(None); };
+        let Some(left) = evaluate(left, checked, class, definitions, &mut call_evidence)?
+            .and_then(|value| value.integer_parameter(evidence.strict_types)) else { return Ok(None); };
+        let Some(right) = evaluate(right, checked, class, definitions, &mut call_evidence)?
+            .and_then(|value| value.integer_parameter(evidence.strict_types)) else { return Ok(None); };
+        return match checked_integer(IntegerOp::Div, left, right) {
+            Ok(value) => Ok(Some(Number::Int(value))),
+            Err(NumericFailure::Overflow) if checked => Err(CompileError::new(expr.span, INTEGER_OVERFLOW_MESSAGE)),
+            _ => Ok(None),
+        };
+    }
     if operation == crate::ir::RuntimeFnId::Pow {
         let [left, right] = normalized.as_slice() else { return Ok(None); };
         let Some(left) = evaluate(left, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
         let Some(right) = evaluate(right, checked, class, definitions, &mut call_evidence)? else { return Ok(None); };
         // Mixed pow parameters follow operator conversion even with PHP strict_types enabled.
         // The existing permissive/Internal builtin implementation always returns a float.
-        return if checked { binary(expr, &BinOp::Pow, left, right, checked) }
+        return if checked { binary(expr, &BinOp::Pow, left, right, checked, evidence.profile) }
             else { Ok(Some(Number::Float(left.as_float().powf(right.as_float())))) };
     }
     let [argument] = normalized.as_slice() else { return Ok(None); };
@@ -269,9 +307,49 @@ fn builtin_number(
     })
 }
 
+/// Retains dense array values and lexical constant aliases without guessing keyed overwrite rules.
+fn array_numbers(
+    expr: &Expr, checked: bool, class: Option<&str>, definitions: &Definitions, evidence: &mut Evidence,
+) -> Result<Option<Vec<Number>>, CompileError> {
+    if let ExprKind::ArrayLiteral(values) = &expr.kind {
+        let mut result = Vec::with_capacity(values.len());
+        for value in values {
+            let Some(value) = evaluate(value, checked, class, definitions, evidence)? else { return Ok(None); };
+            result.push(value);
+        }
+        return Ok(Some(result));
+    }
+    if definitions.unresolved_namespaces { return Ok(None); }
+    let key = match &expr.kind {
+        ExprKind::ConstRef(name) => ConstantKey::Global(name.as_str().trim_start_matches('\\').to_string()),
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            let class = match receiver {
+                StaticReceiver::Named(name) => crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')),
+                StaticReceiver::Self_ => match class { Some(class) => class.to_string(), None => return Ok(None) },
+                _ => return Ok(None),
+            };
+            ConstantKey::Class(class, name.clone())
+        }
+        _ => return Ok(None),
+    };
+    let Some(Some(definition)) = definitions.values.get(&key) else { return Ok(None); };
+    if !evidence.active.insert(key.clone()) { return Ok(None); }
+    let class = match &key { ConstantKey::Class(class, _) => Some(class.as_str()), _ => None };
+    let previous = evidence.strict_types;
+    evidence.strict_types = definition.strict_types;
+    let result = array_numbers(&definition.value, definition.mode != SourceMode::Internal, class, definitions, evidence);
+    evidence.strict_types = previous;
+    evidence.active.remove(&key);
+    result
+}
+
 /// Applies checked integer kernels only when PHP would actually choose integer arithmetic.
-fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool) -> Result<Option<Number>, CompileError> {
+fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, profile: SemanticProfile) -> Result<Option<Number>, CompileError> {
     let (left, right) = (left.numeric(), right.numeric());
+    if checked && profile.contains(StrictFeature::Arithmetic) && matches!(op, BinOp::Div) {
+        let (left, right) = (left.as_float(), right.as_float());
+        return Ok((right != 0.0).then(|| Number::Float(left / right)));
+    }
     if let (Number::Int(left), Number::Int(right)) = (left, right) {
         let operation = match op { BinOp::Add => Some(IntegerOp::Add), BinOp::Sub => Some(IntegerOp::Sub),
             BinOp::Mul => Some(IntegerOp::Mul), BinOp::Mod => Some(IntegerOp::Mod), BinOp::Pow if right >= 0 => Some(IntegerOp::Pow), _ => None };
@@ -300,146 +378,5 @@ fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool) -
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Parses checked integer spellings without exposing the unfinished CLI feature.
-    fn parse(source: &str) -> Program {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
-        crate::parser::parse(&crate::lexer::tokenize_with_semantics(source, SourceMode::Php, 0, profile).unwrap()).unwrap()
-    }
-
-    /// Power evidence uses Mixed operand rules, planned arguments and lexical source contracts.
-    #[test]
-    fn strict_pow_source_constants_share_operator_evidence_and_argument_planning() {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
-        for source in [
-            "<?php if (false) { pow(2, 63); }",
-            "<?php POW(exponent: 2, num: PHP_INT_MAX);",
-            "<?php pow(...[PHP_INT_MAX, 2]);",
-            "<?php declare(strict_types=1); pow('9223372036854775807', 2);",
-            "<?php const BASE = '9223372036854775807'; pow(BASE, 2);",
-            "<?php pow('9223372036854775807x', true + 1);",
-            "<?php eval('pow(2, 63);');",
-        ] {
-            let error = super::super::validate_source(&parse(source), profile).expect_err(source);
-            assert!(error.message.contains("strict-overflow"), "{source}: {error:?}");
-        }
-        for source in [
-            "<?php pow(-2, 63); pow(2, -1); pow('9223372036854775808', 2);",
-            "<?php const LOOP = pow(LOOP, 2); pow(LOOP, 2);",
-            "<?php function pow($n, $e) { return 0; } pow(PHP_INT_MAX, 2);",
-            "<?php pow(num: 0, 2);",
-        ] { assert!(super::super::validate_source(&parse(source), profile).is_ok(), "{source}"); }
-        let mut program = parse("<?php const BASE = pow(PHP_INT_MAX, 2); echo BASE + 1;");
-        program[0].source_mode = SourceMode::Internal;
-        assert!(validate(&program, profile).is_ok());
-    }
-
-    /// Provable overflow is rejected in dead syntax, exact-width literals and scalar coercions.
-    #[test]
-    fn strict_overflow_constants_validate_unpruned_numeric_trees() {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
-        for expression in ["9223372036854775807 + 1", "-9223372036854775808 - 1", "9223372036854775807 * 2",
-            "2 ** 63", "-(-9223372036854775808)", "(9223372036854775806 + 1) + 1",
-            "'9223372036854775807' + true", "('9223372036854775807' + null) + 1"] {
-            let program = parse(&format!("<?php if (false) {{ echo {expression}; }}"));
-            let error = validate(&program, profile).unwrap_err();
-            assert!(error.message.contains("strict-overflow"), "{expression}: {error:?}");
-            assert!(validate(&program, SemanticProfile::PERMISSIVE).is_ok());
-        }
-        for expression in ["9223372036854775807 + 0", "-9223372036854775808 - 0", "(-2) ** 63", "2 ** -1",
-            "1.0e308 * 1.0e308", "'9223372036854775808' + 1", "-9223372036854775808 % -1", "1 / 0"] {
-            assert!(validate(&parse(&format!("<?php echo {expression};")), profile).is_ok(), "{expression}");
-        }
-    }
-
-    /// Forward aliases and lexical class constants share exact evidence and never recurse through cycles.
-    #[test]
-    fn strict_overflow_constants_resolve_aliases_without_guessing_cycles() {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
-        for source in [
-            "<?php const LAST = LIMIT; const LIMIT = PHP_INT_MAX; if (false) { echo LAST + 1; }",
-            "<?php class Limits { const LAST = self::LIMIT; const LIMIT = PHP_INT_MAX; } echo lImItS::LAST + 1;",
-            "<?php class Limits { const LAST = PHP_INT_MAX; function check() { echo self::LAST + 1; } }",
-        ] { assert!(validate(&parse(source), profile).is_err(), "{source}"); }
-        for source in ["<?php const A = B; const B = A; echo A + 1;",
-            "<?php if ($argc) { const A = PHP_INT_MAX; } echo A + 1;",
-            "<?php const A = PHP_INT_MAX; const A = 0; echo A + 1;",
-            "<?php namespace One { const LIMIT = PHP_INT_MAX; } namespace Two { const LIMIT = 0; echo LIMIT + 1; }",
-        ] { assert!(validate(&parse(source), profile).is_ok(), "{source}"); }
-        for (source, invalid) in [
-            ("<?php namespace One { const LIMIT = PHP_INT_MAX; } namespace Two { const LIMIT = 0; echo LIMIT + 1; }", false),
-            ("<?php namespace One { const LIMIT = PHP_INT_MAX; } namespace Two { use const One\\LIMIT as MAX; echo MAX + 1; }", true),
-        ] {
-            let resolved = crate::name_resolver::resolve(parse(source)).unwrap();
-            assert_eq!(validate(&resolved, profile).is_err(), invalid, "{source}");
-        }
-    }
-
-    /// Trusted implementation constants keep their PHP kind at a checked user consumption site.
-    #[test]
-    fn strict_overflow_constants_keep_internal_constant_result_kinds() {
-        let mut program = parse("<?php const LIMIT = PHP_INT_MAX + 1; echo -LIMIT;");
-        program[0].source_mode = SourceMode::Internal;
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
-        assert!(validate(&program, profile).is_ok());
-        program[0].source_mode = SourceMode::Php;
-        assert!(validate(&program, profile).is_err());
-    }
-
-    /// The shared source boundary checks literal eval and all declaration expression positions.
-    #[test]
-    fn strict_overflow_constants_validate_literal_eval_and_declaration_defaults() {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
-        for source in [
-            "<?php if (false) { eval('echo PHP_INT_MAX + 1;'); }",
-            "<?php eval('echo 1;'); eval('echo 2 ** 63;');",
-            "<?php function example(int $value = PHP_INT_MAX + 1) {}",
-            "<?php class Example { public int $value = PHP_INT_MAX + 1; }",
-            "<?php #[Example(PHP_INT_MAX + 1)] class Annotated {}",
-            "<?php $closure = fn() => PHP_INT_MAX + 1;",
-        ] {
-            let error = super::super::validate_source(&parse(source), profile).unwrap_err();
-            assert!(error.message.contains("strict-overflow"), "{source}: {error:?}");
-        }
-        let program = parse("<?php const OUTER_MAX = PHP_INT_MAX; eval('echo OUTER_MAX + 1;'); eval('echo 1 + 2;');");
-        assert!(super::super::validate_source(&program, profile).is_ok());
-    }
-
-    /// Abs uses full numeric-string parameters, shared call planning and declaration-safe proofs.
-    #[test]
-    fn strict_abs_source_constants_validate_known_magnitudes_without_guessing_names() {
-        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
-        for source in [
-            "<?php abs(PHP_INT_MIN);",
-            "<?php if (false) { ABS(num: PHP_INT_MIN); }",
-            "<?php abs(...[PHP_INT_MIN]);",
-            "<?php const MINIMUM = PHP_INT_MIN; abs(MINIMUM);",
-            "<?php const MINIMUM = '-9223372036854775808'; abs(MINIMUM);",
-            "<?php class Limits { const MINIMUM = PHP_INT_MIN; } abs(Limits::MINIMUM);",
-            "<?php eval('abs(PHP_INT_MIN);');",
-        ] {
-            let error = super::super::validate_source(&parse(source), profile)
-                .expect_err(source);
-            assert!(error.message.contains("strict-overflow"), "{source}: {error:?}");
-        }
-        for source in [
-            "<?php abs(PHP_INT_MAX); abs(-1.25); abs('-9223372036854775809');",
-            "<?php abs('-9223372036854775808x');",
-            "<?php declare(strict_types=1); abs('-9223372036854775808');",
-            "<?php declare(strict_types=1); echo PHP_INT_MAX + abs(true);",
-            "<?php const PREFIX = '-9223372036854775808x'; abs(PREFIX);",
-            "<?php const LOOP = abs(LOOP); abs(LOOP);",
-            "<?php namespace Local; function abs($n) { return 0; } abs(PHP_INT_MIN);",
-            "<?php function abs($n) { return 0; } abs(PHP_INT_MIN);",
-            "<?php extern function abs(int $n): int; abs(PHP_INT_MIN);",
-        ] {
-            assert!(super::super::validate_source(&parse(source), profile).is_ok(), "{source}");
-        }
-        let mut internal = parse("<?php abs(PHP_INT_MIN);");
-        internal[0].source_mode = SourceMode::Internal;
-        assert!(validate(&internal, profile).is_ok());
-    }
-
-}
+#[path = "numeric_constants/tests.rs"]
+mod tests;

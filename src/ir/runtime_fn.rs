@@ -2475,6 +2475,7 @@ impl RuntimeFnId {
         matches!(
             self,
             RuntimeFnId::Abs
+                | RuntimeFnId::Intdiv
                 | RuntimeFnId::ArraySum
                 | RuntimeFnId::ArrayProduct
                 | RuntimeFnId::CloneWith
@@ -2513,7 +2514,7 @@ impl RuntimeFnId {
                         | PhpType::Void
                 )
             }),
-            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
+            RuntimeFnId::Intdiv | RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
             | RuntimeFnId::Gettype | RuntimeFnId::InArray
             | RuntimeFnId::MemoryGetAllocations
             | RuntimeFnId::MemoryGetFrees

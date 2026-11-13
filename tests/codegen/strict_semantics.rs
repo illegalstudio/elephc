@@ -429,3 +429,30 @@ try { strict_string_operator('invalid', 2.0); } catch (TypeError $error) { echo 
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Integer division keeps catchable overflow and zero guards on all callable routes.
+#[test]
+fn test_strict_numeric_builtins_staged_intdiv_boundaries() {
+    let source = r#"<?php
+function strict_integer_division(int $left, int $right): int { return intdiv($left, $right); }
+$minimum = $argc > 0 ? PHP_INT_MIN : 0;
+try { strict_integer_division($minimum, -1); } catch (ArithmeticError $error) { echo 'I'; }
+$divide = intdiv(...);
+try { $divide($minimum, -1); } catch (ArithmeticError $error) { echo 'F'; }
+try { call_user_func('intdiv', $minimum, -1); } catch (ArithmeticError $error) { echo 'C'; }
+try { call_user_func_array('intdiv', [$minimum, -1]); } catch (ArithmeticError $error) { echo 'A'; }
+$name = $argc > 0 ? 'intdiv' : 'fdiv';
+try { $name($minimum, -1); } catch (ArithmeticError $error) { echo 'D'; }
+try { strict_integer_division(1, 0); } catch (DivisionByZeroError $error) { echo 'Z'; }
+echo ':', strict_integer_division(-7, 2), ':', strict_integer_division($minimum, 1), ':', strict_integer_division(0, -1);
+"#;
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE.with(elephc_semantics::StrictFeature::Overflow, true);
+    for profile in [elephc_semantics::SemanticProfile::PERMISSIVE, profile] {
+        for optimize in [false, true] {
+            let output = StrictFixture::new(source).capture_staged_lowering(profile, optimize);
+            assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+            assert_eq!(output.stdout, "IFCADZ:-3:-9223372036854775808:0", "opt={optimize}");
+            assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+        }
+    }
+}

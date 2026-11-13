@@ -809,3 +809,30 @@ checked power native fixtures pass. Compiler/exporter builds, complete generated
 builtin docs and architecture audits, and assembly/diff hygiene pass. Source
 evidence for reductions and remaining numeric/storage/eval integration follow
 before exposing the overflow flag.
+
+
+### Dense reduction evidence and integer division boundaries
+
+Source evidence now evaluates dense array_sum/product operands in order, including
+forward global/class constant aliases, empty identities and intermediate overflow
+before a later float. Unknown keyed/spread layouts remain conservative until the
+shared literal-key planner is integrated; they are still checked at runtime.
+Intdiv evidence respects strict PHP integer parameters, weak conversion range,
+full numeric strings and invalid-call precedence. Proof contexts retain the full
+semantic profile, so strict-arithmetic division keeps Float rather than creating
+a false overflowing integer intermediate. Cohesive proof tests moved to their
+own module.
+
+Integer division reuses the shared target-aware ArithmeticError emitter instead
+of duplicating Throwable allocation and unwind assembly. Its existing typed
+wrapper now also participates in runtime-selected callable dispatch; this fixes
+the accepted dynamic call reaching an undefined-function fatal.
+
+Validation: seven source-evidence tests and all-five-target/source-mode division
+emission pass. The native division fixture passes permissive and checked profiles
+with both optimizer settings and clean heaps across direct, FCC, CUF/CUFA, dynamic,
+overflow, zero-divisor and valid-boundary cases. Two existing PHP intdiv overflow
+regressions pass. Compiler/exporter builds, generated builtin docs/architecture
+audits, assembly comments and diff hygiene pass. The final dynamic-target unit
+and native control rerun also pass on the final sources. Keyed literal evidence,
+eval arithmetic and remaining strict guarantees continue in the following steps.
