@@ -768,6 +768,9 @@ fn validate_instruction_immediate(
                         .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
             })
         }
+        MixedMinMax => require_immediate(inst_id, inst, "min/max rule", |imm| {
+            matches!(imm, Imm::I64(rule) if crate::ir::MinMaxRule::from_immediate(*rule).is_some())
+        }),
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
@@ -951,6 +954,9 @@ fn validate_opcode_rules(
         ICheckedNumericChainToInt => check_checked_numeric_chain(function, inst_id, inst),
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
+        // Each operand is a raw int/float scalar or a boxed Mixed cell; the backend dispatches
+        // on the operand's EIR type, so only the arity is pinned here.
+        MixedMinMax => check_count(inst_id, inst, 2, "2"),
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
         // the arity is pinned here; the backend dispatches on the operand's EIR type.
         StrIncDec => check_count(inst_id, inst, 1, "1"),

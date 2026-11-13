@@ -10,12 +10,14 @@
 //! - Every target uses the same 24-byte layout and the target-aware frame helpers.
 //! - A raw integer/float seed of a proven numeric local writes that slot's own seed cell.
 //! - A clone of a proven numeric value copies its tag and payload into the clone's own cell.
+//! - A `min()`/`max()` selection copies the winning operand's own tag and payload, so an integer
+//!   that beats a float stays an integer; only the comparison promotes a mixed pair to doubles.
 //! - Tagged numeric arithmetic remains a clobber point, so its extra caller-saved tag registers
 //!   cannot contain unrelated live SSA values. Both operand homes are read first.
 
 use crate::codegen::{abi, platform::Arch, Result};
 use crate::codegen::context::FunctionContext;
-use crate::ir::{Instruction, MixedNumericOp, Op};
+use crate::ir::{Instruction, MinMaxRule, MixedNumericOp, Op};
 use crate::types::PhpType;
 use super::{expect_operand, load_integer_operand, store_if_result};
 use super::super::numeric_payloads;
@@ -53,6 +55,106 @@ pub(super) fn lower_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruction, off
     let left_type = numeric_payloads::payload(ctx, lhs, left, left_tag)?;
     let right_type = numeric_payloads::payload(ctx, rhs, right, right_tag)?;
     tagged(ctx, inst, offset, op, left_type, right_type)
+}
+
+/// Selects the `min()`/`max()` of two proven numeric operands into the result's frame cell.
+///
+/// Two integer tags compare as signed integers; any float promotes both sides to doubles for
+/// the comparison only, as PHP does. The winner's original tag and payload are then copied,
+/// so the result keeps the selected operand's type. Both payloads are read before the cell is
+/// written, which keeps `$m = max($m, $x)` correct when `$m` already lives in this cell.
+pub(super) fn lower_min_max(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: usize, rule: MinMaxRule) -> Result<()> {
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let (left, right, left_tag, right_tag, combined) = registers(ctx);
+    ctx.load_value_to_reg(lhs, left)?;
+    ctx.load_value_to_reg(rhs, right)?;
+    let left_type = numeric_payloads::payload(ctx, lhs, left, left_tag)?;
+    let right_type = numeric_payloads::payload(ctx, rhs, right, right_tag)?;
+    let integer = ctx.next_label("stack_min_max_integer");
+    let take_left = ctx.next_label("stack_min_max_left");
+    let take_right = ctx.next_label("stack_min_max_right");
+    let done = ctx.next_label("stack_min_max_done");
+    let other_float = match ctx.emitter.target.arch { Arch::AArch64 => "d1", Arch::X86_64 => "xmm1" };
+    // -- compare two integer tags exactly and any other numeric pair as PHP doubles --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("orr {combined}, {left_tag}, {right_tag}")); // a zero combined tag means both payloads are PHP integers
+            ctx.emitter.instruction(&format!("cbz {combined}, {integer}"));     // compare two integers without a lossy double conversion
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov {combined}, {left_tag}"));    // preserve the individual tags for the selected result
+            ctx.emitter.instruction(&format!("or {combined}, {right_tag}"));    // a zero combined tag means both payloads are PHP integers
+            ctx.emitter.instruction(&format!("test {combined}, {combined}"));   // select integer or floating-point comparison from the actual tags
+            ctx.emitter.instruction(&format!("jz {integer}"));                  // compare two integers without a lossy double conversion
+        }
+    }
+    numeric_payloads::float(ctx, &left_type, left, left_tag, abi::float_result_reg(ctx.emitter));
+    numeric_payloads::float(ctx, &right_type, right, right_tag, other_float);
+    match (ctx.emitter.target.arch, rule) {
+        (Arch::AArch64, MinMaxRule::MaxPair) => {
+            ctx.emitter.instruction("fcmp d0, d1");                             // order the left double against the right double
+            ctx.emitter.instruction(&format!("b.lt {take_right}"));             // a smaller or unordered left operand fails `left >= right`
+        }
+        (Arch::AArch64, MinMaxRule::MaxFold) => {
+            ctx.emitter.instruction("fcmp d0, d1");                             // order the running double against the candidate double
+            ctx.emitter.instruction(&format!("b.mi {take_right}"));             // only an ordered, strictly greater candidate replaces the result
+        }
+        (Arch::AArch64, MinMaxRule::MinPair) => {
+            ctx.emitter.instruction("fcmp d0, d1");                             // order the left double against the right double
+            ctx.emitter.instruction(&format!("b.pl {take_right}"));             // an equal, greater or unordered left operand fails `left < right`
+        }
+        (Arch::AArch64, MinMaxRule::MinFold) => {
+            ctx.emitter.instruction("fcmp d0, d1");                             // order the running double against the candidate double
+            ctx.emitter.instruction(&format!("b.gt {take_right}"));             // only an ordered, strictly smaller candidate replaces the result
+        }
+        (Arch::X86_64, MinMaxRule::MaxPair) => {
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // order the left double against the right double
+            ctx.emitter.instruction(&format!("jb {take_right}"));               // a smaller or unordered left operand fails `left >= right`
+        }
+        (Arch::X86_64, MinMaxRule::MaxFold) => {
+            ctx.emitter.instruction("ucomisd xmm1, xmm0");                      // order the candidate double against the running double
+            ctx.emitter.instruction(&format!("ja {take_right}"));               // only an ordered, strictly greater candidate replaces the result
+        }
+        (Arch::X86_64, MinMaxRule::MinPair) => {
+            ctx.emitter.instruction("ucomisd xmm1, xmm0");                      // order the right double against the left double
+            ctx.emitter.instruction(&format!("jbe {take_right}"));              // a right operand that is not strictly greater, or unordered, wins
+        }
+        (Arch::X86_64, MinMaxRule::MinFold) => {
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // order the running double against the candidate double
+            ctx.emitter.instruction(&format!("ja {take_right}"));               // only an ordered, strictly smaller candidate replaces the result
+        }
+    }
+    ctx.emit_branch(&take_left);
+    ctx.emitter.label(&integer);
+    let (aarch64, x86_64) = match rule {
+        MinMaxRule::MaxPair | MinMaxRule::MaxFold => ("b.lt", "jl"),
+        MinMaxRule::MinPair => ("b.ge", "jge"),
+        MinMaxRule::MinFold => ("b.gt", "jg"),
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {left}, {right}"));           // order the two signed integer payloads
+            ctx.emitter.instruction(&format!("{aarch64} {take_right}"));        // select the right operand when the rule rejects the left one
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {left}, {right}"));           // order the two signed integer payloads
+            ctx.emitter.instruction(&format!("{x86_64} {take_right}"));         // select the right operand when the rule rejects the left one
+        }
+    }
+    // -- copy the winner's own tag and payload into the frame-local Mixed cell --
+    ctx.emitter.label(&take_left);
+    write_cell(ctx, offset, left, CellTag::Register(left_tag));
+    ctx.emit_branch(&done);
+    ctx.emitter.label(&take_right);
+    // The right tag lives in the register `store_at_offset` uses as its AArch64 address
+    // scratch for a cell beyond the short frame range, so the payload store would destroy it.
+    // The combined-tag register is dead after the comparison and is never a store scratch.
+    abi::emit_reg_move(ctx.emitter, combined, right_tag);
+    write_cell(ctx, offset, right, CellTag::Register(combined));
+    ctx.emitter.label(&done);
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    store_if_result(ctx, inst)
 }
 
 /// Updates a proven numeric increment cell while retaining float promotion across iterations.

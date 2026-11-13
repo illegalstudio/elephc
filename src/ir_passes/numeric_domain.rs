@@ -22,6 +22,15 @@ pub(crate) fn mixed(inst: &crate::ir::Instruction) -> bool {
         Some(Immediate::MixedNumericOp(MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul)))
 }
 
+/// Recognizes a `min()`/`max()` selection, which copies one operand's tag and payload.
+///
+/// With two numeric operands the winner is an integer or a float, so the result stays inside
+/// the numeric domain and the selection only observes its operands.
+pub(crate) fn min_max(inst: &crate::ir::Instruction) -> bool {
+    inst.op == Op::MixedMinMax && inst.operands.len() == 2 && matches!(inst.immediate,
+        Some(Immediate::I64(rule)) if crate::ir::MinMaxRule::from_immediate(rule).is_some())
+}
+
 /// Recognizes only the two unary steps whose numeric semantics are checked addition.
 pub(crate) fn increment(inst: &crate::ir::Instruction) -> bool {
     inst.op == Op::StrIncDec && matches!(inst.immediate, Some(Immediate::I64(-1 | 1)))
@@ -150,6 +159,9 @@ fn numeric_uncached(function: &Function, value: ValueId, slots: &mut HashSet<Loc
         }
         Op::MixedNumericBinop if mixed(inst) => {
             inst.operands.len() == 2 && inst.operands.iter().all(|&value| numeric(function, value, slots, locals, proven, rejected, known))
+        }
+        Op::MixedMinMax if min_max(inst) => {
+            inst.operands.iter().all(|&value| numeric(function, value, slots, locals, proven, rejected, known))
         }
         Op::StrIncDec if increment(inst) => {
             inst.operands.len() == 1 && numeric(function, inst.operands[0], slots, locals, proven, rejected, known)
@@ -294,6 +306,26 @@ mod tests {
         builder.terminate(term);
         assert!(crate::ir::validate_function(&function).is_ok());
         assert!(inputs(&function, &[loaded]));
+    }
+
+    /// A min/max selection stays numeric only when both of its operands are numeric.
+    #[test]
+    fn numeric_domain_min_max_selection_follows_its_operands() {
+        for numeric_partner in [true, false] {
+            let (mut function, loaded, nonnumeric, one) = shared_cycle();
+            let entry = function.entry;
+            let term = function.blocks[entry.as_raw() as usize].terminator.take().unwrap();
+            let mut builder = Builder::new(&mut function);
+            builder.position_at_end(entry);
+            let partner = if numeric_partner { one } else { nonnumeric };
+            let selected = builder.emit(Op::MixedMinMax, vec![loaded, partner],
+                Some(Immediate::I64(crate::ir::MinMaxRule::MinPair.immediate())),
+                IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned).unwrap();
+            builder.terminate(term);
+            assert!(crate::ir::validate_function(&function).is_ok());
+            assert_eq!(inputs(&function, &[selected]), numeric_partner);
+            assert!(inputs(&function, &[loaded]), "the selection only observes the local");
+        }
     }
 
     /// Shared local cycles validate accesses once while retaining all-writer checks.

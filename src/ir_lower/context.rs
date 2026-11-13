@@ -4241,6 +4241,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
@@ -4473,6 +4474,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(argument),
             Some(
                 Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub

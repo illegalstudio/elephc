@@ -94,6 +94,7 @@ mod method_loop_counters;
 mod checked_numeric_chain;
 mod integer_destinations;
 mod numeric_consumers;
+mod min_max_selection;
 mod counter_fast_paths;
 mod counter_region_comparisons;
 mod integer_property_updates;

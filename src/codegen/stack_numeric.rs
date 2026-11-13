@@ -8,7 +8,8 @@
 //! - Numeric consumers copy payloads; one local or owned operand slot may retain the pointer,
 //!   beside any block-scoped call-operand temporaries that pin it while an operand is evaluated.
 //! - A string cast is a payload observation: numeric tags render into concat scratch without
-//!   adopting the cell, so an accumulator echoed at loop exit keeps its frame storage.
+//!   adopting the cell, so an accumulator echoed at loop exit keeps its frame storage. A direct
+//!   `echo`/`print` of the cell runs the same dispatch and is an observation too.
 //! - Pointer reads cannot survive another execution of the producing instruction.
 //! - Independent producers may intervene, but owning-slot replacements invalidate borrowed reads.
 //! - Array and hash keys only copy the cell into key registers, so they are numeric observations.
@@ -19,6 +20,9 @@
 //! - A Mixed clone of a proven numeric value copies only its tag and payload, so reading a cell
 //!   into a clone is an observation, and the clone itself can own a frame cell for one local
 //!   (an update's key snapshot, say) instead of a fresh heap box.
+//! - A `min()`/`max()` selection over proven numeric operands is the same kind of observation
+//!   and producer: it copies the winner's tag and payload, so its operands keep their cells and
+//!   its own result can use one.
 
 use crate::ir::{
     Function, Immediate, InstId, IrHeapKind, IrType, LocalKind, LocalSlotId, Op, Ownership,
@@ -32,6 +36,8 @@ use std::collections::{HashMap, HashSet};
 mod tests;
 #[cfg(test)]
 mod comparison_tests;
+#[cfg(test)]
+mod min_max_tests;
 mod placement;
 mod retirement;
 pub(super) use retirement::frame_only_locals;
@@ -313,6 +319,7 @@ impl Proof<'_> {
                         .result
                         .is_some_and(|result| self.value_uses(result, producer, seen, stores)),
                     Op::Cast | Op::ReturnBoundaryMixedToInt => scalar_observation(user),
+                    Op::EchoValue | Op::PrintValue => output_observation(user),
                     _ if key_observation(user, value) => true,
                     _ if (domain::comparison(user) || domain::identity(user))
                         && self.numeric_inputs(&user.operands) => true,
@@ -497,6 +504,7 @@ impl Proof<'_> {
                 let arithmetic = tagged_producer(inst) && self.numeric_inputs(&inst.operands);
                 let comparison = domain::comparison(inst) && self.numeric_inputs(&inst.operands);
                 if !scalar_observation(inst)
+                    && !output_observation(inst)
                     && !tag_or_payload_copy(inst)
                     && !arithmetic
                     && !comparison
@@ -580,9 +588,9 @@ fn producer_op(inst: &crate::ir::Instruction) -> bool {
     checked(inst.op) || tagged_producer(inst)
 }
 
-/// Includes unary updates only when their complete input graph is numeric.
+/// Includes unary updates and min/max selections only when their complete input graph is numeric.
 fn tagged_producer(inst: &crate::ir::Instruction) -> bool {
-    domain::mixed(inst) || domain::increment(inst)
+    domain::mixed(inst) || domain::increment(inst) || domain::min_max(inst)
 }
 
 /// Shares the closed numeric proof with comparison lowering; no pointer lifetime is extended.
@@ -635,6 +643,16 @@ fn scalar_observation(inst: &crate::ir::Instruction) -> bool {
                 | (Some(Immediate::CastTarget(IrType::F64)), PhpType::Float)
                 | (Some(Immediate::CastTarget(IrType::Str)), PhpType::Str)
         ))
+}
+
+/// Writes a numeric cell's formatted payload to the output stream.
+///
+/// `echo`/`print` of a boxed value run the same tag dispatch as a string cast and then write
+/// the bytes: an integer or float is formatted into concat scratch and never retained or
+/// freed. An output handler may run user code, but the cell belongs to a private local of
+/// this frame, which no other activation can name.
+fn output_observation(inst: &crate::ir::Instruction) -> bool {
+    matches!(inst.op, Op::EchoValue | Op::PrintValue) && inst.operands.len() == 1
 }
 
 /// Copies a checked payload into a declared `int` property word; the narrowing keeps PHP's

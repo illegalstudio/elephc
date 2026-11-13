@@ -931,6 +931,11 @@ impl<'a> ConcatInertAnalysis<'a> {
             Op::PhpRelCmp if super::numeric_domain::comparison(inst) => {
                 return super::numeric_domain::inputs(self.function, &inst.operands);
             }
+            // Two numeric operands compare without the number-to-string leg, so the selection
+            // only allocates its result cell and never touches concat scratch.
+            Op::MixedMinMax if super::numeric_domain::min_max(inst) => {
+                return super::numeric_domain::inputs(self.function, &inst.operands);
+            }
             Op::IterStart
             | Op::IterNext
             | Op::IterCurrentKey

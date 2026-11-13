@@ -142,6 +142,8 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | IDiv | ISDiv | ISMod
             | IPow | INeg | IBitAnd | IBitOr | IBitXor
             | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
+            // A min/max selection reads both operands and returns a detached copy of the winner.
+            | MixedMinMax
             // Comparisons.
             | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq
             | LooseNotEq | PhpRelCmp | Spaceship
@@ -190,6 +192,10 @@ pub(crate) fn runtime_call_observes_scalar_by_value(inst: &crate::ir::Instructio
             | crate::ir::RuntimeFnId::BufferPtr
             | crate::ir::RuntimeFnId::Intdiv
             | crate::ir::RuntimeFnId::Abs
+            // The scalar forms compare register values and the single-array form reduces a
+            // borrowed container into fresh storage; neither retains an operand.
+            | crate::ir::RuntimeFnId::Min
+            | crate::ir::RuntimeFnId::Max
             | crate::ir::RuntimeFnId::Sqrt
             | crate::ir::RuntimeFnId::Round
             | crate::ir::RuntimeFnId::Sprintf

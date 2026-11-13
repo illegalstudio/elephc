@@ -893,7 +893,7 @@ handlers after every instruction) are skipped.
 Loop descriptor hoisting also accepts reviewed box operations whose complete
 value graph contains only integers and floats. `buffer_access/numeric.rs` reuses
 the shared numeric-domain proof for checked add/subtract/multiply, numeric
-increment/decrement, ordered comparisons, scalar casts, boxing and ownership
+increment/decrement, numeric `min()`/`max()` selections, ordered comparisons, scalar casts, boxing and ownership
 operations. A boxed local's stores and cleanup qualify only when every writer
 is numeric, every read has a dominating initialization, and the slot cannot
 escape by reference. Thus `$found++` and `$sum += $b[$i]` can keep one descriptor

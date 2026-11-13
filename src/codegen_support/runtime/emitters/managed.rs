@@ -299,6 +299,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_min_max_mixed(emitter);
     arrays::emit_min_max_str(emitter);
     arrays::emit_min_max_hash(emitter);
+    arrays::emit_mixed_min_max(emitter);
     objects::emit_obj_enum_kind(emitter);
     objects::emit_obj_enum_name_offset(emitter);
     objects::emit_obj_enum_case_name(emitter);

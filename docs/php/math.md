@@ -132,6 +132,36 @@ Two limitations remain in the single-array form:
   array whose elements are themselves arrays (`min([[1], [2]])`) is rejected at compile
   time rather than reduced with the wrong order.
 
+The variadic form compares its arguments with the same rules and returns the winning
+argument itself, so the result keeps that argument's value and type, exactly like PHP:
+
+```php
+var_dump(max(3, 2.5));                   // int(3)
+var_dump(max(2, 2.5));                   // float(2.5)
+var_dump(max(null, -5));                 // int(-5)
+var_dump(max(true, 2));                  // bool(true)
+var_dump(max("10", 9));                  // string(2) "10"
+var_dump(max(PHP_INT_MAX + $argc, 0));   // float(9.223372036854776E+18)
+```
+
+Ties and `NAN` follow php-src. A longer call keeps the earlier argument on a tie and never
+replaces its running result with `NAN`. The two-argument forms evaluate `a >= b ? a : b`
+and `a < b ? a : b`, so a two-argument `min()` returns its *second* argument on a tie and
+both return their second argument when either one is `NAN`:
+
+```php
+var_dump(max(1, 1.0), min(1, 1.0));       // int(1) float(1)
+var_dump(max(1, 1.0, true));              // int(1)
+var_dump(max(NAN, 1), max(1, NAN));       // int(1) float(NAN)
+```
+
+The static type of a variadic call is `int` when every argument is an `int`, `float` when
+every argument is a `float`, and `mixed` for every other mix of numbers, bools, null,
+strings and runtime-typed values, because only the comparison decides which argument is
+returned. A variadic call with an array or an object argument (other than GMP) is rejected
+at compile time. `max($f, 0)` with a `float $f` is therefore `mixed` (it can be
+`int(0)`); write `max($f, 0.0)` to keep a `float` result in registers.
+
 ## Math constants
 
 | Constant | Type | Value |

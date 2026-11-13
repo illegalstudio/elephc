@@ -476,6 +476,53 @@ impl CheckedNumericChainImmediate {
     }
 }
 
+/// Direction and tie policy of one `Op::MixedMinMax` selection between a left and a right operand.
+///
+/// php-src keeps the earlier argument on a tie and on an unordered (`NAN`) comparison when it
+/// folds three or more arguments, but its two-argument fast paths evaluate `a >= b ? a : b`
+/// for `max()` and `a < b ? a : b` for `min()`, so a two-argument `min()` returns the right
+/// operand on a tie and both two-argument forms return the right operand when either is `NAN`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i64)]
+pub enum MinMaxRule {
+    /// Two-argument `max()`: the left operand wins when `left >= right`.
+    MaxPair = 0,
+    /// A later step of a longer `max()`: the right operand wins only when `left < right`.
+    MaxFold = 1,
+    /// Two-argument `min()`: the left operand wins only when `left < right`.
+    MinPair = 2,
+    /// A later step of a longer `min()`: the right operand wins only when `right < left`.
+    MinFold = 3,
+}
+
+impl MinMaxRule {
+    /// Decodes the `I64` immediate of an `Op::MixedMinMax` instruction.
+    pub const fn from_immediate(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::MaxPair),
+            1 => Some(Self::MaxFold),
+            2 => Some(Self::MinPair),
+            3 => Some(Self::MinFold),
+            _ => None,
+        }
+    }
+
+    /// Returns the `I64` immediate that encodes this rule.
+    pub const fn immediate(self) -> i64 {
+        self as i64
+    }
+
+    /// Returns the rule for one step of a `min()`/`max()` call with `operands` arguments.
+    pub const fn for_call(want_max: bool, operands: usize) -> Self {
+        match (want_max, operands == 2) {
+            (true, true) => Self::MaxPair,
+            (true, false) => Self::MaxFold,
+            (false, true) => Self::MinPair,
+            (false, false) => Self::MinFold,
+        }
+    }
+}
+
 /// Runtime arithmetic operation carried by `Op::MixedNumericBinop`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MixedNumericOp {
@@ -962,6 +1009,12 @@ pub enum Op {
     FPow,
     FNeg,
     MixedNumericBinop,
+    /// Selects the PHP `min()`/`max()` of two operands and returns it as a fresh Mixed cell.
+    ///
+    /// Operands are raw `int`/`float` scalars or boxed Mixed cells, which are only read. The
+    /// `I64` immediate is a [`MinMaxRule`] discriminant fixing the direction and the tie/NaN
+    /// policy. The result never aliases an operand: it is a detached copy of the winner.
+    MixedMinMax,
     StrIncDec,
     ICmp,
     FCmp,
@@ -1653,6 +1706,10 @@ impl Op {
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
             StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
+            // Reads both operand cells, compares them through `__rt_php_compare` (which saves
+            // and restores the concat cursor around any number-to-string leg) and boxes a
+            // detached copy of the winner, retaining a string, array or object payload.
+            MixedMinMax => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             IterCurrentValueRef | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
@@ -1860,6 +1917,7 @@ impl Op {
             FPow => "fpow",
             FNeg => "fneg",
             MixedNumericBinop => "mixed_numeric_binop",
+            MixedMinMax => "mixed_min_max",
             StrIncDec => "str_inc_dec",
             ICmp => "icmp",
             FCmp => "fcmp",

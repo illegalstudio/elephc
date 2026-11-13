@@ -639,14 +639,20 @@ fn intval_helpers() -> Vec<Stmt> {
 
 /// Shared `min()`/`max()` reducer for one array of operands.
 ///
-/// The reducer applies PHP's last-operand-wins tie rule and only uses GMP's comparison
-/// adapter when either value is a GMP object; every other pair goes through the ordinary
-/// PHP comparison so mixed scalar arrays keep their engine semantics.
+/// `mode` is 0 for the single-array form, 1 for a variadic call with three or more
+/// arguments and 2 for a two-argument call. GMP's comparison adapter is used only when
+/// either value is a GMP object. Every other pair of a variadic call uses PHP's relational
+/// operators, which are false for an unordered `NAN`, in the shape php-src evaluates: a
+/// longer call replaces the running result only on a strict win, and the two-argument
+/// forms keep the first argument only for `first >= second` (max) or `first < second`
+/// (min). The single-array form keeps its three-way comparison.
 fn minmax_array() -> Stmt {
+    let mode_is = |mode: i64| bin(v("mode"), BinOp::StrictEq, i(mode));
+    let three_way = || bin(v("value"), BinOp::Spaceship, v("best"));
     function("__elephc_gmp_minmax_array")
         .param("strict", TypeExpr::Bool)
         .param("max", TypeExpr::Bool)
-        .param("last_min_tie", TypeExpr::Bool)
+        .param("mode", TypeExpr::Int)
         .param("values", t_array())
         .returns(t_mixed())
         .body(vec![
@@ -670,34 +676,65 @@ fn minmax_array() -> Stmt {
                     vec![assign("best", v("value"))],
                     Vec::new(),
                     Some(vec![
-                        assign(
-                            "cmp",
-                            e_ternary(
-                                or(
-                                    e_instance_of(v("value"), "GMP"),
-                                    e_instance_of(v("best"), "GMP"),
-                                ),
-                                e_static_call(
-                                    "GMP",
-                                    "__elephc_compare",
-                                    vec![v("value"), v("best")],
-                                ),
-                                bin(v("value"), BinOp::Spaceship, v("best")),
-                            ),
-                        ),
-                        // php-src replaces strictly, so equal values keep the first
-                        // candidate. The two-argument frameless min() is the one exception:
-                        // it returns its right operand on equality.
+                        assign("replace", b(false)),
                         if_(
-                            e_ternary(
-                                v("max"),
-                                bin(v("cmp"), BinOp::Gt, i(0)),
-                                e_ternary(
-                                    v("last_min_tie"),
-                                    bin(v("cmp"), BinOp::LtEq, i(0)),
-                                    bin(v("cmp"), BinOp::Lt, i(0)),
-                                ),
+                            or(
+                                e_instance_of(v("value"), "GMP"),
+                                e_instance_of(v("best"), "GMP"),
                             ),
+                            vec![
+                                assign(
+                                    "cmp",
+                                    e_static_call(
+                                        "GMP",
+                                        "__elephc_compare",
+                                        vec![v("value"), v("best")],
+                                    ),
+                                ),
+                                // php-src replaces strictly, so equal values keep the first
+                                // candidate. The two-argument frameless min() is the one
+                                // exception: it returns its right operand on equality.
+                                assign(
+                                    "replace",
+                                    e_ternary(
+                                        v("max"),
+                                        bin(v("cmp"), BinOp::Gt, i(0)),
+                                        e_ternary(
+                                            mode_is(2),
+                                            bin(v("cmp"), BinOp::LtEq, i(0)),
+                                            bin(v("cmp"), BinOp::Lt, i(0)),
+                                        ),
+                                    ),
+                                ),
+                            ],
+                            Vec::new(),
+                            Some(vec![assign(
+                                "replace",
+                                e_ternary(
+                                    v("max"),
+                                    e_ternary(
+                                        mode_is(2),
+                                        not(bin(v("best"), BinOp::GtEq, v("value"))),
+                                        e_ternary(
+                                            mode_is(1),
+                                            bin(v("value"), BinOp::Gt, v("best")),
+                                            bin(three_way(), BinOp::Gt, i(0)),
+                                        ),
+                                    ),
+                                    e_ternary(
+                                        mode_is(2),
+                                        not(bin(v("best"), BinOp::Lt, v("value"))),
+                                        e_ternary(
+                                            mode_is(1),
+                                            bin(v("value"), BinOp::Lt, v("best")),
+                                            bin(three_way(), BinOp::Lt, i(0)),
+                                        ),
+                                    ),
+                                ),
+                            )]),
+                        ),
+                        if_(
+                            v("replace"),
                             vec![assign("best", v("value"))],
                             Vec::new(),
                             None,
