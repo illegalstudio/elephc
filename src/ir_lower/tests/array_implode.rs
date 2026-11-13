@@ -81,3 +81,28 @@ echo joinBoxedArray(["object" => new JoinedObjectValue()]);
         assert!(assembly.contains(saved_array), "{name}: normalized owner offset");
     }
 }
+
+/// Boxed `join()` operands name `join()` in the fallback diagnostic, never the `implode()` alias.
+#[test]
+fn boxed_join_fallback_diagnostic_names_called_function_on_all_targets() {
+    let source = r#"<?php
+function joinOneBoxed(mixed $items): string { return join($items); }
+function joinTwoBoxed(mixed $items): string { return join(",", $items); }
+echo joinOneBoxed(["a", "b"]), joinTwoBoxed(["c", "d"]);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(
+            assembly.contains("join(): Argument #2 ($array) must be of type array\""),
+            "{name}: missing join() fallback diagnostic"
+        );
+        assert!(
+            !assembly.contains("implode(): Argument #2 ($array) must be of type array\""),
+            "{name}: join() fallback reported as implode()"
+        );
+    }
+}

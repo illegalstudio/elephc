@@ -18,8 +18,9 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// PHP's overload error when the optional array was not supplied or is null.
-const IMPLODE_NULL_TYPE_ERROR: &str = "implode(): If argument #1 ($separator) is of type string, \
+/// PHP's overload error when the optional array was not supplied or is null, completed by the
+/// called name (`implode` or `join`).
+const IMPLODE_NULL_TYPE_ERROR: &str = "If argument #1 ($separator) is of type string, \
 argument #2 ($array) must be of type array, null given";
 
 /// Evaluates PHP `implode()` over separator and array expressions.
@@ -39,15 +40,22 @@ pub(in crate::interpreter) fn eval_builtin_implode(
         // reports this overload error without attempting separator coercion.
         if let [array] = args {
             if !matches!(values.type_tag(*array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-                return eval_throw_type_error(IMPLODE_NULL_TYPE_ERROR, context, values);
+                return eval_throw_type_error(
+                    &format!("implode(): {IMPLODE_NULL_TYPE_ERROR}"),
+                    context,
+                    values,
+                );
             }
         }
-        eval_implode_declared_values_result(args, context, values)
+        eval_implode_named_result("implode", args, context, values)
     })
 }
 
 /// Joins array values in eval iteration order using PHP string conversion.
+///
+/// `name` is the called PHP function (`implode` or its `join` alias) the diagnostics report.
 pub(in crate::interpreter) fn eval_implode_result(
+    name: &str,
     separator: Option<RuntimeCellHandle>,
     array: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -65,12 +73,12 @@ pub(in crate::interpreter) fn eval_implode_result(
         }
         let message = if first_argument {
             let given = eval_given_type_name(array, context, values)?;
-            format!("implode(): Argument #1 ($separator) must be of type array|string, {given} given")
+            format!("{name}(): Argument #1 ($separator) must be of type array|string, {given} given")
         } else if separator.is_none() || tag == EVAL_TAG_NULL {
-            IMPLODE_NULL_TYPE_ERROR.to_string()
+            format!("{name}(): {IMPLODE_NULL_TYPE_ERROR}")
         } else {
             let given = eval_given_type_name(array, context, values)?;
-            format!("implode(): Argument #2 ($array) must be of type ?array, {given} given")
+            format!("{name}(): Argument #2 ($array) must be of type ?array, {given} given")
         };
         return eval_throw_type_error(&message, context, values);
     }
@@ -102,9 +110,21 @@ pub(in crate::interpreter) fn eval_implode_declared_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    eval_implode_named_result("implode", evaluated_args, context, values)
+}
+
+/// Binds evaluated `implode()`/`join()` operands by count and joins them under `name`.
+pub(in crate::interpreter) fn eval_implode_named_result(
+    name: &str,
+    evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [array] => eval_implode_result(None, *array, context, values),
-        [separator, array] => eval_implode_result(Some(*separator), *array, context, values),
+        [array] => eval_implode_result(name, None, *array, context, values),
+        [separator, array] => {
+            eval_implode_result(name, Some(*separator), *array, context, values)
+        }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

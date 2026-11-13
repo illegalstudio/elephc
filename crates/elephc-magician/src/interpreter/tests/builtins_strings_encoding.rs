@@ -208,6 +208,43 @@ return true;
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// `join()` shares implode's join but reports its own name and skips the direct-call specialization.
+#[test]
+fn execute_program_join_alias_reports_called_name() {
+    let program = parse_fragment(br#"
+class JoinArgumentObject {}
+class JoinArgumentStringable { public function __toString(): string { echo "cast|"; return "-"; } }
+echo join(["a", "b"]), "|", join(",", ["c", "d"]), "|", call_user_func("join", ["e", "f"]), "|";
+echo join(array: ["g", "h"], separator: "-"), "|", join(separator: ["i", "j"]), "\n";
+foreach ([new JoinArgumentObject(), $handle, 12, null, new JoinArgumentStringable()] as $item) {
+    try { join($item); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+    try { call_user_func("join", $item); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+try { join(",", 12); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { join(",", null); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { call_user_func_array("join", [",", new JoinArgumentObject()]); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+return true;
+"#).expect("parse join alias fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let handle = values.alloc(FakeValue::Resource(6));
+    scope.set("handle".to_string(), handle, ScopeCellOwnership::Borrowed);
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute join alias");
+
+    let overload = "join(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\n";
+    let mut expected = String::from("ab|c,d|ef|g-h|ij\n");
+    expected.push_str(&"join(): Argument #1 ($separator) must be of type array|string, JoinArgumentObject given\n".repeat(2));
+    expected.push_str(&"join(): Argument #1 ($separator) must be of type array|string, resource given\n".repeat(2));
+    expected.push_str(&overload.repeat(4));
+    expected.push_str(&format!("cast|{overload}").repeat(2));
+    expected.push_str("join(): Argument #2 ($array) must be of type ?array, int given\n");
+    expected.push_str(overload);
+    expected.push_str("join(): Argument #2 ($array) must be of type ?array, JoinArgumentObject given\n");
+    assert_eq!(values.output, expected);
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Native argument guards can inspect inherited eval stringability without conversion effects.
 #[test]
 fn implode_object_stringability_probe_does_not_invoke_to_string() {

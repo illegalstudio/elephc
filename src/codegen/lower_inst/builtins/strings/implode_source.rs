@@ -129,11 +129,12 @@ pub(super) fn emit_boxed_implode_array_type_guard(
 /// slot layout.
 ///
 /// The type guard runs before the glue is staged, making the normalizer's invalid-tag path
-/// unreachable for a well-formed value while keeping any actual TypeError catchable.
-pub(super) fn emit_boxed_implode_array_source(ctx: &mut FunctionContext<'_>) -> Result<()> {
+/// unreachable for a well-formed value while keeping any actual TypeError catchable. The
+/// fallback still names the called function (`implode` or `join`), as every other path does.
+pub(super) fn emit_boxed_implode_array_source(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
     emit_loaded_boxed_array_values(
         ctx,
-        "implode(): Argument #2 ($array) must be of type array",
+        &format!("{name}(): Argument #2 ($array) must be of type array"),
     )
 }
 

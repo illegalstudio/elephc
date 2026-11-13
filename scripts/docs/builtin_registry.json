@@ -86443,9 +86443,36 @@
     "canonical_name": "join",
     "description": "Joins array elements into a single string using a separator (alias of implode).",
     "eval": {
-      "kind": "none",
-      "supported": false,
-      "unsupported_reason": "eval-implementation-pending"
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "string",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/join.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "separator",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "array",
+          "optional": true,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "examples": [],
