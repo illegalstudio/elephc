@@ -40,6 +40,12 @@ bitflags! {
 impl Effects {
     pub const PURE: Effects = Effects::empty();
 
+    /// Describes arbitrary PHP callbacks without claiming direct blocking or network operations.
+    pub const fn php_callback() -> Effects {
+        Effects::from_bits_retain(Effects::all().bits()
+            & !Effects::BLOCKING_IO.bits() & !Effects::NETWORK_IO.bits())
+    }
+
     /// Returns true when no effect bits are set.
     pub fn is_pure(self) -> bool {
         self.is_empty()

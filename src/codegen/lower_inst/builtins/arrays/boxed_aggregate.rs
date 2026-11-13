@@ -21,7 +21,14 @@ pub(super) fn lower_aggregate(ctx: &mut FunctionContext<'_>, inst: &Instruction,
     abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), 0);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1),
         i64::from(crate::codegen::compile_php_version().version_id() >= 80300));
-    abi::emit_call_label(ctx.emitter, if product { "__rt_array_product_boxed" } else { "__rt_array_sum_boxed" });
+    let checked = inst.arithmetic_policy().checked_overflow();
+    let helper = match (product, checked) {
+        (false, false) => "__rt_array_sum_boxed",
+        (true, false) => "__rt_array_product_boxed",
+        (false, true) => "__rt_strict_array_sum_boxed",
+        (true, true) => "__rt_strict_array_product_boxed",
+    };
+    abi::emit_call_label(ctx.emitter, helper);
     abi::emit_release_temporary_stack(ctx.emitter, 32);
     let valid = ctx.next_label("array_aggregate_valid");
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);

@@ -779,3 +779,33 @@ Compiler/exporter builds and the complete docs/architecture audits pass. Four
 abs units, its native fixture and the earlier boxed arithmetic/power fixture
 also pass after sharing the numeric result helper. The pre-existing permissive typed-string
 pow backend gap is tracked separately as journal task 85c52504.
+
+
+### Checked numeric array reductions and guarded map fallbacks
+
+Array sum/product homes now emit typed NumericFunction policies through a shared
+EIR descriptor. Separate checked runtime entries reuse numeric classification and
+resumable cleanup, with checked add/multiply and no PHP-promoting packed sum fast
+path. Callable refinements follow DynamicRuntime metadata, and activation-owned
+aggregate operands remain rooted independently of the lowering representation.
+Unchecked reduce/map-sum fusion declines checked numeric contracts; the normal
+callback path then preserves the checked operation and its failure order.
+
+The newly exercised untyped map fallback revealed a pre-existing Mixed map leak
+on callback exceptions. Scalar and Mixed maps now share one guarded emitter. The
+Mixed result keeps its descriptor environment ABI and element stamp, and each
+transferred owner advances the destination length before the next callback.
+Exceptional cleanup therefore retires the initialized prefix, including owned
+Mixed cells and strings. Shared callback effects no longer claim direct network
+or blocking I/O operations.
+
+Validation: three new runtime/EIR units pass on all five targets and all source
+modes. Native fixtures pass both optimizer settings and clean-heap checks across
+direct, FCC, CUF/CUFA, dynamic, numeric-string, COW and callback-fusion paths. A
+default-profile regression verifies partial Mixed map cleanup after a second-item
+PHP exception for scalar and string source widths. Ten existing boxed aggregate
+controls, three map controls, the original aggregate runtime unit and both prior
+checked power native fixtures pass. Compiler/exporter builds, complete generated
+builtin docs and architecture audits, and assembly/diff hygiene pass. Source
+evidence for reductions and remaining numeric/storage/eval integration follow
+before exposing the overflow flag.

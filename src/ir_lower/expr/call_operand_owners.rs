@@ -420,7 +420,11 @@ pub(super) fn root_non_aliasing_callback_operands(
 ) -> Vec<(usize, crate::ir::LocalSlotId)> {
     use crate::builtins::semantics::{BuiltinArgumentLowering, BuiltinLowering, BuiltinResultOwnership};
     use crate::ir::RuntimeCallTarget;
-    let needs_unwind_roots = match def.spec.semantics.lowering {
+    let aggregate = matches!(def.spec.semantics.runtime_functions,
+        crate::builtins::semantics::BuiltinRuntimeFunctions::One(
+            crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct));
+    // Aggregate graph homes still borrow the activation's original temporary across warnings.
+    let needs_unwind_roots = aggregate || match def.spec.semantics.lowering {
         BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)
             | RuntimeCallTarget::ProfiledFunction { target, .. }
             | RuntimeCallTarget::NumericFunction { target, .. }) => {

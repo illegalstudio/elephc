@@ -311,6 +311,11 @@ pub(super) fn instance_callable_signature(target: &StaticCallableBinding) -> Opt
     }
 }
 
+/// Admits PHP-promoting fused kernels only when no checked numeric operation contract is selected.
+fn allows_promoting_numeric_fusion(ctx: &LoweringContext<'_, '_>) -> bool {
+    crate::semantics::numeric::operation_policy(ctx.semantic_profile, ctx.source_mode).is_permissive()
+}
+
 /// Lowers `array_reduce($ints, fn($carry, $item) => $carry + $item, 0)` to the typed int sum.
 ///
 /// The closure is an untyped pure addition of its two parameters and the initial value is the
@@ -323,6 +328,7 @@ pub(super) fn lower_reduce_sum(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if !allows_promoting_numeric_fusion(ctx) { return None; }
     if php_symbol_key(name.trim_start_matches('\\')) != "array_reduce" || args.len() != 3 {
         return None;
     }
@@ -491,6 +497,7 @@ pub(super) fn lower_map_sum_add(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if !allows_promoting_numeric_fusion(ctx) { return None; }
     if php_symbol_key(name.trim_start_matches('\\')) != "array_sum" || args.len() != 1 {
         return None;
     }
@@ -796,6 +803,7 @@ pub(super) fn lower_map_sum_add_declared_int(
     args: &[Expr],
     expr: &Expr,
 ) -> Option<LoweredValue> {
+    if !allows_promoting_numeric_fusion(ctx) { return None; }
     if php_symbol_key(name.trim_start_matches('\\')) != "array_sum" || args.len() != 1 {
         return None;
     }

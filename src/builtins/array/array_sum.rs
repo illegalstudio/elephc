@@ -15,7 +15,7 @@ use crate::types::PhpType;
 builtin! {
     contract: "array_sum",
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    semantics: super::numeric_aggregate::semantics(
         crate::ir::RuntimeFnId::ArraySum,
     ),
 }

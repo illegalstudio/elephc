@@ -1407,11 +1407,7 @@ impl RuntimeFnId {
             ),
             // Unsupported entries can invoke arbitrary warning handlers, including
             // mutation of globals and destruction of the replaced source array.
-            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::from_bits_retain(
-                crate::ir::Effects::all().bits()
-                    & !crate::ir::Effects::BLOCKING_IO.bits()
-                    & !crate::ir::Effects::NETWORK_IO.bits(),
-            ),
+            RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => crate::ir::Effects::php_callback(),
             // Both transfer drivers may invoke arbitrary PHP callbacks. Keep the
             // callback-capable conservative set, then preserve their typed network and
             // blocking distinctions so optimizer and monitoring consumers agree.

@@ -1475,7 +1475,8 @@ fn validate_typed_runtime_call(
         return Ok(());
     };
     if let crate::ir::RuntimeCallTarget::NumericFunction { target, policy } = target {
-        if target != crate::ir::RuntimeFnId::Abs || !policy.checked_overflow()
+        if !matches!(target, crate::ir::RuntimeFnId::Abs | crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct)
+            || !policy.checked_overflow()
             || !inst.effects.contains(Effects::MAY_THROW)
             || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
             || inst.result_php_type != PhpType::Mixed

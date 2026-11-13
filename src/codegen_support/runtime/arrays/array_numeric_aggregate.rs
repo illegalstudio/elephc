@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Source snapshots survive warning-handler mutations and exceptional cleanup.
-//! - Numeric arithmetic uses the shared overflow-promoting Mixed helpers.
+//! - Separate PHP and checked entries share classification and exceptional ownership cleanup.
 //! - PHP 8.3 warnings do not change the legacy fallback for strings and resources.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels};
@@ -45,13 +45,22 @@ pub const ARRAY_AGGREGATE_MESSAGES: &[(&str, &str)] = &[
 
 /// Emits numeric aggregation entries taking a borrowed C ABI source cell and a warning-profile flag.
 pub fn emit_array_numeric_aggregate(emitter: &mut Emitter) {
-    emit_aggregate(emitter, false);
-    emit_aggregate(emitter, true);
+    for product in [false, true] {
+        emit_aggregate(emitter, product, false);
+        if emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Overflow) {
+            emit_aggregate(emitter, product, true);
+        }
+    }
 }
 
 /// Emits one storage-neutral fold returning an owned numeric cell or zero for an invalid source.
-fn emit_aggregate(emitter: &mut Emitter, product: bool) {
-    let prefix = if product { "__rt_array_product_boxed" } else { "__rt_array_sum_boxed" };
+fn emit_aggregate(emitter: &mut Emitter, product: bool, checked: bool) {
+    let prefix = match (product, checked) {
+        (false, false) => "__rt_array_sum_boxed",
+        (true, false) => "__rt_array_product_boxed",
+        (false, true) => "__rt_strict_array_sum_boxed",
+        (true, true) => "__rt_strict_array_product_boxed",
+    };
     let result = abi::int_result_reg(emitter);
     let low = low_reg(emitter);
     let high = high_reg(emitter);
@@ -70,7 +79,7 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     sentinels::emit_branch_if_null_container(emitter, low, abi::secondary_scratch_reg(emitter), &format!("{prefix}_invalid"));
     abi::store_at_offset(emitter, low, PAYLOAD);
     for slot in [SOURCE, CARRY, CURSOR, PENDING, NEXT, ESCAPED] { clear_slot(emitter, slot); }
-    if !product {
+    if !product && !checked {
         emit_packed_int_sum_fast_path(emitter, prefix);
     }
     install_boundary(emitter, prefix);
@@ -182,7 +191,13 @@ fn emit_aggregate(emitter: &mut Emitter, product: bool) {
     emitter.label(&format!("{prefix}_combine"));
     abi::load_at_offset(emitter, result, CARRY);
     abi::emit_frame_slot_address(emitter, low, ENTRY);
-    abi::emit_call_label(emitter, if product { "__rt_mixed_numeric_mul" } else { "__rt_mixed_numeric_add" });
+    let combine = match (product, checked) {
+        (false, false) => "__rt_mixed_numeric_add",
+        (true, false) => "__rt_mixed_numeric_mul",
+        (false, true) => "__rt_strict_mixed_numeric_add",
+        (true, true) => "__rt_strict_mixed_numeric_mul",
+    };
+    abi::emit_call_label(emitter, combine);
     abi::store_at_offset(emitter, result, NEXT);
     release_slot(emitter, CARRY);
     abi::load_at_offset(emitter, result, NEXT);
@@ -427,6 +442,25 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
+    /// Checked aggregate entries retain cleanup and never use a PHP-promoting packed fast path.
+    #[test]
+    fn strict_numeric_aggregates_emit_separate_throwing_entries_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for product in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emitter.semantic_profile = elephc_semantics::SemanticProfile::PERMISSIVE
+                    .with(elephc_semantics::StrictFeature::Overflow, true);
+                emit_aggregate(&mut emitter, product, true);
+                let asm = emitter.output();
+                let operation = if product { "__rt_strict_mixed_numeric_mul" } else { "__rt_strict_mixed_numeric_add" };
+                assert!(asm.contains(operation), "{name}");
+                assert!(asm.contains("__rt_exception_chain") && asm.contains("__rt_throw_current"), "{name}");
+                assert!(!asm.contains("__rt_array_sum_int_i64"), "{name}: checked sums must not promote");
+                assert!(!asm.contains("__rt_mixed_numeric_add") && !asm.contains("__rt_mixed_numeric_mul"), "{name}");
+            }
+        }
+    }
+
     /// Both aggregates install cleanup before ownership acquisition or user warning dispatch.
     #[test]
     fn numeric_aggregate_snapshots_and_unwinds_on_all_targets() {
@@ -434,7 +468,7 @@ mod tests {
             let target = Target::parse(name).unwrap();
             for product in [false, true] {
                 let mut emitter = Emitter::new(target);
-                emit_aggregate(&mut emitter, product);
+                emit_aggregate(&mut emitter, product, false);
                 let asm = emitter.output();
                 let prefix = if product { "__rt_array_product_boxed" } else { "__rt_array_sum_boxed" };
                 let boundary = asm.find(&target.extern_symbol("_setjmp")).unwrap();

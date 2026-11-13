@@ -734,3 +734,4 @@ echo checks($argc);
 mod strict_abs;
 
 mod strict_pow;
+mod strict_numeric_aggregates;

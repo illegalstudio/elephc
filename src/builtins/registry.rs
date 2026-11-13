@@ -397,6 +397,10 @@ pub fn first_class_callable_rejection(name: &str) -> Option<&'static str> {
 
 /// Applies first-class-callable refinements that are broader in the direct builtin spec.
 fn refine_first_class_callable_sig(def: &BuiltinDef, sig: &mut FunctionSig) {
+    if let crate::builtins::semantics::BuiltinCallablePolicy::DynamicRuntime(target) = def.spec.semantics.callable {
+        target.refine_first_class_callable_sig(sig);
+        return;
+    }
     if let crate::builtins::semantics::BuiltinLowering::Runtime(
         crate::ir::RuntimeCallTarget::Function(target),
     ) = def.spec.semantics.lowering
