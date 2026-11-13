@@ -605,10 +605,26 @@ An explicit `--no-strict-<feature>` overrides the umbrella in either argument
 order. Repeating an explicit feature option uses the last value.
 
 Integration is in progress. This build accepts the existing strict-locals and
-strict-opcache rules plus strict-dynamic-code. Other registered guarantees,
+strict-opcache rules plus strict-dynamic-code and strict-bools. Other registered guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
 tracks the remaining work.
+
+### Strict booleans
+
+`--strict-bools` requires boolean values in conditions (`if`, loops, ternaries),
+logical operands (`!`, `&&`, `||`, `and`, `or`, `xor`), and predicate callback
+results (`array_filter`, `array_any`, `array_all`, `array_find`, `iterator_apply`).
+Known incompatible types produce a compile diagnostic. A mixed value with a
+nonboolean runtime kind throws a catchable `TypeError`. Lazy operators evaluate
+only their selected operand; xor evaluates both operands before checking them.
+
+Use an explicit `(bool)` cast when PHP truthiness is intended. `isset`, `empty`,
+null coalescing, nullsafe access, and callback-free `array_filter` keep their
+explicit probing or data-filtering contracts. The rule also applies inside eval,
+with either interpreter execution engine. The REPL forwards the guarantee to
+each submitted fragment. It is independent of
+`declare(strict_types=1)` and applies to PHP and LFC user source.
 
 ### Strict dynamic code
 

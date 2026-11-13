@@ -7,7 +7,7 @@ extern "elephc_magician" {
     function __elephc_repl_status(): int;
 }
 
-while (__elephc_repl_next()) {
+while (__elephc_repl_next() !== 0) {
     try {
         eval(__elephc_repl_source());
     } catch (Throwable $__elephc_repl_error) {

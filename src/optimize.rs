@@ -20,6 +20,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
+mod semantic_context;
+pub use semantic_context::scoped_semantic_profile;
 mod binding_decisions;
 mod control;
 mod effect_analysis;

@@ -25,6 +25,8 @@ use super::super::{
 };
 use super::{expect_operand, store_if_result};
 
+mod owners;
+
 const EXTS_PTR_SYMBOL: &str = "_spl_autoload_exts_ptr";
 const EXTS_LEN_SYMBOL: &str = "_spl_autoload_exts_len";
 const NULL_SENTINEL: i64 = 0x7fff_ffff_ffff_fffe;
@@ -247,11 +249,13 @@ pub(crate) fn lower_iterator_apply(
     let callback = iterator_apply_callback(ctx, callback_value, inst)?;
     let source_ty = ctx.value_php_type(source)?.codegen_repr();
 
+    let descriptor_guard = owners::DescriptorGuard::reserve(ctx, &callback);
     emit_apply_callback_state(
         ctx,
         &callback,
         super::super::instruction_php_only_profile(inst),
     )?;
+    descriptor_guard.publish(ctx);
 
     ctx.load_value_to_result(source)?;
     match source_ty {
@@ -264,7 +268,9 @@ pub(crate) fn lower_iterator_apply(
             )))
         }
     }
+    descriptor_guard.detach(ctx);
     release_apply_callback_state(ctx, &callback);
+    descriptor_guard.finish(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -1840,14 +1846,19 @@ fn emit_branch_if_callback_result_false(
     callback_return_ty: &PhpType,
     loop_end: &str,
 ) -> Result<()> {
+    let strict = ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Bools);
+    if strict && !matches!(callback_return_ty.codegen_repr(), PhpType::Bool | PhpType::False | PhpType::Mixed | PhpType::Union(_)) {
+        super::super::exceptions::emit_type_error(ctx, "--strict-bools requires a boolean callback result");
+        return Ok(());
+    }
     match callback_return_ty.codegen_repr() {
-        PhpType::Bool | PhpType::Int => {}
+        PhpType::Bool | PhpType::False | PhpType::Int => {}
         PhpType::Float => predicates::emit_float_result_nonzero_bool(ctx),
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
+            abi::emit_call_label(ctx.emitter, if strict { "__rt_strict_boolean_owned" } else { "__rt_mixed_cast_bool" });
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

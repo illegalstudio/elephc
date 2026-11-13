@@ -1001,7 +1001,8 @@ fn validate_opcode_rules(
         | LoadReflectionStaticProperty
         | ReflectionStaticPropertyInitialized
         | ExternGlobalLoad => check_count(inst_id, inst, 0, "0"),
-        ThrowError => check_count(inst_id, inst, 0, "0"),
+        ThrowError | ThrowTypeError | ThrowValueError | ThrowArithmeticError | ThrowOutOfBounds =>
+            check_count(inst_id, inst, 0, "0"),
         ThrowErrorValue => check_unary(function, inst_id, inst, IrType::Str, "Str"),
         UnsetLocal | ZeroLocalSlot | PromoteLocalRefCell | AliasLocalRefCell | RetainLocalRefCell
         | ReleaseLocalRefCell

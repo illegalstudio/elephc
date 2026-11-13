@@ -165,6 +165,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         quiet,
         ini_overrides,
     } = config;
+    let _optimizer_semantics = optimize::scoped_semantic_profile(semantic_profile);
     let strict_opcache = semantic_profile.contains(crate::semantics::StrictFeature::Opcache);
     let pending_guarantees = crate::semantics::pending_guarantees(semantic_profile);
     if !pending_guarantees.is_empty() {

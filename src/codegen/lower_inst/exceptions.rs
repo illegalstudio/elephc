@@ -255,6 +255,11 @@ pub(super) fn emit_arithmetic_error(ctx: &mut FunctionContext<'_>, message: &str
     );
 }
 
+/// Throws the strict ordinary-read failure through the standard SPL exception path.
+pub(super) fn emit_out_of_bounds(ctx: &mut FunctionContext<'_>, message: &str) {
+    emit_static_exception(ctx, "OutOfBoundsException", "_spl_out_of_bounds_exception_class_id", message);
+}
+
 /// Throws a catchable PHP `ArgumentCountError` carrying a static message.
 ///
 /// Reference PHP raises this `TypeError` subclass when a call passes fewer arguments than the

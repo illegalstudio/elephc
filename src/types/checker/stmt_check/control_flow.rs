@@ -618,7 +618,7 @@ impl Checker {
                 let mut callable_target_version_exits = Vec::new();
 
                 for (cond, body) in &clauses {
-                    self.infer_type_with_assignment_effects(cond, env)?;
+                    self.infer_condition_type_with_effects(cond, env)?;
                     let branch_entry_targets = self.callable_array_targets.clone();
                     let branch_entry_target_versions =
                         self.callable_array_target_versions.clone();
@@ -815,7 +815,7 @@ impl Checker {
                 let mut errors = self.check_loop_body(body, env);
                 let backedge = self.loop_backedge_env();
                 let mut tail_env = backedge.clone().unwrap_or_else(|| env.clone());
-                if let Err(error) = self.infer_type_with_assignment_effects(condition, &mut tail_env) {
+                if let Err(error) = self.infer_condition_type_with_effects(condition, &mut tail_env) {
                     errors.extend(error.flatten());
                 }
                 self.record_loop_tail_end(&tail_env, backedge.is_some());
@@ -833,7 +833,7 @@ impl Checker {
             StmtKind::While { condition, body } => {
                 self.boxed_ref_aliased_locals.clear();
                 stabilize_loop_storage(self, stmt.span, body, None, Some(condition), env, None);
-                self.infer_type_with_assignment_effects(condition, env)?;
+                self.infer_condition_type_with_effects(condition, env)?;
                 let flow = self.snapshot_loop_flow(env);
                 // The condition is re-evaluated before every iteration, so a guard on it
                 // holds on entry to each one: `while (($row = fgetcsv($h)) !== false)`
@@ -1197,7 +1197,7 @@ impl Checker {
         body: &[Stmt], env: &mut TypeEnv,
     ) -> Result<(), CompileError> {
         if let Some(condition) = condition {
-            self.infer_type_with_assignment_effects(condition, env)?;
+            self.infer_condition_type_with_effects(condition, env)?;
         }
         let flow = self.snapshot_loop_flow(env);
         let can_exit = condition.is_some_and(|condition| !crate::termination::expr_is_truthy_literal(condition));

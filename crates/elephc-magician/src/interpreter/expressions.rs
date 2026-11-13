@@ -423,7 +423,7 @@ fn eval_expr_with_result_ownership(
                 return eval_expr(selected, context, scope, values);
             }
             let condition = eval_owned_expr(condition, context, scope, values)?;
-            let truthy = values.truthy(condition);
+            let truthy = eval_boolean_condition(condition, context, values);
             if matches!(truthy, Ok(true)) { return Ok(condition); }
             let released = eval_release_value(context, values, condition);
             truthy?;

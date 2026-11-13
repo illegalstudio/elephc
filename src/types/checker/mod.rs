@@ -46,6 +46,7 @@ mod member_receivers;
 mod local_values;
 mod binding_flow;
 mod mixed_storage_scan;
+mod semantic_rules;
 mod numeric_regions;
 mod packed_counter;
 mod promotable_arrays;
@@ -540,6 +541,8 @@ pub(crate) struct Checker {
     pub strict_locals: bool,
     /// Immutable guarantees selected for this type-checking invocation.
     pub semantic_profile: elephc_semantics::SemanticProfile,
+    /// Physical source of the expression currently checked.
+    pub(super) semantic_source_mode: crate::source::SourceMode,
     /// Nesting depth of conditional statements (`if`/`switch`/loops/`try`/…) in the body being
     /// checked. Only depth 0 is straight-line code that unconditionally dominates everything
     /// after it, which is what makes a binding kill or re-bind safe to lower.

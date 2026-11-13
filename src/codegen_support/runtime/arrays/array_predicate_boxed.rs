@@ -97,7 +97,9 @@ pub fn emit_array_predicate_boxed(emitter: &mut Emitter) {
     clear_slot(emitter, ARGUMENTS);
     abi::emit_call_label(emitter, "__rt_callable_invoke_owned_args");
     abi::store_at_offset(emitter, result, NEXT);
-    abi::emit_call_label(emitter, "__rt_mixed_cast_bool");
+    abi::emit_call_label(emitter, if emitter.semantic_profile.contains(elephc_semantics::StrictFeature::Bools) {
+        "__rt_strict_boolean"
+    } else { "__rt_mixed_cast_bool" });
     abi::store_at_offset(emitter, result, TRUTH);
     release_slot(emitter, NEXT, "__rt_decref_mixed");
     abi::emit_jump(emitter, "__rt_array_predicate_boxed_decide");

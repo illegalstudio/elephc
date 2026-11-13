@@ -14,6 +14,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 
+#[path = "repl_strict.rs"]
+mod strict;
 #[path = "repl_terminal.rs"]
 mod terminal;
 #[path = "repl_prebuilt.rs"]

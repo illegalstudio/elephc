@@ -154,11 +154,14 @@ pub(super) use array_write_storage::{
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     let _profile = crate::source::scoped_parse_mode(stmt.profile());
+    let previous_source_mode = ctx.source_mode;
+    ctx.source_mode = stmt.source_mode;
     crate::php_only::with_source_mode(stmt.source_mode, || {
         if !ctx.builder.insertion_block_is_terminated() {
             repr_fixpoint::lower_stmt_at_type_fixpoint(ctx, stmt);
         }
     });
+    ctx.source_mode = previous_source_mode;
 }
 
 /// Declares the hidden internal-array-pointer cursor slots used inside a loop body before

@@ -385,5 +385,6 @@ pub(super) fn walk_stmt(stmt: &Stmt, visitor: &mut impl AstVisitor) {
             );
         }
     }
+    visitor.statement_end(stmt);
 }
 

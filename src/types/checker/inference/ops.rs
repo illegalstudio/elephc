@@ -39,6 +39,10 @@ impl Checker {
         }
         let lt = self.infer_type(left, env)?;
         let rt = self.infer_type(right, env)?;
+        if *op == BinOp::Xor {
+            self.require_boolean_type(&lt, left.span)?;
+            self.require_boolean_type(&rt, right.span)?;
+        }
         if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(op, &lt, &rt, &self.classes) {
             return Ok(plan.result_type(op));
         }

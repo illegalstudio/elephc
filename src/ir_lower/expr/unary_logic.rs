@@ -118,7 +118,7 @@ pub(super) fn lower_tagged_scalar_to_int(
 /// Lowers logical negation.
 pub(super) fn lower_not(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr: &Expr) -> LoweredValue {
     let value = lower_expr(ctx, inner);
-    let value = ctx.truthy_consuming(value, Some(expr.span));
+    let value = ctx.condition_truthy_consuming(value, Some(expr.span));
     let zero = lower_int_literal(ctx, 0, expr);
     ctx.emit_value(
         Op::ICmp,
@@ -176,7 +176,7 @@ pub(super) fn lower_logical_binary(
     expr: &Expr,
 ) -> LoweredValue {
     let lhs = lower_expr(ctx, left);
-    let lhs = ctx.truthy_consuming(lhs, Some(left.span));
+    let lhs = ctx.condition_truthy_consuming(lhs, Some(left.span));
     let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
     let rhs_block = ctx.builder.create_named_block("logical.rhs", Vec::new());
     let const_block = ctx.builder.create_named_block("logical.const", Vec::new());
@@ -201,7 +201,7 @@ pub(super) fn lower_logical_binary(
     ctx.builder.position_at_end(rhs_block);
     join.enter_arm(ctx);
     let rhs = lower_expr(ctx, right);
-    let rhs = ctx.truthy_consuming(rhs, Some(right.span));
+    let rhs = ctx.condition_truthy_consuming(rhs, Some(right.span));
     store_value_into_temp(ctx, &temp_name, PhpType::Bool, rhs, expr.span);
     join.leave_arm(ctx);
 
@@ -225,7 +225,7 @@ pub(super) fn lower_logical_xor(
     let native_boolean = ctx.classes.keys().any(|name|
         elephc_builtin_contract::lookup_class(name)
             .and_then(|class| class.operators).and_then(|operators| operators.boolean).is_some());
-    let (lhs, rhs) = if native_boolean {
+    let (lhs, rhs) = if native_boolean || ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Bools) {
         // XOR evaluates both operands before either native conversion can throw.
         let lhs = lower_expr(ctx, left);
         let (lhs, left_pins) = object_operators::capture_left_operand(ctx, lhs, right, left.span);
@@ -239,9 +239,9 @@ pub(super) fn lower_logical_xor(
             value: pinned_transfer_owner(ctx, &right_pins, right.span).unwrap_or(rhs.value),
             ..rhs
         };
-        let lhs = ctx.truthy(left_input, Some(left.span));
+        let lhs = ctx.condition_truthy(left_input, Some(left.span));
         let lhs = lower_truthy_bool(ctx, lhs, Some(left.span));
-        let rhs = ctx.truthy(right_input, Some(right.span));
+        let rhs = ctx.condition_truthy(right_input, Some(right.span));
         let rhs = lower_truthy_bool(ctx, rhs, Some(right.span));
         release_pinned_in_flight_owners(ctx, right_pins, right.span);
         release_pinned_in_flight_owners(ctx, left_pins, left.span);

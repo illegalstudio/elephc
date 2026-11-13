@@ -205,6 +205,7 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
+                self.require_boolean_type(&value_ty, value.span)?;
                 let (default_ty, flow) = if matches!(value_ty, PhpType::Void | PhpType::False) {
                     (self.infer_type_with_assignment_effects(default, env)?, None)
                 } else {
@@ -226,7 +227,7 @@ impl Checker {
                 then_expr,
                 else_expr,
             } => {
-                self.infer_type_with_assignment_effects(condition, env)?;
+                self.infer_condition_type_with_effects(condition, env)?;
                 // Flow-narrowing across the branches (see guard_narrowing): `$x instanceof X`
                 // and simple `$x->prop instanceof X` guards narrow the branch envs. A ternary is a
                 // single expression, so branch narrowing is write-invalidation-safe.

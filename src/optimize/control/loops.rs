@@ -123,7 +123,7 @@ pub(crate) fn normalize_for_stmt(
 
 /// Returns whether `expr` is a compile-time scalar that PHP treats as true.
 fn is_truthy_literal(expr: &Expr) -> bool {
-    scalar_value(expr).is_some_and(|value| value.truthy())
+    condition_scalar_value(expr).is_some_and(|value| value.truthy())
 }
 
 /// Returns whether `body` is exactly one level-1 `break`.

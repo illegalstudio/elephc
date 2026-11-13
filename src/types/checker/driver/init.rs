@@ -160,6 +160,7 @@ impl Checker {
             string_incdec_locals: HashSet::new(),
             strict_locals: false,
             semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
+            semantic_source_mode: crate::source::SourceMode::Internal,
             local_conditional_depth: 0,
             local_binding_depth: HashMap::new(),
             definitely_bound_locals: HashSet::new(),

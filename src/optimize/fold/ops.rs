@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use super::super::*;
 use super::array_key::{php_array_key, PhpArrayKey};
 use super::scalar::{
-    compare_scalar_exprs, int_literal, loose_eq, numeric_literal, scalar_value, spaceship_scalar,
+    condition_scalar_value, compare_scalar_exprs, int_literal, loose_eq, numeric_literal, scalar_value, spaceship_scalar,
     strict_eq, ScalarValue,
 };
 
@@ -34,7 +34,7 @@ pub(super) fn try_fold_negate(expr: &Expr) -> Option<ExprKind> {
 
 /// Returns the logical negation of a scalar expression as a BoolLiteral, or `None` if the operand is not a scalar.
 pub(super) fn try_fold_not(expr: &Expr) -> Option<ExprKind> {
-    Some(ExprKind::BoolLiteral(!scalar_value(expr)?.truthy()))
+    Some(ExprKind::BoolLiteral(!condition_scalar_value(expr)?.truthy()))
 }
 
 /// Returns the bitwise NOT of an integer literal, or `None` if the operand is not an integer literal.
@@ -260,8 +260,8 @@ fn try_fold_bitwise_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprK
 /// Evaluates logical AND, OR, and XOR on two scalar operands using PHP truthiness rules.
 /// Both operands are evaluated (no short-circuit).
 fn try_fold_logical_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprKind> {
-    let left = scalar_value(left)?;
-    let right = scalar_value(right)?;
+    let left = condition_scalar_value(left)?;
+    let right = condition_scalar_value(right)?;
     let result = match op {
         BinOp::And => left.truthy() && right.truthy(),
         BinOp::Or => left.truthy() || right.truthy(),
@@ -317,7 +317,7 @@ pub(super) fn try_fold_ternary(
     then_expr: &Expr,
     else_expr: &Expr,
 ) -> Option<ExprKind> {
-    let condition = scalar_value(condition)?;
+    let condition = condition_scalar_value(condition)?;
     let then_expr = scalar_value(then_expr)?;
     let else_expr = scalar_value(else_expr)?;
     if condition.truthy() {
@@ -329,7 +329,7 @@ pub(super) fn try_fold_ternary(
 
 /// Folds a short ternary (`?:) when the value and default are scalar literals.
 pub(super) fn try_fold_short_ternary(value: &Expr, default: &Expr) -> Option<ExprKind> {
-    let value = scalar_value(value)?;
+    let value = condition_scalar_value(value)?;
     if value.truthy() {
         Some(value.into_expr_kind())
     } else {

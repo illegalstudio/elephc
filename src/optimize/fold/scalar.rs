@@ -42,6 +42,14 @@ pub(in crate::optimize) fn scalar_value(expr: &Expr) -> Option<ScalarValue> {
     }
 }
 
+/// Extracts a condition only when replacing its boolean guard preserves semantic checks.
+pub(in crate::optimize) fn condition_scalar_value(expr: &Expr) -> Option<ScalarValue> {
+    let value = scalar_value(expr)?;
+    if super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Bools)
+        && !matches!(value, ScalarValue::Bool(_)) { return None; }
+    Some(value)
+}
+
 /// Extracts a ScalarValue from an expression, unwrapping ternary/match branches when both arms yield the same value.
 ///
 /// Returns `None` if the expression is not a scalar literal or a ternary/match whose

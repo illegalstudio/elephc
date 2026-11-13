@@ -497,7 +497,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::EchoValue => lower_echo_value(ctx, &inst),
         Op::PrintValue => lower_print_value(ctx, &inst),
         Op::ThrowException => lower_throw_exception(ctx, &inst),
-        Op::ThrowError => lower_throw_error(ctx, &inst),
+        Op::ThrowError | Op::ThrowTypeError | Op::ThrowValueError
+        | Op::ThrowArithmeticError | Op::ThrowOutOfBounds => lower_throw_error(ctx, &inst),
         Op::ThrowErrorValue => lower_throw_error_value(ctx, &inst),
         Op::TryPushHandler => lower_try_push_handler(ctx, &inst),
         Op::TryPopHandler => lower_try_pop_handler(ctx, &inst),

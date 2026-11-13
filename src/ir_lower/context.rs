@@ -320,6 +320,8 @@ const EVAL_ARGV_LOCAL_NAME: &str = "argv";
 pub(crate) struct LoweringContext<'m, 'f> {
     /// Immutable semantic policy inherited by ordinary and synthetic functions.
     pub(crate) semantic_profile: elephc_semantics::SemanticProfile,
+    /// Physical source of the operation; internal implementation control flow is explicit.
+    pub(crate) source_mode: crate::source::SourceMode,
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
     pub local_slots: HashMap<String, LocalSlotId>,
@@ -668,6 +670,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let return_type = return_ir_type(&return_php_type);
         Self {
             semantic_profile,
+            source_mode: crate::source::SourceMode::Internal,
             builder,
             data,
             local_slots: HashMap::new(),
@@ -5677,6 +5680,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             )
             .expect("owned value opcode produces a value");
         LoweredValue { value, ir_type }
+    }
+
+    /// Checks a user condition without changing explicit casts or quiet probe semantics.
+    pub(crate) fn condition_truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+        let input = if self.source_mode != crate::source::SourceMode::Internal
+            && self.semantic_profile.contains(elephc_semantics::StrictFeature::Bools)
+            && !matches!(self.builder.value_php_type(input.value).codegen_repr(), PhpType::Bool | PhpType::False)
+        {
+            super::semantic_guards::require_kind(self, input, crate::ir::PhpTypePredicate::Bool, "strict-bools", span)
+        } else { input };
+        self.truthy(input, span)
+    }
+
+    /// Consumes a guarded condition while balancing a separately materialized boolean result.
+    pub(crate) fn condition_truthy_consuming(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
+        let owns_input = self.value_is_owning_temporary(input);
+        let result = self.condition_truthy(input, span);
+        if owns_input && result.value != input.value {
+            crate::ir_lower::ownership::release_if_owned(self, input, span);
+        }
+        result
     }
 
     /// Emits an `is_truthy` conversion unless the value is an integer that is already its own

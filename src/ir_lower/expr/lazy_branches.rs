@@ -408,10 +408,11 @@ pub(super) fn lower_short_ternary(
     let value = lower_array_value_for_merge(ctx, value).unwrap_or_else(|| lower_expr(ctx, value));
     // A retained constant-null branch uses the raw I64 null sentinel. It is PHP-falsy,
     // while `truthy` deliberately forwards ordinary I64 conditions without converting them.
-    let cond = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Void {
+    let cond = if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Void
+        && !ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Bools) {
         emit_bool_literal(ctx, false, Some(condition_span))
     } else {
-        ctx.truthy(value, Some(condition_span))
+        ctx.condition_truthy(value, Some(condition_span))
     };
     let temp_name = ctx.declare_owned_hidden_temp(result_type.clone());
     let split_initialized = ctx.initialized_slots_snapshot();

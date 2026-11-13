@@ -857,6 +857,8 @@ impl ExceptionFlowAnalysis {
     fn internal_conversion_throws(&self, expr: &Expr) -> ThrownTypes {
         if self.has_internal_object_operators && !effects::literal_scalar_operand(expr) {
             ThrownTypes::unknown()
+        } else if super::semantic_context::boolean_guard_may_throw(expr) {
+            ThrownTypes::exact("TypeError")
         } else { ThrownTypes::default() }
     }
 

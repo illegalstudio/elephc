@@ -1338,6 +1338,10 @@ pub enum Op {
     Warn,
     ThrowException,
     ThrowError,
+    ThrowTypeError,
+    ThrowValueError,
+    ThrowArithmeticError,
+    ThrowOutOfBounds,
     ThrowErrorValue,
     TryPushHandler,
     TryPopHandler,
@@ -1702,7 +1706,8 @@ impl Op {
             ThrowNamedParameterOverwrite => {
                 E::MAY_THROW | E::READS_HEAP | E::ALLOC_HEAP | E::WRITES_GLOBAL
             }
-            ThrowError | ThrowErrorValue => {
+            ThrowError | ThrowErrorValue | ThrowTypeError | ThrowValueError
+            | ThrowArithmeticError | ThrowOutOfBounds => {
                 E::MAY_THROW
                     | E::READS_GLOBAL
                     | E::WRITES_GLOBAL
@@ -2063,6 +2068,10 @@ impl Op {
             Warn => "warn",
             ThrowException => "throw_exception",
             ThrowError => "throw_error",
+            ThrowTypeError => "throw_type_error",
+            ThrowValueError => "throw_value_error",
+            ThrowArithmeticError => "throw_arithmetic_error",
+            ThrowOutOfBounds => "throw_out_of_bounds",
             ThrowErrorValue => "throw_error_value",
             TryPushHandler => "try_push_handler",
             TryPopHandler => "try_pop_handler",

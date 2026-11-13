@@ -22,7 +22,7 @@ use crate::errors::EvalStatus;
 use crate::eval_ir::{CompiledBody, CompiledModule, EvalCastType, EvalFunction, Op};
 use crate::interpreter::{
     copy_scope_value, eval_binary_result, eval_cast_value, eval_call, eval_expr_language_construct_name,
-    eval_inc_dec_value, eval_output_value, finish_eval_argument_values, release_function_args,
+    eval_inc_dec_value, eval_output_value, eval_boolean_condition, finish_eval_argument_values, release_function_args,
     eval_pcntl_maybe_dispatch, eval_release_value, eval_unary_value,
     finish_activation_scope, set_owned_scope_cell, visible_scope_cell, EvalControl, RuntimeValueOps,
     warn_eval_discarded_function_call,
@@ -230,7 +230,7 @@ fn step(
         }
         Op::Unary(op) => {
             let value = pop(&mut vm.stack)?;
-            let result = with_runtime_owners(&value, || eval_unary_value(op, value, values));
+            let result = with_runtime_owners(&value, || eval_unary_value(op, value, context, values));
             vm.stack.push(finish_eval_argument_values(result, [value], context, values)?);
         }
         Op::CastInt | Op::CastFloat | Op::CastString | Op::CastBool => {
@@ -248,7 +248,7 @@ fn step(
         Op::Jump(target) => set_ip(vm, target)?,
         Op::JumpIfFalse(target) => {
             let condition = pop(&mut vm.stack)?;
-            let truthy = match values.truthy(condition) {
+            let truthy = match eval_boolean_condition(condition, context, values) {
                 Ok(truthy) => truthy,
                 Err(status) => {
                     let _ = eval_release_value(context, values, condition);

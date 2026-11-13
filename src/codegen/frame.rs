@@ -269,7 +269,8 @@ fn module_throws(module: &Module) -> bool {
                 || function.instructions.iter().any(|inst| {
                     matches!(
                         inst.op,
-                        Op::ThrowException | Op::ThrowError | Op::ThrowErrorValue
+                        Op::ThrowException | Op::ThrowError | Op::ThrowErrorValue | Op::ThrowTypeError
+                        | Op::ThrowValueError | Op::ThrowArithmeticError | Op::ThrowOutOfBounds
                     )
                 })
         })

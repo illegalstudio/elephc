@@ -426,4 +426,38 @@ contract tests, 7 compiler profile/target tests, 6 eval profile tests, 40 PHP-on
 AST audits, and 7 native CLI tests). Builtin docs regeneration and all three audits
 passed. Assembly-comment checks passed on all 31 modified backend/runtime files.
 The full suite and native execution on other hosts were not run locally. No task
-fixture directories or generated Python bytecode remain. No commit or PR exists.
+fixture directories or generated Python bytecode remain. The foundation is committed
+as `09ab0ce4af`; no PR exists. Each subsequent complete, verified step is committed
+separately, as requested by the user.
+
+
+### Boolean integration
+
+Strict boolean conditions now use a shared kind guard and typed EIR failure
+instructions. Known incompatible kinds are source/checker diagnostics; mixed
+runtime operands raise TypeError. Conditions, lazy logical operations, xor,
+ternaries, predicate callbacks and Iterator results share that rule. Explicit
+boolean casts and intentional absence/data-filtering operations keep their
+separate contracts. PHP and LFC statements carry their source mode into checking
+and lowering, while reviewed internal implementation tests retain their semantics.
+
+The explicit profile also reaches PHP extension runtime generation. A narrowly
+scoped optimizer adapter protects strict conditions during folding, propagation,
+control pruning and effect/exception analysis, without changing backend profile
+ownership. Both Magician engines and callback adapters use the same condition
+helper. Predicate runtime guards distinguish borrowed and consumed result cells.
+
+Focused tests already cover source rejection, both eval engines, native EIR
+optimization on/off, predicate/FCC result ownership, iterator failure ownership,
+and generation on all five targets. An explicit branch between global runtime
+helper entries is required for section GC; the initial fallthrough crashed when
+the destination section was stripped. The iterator's retained descriptor is now
+published to the ordinary exceptional-owner chain and is released on a same-frame
+catch. Both predicate and iterator strict failures pass heap-debug cleanup checks.
+Native opaque eval, the real cached REPL (including session recovery), and all
+builtin-doc generation/audits pass. The REPL bootstrap now compares its integer
+input status explicitly. Fourteen new focused tests pass, plus two permissive
+iterator compatibility regressions. Throwing callback-result destructors retain
+the TypeError as their previous exception and leave a clean heap. All modified
+backend assembly comments and Rust file preambles pass their hygiene checks.
+No task-owned fixture directories or Python bytecode remain.

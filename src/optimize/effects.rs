@@ -76,7 +76,7 @@ pub(super) fn internal_conversion_may_throw(expr: &Expr) -> bool {
 /// Includes the implicit native conversion performed when evaluating a condition.
 fn condition_effect(expr: &Expr) -> Effect {
     let effect = expr_effect(expr);
-    if internal_conversion_may_throw(expr) { effect.with_may_throw() } else { effect }
+    if internal_conversion_may_throw(expr) || super::semantic_context::boolean_guard_may_throw(expr) { effect.with_may_throw() } else { effect }
 }
 
 /// Returns true if any statement in `stmts` may throw, including implicit destruction.
@@ -302,8 +302,8 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
                 effect.with_may_throw()
             } else { effect }
         }
-        ExprKind::Not(inner)
-        | ExprKind::Cast { target: CastType::Bool | CastType::Array, expr: inner } => condition_effect(inner),
+        ExprKind::Not(inner) => condition_effect(inner),
+        ExprKind::Cast { target: CastType::Bool | CastType::Array, expr: inner } => condition_effect(inner),
         ExprKind::ErrorSuppress(inner)
         | ExprKind::Cast { expr: inner, .. }
         | ExprKind::PtrCast { expr: inner, .. } => expr_effect(inner),
@@ -330,7 +330,9 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             } else if binary_op_may_throw(op, right)
                 || (internal_object_operators_available() && internal_arithmetic_candidate(left, op, right))
                 || (matches!(op, BinOp::And | BinOp::Or | BinOp::Xor)
-                    && (internal_conversion_may_throw(left) || internal_conversion_may_throw(right))) {
+                    && (internal_conversion_may_throw(left) || internal_conversion_may_throw(right)
+                        || super::semantic_context::boolean_guard_may_throw(left)
+                        || super::semantic_context::boolean_guard_may_throw(right))) {
                 operands.with_may_throw()
             } else {
                 operands

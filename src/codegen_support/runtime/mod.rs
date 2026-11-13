@@ -12,6 +12,7 @@
 mod arrays;
 pub(crate) use arrays::emit_native_frame_owners;
 mod buffers;
+pub(crate) mod semantic_guards;
 mod callables;
 /// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.
 mod compare;

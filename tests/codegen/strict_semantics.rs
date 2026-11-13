@@ -53,3 +53,131 @@ fn test_strict_dynamic_code_validates_autoloaded_physical_source() {
         "<?php class StrictAutoloadService { public function run(): void { if (false) { eval($source); } } }");
     fixture.assert_error(&["--strict-dynamic-code"], "strict-dynamic-code");
 }
+
+/// Rejects invalid source conditions even when folding could remove their use.
+#[test]
+fn test_strict_bools_rejects_nonboolean_conditions_before_folding() {
+    for source in [
+        "<?php if (1) { echo 'bad'; }",
+        "<?php if (strlen('x')) { echo 'bad'; }",
+        "<?php $x = 1; if ($x) { echo 'bad'; }",
+        "<?php while (0) {}",
+        "<?php do {} while ('');",
+        "<?php for (; 0;) {}",
+        "<?php echo !1;",
+        "<?php echo true && 1;",
+        "<?php echo true xor 1;",
+        "<?php echo 1 ? 'bad' : 'bad';",
+        "<?php echo 1 ?: 'bad';",
+        "<?php echo array_any([1], fn($x): int => 1);",
+        "<?php echo array_filter([1], fn($x): int => 1);",
+        "<?php eval('if (1) { echo 42; }');",
+    ] {
+        StrictFixture::new(source).assert_error(&["--strict-bools"], "strict-bools");
+    }
+}
+
+/// Guards mixed conditions, preserves lazy evaluation, and keeps explicit formatting/probes usable.
+#[test]
+fn test_strict_bools_runtime_guards_and_optimization_parity() {
+    let source = r#"<?php
+function strict_bool_if(mixed $x): void { if ($x) { echo 'T'; } else { echo 'F'; } }
+function strict_bool_not(mixed $x): void { echo !$x ? 'N' : 'Y'; }
+function strict_bool_short(mixed $x): void { echo $x ?: false; }
+function strict_bool_side(): bool { echo 'S'; return true; }
+function strict_bool_xor(mixed $x): void { $r = $x xor strict_bool_side(); }
+function strict_bool_and(mixed $x): void { $r = $x && strict_bool_side(); }
+strict_bool_if(true); strict_bool_if(false); strict_bool_not(false);
+foreach ([1, 'x', null, []] as $value) {
+    try { strict_bool_if($value); } catch (TypeError $error) { echo 'E'; }
+}
+try { strict_bool_not(1); } catch (TypeError $error) { echo 'N'; }
+try { strict_bool_short(1); } catch (TypeError $error) { echo 'Q'; }
+try { strict_bool_xor(1); } catch (TypeError $error) { echo 'X'; }
+strict_bool_and(false);
+if ((bool) $argc) { echo 'B'; }
+$a = []; echo isset($a['absent']) ? 'bad' : 'I'; echo empty($a['absent']) ? 'P' : 'bad';
+echo $a['absent'] ?? 'C';
+"#;
+    for optimization in ["--ir-opt=on", "--ir-opt=off"] {
+        assert_eq!(StrictFixture::new(source).run(&["--strict-bools", optimization]), "TFNEEEENQSXBIPC");
+    }
+}
+
+/// Predicate callbacks require boolean results while callback-free filtering keeps its data contract.
+#[test]
+fn test_strict_bools_array_predicate_callbacks() {
+    let source = r#"<?php
+function strict_bool_predicate(mixed $value): mixed { return $value; }
+function strict_bool_owned_predicate(mixed $value): mixed { return str_repeat('x', $value); }
+try { array_filter([1], strict_bool_predicate(...)); } catch (TypeError $error) { echo 'E'; }
+try { array_any([1], strict_bool_predicate(...)); } catch (TypeError $error) { echo 'E'; }
+try { array_all([1], strict_bool_predicate(...)); } catch (TypeError $error) { echo 'E'; }
+try { array_find([1], strict_bool_predicate(...)); } catch (TypeError $error) { echo 'E'; }
+$filter = array_filter(...);
+try { $filter([1], strict_bool_owned_predicate(...)); } catch (TypeError $error) { echo 'E'; }
+echo count(array_filter([0, 1, 2]));
+echo count(array_filter([1, 2], fn($value): bool => $value > 1));
+"#;
+    let output = StrictFixture::new(source).capture(&["--strict-bools", "--heap-debug"]);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "EEEEE21");
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("HEAP DEBUG: leak summary: clean"), "{errors}");
+}
+
+/// Iterator callback results use the same consumed-cell guard as direct conditions.
+#[test]
+fn test_strict_bools_iterator_apply_callback_results() {
+    let source = r#"<?php
+class StrictBoolIterator implements Iterator {
+    private int $position = 0;
+    public function rewind(): void { $this->position = 0; }
+    public function valid(): bool { return $this->position < 1; }
+    public function current(): int { return $this->position; }
+    public function key(): int { return $this->position; }
+    public function next(): void { $this->position++; }
+}
+function strict_iterator_result(int $count): mixed { return str_repeat('x', $count); }
+try { iterator_apply(new StrictBoolIterator(), strict_iterator_result(...), [$argc]); }
+catch (TypeError $error) { echo 'E'; }
+echo iterator_apply(new StrictBoolIterator(), fn(): bool => false);
+"#;
+    let output = StrictFixture::new(source).capture(&["--strict-bools", "--heap-debug"]);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "E1");
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("HEAP DEBUG: leak summary: clean"), "{errors}");
+}
+
+/// Opaque eval retains independent boolean rules when dynamic source itself is permitted.
+#[test]
+fn test_strict_bools_native_eval_context_preserves_guarantees() {
+    let source = r#"<?php
+$code = $argc > 0 ? 'try { if (1) { echo "bad"; } } catch (TypeError $error) { echo "E"; } if ((bool) 1) { echo "B"; }' : '';
+eval($code);
+"#;
+    assert_eq!(StrictFixture::new(source).run(&["--strict-bools", "--no-strict-dynamic-code"]), "EB");
+}
+
+/// Failure is established before releasing an invalid callback result with a throwing destructor.
+#[test]
+fn test_strict_bools_callback_destructor_keeps_failure_as_previous() {
+    let source = r#"<?php
+class StrictBoolThrowingResult {
+    public function __destruct() { throw new RuntimeException('destructor'); }
+}
+class StrictBoolSingleIterator implements Iterator {
+    public function rewind(): void {}
+    public function valid(): bool { return true; }
+    public function current(): int { return 0; }
+    public function key(): int { return 0; }
+    public function next(): void {}
+}
+function strict_bool_object_result(): mixed { return new StrictBoolThrowingResult(); }
+try { iterator_apply(new StrictBoolSingleIterator(), strict_bool_object_result(...)); }
+catch (RuntimeException $error) { echo get_class($error->getPrevious()); }
+"#;
+    let output = StrictFixture::new(source).capture(&["--strict-bools", "--heap-debug"]);
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "TypeError");
+    let errors = String::from_utf8_lossy(&output.stderr);
+    assert!(errors.contains("HEAP DEBUG: leak summary: clean"), "{errors}");
+}

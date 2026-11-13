@@ -36,8 +36,8 @@ pub(in crate::interpreter) fn eval_unary_expr(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_operands(&[expr], context, scope, values, |args, _, _, values| {
-        eval_unary_value(op, args[0], values)
+    with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
+        eval_unary_value(op, args[0], context, values)
     })
 }
 
@@ -45,6 +45,7 @@ pub(in crate::interpreter) fn eval_unary_expr(
 pub(in crate::interpreter) fn eval_unary_value(
     op: EvalUnaryOp,
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match op {
@@ -78,7 +79,7 @@ pub(in crate::interpreter) fn eval_unary_value(
             }
         }
         EvalUnaryOp::LogicalNot => {
-            let truthy = values.truthy(value)?;
+            let truthy = eval_boolean_condition(value, context, values)?;
             values.bool_value(!truthy)
         }
         EvalUnaryOp::BitNot => values.bit_not_dispatch(value),
@@ -252,7 +253,7 @@ pub(in crate::interpreter) fn eval_condition(
     values: &mut impl RuntimeValueOps,
 ) -> Result<bool, EvalStatus> {
     let value = eval_owned_expr(expr, context, scope, values)?;
-    let result = values.truthy(value);
+    let result = eval_boolean_condition(value, context, values);
     let released = eval_release_value(context, values, value);
     result.and_then(|result| released.map(|()| result))
 }
@@ -337,4 +338,15 @@ pub(in crate::interpreter) fn with_eval_value_lease<V: RuntimeValueOps>(
     let result = consume(value, context, values);
     let released = eval_release_value(context, values, value);
     result.and(released)
+}
+
+/// Applies condition semantics separately from explicit casts and builtin data filtering.
+pub(in crate::interpreter) fn eval_boolean_condition(
+    value: RuntimeCellHandle, context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Bools)
+        && values.type_tag(value)? != EVAL_TAG_BOOL {
+        return throwables::eval_throw_type_error("--strict-bools requires bool in a condition", context, values);
+    }
+    values.truthy(value)
 }

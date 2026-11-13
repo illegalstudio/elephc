@@ -32,8 +32,8 @@ pub(in crate::interpreter) fn eval_binary_result(
         | EvalBinOp::ShiftRight => values.bitwise_dispatch(op, left, right),
         EvalBinOp::Concat => eval_concat_result(left, right, context, values),
         EvalBinOp::LogicalXor => {
-            let left_truthy = values.truthy(left)?;
-            let right_truthy = values.truthy(right)?;
+            let left_truthy = eval_boolean_condition(left, context, values)?;
+            let right_truthy = eval_boolean_condition(right, context, values)?;
             values.bool_value(left_truthy ^ right_truthy)
         }
         EvalBinOp::LooseEq

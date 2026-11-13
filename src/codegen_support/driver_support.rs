@@ -107,9 +107,15 @@ pub fn generate_runtime_with_semantics(
 }
 
 /// Generates producer runtime code with recoverable boundaries and deferred PHP output.
+#[allow(dead_code)] // The default-profile producer entry remains available to library harnesses.
 pub(crate) fn generate_phpext_runtime(heap_size: usize, target: Target, features: RuntimeFeatures) -> String {
-    generate_runtime_profile(heap_size, target, features, true, true, true,
-        elephc_semantics::SemanticProfile::PERMISSIVE)
+    generate_phpext_runtime_with_semantics(heap_size, target, features, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Preserves user guarantees when producing a PHP-hosted runtime image.
+pub(crate) fn generate_phpext_runtime_with_semantics(heap_size: usize, target: Target,
+    features: RuntimeFeatures, profile: elephc_semantics::SemanticProfile) -> String {
+    generate_runtime_profile(heap_size, target, features, true, true, true, profile)
 }
 
 /// Shares runtime generation while keeping producer-specific output out of ordinary cache entries.
@@ -153,6 +159,7 @@ fn generate_runtime_profile(heap_size: usize, target: Target, features: RuntimeF
         target,
         crate::codegen_support::compile_php_version(),
     ));
+    output.push_str(&runtime::semantic_guards::data(semantic_profile));
     // PIC runtime globals are implementation details on every shared-library
     // target. ELF uses hidden visibility; Mach-O uses private extern visibility.
     if library_boundary && !phpext {

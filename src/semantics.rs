@@ -52,3 +52,28 @@ mod tests {
         assert!(error.message.contains("strict-overflow"));
     }
 }
+
+#[cfg(test)]
+mod boolean_codegen_tests {
+    use super::*;
+
+    /// User boolean guards lower to typed exception paths on all five target ABIs.
+    #[test]
+    fn strict_profile_bools_eir_guards_emit_for_every_supported_target() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Bools, true);
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let tokens = crate::lexer::tokenize("<?php function strict_guard(mixed $value): void { if ($value) { echo 'yes'; } } strict_guard(true);").unwrap();
+            let program = crate::parser::parse_with_mode(&tokens, crate::source::SourceMode::Php).unwrap();
+            let checked = crate::types::check_with_target_and_options(&program, target,
+                crate::types::CheckOptions { semantic_profile: profile, ..Default::default() },
+                &crate::generics::GenericContext::default()).unwrap();
+            let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            assert!(module.functions.iter().any(|function| function.instructions.iter()
+                .any(|inst| inst.op == crate::ir::Op::ThrowTypeError)), "{name}");
+            let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            assert!(asm.contains("_spl_type_error_class_id"), "{name}");
+            assert!(asm.contains("__rt_throw_current"), "{name}");
+        }
+    }
+}

@@ -75,7 +75,7 @@ fn lower_condition_tree(
             lower_condition_tree(ctx, inner, else_target, then_target, continuations),
         _ => {
             let value = lower_expr_inner(ctx, condition);
-            let value = ctx.truthy_consuming(value, Some(condition.span));
+            let value = ctx.condition_truthy_consuming(value, Some(condition.span));
             ctx.builder.terminate(Terminator::CondBr {
                 cond: value.value,
                 then_target,

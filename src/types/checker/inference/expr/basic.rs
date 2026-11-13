@@ -82,7 +82,8 @@ impl Checker {
                 }
             }
             ExprKind::Not(inner) => {
-                self.infer_type(inner, env)?;
+                let ty = self.infer_type(inner, env)?;
+                self.require_boolean_type(&ty, inner.span)?;
                 Ok(PhpType::Bool)
             }
             ExprKind::ErrorSuppress(inner) => self.infer_type(inner, env),
@@ -334,7 +335,8 @@ impl Checker {
                 then_expr,
                 else_expr,
             } => {
-                self.infer_type(condition, env)?;
+                let condition_ty = self.infer_type(condition, env)?;
+                self.require_boolean_type(&condition_ty, condition.span)?;
                 // Flow-narrowing across the branches: `$x instanceof X ? ... : ...` (and the other
                 // recognized guards) narrow `$x` — or a simple `$x->prop` — in the then/else
                 // branches. A ternary is a single expression (no intervening writes), so the
@@ -359,6 +361,7 @@ impl Checker {
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.match_arm_result_type(value, env)?;
+                self.require_boolean_type(&value_ty, value.span)?;
                 let default_ty = self.match_arm_result_type(default, env)?;
                 let arms = [(&**value, value_ty), (&**default, default_ty)];
                 if let Some(buffer) = buffer_merge_result_type("a `?:`", &arms, expr.span)? {

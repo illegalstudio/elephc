@@ -47,14 +47,19 @@ impl StrictFixture {
     }
 
     /// Compiles and executes a fixture, requiring successful compilation and execution.
-    pub(crate) fn run(&self, flags: &[&str]) -> String {
+    pub(crate) fn capture(&self, flags: &[&str]) -> Output {
         let output = self.compile(flags);
         assert!(output.status.success(), "strict fixture compilation failed: {}",
             String::from_utf8_lossy(&output.stderr));
         let output = run_binary(&self.directory.join("main"), &self.directory);
-        assert!(output.status.success(), "strict fixture execution failed: {}",
-            String::from_utf8_lossy(&output.stderr));
-        String::from_utf8(output.stdout).unwrap()
+        assert!(output.status.success(), "strict fixture execution failed: status={} stdout={} stderr={}",
+            output.status, String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        output
+    }
+
+    /// Returns stdout for fixtures whose successful execution needs no further inspection.
+    pub(crate) fn run(&self, flags: &[&str]) -> String {
+        String::from_utf8(self.capture(flags).stdout).unwrap()
     }
 }
 

@@ -21,6 +21,8 @@ pub trait AstVisitor {
     fn expression(&mut self, _expr: &Expr) {}
     /// Observes one statement, including generated nested statement lists.
     fn statement(&mut self, _stmt: &Stmt) {}
+    /// Observes the end of a statement after all nested syntax has been visited.
+    fn statement_end(&mut self, _stmt: &Stmt) {}
     /// Observes one type annotation with its enclosing source span.
     fn annotation(&mut self, _annotation: &TypeExpr, _span: Span) {}
     /// Observes a free-function declaration or call target.

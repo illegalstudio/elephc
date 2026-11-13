@@ -284,9 +284,9 @@ pub(super) fn execute_foreach_iterator_stmt(
     values.release(result)?;
     loop {
         let valid = eval_method_call_result(iterator, "valid", Vec::new(), context, values)?;
-        let is_valid = values.truthy(valid)?;
+        let is_valid = eval_boolean_condition(valid, context, values);
         values.release(valid)?;
-        if !is_valid {
+        if !is_valid? {
             return Ok(EvalControl::None);
         }
 

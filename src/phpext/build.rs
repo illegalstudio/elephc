@@ -12,8 +12,15 @@ use std::{collections::HashMap, path::{Path, PathBuf}, process::Command};
 use crate::{codegen_support::{self, platform::Target, RuntimeFeatures}, exports::ExportedFunction};
 
 /// Emits the combined user/runtime assembly with a bounded, request-owned state region.
+#[allow(dead_code)] // Default-profile compatibility entry point for integration harnesses.
 pub fn assembly(user: &str, heap_size: usize, target: Target, features: RuntimeFeatures) -> Result<String, String> {
-    let runtime = codegen_support::generate_phpext_runtime(heap_size, target, features);
+    assembly_with_semantics(user, heap_size, target, features, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Emits a producer runtime with the same semantic contract as the user module.
+pub fn assembly_with_semantics(user: &str, heap_size: usize, target: Target,
+    features: RuntimeFeatures, profile: elephc_semantics::SemanticProfile) -> Result<String, String> {
+    let runtime = codegen_support::generate_phpext_runtime_with_semantics(heap_size, target, features, profile);
     let runtime = super::prune::runtime(user, &runtime, target)?;
     super::state::combine(&[user, &runtime], target)
 }
