@@ -461,3 +461,30 @@ iterator compatibility regressions. Throwing callback-result destructors retain
 the TypeError as their previous exception and leave a clean heap. All modified
 backend assembly comments and Rust file preambles pass their hygiene checks.
 No task-owned fixture directories or Python bytecode remain.
+
+
+### Integer literal evidence
+
+A shared exact unsigned-magnitude classifier now distinguishes ordinary signed
+integers, the unsigned magnitude of i64::MIN, overflowing integers and malformed
+digits. The compiler and eval lexers expose explicit profile-aware entry points.
+Their parsers accept the minimum magnitude only beneath direct unary minus,
+respecting power and postfix precedence. Deliberately written floats, including
+IEEE infinities, retain floating semantics. Physical entry, include and autoload
+lexing receive the immutable profile; complex interpolation inherits it too.
+Eval numeric scanning now lives in a cohesive lexer/numbers.rs leaf.
+
+Simple interpolation offsets require a separate key-syntax decision. Reference
+PHP classifies canonical numeric text before ArrayAccess dispatch: 1 is an int,
+while 01, -0 and an out-of-range numeric spelling remain exact strings. Both
+lexers now consume the shared key classifier, fixing the compiler's zero fallback
+and eval's rejection of oversized textual offsets. Exact-key policy keeps the
+canonical spelling raw as well. Complex interpolation still parses actual integer
+expressions and therefore observes checked literal bounds.
+
+Ten focused tests pass across the neutral policy, both frontend parsers, native
+array/ArrayAccess output and eval output. Profile-dependent parsed-source caches,
+literal eval plans, runtime arithmetic and checked conversion integration remain
+pending. Overflow and other unfinished flags stay explicitly gated until their
+entire guarantee is implemented. This is supporting frontend work, not completion
+of the strict-overflow feature.

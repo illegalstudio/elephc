@@ -183,6 +183,7 @@ fn parse_error_message(error: crate::errors::EvalParseError) -> &'static str {
         EvalParseError::UnsupportedConstruct => "construct is not supported by eval",
         EvalParseError::ExpectedSemicolon => "syntax error: expected a semicolon",
         EvalParseError::ExpectedVariable => "syntax error: expected a variable",
+        EvalParseError::IntegerLiteralOverflow => "--strict-overflow: integer literal is outside signed 64-bit range",
         EvalParseError::InvalidNumber => "syntax error: invalid number",
         EvalParseError::InvalidUtf8 => "input is not valid UTF-8",
         _ => "syntax error: unexpected token",

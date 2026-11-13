@@ -13,11 +13,12 @@
 //!   a concatenation token stream the existing grammar already understands.
 
 mod inline_html;
+mod numbers;
 mod scan;
 mod strings;
 #[cfg(test)]
 mod tests;
 mod token;
 
-pub(crate) use scan::{tokenize, tokenize_at_line};
+pub(crate) use scan::{tokenize, tokenize_at_line, tokenize_with_semantics};
 pub(crate) use token::{Token, TokenKind};

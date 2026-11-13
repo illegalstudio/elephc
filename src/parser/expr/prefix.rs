@@ -88,6 +88,15 @@ pub(super) fn parse_prefix(
                 right: inner,
             }
         }, 35),
+        Token::Minus if matches!(tokens.get(*pos + 1), Some((Token::MinimumIntegerMagnitude, _)))
+            && !matches!(tokens.get(*pos + 2), Some((Token::StarStar | Token::LParen | Token::LBracket
+                | Token::Arrow | Token::QuestionArrow | Token::DoubleColon | Token::PlusPlus | Token::MinusMinus, _))) => {
+            let end = tokens[*pos + 1].1.span;
+            *pos += 2;
+            Ok(Expr::new(ExprKind::IntLiteral(i64::MIN), Span::with_end_from(span, end)))
+        }
+        Token::MinimumIntegerMagnitude => Err(CompileError::new(span,
+            "--strict-overflow: positive integer literal is outside signed 64-bit range")),
         Token::Minus => parse_unary(tokens, pos, span, ExprKind::Negate, 35),
         Token::Bang => parse_unary(tokens, pos, span, ExprKind::Not, 35),
         Token::Tilde => parse_unary(tokens, pos, span, ExprKind::BitNot, 35),

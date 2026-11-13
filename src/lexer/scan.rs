@@ -36,10 +36,18 @@ pub(super) fn scan_tokens_in_source(
     mode: SourceMode,
     source_id: u32,
 ) -> Result<Vec<SpannedToken>, CompileError> {
+    scan_tokens_with_semantics(source, mode, source_id, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Tokenizes physical source with explicit semantic policy and span identity.
+pub(super) fn scan_tokens_with_semantics(
+    source: &str, mode: SourceMode, source_id: u32,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Vec<SpannedToken>, CompileError> {
     // A leading UTF-8 byte-order mark (U+FEFF) is ignored, matching editors that save PHP
     // files as BOM-prefixed UTF-8; stripping it keeps the `<?php` open tag at the start.
     let source = source.strip_prefix('\u{feff}').unwrap_or(source);
-    let mut cursor = Cursor::new_in_source(source, source_id);
+    let mut cursor = Cursor::new_in_source(source, source_id, profile);
     let mut tokens = Vec::new();
 
     let span = cursor.span();

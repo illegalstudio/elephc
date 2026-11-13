@@ -27,7 +27,7 @@ mod tests;
 
 use crate::errors::EvalParseError;
 use crate::eval_ir::EvalProgram;
-use crate::lexer::tokenize;
+use crate::lexer::tokenize_with_semantics;
 use state::Parser;
 
 pub(crate) use cursor::is_reserved_class_like_name as is_reserved_word;
@@ -43,9 +43,14 @@ const PARSER_STACK_BYTES: usize = 16 * 1024 * 1024;
 /// `<?php` met in code lexes as `<` then `?`, which the grammar refuses as PHP does
 /// (`eval('<?php echo 1;')` is a parse error there too).
 pub fn parse_fragment(code: &[u8]) -> Result<EvalProgram, EvalParseError> {
+    parse_fragment_with_semantics(code, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Parses runtime source without discarding profile-dependent literal evidence.
+pub fn parse_fragment_with_semantics(code: &[u8], profile: elephc_semantics::SemanticProfile) -> Result<EvalProgram, EvalParseError> {
     with_parser_stack(|| {
         let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
-        let tokens = tokenize(source)?;
+        let tokens = tokenize_with_semantics(source, profile)?;
         Parser::new(tokens, code.len()).parse_program()
     })
 }

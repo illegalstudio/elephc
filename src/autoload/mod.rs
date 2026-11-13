@@ -237,7 +237,7 @@ fn load_autoloaded_file(
     let source_id = Span::fresh_source_id();
     Span::register_source_path(source_id, file_label.clone());
     let tokens =
-        crate::lexer::tokenize_with_mode_and_source_id(&content, source_mode, source_id)
+        crate::lexer::tokenize_with_semantics(&content, source_mode, source_id, semantic_profile)
             .map_err(|e| e.with_file(file_label.clone()))?;
     let parsed = crate::parser::parse_with_mode(&tokens, source_mode)
         .map_err(|e| e.with_file(file_label.clone()))?;

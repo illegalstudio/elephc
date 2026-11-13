@@ -15,6 +15,7 @@ impl Parser {
     /// Parses primary expressions supported by the initial eval subset.
     pub(in crate::parser) fn parse_primary(&mut self) -> Result<EvalExpr, EvalParseError> {
         match self.current() {
+            TokenKind::MinimumIntegerMagnitude => Err(EvalParseError::IntegerLiteralOverflow),
             TokenKind::Int(value) => {
                 let value = *value;
                 self.advance();

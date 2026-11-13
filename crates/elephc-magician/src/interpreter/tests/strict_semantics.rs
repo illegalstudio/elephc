@@ -94,3 +94,13 @@ fn strict_profile_bools_callback_results_are_checked_in_eval() {
         assert!(context.take_pending_throw().is_some());
     }
 }
+
+/// Simple interpolation routes textual keys through PHP key normalization without losing bytes.
+#[test]
+fn strict_integer_literal_eval_text_keys_preserve_php_bytes() {
+    let program = parse_fragment(br#"$items = [0 => 'zero', '1' => 'one', '01' => 'leading', '-0' => 'negative', '9223372036854775808' => 'large']; echo "$items[01]|$items[-0]|$items[9223372036854775808]";"#).unwrap();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).unwrap();
+    assert_eq!(values.output, "leading|negative|large");
+}

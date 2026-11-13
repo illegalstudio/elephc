@@ -70,6 +70,8 @@ pub enum Token {
     // Literals
     StringLiteral(String),
     IntLiteral(i64),
+    /// Exact unsigned 2^63 under strict overflow, pending a direct unary minus.
+    MinimumIntegerMagnitude,
     FloatLiteral(f64),
 
     // Identifiers

@@ -55,7 +55,7 @@ pub(super) fn parse_file(
     let source_id = Span::fresh_source_id();
     // Names this file in a later checker or lowering diagnostic, which carries only a span.
     Span::register_source_path(source_id, file.clone());
-    let tokens = lexer::tokenize_with_mode_and_source_id(&source, mode, source_id)
+    let tokens = lexer::tokenize_with_semantics(&source, mode, source_id, semantic_profile)
         .map_err(|e| e.with_file(file.clone()))?;
 
     // Both resolver passes parse this file; naming its anonymous classes after the file keeps the

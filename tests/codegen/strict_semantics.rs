@@ -181,3 +181,21 @@ catch (RuntimeException $error) { echo get_class($error->getPrevious()); }
     let errors = String::from_utf8_lossy(&output.stderr);
     assert!(errors.contains("HEAP DEBUG: leak summary: clean"), "{errors}");
 }
+
+/// Numeric-looking simple interpolation keys retain their original bytes before key policy.
+#[test]
+fn test_strict_integer_literal_interpolation_text_keys_remain_strings() {
+    let source = r#"<?php
+$items = [0 => 'zero', '1' => 'one', '01' => 'leading', '-0' => 'negative', '9223372036854775808' => 'large'];
+echo "$items[01]|$items[-0]|$items[9223372036854775808]";
+class StrictTextKeyProbe implements ArrayAccess {
+    public function offsetExists(mixed $key): bool { return true; }
+    public function offsetGet(mixed $key): mixed { return (is_int($key) ? 'i:' : 's:') . (string) $key; }
+    public function offsetSet(mixed $key, mixed $value): void {}
+    public function offsetUnset(mixed $key): void {}
+}
+$probe = new StrictTextKeyProbe();
+echo "|$probe[1]|$probe[01]|$probe[-0]|$probe[9223372036854775808]";
+"#;
+    assert_eq!(StrictFixture::new(source).run(&[]), "leading|negative|large|i:1|s:01|s:-0|s:9223372036854775808");
+}

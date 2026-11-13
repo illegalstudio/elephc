@@ -414,6 +414,13 @@ impl Parser {
             });
         }
         if self.consume(TokenKind::Minus) {
+            if matches!(self.current(), TokenKind::MinimumIntegerMagnitude)
+                && !matches!(self.peek(), TokenKind::StarStar | TokenKind::LParen | TokenKind::LBracket
+                    | TokenKind::Arrow | TokenKind::QuestionArrow | TokenKind::DoubleColon
+                    | TokenKind::PlusPlus | TokenKind::MinusMinus) {
+                self.advance();
+                return Ok(EvalExpr::Const(EvalConst::Int(i64::MIN)));
+            }
             let expr = self.parse_unary()?;
             return Ok(EvalExpr::Unary {
                 op: EvalUnaryOp::Negate,

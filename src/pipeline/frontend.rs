@@ -35,7 +35,7 @@ pub(super) fn read_and_parse(
 
     crate::progress::phase("tokenize");
     let phase_started = Instant::now();
-    let tokens = match lexer::tokenize_with_mode(&source, source_mode) {
+    let tokens = match lexer::tokenize_with_semantics(&source, source_mode, 0, semantic_profile) {
         Ok(tokens) => tokens,
         Err(e) => {
             crate::progress::clear();

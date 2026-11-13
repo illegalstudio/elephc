@@ -18,7 +18,7 @@
 //! - Malformed offsets (`"$a[]"`, `"$a[ 0]"`, `"$a['k']"`) are refused, matching PHP's
 //!   parse errors rather than silently inventing a key.
 
-use super::scan::{is_ident_start, tokenize, Lexer};
+use super::scan::{is_ident_start, tokenize_with_semantics, Lexer};
 use super::{Token, TokenKind};
 use crate::errors::EvalParseError;
 use elephc_builtin_contract::string_literal::{push_escaped_byte, push_literal_char};
@@ -54,7 +54,7 @@ impl Lexer<'_> {
                 '{' if self.peek_next_char() == Some('$') => {
                     self.bump_char();
                     let inner = self.capture_braced_expr()?;
-                    let part = tokenize_interpolated_fragment(&inner, line)?;
+                    let part = tokenize_interpolated_fragment(&inner, line, self.semantic_profile())?;
                     has_interpolation = true;
                     push_interp_part(&mut tokens, &mut current, part, line);
                 }
@@ -66,7 +66,7 @@ impl Lexer<'_> {
                         let inner_raw = self.capture_braced_expr()?;
                         // Re-prepend the `$` so the captured text is a valid expression.
                         let inner = format!("${inner_raw}");
-                        let part = tokenize_interpolated_fragment(&inner, line)?;
+                        let part = tokenize_interpolated_fragment(&inner, line, self.semantic_profile())?;
                         has_interpolation = true;
                         push_interp_part(&mut tokens, &mut current, part, line);
                         continue;
@@ -180,10 +180,12 @@ impl Lexer<'_> {
                     digits.push(digit);
                     self.bump_char();
                 }
-                let value = digits
-                    .parse::<i64>()
-                    .map_err(|_| EvalParseError::InvalidNumber)?;
-                part.push(Token::new(TokenKind::Int(value), line));
+                if digits == "-" { return Err(EvalParseError::InvalidNumber); }
+                let kind = match elephc_semantics::array_keys::classify_string_key(self.semantic_profile(), digits.as_bytes()) {
+                    elephc_semantics::array_keys::StringKey::Integer(value) => TokenKind::Int(value),
+                    elephc_semantics::array_keys::StringKey::String(_) => TokenKind::String(digits),
+                };
+                part.push(Token::new(kind, line));
             }
             _ => {
                 let key = self.lex_ident();
@@ -462,8 +464,9 @@ fn push_interp_part(
 fn tokenize_interpolated_fragment(
     inner: &str,
     line: i64,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Result<Vec<Token>, EvalParseError> {
-    let fragment = tokenize(inner)?;
+    let fragment = tokenize_with_semantics(inner, profile)?;
     let mut part = vec![Token::new(TokenKind::LParen, line)];
     part.extend(
         fragment

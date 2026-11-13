@@ -22,11 +22,12 @@ pub struct Cursor<'a> {
     line: usize,
     col: usize,
     source_id: u32,
+    pub(super) semantic_profile: elephc_semantics::SemanticProfile,
 }
 
 impl<'a> Cursor<'a> {
     /// Constructs a cursor whose spans identify one included physical source file.
-    pub(super) fn new_in_source(source: &'a str, source_id: u32) -> Self {
+    pub(super) fn new_in_source(source: &'a str, source_id: u32, semantic_profile: elephc_semantics::SemanticProfile) -> Self {
         Self {
             bytes: source.as_bytes(),
             text: Some(source),
@@ -34,6 +35,7 @@ impl<'a> Cursor<'a> {
             line: 1,
             col: 1,
             source_id,
+            semantic_profile,
         }
     }
 
@@ -51,6 +53,7 @@ impl<'a> Cursor<'a> {
             line: 1,
             col: 1,
             source_id: 0,
+            semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
         }
     }
 

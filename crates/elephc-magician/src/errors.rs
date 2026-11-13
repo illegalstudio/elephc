@@ -54,6 +54,8 @@ pub enum EvalParseError {
     UnterminatedComment,
     ExpectedVariable,
     ExpectedSemicolon,
+    /// Checked integer spelling cannot fit a signed 64-bit value.
+    IntegerLiteralOverflow,
 }
 
 impl EvalParseError {
@@ -66,6 +68,7 @@ impl EvalParseError {
             | Self::UnexpectedToken
             | Self::UnexpectedEof
             | Self::InvalidNumber
+            | Self::IntegerLiteralOverflow
             | Self::UnterminatedString
             | Self::UnterminatedComment
             | Self::ExpectedVariable

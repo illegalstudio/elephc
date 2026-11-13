@@ -123,4 +123,6 @@ pub(crate) enum TokenKind {
     Backslash,
     AttributeStart,
     Eof,
+    /// Exact unsigned 2^63, pending direct unary-minus syntax under strict overflow.
+    MinimumIntegerMagnitude,
 }

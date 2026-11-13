@@ -23,6 +23,7 @@ mod namespaces;
 mod operators;
 mod static_members;
 mod generics;
+mod strict_literals;
 mod support;
 mod trait_adaptations;
 mod small_stack;
