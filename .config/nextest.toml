@@ -44,10 +44,10 @@ filter = 'binary(codegen_tests) and (test(=codegen::simplexml::projections::test
 threads-required = "num-test-threads"
 
 # This AOT/eval GMP/XML pair reached its 360s deadline twice during x86_64
-# linking under shared workers. Keep both programs and reserve the existing pool.
+# linking under shared workers. Each program is now its own test; keep the pool reserved for both.
 [[profile.ci.overrides]]
 platform = 'cfg(target_arch = "x86_64")'
-filter = 'binary(codegen_tests) and test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_bundle)'
+filter = 'binary(codegen_tests) and (test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_bundle) or test(=codegen::simplexml::native_operators::test_simplexml_gmp_mixed_operator_dispatch_eval_bundle))'
 threads-required = "num-test-threads"
 
 # These target probes hit 60s twice under concurrent x86_64 CI work. Preserve their
@@ -57,34 +57,36 @@ platform = 'cfg(target_arch = "x86_64")'
 filter = 'test(/^ir_lower::tests::instance_dimension_incdec::instance_dimension_incdec_values::/) or test(/^ir_lower::tests::property_element_unset::property_element_unset_known_name_bounds_slot_dispatch::/)'
 threads-required = "num-test-threads"
 
-# This five-target computed-property probe passed in 140-146s but reached 180s
-# while sharing x86_64 workers. Reserve the pool for both unit-test binaries,
-# preserving the complete target matrix and the existing three-minute deadline.
-[[profile.ci.overrides]]
-platform = 'cfg(target_arch = "x86_64")'
-filter = 'test(=ir_lower::tests::computed_property_update_owners::computed_property_update_storage_on_every_target)'
-threads-required = "num-test-threads"
-
-# These five-target native reference probes pass in 125-154s but reached their
-# 180s deadline while sharing x86_64 workers; repeated attempts then exhausted
-# the 30-minute shard. Reserve the pool, preserving every target and deadline.
-[[profile.ci.overrides]]
-platform = 'cfg(target_arch = "x86_64")'
-filter = 'test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_unset_keeps_numeric_alias_payloads_in_the_sync_inventory_on_every_target) or test(=ir_lower::tests::eval_native_reference_layout::dynamic_eval_object_aliases_guard_tags_and_classes_on_every_target) or test(=codegen::eval_property_helpers::reference_getter::tests::hidden_mixed_reference_cells_keep_physical_ownership_on_every_target)'
-threads-required = "num-test-threads"
-
-# This five-target SimpleXML native-reference probe compiles the complete AST prelude for
-# every target and reached its 180s deadline while sharing a linux-x86_64 shard. Reserve
-# the pool so the existing target coverage and deadline stay unchanged.
-[[profile.ci.overrides]]
-filter = 'test(=ir_lower::tests::simplexml_targets::native_nullable_object_reference_returns_preserve_the_named_cell_on_every_target)'
-threads-required = "num-test-threads"
-
 # Phase records show these XML probes reached assembly or linking under shared work.
-# The factory pair reached its unchanged 360s limit in assembly. Keep every case and budget.
+# The factory pair reached its unchanged 360s limit in assembly. Keep every case and budget;
+# the owners bundle now compiles one optimizer mode per test.
 [[profile.ci.overrides]]
-filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_constructorless_factories) or test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_factories_after_eval_returns) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval) or test(=codegen::simplexml::factory_owners::test_simplexml_constructorless_factory_owners_bundle)'
+filter = 'test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_constructorless_factories) or test(=codegen::simplexml::receiver_handoff::test_simplexml_eval_subclass_factories_after_eval_returns) or test(=codegen::runtime_gc::native_raw_property_guards::test_native_dom_exception_accessors_from_eval) or test(=codegen::simplexml::factory_owners::test_simplexml_constructorless_factory_owners_bundle) or test(=codegen::simplexml::factory_owners::test_simplexml_constructorless_factory_owners_unoptimized_bundle)'
 threads-required = "num-test-threads"
+
+# These five SimpleXML fixtures compile ONE catalog-sized program each, so they cannot be split
+# further. Green merge-queue runs measured them at 270-357s against the 360s bundle budget
+# (one such compile emits about 276 MB of assembly and takes about 210s on a loaded macOS
+# runner), and a slower runner evicted queue entries on that margin alone. Ten periods keep a
+# hang bounded; the fix for the cost itself is tracked in Code Journal plan 52bad3e9 (eval-catalog
+# compile time). This must stay ahead of the bundle budget below: the first match wins.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and (test(=codegen::simplexml::dimension_updates::test_simplexml_computed_indexed_incdec_eval_bundle) or test(=codegen::simplexml::review_type_boundaries::test_simplexml_type_boundaries_native_bundle) or test(=codegen::simplexml::receiver_handoff_generic::test_simplexml_generic_property_handoff_native_bundle) or test(=codegen::simplexml::receiver_handoff::test_simplexml_temporary_parent_handoff_bundle) or test(=codegen::simplexml::namespace_queries::test_simplexml_large_namespace_query_bundle))'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+# This probe lowers one deeply nested program on a deliberately small stack: a single
+# operation that reached 152s of its 180s budget on a loaded x86_64 runner.
+[[profile.default.overrides]]
+filter = 'binary(embedder_stack_tests) and test(=eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack)'
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.ci.overrides]]
+filter = 'binary(embedder_stack_tests) and test(=eir_lowering_survives_the_nesting_limit_on_a_small_embedder_stack)'
+slow-timeout = { period = "60s", terminate-after = 5 }
 
 # A fixture bundle (tests/codegen/support/bundle.rs) compiles several opaque-eval programs as
 # one: one catalog compile per optimizer mode instead of one per fixture, but the run itself
@@ -203,6 +205,14 @@ final-status-level = "slow"
 retries = 1
 slow-timeout = { period = "60s", terminate-after = 3 }
 status-level = "slow"
+
+# OPcache probes compile eval-capable hosts and reached the 180s cap when
+# two catalog compiles shared a macOS runner. Reserve the worker pool for each
+# probe to serialize this compilation work within the shard.
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "macos")'
+filter = 'binary(/^opcache_/)'
+threads-required = "num-test-threads"
 
 # One JUnit report per CI run, written under nextest's store dir, which is
 # `target/nextest` relative to the workspace root (`<workspace>/target/nextest/ci/junit.xml`).

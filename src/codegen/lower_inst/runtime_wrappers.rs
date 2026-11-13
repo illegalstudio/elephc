@@ -225,7 +225,7 @@ fn emit_runtime_call_wrapper_inline(
             ctx.shared.cache_runtime_extern_wrapper(name, sig, &label)
         }
     }
-    let mut wrapper_module = ctx.module.clone();
+    let mut wrapper_module = ctx.shared.take_wrapper_module(ctx.module);
     let wrapper = build_runtime_call_wrapper_function(&mut wrapper_module, &label, name, sig, kind)?;
     ctx.shared.record_generated_runtime_features(&wrapper);
     // Out of line, not spliced into the function that first needed it: see
@@ -243,6 +243,7 @@ fn emit_runtime_call_wrapper_inline(
     // Closed on the error path too: the scope holds the caller's text, and returning early with
     // it would drop everything the caller had emitted so far.
     ctx.emitter.end_out_of_line(scope);
+    ctx.shared.recycle_wrapper_module(wrapper_module);
     emitted?;
     Ok(label)
 }

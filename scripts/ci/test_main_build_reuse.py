@@ -2,9 +2,12 @@
 """Regression cases for queue provenance, incomplete uploads and partial reruns."""
 
 import copy
+import os
+import subprocess
 import unittest
+from unittest.mock import patch
 
-from resolve_main_build import GATES, HOSTS, select
+from resolve_main_build import GATES, HOSTS, resolve, select
 from verify_ci_verdicts import successful_latest, trusted_verdict_run
 
 
@@ -34,6 +37,26 @@ class MainBuildReuseTests(unittest.TestCase):
         self.jobs.append({"name": "Unrelated optional job", "conclusion": None})
         self.assertEqual(self.run["run_attempt"], 3)
         self.assertEqual(self.selected()["attempts"]["linux-x86_64"], "1")
+
+    def test_resolver_recovers_job_inventory_after_large_page_502(self):
+        """A partial rerun can break large job pages without invalidating its green gates."""
+        def api(path):
+            """Return the same authoritative gate results when a smaller page is requested."""
+            if "/jobs?" in path:
+                if "per_page=100" in path:
+                    raise subprocess.CalledProcessError(1, ["gh"], stderr="HTTP 502")
+                return {"jobs": self.jobs, "total_count": len(self.jobs)}
+            if "/artifacts?" in path:
+                return {"artifacts": self.artifacts, "total_count": len(self.artifacts)}
+            if "/workflows/" in path:
+                return {"workflow_runs": [self.run]}
+            return self.run
+
+        with patch("resolve_main_build.api", side_effect=api), \
+                patch.dict(os.environ, {"ELEPHC_CI_IMAGE": ""}):
+            self.assertEqual(resolve("o/r", self.sha), self.selected())
+            self.jobs[0]["conclusion"] = "failure"
+            self.assertIsNone(resolve("o/r", self.sha))
 
     def test_disposable_archives_are_not_needed_after_every_required_gate_passes(self):
         """Cleaning completed test inputs must not cause main to rebuild a green queue SHA."""

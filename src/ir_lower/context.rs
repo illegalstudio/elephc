@@ -515,6 +515,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     array_conversions: HashMap<String, PhpType>,
     /// Whether the current statement lowering is a disposable discovery pass.
     speculating: bool,
+    /// While set, the next array read lowers without the missing-key warning (the bucket read of
+    /// a fallen-open nested append, which PHP auto-vivifies silently). That read clears it, so
+    /// its receiver and key still warn.
+    quiet_array_reads: bool,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function SOURCE declares a return type, as opposed to one inferred
@@ -730,6 +734,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             foreach_int_key_locals: HashSet::new(),
             array_conversions: HashMap::new(),
             speculating: false,
+            quiet_array_reads: false,
             return_type,
             return_php_type,
             return_type_is_declared: false,
@@ -1258,6 +1263,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         std::mem::replace(&mut self.speculating, speculating)
     }
 
+    /// Returns whether the next array read lowers without the missing-key warning, and clears
+    /// the setting so the reads inside it (its receiver, its key) warn as usual.
+    pub(crate) fn take_quiet_array_read(&mut self) -> bool {
+        std::mem::take(&mut self.quiet_array_reads)
+    }
+
+    /// Sets whether the next array read lowers without the missing-key warning, and returns the
+    /// previous setting so the caller can restore it.
+    pub(crate) fn set_quiet_array_reads(&mut self, quiet: bool) -> bool {
+        std::mem::replace(&mut self.quiet_array_reads, quiet)
+    }
+
     /// Updates only the flow-sensitive PHP type fact for a local.
     pub(crate) fn set_local_logical_type(&mut self, name: &str, ty: PhpType) {
         self.local_types.insert(name.to_string(), ty);
@@ -1699,6 +1716,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .boxed_reference_promotion_sites
                 .get(&(self.loop_storage_scope.clone(), span))
                 .is_some_and(|names| names.contains(name))
+    }
+
+    /// Returns the frame slot whose Mixed cell a `foreach` key binding may rewrite in place.
+    ///
+    /// Only a plain PHP local stored as one boxed Mixed cell qualifies: the binding is about to
+    /// replace that cell, and the frame is its owner. A reference alias, a global or static
+    /// backing store, an extern global and an eval-scope name are all written through another
+    /// storage path, so their slot must not lend its cell.
+    pub(crate) fn reusable_foreach_key_slot(&self, name: &str) -> Option<LocalSlotId> {
+        if self.is_ref_bound_local(name)
+            || self.local_uses_global_storage(name)
+            || self.extern_global_type(name).is_some()
+            || self.should_store_to_eval_scope(name)
+            || self.append_update_cell_aliases.contains(name)
+        {
+            return None;
+        }
+        let slot = *self.local_slots.get(name)?;
+        let local = self.builder.function().locals.get(slot.as_raw() as usize)?;
+        (local.kind == LocalKind::PhpLocal
+            && local.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            && local.php_type.codegen_repr() == PhpType::Mixed
+            && self.local_type(name).codegen_repr() == PhpType::Mixed)
+            .then_some(slot)
     }
 
     /// Returns true when a local is currently modeled as a by-reference alias.
@@ -4229,6 +4270,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
@@ -4462,6 +4504,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(argument),
             Some(
                 Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub

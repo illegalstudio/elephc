@@ -422,7 +422,9 @@ routing and web transport verification remain open.
 `trim()`, `ltrim()`, and `rtrim()` expand PHP's `start..end` character ranges
 (for example `"a..z"`) using the same rules as `php_charmask()`: only an
 increasing range is expanded, and an invalid range leaves its bytes literal.
-The invalid-range warnings are not emitted yet.
+Invalid ranges emit PHP's warning with the called function's name in compiled
+and `eval()` code. The shared warning formatter currently omits the source-file
+and line suffix.
 
 #### Known divergence: `inet_pton()` caps its argument at 255 bytes
 

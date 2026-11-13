@@ -382,7 +382,7 @@ fn prelude_injection_survives_the_nesting_limit_on_a_small_embedder_stack() {
         let ast = elephc::pdo_prelude::inject_if_used(ast, false, &mut inventory);
         let ast = elephc::mysqli_prelude::inject_if_used(ast, false, php_version, &mut inventory);
         let ast = elephc::tz_prelude::inject_if_used(ast, false, &mut inventory);
-        let ast = elephc::list_id_prelude::inject_if_used(ast, &mut inventory);
+        let ast = elephc::list_id_prelude::inject_if_used(ast, false, &mut inventory);
         let ast = elephc::var_export_prelude::inject_if_used(ast, &mut inventory);
         let ast = elephc::image_prelude::inject_if_used(ast, false, &mut inventory);
         let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut inventory);

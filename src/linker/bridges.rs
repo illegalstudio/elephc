@@ -1714,10 +1714,15 @@ mod tests {
                  bridge missing from the tarball ships unnoticed again"
             );
             assert!(
-                body.contains("~/.cache/elephc/native"),
+                body.contains("uses: actions/cache@")
+                    && body.contains("path: ${{ runner.temp }}/verify-native"),
                 "{rel} runs {probe} without caching managed native packages, so \
                  a cold native add curl rebuilds openssl/libcurl from source \
                  on every nightly instead of reusing a verified cache"
+            );
+            assert!(
+                body.contains("ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/verify-native"),
+                "{rel} caches native packages outside the execution image's shared cache"
             );
         }
         let script = std::fs::read_to_string(root.join(probe))

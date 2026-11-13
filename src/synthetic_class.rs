@@ -467,6 +467,11 @@ pub fn e_clone(value: Expr) -> Expr {
     Expr::new(ExprKind::Clone(Box::new(value)), Span::dummy())
 }
 
+/// `@value` — evaluates `value` while suppressing PHP diagnostics.
+pub fn e_error_suppress(value: Expr) -> Expr {
+    Expr::new(ExprKind::ErrorSuppress(Box::new(value)), Span::dummy())
+}
+
 /// `-value`, the unary minus.
 ///
 /// A NEGATIVE LITERAL IS THIS TOO. The parser does NOT fold `-3` into `IntLiteral(-3)`; it
@@ -526,6 +531,21 @@ pub fn e_index(array: Expr, index: Expr) -> Expr {
 /// `$name++` in expression position.
 pub fn e_post_inc(name: &str) -> Expr {
     Expr::new(ExprKind::PostIncrement(name.to_string()), Span::dummy())
+}
+
+/// `++$name` in expression position; the expression evaluates to the incremented value.
+pub fn e_pre_inc(name: &str) -> Expr {
+    Expr::new(ExprKind::PreIncrement(name.to_string()), Span::dummy())
+}
+
+/// `$name--` in expression position.
+pub fn e_post_dec(name: &str) -> Expr {
+    Expr::new(ExprKind::PostDecrement(name.to_string()), Span::dummy())
+}
+
+/// `--$name` in expression position; the expression evaluates to the decremented value.
+pub fn e_pre_dec(name: &str) -> Expr {
+    Expr::new(ExprKind::PreDecrement(name.to_string()), Span::dummy())
 }
 
 /// A list array literal `[a, b, c]`.
@@ -686,6 +706,22 @@ pub fn e_closure_call(var: &str, args: Vec<Expr>) -> Expr {
     Expr::new(
         ExprKind::ClosureCall {
             var: var.to_string(),
+            args,
+        },
+        Span::dummy(),
+    )
+}
+
+/// `(callee)(<args>)` — calling an arbitrary callable expression.
+///
+/// A distinct node from `e_call` (a named function) and `e_closure_call` (a variable): the
+/// callee is an expression, so no function name resolves statically. The DOM prelude uses the
+/// form to reach the optional SimpleXML loader without making the SimpleXML prelude a
+/// compile-time dependency of every `DOMDocument` program.
+pub fn e_expr_call(callee: Expr, args: Vec<Expr>) -> Expr {
+    Expr::new(
+        ExprKind::ExprCall {
+            callee: Box::new(callee),
             args,
         },
         Span::dummy(),
@@ -1322,6 +1358,12 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
                 walk_expr(arg, out);
             }
         }
+        ExprKind::ExprCall { callee, args } => {
+            walk_expr(callee, out);
+            for arg in args {
+                walk_expr(arg, out);
+            }
+        }
         ExprKind::NewDynamic { name_expr, args } => {
             walk_expr(name_expr, out);
             for arg in args {
@@ -1347,7 +1389,8 @@ fn walk_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
-        | ExprKind::Negate(inner) => walk_expr(inner, out),
+        | ExprKind::Negate(inner)
+        | ExprKind::ErrorSuppress(inner) => walk_expr(inner, out),
         ExprKind::Match { subject, arms, default } => {
             walk_expr(subject, out);
             for (labels, value) in arms {
@@ -2173,7 +2216,8 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         ExprKind::Cast { expr: inner, .. }
         | ExprKind::Not(inner)
-        | ExprKind::Negate(inner) => audit_expr(inner, out),
+        | ExprKind::Negate(inner)
+        | ExprKind::ErrorSuppress(inner) => audit_expr(inner, out),
         ExprKind::Match { subject, arms, default } => {
             audit_expr(subject, out);
             for (labels, value) in arms {
@@ -2201,6 +2245,13 @@ fn audit_expr(expr: &Expr, out: &mut Vec<String>) {
         }
         // The callee is a variable, so nothing is NAMED here — but the arguments are code.
         ExprKind::ClosureCall { args, .. } => {
+            for arg in args {
+                audit_expr(arg, out);
+            }
+        }
+        // An expression callee names no function statically, but both sides are still code.
+        ExprKind::ExprCall { callee, args } => {
+            audit_expr(callee, out);
             for arg in args {
                 audit_expr(arg, out);
             }
@@ -2658,6 +2709,20 @@ mod tests {
     fn parse_php(source: &str) -> Program {
         let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
         crate::parser::parse_internal(&tokens).expect("fixture must parse")
+    }
+
+    /// An expression-call callee and its arguments are both uses of the enclosed variables.
+    #[test]
+    fn expression_calls_count_callee_and_arguments_as_reads() {
+        let body = vec![s_return(e_expr_call(
+            e_var("callable"),
+            vec![e_var("value")],
+        ))];
+        let params = vec![
+            ("callable".to_string(), None, None, false),
+            ("value".to_string(), Some(TypeExpr::Int), None, false),
+        ];
+        assert!(unread_params(&params, &body).is_empty());
     }
 
     /// The builders must emit the SAME nodes the parser emits for the equivalent PHP.

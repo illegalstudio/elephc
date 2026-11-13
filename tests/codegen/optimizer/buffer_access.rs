@@ -20,6 +20,7 @@
 
 use super::*;
 
+mod element_views;
 mod numeric_accumulators;
 
 /// One packed-record integration step in the shape of Ivory's `bench/integrate` hot loop.

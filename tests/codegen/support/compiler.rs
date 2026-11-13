@@ -437,7 +437,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     }
     elephc::codegen::set_linked_extensions(linked_php_surfaces);
     let resolved = elephc::tz_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::list_id_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::list_id_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);

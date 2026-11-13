@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   actions: read
+  packages: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,29 +31,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Select preinstalled test environment
+        uses: ./.github/actions/use-ci-image
+        with:
+          role: smoke
+
       - name: Configure isolated native cache
         # `runner.temp` is unavailable while GitHub validates job-level `env`;
         # publish the runner-local path once the job is executing instead.
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: echo "ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/elephc-managed-native-cache" >> "$GITHUB_ENV"
 
       - name: Install Rust
+        if: runner.os == 'macOS'
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-
-      - name: Install Linux source-build tools
-        if: startsWith(inputs.target, 'linux-')
-        # Deliberately omit system PCRE2 packages: this smoke must use only the
-        # exact shim/POSIX/8-bit archives materialized by `elephc native`.
-        # libbz2/zlib are the runtime's own stream-layer libraries (`-lz -lbz2`,
-        # src/codegen_support/runtime_features.rs), not catalog packages: every
-        # program linking the xml bridge carries them, even a parser-only one,
-        # because the bridge's prelude calls `fopen()` and that enables the
-        # runtime's phar stream feature.
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
 
       - name: Restore shared compiler
         uses: ./.github/actions/restore-build-artifact
@@ -70,11 +64,11 @@ jobs:
 
 
       - name: Verify isolated native cache starts empty
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: test ! -e "$ELEPHC_NATIVE_CACHE"
 
       - name: Materialize catalog PCRE2 from verified source
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           for example in date-json-regex eval_regex hello-preg; do
             ./target/debug/elephc native add pcre2 \
@@ -90,7 +84,7 @@ jobs:
             examples/hello-preg/elephc.lock
 
       - name: Materialize catalog zlib and verify locked offline reuse
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           mkdir -p "$RUNNER_TEMP/zlib-project"
           ./target/debug/elephc native add zlib \
@@ -103,7 +97,7 @@ jobs:
             --manifest-path "$RUNNER_TEMP/zlib-project/elephc.toml"
 
       - name: Materialize Oniguruma and verify locked offline reuse
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           mkdir -p "$RUNNER_TEMP/oniguruma-project"
           ./target/debug/elephc native add oniguruma \
@@ -129,11 +123,12 @@ jobs:
           attempt: ${{ inputs.artifact-attempt }}
 
       - name: Compare the managed mbregex provider with the PHP oracle
+        shell: elephc-ci-shell {0}
         run: bash scripts/ci/run_prebuilt_tests.sh 'package(=elephc-mbstring) and (binary(=regex) or binary(=regex_request) or binary(=regex_ini_abi) or binary(=invoke)) and test(regex)' --run-ignored all
 
       - name: Build Oniguruma providers for iOS device and Simulator
         if: inputs.target == 'macos-aarch64'
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           for target in ios-arm64 ios-sim-arm64; do
             source scripts/ci/configure_ios_native_toolchain.sh "$target"
@@ -154,7 +149,7 @@ jobs:
         # still needs these raw libcurl/libssh2/libssl/libcrypto/libz/libnghttp2
         # archives at PHP-program link time even though `cargo build -p
         # elephc-curl` itself does not.
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc native add curl \
             --target "${{ inputs.target }}" \
@@ -173,7 +168,7 @@ jobs:
         # elephc_xml BRIDGE staticlib (built via BRIDGE_CRATES elsewhere) still
         # needs these two archives at PHP-program link time even though `cargo
         # build -p elephc-xml` itself does not.
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc native add libxml2 \
             --target "${{ inputs.target }}" \
@@ -183,7 +178,7 @@ jobs:
             examples/xml/elephc.lock
 
       - name: Compile and run regex through the production resolver
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc \
             --keep-symbols \
@@ -195,9 +190,6 @@ jobs:
             smoke_status=$?
             cat "$RUNNER_TEMP/date-json-regex.out"
             if [[ "${{ runner.os }}" == "Linux" ]]; then
-              if ! command -v gdb >/dev/null; then
-                sudo apt-get update && sudo apt-get install -y gdb
-              fi
               gdb --batch -ex run -ex bt -ex 'x/12i $pc-16' -ex 'info registers' -ex 'x/16gx $sp' \
                 -ex up -ex 'x/20i $pc-48' \
                 --args ./examples/date-json-regex/main || true
@@ -229,7 +221,7 @@ jobs:
         # example.com may or may not reach the network on a given runner, so
         # only network-independent output is asserted — the compiled binary
         # always reaches real curl_exec()/curl_errno()/curl_error() either way.
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc \
             --target "${{ inputs.target }}" \
@@ -240,6 +232,7 @@ jobs:
           grep -F "connection refused, as expected" "$RUNNER_TEMP/curl-get.out"
 
       - name: Compile and run fileinfo through the production resolver
+        shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc native install --locked --target "${{ inputs.target }}" --manifest-path examples/fileinfo/elephc.toml
           ./target/debug/elephc --target "${{ inputs.target }}" examples/fileinfo/main.php
@@ -257,7 +250,7 @@ jobs:
         # `titles:` one, where libxml2 splits the character data of
         # `Design Patterns &amp; Friends` at the entity reference into three
         # handler calls, exactly as PHP's ext/xml does.
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc \
             --target "${{ inputs.target }}" \
@@ -273,7 +266,7 @@ jobs:
           }
 
       - name: Compile and run SimpleXML through the production resolver
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc \
             --target "${{ inputs.target }}" \
@@ -284,7 +277,7 @@ jobs:
           grep -F 'Under EUR 2: Pencil' "$RUNNER_TEMP/simplexml.out"
 
       - name: Reinstall locked state offline
-        shell: bash
+        shell: elephc-ci-shell {0}
         run: |
           ./target/debug/elephc native install \
             --locked \

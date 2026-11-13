@@ -158,10 +158,22 @@ fn rewrite_property_ref_args(
         if live_arguments && regular_reference && live_mixed_property_argument(ctx, place_arg, &expected_ty) {
             continue;
         }
+        let typed_element = typed_property_element_place(ctx, place_arg, &expected_ty);
+        if element_needs_write_back_refusal(ctx, place_arg, &expected_ty) {
+            // The write-back cannot validate a pointer word or a hash of containers/objects.
+            crate::ir_lower::diagnostics::refuse(
+                place_arg.span,
+                "A typed array element holding pointers, or whose own entries are arrays or \
+                 objects, cannot be passed to a wider by-reference parameter; declare the \
+                 parameter with the element's exact type",
+            );
+            continue;
+        }
         match &place_arg.kind {
             // `stabilize_place` retains a nested receiver in a synthetic local, so the
             // rewrite targets the same object PHP resolved when it bound the reference.
             ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => {}
+            ExprKind::ArrayAccess { .. } if typed_element => {}
             _ => continue,
         }
         let Some(place_ty) = static_place_type(ctx, place_arg) else {
@@ -181,8 +193,18 @@ fn rewrite_property_ref_args(
             .map(normalize_value_php_type)
             .unwrap_or(PhpType::Mixed);
         let variadic_tail = variadic_by_ref && index >= regular_count;
+        // A typed scalar, nullable-int or object element bound to a wider parameter travels as a
+        // boxed cell too, so the write-back can check what the callee stored against the
+        // element's declared type. A typed array element instead keeps a temporary of its own
+        // layout: the call's by-reference write-back converts what the callee stored into that
+        // layout and validates every nested element before the place is assigned.
+        let container_element = matches!(
+            value_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        );
         let promoted = variadic_tail
             || matches!(expected_ty, PhpType::Mixed)
+            || (typed_element && !container_element)
             || matches!(
                 value_type.codegen_repr(),
                 PhpType::Object(_) | PhpType::Mixed
@@ -251,6 +273,91 @@ fn rewrite_property_ref_args(
     })
 }
 
+/// Accepts `$object->prop[$key]`, `Class::$prop[$key]` and ref-bound `$local[$key]` places (at
+/// any nesting depth) whose declared element type is a concrete scalar or class, bound to a
+/// wider by-reference parameter.
+///
+/// The element's container keeps its declared storage, so the callee cannot be handed the
+/// entry's own slot: a `mixed &$slot` parameter would store an object into an `int` entry that
+/// every later typed read still decodes as an integer. A plain local may widen its own storage
+/// instead, but a ref-bound local (a by-reference parameter, a `&` alias or capture) shares its
+/// table with another frame that keeps reading it with the declared type. The element instead
+/// travels through the hidden boxed temporary, and the write-back applies the declared element
+/// type the way php-src applies a typed property's type to a reference it holds.
+fn typed_property_element_place(
+    ctx: &LoweringContext<'_, '_>,
+    place: &Expr,
+    expected: &PhpType,
+) -> bool {
+    if !shared_element_root(ctx, place) {
+        return false;
+    }
+    let Some(element) = static_place_type(ctx, place) else { return false; };
+    let element_repr = element.codegen_repr();
+    matches!(
+        element_repr,
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str | PhpType::Object(_)
+            | PhpType::TaggedScalar | PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) && expected.codegen_repr() != element_repr
+        // A nullable-int element declares a union, which the property rewrite's compatibility
+        // table leaves out; a `mixed` parameter still binds it through the boxed temporary.
+        && ((element_repr == PhpType::TaggedScalar && expected.codegen_repr() == PhpType::Mixed)
+            || crate::types::param_binding::by_ref_property_storage_compatible(expected, &element))
+}
+
+/// Returns true for an array-element place whose container another frame keeps reading with
+/// its declared layout: an instance or static property, or a ref-bound local (a by-reference
+/// parameter, a `&` alias or capture).
+fn shared_element_root(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool {
+    let ExprKind::ArrayAccess { array, .. } = &place.kind else { return false; };
+    let mut root = array.as_ref();
+    while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+        root = array.as_ref();
+    }
+    match &root.kind {
+        ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. } => true,
+        ExprKind::Variable(name) => ctx.has_local_slot(name) && ctx.is_ref_bound_local(name),
+        _ => false,
+    }
+}
+
+/// Returns true for a shared typed element, bound to a wider parameter, that the by-reference
+/// write-back cannot validate: a raw pointer word (a boxed cell cannot say which `ptr<T>` it
+/// held, and binding the entry would box every pointer of the container), or a hash whose
+/// values are themselves containers or objects (a hash's entries are checked against a scalar
+/// value kind only).
+fn element_needs_write_back_refusal(
+    ctx: &LoweringContext<'_, '_>,
+    place: &Expr,
+    expected: &PhpType,
+) -> bool {
+    if !shared_element_root(ctx, place) {
+        return false;
+    }
+    let Some(element) = static_place_type(ctx, place).map(|ty| ty.codegen_repr()) else {
+        return false;
+    };
+    if expected.codegen_repr() == element {
+        return false;
+    }
+    element_layout_needs_refusal(&element)
+}
+
+/// Walks an element layout, through nested indexed arrays, for a pointer word or a hash whose
+/// values are not scalars: the write-back checks indexed arrays recursively and a hash's
+/// entries against a scalar kind, and nothing else.
+fn element_layout_needs_refusal(element: &PhpType) -> bool {
+    match element.codegen_repr() {
+        PhpType::Pointer(_) => true,
+        PhpType::Array(inner) => element_layout_needs_refusal(&inner),
+        PhpType::AssocArray { value, .. } => !matches!(
+            value.codegen_repr(),
+            PhpType::Int | PhpType::Str | PhpType::Float | PhpType::Bool | PhpType::Mixed
+        ),
+        _ => false,
+    }
+}
+
 /// Formats the `Class::$property` label php-src uses in typed-reference diagnostics.
 fn property_place_label(ctx: &LoweringContext<'_, '_>, place: &Expr) -> String {
     match &place.kind {
@@ -273,6 +380,17 @@ fn property_place_label(ctx: &LoweringContext<'_, '_>, place: &Expr) -> String {
             let class = super::static_receiver_class_name(ctx, receiver)
                 .unwrap_or_else(|| "static".to_string());
             format!("{}::${}", class.trim_start_matches('\\'), property)
+        }
+        // A typed container element names the property that declares its element type.
+        ExprKind::ArrayAccess { array, .. } => {
+            let mut root = array.as_ref();
+            while let ExprKind::ArrayAccess { array, .. } = &root.kind {
+                root = array.as_ref();
+            }
+            match &root.kind {
+                ExprKind::Variable(name) => format!("${name} element"),
+                _ => format!("{} element", property_place_label(ctx, root)),
+            }
         }
         _ => format!("${}", "value"),
     }
@@ -314,14 +432,18 @@ pub(super) fn finish_ref_place_rewrite(
     for plan in rewrite.plans {
         // The callee wrote through a boxed ref cell. Narrow it back to the property's
         // declared storage before the ordinary assignment runs.
+        // A nullable-int element is stored as a boxed Mixed cell, so once the guard admitted
+        // an int or null the boxed temporary is written back as it is.
+        let tagged = plan.temp_type.codegen_repr() == PhpType::TaggedScalar;
         let needs_typed_local = plan.promoted
             && !matches!(
                 plan.temp_type.codegen_repr(),
-                PhpType::Mixed | PhpType::AssocArray { .. }
+                PhpType::Mixed | PhpType::AssocArray { .. } | PhpType::TaggedScalar
             );
-        let next = needs_typed_local
+        let needs_guard = needs_typed_local || (plan.promoted && tagged);
+        let next = needs_guard
             .then(|| ctx.builder.create_named_block("ref.writeback.next", vec![]));
-        if needs_typed_local {
+        if needs_guard {
             guard_typed_writeback(ctx, &plan, span);
         }
         let writeback = if needs_typed_local {
@@ -520,6 +642,13 @@ fn writeback_accepts_type(
                 .value,
             )
         }
+        // A nullable-int element accepts exactly an int or null.
+        PhpType::TaggedScalar => {
+            let int = predicate(ctx, PhpTypePredicate::Int);
+            let null = ctx.emit_value(Op::IsNull, vec![value], None, PhpType::Bool,
+                Op::IsNull.default_effects(), Some(span)).value;
+            Some(or(ctx, int, null))
+        }
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             Some(predicate(ctx, PhpTypePredicate::Array))
         }
@@ -580,7 +709,12 @@ fn emit_typed_reference_error(
     let message = [
         literal("Cannot assign "),
         given,
-        literal(" to reference held by property "),
+        // A ref-bound local element names its variable, not a property.
+        literal(if plan.place_label.starts_with('$') {
+            " to reference held by "
+        } else {
+            " to reference held by property "
+        }),
         literal(&plan.place_label),
         literal(" of type "),
         literal(&expected),

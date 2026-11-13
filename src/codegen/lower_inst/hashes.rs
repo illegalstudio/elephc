@@ -342,13 +342,23 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         &storage_value_ty,
         inst,
     )?;
-    let receiver = ReceiverPlace::resolve(ctx, hash)?;
-    receiver.prepare_consuming_storeback(ctx, hash)?;
     let normalization = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
         HashKeyNormalization::PhpAlreadyDiagnosed
     } else {
         HashKeyNormalization::Php
     };
+    if let Some(property) = super::objects::in_place_property_container(ctx, hash)? {
+        // The property lent its own separated table: nothing is retained for the helper, and
+        // only a relocated table is published back.
+        let reload = hash_key_materialization_may_run_user_code(ctx, key)?.then_some(&property);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_hash_set_aarch64_reloading(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization, reload)?,
+            Arch::X86_64 => lower_hash_set_x86_64_reloading(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization, reload)?,
+        }
+        return property.publish_relocated(ctx, hash);
+    }
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    receiver.prepare_consuming_storeback(ctx, hash)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_hash_set_aarch64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
         Arch::X86_64 => lower_hash_set_x86_64_with(ctx, hash, key, value, &value_ty, &storage_value_ty, normalization)?,
@@ -357,6 +367,25 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     receiver.store_back_container_writeback(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
+}
+
+/// Returns whether materializing `key` as a hash key can run user code.
+///
+/// A raw integer and a string normalize silently. A float, a nullable scalar or a boxed value
+/// can report a conversion diagnostic, and a warning handler may then replace the container the
+/// write was about to use.
+fn hash_key_materialization_may_run_user_code(
+    ctx: &FunctionContext<'_>,
+    key: ValueId,
+) -> Result<bool> {
+    let key_ty = ctx.value_php_type(key)?.codegen_repr();
+    if matches!(key_ty, PhpType::Int | PhpType::Bool | PhpType::Str) {
+        return Ok(false);
+    }
+    // Checked integer arithmetic reports a boxed PHP type while carrying a raw integer.
+    let raw_integer = ctx.value_ir_type(key)? == crate::ir::IrType::I64
+        && matches!(key_ty, PhpType::Mixed | PhpType::Union(_));
+    Ok(!raw_integer)
 }
 
 /// Whether a hash key goes through PHP's numeric-string normalization.
@@ -519,13 +548,14 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     store_unset_result(ctx, inst)
 }
 
-/// Stores the runtime removal flag while leaving the legacy hash-pointer result unused.
+/// Stores the runtime collection flag (a removed value that may own a graph) while leaving the
+/// legacy hash-pointer result unused.
 pub(super) fn store_unset_result(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.result.is_none() { return Ok(()); }
     // -- materialize the boolean result returned alongside the retired table pointer --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1");                              // a present entry reports one even when its value was null
+            ctx.emitter.instruction("mov x0, x1");                              // a removed value that may own a graph reports one
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rax, rdx");                            // consume the per-call flag before any later helper can clobber it
@@ -538,6 +568,11 @@ pub(super) fn store_unset_result(ctx: &mut FunctionContext<'_>, inst: &Instructi
 pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let hash = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
+    if let Some(property) = super::objects::in_place_property_container(ctx, hash)? {
+        // Same in-place contract as `lower_hash_set`: no helper owner, publish-only write-back.
+        append_one_value_to_hash(ctx, hash, value, inst, &ReceiverPlace::Opaque, false)?;
+        return property.publish_relocated(ctx, hash);
+    }
     let receiver = ReceiverPlace::resolve(ctx, hash)?;
     append_one_value_to_hash(ctx, hash, value, inst, &receiver, false)?;
     ctx.store_result_value(hash)?;
@@ -801,9 +836,29 @@ pub(super) fn lower_hash_set_aarch64_with(
     storage_value_ty: &PhpType,
     normalization: HashKeyNormalization,
 ) -> Result<()> {
+    lower_hash_set_aarch64_reloading(
+        ctx, hash, key, value, value_ty, storage_value_ty, normalization, None,
+    )
+}
+
+/// Lowers an AArch64 associative-array write, re-reading an in-place property receiver after
+/// the key conversion when `reload` names one.
+fn lower_hash_set_aarch64_reloading(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+    normalization: HashKeyNormalization,
+    reload: Option<&super::objects::InPlacePropertyContainer>,
+) -> Result<()> {
     let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     materialize_hash_key_aarch64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    if let Some(property) = reload {
+        property.reload(ctx, hash)?;
+    }
     materialize_hash_value_aarch64(ctx, value, value_ty, storage_value_ty)?;
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
     ctx.load_value_to_reg(hash, "x0")?;
@@ -869,9 +924,29 @@ pub(super) fn lower_hash_set_x86_64_with(
     storage_value_ty: &PhpType,
     normalization: HashKeyNormalization,
 ) -> Result<()> {
+    lower_hash_set_x86_64_reloading(
+        ctx, hash, key, value, value_ty, storage_value_ty, normalization, None,
+    )
+}
+
+/// Lowers an x86_64 associative-array write, re-reading an in-place property receiver after
+/// the key conversion when `reload` names one.
+fn lower_hash_set_x86_64_reloading(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+    value: ValueId,
+    value_ty: &PhpType,
+    storage_value_ty: &PhpType,
+    normalization: HashKeyNormalization,
+    reload: Option<&super::objects::InPlacePropertyContainer>,
+) -> Result<()> {
     let value_ty = &hash_payload_value_type(ctx, value, value_ty, storage_value_ty)?;
     materialize_hash_key_x86_64_with(ctx, key, normalization)?;
     abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
+    if let Some(property) = reload {
+        property.reload(ctx, hash)?;
+    }
     materialize_hash_value_x86_64(ctx, value, value_ty, storage_value_ty)?;
     abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
     ctx.load_value_to_reg(hash, "rdi")?;

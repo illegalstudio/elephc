@@ -699,6 +699,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
     out.push_str(&comm_directive("_hash_write_guard_top", 8, target));
     out.push_str(&comm_directive("_gc_runs", 8, target));
+    out.push_str(&comm_directive("_gc_safe_point_credit", 8, target));
+    out.push_str(&comm_directive("_gc_safe_point_live_limit", 8, target));
     out.push_str(&comm_directive("_gc_collected", 8, target));
     out.push_str(&comm_directive("_gc_application_started", 8, target));
     out.push_str(&comm_directive("_gc_collector_started", 8, target));

@@ -26,6 +26,18 @@ macro_rules! impl_fake_collection_call_ops {
     ) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_string_array_push(array, value)
     }
+    /// Creates a fake direct-object indexed array cell.
+    fn object_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_array_new(capacity)
+    }
+    /// Appends one retained object to a fake direct-object indexed array cell.
+    fn object_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_object_array_push(array, object)
+    }
     /// Creates a fake associative array cell.
     fn assoc_new(&mut self, _capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_assoc_new(_capacity)

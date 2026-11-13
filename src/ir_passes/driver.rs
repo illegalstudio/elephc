@@ -73,6 +73,8 @@ use super::array_sum_loop::ArraySumLoop;
 use super::branch_simplify::BranchSimplify;
 use super::borrowed_receiver_roots::BorrowedReceiverRoots;
 use super::bounded_mixed_counter::{BoundedMixedCounter, LoopCounterVersioning};
+use super::raw_promotable_loop::RawPromotableLoop;
+use super::lazy_boxed_accumulator::LazyBoxedAccumulator;
 use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
 use super::concat_reset::{ConcatResetElim, ConcatResetHoist};
@@ -158,7 +160,9 @@ pub trait IrPass {
 /// `ICheckedNumericChainToInt` regions.
 /// CSE can then deduplicate those computations using canonical immutable loads,
 /// while LICM can move both the loads and their dependent arithmetic into loop
-/// preheaders. Canonical loop optimization shares equivalent scalar induction
+/// preheaders. Raw promotable loops then keep straight-line overflow-capable
+/// accumulators and counters in integers, and continue a promoted local as a raw float.
+/// Canonical loop optimization shares equivalent scalar induction
 /// variables before range analysis, keeping checked updates checked, and exposes
 /// invariant header arguments plus simpler integer tests for subsequent passes. Branch cleanup composes
 /// SSA forwarding edges and merges straight-line loop update blocks.
@@ -213,6 +217,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(JsonDecodeCountSink),
         Box::new(BoundedMixedCounter::new(module)),
         Box::new(LoopCounterVersioning::new(module)),
+        Box::new(RawPromotableLoop),
         Box::new(LoopOptimize),
         Box::new(CountHoist),
         Box::new(ArrayGetBounds),
@@ -231,6 +236,27 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(ConcatResetElim),
         Box::new(ConcatResetHoist),
         Box::new(FreshMixedTransfer),
+    ]
+}
+
+/// Returns the cheap scalar passes that tidy up after a pass introduces new locals.
+///
+/// They promote the locals to SSA values, fold and forward them, and drop what is left
+/// dead. Every one is also a member of `default_passes`, so running them first changes how
+/// soon a function converges, not which passes it gets.
+fn scalar_cleanup_passes() -> Vec<Box<dyn IrPass>> {
+    vec![
+        Box::new(IdentityArith),
+        Box::new(Peephole),
+        Box::new(Mem2Reg),
+        Box::new(ImmutableLocalLoads),
+        Box::new(LoopOptimize),
+        Box::new(ConstFold),
+        Box::new(Cse),
+        Box::new(Licm),
+        Box::new(DeadInst),
+        Box::new(DeadStore),
+        Box::new(BranchSimplify),
     ]
 }
 
@@ -285,6 +311,23 @@ pub fn optimize_module(module: &mut Module) {
         }
         run_module_function_passes(module, &passes);
     }
+    // Lazy boxed accumulators take the locals the converged loop passes left mixed. Running
+    // them earlier would claim a loop that `RawPromotableLoop` matches a few rounds later
+    // and compiles better. The scalar passes then promote and fold the new companions.
+    // Only a function the lazy pass rewrote is optimized again: every other one is already
+    // converged, and a module-wide rerun would pay for all of them. The cheap scalar passes
+    // converge first, so the whole list usually runs once, to confirm, instead of once per
+    // cleanup round. Its analyses dominate the time on a large function.
+    let lazy: Vec<Box<dyn IrPass>> = vec![Box::new(LazyBoxedAccumulator)];
+    let cleanup = scalar_cleanup_passes();
+    for_each_function(module, |function, data| {
+        if !run_function_passes(function, &lazy, data) {
+            return false;
+        }
+        run_function_passes(function, &cleanup, data);
+        run_function_passes(function, &passes, data);
+        true
+    });
     run_module_function_passes(module, &finalizers);
 }
 
@@ -329,6 +372,16 @@ fn run_module_function_passes(module: &mut Module, passes: &[Box<dyn IrPass>]) -
     if passes.is_empty() {
         return false;
     }
+    for_each_function(module, |function, data| run_function_passes(function, passes, data))
+}
+
+/// Calls `visit` on every function-like body of the module with the shared literal pool.
+///
+/// Returns true when any call did.
+fn for_each_function(
+    module: &mut Module,
+    mut visit: impl FnMut(&mut Function, &mut DataPool) -> bool,
+) -> bool {
     let Module {
         functions,
         class_methods,
@@ -349,7 +402,7 @@ fn run_module_function_passes(module: &mut Module, passes: &[Box<dyn IrPass>]) -
         .chain(runtime_callable_invokers.iter_mut());
     let mut changed = false;
     for function in all_functions {
-        changed |= run_function_passes(function, passes, data);
+        changed |= visit(function, data);
     }
     changed
 }

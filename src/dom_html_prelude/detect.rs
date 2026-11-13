@@ -612,11 +612,9 @@ mod tests {
 
     use super::*;
 
-    /// Parses source the same way `inject_if_used` sees it: tokenize then parse,
-    /// before any name resolution.
+    /// Parses source the same way `inject_if_used` sees it, before any name resolution.
     fn parse(source: &str) -> Vec<Stmt> {
-        let tokens = crate::lexer::tokenize(source).expect("test source must tokenize");
-        crate::parser::parse(&tokens).expect("test source must parse")
+        crate::parser::parse_test_source(source).expect("test source must parse")
     }
 
     /// Global document and PI constructor references inject the prelude independently.

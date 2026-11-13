@@ -461,6 +461,24 @@ impl Checker {
             )
     }
 
+    /// Whether parameter `index` is passed by reference and carries a WRITTEN array type
+    /// (`array<T>` or `array<K, V>`).
+    ///
+    /// Such a parameter is a storage contract in both directions: the callee reads and writes
+    /// the caller's variable with exactly that layout. Call-site specialization must leave it
+    /// alone. Sharpening `array<mixed> &$a` to the first caller's `array<int>` compiled a callee
+    /// that widened the caller's list behind its back, and joining `array<int, int> &$m` with a
+    /// list argument widened the parameter to `mixed`, which then refused the very call that
+    /// caused it. By-value parameters keep the join: it is what protects a body compiled for
+    /// raw slots from a later boxed argument.
+    pub(crate) fn is_written_reference_array_param(
+        ref_params: &[bool],
+        param_type_exprs: &[Option<crate::parser::ast::TypeExpr>],
+        index: usize,
+    ) -> bool {
+        crate::types::is_written_reference_array_param(ref_params, param_type_exprs, index)
+    }
+
     /// If `declared_ty` is a generic array hint and `actual_ty` is a concrete array or
     /// assoc-array, returns `actual_ty` (specialization). Otherwise returns `declared_ty`.
     /// Used to sharpen untyped `array` parameters when the actual argument type is known.

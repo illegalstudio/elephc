@@ -69,7 +69,12 @@ pub(super) fn stabilize_loop_storage(
     let mut raw_proof_kills: HashSet<String> = backedges.values.iter().map(|(name, _)| (*name).to_string())
         .chain(backedges.references.iter().map(|name| (*name).to_string()))
         .chain(backedges.unbound.iter().map(|name| (*name).to_string())).collect();
+    // The upcast query reads the class graph while `infer` holds the mutable checker borrow.
+    // One cell shares the checker; the analysis never runs both closures at the same time.
+    let shared = std::cell::RefCell::new(&mut *checker);
     let mut infer = |expr: &Expr, analysis_env: &TypeEnv| {
+        let mut guard = shared.borrow_mut();
+        let checker: &mut Checker = &mut guard;
         let is_call = matches!(
             expr.kind,
             ExprKind::FunctionCall { .. }
@@ -101,8 +106,10 @@ pub(super) fn stabilize_loop_storage(
         }
         Some(inferred)
     };
+    let object_is_a = |class: &str, ancestor: &str| shared.borrow().object_is_a(class, ancestor);
     let analysis = super::super::loop_storage::analyze_loop_storage(body, update, condition,
-        &snapshot, packed_counter, &tagged_integer_locals, &promotable_candidates, &mut infer);
+        &snapshot, packed_counter, &tagged_integer_locals, &promotable_candidates, &mut infer,
+        &object_is_a);
     let mut incoming = Vec::new();
     for name in &backedges.references {
         if !narrowed.contains(*name) { continue; }

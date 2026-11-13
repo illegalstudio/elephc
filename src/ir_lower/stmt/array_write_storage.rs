@@ -193,6 +193,9 @@ pub(super) fn prepare_indexed_array_local_set(
 ) -> (LoweredValue, Option<PhpType>, bool) {
     let current_ty = ctx.builder.value_php_type(array_value.value);
     let value_ty = ctx.builder.value_php_type(value.value);
+    if indexed_object_write_keeps_element(ctx, &current_ty, &value_ty) {
+        return (array_value, None, false);
+    }
     if indexed_array_refcounted_set_needs_mixed_conversion(&current_ty, &value_ty) {
         let updated_ty = PhpType::Array(Box::new(PhpType::Mixed));
         let converted = ctx.emit_value(
@@ -254,6 +257,9 @@ pub(in crate::ir_lower) fn prepare_indexed_array_local_write(
 ) -> (LoweredValue, Option<PhpType>, bool) {
     let current_ty = ctx.builder.value_php_type(array_value.value);
     let value_ty = ctx.builder.value_php_type(value.value);
+    if indexed_object_write_keeps_element(ctx, &current_ty, &value_ty) {
+        return (array_value, None, false);
+    }
     let Some(updated_ty) = indexed_array_write_updated_type(current_ty.clone(), value_ty) else {
         return (array_value, None, false);
     };
@@ -269,6 +275,25 @@ pub(in crate::ir_lower) fn prepare_indexed_array_local_write(
         Some(span),
     );
     (converted, Some(updated_ty), true)
+}
+
+/// Returns whether an object write keeps an indexed array's declared object element type.
+///
+/// Every object element is one counted object pointer whatever its class, so storing an
+/// instance of the element class, of a subclass, or of a class implementing the element
+/// interface is a safe upcast: the slots keep their layout and the array keeps its element
+/// view instead of being boxed into `mixed` slots. Wider, sibling or unrelated classes still
+/// widen. The checker's loop-storage join (`types::checker::loop_storage`) applies the same
+/// nominal rule, so both layers agree on when a builder's storage changes.
+fn indexed_object_write_keeps_element(
+    ctx: &LoweringContext<'_, '_>, current_ty: &PhpType, value_ty: &PhpType,
+) -> bool {
+    let PhpType::Array(element) = current_ty.codegen_repr() else { return false; };
+    let (PhpType::Object(element), PhpType::Object(value)) =
+        (element.codegen_repr(), value_ty.codegen_repr()) else { return false; };
+    !element.is_empty()
+        && (crate::ir_lower::expr::class_extends_class(ctx, &value, &element)
+            || ctx.type_is_or_implements_interface(&value, &element))
 }
 
 /// Returns the widened storage when a stamped hash value type cannot hold `value_ty`.

@@ -356,6 +356,7 @@ impl Checker {
             arg,
             caller_env,
             can_widen_local,
+            false,
             &format!("{} variadic parameter ${}", callee_desc, variadic_name),
         )?;
         self.record_boxed_reference_output(
@@ -364,6 +365,7 @@ impl Checker {
             actual_ty,
             call_span,
             caller_env,
+            false,
         )?;
         self.record_reference_alias_root(arg);
         Ok(())
@@ -989,12 +991,18 @@ impl Checker {
                         && (sig.declared_params.get(param_idx).copied().unwrap_or(false)
                             || matches!(expected_ty, PhpType::Mixed));
                     if tracks_boxed_reference_output {
+                        let layout_contract = crate::types::is_written_reference_array_param(
+                            &sig.ref_params,
+                            &sig.param_type_exprs,
+                            param_idx,
+                        );
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
                             arg,
                             caller_env,
                             can_widen_by_ref_local,
+                            layout_contract,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                         self.record_boxed_reference_output(
@@ -1003,6 +1011,7 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
+                            layout_contract,
                         )?;
                     }
                     // `strict_types` applies to every declared parameter type, including the
@@ -1046,6 +1055,18 @@ impl Checker {
                                     item.kind,
                                     crate::parser::ast::ExprKind::StringLiteral(_)
                                 )));
+                    // A by-value list is rebuilt as the declared hash; refuse what cannot be.
+                    if sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        && !supplied_reference
+                        && !runtime_descriptor_projection
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                        )?;
+                    }
                     if !proven_callable_array && !runtime_descriptor_projection
                         && !literal_str_replace_search
                     {
@@ -1132,6 +1153,21 @@ impl Checker {
                         arg.span,
                         &format!("{} variadic parameter ${}", callee_desc, vname),
                     )?;
+                    // Same list-to-hash rule as a regular declared parameter: a collected list
+                    // is rebuilt as the element hash, or refused when no conversion exists.
+                    if variadic_index
+                        .and_then(|index| sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                        && !variadic_by_ref
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                        )?;
+                    }
                 }
             }
             param_idx += 1;

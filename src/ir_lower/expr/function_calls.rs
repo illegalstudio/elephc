@@ -519,18 +519,21 @@ pub(super) fn emit_builtin_call_value(
             } else {
                 raw_call
             };
+            // A lowering hook that ends in a min/max selection returns a detached copy of the
+            // winner, whatever the builtin's static contract says about its other forms.
+            let detached_copy = ctx.builder.value_defining_op(call.value) == Some(Op::MixedMinMax);
             // Consumers make lifetime decisions during lowering, before final
             // ownership refinement. In particular, Fresh strings already own
             // heap storage and must not be persisted again as concat scratch.
-            if matches!(
+            if (detached_copy || matches!(
                 def.spec.semantics.result_ownership,
                 crate::builtins::semantics::BuiltinResultOwnership::Fresh,
-            ) && Ownership::php_type_needs_lifetime_tracking(
+            )) && Ownership::php_type_needs_lifetime_tracking(
                 &ctx.builder.value_php_type(call.value),
             ) {
                 ctx.builder.set_value_ownership(call.value, Ownership::Owned);
             }
-            let return_alias = if stabilizes_evaluation_pin {
+            let return_alias = if stabilizes_evaluation_pin || detached_copy {
                 ReturnArgAlias::None
             } else {
                 match def.spec.semantics.result_ownership {

@@ -187,9 +187,10 @@ catch (TypeError $error) { echo $error->getMessage(), '|'; }
     });
 }
 
-/// Both native families retain their casts and operator result domains in AOT and opaque eval.
-#[test]
-fn test_simplexml_gmp_mixed_operator_dispatch_bundle() {
+/// Both native families retain their casts and operator result domains.
+///
+/// The AOT and opaque-eval programs each compile on their own, so the caller picks one.
+fn assert_gmp_mixed_operator_dispatch(opaque_eval: bool) {
     if skip_without_xml_native("test_simplexml_gmp_mixed_operator_dispatch_bundle")
         || skip_without_gmp_native("test_simplexml_gmp_mixed_operator_dispatch_bundle")
     {
@@ -243,14 +244,26 @@ nativeForeignOperator($xml, $integer, 2); nativeForeignOperator($integer, $xml, 
         "Number must be of type GMP|string|int, SimpleXMLElement given|",
         "Unsupported operand types: GMP << SimpleXMLElement|",
     );
-    for (name, source) in [
-        ("aot", format!("{setup}{body}")),
-        ("opaque-eval", format!("{setup}\n$code = $argc > 0 ? <<<'NATIVE_OPERATORS'\n{body}\nNATIVE_OPERATORS\n : '';\neval($code);\n")),
-    ] {
-        let output = compile_and_run_capture_merged_with_gmp(&source);
-        assert!(output.success, "{name}: {}", output.stderr);
-        assert_eq!(output.stdout, expected, "{name}: {}", output.stderr);
-    }
+    let (name, source) = if opaque_eval {
+        ("opaque-eval", format!("{setup}\n$code = $argc > 0 ? <<<'NATIVE_OPERATORS'\n{body}\nNATIVE_OPERATORS\n : '';\neval($code);\n"))
+    } else {
+        ("aot", format!("{setup}{body}"))
+    };
+    let output = compile_and_run_capture_merged_with_gmp(&source);
+    assert!(output.success, "{name}: {}", output.stderr);
+    assert_eq!(output.stdout, expected, "{name}: {}", output.stderr);
+}
+
+/// The AOT program keeps both native families' casts and operator result domains.
+#[test]
+fn test_simplexml_gmp_mixed_operator_dispatch_bundle() {
+    assert_gmp_mixed_operator_dispatch(false);
+}
+
+/// The opaque-eval program keeps both native families' casts and operator result domains.
+#[test]
+fn test_simplexml_gmp_mixed_operator_dispatch_eval_bundle() {
+    assert_gmp_mixed_operator_dispatch(true);
 }
 
 /// BcMath's native handler sees the original XML operand before numeric conversion in either order.

@@ -37,36 +37,52 @@ pub(in crate::interpreter) fn eval_unary_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[expr], context, scope, values, |args, _, _, values| {
-        match op {
-            EvalUnaryOp::Plus | EvalUnaryOp::Negate => {
-                if op == EvalUnaryOp::Negate {
-                    let tag = values.type_tag(args[0])?;
-                    if tag == EVAL_TAG_FLOAT {
-                        let bits = values.raw_value_word(args[0])? ^ (1_u64 << 63);
-                        return values.raw_word_value(EVAL_TAG_FLOAT, bits);
-                    }
-                    if tag == EVAL_TAG_OBJECT {
-                        if let Some(result) = runtime_ops::object_operators::negate(values, args[0])? {
-                            return Ok(result);
-                        }
+        eval_unary_value(op, args[0], values)
+    })
+}
+
+/// Applies a unary operation to an already evaluated operand without releasing it.
+pub(in crate::interpreter) fn eval_unary_value(
+    op: EvalUnaryOp,
+    value: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match op {
+        EvalUnaryOp::Plus | EvalUnaryOp::Negate => {
+            if op == EvalUnaryOp::Negate {
+                let tag = values.type_tag(value)?;
+                if tag == EVAL_TAG_FLOAT {
+                    let bits = values.raw_value_word(value)? ^ (1_u64 << 63);
+                    return values.raw_word_value(EVAL_TAG_FLOAT, bits);
+                }
+                if tag == EVAL_TAG_OBJECT {
+                    if let Some(result) = runtime_ops::object_operators::negate(values, value)? {
+                        return Ok(result);
                     }
                 }
-                let zero = values.int(0)?;
-                let result = if op == EvalUnaryOp::Plus {
-                    values.add(zero, args[0])
-                } else {
-                    values.sub(zero, args[0])
-                };
-                let released = values.release(zero);
-                result.and_then(|result| released.map(|()| result))
             }
-            EvalUnaryOp::LogicalNot => {
-                let truthy = values.truthy(args[0])?;
-                values.bool_value(!truthy)
+            let zero = values.int(0)?;
+            let result = if op == EvalUnaryOp::Plus {
+                values.add(zero, value)
+            } else {
+                values.sub(zero, value)
+            };
+            let released = values.release(zero);
+            match (result, released) {
+                (Err(status), _) => Err(status),
+                (Ok(result), Err(status)) => {
+                    if !result.is_borrowed() { let _ = values.release(result); }
+                    Err(status)
+                }
+                (Ok(result), Ok(())) => Ok(result),
             }
-            EvalUnaryOp::BitNot => values.bit_not_dispatch(args[0]),
         }
-    })
+        EvalUnaryOp::LogicalNot => {
+            let truthy = values.truthy(value)?;
+            values.bool_value(!truthy)
+        }
+        EvalUnaryOp::BitNot => values.bit_not_dispatch(value),
+    }
 }
 
 /// Applies binary operations with source-order leases and lazy boolean right-hand operands.

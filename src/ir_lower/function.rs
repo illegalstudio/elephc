@@ -31,6 +31,7 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+pub(in crate::ir_lower) use builtin_wrappers::lower_builtin_callable_body;
 mod closure_defaults;
 pub(crate) use crate::types::deferred_defaults::contains_deferred_error;
 mod object_comparisons;
@@ -2331,14 +2332,23 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         if by_ref {
             continue;
         }
+        if index == 1
+            && owner_name.rsplit_once("::").is_some_and(|(_, method)|
+                php_symbol_key(method) == "__call")
+        {
+            // Runtime-selected magic calls can carry any PHP argument tags and string keys.
+            // Call-site specialization must not become the hook body's physical array ABI.
+            *php_type = PhpType::Mixed;
+            has_dynamic_untyped_param = true;
+            continue;
+        }
         if declared && index == 1
             && owner_name.rsplit_once("::").is_some_and(|(_, method)|
-                matches!(php_symbol_key(method).as_str(), "__call" | "__callstatic"))
+                php_symbol_key(method) == "__callstatic")
             && matches!(php_type, PhpType::Array(element)
                 if matches!(element.as_ref(), PhpType::Never | PhpType::Void))
         {
-            // Eval-only magic calls have no static argument evidence. Their array is populated
-            // at runtime, so its seed element type must never become a constant null read.
+            // Eval-only static hooks still require materialized mixed array elements.
             *php_type = PhpType::Array(Box::new(PhpType::Mixed));
         }
         if !declared && !by_ref && !variadic {
@@ -2356,9 +2366,14 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         }
     }
     if has_dynamic_untyped_param && !signature.declared_return {
-        eir_signature.return_type = crate::types::dynamic_params::dynamic_param_container_return_type(
-            &eir_signature.return_type,
-        );
+        eir_signature.return_type = if owner_name.rsplit_once("::")
+            .is_some_and(|(_, method)| php_symbol_key(method) == "__call")
+        {
+            // An untyped hook can forward a boxed argument selected only at runtime.
+            PhpType::Mixed
+        } else {
+            crate::types::dynamic_params::dynamic_param_container_return_type(&eir_signature.return_type)
+        };
     }
     eir_signature
 }

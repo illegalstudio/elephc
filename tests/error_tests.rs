@@ -342,6 +342,10 @@ mod classes_traits;
 mod property_default_scope;
 #[path = "error_tests/generics_review.rs"]
 mod generics_review;
+#[path = "error_tests/typed_object_arrays.rs"]
+mod typed_object_arrays;
+#[path = "error_tests/list_hash_param_binding.rs"]
+mod list_hash_param_binding;
 #[path = "error_tests/extensions.rs"]
 mod extensions;
 #[path = "error_tests/buffer_merges.rs"]

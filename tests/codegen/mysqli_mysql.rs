@@ -3345,29 +3345,30 @@ run($db);
 /// A buffered result does not keep its mysqli object alive: unsetting the link closes the
 /// connection at once while the result (already read into the client) stays fetchable, like
 /// php, whose result holds the native result state rather than the mysqli wrapper. Expected
-/// output is php 8.5 + mysqlnd's.
+/// output is php 8.5 + mysqlnd's. The PROCESSLIST probe counts only the thread ids of the link
+/// under test, so connections opened by concurrent live tests on the same user cannot skew it.
 #[test]
 #[ignore]
 fn test_mysqli_buffered_result_does_not_keep_the_link_alive() {
     let out = compile_and_run(&my_program(
         r#"
 mysqli_report(MYSQLI_REPORT_OFF);
-function lc_threads(string $h, string $u, string $p, string $d, int $port): int {
+function lc_threads(string $h, string $u, string $p, string $d, int $port, string $ids): int {
     $m = new mysqli($h, $u, $p, $d, $port);
-    $row = $m->query("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = '" . $u . "'")->fetch_row();
+    $row = $m->query("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID IN (" . $ids . ")")->fetch_row();
     $m->close();
     return (int) $row[0];
 }
-$base = lc_threads($host, $user, $pass, $dbname, $port);
 $db2 = new mysqli($host, $user, $pass, $dbname, $port);
+$ids = (string) $db2->thread_id;
 $r = $db2->query("SELECT 1 UNION ALL SELECT 2");
-echo "a:", lc_threads($host, $user, $pass, $dbname, $port) - $base, "|";
+echo "a:", lc_threads($host, $user, $pass, $dbname, $port, $ids), "|";
 unset($db2);
-echo "b:", lc_threads($host, $user, $pass, $dbname, $port) - $base, "|", json_encode($r->fetch_row()), "|";
+echo "b:", lc_threads($host, $user, $pass, $dbname, $port, $ids), "|", json_encode($r->fetch_row()), "|";
 $r->free();
-echo "c:", lc_threads($host, $user, $pass, $dbname, $port) - $base, "|";
+echo "c:", lc_threads($host, $user, $pass, $dbname, $port, $ids), "|";
 unset($r);
-echo "d:", lc_threads($host, $user, $pass, $dbname, $port) - $base, "\n";
+echo "d:", lc_threads($host, $user, $pass, $dbname, $port, $ids), "\n";
 "#,
     ));
     assert_eq!(out, "a:1|b:0|[\"1\"]|c:0|d:0\n");
@@ -3436,33 +3437,38 @@ echo ":", $db->errno, "|", $db->query("SELECT 5")->fetch_row()[0], "\n";
 
 /// A stale MYSQLI_USE_RESULT result (its link reconnected) keeps no reference to the link:
 /// freeing it, or failing a fetch on it, and then unsetting the mysqli object closes the
-/// replacement connection at once, as in php. Expected output is php 8.5 + mysqlnd's.
+/// replacement connection at once, as in php. Expected output is php 8.5 + mysqlnd's. The
+/// PROCESSLIST probe counts only the original and replacement thread ids of the link under
+/// test, so connections opened by concurrent live tests on the same user cannot skew it.
 #[test]
 #[ignore]
 fn test_mysqli_stale_result_does_not_keep_the_replacement_link_alive() {
     let out = compile_and_run(&my_program(
         r#"
 mysqli_report(MYSQLI_REPORT_OFF);
-function sd_threads(string $h, string $u, string $p, string $d, int $port): int {
+function sd_threads(string $h, string $u, string $p, string $d, int $port, string $ids): int {
     $m = new mysqli($h, $u, $p, $d, $port);
-    $row = $m->query("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE USER = '" . $u . "'")->fetch_row();
+    $row = $m->query("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID IN (" . $ids . ")")->fetch_row();
     $m->close();
     return (int) $row[0];
 }
-$base = sd_threads($host, $user, $pass, $dbname, $port);
 $db2 = new mysqli($host, $user, $pass, $dbname, $port);
+$ids2 = (string) $db2->thread_id;
 $u = $db2->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
 $db2->real_connect($host, $user, $pass, $dbname, $port);
-echo "a:", sd_threads($host, $user, $pass, $dbname, $port) - $base, "|";
+$ids2 = $ids2 . "," . $db2->thread_id;
+echo "a:", sd_threads($host, $user, $pass, $dbname, $port, $ids2), "|";
 $u->free();
 unset($db2);
-echo "b:", sd_threads($host, $user, $pass, $dbname, $port) - $base, "|";
+echo "b:", sd_threads($host, $user, $pass, $dbname, $port, $ids2), "|";
 $db3 = new mysqli($host, $user, $pass, $dbname, $port);
+$ids3 = (string) $db3->thread_id;
 $w = $db3->query("SELECT 1 AS a UNION ALL SELECT 2", MYSQLI_USE_RESULT);
 $db3->real_connect($host, $user, $pass, $dbname, $port);
+$ids3 = $ids3 . "," . $db3->thread_id;
 echo var_export($w->fetch_column(), true), "|";
 unset($db3);
-echo "c:", sd_threads($host, $user, $pass, $dbname, $port) - $base, "\n";
+echo "c:", sd_threads($host, $user, $pass, $dbname, $port, $ids3), "\n";
 "#,
     ));
     assert_eq!(out, "a:1|b:0|false|c:0\n");

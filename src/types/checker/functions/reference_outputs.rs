@@ -8,6 +8,7 @@
 //! - Arguments are already normalized by the shared call planner.
 //! - A referenced array element widens its local root to boxed Mixed element storage.
 //! - A `null` local bound to a `?ptr<T>` parameter becomes a `?ptr<T>` local.
+//! - A typed list local bound to a declared hash or `array<mixed>` parameter takes that layout.
 
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
@@ -215,6 +216,9 @@ impl Checker {
     ///
     /// A `null` local bound to a `?ptr<T>` parameter leaves the call as that `?ptr<T>`: the
     /// callee may store a live address through it, and lowering gives the slot that pointer word.
+    ///
+    /// `layout_contract` says the parameter carries a written array type, the only kind whose
+    /// layout the caller's list is converted to (`crate::types::is_written_reference_array_param`).
     pub(crate) fn record_boxed_reference_output(
         &mut self,
         arg: &Expr,
@@ -222,6 +226,7 @@ impl Checker {
         actual: &PhpType,
         call_span: Span,
         env: &TypeEnv,
+        layout_contract: bool,
     ) -> Result<(), crate::errors::CompileError> {
         // A narrowed value can still occupy a nullable or union slot. Use that slot for
         // layout decisions and restore its full view after a callee can write through it.
@@ -249,6 +254,13 @@ impl Checker {
             && matches!(actual.codegen_repr(), PhpType::Void | PhpType::Never)
         {
             expected.clone()
+        } else if let Some(promoted) = layout_contract
+            .then(|| crate::types::packed_reference_argument_storage(expected, actual))
+            .flatten()
+        {
+            // A typed list bound to a declared hash or boxed-list parameter is converted to that
+            // layout before the call (`require_boxed_by_ref_storage` rule 4), and keeps it.
+            promoted
         } else if let Some(storage) = guarded_storage {
             storage
         } else {

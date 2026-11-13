@@ -15,15 +15,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  resolve-image:
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve immutable producer environment
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/resolve_ci_image.sh
+
   build-host:
+    needs: resolve-image
     uses: ./.github/workflows/ci-build-host.yml
     with:
       target: linux-x86_64
+      ci-image: ${{ needs.resolve-image.outputs.image }}
 
   build-libpq:
-    needs: build-host
+    needs: [resolve-image, build-host]
     uses: ./.github/workflows/ci-build-pdo.yml
     with:
+      ci-image: ${{ needs.resolve-image.outputs.image }}
       host-attempt: ${{ needs.build-host.outputs.artifact-attempt }}
       variants: '["libpq-gss"]'
 
@@ -36,9 +51,10 @@ jobs:
       variant-attempts: ${{ needs.build-libpq.outputs.artifact-attempts }}
 
   build-drivers:
-    needs: build-host
+    needs: [resolve-image, build-host]
     uses: ./.github/workflows/ci-build-pdo.yml
     with:
+      ci-image: ${{ needs.resolve-image.outputs.image }}
       host-attempt: ${{ needs.build-host.outputs.artifact-attempt }}
       variants: '["sqlsrv","oci","cubrid","dblib","firebird","odbc","informix","ibm"]'
 

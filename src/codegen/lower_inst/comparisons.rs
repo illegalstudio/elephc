@@ -7,7 +7,7 @@
 //! Key details:
 //! - Strict equality respects static PHP type identity before comparing payloads.
 //! - Mixed strict equality boxes concrete operands and delegates tag/payload comparison
-//!   to the shared runtime helper.
+//!   to the shared runtime helper; a Mixed operand against `null` only tests its unwrapped tag.
 //! - Loose equality mirrors the legacy scalar paths for int/bool/null/string
 //!   combinations and delegates string numeric parsing to shared runtime helpers.
 //! - Mixed/int equality compares integer-tagged payloads without floating-point promotion.
@@ -105,6 +105,14 @@ pub(super) fn lower_strict_eq(
     // value it boxes to, null for address 0 and the integer address otherwise: a live pointer
     // is `=== (int)$p`, and a null one is not a plain `ptr_null()`, whose 0 is no PHP null.
     // Two `?ptr<T>` words compare directly below.
+    // A boxed value against `null` only needs its unwrapped runtime tag. Boxing the null partner
+    // for `__rt_mixed_strict_eq` would allocate a temporary cell on every comparison.
+    for (mixed, mixed_ty, other_ty) in [(lhs, &lhs_ty, &rhs_ty), (rhs, &rhs_ty, &lhs_ty)] {
+        if *mixed_ty == PhpType::Mixed && matches!(other_ty, PhpType::Void | PhpType::Never) {
+            emit_mixed_null_identity(ctx, mixed, is_equal)?;
+            return store_if_result(ctx, inst);
+        }
+    }
     let lhs_nullable_pointer = crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(lhs)?);
     let rhs_nullable_pointer = crate::types::is_nullable_pointer_type(&ctx.raw_value_php_type(rhs)?);
     let other_ty = if lhs_nullable_pointer { &rhs_ty } else { &lhs_ty };
@@ -285,6 +293,35 @@ fn emit_mixed_strict_compare(
     }
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
+/// Answers `$mixed === null` (or `!==`) from the runtime tag `__rt_mixed_unbox` reports.
+///
+/// The unbox helper follows nested boxes and maps a null pointer or a null container payload
+/// to tag 8, which is exactly when `__rt_mixed_strict_eq` would match a boxed null partner.
+fn emit_mixed_null_identity(ctx: &mut FunctionContext<'_>, value: ValueId, is_equal: bool) -> Result<()> {
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 means the boxed value is PHP null
+            if is_equal {
+                ctx.emitter.instruction("cset x0, eq");                         // === null holds exactly for the null tag
+            } else {
+                ctx.emitter.instruction("cset x0, ne");                         // !== null holds for every non-null tag
+            }
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 means the boxed value is PHP null
+            if is_equal {
+                ctx.emitter.instruction("sete al");                             // === null holds exactly for the null tag
+            } else {
+                ctx.emitter.instruction("setne al");                            // !== null holds for every non-null tag
+            }
+            ctx.emitter.instruction("movzx eax, al");                           // widen the identity flag to a PHP bool word
+        }
+    }
     Ok(())
 }
 

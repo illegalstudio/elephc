@@ -135,40 +135,51 @@ class DownloadDeadline(unittest.TestCase):
             "puts JSON.generate(YAML.load_file(ARGV.fetch(0)))", str(ACTION_SPEC),
         ], text=True))
         cls.downloads = [step for step in spec["runs"]["steps"]
-                         if step.get("uses") == "actions/download-artifact@v4"]
+                         if step.get("uses", "").startswith("actions/download-artifact@")]
 
     def node_options(self):
         """Require the same workspace-relative preload on all three attempts."""
         expected = "--require ./.github/actions/download-test-archive/deadline.cjs"
         self.assertEqual([step["id"] for step in self.downloads], ["first", "second", "third"])
         for step in self.downloads:
+            self.assertEqual(step["uses"], "actions/download-artifact@v8.0.2")
+            self.assertEqual(step["with"].get("digest-mismatch"), "error")
             self.assertEqual(step.get("env", {}).get("NODE_OPTIONS"), expected)
         return expected
 
     def test_success_exits_without_waiting_for_the_deadline(self):
         """A completed action can exit naturally despite the five-minute timer."""
+        # The outer watchdog includes Node startup under shared-runner contention;
+        # the production deadline remains 300 seconds and is accelerated below.
         env = {**os.environ, "NODE_OPTIONS": self.node_options()}
         result = subprocess.run(["node", "-e", "console.log('download complete')"],
-                                cwd=REPO, env=env, capture_output=True, text=True, timeout=3)
+                                cwd=REPO, env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "download complete")
 
     def test_slow_active_transfer_fails_instead_of_resetting_the_deadline(self):
-        """Accelerate a real timer, then keep the process active with periodic progress."""
+        """Start progress before arming a real timer, even when later startup is slow."""
         options = self.node_options()
         with tempfile.TemporaryDirectory(prefix=".download-deadline.", dir=REPO) as tmp:
             clock = Path(tmp) / "fast clock.cjs"
             clock.write_text("""const assert = require('node:assert/strict');
+const { writeSync } = require('node:fs');
+// A preload deadline can expire before Node reaches its -e program. Establish
+// the active-transfer fixture first, and do not rely on buffered stdout at exit.
+writeSync(1, '.');
+setInterval(() => writeSync(1, '.'), 5);
 const original = global.setTimeout;
 global.setTimeout = (callback, delay) => {
   assert.equal(delay, 300000);
   return original(callback, 50);
 };
 """)
-            env = {**os.environ, "NODE_OPTIONS": f'--require "{clock}" {options}'}
+            startup = Path(tmp) / "slow startup.cjs"
+            startup.write_text("Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);\n")
+            env = {**os.environ, "NODE_OPTIONS": f'--require "{clock}" {options} --require "{startup}"'}
             result = subprocess.run([
-                "node", "-e", "setInterval(() => process.stdout.write('.'), 5)",
-            ], cwd=REPO, env=env, capture_output=True, text=True, timeout=3)
+                "node", "-e", "",
+            ], cwd=REPO, env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn(".", result.stdout)
         self.assertIn("Artifact download exceeded 5 minutes", result.stderr)

@@ -884,6 +884,31 @@ pub(crate) fn root_owned_call_operand(
     (rooted, Some(slot))
 }
 
+/// Roots the owned list-to-hash conversions argument lowering could not publish itself.
+///
+/// `coerce_operands_to_params` rebuilds a list bound to a declared `array<K, V>` parameter as an
+/// owned hash and hands it to the argument-evaluation scope of the call. A descriptor
+/// `ExprCall` has no such scope, so the conversion comes back unpublished: nothing would
+/// release it after the call, on the normal path or while unwinding. Each one is moved into a
+/// frame slot here; the caller retires the returned slots once the call has returned.
+pub(super) fn root_unpublished_argument_conversions(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: &mut [crate::ir::ValueId],
+    span: Span,
+) -> Vec<crate::ir::LocalSlotId> {
+    let mut roots = Vec::new();
+    for operand in operands.iter_mut() {
+        if ctx.builder.value_defining_op(*operand) != Some(Op::ArrayToHash) {
+            continue;
+        }
+        let value = LoweredValue { value: *operand, ir_type: ctx.builder.value_type(*operand) };
+        let (rooted, slot) = root_owned_call_operand(ctx, value, span);
+        *operand = rooted.value;
+        roots.extend(slot);
+    }
+    roots
+}
+
 /// Makes a rooted operand visible even to a catch that preserves the current PHP activation.
 pub(crate) fn register_owned_call_operand(
     ctx: &mut LoweringContext<'_, '_>,

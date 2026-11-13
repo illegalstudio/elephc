@@ -106,7 +106,7 @@ pub(crate) fn lower_array_merge_callable(
 }
 
 /// Applies ordinary parameter ownership and exceptional cleanup to a synthetic callable body.
-pub(super) fn lower_builtin_callable_body(
+pub(in crate::ir_lower) fn lower_builtin_callable_body(
     module: &mut Module,
     label: &str,
     signature: &FunctionSig,
