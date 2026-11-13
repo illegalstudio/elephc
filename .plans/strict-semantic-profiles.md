@@ -621,3 +621,25 @@ Validation: the focused folding regression passes for PHP, LFC, Internal and a
 mixed nested wrapper. The native arithmetic/ownership fixture now runs both AST
 and EIR optimizers when enabled, including unused addition and negation results
 inside catches. Both optimization settings pass and report a clean heap.
+
+### Source-known integer overflow
+
+Source validation now rejects proven integer overflow before folding can erase
+dead branches or declaration expressions. Its numeric evidence keeps exact i64
+intermediates, distinguishes float results and delegates checked operations to
+the neutral arithmetic kernel. Unconditional global aliases and direct lexical
+class constants support forward references; duplicate declarations, cycles and
+unresolved namespace names remain unknown. Resolved `use const` aliases use the
+canonical names supplied by the existing name resolver.
+
+Each physical source tree and parsed literal eval fragment owns its own memoized
+evidence. Trusted implementation constants keep their PHP result kind when user
+code consumes them. The shared source visitor covers defaults, attributes,
+closures and unreachable branches without duplicating those traversal rules.
+
+Validation: four focused tests passed, covering overflow and valid boundaries,
+numeric strings, floats, negative powers, aliases, cycles, source modes, literal
+eval and declaration expression positions. The additional resolved namespace
+and imported-alias cases pass. The pre-existing eager predefined-constant token
+binding issue is tracked separately as Code Journal task d0932767; this adapter
+does not infer a replacement value for names the parser has already erased.

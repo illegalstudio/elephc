@@ -17,6 +17,7 @@ use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKin
 pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
     if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
     crate::compiler_stack::with_compiler_stack(|| {
+        super::numeric_constants::validate(program, profile)?;
         let mut validator = SourceValidator { depth: 0, error: None, profile, source_modes: Vec::new() };
         walk_program(program, &mut validator);
         validator.error.map_or(Ok(()), Err)
@@ -87,7 +88,10 @@ impl AstVisitor for SourceValidator {
         match parsed {
             Ok(program) => {
                 self.depth += 1;
-                walk_program(&program, self);
+                match super::numeric_constants::validate(&program, self.profile) {
+                    Ok(()) => walk_program(&program, self),
+                    Err(error) => self.error = Some(error),
+                }
                 self.depth -= 1;
                 if let Some(error) = self.error.take() {
                     self.error = Some(CompileError::new(expr.span, &format!(
