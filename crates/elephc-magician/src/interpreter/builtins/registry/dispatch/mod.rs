@@ -118,7 +118,7 @@ pub(in crate::interpreter) fn eval_builtin_with_values_from_scope(
         if let Some(refused) = eval_opcache_api_refusal(values)? {
             return Ok(Some(refused));
         }
-        return Ok(Some(eval_opcache_is_script_cached_for_path(&path, values)?));
+        return Ok(Some(eval_opcache_is_script_cached_for_path(&path, context.semantic_profile(), values)?));
     }
     if name == "opcache_invalidate" {
         if evaluated_args.is_empty() || evaluated_args.len() > 2 {
@@ -150,7 +150,7 @@ pub(in crate::interpreter) fn eval_builtin_with_values_from_scope(
             return Ok(Some(refused));
         }
         return Ok(Some(eval_opcache_is_script_cached_in_file_cache_for_path(
-            &path, values,
+            &path, context.semantic_profile(), values,
         )?));
     }
     if name == "opcache_jit_blacklist" {

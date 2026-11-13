@@ -101,7 +101,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// Format 27 combines SimpleXML property updates with native variable increment statements.
 /// Format 28 records bytecode-backed function metadata in the conservative source guard,
 /// even though serde omits the executable cache from the stored payload.
-pub(crate) const FORMAT_VERSION: u32 = 28;
+/// Format 29 adds checked integer tokens, overflow parse errors and semantic profile headers.
+pub(crate) const FORMAT_VERSION: u32 = 29;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
@@ -117,10 +118,14 @@ fn system_id() -> String {
 /// used, so this struct is the contract rather than a convenience wrapper.
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 struct CacheFile {
+    // The leading magic and format fields remain first for the bounded raw-header check.
     /// Guards against reading a file that is not one of ours at all.
     magic: u64,
     /// Guards against an older or newer stored shape. See [`FORMAT_VERSION`].
     format_version: u32,
+    /// The neutral semantic ABI and exact parser policy which produced these segments.
+    semantics_abi: u32,
+    semantic_bits: u64,
     /// The canonical source path, so a file-name hash collision is a miss, not a mix-up.
     ///
     /// Its BYTES, as the filesystem names the file (see [`path_bytes`]). It was a lossy
@@ -203,6 +208,7 @@ pub(crate) fn stable_hash(bytes: &[u8]) -> u64 {
 ///
 /// Returns `None` for every failure mode — absent, foreign, stale, unreadable or corrupt —
 /// because each of them means the same thing to the caller: parse the file instead.
+#[cfg(test)]
 pub(crate) fn load(
     config: &ScriptCacheConfig,
     canonical: &Path,
@@ -230,11 +236,23 @@ pub(crate) struct DiskEntry {
 /// `validate_timestamps=0` recorded none, so once validation was turned back on the entry
 /// was never re-checked and a changed source kept running the stored version. MEASURED:
 /// reference printed `A B-longer`, elephc `A A`.
+#[cfg(test)]
 pub(crate) fn load_entry(
     config: &ScriptCacheConfig,
     canonical: &Path,
     mtime: Option<i64>,
     size: u64,
+) -> Option<DiskEntry> {
+    load_entry_with_semantics(config, canonical, mtime, size, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Reads an entry only when its semantic ABI and profile match the requesting context.
+pub(crate) fn load_entry_with_semantics(
+    config: &ScriptCacheConfig,
+    canonical: &Path,
+    mtime: Option<i64>,
+    size: u64,
+    profile: elephc_semantics::SemanticProfile,
 ) -> Option<DiskEntry> {
     let dir = cache_dir(config)?;
     let bytes = std::fs::read(entry_path(&dir, canonical)).ok()?;
@@ -257,7 +275,10 @@ pub(crate) fn load_entry(
         .allow_trailing_bytes()
         .with_limit(bytes.len() as u64);
     let cached: CacheFile = decoder.deserialize(&bytes).ok()?;
-    if cached.magic != MAGIC || cached.format_version != FORMAT_VERSION {
+    if cached.magic != MAGIC || cached.format_version != FORMAT_VERSION
+        || cached.semantics_abi != elephc_semantics::SEMANTICS_ABI_VERSION
+        || cached.semantic_bits != profile.bits()
+    {
         return None;
     }
     // IDENTITY IS UNCONDITIONAL, FRESHNESS IS NOT, and the two were conflated here.
@@ -307,7 +328,7 @@ pub(crate) fn load_entry(
 /// created if possible, and any I/O failure leaves the caller with a working — merely
 /// uncached — include.
 ///
-/// Test-only since round 10: production writes go through [`store_entry`], which also records
+/// Test-only since round 10: production writes go through [`store_entry_with_semantics`], which also records
 /// the revalidation deadline.
 #[cfg(test)]
 pub(crate) fn store(
@@ -321,6 +342,7 @@ pub(crate) fn store(
 }
 
 /// [`store`], also recording the writer's revalidation deadline. See [`DiskEntry::revalidate`].
+#[cfg(test)]
 pub(crate) fn store_entry(
     config: &ScriptCacheConfig,
     canonical: &Path,
@@ -328,6 +350,19 @@ pub(crate) fn store_entry(
     size: u64,
     revalidate: i64,
     segments: &[ScriptSegment],
+) {
+    store_entry_with_semantics(config, canonical, mtime, size, revalidate, segments, elephc_semantics::SemanticProfile::PERMISSIVE);
+}
+
+/// Persists the parser profile alongside the immutable parsed segments.
+pub(crate) fn store_entry_with_semantics(
+    config: &ScriptCacheConfig,
+    canonical: &Path,
+    mtime: Option<i64>,
+    size: u64,
+    revalidate: i64,
+    segments: &[ScriptSegment],
+    profile: elephc_semantics::SemanticProfile,
 ) {
     if super::file_cache::file_cache_config().read_only {
         return;
@@ -341,6 +376,8 @@ pub(crate) fn store_entry(
     let payload = CacheFile {
         magic: MAGIC,
         format_version: FORMAT_VERSION,
+        semantics_abi: elephc_semantics::SEMANTICS_ABI_VERSION,
+        semantic_bits: profile.bits(),
         path: path_bytes(canonical).to_vec(),
         mtime,
         size,
@@ -446,17 +483,24 @@ fn create_temp_entry_named(
 ///
 /// This is what `opcache_is_script_cached_in_file_cache()` answers, so it applies the same
 /// validation a read does: reporting an entry that a read would reject would be a lie.
+#[cfg(test)]
 pub(crate) fn contains(canonical: &Path) -> bool {
+    contains_with_semantics(canonical, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Answers whether disk has an entry usable under this context's parser policy.
+pub(crate) fn contains_with_semantics(canonical: &Path, profile: elephc_semantics::SemanticProfile) -> bool {
     let Ok(metadata) = std::fs::metadata(canonical) else {
         return false;
     };
     let canonical = std::fs::canonicalize(canonical).unwrap_or_else(|_| canonical.to_path_buf());
     let mtime = super::store::mtime_seconds(&metadata);
-    load(
+    load_entry_with_semantics(
         &super::config::config(),
         &canonical,
         mtime,
         metadata.len(),
+        profile,
     )
     .is_some()
 }

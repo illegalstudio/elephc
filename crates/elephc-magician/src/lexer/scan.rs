@@ -21,15 +21,6 @@ pub(crate) fn tokenize(source: &str) -> Result<Vec<Token>, EvalParseError> {
     tokenize_with_semantics(source, elephc_semantics::SemanticProfile::PERMISSIVE)
 }
 
-/// Tokenizes one code block of a larger file whose first line is `line`.
-///
-/// An included file is lexed block by block (`crate::script_cache::segments`), and every
-/// block has to count lines from where it sits in the file, or `__LINE__` restarts at 1 after
-/// each `?>`.
-pub(crate) fn tokenize_at_line(source: &str, line: i64) -> Result<Vec<Token>, EvalParseError> {
-    tokenize_at_line_with_semantics(source, line, elephc_semantics::SemanticProfile::PERMISSIVE)
-}
-
 /// Tokenizes a fragment using the immutable execution profile.
 pub(crate) fn tokenize_with_semantics(source: &str, profile: elephc_semantics::SemanticProfile) -> Result<Vec<Token>, EvalParseError> {
     Lexer { profile, ..Lexer::new(source) }.tokenize()

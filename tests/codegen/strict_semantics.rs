@@ -199,3 +199,17 @@ echo "|$probe[1]|$probe[01]|$probe[-0]|$probe[9223372036854775808]";
 "#;
     assert_eq!(StrictFixture::new(source).run(&[]), "leading|negative|large|i:1|s:01|s:-0|s:9223372036854775808");
 }
+
+/// Native and eval OPcache calls reuse a runtime-created script under the same explicit profile.
+#[test]
+fn test_strict_cache_native_and_eval_profile_parity() {
+    let fixture = StrictFixture::new(r#"<?php
+$path = __DIR__ . '/runtime.php';
+file_put_contents($path, '<?php return true;');
+$code = $argc > 0 ? 'echo opcache_is_script_cached($path) ? "E" : "x"; $result = include $path; if ($result) { echo "R"; }' : '';
+echo opcache_compile_file($path) ? 'N' : 'x';
+echo opcache_is_script_cached($path) ? 'M' : 'x';
+eval($code);
+"#);
+    assert_eq!(fixture.run(&["--strict-bools", "--ini", "opcache.enable_cli=1", "--ini", "opcache.file_update_protection=0"]), "NMER");
+}

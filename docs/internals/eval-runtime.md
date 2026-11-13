@@ -742,11 +742,16 @@ same configuration. The blacklist is loaded once per process.
 
 - An entry lives at
   `<file_cache>/<crate version>-<FORMAT_VERSION>/<FNV-1a of the path bytes>.bin`.
-  Its header carries a magic, the format version, the canonical path's raw
-  bytes, the mtime, the size and the writer's `revalidate`. A read checks the
+  Its header carries a magic, the format version, the semantic ABI and profile
+  bits, the canonical path's raw bytes, the mtime, the size and the writer's
+  `revalidate`. A read checks the
   header on the raw bytes before decoding, bounds the decode by the file size,
   and treats every failure as a miss.
-- Identity is unconditional (the path bytes must match); freshness is checked
+- Identity is unconditional (path bytes, semantic ABI and profile must match).
+  Memory entries follow the same profile rule. Each path has one slot; a request
+  with a different profile reparses and replaces it. Fragment and uncached-file
+  parse memos also separate successful results and errors by profile, sharing
+  their existing total capacity across profiles. Freshness is checked
   only under `validate_timestamps`, and a stale entry is removed by the read
   that rejects it.
 - A write goes to an `O_EXCL` temporary under a random name, then a rename.

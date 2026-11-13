@@ -20,5 +20,5 @@ mod strings;
 mod tests;
 mod token;
 
-pub(crate) use scan::{tokenize, tokenize_at_line, tokenize_with_semantics};
+pub(crate) use scan::{tokenize, tokenize_at_line_with_semantics, tokenize_with_semantics};
 pub(crate) use token::{Token, TokenKind};

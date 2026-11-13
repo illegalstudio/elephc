@@ -147,12 +147,13 @@ pub(in crate::interpreter) fn eval_opcache_path_value(
 /// The `opcache_is_script_cached()` answer for a resolved path.
 pub(in crate::interpreter) fn eval_opcache_is_script_cached_for_path(
     path: &std::path::Path,
+    profile: elephc_semantics::SemanticProfile,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !eval_opcache_cache_enabled() {
         return eval_opcache_file_disabled_result(values);
     }
-    values.bool_value(crate::script_cache::is_cached(path))
+    values.bool_value(crate::script_cache::store::is_cached_with_semantics(path, profile))
 }
 
 /// The `opcache_invalidate()` answer for a resolved path.
@@ -193,12 +194,13 @@ pub(in crate::interpreter) fn eval_opcache_invalidate_for_path(
 /// both, without the ` in <file> on line <n>` suffix it does not synthesize anywhere.
 pub(in crate::interpreter) fn eval_opcache_compile_file_for_path(
     path: &std::path::Path,
+    profile: elephc_semantics::SemanticProfile,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !eval_opcache_cache_enabled() {
         return eval_opcache_compile_file_result(values);
     }
-    if crate::script_cache::compile_file(path) {
+    if crate::script_cache::store::compile_file_with_semantics(path, profile) {
         return values.bool_value(true);
     }
     // `compile_file` answers `false` for two different failures, and only one of them is a
@@ -285,7 +287,7 @@ pub(in crate::interpreter) fn eval_opcache_compile_file_checked(
             values,
         );
     }
-    eval_opcache_compile_file_for_path(path, values)
+    eval_opcache_compile_file_for_path(path, context.semantic_profile(), values)
 }
 
 /// Builds the `opcache_compile_file()` return value: `false` (disabled eval cache, no
@@ -308,12 +310,13 @@ pub(in crate::interpreter) fn eval_opcache_compile_file_result(
 /// directory to look in and the answer is `false`, which is what reference PHP returns too.
 pub(in crate::interpreter) fn eval_opcache_is_script_cached_in_file_cache_for_path(
     path: &std::path::Path,
+    profile: elephc_semantics::SemanticProfile,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !eval_opcache_cache_enabled() {
         return eval_opcache_file_disabled_result(values);
     }
-    values.bool_value(crate::script_cache::file_cache_contains(path))
+    values.bool_value(crate::script_cache::file_store::contains_with_semantics(path, profile))
 }
 
 

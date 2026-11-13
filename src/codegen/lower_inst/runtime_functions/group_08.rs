@@ -8,6 +8,7 @@
 //! - Dispatch is by enum identity, never by PHP function-name strings.
 //! - Extracted bodies remain thin calls into target-aware backend emitters.
 
+use crate::codegen::lower_inst::builtins::opcache_runtime::OpcachePathOperation;
 use crate::codegen::context::FunctionContext;
 use crate::codegen::Result;
 use crate::ir::{RuntimeFnId, Instruction};
@@ -69,27 +70,27 @@ pub(super) fn lower(
         }),
         RuntimeFnId::ElephcOpcacheRtIsCached => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
-                ctx, inst, "__elephc_opcache_rt_is_cached",
+                ctx, inst, OpcachePathOperation::IsCached,
             )
         }),
         RuntimeFnId::ElephcOpcacheRtDiscard => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
-                ctx, inst, "__elephc_opcache_rt_discard",
+                ctx, inst, OpcachePathOperation::Discard,
             )
         }),
         RuntimeFnId::ElephcOpcacheRtSoftInvalidate => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
-                ctx, inst, "__elephc_opcache_rt_soft_invalidate",
+                ctx, inst, OpcachePathOperation::SoftInvalidate,
             )
         }),
         RuntimeFnId::ElephcOpcacheRtInFileCache => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
-                ctx, inst, "__elephc_opcache_rt_in_file_cache",
+                ctx, inst, OpcachePathOperation::InFileCache,
             )
         }),
         RuntimeFnId::ElephcOpcacheRtCompile => Some({
             crate::codegen::lower_inst::builtins::opcache_runtime::lower_opcache_rt_path_call(
-                ctx, inst, "__elephc_opcache_rt_compile",
+                ctx, inst, OpcachePathOperation::Compile,
             )
         }),
         RuntimeFnId::ElephcOpcacheRtReset => Some({

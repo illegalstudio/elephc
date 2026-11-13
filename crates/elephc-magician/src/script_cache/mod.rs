@@ -35,6 +35,8 @@ pub(crate) mod file_store;
 
 mod format_guard;
 #[cfg(test)]
+mod semantic_profile_tests;
+#[cfg(test)]
 mod format_bench;
 pub(crate) mod segments;
 pub(crate) mod store;
@@ -51,13 +53,12 @@ pub use config::{
     swap_directive, DIRECTIVE_FILE_UPDATE_PROTECTION, DIRECTIVE_REVALIDATE_FREQ,
     DIRECTIVE_UNKNOWN, DIRECTIVE_VALIDATE_TIMESTAMPS,
 };
-pub(crate) use file_store::contains as file_cache_contains;
 pub(crate) use file_cache::{
     set_file_cache_config, validate_file_cache_directives_at_startup, FileCacheConfig,
 };
 pub(crate) use segments::ScriptSegment;
 pub(crate) use store::generation as script_cache_generation;
-pub(crate) use store::load_script;
+pub(crate) use store::load_script_with_semantics;
 
 #[allow(unused_imports)]
 pub use store::{

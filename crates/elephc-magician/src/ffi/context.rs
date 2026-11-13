@@ -311,11 +311,24 @@ pub extern "C" fn __elephc_eval_opcache_apply_restart() {
 /// `ptr` must be readable for `len` bytes when `len > 0`.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_opcache_rt_is_cached(ptr: *const u8, len: u64) -> u64 {
+    unsafe { __elephc_eval_opcache_rt_is_cached_profiled(ptr, len, elephc_semantics::SEMANTICS_ABI_VERSION as u64, 0) }
+}
+
+/// Uses the caller's exact semantic profile for this OPcache path operation.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_is_cached_profiled(
+    ptr: *const u8, len: u64, semantics_abi: u64, semantic_bits: u64,
+) -> u64 {
+    if semantics_abi != u64::from(elephc_semantics::SEMANTICS_ABI_VERSION) { return 0; }
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_bits(semantic_bits) else { return 0; };
     let path = unsafe { borrow_path(ptr, len) };
     if path.as_os_str().is_empty() {
         return 0;
     }
-    u64::from(crate::script_cache::store::is_cached(&path))
+    u64::from(crate::script_cache::store::is_cached_with_semantics(&path, profile))
 }
 
 /// Retires the runtime cache's entry for `path`, as a FORCED `opcache_invalidate()` does,
@@ -380,11 +393,24 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_soft_invalidate(
 /// `ptr` must be readable for `len` bytes when `len > 0`.
 #[no_mangle]
 pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile(ptr: *const u8, len: u64) -> u64 {
+    unsafe { __elephc_eval_opcache_rt_compile_profiled(ptr, len, elephc_semantics::SEMANTICS_ABI_VERSION as u64, 0) }
+}
+
+/// Uses the caller's exact semantic profile for this OPcache path operation.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile_profiled(
+    ptr: *const u8, len: u64, semantics_abi: u64, semantic_bits: u64,
+) -> u64 {
+    if semantics_abi != u64::from(elephc_semantics::SEMANTICS_ABI_VERSION) { return 0; }
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_bits(semantic_bits) else { return 0; };
     let file = unsafe { borrow_path(ptr, len) };
     if file.as_os_str().is_empty() {
         return 0;
     }
-    if crate::script_cache::store::compile_file(&file) {
+    if crate::script_cache::store::compile_file_with_semantics(&file, profile) {
         return 1;
     }
     if let Some(reason) = crate::script_cache::store::compile_open_failure(&file) {
@@ -412,11 +438,24 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_in_file_cache(
     ptr: *const u8,
     len: u64,
 ) -> u64 {
+    unsafe { __elephc_eval_opcache_rt_in_file_cache_profiled(ptr, len, elephc_semantics::SEMANTICS_ABI_VERSION as u64, 0) }
+}
+
+/// Uses the caller's exact semantic profile for this OPcache path operation.
+///
+/// # Safety
+/// `ptr` must be readable for `len` bytes when `len > 0`.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_eval_opcache_rt_in_file_cache_profiled(
+    ptr: *const u8, len: u64, semantics_abi: u64, semantic_bits: u64,
+) -> u64 {
+    if semantics_abi != u64::from(elephc_semantics::SEMANTICS_ABI_VERSION) { return 0; }
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_bits(semantic_bits) else { return 0; };
     let path = unsafe { borrow_path(ptr, len) };
     if path.as_os_str().is_empty() {
         return 0;
     }
-    u64::from(crate::script_cache::file_cache_contains(&path))
+    u64::from(crate::script_cache::file_store::contains_with_semantics(&path, profile))
 }
 
 /// Copies one generated directive string out of the binary's read-only data.

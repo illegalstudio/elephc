@@ -98,7 +98,7 @@ unsafe fn can_defer_inner(
     if context.eval_scope_sync_requires_full() || (len != 0 && code_ptr.is_null())
         || len > 64 * 1024 { return 0; }
     let code = if len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(code_ptr, len) } };
-    let Ok(program) = crate::parse_cache::parse_fragment_cached(code) else { return 0; };
+    let Ok(program) = crate::parse_cache::parse_fragment_cached(code, context.semantic_profile()) else { return 0; };
     #[cfg(not(test))]
     {
         use crate::interpreter::RuntimeValueOps;

@@ -24,8 +24,9 @@
 //!   and matching what the compile-time manifest emulation already does.
 
 use super::config::{config, ScriptCacheConfig};
-use super::segments::{segment_script, ParseMode, ScriptSegment};
+use super::segments::{segment_script_with_semantics, ParseMode, ScriptSegment};
 use std::collections::HashMap;
+use elephc_semantics::SemanticProfile;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -34,6 +35,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// One cached script: its replayable segments plus the freshness and accounting state.
 #[derive(Debug)]
 struct Entry {
+    /// Profile which produced the cached segments, independent of freshness settings.
+    semantic_profile: SemanticProfile,
     segments: Arc<[ScriptSegment]>,
     /// php-src's `persistent_script->timestamp`: the source's mtime when the entry was
     /// admitted, or `0` when it was admitted under `validate_timestamps=0` — which records
@@ -216,19 +219,25 @@ pub(super) fn mtime_seconds(metadata: &std::fs::Metadata) -> Option<i64> {
 /// cannot be opened, so the caller's missing-include diagnostics are unchanged. When
 /// the cache is disabled this reads and segments the file exactly as the uncached
 /// path always did, storing nothing.
+#[cfg(test)]
 pub(crate) fn load_script(path: &Path) -> io::Result<Arc<[ScriptSegment]>> {
+    load_script_with_semantics(path, SemanticProfile::PERMISSIVE)
+}
+
+/// Loads one file with the immutable parser profile of the executing context.
+pub(crate) fn load_script_with_semantics(path: &Path, profile: SemanticProfile) -> io::Result<Arc<[ScriptSegment]>> {
     let config = config();
     if !config.enabled {
         // No entry will hold this result, so the byte-keyed parse memo is what keeps a
         // repeated include off the parser — exactly as the inline loop did before.
         let bytes = std::fs::read(path)?;
-        return Ok(Arc::from(segment_script(&bytes, ParseMode::Memoized)));
+        return Ok(Arc::from(segment_script_with_semantics(&bytes, ParseMode::Memoized, profile)));
     }
     let key = cache_key(path);
-    if let Some(segments) = serve_warm_entry(&key, &config)? {
+    if let Some(segments) = serve_warm_entry(&key, &config, profile)? {
         return Ok(segments);
     }
-    fill_entry(&key, path, &config)
+    fill_entry(&key, path, &config, profile)
 }
 
 /// Returns a warm entry's segments when one is present and still considered fresh.
@@ -238,12 +247,19 @@ pub(crate) fn load_script(path: &Path) -> io::Result<Arc<[ScriptSegment]>> {
 fn serve_warm_entry(
     key: &Path,
     config: &ScriptCacheConfig,
+    profile: SemanticProfile,
 ) -> io::Result<Option<Arc<[ScriptSegment]>>> {
     let now = request_now();
     let mut cache = lock_script_cache();
     let Some(entry) = cache.entries.get(key) else {
         return Ok(None);
     };
+    if entry.semantic_profile != profile {
+        let entry = cache.entries.get_mut(key).expect("entry was just observed");
+        entry.discarded = true;
+        cache.generation = cache.generation.wrapping_add(1);
+        return Ok(None);
+    }
     if entry.discarded {
         return Ok(None);
     }
@@ -293,6 +309,7 @@ fn fill_entry(
     key: &Path,
     path: &Path,
     config: &ScriptCacheConfig,
+    profile: SemanticProfile,
 ) -> io::Result<Arc<[ScriptSegment]>> {
     // ONE HANDLE FOR BOTH the bytes and the metadata that will be stored beside them.
     //
@@ -324,7 +341,7 @@ fn fill_entry(
     // `validate_timestamps=0` with `max_file_size=1` — and again with the file blacklisted —
     // over a source changed since it was stored: reference ran the stored version, elephc
     // re-read the new one.
-    let from_disk = super::file_store::load_entry(config, key, mtime, file_size);
+    let from_disk = super::file_store::load_entry_with_semantics(config, key, mtime, file_size, profile);
     let parsed_here = from_disk.is_none();
     if parsed_here {
         // `opcache.blacklist_filename` is decided before any compile accounting, and the
@@ -337,7 +354,7 @@ fn fill_entry(
         // counter is of refusals, not of distinct files.
         if super::blacklist::blocks(key) {
             let segments: Arc<[ScriptSegment]> =
-                Arc::from(segment_script(&bytes, ParseMode::Fresh));
+                Arc::from(segment_script_with_semantics(&bytes, ParseMode::Fresh, profile));
             lock_script_cache().blacklist_misses += 1;
             return Ok(segments);
         }
@@ -357,7 +374,7 @@ fn fill_entry(
         let unrecordable = reads_timestamp && mtime.unwrap_or(0) == 0;
         if unrecordable || !config.admits_age(mtime, request_now()) {
             let segments: Arc<[ScriptSegment]> =
-                Arc::from(segment_script(&bytes, ParseMode::Fresh));
+                Arc::from(segment_script_with_semantics(&bytes, ParseMode::Fresh, profile));
             lock_script_cache().misses += 1;
             return Ok(segments);
         }
@@ -369,7 +386,7 @@ fn fill_entry(
         // refusal is. Placing it after `misses += 1` made elephc report BOTH.
         if !config.admits_size(file_size) {
             let segments: Arc<[ScriptSegment]> =
-                Arc::from(segment_script(&bytes, ParseMode::Fresh));
+                Arc::from(segment_script_with_semantics(&bytes, ParseMode::Fresh, profile));
             lock_script_cache().blacklist_misses += 1;
             return Ok(segments);
         }
@@ -377,7 +394,7 @@ fn fill_entry(
     let (segments, stored_mtime, stored_revalidate): (Arc<[ScriptSegment]>, Option<i64>, i64) =
         match from_disk {
             Some(entry) => (Arc::from(entry.segments), entry.mtime, entry.revalidate),
-            None => (Arc::from(segment_script(&bytes, ParseMode::Fresh)), None, 0),
+            None => (Arc::from(segment_script_with_semantics(&bytes, ParseMode::Fresh, profile)), None, 0),
         };
     let now = request_now();
     let mut cache = lock_script_cache();
@@ -438,13 +455,14 @@ fn fill_entry(
         // with the real mtime and recompiles. MEASURED across two processes over an unchanged
         // source: reference's reader missed on the library, elephc's hit.
         let recorded = if config.validate_timestamps { mtime } else { Some(0) };
-        super::file_store::store_entry(
+        super::file_store::store_entry_with_semantics(
             config,
             key,
             recorded,
             file_size,
             fresh_revalidate_at(config, now),
             &segments,
+            profile,
         );
     }
     // A PENDING RESTART CLOSES ADMISSION. `opcache_reset()` schedules rather than flushes,
@@ -482,6 +500,7 @@ fn fill_entry(
     cache.entries.insert(
         key.to_path_buf(),
         Entry {
+            semantic_profile: profile,
             segments: Arc::clone(&segments),
             // Recorded only under validation, as php-src's `cache_script_in_shared_memory`
             // does — see `is_unrecorded` — except that a DISK HIT keeps the timestamp it was
@@ -771,11 +790,16 @@ fn entry_is_stale(key: &Path) -> bool {
 /// seen at once where reference, having just renewed, keeps vouching for the entry until
 /// the renewed window lapses.
 pub fn is_cached(path: &Path) -> bool {
+    is_cached_with_semantics(path, SemanticProfile::PERMISSIVE)
+}
+
+/// Reports a usable memory entry only for the requesting semantic profile.
+pub fn is_cached_with_semantics(path: &Path, profile: SemanticProfile) -> bool {
     let key = cache_key(path);
     let (timestamp, revalidate_at) = {
         let cache = lock_script_cache();
         match cache.entries.get(&key) {
-            Some(entry) if !entry.discarded => (entry.timestamp, entry.revalidate_at),
+            Some(entry) if !entry.discarded && entry.semantic_profile == profile => (entry.timestamp, entry.revalidate_at),
             _ => return false,
         }
     };
@@ -829,7 +853,7 @@ fn is_present(key: &Path) -> bool {
 /// return the entry's footprint to the budget, so the refill would count the same bytes
 /// twice and the entry would be weighed against `max_accelerated_files` as a NEW one.
 pub fn compile_file(path: &Path) -> bool {
-    compile_file_inner(path)
+    compile_file_with_semantics(path, SemanticProfile::PERMISSIVE)
 }
 
 /// Why `opcache_compile_file()` could not OPEN `path`, as the `strerror` text php-src's stream
@@ -858,7 +882,7 @@ pub(crate) fn compile_open_failure_warnings(display: &str, reason: &str) -> [Str
 
 /// Compiles one file into the cache for `opcache_compile_file()`, serving a warm entry as a hit;
 /// answers whether the file is cached without a parse error.
-fn compile_file_inner(path: &Path) -> bool {
+pub fn compile_file_with_semantics(path: &Path, profile: SemanticProfile) -> bool {
     let config = config();
     if !config.enabled {
         return false;
@@ -871,12 +895,12 @@ fn compile_file_inner(path: &Path) -> bool {
     // `hits: 0` and a reset `last_used` — so repeated calls moved every figure the wrong way
     // and dragged `opcache_hit_rate` down with them. MEASURED on reference PHP 8.5.10: three
     // calls give `hits=2 misses=0` beyond the first, against `hits=0 misses=2` here.
-    match serve_warm_entry(&key, &config) {
+    match serve_warm_entry(&key, &config, profile) {
         Ok(Some(_)) => return true,
         Ok(None) => {}
         Err(_) => return false,
     }
-    match fill_entry(&key, path, &config) {
+    match fill_entry(&key, path, &config, profile) {
         Ok(segments) => !segments
             .iter()
             .any(|segment| matches!(segment, ScriptSegment::ParseError(_))),

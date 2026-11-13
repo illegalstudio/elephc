@@ -77,7 +77,7 @@ unsafe fn eval_scope_access_mask_inner(
         context.require_full_eval_scope_sync();
         return EVAL_SCOPE_ACCESS_ALL;
     }
-    let mask = parse_cache::parse_fragment_cached(code)
+    let mask = parse_cache::parse_fragment_cached(code, context.semantic_profile())
         .map(|program| program.scope_access_mask())
         .unwrap_or(EVAL_SCOPE_ACCESS_ALL);
     if mask == EVAL_SCOPE_ACCESS_ALL {
@@ -164,7 +164,8 @@ unsafe fn execute_eval_inner(
     } else {
         slice::from_raw_parts(code_ptr, code_len)
     };
-    let program = parse_cache::parse_fragment_cached(code).map_err(|error| error.status());
+    let profile = ctx.as_ref().map_or(elephc_semantics::SemanticProfile::PERMISSIVE, |context| context.semantic_profile());
+    let program = parse_cache::parse_fragment_cached(code, profile).map_err(|error| error.status());
     clear_result(out);
     with_executable_cache_key(code, || {
         execute_parsed_eval(ctx, scope, program.as_deref().map_err(|status| *status), out, allow_deferred_catalog)

@@ -488,3 +488,24 @@ literal eval plans, runtime arithmetic and checked conversion integration remain
 pending. Overflow and other unfinished flags stay explicitly gated until their
 entire guarantee is implemented. This is supporting frontend work, not completion
 of the strict-overflow feature.
+
+
+### Parsed-source cache profile step
+
+Eval fragments and uncached include memos now partition positive and negative
+parse results by immutable semantic profile with one total FIFO capacity. Eval
+execution, scope scans, deferred native-catalog checks and includes pass the
+context profile explicitly. OPcache keeps one slot per canonical path in memory
+and on disk. A different parser profile is a miss regardless of timestamp
+settings; a failed strict replacement discards the former memory entry. Disk
+headers require the neutral semantic ABI and exact profile, and serialized cache
+format 29 also accounts for the new checked-integer token and parse error. Native
+OPcache path operations use a typed backend operation and pass hidden ABI/profile
+arguments through target-aware register helpers. Legacy host symbols retain an
+explicit permissive default. Profile-aware AOT fragment metadata is the next step.
+
+Validation: seven focused tests passed, covering cached errors and shared FIFO
+capacity, disabled/enabled script caches, profile and ABI disk headers, native
+FFI refusals, hidden arguments on every supported target, the serialized format
+guard, and native/eval OPcache parity with a runtime-created include. Compiler
+builds, builtin docs regeneration/audits and assembly-comment checks passed.

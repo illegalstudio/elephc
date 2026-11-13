@@ -120,7 +120,27 @@ pub(crate) fn lower_opcache_rt_reset(
     store_if_result(ctx, inst)
 }
 
-/// Lowers the three path-taking runtime-tier helpers to their bridge symbols.
+/// Typed runtime path operation and its hidden profile ABI contract.
+#[derive(Clone, Copy)]
+pub(crate) enum OpcachePathOperation { IsCached, Discard, SoftInvalidate, InFileCache, Compile }
+
+impl OpcachePathOperation {
+    /// Returns the existing internal diagnostic name and the exported bridge suffix.
+    fn names(self) -> (&'static str, &'static str) {
+        match self {
+            Self::IsCached => ("__elephc_opcache_rt_is_cached", "is_cached_profiled"),
+            Self::Discard => ("__elephc_opcache_rt_discard", "discard"),
+            Self::SoftInvalidate => ("__elephc_opcache_rt_soft_invalidate", "soft_invalidate"),
+            Self::InFileCache => ("__elephc_opcache_rt_in_file_cache", "in_file_cache_profiled"),
+            Self::Compile => ("__elephc_opcache_rt_compile", "compile_profiled"),
+        }
+    }
+
+    /// Identifies the operations that may reuse a parsed source.
+    fn uses_profile(self) -> bool { matches!(self, Self::IsCached | Self::InFileCache | Self::Compile) }
+}
+
+/// Lowers typed path operations, adding semantic identity whenever a parse can be reused.
 ///
 /// `__elephc_opcache_rt_is_cached`, `_rt_discard` and `_rt_compile` differ only in which
 /// symbol they call, so they share one lowering rather than three copies of the same
@@ -142,8 +162,9 @@ pub(crate) fn lower_opcache_rt_reset(
 pub(crate) fn lower_opcache_rt_path_call(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    name: &str,
+    operation: OpcachePathOperation,
 ) -> Result<()> {
+    let (name, suffix) = operation.names();
     super::ensure_arg_count(inst, name, 1)?;
     ctx.emitter.blank();
     ctx.emitter.comment(&format!("{name}()"));
@@ -169,10 +190,16 @@ pub(crate) fn lower_opcache_rt_path_call(
                 .instruction(&format!("mov {len_arg}, {len_reg}"));                // path length → SysV second argument register
         }
     }
+    if operation.uses_profile() {
+        let abi_reg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+        let bits_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+        abi::emit_load_int_immediate(ctx.emitter, abi_reg, i64::from(elephc_semantics::SEMANTICS_ABI_VERSION));
+        abi::emit_load_int_immediate(ctx.emitter, bits_reg, ctx.module.semantic_profile.bits() as i64);
+    }
     let symbol = ctx
         .emitter
         .target
-        .extern_symbol(&format!("__elephc_eval_opcache_rt_{}", &name["__elephc_opcache_rt_".len()..]));
+        .extern_symbol(&format!("__elephc_eval_opcache_rt_{suffix}"));
     abi::emit_call_label(ctx.emitter, &symbol);
     store_if_result(ctx, inst)
 }
@@ -341,3 +368,7 @@ pub(crate) fn lower_opcache_rt_script_path(
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");                      // copy the borrowed bytes into an owned PHP string
     store_if_result(ctx, inst)
 }
+
+#[cfg(test)]
+#[path = "opcache_runtime_tests.rs"]
+mod tests;
