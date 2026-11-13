@@ -66,6 +66,8 @@ pub(super) const FAKE_STD_STREAM_MAX_PAYLOAD: i64 = 2;
 /// Test runtime hooks that allocate stable fake handles and record echo output.
 #[derive(Default)]
 pub(super) struct FakeOps {
+    /// Optional fixed native policy for compatibility tests; ordinary fake primitives are policy-independent.
+    pub(super) fixed_profile: Option<elephc_semantics::SemanticProfile>,
     pub(super) next_id: usize,
     pub(super) native_class_scope: Option<String>,
     pub(super) values: HashMap<usize, FakeValue>,

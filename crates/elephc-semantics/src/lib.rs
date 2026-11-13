@@ -15,4 +15,4 @@ pub mod integer_literals;
 pub mod conversions;
 
 pub use catalog::{FeatureSpec, StrictFeature, FEATURES, INTEGRATED_FEATURE_BITS};
-pub use profile::{ProfileDecodeError, SemanticProfile, StrictRequests, SEMANTICS_ABI_VERSION};
+pub use profile::{ProfileDecodeError, SemanticAbiError, SemanticProfile, StrictRequests, SEMANTICS_ABI_VERSION};

@@ -84,12 +84,19 @@ pub extern "C" fn __elephc_eval_set_php_only(enabled: u8) {
 pub unsafe extern "C" fn __elephc_eval_set_semantic_profile(
     ctx: *mut ElephcEvalContext, version: u32, bits: u64,
 ) -> i32 {
-    if version != elephc_semantics::SEMANTICS_ABI_VERSION { return EvalStatus::AbiMismatch.code(); }
-    let Ok(profile) = elephc_semantics::SemanticProfile::from_bits(bits) else {
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_abi(u64::from(version), bits) else {
         return EvalStatus::AbiMismatch.code();
     };
     let Some(context) = (unsafe { ctx.as_mut() }) else { return EvalStatus::RuntimeFatal.code(); };
     if context.abi_version() != ABI_VERSION { return EvalStatus::AbiMismatch.code(); }
+    #[cfg(not(test))]
+    {
+        use crate::interpreter::RuntimeValueOps;
+        let runtime = crate::runtime_hooks::ElephcRuntimeOps::new();
+        if runtime.fixed_semantic_profile().ok().flatten() != Some(profile) {
+            return EvalStatus::AbiMismatch.code();
+        }
+    }
     match context.install_semantic_profile(profile) {
         Ok(()) => EvalStatus::Ok.code(),
         Err(status) => status.code(),
@@ -322,8 +329,7 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_is_cached(ptr: *const u8, len:
 pub unsafe extern "C" fn __elephc_eval_opcache_rt_is_cached_profiled(
     ptr: *const u8, len: u64, semantics_abi: u64, semantic_bits: u64,
 ) -> u64 {
-    if semantics_abi != u64::from(elephc_semantics::SEMANTICS_ABI_VERSION) { return 0; }
-    let Ok(profile) = elephc_semantics::SemanticProfile::from_bits(semantic_bits) else { return 0; };
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_abi(semantics_abi, semantic_bits) else { return 0; };
     let path = unsafe { borrow_path(ptr, len) };
     if path.as_os_str().is_empty() {
         return 0;
@@ -404,8 +410,7 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile(ptr: *const u8, len: u
 pub unsafe extern "C" fn __elephc_eval_opcache_rt_compile_profiled(
     ptr: *const u8, len: u64, semantics_abi: u64, semantic_bits: u64,
 ) -> u64 {
-    if semantics_abi != u64::from(elephc_semantics::SEMANTICS_ABI_VERSION) { return 0; }
-    let Ok(profile) = elephc_semantics::SemanticProfile::from_bits(semantic_bits) else { return 0; };
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_abi(semantics_abi, semantic_bits) else { return 0; };
     let file = unsafe { borrow_path(ptr, len) };
     if file.as_os_str().is_empty() {
         return 0;
@@ -449,8 +454,7 @@ pub unsafe extern "C" fn __elephc_eval_opcache_rt_in_file_cache(
 pub unsafe extern "C" fn __elephc_eval_opcache_rt_in_file_cache_profiled(
     ptr: *const u8, len: u64, semantics_abi: u64, semantic_bits: u64,
 ) -> u64 {
-    if semantics_abi != u64::from(elephc_semantics::SEMANTICS_ABI_VERSION) { return 0; }
-    let Ok(profile) = elephc_semantics::SemanticProfile::from_bits(semantic_bits) else { return 0; };
+    let Ok(profile) = elephc_semantics::SemanticProfile::from_abi(semantics_abi, semantic_bits) else { return 0; };
     let path = unsafe { borrow_path(ptr, len) };
     if path.as_os_str().is_empty() {
         return 0;

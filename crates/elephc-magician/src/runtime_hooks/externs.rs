@@ -17,6 +17,11 @@ use crate::value::RuntimeCell;
 
 #[cfg(not(test))]
 unsafe extern "C" {
+    /// Reports the semantic ABI implemented by the linked native value wrappers.
+    pub(super) fn __elephc_eval_runtime_semantics_version() -> u64;
+    /// Reports the immutable semantic profile compiled into the native runtime.
+    pub(super) fn __elephc_eval_runtime_semantics_profile() -> u64;
+
     /// Casts one borrowed Mixed value to a fresh boxed PHP array.
     pub(super) fn __elephc_eval_value_cast_array(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Shares find (0), push (1), and saved-depth restore (2) with the native debug walk.

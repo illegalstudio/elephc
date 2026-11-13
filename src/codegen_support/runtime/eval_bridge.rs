@@ -43,6 +43,7 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
         Arch::AArch64 => emit_aarch64_wrappers(emitter, features),
         Arch::X86_64 => emit_x86_64_wrappers(emitter, features),
     }
+    semantic_profile::emit(emitter);
     emit_gc_lifecycle_wrappers(emitter);
     release_boundary::emit(emitter);
     bit_not::emit(emitter);
@@ -139,6 +140,7 @@ mod release_boundary;
 mod bit_not;
 mod scope_release;
 mod owner_frames;
+mod semantic_profile;
 
 #[allow(unused_imports)]
 use aarch64_values_classes::*;

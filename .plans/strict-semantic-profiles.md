@@ -537,3 +537,23 @@ engine cases, cache identity/format/hostile-length guards, native literal eval i
 both optimization modes, opaque eval, runtime-created cached includes, and PHP/LFC
 visibility isolation. The compiler build, builtin exporter/docs audits and five
 assembly-comment checks passed. No generated builtin documentation changed.
+
+
+### Native value-hook semantic identity step
+
+Before numeric helpers acquire profile-dependent behavior, native runtime value
+hooks must advertise their compiled policy. Two target-aware C getters expose
+the neutral semantic ABI and exact u64 profile. RuntimeValueOps reports a fixed
+profile, defaulting existing host implementations to permissive. Explicitly
+policy-independent adapters may opt out. Shared eval entry validation rejects
+mismatched hooks before any value operation, and native context installation
+rejects mismatches before pinning the context. A shared versioned decoder owns
+ABI/unknown-bit rejection for setters, OPcache calls, native hooks and disk cache
+headers. Unsupported-profile staging remains in force.
+
+Validation: eight focused tests passed: versioned decoding, fixed-hook admission,
+three cache boundary cases, getter emission on every supported target, a real
+native setter rejection followed by successful matching installation, and PHP/LFC
+eval visibility compatibility. The compiler build and assembly-comment checks
+passed. The native handshake fixture confirms a rejected profile does not pin
+or contaminate an otherwise unused context.

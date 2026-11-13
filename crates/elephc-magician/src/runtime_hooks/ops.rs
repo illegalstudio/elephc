@@ -38,6 +38,13 @@ use reflection::impl_reflection_ops;
 
 #[cfg(not(test))]
 impl RuntimeValueOps for ElephcRuntimeOps {
+    /// Refuses native hooks whose semantic ABI or feature encoding differs from this bridge.
+    fn fixed_semantic_profile(&self) -> Result<Option<elephc_semantics::SemanticProfile>, EvalStatus> {
+        let version = unsafe { __elephc_eval_runtime_semantics_version() };
+        let bits = unsafe { __elephc_eval_runtime_semantics_profile() };
+        elephc_semantics::SemanticProfile::from_abi(version, bits).map(Some).map_err(|_| EvalStatus::AbiMismatch)
+    }
+
     /// Keeps generated helper authorization independent of the adapter's original context pointer.
     fn replace_native_class_scope(&mut self, scope: Option<String>) -> Option<String> {
         std::mem::replace(&mut self.native_class_scope, scope)

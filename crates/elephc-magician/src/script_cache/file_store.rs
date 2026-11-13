@@ -277,8 +277,7 @@ pub(crate) fn load_entry_with_semantics(
         .with_limit(bytes.len() as u64);
     let cached: CacheFile = decoder.deserialize(&bytes).ok()?;
     if cached.magic != MAGIC || cached.format_version != FORMAT_VERSION
-        || cached.semantics_abi != elephc_semantics::SEMANTICS_ABI_VERSION
-        || cached.semantic_bits != profile.bits()
+        || elephc_semantics::SemanticProfile::from_abi(u64::from(cached.semantics_abi), cached.semantic_bits) != Ok(profile)
     {
         return None;
     }

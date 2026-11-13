@@ -55,6 +55,13 @@ pub struct NativeCallableSignatureMetadata {
 
 /// Runtime value hooks required by the EvalIR interpreter.
 pub trait RuntimeValueOps {
+    /// Reports the policy encoded by these hooks before any value operation runs.
+    /// Existing hosts default to permissive hooks. Only a policy-independent implementation
+    /// may return None; generated native hooks report their immutable compiled profile.
+    fn fixed_semantic_profile(&self) -> Result<Option<elephc_semantics::SemanticProfile>, EvalStatus> {
+        Ok(Some(elephc_semantics::SemanticProfile::PERMISSIVE))
+    }
+
     /// Replaces the explicitly authorized native bridge scope, returning the previous override.
     fn replace_native_class_scope(&mut self, _scope: Option<String>) -> Option<String> { None }
 

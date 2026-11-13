@@ -120,3 +120,24 @@ fn strict_profile_preparsed_host_programs_require_parser_provenance() {
         assert!(values.output.is_empty());
     }
 }
+
+/// Native hook policy and context policy must match before output, allocation or declarations.
+#[test]
+fn strict_profile_native_hooks_require_matching_semantic_policy() {
+    let strict = SemanticProfile::PERMISSIVE.with(StrictFeature::Bools, true);
+    for (runtime, context_profile) in [(SemanticProfile::PERMISSIVE, strict), (strict, SemanticProfile::PERMISSIVE), (strict, strict)] {
+        let program = crate::parser::parse_fragment_with_semantics(b"echo 'ok';", context_profile).unwrap();
+        let mut context = ElephcEvalContext::new();
+        context.install_semantic_profile(context_profile).unwrap();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps { fixed_profile: Some(runtime), ..Default::default() };
+        let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values);
+        if runtime == context_profile {
+            result.unwrap();
+            assert_eq!(values.output, "ok");
+        } else {
+            assert_eq!(result, Err(EvalStatus::AbiMismatch));
+            assert!(values.values.is_empty() && values.output.is_empty());
+        }
+    }
+}

@@ -676,6 +676,16 @@ program. Runtime includes apply the same check, including the direct walker repl
 path. This prevents reuse of already-normalized literals or interpolation keys
 under different guarantees.
 
+Generated native value hooks expose their semantic ABI and immutable profile
+through two C getters. The native profile setter rejects mismatches before
+pinning a context. Program entry and direct walker replay also check the
+`RuntimeValueOps::fixed_semantic_profile()` contract before value operations.
+Existing host adapters default to permissive hooks. A host may return `None`
+only when its primitives do not encode a fixed semantic policy. The versioned
+profile decoder is shared by context installation, native hooks and disk-cache
+identity checks.
+
+
 ## Runtime script cache
 
 **Sources:** `crates/elephc-magician/src/script_cache/`, the

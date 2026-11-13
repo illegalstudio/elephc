@@ -213,3 +213,22 @@ eval($code);
 "#);
     assert_eq!(fixture.run(&["--strict-bools", "--ini", "opcache.enable_cli=1", "--ini", "opcache.file_update_protection=0"]), "NMER");
 }
+
+/// The real native runtime refuses a conflicting host profile before pinning its context.
+#[test]
+fn test_strict_runtime_semantic_profile_handshake() {
+    let fixture = StrictFixture::new(r#"<?php
+extern "elephc_magician" {
+    function __elephc_eval_context_new(): int;
+    function __elephc_eval_set_semantic_profile(int $context, int $version, int $bits): int;
+    function __elephc_eval_context_free(int $context): int;
+}
+$context = __elephc_eval_context_new();
+echo __elephc_eval_set_semantic_profile($context, 1, 0), ':';
+echo __elephc_eval_set_semantic_profile($context, 1, 32), ':';
+__elephc_eval_context_free($context);
+$code = $argc > 0 ? 'echo "E";' : '';
+eval($code);
+"#);
+    assert_eq!(fixture.run(&["--strict-bools"]), "5:0:E");
+}

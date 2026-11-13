@@ -147,12 +147,17 @@ pub fn execute_program_with_context(
 }
 
 /// Validates immutable parser/context compatibility before either execution engine runs.
-pub(crate) fn validate_program_semantics(context: &mut ElephcEvalContext, program: &EvalProgram) -> Result<(), EvalStatus> {
+pub(crate) fn validate_program_semantics(
+    context: &mut ElephcEvalContext, program: &EvalProgram, values: &impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     let profile = context.activate_semantic_profile();
     if profile.bits() & !elephc_semantics::INTEGRATED_FEATURE_BITS != 0 {
         return Err(EvalStatus::UnsupportedConstruct);
     }
     if !program.matches_semantic_profile(profile) { return Err(EvalStatus::AbiMismatch); }
+    if values.fixed_semantic_profile()?.is_some_and(|runtime| runtime != profile) {
+        return Err(EvalStatus::AbiMismatch);
+    }
     Ok(())
 }
 
@@ -166,7 +171,7 @@ pub fn execute_program_outcome_with_context(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalOutcome, EvalStatus> {
-    validate_program_semantics(context, program)?;
+    validate_program_semantics(context, program, values)?;
     let executed = match bytecode::try_execute(context, program, scope, values) {
         Ok(Some(control)) => Ok(control),
         Ok(None) => execute_program_statements(program, context, scope, values),

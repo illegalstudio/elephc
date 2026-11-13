@@ -26,6 +26,11 @@ use numeric_string::impl_fake_numeric_string_ops;
 use reflection::impl_fake_reflection_ops;
 
 impl RuntimeValueOps for FakeOps {
+    /// Models either a fixed native runtime or the policy-independent fake primitive adapter.
+    fn fixed_semantic_profile(&self) -> Result<Option<elephc_semantics::SemanticProfile>, EvalStatus> {
+        Ok(self.fixed_profile)
+    }
+
     /// Models nested native bridge authorization independently of interpreter context identity.
     fn replace_native_class_scope(&mut self, scope: Option<String>) -> Option<String> {
         std::mem::replace(&mut self.native_class_scope, scope)
