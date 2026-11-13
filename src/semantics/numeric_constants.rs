@@ -307,15 +307,22 @@ fn builtin_number(
     })
 }
 
-/// Retains dense array values and lexical constant aliases without guessing keyed overwrite rules.
+/// Retains source evaluation, first-insertion order and last-write values through shared key planning.
 fn array_numbers(
     expr: &Expr, checked: bool, class: Option<&str>, definitions: &Definitions, evidence: &mut Evidence,
 ) -> Result<Option<Vec<Number>>, CompileError> {
-    if let ExprKind::ArrayLiteral(values) = &expr.kind {
-        let mut result = Vec::with_capacity(values.len());
-        for value in values {
-            let Some(value) = evaluate(value, checked, class, definitions, evidence)? else { return Ok(None); };
-            result.push(value);
+    let profile = if checked { evidence.profile } else { SemanticProfile::PERMISSIVE };
+    if let Some(entries) = crate::types::plan_literal_array_entries(&expr.kind,
+        crate::codegen_support::compile_php_version(), profile) {
+        let mut result: Vec<Number> = Vec::with_capacity(entries.len());
+        let mut positions = HashMap::new();
+        for entry in entries {
+            let Some(value) = evaluate(entry.value, checked, class, definitions, evidence)? else { return Ok(None); };
+            if let Some(position) = positions.get(&entry.key).copied() { result[position] = value; }
+            else {
+                positions.insert(entry.key, result.len());
+                result.push(value);
+            }
         }
         return Ok(Some(result));
     }

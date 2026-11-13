@@ -14,6 +14,27 @@ use crate::parser::ast::{Expr, ExprKind};
 
 use super::PhpType;
 
+/// Classifies a static key without erasing its kind, original bytes or lexical exact-key policy.
+pub(crate) fn literal_array_key(
+    expr: &Expr, profile: elephc_semantics::SemanticProfile,
+) -> Option<elephc_semantics::array_keys::StringKey<'_>> {
+    use elephc_semantics::{array_keys::{classify_string_key, StringKey}, StrictFeature};
+    let exact = profile.contains(StrictFeature::ArrayKeys);
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(StringKey::Integer(*value)),
+        ExprKind::StringLiteral(value) => Some(classify_string_key(profile, value.as_bytes())),
+        ExprKind::BoolLiteral(value) if !exact => Some(StringKey::Integer(i64::from(*value))),
+        ExprKind::FloatLiteral(value) if !exact => Some(StringKey::Integer(super::php_float_array_key(*value))),
+        ExprKind::Null if !exact => Some(StringKey::String(b"")),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value.checked_neg().map(StringKey::Integer),
+            ExprKind::FloatLiteral(value) if !exact => Some(StringKey::Integer(super::php_float_array_key(-*value))),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Determines the normalized PHP type for an array key expression.
 ///
 /// PHP integer-string key coercion: numeric strings like `"123"` become `PhpType::Int`

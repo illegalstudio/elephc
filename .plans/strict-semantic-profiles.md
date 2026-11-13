@@ -836,3 +836,22 @@ regressions pass. Compiler/exporter builds, generated builtin docs/architecture
 audits, assembly comments and diff hygiene pass. The final dynamic-target unit
 and native control rerun also pass on the final sources. Keyed literal evidence,
 eval arithmetic and remaining strict guarantees continue in the following steps.
+
+
+### Typed literal keys and preserved append provenance
+
+A shared literal-array planner retains integer/string identity, original string
+bytes, explicit key expressions, all value evaluations and insertion order.
+Append history follows the selected PHP version and exact-key profile. Numeric
+source evidence uses that plan for keyed/mixed reductions, applies last-wins
+values at the original insertion position and keeps unknown spreads conservative.
+The parser preserves trailing implicit entries until semantic planning instead
+of stamping PHP keys before a profile exists. Default folding retains explicit
+conversion expressions and overwritten value effects; fractional float keys now
+advance the append cursor correctly.
+
+Validation: two focused planner/proof units, all eight numeric source-evidence
+controls, the parser provenance regression and a native default-key/value-effect
+fixture pass. Both leading-positional parser controls, the compiler build and
+diff hygiene pass. The native fixture reports a clean heap. Exact-key runtime and
+producer integration remains staged; the public feature mask is unchanged.

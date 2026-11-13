@@ -92,3 +92,18 @@ try { array_map(guardedStringMap(...), $strings); } catch (RuntimeException $err
     assert_eq!(output.stdout, "IS");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Default mixed-literal folding preserves overwritten value effects and PHP key/append identity.
+#[test]
+fn test_strict_literal_array_plan_default_key_and_value_effects() {
+    let output = compile_and_run_with_heap_debug(r#"<?php
+function literalPlanValue(string $tag, int $value): int { echo $tag; return $value; }
+$items = [1.0 => literalPlanValue('a', 10), '1' => literalPlanValue('b', 20), '01' => literalPlanValue('c', 30), literalPlanValue('d', 40)];
+foreach ($items as $key => $value) { echo '|', gettype($key), ':', $key, '=', $value; }
+$fractional = @([1.5 => 10, 20]);
+foreach ($fractional as $key => $value) { echo '|', $key, '=', $value; }
+"#);
+    assert!(output.success, "{} {} {}", output.status, output.stdout, output.stderr);
+    assert_eq!(output.stdout, "abcd|integer:1=20|string:01=30|integer:2=40|1=10|2=20");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+}

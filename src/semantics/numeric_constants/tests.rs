@@ -10,6 +10,38 @@
 
 use super::*;
 
+/// Associative reductions collapse final values while retaining first-insertion order and key kind.
+#[test]
+fn strict_literal_array_plan_reduction_evidence_preserves_overwrites_and_exact_keys() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+    for source in [
+        "<?php if (false) { array_sum(['max' => PHP_INT_MAX, 'one' => 1]); }",
+        "<?php array_product([false => PHP_INT_MAX, true => 2]);",
+        "<?php array_sum(['max' => PHP_INT_MAX, 1]);",
+        "<?php const VALUES = ['max' => PHP_INT_MAX, 'two' => 2]; array_product(VALUES);",
+    ] {
+        let error = super::super::validate_source(&parse(source), profile).expect_err(source);
+        assert!(error.message.contains("strict-overflow"), "{source}: {error:?}");
+    }
+    for source in [
+        "<?php array_sum(['key' => PHP_INT_MAX, 'key' => 0, 1]);",
+        "<?php array_sum([0 => PHP_INT_MAX, 1, 0 => 1]);",
+        "<?php array_sum([null => PHP_INT_MAX, '' => 0, 1]);",
+        "<?php array_sum([1.5 => PHP_INT_MAX, 1 => 0, 1]);",
+        "<?php array_sum([18446744073709551616.0 => PHP_INT_MAX, 0 => 0, 1]);",
+        "<?php array_sum(['first' => 0, 'max' => PHP_INT_MAX, 'one' => 1, 'first' => 1.0]);",
+        "<?php array_sum(['max' => PHP_INT_MAX, ...$unknown]);",
+    ] { assert!(super::super::validate_source(&parse(source), profile).is_ok(), "{source}"); }
+    for source in [
+        "<?php array_sum(['1' => PHP_INT_MAX, 1 => 0, 'last' => 1]);",
+        "<?php array_sum(['9223372036854775807' => PHP_INT_MAX, 1]);",
+    ] {
+        let program = parse(source);
+        assert!(validate(&program, profile).is_ok(), "{source}");
+        assert!(validate(&program, profile.with(StrictFeature::ArrayKeys, true)).is_err(), "{source}");
+    }
+}
+
 /// Dense reductions preserve ordered intermediate overflow and avoid uncertain array key plans.
 #[test]
 fn strict_numeric_builtins_prove_reductions_and_intdiv_parameter_domains() {

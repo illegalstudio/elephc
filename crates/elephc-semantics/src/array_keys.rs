@@ -10,7 +10,7 @@
 use crate::{SemanticProfile, StrictFeature};
 
 /// The semantic key obtained from a borrowed string spelling.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StringKey<'a> {
     /// A PHP-normalized signed integer key.
     Integer(i64),

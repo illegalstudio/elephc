@@ -23,7 +23,7 @@ pub struct Expr {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-/// One entry of an array literal that mixes spreads with explicit keys.
+/// One ordered array-literal entry, retaining explicit keys, implicit keys and spreads.
 ///
 /// PHP lets the three forms appear in any order in one literal -- `["a" => 1, ...$v, 2]` -- and
 /// the order is observable, because a spread's elements take the next free integer key at the
@@ -141,9 +141,8 @@ pub enum ExprKind {
     },
     ArrayLiteral(Vec<Expr>),
     ArrayLiteralAssoc(Vec<(Expr, Expr)>),
-    /// An array literal that MIXES a spread with explicit keys, which neither of the two
-    /// nodes above can hold: `ArrayLiteral` has no place for a key and `ArrayLiteralAssoc`
-    /// has no place for a keyless spread. Produced only for that shape.
+    /// Ordered entries retain spreads and implicit keys after explicit keys. Their append
+    /// history depends on runtime spreads, the PHP version and the exact-key semantic policy.
     ArrayLiteralMixed(Vec<ArrayEntry>),
     Match {
         subject: Box<Expr>,

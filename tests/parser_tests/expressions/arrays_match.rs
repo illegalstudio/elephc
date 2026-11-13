@@ -129,13 +129,9 @@ fn test_parse_key_before_spread_migrates_into_entries() {
     assert!(matches!(&entries[1], ArrayEntry::Spread(_)));
 }
 
-/// Verifies a literal with no spread still parses to the plain associative node.
-///
-/// The entry list exists for the one shape the other two nodes cannot hold; everything else must
-/// keep the node it had, or every pass that special-cases `ArrayLiteralAssoc` quietly stops
-/// seeing the common case.
+/// Leading positional keys are policy-independent and keep the plain associative representation.
 #[test]
-fn test_parse_keys_without_a_spread_stay_associative() {
+fn test_parse_leading_positional_keys_stay_associative() {
     let stmts = parse_source("<?php $m = [10, \"a\" => 1];");
     assert_eq!(stmts.len(), 1);
     let StmtKind::Assign { value, .. } = &stmts[0].kind else {
@@ -196,4 +192,20 @@ fn test_parse_array_implicit_after_negative_key() {
         if value.kind == ExprKind::StringLiteral("b".to_string())));
     assert!(matches!(&entries[2], ArrayEntry::Value(value)
         if value.kind == ExprKind::StringLiteral("c".to_string())));
+}
+
+/// Trailing implicit keys remain source syntax until the semantic key policy is selected.
+#[test]
+fn test_parse_strict_literal_array_plan_preserves_trailing_implicit_keys() {
+    for source in [
+        "<?php $items = ['1' => 10, 20];",
+        "<?php $items = [1.5 => 10, 20];",
+        "<?php $items = [$argc => 10, 20];",
+        "<?php $items = array('1' => 10, 20);",
+    ] {
+        let stmts = parse_source(source);
+        let StmtKind::Assign { value, .. } = &stmts[0].kind else { panic!("expected assignment"); };
+        let ExprKind::ArrayLiteralMixed(entries) = &value.kind else { panic!("expected ordered entries: {source}"); };
+        assert!(matches!(entries.as_slice(), [ArrayEntry::Keyed(_, _), ArrayEntry::Value(_)]), "{source}");
+    }
 }
