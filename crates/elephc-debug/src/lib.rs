@@ -702,6 +702,7 @@ impl ExceptionFilters {
     }
 
     /// Builds class-aware filters from DAP `filterOptions` alone.
+    #[cfg(test)]
     fn from_options(options: &[(String, Option<String>)]) -> Self {
         Self::default().with_options(options)
     }
