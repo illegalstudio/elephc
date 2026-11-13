@@ -247,12 +247,20 @@ impl Builder {
             .max()
             .map_or(3, |max| (max + 1).max(3));
         let floor = c_int::try_from(floor).unwrap_or(c_int::MAX);
+        // Every child end must sit above the target numbers before the dup2 actions run:
+        // otherwise an earlier dup2 can overwrite a later one's source and the child would
+        // write to the wrong file. A move that fails (e.g. EMFILE) aborts the spawn.
         for descriptor in &mut self.descriptors {
             if descriptor.child_end < floor {
-                if let Ok(moved) = dup_cloexec(descriptor.child_end, floor) {
-                    close_quietly(descriptor.child_end);
-                    descriptor.child_end = moved;
-                }
+                let moved = dup_cloexec(descriptor.child_end, floor).map_err(|errno| {
+                    format!(
+                        "proc_open(): Failed to dup() for descriptor {}: {}",
+                        descriptor.index,
+                        strerror(errno)
+                    )
+                })?;
+                close_quietly(descriptor.child_end);
+                descriptor.child_end = moved;
             }
         }
         let mut actions = std::mem::MaybeUninit::<libc::posix_spawn_file_actions_t>::uninit();
