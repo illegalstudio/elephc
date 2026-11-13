@@ -99,11 +99,17 @@ docker run -d \
     -p "127.0.0.1:$KDC_PORT:88/tcp" \
     -p "127.0.0.1:$KDC_PORT:88/udp" \
     -v "$FIXTURE_DIR:/fixture" \
-    debian:bookworm-slim \
+    -e "ELEPHC_GSS_PREINSTALLED=${ELEPHC_GSS_KDC_IMAGE:+1}" \
+    "${ELEPHC_GSS_KDC_IMAGE:-debian:bookworm-slim}" \
     sh -ec '
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y -qq krb5-kdc krb5-admin-server >/dev/null
+        if [ "${ELEPHC_GSS_PREINSTALLED:-}" = 1 ]; then
+            command -v krb5kdc >/dev/null
+            command -v kdb5_util >/dev/null
+        else
+            apt-get update -qq
+            apt-get install -y -qq krb5-kdc krb5-admin-server >/dev/null
+        fi
         install -m 0644 /fixture/krb5-kdc.conf /etc/krb5.conf
         install -m 0644 /fixture/kdc.conf /etc/krb5kdc/kdc.conf
         install -m 0600 /fixture/kadm5.acl /etc/krb5kdc/kadm5.acl
@@ -193,5 +199,9 @@ export ELEPHC_PDO_GSS_REQUIRED=1
 export ELEPHC_PG_GSS_DSN="pgsql:host=pgsql.elephc.test;hostaddr=127.0.0.1;port=$PG_PORT;dbname=testdb;user=elephc_gss;gssencmode=require;require_auth=gss;krbsrvname=postgres"
 export ELEPHC_PG_GSS_EMPTY_CACHE="FILE:$FIXTURE_DIR/missing.ccache"
 
-cargo build -p elephc-pdo --features libpq-gss
-cargo test --features pdo-libpq-gss --test codegen_tests pgsql_gss -- --ignored --test-threads=1
+if [[ -n ${ELEPHC_CI_TEST_ROOT:-} ]]; then
+    bash scripts/ci/run_prebuilt_tests.sh 'binary(=codegen_tests) and test(pgsql_gss)' --run-ignored only -j 1
+else
+    cargo build -p elephc-pdo --features libpq-gss
+    cargo test --features pdo-libpq-gss --test codegen_tests pgsql_gss -- --ignored --test-threads=1
+fi

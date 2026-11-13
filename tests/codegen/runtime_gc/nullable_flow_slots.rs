@@ -9,6 +9,47 @@
 
 use crate::support::{compile_and_run_with_heap_debug, without_ir_opt};
 
+/// A lazy getter joins a nullable local as an object and preserves its cached owner and identity.
+#[test]
+fn test_nullable_object_lazy_local_join_preserves_owners() {
+    let source = r#"<?php
+final class Service {
+    public function value(): int { return 7; }
+    public function __destruct() { echo "drop\n"; }
+}
+final class Owner {
+    private ?Service $service = null;
+    public function get(): Service {
+        $service = $this->service;
+        if ($service === null) {
+            $service = new Service();
+            $this->service = $service;
+        }
+        return $service;
+    }
+}
+function exercise(): void {
+    $owner = new Owner();
+    echo $owner->get()->value(), "\n";
+    echo $owner->get()->value(), "\n";
+    $first = $owner->get();
+    $second = $owner->get();
+    echo $first === $second ? "same\n" : "different\n";
+}
+exercise();
+exercise();
+"#;
+    for optimized in [true, false] {
+        let run = || {
+            let out = compile_and_run_with_heap_debug(source);
+            assert!(out.success, "{}", out.stderr);
+            assert_eq!(out.stdout, "7\n7\nsame\ndrop\n7\n7\nsame\ndrop\n");
+            assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+        };
+        if optimized { run(); } else { without_ir_opt(run); }
+    }
+}
+
 /// Widened nullable counters and accumulators release every owner in both IR modes.
 #[test]
 fn test_nullable_flow_parameter_widening_releases_initial_cells() {

@@ -81,10 +81,18 @@ pub(super) fn builtin_reflection_owner_class(
             Some(mixed_type()),
             false_bool(),
         ));
+        // An enum case's declaring class is always an enum, so its getter is typed with the
+        // `ReflectionEnum` php's class factory builds; the other owners' declaring class may or
+        // may not be an enum and keep the `ReflectionClass` base type.
+        let declaring_class = if matches!(name, "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase") {
+            "ReflectionEnum"
+        } else {
+            "ReflectionClass"
+        };
         methods.push(builtin_reflection_class_object_method(
             "getDeclaringClass",
             "__declaring_class",
-            "ReflectionClass",
+            declaring_class,
         ));
     }
     if matches!(

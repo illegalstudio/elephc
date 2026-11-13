@@ -255,6 +255,8 @@ pub(crate) struct LoweringSnapshot {
     /// Pending call scopes order capture cleanup by PHP parameter position.
     argument_guard_scopes: Vec<Vec<(usize, ValueId)>>,
     eval_barrier_active: bool,
+    /// Variable reads on active null-probe spines; indices, names and call arguments stay normal.
+    quiet_undefined_reads: Vec<Option<(String, Span)>>,
     eval_executed: bool,
     consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
@@ -392,6 +394,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Checked receiver views at property reads and method calls, scoped to the current body.
     pub member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
+    /// Checker-proved element types at declared-array append sites, scoped to each body.
+    pub array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
     /// Checked integer value views, separate from the physical local/reference contract.
     pub local_value_read_types: &'m crate::types::LocalValueReadTypes,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
@@ -507,6 +511,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     array_conversions: HashMap<String, PhpType>,
     /// Whether the current statement lowering is a disposable discovery pass.
     speculating: bool,
+    /// While set, the next array read lowers without the missing-key warning (the bucket read of
+    /// a fallen-open nested append, which PHP auto-vivifies silently). That read clears it, so
+    /// its receiver and key still warn.
+    quiet_array_reads: bool,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function SOURCE declares a return type, as opposed to one inferred
@@ -541,6 +549,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// read there feeds a heap-kind-dispatching element op, never the `array<mixed>` view.
     promotable_view_suppressed: bool,
     eval_barrier_active: bool,
+    /// Variable reads on active null-probe spines; indices, names and call arguments stay normal.
+    quiet_undefined_reads: Vec<Option<(String, Span)>>,
     eval_executed: bool,
     consuming_string_append_enabled: bool,
     eval_scope_read_param: Option<String>,
@@ -606,6 +616,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         closure_generator_spans: &'m HashSet<Span>,
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
+        array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
         local_value_read_types: &'m crate::types::LocalValueReadTypes,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -679,6 +690,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             closure_generator_spans,
             array_push_property_plans,
             member_receiver_types,
+            array_append_element_types,
             local_value_read_types,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
@@ -718,6 +730,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             foreach_int_key_locals: HashSet::new(),
             array_conversions: HashMap::new(),
             speculating: false,
+            quiet_array_reads: false,
             return_type,
             return_php_type,
             return_type_is_declared: false,
@@ -750,6 +763,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             write_operand_is_borrowed: false,
             promotable_view_suppressed: false,
             eval_barrier_active: false,
+            quiet_undefined_reads: Vec::new(),
             eval_executed: false,
             consuming_string_append_enabled: true,
             eval_scope_read_param: None,
@@ -824,6 +838,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             argument_guards: self.argument_guards.clone(),
             argument_guard_scopes: self.argument_guard_scopes.clone(),
             eval_barrier_active: self.eval_barrier_active,
+            quiet_undefined_reads: self.quiet_undefined_reads.clone(),
             eval_executed: self.eval_executed,
             consuming_string_append_enabled: self.consuming_string_append_enabled,
             eval_scope_read_param: self.eval_scope_read_param.clone(),
@@ -938,6 +953,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.argument_guards = snapshot.argument_guards;
         self.argument_guard_scopes = snapshot.argument_guard_scopes;
         self.eval_barrier_active = snapshot.eval_barrier_active;
+        self.quiet_undefined_reads = snapshot.quiet_undefined_reads;
         self.eval_executed = snapshot.eval_executed;
         self.consuming_string_append_enabled = snapshot.consuming_string_append_enabled;
         self.eval_scope_read_param = snapshot.eval_scope_read_param;
@@ -1240,6 +1256,18 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Sets speculative-lowering mode and returns its previous value.
     pub(crate) fn set_speculating(&mut self, speculating: bool) -> bool {
         std::mem::replace(&mut self.speculating, speculating)
+    }
+
+    /// Returns whether the next array read lowers without the missing-key warning, and clears
+    /// the setting so the reads inside it (its receiver, its key) warn as usual.
+    pub(crate) fn take_quiet_array_read(&mut self) -> bool {
+        std::mem::take(&mut self.quiet_array_reads)
+    }
+
+    /// Sets whether the next array read lowers without the missing-key warning, and returns the
+    /// previous setting so the caller can restore it.
+    pub(crate) fn set_quiet_array_reads(&mut self, quiet: bool) -> bool {
+        std::mem::replace(&mut self.quiet_array_reads, quiet)
     }
 
     /// Updates only the flow-sensitive PHP type fact for a local.
@@ -1685,6 +1713,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .is_some_and(|names| names.contains(name))
     }
 
+    /// Returns the frame slot whose Mixed cell a `foreach` key binding may rewrite in place.
+    ///
+    /// Only a plain PHP local stored as one boxed Mixed cell qualifies: the binding is about to
+    /// replace that cell, and the frame is its owner. A reference alias, a global or static
+    /// backing store, an extern global and an eval-scope name are all written through another
+    /// storage path, so their slot must not lend its cell.
+    pub(crate) fn reusable_foreach_key_slot(&self, name: &str) -> Option<LocalSlotId> {
+        if self.is_ref_bound_local(name)
+            || self.local_uses_global_storage(name)
+            || self.extern_global_type(name).is_some()
+            || self.should_store_to_eval_scope(name)
+            || self.append_update_cell_aliases.contains(name)
+        {
+            return None;
+        }
+        let slot = *self.local_slots.get(name)?;
+        let local = self.builder.function().locals.get(slot.as_raw() as usize)?;
+        (local.kind == LocalKind::PhpLocal
+            && local.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            && local.php_type.codegen_repr() == PhpType::Mixed
+            && self.local_type(name).codegen_repr() == PhpType::Mixed)
+            .then_some(slot)
+    }
+
     /// Returns true when a local is currently modeled as a by-reference alias.
     pub(crate) fn is_ref_bound_local(&self, name: &str) -> bool {
         self.ref_bound_locals.contains(name)
@@ -2034,6 +2086,33 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     fn eval_can_widen_binding(&self, name: &str) -> bool {
         !self.is_ref_bound_local(name) || (!self.by_ref_return && self.builder.function().params.iter()
             .any(|parameter| parameter.by_ref && parameter.name == name))
+    }
+
+    /// Silences only the variable at the root of this null-probe chain.
+    pub(crate) fn begin_quiet_undefined_reads(&mut self, mut operand: &Expr) {
+        let root = loop {
+            match &operand.kind {
+                ExprKind::Variable(name) => break Some((name.clone(), operand.span)),
+                ExprKind::ArrayAccess { array, .. } => operand = array,
+                ExprKind::PropertyAccess { object, .. }
+                | ExprKind::DynamicPropertyAccess { object, .. }
+                | ExprKind::NullsafePropertyAccess { object, .. }
+                | ExprKind::NullsafeDynamicPropertyAccess { object, .. } => operand = object,
+                _ => break None,
+            }
+        };
+        self.quiet_undefined_reads.push(root);
+    }
+
+    /// Closes one PHP null-probe operand.
+    pub(crate) fn end_quiet_undefined_reads(&mut self) {
+        self.quiet_undefined_reads.pop();
+    }
+
+    /// Matches the nominated root read, leaving every other subexpression observable.
+    pub(crate) fn suppresses_undefined_reads(&self, name: &str, span: Span) -> bool {
+        self.quiet_undefined_reads.iter().flatten()
+            .any(|(root, site)| root == name && *site == span)
     }
 
     /// Enables direct eval-scope reads for selected variable names in an AOT eval body.
@@ -2438,6 +2517,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         } else {
             self.local_type(name)
         }
+    }
+
+    /// Returns whether a read is served by the active eval scope instead of a frame slot.
+    pub(crate) fn reads_from_eval_scope(&self, name: &str) -> bool {
+        self.should_load_from_eval_scope(name)
     }
 
     /// Returns true when a variable read should be sourced from the eval scope handle.
@@ -4181,6 +4265,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
@@ -4413,6 +4498,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(argument),
             Some(
                 Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub

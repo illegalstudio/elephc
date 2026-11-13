@@ -30,6 +30,7 @@ pub(super) fn lower_lazy_isset(
     let false_block = ctx.builder.create_named_block("isset.lazy_false", Vec::new());
     let merge = ctx.builder.create_named_block("isset.lazy_merge", Vec::new());
     for (idx, arg) in args.iter().enumerate() {
+        ctx.begin_quiet_undefined_reads(arg);
         let checked = lower_lazy_isset_operand(ctx, arg).unwrap_or_else(|| {
             // `isset()` never emits undefined-offset warnings, so eager array
             // operands must be lowered with the silent read variants.
@@ -40,6 +41,7 @@ pub(super) fn lower_lazy_isset(
             };
             emit_builtin_call_value(ctx, name, vec![value.value], PhpType::Int, arg.span, None)
         });
+        ctx.end_quiet_undefined_reads();
         let then_target = if idx + 1 == args.len() {
             ctx.builder.create_named_block("isset.lazy_true", Vec::new())
         } else {

@@ -149,7 +149,7 @@ pub(super) fn warn_eval_discarded_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     let selected = match expression {
-        EvalExpr::Call { name, .. } => context.function(name).map(|function| (name.clone(), function.attributes().to_vec())),
+        EvalExpr::Call { name, .. } => return warn_eval_discarded_function_call(name, context, values),
         EvalExpr::NamespacedCall { name, fallback_name, .. } => context.function(name).or_else(|| context.function(fallback_name))
             .map(|function| (function.name().to_string(), function.attributes().to_vec())),
         EvalExpr::StaticMethodCall { class_name, method, .. } => context.class_method(class_name, method)
@@ -157,12 +157,35 @@ pub(super) fn warn_eval_discarded_call(
         _ => None,
     };
     if let Some((name, attributes)) = selected {
-        if eval_attributes_have_global_builtin_attribute(&attributes, "NoDiscard") {
-            eval_dispatch_php_error(
-                &format!("The return value of {name}() should either be used or explicitly ignored"),
-                E_WARNING, context, values,
-            )?;
-        }
+        warn_eval_discarded_attributes(&name, &attributes, context, values)?;
+    }
+    Ok(())
+}
+
+/// Applies the direct-function discard policy after either EvalIR consumer completes a call.
+pub(in crate::interpreter) fn warn_eval_discarded_function_call(
+    name: &str,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if let Some(attributes) = context.function(name).map(|function| function.attributes().to_vec()) {
+        warn_eval_discarded_attributes(name, &attributes, context, values)?;
+    }
+    Ok(())
+}
+
+/// Emits a warning only for the builtin NoDiscard attribute on a selected declaration.
+fn warn_eval_discarded_attributes(
+    name: &str,
+    attributes: &[EvalAttribute],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if eval_attributes_have_global_builtin_attribute(attributes, "NoDiscard") {
+        eval_dispatch_php_error(
+            &format!("The return value of {name}() should either be used or explicitly ignored"),
+            E_WARNING, context, values,
+        )?;
     }
     Ok(())
 }

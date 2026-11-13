@@ -63,20 +63,43 @@ impl Checker {
     /// Returns true if `class_name` is or inherits from `ancestor_name` (excluding self equality).
     /// Walks the parent chain via `class_info.parent`.
     pub(crate) fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
+        // A class under construction is absent from `classes` but its parent is already known;
+        // override covariance is validated during that window.
         let mut current = self
             .classes
             .get(class_name)
-            .and_then(|class| class.parent.clone());
+            .and_then(|class| class.parent.clone())
+            .or_else(|| self.pending_class_parents.get(class_name).cloned());
+        let mut seen = std::collections::HashSet::new();
         while let Some(parent_name) = current {
             if parent_name == ancestor_name {
                 return true;
             }
+            if !seen.insert(parent_name.clone()) {
+                return false;
+            }
             current = self
                 .classes
                 .get(&parent_name)
-                .and_then(|class| class.parent.clone());
+                .and_then(|class| class.parent.clone())
+                .or_else(|| self.pending_class_parents.get(&parent_name).cloned());
         }
         false
+    }
+
+    /// Returns true when `class_name` is `ancestor_name` or nominally extends or implements it.
+    ///
+    /// These are the relations for which `common_object_type` keeps the ancestor side, so an
+    /// object slot typed as the ancestor can hold the class without changing its view. Generic
+    /// variance and the non-nominal `object` type are deliberately excluded: EIR lowering keeps
+    /// an indexed object element only for this same nominal relation
+    /// (`ir_lower::stmt::array_write_storage`).
+    pub(crate) fn object_is_a(&self, class_name: &str, ancestor_name: &str) -> bool {
+        class_name == ancestor_name
+            || self.is_subclass_of(class_name, ancestor_name)
+            || (self.interfaces.contains_key(ancestor_name)
+                && (self.class_implements_interface(class_name, ancestor_name)
+                    || self.interface_extends_interface(class_name, ancestor_name)))
     }
 
     /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).

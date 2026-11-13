@@ -95,6 +95,19 @@ fn function_text<'a>(asm: &'a str, name: &str) -> &'a str {
     &asm[start..end]
 }
 
+/// Returns the `while.cond` block of one function's assembly.
+///
+/// The `$hits++` counter of the float loop has its own integer tests in other blocks.
+fn loop_condition(function: &str) -> &str {
+    function
+        .split("@block name=while.cond")
+        .nth(1)
+        .expect("loop condition block")
+        .split("@block name=")
+        .next()
+        .unwrap()
+}
+
 /// Constants covering every strength-reduction shape plus ones that keep the multiplier.
 const MULTIPLIERS: [i64; 22] = [2, 3, 5, 8, 9, 10, 12, 16, 17, 31, 33, 63, 96, 4096, -1, -2, -7, -8, -31, -33, 11, 1000];
 
@@ -226,12 +239,12 @@ echo float_loop($argc - 2.0, 3.0), "\n";
 "#,
     );
     let arm = fixture.assembly("linux-aarch64");
-    let arm_loop = function_text(&arm, "float_loop");
+    let arm_loop = loop_condition(function_text(&arm, "float_loop"));
     assert!(arm_loop.contains("fcmp d1, d0"), "{arm_loop}");
     assert!(!arm_loop.contains("cset "), "{arm_loop}");
 
     let x86 = fixture.assembly("linux-x86_64");
-    let x86_loop = function_text(&x86, "float_loop");
+    let x86_loop = loop_condition(function_text(&x86, "float_loop"));
     assert!(x86_loop.contains("ucomisd xmm0, xmm1"), "{x86_loop}");
     for materializer in ["setb ", "seta ", "setnp ", "movzx rax, al"] {
         assert!(!x86_loop.contains(materializer), "{materializer}: {x86_loop}");

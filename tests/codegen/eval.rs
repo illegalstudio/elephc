@@ -14,10 +14,15 @@
 use crate::support::*;
 
 mod buffers;
+mod declaring_class_reflectors;
 mod invoker_sharing;
 mod json_enums;
 mod literal_catalog;
 mod native_false_returns;
+mod reflection_class_members;
+mod reflection_constant_collections;
+mod reflection_default_properties;
+mod reflection_mirror_references;
 
 /// Asserts an eval failure stayed inside the C ABI/error-status contract.
 fn assert_no_rust_panic_leaked(stderr: &str) {
@@ -9346,9 +9351,7 @@ try {
 Error:Object of class EvalBuiltinSprintfPlain could not be converted to string|\
 Error:Object of class Closure could not be converted to string|"
     );
-    assert_eq!(
-        output.stderr,
-        "Warning: Array to string conversion\n\
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: Array to string conversion\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to int\n\
 Warning: Object of class EvalBuiltinSprintfPlain could not be converted to float\n\
 Warning: Object of class Closure could not be converted to int\n\
@@ -9368,9 +9371,7 @@ echo sprintf("%d|%f", $box, $box);
     );
     assert!(output.success, "{}", output.stderr);
     assert_eq!(output.stdout, "1|1.000000");
-    assert_eq!(
-        output.stderr,
-        "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
+    assert_eq!(normalize_diagnostic_text(&output.stderr), "Warning: Object of class EvalSprintfNumericWarning could not be converted to int\n\
 Warning: Object of class EvalSprintfNumericWarning could not be converted to float\n"
     );
 }

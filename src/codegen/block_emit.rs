@@ -1517,10 +1517,13 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
         ctx.machine_layout.next_block = order.get(position + 1).map(|&next| blocks[next].id);
         ctx.machine_layout.fused_compare =
             block_layout::fusible_compare(ctx.function, &blocks[index], &use_counts);
+        ctx.machine_layout.fused_overflow =
+            block_layout::fusible_overflow(ctx.function, &blocks[index], &use_counts);
         emit_block(ctx, &blocks[index])?;
     }
     ctx.machine_layout.next_block = None;
     ctx.machine_layout.fused_compare = None;
+    ctx.machine_layout.fused_overflow = None;
     ctx.flush_cold_section();
     // The text peepholes pay off in loops and in small functions (often called from loops);
     // large loop-free bodies (generated helpers and dispatch code) skip them, keeping compile

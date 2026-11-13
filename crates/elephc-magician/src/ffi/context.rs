@@ -561,6 +561,7 @@ fn drop_eval_context_box(mut context: Box<ElephcEvalContext>) {
             .release_curl_easy_private_values(&mut values);
     }
     context.unregister_dynamic_object_context();
+    crate::context::untrack_reflection_identities_for_context(ctx);
     crate::context::unregister_live_native_context(ctx);
     crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
 }

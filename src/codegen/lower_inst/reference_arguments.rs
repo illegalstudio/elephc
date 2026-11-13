@@ -1062,6 +1062,12 @@ fn emit_heap_ref_writeback(ctx: &mut FunctionContext<'_>, writeback: &RefArgWrit
             emit_object_writeback_class_guard(ctx, class_name);
             abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
         }
+        PhpType::AssocArray { value, .. } => {
+            if let Some(tag) = hash_scalar_value_tag(&value.codegen_repr()) {
+                emit_hash_entries_writeback_guard(ctx, tag);
+            }
+            abi::emit_incref_if_refcounted(ctx.emitter, &source_ty);
+        }
         _ => abi::emit_incref_if_refcounted(ctx.emitter, &source_ty),
     }
     // The result register holds an owned reference to the new value, and the caller pushed
@@ -1139,6 +1145,65 @@ fn emit_object_writeback_class_guard(ctx: &mut FunctionContext<'_>, class_name: 
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
 }
 
+/// Returns the entry tag every value of a hash with scalar value type `value` must carry.
+fn hash_scalar_value_tag(value: &PhpType) -> Option<u8> {
+    matches!(value, PhpType::Int | PhpType::Str | PhpType::Float | PhpType::Bool)
+        .then(|| crate::codegen_support::runtime_value_tag(value))
+}
+
+/// Fatals unless every live entry of the hash in the result register carries `tag`.
+///
+/// A hash records each value's kind in its entry, and typed reads decode the payload by the
+/// declared value type alone. A callee that stored `["k" => "s"]` into an `array<string, int>`
+/// reference, or built the hash from `mixed` reads (boxed entries), would otherwise leave
+/// payloads the typed variable reads as integers. The hash is only read, never converted.
+fn emit_hash_entries_writeback_guard(ctx: &mut FunctionContext<'_>, tag: u8) {
+    let lp = ctx.next_label("ref_writeback_hash_loop");
+    let next = ctx.next_label("ref_writeback_hash_next");
+    let fail = ctx.next_label("ref_writeback_hash_fail");
+    let done = ctx.next_label("ref_writeback_hash_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0, #8]");                        // load the hash capacity bounding the slot walk
+            ctx.emitter.instruction("mov x10, #0");                             // start at slot 0
+            ctx.emitter.label(&lp);
+            ctx.emitter.instruction("cmp x10, x9");                             // has every slot been inspected?
+            ctx.emitter.instruction(&format!("b.hs {done}"));                   // yes: every value has the declared kind
+            ctx.emitter.instruction("ldr x11, [x0, #40]");                      // load the hash's separate entry storage
+            ctx.emitter.instruction("add x11, x11, x10, lsl #6");               // address this 64-byte entry
+            ctx.emitter.instruction("ldr x12, [x11]");                          // load the slot's occupied marker
+            ctx.emitter.instruction("cmp x12, #1");                             // only live entries hold values
+            ctx.emitter.instruction(&format!("b.ne {next}"));                   // skip empty slots and tombstones
+            ctx.emitter.instruction("ldr x12, [x11, #40]");                     // load the live entry's value tag
+            ctx.emitter.instruction(&format!("cmp x12, #{tag}"));               // does the value have the declared kind?
+            ctx.emitter.instruction(&format!("b.ne {fail}"));                   // no: the typed variable cannot read it
+            ctx.emitter.label(&next);
+            ctx.emitter.instruction("add x10, x10, #1");                        // advance to the next slot
+            ctx.emitter.instruction(&format!("b {lp}"));                        // inspect it
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax + 8]");            // load the hash capacity bounding the slot walk
+            ctx.emitter.instruction("xor r11d, r11d");                          // start at slot 0
+            ctx.emitter.label(&lp);
+            ctx.emitter.instruction("cmp r11, r10");                            // has every slot been inspected?
+            ctx.emitter.instruction(&format!("jae {done}"));                    // yes: every value has the declared kind
+            ctx.emitter.instruction("mov r8, r11");                             // copy the slot index
+            ctx.emitter.instruction("shl r8, 6");                               // scale it to a 64-byte entry offset
+            ctx.emitter.instruction("add r8, QWORD PTR [rax + 40]");            // address the entry in the hash's separate storage
+            ctx.emitter.instruction("cmp QWORD PTR [r8], 1");                   // only live entries hold values
+            ctx.emitter.instruction(&format!("jne {next}"));                    // skip empty slots and tombstones
+            ctx.emitter.instruction(&format!("cmp QWORD PTR [r8 + 40], {tag}")); // does the value have the declared kind?
+            ctx.emitter.instruction(&format!("jne {fail}"));                    // no: the typed variable cannot read it
+            ctx.emitter.label(&next);
+            ctx.emitter.instruction("add r11, 1");                              // advance to the next slot
+            ctx.emitter.instruction(&format!("jmp {lp}"));                      // inspect it
+        }
+    }
+    ctx.emitter.label(&fail);
+    super::objects::emit_fatal_message(ctx, FOREIGN_ARRAY_WRITEBACK_MESSAGE);
+    ctx.emitter.label(&done);
+}
+
 /// The fatal raised when a callee left an array whose nested layout the typed local cannot read.
 const FOREIGN_ARRAY_WRITEBACK_MESSAGE: &[u8] =
     b"Fatal error: a by-reference argument was replaced by an array whose elements its typed variable cannot hold\n";
@@ -1147,7 +1212,12 @@ const FOREIGN_ARRAY_WRITEBACK_MESSAGE: &[u8] =
 /// check beyond the array's own slot tag: an object element's class, or a nested array's slot
 /// layout (recursively).
 fn array_elements_need_writeback_guard(element: &PhpType) -> bool {
-    matches!(element, PhpType::Object(_) | PhpType::Array(_))
+    match element {
+        PhpType::Object(_) | PhpType::Array(_) => true,
+        // A hash of scalars records each value's kind per entry, which the slot tag cannot say.
+        PhpType::AssocArray { value, .. } => hash_scalar_value_tag(&value.codegen_repr()).is_some(),
+        _ => false,
+    }
 }
 
 /// Fatals unless every element of the owned `array<element>` in the result register fits the
@@ -1169,7 +1239,12 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
             None => return,
         },
         PhpType::Array(_) => None,
+        PhpType::AssocArray { value, .. } if hash_scalar_value_tag(&value.codegen_repr()).is_some() => None,
         _ => return,
+    };
+    let hash_tag = match element {
+        PhpType::AssocArray { value, .. } => hash_scalar_value_tag(&value.codegen_repr()),
+        _ => None,
     };
     let lp = ctx.next_label("ref_writeback_elements_loop");
     let next = ctx.next_label("ref_writeback_elements_next");
@@ -1211,7 +1286,11 @@ fn emit_array_elements_writeback_guard(ctx: &mut FunctionContext<'_>, element: &
             ctx.emitter.instruction("mov rax, QWORD PTR [r10 + 24 + rcx * 8]"); // load this element's payload pointer
         }
     }
-    if let Some((target_id, target_kind)) = object_target {
+    if let Some(tag) = hash_tag {
+        // Each element is a hash of scalars: every live entry must carry the declared kind.
+        emit_hash_entries_writeback_guard(ctx, tag);
+        abi::emit_jump(ctx.emitter, &next);
+    } else if let Some((target_id, target_kind)) = object_target {
         if ctx.emitter.target.arch == Arch::X86_64 {
             ctx.emitter.instruction("mov rdi, rax");                            // pass this element's object to the class matcher
         }

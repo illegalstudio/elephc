@@ -398,9 +398,10 @@ mod tests {
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
         // Also includes the SimpleXML allocation and diagnostic adapters,
-        // `__elephc_reflection_class_build`, which only compiled reflectors call,
-        // and the internal capture-event helper.
-        assert_eq!(eval_internal, 138);
+        // `__elephc_reflection_class_build` and its eval twin
+        // `__elephc_eval_reflection_class_build`, which only compiled/eval
+        // reflector getters call, and the internal capture-event helper.
+        assert_eq!(eval_internal, 139);
         // 30 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 386);
@@ -414,8 +415,9 @@ mod tests {
         // internal aliases the extension-hosting prelude calls, and the internal
         // capture-event helper.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries, and the
-        // compiled `ReflectionClass` builder call one more.
-        assert_eq!(aot_registry, 828);
+        // compiled and eval `ReflectionClass` builder calls two more, and the
+        // internal capture-event helper one.
+        assert_eq!(aot_registry, 829);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 454 + curl_surface);
@@ -473,7 +475,7 @@ mod tests {
         assert_eq!(interpreter_adapter, 663 + curl_surface);
         // Internal compiler surfaces and pending eval bindings remain unavailable, including
         // the internal capture-event helper and the four debug source helpers.
-        assert_eq!(unsupported, 524);
+        assert_eq!(unsupported, 525);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

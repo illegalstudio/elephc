@@ -493,7 +493,8 @@ fn eval_user_function_sigs(module: &Module) -> Vec<(String, FunctionSig)> {
         .functions
         .iter()
         .filter(|function| {
-            !function.flags.is_main && !function.name.starts_with("_class_propinit_")
+            function.has_source_identity()
+                && !function.flags.is_main && !function.name.starts_with("_class_propinit_")
         })
         .map(|function| {
             (

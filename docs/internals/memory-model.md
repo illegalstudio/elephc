@@ -36,6 +36,9 @@ at their request/call boundaries. See [PHP extensions](../beyond-php/phpext.md).
 │     String buffer            │  _concat_buf: heap-sized, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
+│ Numeric formatter spill rings│  _itoa_spill_ring: 8 x 32B
+│  (bounded scratch windows)   │  _float_spill_ring: 4 x 64B
+├─────────────────────────────┤
 │   Output capture buffers     │  _print_r_ptr/_cap: growable heap capture,
 │  (print_r rendering, ob_*    │  _ob_ptrs/_lens/_caps + handler tables:
 │   buffer-stack bookkeeping)  │  64 slots x 8B each (ob buffer bodies
@@ -127,6 +130,17 @@ stores, so re-entering a counter loop does not box its seed. References, `eval`,
 retain ordinary heap storage. See
 [Frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells).
 
+### Reused foreach key cells
+
+The key variable of a by-value `foreach` is a boxed `mixed` cell, because a hash key can be
+an integer or a string. Binding a new key used to allocate one cell per entry and release
+the previous one. For an integer key of a source that is statically a PHP array,
+`__rt_mixed_reuse_int_cell` now rewrites the previous cell in place when the key variable
+is its only owner (reference count one) and it holds a scalar, so a keyed loop costs one
+cell in total. A key that was
+copied into an array, another variable, a closure or a property has a higher reference
+count and keeps its value while the loop allocates a new cell for the next entry.
+
 ### Variable allocation
 
 EIR lowering declares PHP locals and hidden temporary slots before codegen.
@@ -204,6 +218,11 @@ binding: a straight-line reassignment between two different numeric types starts
 new binding (see [Local retyping](the-type-checker.md#local-retyping-and-strict-locals-mode)),
 so a counter name reused by a later loop with a boxed seed does not widen the slot of
 an earlier, provably integer loop.
+
+A `MixedClone` of a proven numeric value, such as the key snapshot that
+`$starts[$cell]--` takes of `$cell`, copies only a tag and payload. Reading a
+numeric local into such a clone is therefore an observation, and a clone stored
+into one proven local writes that local's own frame cell instead of a heap box.
 
 These frame cells have no heap header and cannot own children. Proven retains and
 releases of their SSA pointers emit no refcount calls. A selected local may still
@@ -1231,6 +1250,33 @@ live owner allows this snapshot to be retired before deletion, preserving ordina
 destructor interleaving. A detached hash keeps its snapshot through deletion or
 exception unwinding. The old property value is never stored back.
 
+Property element writes (`$o->items[$k] = $v`, `$o->items[] = $v`) into an indexed
+array or hash slot use the same fetch. `PropGetForWrite` lends the property's own
+separated container, borrowed, and the write helper mutates it in place. The
+previous lowering read the property, took a second reference and stored the result
+back, so every write found a shared container, copied all of it and freed the old
+one: filling a property was quadratic. The slot's reference is now the one a split
+or growth consumes, so the backend only publishes the pointer the helper returns,
+without retaining or releasing anything, and only when it differs from the pointer
+the helper was given. An indexed array that grew or a table a warning handler
+shared during key conversion is relocated before any element is released, so a
+changed pointer is always safe to publish. An unchanged pointer is not written
+back: an overwrite releases the replaced element last, and that element's
+destructor may write or replace the same property. A hash key whose conversion
+can report a diagnostic re-reads the property after the conversion, so the write
+targets the container the property holds then. One write keeps the copying shape: a
+boxed `mixed` value stored into concrete element storage (`array<string, string>`,
+`array<int>`) is converted inside the write itself, and that conversion can call
+`__toString` or raise a warning whose handler replaces the property and frees the
+borrowed container. That write therefore takes its own reference, writes to the
+private copy and stores it back with `PropSet`.
+
+The runtime element writers keep the matching order. `__rt_hash_set`,
+`__rt_array_set_refcounted` and `__rt_array_set_mixed` store the replacement into
+the entry or slot before they release the overwritten value, and do not touch the
+container afterwards. A destructor that runs from that release therefore reads the
+new element, and may grow or replace the container, as it can in PHP.
+
 When a boxed property holds an `ArrayAccess` object, the native
 `__rt_mixed_object_offset_unset` helper retains the selected object across dispatch.
 A callback may clear the supplying property while still using its receiver. The
@@ -1363,25 +1409,76 @@ In full-reset `--web` mode, the next request reclaims the previous PHP heap aren
 - **Object destructors (`__destruct`)**: `__rt_call_object_destructor` dispatches through the eval hook or class-id-indexed `_class_destruct_ptrs` table with a borrowed `$this`. Refcount bit 31 guards active execution. For collector-triggered destruction, heap-kind bit 14 remembers completion after that temporary guard is cleared, so a resurrected object is not destructed again on later collection or final release. Eval class/property metadata survives until actual object release. Ordinary last-owner destruction still runs at the top of `__rt_object_free_deep`, before property release; resurrection on that ordinary path remains unsupported
 - **Process exit**: all memory is reclaimed by the OS
 
-EIR array-element removal instructions report whether the key existed,
-including entries whose value was null. EIR combines these flags for an
-array-only unset list and runs its final automatic cycle collection only if an
-entry was removed. Missing keys therefore avoid a full heap graph scan. The flag
-lives in the runtime call's stack frame so reentrant destructors cannot overwrite
-another removal's result. Copy-on-write publication, sparse-array promotion, and
-normal key evaluation still precede removal.
+Native array and hash `isset` probes, ordinary hash reads, and indexed-array
+string-key reads borrow their keys for the lookup. Lowering releases independent key-expression owners after the
+lookup. This includes a string read whose local slot is boxed by a later
+`foreach` binding: the earlier read creates an independent string copy even if
+that loop is empty. Final storage analysis removes the provisional release when
+the local keeps the same representation. Global keys and other borrowed key
+operands remain owned by their existing storage.
 
-This gate applies to scalar key literals and concrete scalar locals, plus pure
-unary string builtins applied to concrete strings, such as
-`unset($fields[strtolower($name)])`. Keys that can invoke user code, weak-coercion
-diagnostics, or other effects keep unconditional collection. Unsets of local
-roots, properties, and `ArrayAccess` offsets keep their existing safe point,
-including lists mixing those targets with array offsets. Explicit
-`gc_collect_cycles()` remains independent of the removal flags.
+Branch-result temporaries retain an incoming heap value only when the
+destination itself keeps an owner. An inline nullable-integer temporary instead
+borrows a boxed branch result while converting its tag and payload, then
+releases that source expression's owner. Taking an extra reference before this
+scalar store would leak the box, because the inline slot cannot carry or retire
+it. Heap-backed merge results keep their existing transfer semantics.
+
+EIR array-element removal instructions report whether the removal may have
+stranded a cycle. `__rt_hash_unset` reads the removed entry's own runtime tag:
+an int, float, bool, string or null value owns no PHP children and clears the
+flag, while a container, object, boxed `Mixed`, reference, callable or resource
+keeps it. EIR combines these flags for an array-only unset list and runs its
+final automatic cycle collection only if one of them is set. Missing keys and
+leaf removals therefore avoid a full heap graph scan. The decision never trusts
+a declared element type, only the entry's own tag. The flag lives in
+the runtime call's stack frame so reentrant destructors cannot overwrite another
+removal's result. Copy-on-write publication, sparse-array promotion, and normal
+key evaluation still precede removal.
+
+This gate applies to scalar key literals, plain locals and pure unary string
+builtins applied to concrete strings, such as `unset($fields[strtolower($name)])`.
+A plain local key (an `int|float` loop counter, say) may reach a
+key-normalization diagnostic handler; garbage that handler strands is not this
+removal's and waits for the next safe point. Keys that can invoke user code or
+other effects keep unconditional collection. It covers local arrays, declared
+hook-free writable properties of `$this` or a non-nullable local object, and
+declared PHP `array` static properties, so `unset($this->ids[$i])` over integer
+ids runs no collector scan. Unsets of local roots, whole properties, magic or
+hooked properties, nullable receivers and `ArrayAccess` offsets keep their
+existing safe point, including lists mixing those targets with array offsets.
+Explicit `gc_collect_cycles()` remains independent of the removal flags.
 When a boxed reference holds a non-array value, its runtime fallback conservatively
 requests collection, preserving `ArrayAccess` and false-conversion callback effects.
 Float and boxed-key diagnostic snapshots preserve the removal flag across their
 temporary hash-owner cleanup.
+
+Outside candidate mode a collection walks the whole bump heap up to `_heap_off`,
+so the automatic safe point runs through `__rt_gc_collect_cycles_budgeted`. Each
+safe point adds a fixed 64 KiB scan credit to `_gc_safe_point_credit`, and the
+collector runs (spending the whole credit) once the credit covers `_heap_off`.
+Programs whose heap fits in one credit still collect at every safe point. A larger
+heap collects once every `_heap_off / 64 KiB` safe points, so removing open-class
+elements from a big scene in a loop costs a bounded amortized scan per unset
+instead of a full heap walk each time.
+
+The credit alone cannot bound garbage: one removal may strand far more than 64 KiB,
+and no allocation path collects in non-web builds. Stranded garbage still counts in
+`_gc_live`, so a safe point also collects once `_gc_live` reaches
+`_gc_safe_point_live_limit`. After every budgeted collection that limit becomes twice
+the surviving live bytes, capped at half of `_heap_max`; it starts at zero, so the
+first safe point always collects. Garbage therefore never outgrows the reachable
+heap, and a nearly full arena collects at every safe point as before. A safe point reached
+while `gc_disable()` is active, or from a destructor or container cleanup during a
+collection, would not scan; it defers instead, keeping the saved credit and the live
+limit for the next safe point that can collect.
+
+Garbage stranded by a deferred safe point, and its destructors, wait for a later safe
+point, an explicit `gc_collect_cycles()`, or the shutdown collection that the main
+epilogue runs after releasing locals, globals and statics. `exit()`, `die()` and fatal
+errors terminate without that shutdown collection, so destructors of a cycle still
+pending at that moment do not run. Web application candidate mode already scales with
+lost owners and always collects.
 
 Collector-triggered destructors run under individual native exception handlers.
 Both explicit collection and automatic EIR safe points have conservative callback
@@ -1741,6 +1838,7 @@ borrowed pointers rather than a second copy of the runtime heap.
 
 | Symbols | Size | Purpose |
 |---|---|---|
+| `_itoa_spill_ring`, `_float_spill_ring` | 256 bytes each | Eight 32-byte integer-formatting slots and four 64-byte float-formatting slots when the concat arena cannot reserve a formatter window |
 | `_itoa_spill_index`, `_float_spill_index` | 8 bytes each | Current positions in the integer and floating-point formatting spill rings |
 | `_ser_stream`, `_unser_call_line` | 8 bytes each | Active growable serialization-stream descriptor and source line for unserialization diagnostics |
 | `_elephc_eval_inventory_context` | 8 bytes | Eval context used while registering the module's native metadata |
@@ -1887,6 +1985,7 @@ read the same uniform heap header, including on the iOS targets.
 |---|---|---|
 | Stack | OS default (~8MB) | Stack overflow (crash) |
 | String buffer | `--heap-size` (default 128 MB) | Resets each statement, bounded by the program budget |
+| Numeric formatting spill rings | `_itoa_spill_ring` and `_float_spill_ring` = 256 bytes each; their indices = 8 bytes each | Slots wrap after eight integer or four float results; escaping results need ordinary owned string storage |
 | print_r capture | `_print_r_ptr`, `_print_r_cap`, `_print_r_mode`, `_print_r_off` = 8 bytes each | Both return and echo modes render into growable raw heap storage. Finish persists the result with string metadata, frees the raw buffer, and clears state; cleanup releases abandoned captures |
 | Output-buffer (`ob_*`) stack | `_ob_level`, `_ob_in_handler`, `_ob_flushing`, `_ob_implicit_flush` = 8 bytes each; `_ob_ptrs`, `_ob_lens`, `_ob_caps`, `_ob_handler_stubs`, `_ob_handler_envs`, `_ob_name_ptrs`, `_ob_name_lens`, `_ob_chunk_sizes`, `_ob_flags`, `_ob_started` = 512 bytes each (64 slots) | Up to 64 nested `ob_start()` levels; the buffer bodies themselves are heap-allocated (16KB default capacity, page-aligned chunk size + 1 when a chunk size is set, grown by doubling) |
 | Web capture flag | `elephc_web_capture` = 8 bytes | `--web` bridge output-capture flag read by `__rt_stdout_write`; zero selects the plain `write(1, ...)` syscall path |

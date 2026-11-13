@@ -11,7 +11,21 @@ use super::*;
 
 /// Emits the PHP fatal terminator for an ordinary method call on null.
 pub(super) fn terminate_method_call_on_null(ctx: &mut LoweringContext<'_, '_>, method: &str) {
-    let message = format!("Call to a member function {}() on null", method);
+    terminate_method_call_on_non_object(ctx, method, "null");
+}
+
+/// Emits the PHP fatal terminator for an ordinary method call on `false`.
+pub(super) fn terminate_method_call_on_false(ctx: &mut LoweringContext<'_, '_>, method: &str) {
+    terminate_method_call_on_non_object(ctx, method, "false");
+}
+
+/// Emits the PHP fatal terminator naming the runtime receiver type.
+fn terminate_method_call_on_non_object(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
+    receiver: &str,
+) {
+    let message = format!("Call to a member function {}() on {}", method, receiver);
     let message = ctx.intern_string(&message);
     ctx.emit_void(
         Op::ThrowError,
@@ -136,7 +150,7 @@ pub(super) fn lower_method_call_with_receiver(
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
     }
-    if let Some(call) = source_variadic_calls::lower(ctx, object, method, args, op, expr) {
+    if let Some(call) = selected_native_methods::lower(ctx, object, method, args, op, expr) {
         return call;
     }
     lower_method_call_with_receiver_direct(ctx, object, method, args, op, expr)
@@ -163,6 +177,9 @@ fn lower_method_call_with_binding(
     ctx: &mut LoweringContext<'_, '_>, object: LoweredValue, method: &str,
     args: &[Expr], op: Op, expr: &Expr, selected_enum: bool,
 ) -> LoweredValue {
+    if let Some(call) = magic_method_calls::lower(ctx, object, method, args, op, expr) {
+        return call;
+    }
     if op == Op::MethodCall && is_reflection_class_new_instance_call(ctx, object.value, method) {
         return lower_reflection_class_new_instance(ctx, None, object, args, expr);
     }
@@ -175,14 +192,7 @@ fn lower_method_call_with_binding(
     {
         return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
     }
-    let magic_args;
-    let (dispatch_method, args) =
-        if let Some(args) = magic_call_dispatch_args(ctx, object.value, method, args, expr.span) {
-            magic_args = args;
-            ("__call", magic_args.as_slice())
-        } else {
-            (method, args)
-        };
+    let dispatch_method = method;
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let sig = method_signature(ctx, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
@@ -241,11 +251,9 @@ fn lower_method_call_with_binding(
         &result_type,
         expr.span,
     );
-    // Selected enum implementations may have fewer parameters than another implementor.
-    // PHP ignores surplus positionals, but their values still belong to ordinary cleanup.
+    // PHP ignores surplus positionals on user methods. Their values still participate in
+    // argument evaluation and cleanup, but must not reach the fixed native parameter ABI.
     let operand_limit = sig.as_ref().filter(|sig| sig.variadic.is_none())
-        .filter(|_| singular_object_class(&ctx.builder.value_php_type(object.value))
-            .is_some_and(|(class, _)| ctx.enums.contains_key(class)))
         .map_or(arg_values.len(), |sig| sig.params.len());
     operands.extend(arg_values.iter().take(operand_limit).copied());
     let data = ctx.intern_string(dispatch_method);

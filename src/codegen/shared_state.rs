@@ -17,7 +17,7 @@
 //!   trailing id keeps two functions with similar names from emitting the same label.
 
 use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethodCallableCase};
-use crate::ir::{CoreBuiltinOp, Function, Immediate, Op, RuntimeCallTarget, RuntimeFnId};
+use crate::ir::{CoreBuiltinOp, Function, Immediate, Module, Op, RuntimeCallTarget, RuntimeFnId};
 use crate::types::{FunctionSig, PhpType};
 
 /// Optional runtime families discovered while codegen lowers synthetic EIR functions.
@@ -44,6 +44,10 @@ pub(crate) struct SharedCodegenState {
     runtime_callable_invokers: Vec<RuntimeCallableInvokerCacheEntry>,
     runtime_builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     runtime_extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
+    /// Wrapper lowering only extends the literal pool. Reuse private module snapshots between
+    /// wrappers instead of cloning every source body once for every builtin in the catalog.
+    /// An active snapshot is removed from the pool, so recursive wrapper emission stays isolated.
+    wrapper_modules: Vec<Module>,
     label_counter: usize,
     /// Memoized "does this module share the Mixed string-context ladder", indexed by mode.
     ///
@@ -127,6 +131,16 @@ struct RuntimeCallWrapperCacheEntry {
 }
 
 impl SharedCodegenState {
+    /// Borrows an idle wrapper snapshot or clones one for a newly reached nesting depth.
+    pub(super) fn take_wrapper_module(&mut self, module: &Module) -> Module {
+        self.wrapper_modules.pop().unwrap_or_else(|| module.clone())
+    }
+
+    /// Retains a completed wrapper's private literal pool for the next independent wrapper.
+    pub(super) fn recycle_wrapper_module(&mut self, module: Module) {
+        self.wrapper_modules.push(module);
+    }
+
     /// Returns the global label of `class_name`'s complete `ReflectionClass` builder,
     /// queuing the builder for emission the first time the class is asked for.
     pub(super) fn request_reflection_class_builder(&mut self, class_name: &str) -> String {

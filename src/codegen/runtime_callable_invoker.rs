@@ -2846,6 +2846,15 @@ fn coerce_current_value_to_target(
         owned_value_args::normalize_callable(emitter, ctx, source_ty);
         return (PhpType::Callable, true);
     }
+    if matches!(source_repr, PhpType::Mixed | PhpType::Union(_)) {
+        if let Some(hash_ty) = target_ty
+            .map(PhpType::codegen_repr)
+            .filter(|target| matches!(target, PhpType::AssocArray { .. }))
+        {
+            emit_owned_hash_from_boxed_array(emitter, ctx, &hash_ty);
+            return (hash_ty, true);
+        }
+    }
     let pushed_ty = target_ty
         .filter(|target_ty| can_coerce_result_to_type(source_ty, target_ty))
         .map(PhpType::codegen_repr)
@@ -2864,6 +2873,50 @@ fn coerce_current_value_to_target(
     }
 
     (pushed_ty, boxed_to_mixed)
+}
+
+/// Unboxes the current Mixed argument into an OWNED hash for a declared `array<K, V>` parameter.
+///
+/// The callee is compiled for hash storage, but the boxed value a descriptor call carries is
+/// whatever the caller passed, and a PHP list is a valid keyed array. A plain unbox handed the
+/// callee a packed vector to read as a hash table. A boxed indexed array is therefore rebuilt
+/// as a hash here; a boxed hash (and anything else, which the callee's own checks answer) is
+/// passed through with a reference of its own, so both arms leave one owner for the invoker's
+/// argument cleanup and the caller reports the conversion as owning.
+fn emit_owned_hash_from_boxed_array(
+    emitter: &mut Emitter,
+    ctx: &mut InvokerEmitContext,
+    hash_ty: &PhpType,
+) {
+    let convert = ctx.next_label("list_arg_to_hash");
+    let done = ctx.next_label("hash_arg_ready");
+    let list_tag =
+        crate::codegen::runtime_value_tag(&PhpType::Array(Box::new(PhpType::Mixed))) as i64;
+    // -- rebuild a boxed list as the hash the parameter is compiled for --
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp x0, #{list_tag}"));               // is the boxed argument a packed list?
+            emitter.instruction(&format!("b.eq {convert}"));                    // lists are rebuilt as an owned hash
+            emitter.instruction("mov x0, x1");                                  // a hash (or null) passes through as the unboxed payload
+            abi::emit_incref_if_refcounted(emitter, hash_ty);
+            emitter.instruction(&format!("b {done}"));                          // the passed-through payload now carries its own owner
+            emitter.label(&convert);
+            emitter.instruction("mov x0, x1");                                  // pass the packed list to the conversion helper
+            abi::emit_call_label(emitter, "__rt_array_to_hash");
+            emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp rax, {list_tag}"));               // is the boxed argument a packed list?
+            emitter.instruction(&format!("je {convert}"));                      // lists are rebuilt as an owned hash
+            emitter.instruction("mov rax, rdi");                                // a hash (or null) passes through as the unboxed payload
+            abi::emit_incref_if_refcounted(emitter, hash_ty);
+            emitter.instruction(&format!("jmp {done}"));                        // the passed-through payload now carries its own owner
+            emitter.label(&convert);
+            abi::emit_call_label(emitter, "__rt_array_to_hash");
+            emitter.label(&done);
+        }
+    }
 }
 
 /// Emits runtime coercion from one result type to another.

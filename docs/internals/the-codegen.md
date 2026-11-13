@@ -14,6 +14,66 @@ Codegen is a single EIR pipeline. The checked and optimized AST is always
 lowered into EIR, IR passes run over that module, and `src/codegen/` emits the
 user assembly for the selected target.
 
+Dynamic operators with boxed operands share a synthetic EIR function per operator
+when internal object handlers are available. Scalar counterparts use the ordinary
+boxing conversion; source expressions are evaluated before the call and their
+owners remain rooted until it returns. Each helper lowers the existing native
+handler precedence and scalar fallback once. This prevents an opaque eval catalog
+from copying the same operator graph into every prelude function. Typed scalar
+operations and statically selected object handlers retain their direct paths.
+The helpers use compiler-only names and are excluded from PHP function and
+callable inventories. They pass through the same normalization, effect analysis,
+optimization and target-aware codegen as other EIR functions.
+Increment and decrement have separate helpers so PHP's string, boolean and null
+update rules remain distinct from arithmetic. Post-increment and post-decrement
+keep selecting the original value in the caller.
+
+Callable wrapper lowering reuses private module snapshots within one codegen run.
+Wrapper construction extends their literal pools while preserving the source
+functions and class metadata. An active snapshot stays outside the reusable pool
+until its wrapper has finished emitting, so nested wrappers have independent data
+IDs. This avoids cloning all source EIR bodies for every builtin wrapper.
+
+Runtime-selected native methods that need distinct argument plans select their
+concrete class in EIR before evaluating the arguments. This includes variadic
+collectors, surplus user-method arguments and missing methods handled by `__call`.
+Magic hooks receive the original method name and a boxed PHP array built through
+the shared argument-container lowering, preserving named and unpacked keys.
+Their array ABI stays generic even when a known call supplies homogeneous values.
+Receiver, argument-container and result owners participate in ordinary EIR
+unwind cleanup. A possible magic fallback also prevents inferring a common native
+return representation from explicitly declared methods alone.
+
+An explicitly declared indexed-array builder keeps its element contract when
+an append receives a physically boxed value with an exact checker proof. The
+checker records the declaration, current receiver element, and stable RHS variable
+type agreeing at that source point; conflicting visits disable the proof.
+The RHS must be definitely bound and free of global, static, reference, or eval
+aliasing that could invalidate its checked type.
+Lowering extracts proven scalar or callable values before
+array representation discovery considers widening the builder. Scalar casts
+produce the integer, float, boolean, or independent string result; callable
+unboxing retains its descriptor. Temporary source owners retire after extraction,
+while borrowed loop-local cells retain their existing lifetime.
+
+This matters for scalar hash `foreach` bindings, which remain boxed `Mixed` so
+the loop variable preserves each entry's runtime tag. Builtins such as
+`array_flip()` can produce integer values from keys that were statically typed
+as strings before a reindexing sort. The append converts only at the declared
+`array<T>` sink, keeping the builder's storage suitable for typed property stores
+and returns. Inferred builders and unknown, nullable, or differently typed append
+values keep their existing widening behavior.
+
+Literal scalar `settype()` updates on boxed locals use the ordinary EIR cast and
+assignment path, including hash `foreach` bindings. That path publishes the write
+to storage discovery and ownership cleanup, so loop backedges retain the actual
+runtime tag and replacing a string retires its previous owner. It also preserves
+boxed storage after a conversion narrows the logical value type, so consecutive
+`settype()` calls use the same cleanup path. The assignment path preserves
+the boxed value contract for static and reference-bound cells before conversion,
+and returns `true` after a
+successful conversion.
+
 Switch dispatch uses integer comparisons only for PHP integer subjects and labels.
 Other PHP values use loose equality, preserving boolean conversion, array comparison
 rules and object-to-number warnings. Float comparisons with null test numeric zero
@@ -168,7 +228,9 @@ checked arithmetic follows its runtime call ABI unless its entire lifetime is
 proven eligible for a frame-local cell.
 
 Loop-carried numeric locals must preserve an overflow-promoted float on later
-iterations. Lowering discovers integer reads of a final Mixed slot inside a
+iterations. `raw_promotable_loop` keeps eligible accumulators and counters in raw
+integers, then continues a promoted local as a raw float so later iterations observe
+that float. Lowering discovers integer reads of a final Mixed slot inside a
 cyclic region, then replays the body with Mixed storage from its first store.
 Constraints belong to individual storage bindings, so a name reused after
 `unset` retains its new representation. This decision is separate from the
@@ -224,6 +286,30 @@ condition `$divisor * $divisor <= $candidate`. Strict identity against a proven
 numeric partner is admitted on the same terms, including reads of the owning local
 as in `$value = $i * 4; if ($value !== 20)`. The product retains overflow-to-float
 semantics; this does not require or imply an integer range proof for either counter.
+A variadic `min()` / `max()` selection (`MixedMinMax`) over proven numeric operands is
+both an observation and a producer: two integer tags compare as integers, any float
+promotes both sides to doubles for the comparison only, and the winner's own tag and
+payload are copied into the result's cell. A two-argument selection is emitted inline; a
+longer one lends its operands to `__rt_mixed_min_max_select`, which carries php-src's
+comparison mode across the arguments, and copies the returned winner into the cell.
+`$sum += min($i, $count - 1)`, `max($a, $b, 2.5)` in a loop and a checked accumulator
+read by `max($total, 0)` after its loop therefore allocate nothing. The by-value
+assignment of such a selection (`$r = max($i, $f)`) is an observation too: its
+`MixedClone` copies the two words into the variable's own cell.
+
+A selection over operands that are not proven numeric (`mixed` parameters, array elements)
+cannot be a numeric cell, because a string or a bool may win. When its result is only read
+(by checked arithmetic, an ordered comparison, a scalar cast, `echo`, an
+assignment copy and its release) it gets a *guarded* cell instead: the lowering copies an
+integer or float winner into that frame cell and returns its address, and clones any other
+winner into an owned heap cell. Its users keep their generic lowering, which reads the
+value through the pointer either way, and the release helper ignores a pointer outside the
+managed heap. `$s += max($a, $b)` with `mixed` operands therefore allocates nothing when
+numbers win. A result that escapes (returned, stored, passed on) is always an owned
+`__rt_mixed_clone` of the winner, never the retained operand cell: a write through a
+reference to the operand's variable mutates that cell in place. A direct
+`echo` or `print` of a cell is an observation as well, because it runs the string cast's
+tag dispatch and writes the formatted number without retaining the cell.
 An array or hash key is also a numeric observation: `$arr[$j + 1]` and
 `$arr[$j]` with an `int|float` counter `$j` read the cell's tag and payload into
 the key registers inline (a float key keeps PHP's truncation and deprecation),

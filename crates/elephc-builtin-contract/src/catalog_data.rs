@@ -2998,6 +2998,39 @@ pub(crate) static CONTRACTS: &[BuiltinContract] = &[
     },
 
     BuiltinContract {
+        id: BuiltinId::from_canonical_name("__elephc_eval_reflection_class_build"),
+        name: "__elephc_eval_reflection_class_build",
+        area: Area::System,
+        module: PhpModule::Elephc,
+        since: None,
+        kind: BuiltinKind::Function,
+        params: &[
+            ParamSpec {
+                name: "class",
+                ty: TypeSpec::Mixed,
+                default: None,
+                by_ref: false,
+            },
+        ],
+        variadic: None,
+        variadic_by_ref: false,
+        min_args: None,
+        max_args: None,
+
+        arity_error: None,
+        returns: TypeSpec::Object,
+        by_ref_return: false,
+        summary: "Internal: build a fresh, complete ReflectionClass for a class an eval-built reflector names.",
+        examples: &[
+        ],
+        php_manual: None,
+        deprecation: None,
+        extension: false,
+        internal: true,
+        requirements: &[],
+    },
+
+    BuiltinContract {
         id: BuiltinId::from_canonical_name("__elephc_opcache_rt_reset"),
         name: "__elephc_opcache_rt_reset",
         area: Area::System,

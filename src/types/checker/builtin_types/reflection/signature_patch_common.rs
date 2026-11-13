@@ -87,7 +87,17 @@ pub(super) fn patch_initial_reflection_owner(class_name: &str, class_info: &mut 
                     .methods
                     .get_mut(&php_symbol_key("getDeclaringClass"))
                 {
-                    sig.return_type = PhpType::Object("ReflectionClass".to_string());
+                    // An enum case's declaring class is the `ReflectionEnum` php's class
+                    // factory builds; the other owners may declare on a plain class.
+                    let declaring_class = if matches!(
+                        class_name,
+                        "ReflectionEnumUnitCase" | "ReflectionEnumBackedCase"
+                    ) {
+                        "ReflectionEnum"
+                    } else {
+                        "ReflectionClass"
+                    };
+                    sig.return_type = PhpType::Object(declaring_class.to_string());
                 }
             }
 }

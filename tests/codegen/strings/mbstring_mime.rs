@@ -398,7 +398,11 @@ echo mb_encode_mimeheader("café", "UTF-8", null), "\n";
         let output = compile_and_run_capture(&program(body, eval));
         assert!(output.success, "{}", output.stderr);
         assert_eq!(output.stdout, stdout, "eval={eval}");
-        assert_eq!(output.stderr, stderr, "eval={eval}");
+        assert_eq!(
+            normalize_diagnostic_text(&output.stderr),
+            stderr,
+            "eval={eval}"
+        );
     }
     let strict = r#"<?php declare(strict_types=1);
 try { mb_encode_mimeheader("x", null); } catch (TypeError $error) { echo $error->getMessage(); }

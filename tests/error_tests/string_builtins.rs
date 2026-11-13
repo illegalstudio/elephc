@@ -285,18 +285,14 @@ fn test_error_ord_wrong_args() {
     expect_error("<?php ord();", "ord() takes exactly 1 argument");
 }
 
-/// Verifies that a pure-data registry builtin (`ord`) infers argument types so that
-/// an undefined variable passed as an argument produces the correct diagnostic.
+/// Verifies that a pure-data registry builtin (`ord`) still infers its argument type.
 ///
-/// This is a regression test for Fix B: before the fix, the registry-first dispatch
-/// branch skipped `infer_type` for builtins with no check hook, so undefined-variable
-/// errors were silently dropped.
+/// This is a regression test for Fix B: before the fix, the registry-first dispatch branch
+/// skipped `infer_type` for builtins with no check hook. Undefined reads are now PHP 8 runtime
+/// warnings, so the program type-checks and lowering emits the warning at the read site.
 #[test]
-fn test_error_ord_undefined_variable_arg() {
-    expect_error(
-        "<?php ord($undeclared);",
-        "Undefined variable: $undeclared",
-    );
+fn test_ord_undefined_variable_arg_is_a_runtime_warning() {
+    expect_no_error("<?php ord($undeclared);");
 }
 
 /// Verifies that `explode()` with only one argument produces the correct arity error.
@@ -791,5 +787,22 @@ fn test_error_mbstring_text_contracts() {
         ("<?php mb_strimwidth('a', 0, 1, []);", "mb_strimwidth() trim_marker argument must be string"),
     ] {
         expect_error(source, message);
+    }
+}
+
+/// Array-search forms must not reach the string-only backend without the literal rewrite.
+#[test]
+fn test_simplexml_followup_str_replace_rejects_unlowerable_array_search() {
+    for source in [
+        r#"<?php function replace_runtime(string $replacement): string {
+            return str_replace(["a", "b"], $replacement, "ab");
+        }"#,
+        r#"<?php echo str_replace(search: ["a", "b"], replace: "x", subject: "ab");"#,
+        r#"<?php echo str_replace(...[["a", "b"], "x", "ab"]);"#,
+    ] {
+        expect_error(
+            source,
+            "str_replace(): Argument #1 ($search) must be of type string, array given",
+        );
     }
 }

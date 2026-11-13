@@ -291,7 +291,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     // The preludes below are decided on the entry program, but the autoload pass that loads the
     // Composer class files runs after name resolution, much later. Probe that closure now, so a
-    // vendor file that uses PDO or curl gets its prelude as if the entry file used it.
+    // vendor file that uses PDO, curl, Random, BcMath, GMP, or DateTimeZone::listIdentifiers
+    // gets its prelude as if the entry file used it.
     crate::progress::phase("autoload-prelude-probe");
     let phase_started = Instant::now();
     let autoloaded_preludes = if entry.is_repl_host() {
@@ -415,7 +416,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // is detected, and before name resolution, which desugars both call forms to it.
     crate::progress::phase("list-id-prelude");
     let phase_started = Instant::now();
-    let ast = list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = list_id_prelude::inject_if_used(
+        ast,
+        autoloaded("list_id"),
+        &mut prelude_inventory,
+    );
     timings.record_since("list-id-prelude", phase_started);
 
     // Inject the var_export prelude (a pure elephc-PHP function) only when the program
@@ -546,9 +551,21 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         strict_php,
         &mut prelude_inventory,
     );
-    let ast = crate::bcmath_prelude::inject_if_used(ast, with_crates.contains("bcmath"), &mut prelude_inventory);
-    let ast = crate::gmp_prelude::inject_if_used(ast, with_crates.contains("gmp"), &mut prelude_inventory);
-    let ast = crate::random_prelude::inject_if_used(ast, with_crates.contains("random"), &mut prelude_inventory);
+    let ast = crate::bcmath_prelude::inject_if_used(
+        ast,
+        with_crates.contains("bcmath") || autoloaded("bcmath"),
+        &mut prelude_inventory,
+    );
+    let ast = crate::gmp_prelude::inject_if_used(
+        ast,
+        with_crates.contains("gmp") || autoloaded("gmp"),
+        &mut prelude_inventory,
+    );
+    let ast = crate::random_prelude::inject_if_used(
+        ast,
+        with_crates.contains("random") || autoloaded("random"),
+        &mut prelude_inventory,
+    );
     timings.record_since("hash-prelude", phase_started);
 
     // Inject the testing runtime (`Elephc\Testing\TestCase`, `Runner`, the PHPUnit alias)

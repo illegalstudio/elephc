@@ -181,6 +181,23 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                     expression(&constant.value)
                 ));
             }
+            // A hooked property is stored with its hook BODIES as `__propget_*` / `__propset_*`
+            // methods, exactly as the parser produces them. Printing those accessors as ordinary
+            // methods and the property as a plain declaration would reparse to a class with NO
+            // hook flags, so the property has to carry the `{ get … set … }` block and the
+            // accessors must not be printed a second time.
+            let mut hook_accessors: Vec<String> = Vec::new();
+            for property in properties {
+                if !property.hooks.any() {
+                    continue;
+                }
+                if property.hooks.requires_get() {
+                    hook_accessors.push(crate::names::property_hook_get_method(&property.name));
+                }
+                if property.hooks.set {
+                    hook_accessors.push(crate::names::property_hook_set_method(&property.name));
+                }
+            }
             for property in properties {
                 let visibility = match property.visibility {
                     Visibility::Public => "public",
@@ -195,18 +212,68 @@ fn statement(stmt: &Stmt, depth: usize) -> String {
                     Some(value) => format!(" = {}", expression(value)),
                     None => String::new(),
                 };
+                let mut hook_block = String::new();
+                if property.hooks.any() {
+                    hook_block.push_str(" {\n");
+                    if property.hooks.requires_get() {
+                        let accessor = methods
+                            .iter()
+                            .find(|method| {
+                                method.name == crate::names::property_hook_get_method(&property.name)
+                            })
+                            .unwrap_or_else(|| {
+                                panic!("hooked property {} has no get accessor", property.name)
+                            });
+                        let keyword = if property.hooks.get_by_ref { "&get" } else { "get" };
+                        hook_block.push_str(&format!(
+                            "{}{keyword} {}\n",
+                            pad(depth + 2),
+                            block(&accessor.body, depth + 2)
+                        ));
+                    }
+                    if property.hooks.set {
+                        let accessor = methods
+                            .iter()
+                            .find(|method| {
+                                method.name == crate::names::property_hook_set_method(&property.name)
+                            })
+                            .unwrap_or_else(|| {
+                                panic!("hooked property {} has no set accessor", property.name)
+                            });
+                        let parameter = accessor
+                            .params
+                            .first()
+                            .map(|(name, ..)| name.as_str())
+                            .unwrap_or("value");
+                        let head = if parameter == "value" {
+                            "set".to_string()
+                        } else {
+                            format!("set(${parameter})")
+                        };
+                        hook_block.push_str(&format!(
+                            "{}{head} {}\n",
+                            pad(depth + 2),
+                            block(&accessor.body, depth + 2)
+                        ));
+                    }
+                    hook_block.push_str(&format!("{}}}", pad(depth + 1)));
+                }
                 // `readonly` sits between the visibility and the type, and PHP rejects it on a
                 // static property — which is why the two modifiers are separate strings here
                 // rather than one `modifiers` field: they cannot both appear.
                 out.push_str(&format!(
-                    "{}{visibility} {}{}{type_hint}${}{default};\n",
+                    "{}{visibility} {}{}{type_hint}${}{default}{hook_block}{}\n",
                     pad(depth + 1),
                     if property.is_static { "static " } else { "" },
                     if property.readonly { "readonly " } else { "" },
-                    property.name
+                    property.name,
+                    if property.hooks.any() { "" } else { ";" }
                 ));
             }
             for method in methods {
+                if hook_accessors.contains(&method.name) {
+                    continue;
+                }
                 let visibility = match method.visibility {
                     Visibility::Public => "public ",
                     Visibility::Private => "private ",
@@ -793,8 +860,12 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::Variable(name) => (format!("${name}"), ATOM),
         ExprKind::ConstRef(name) => (name_source(name), ATOM),
         ExprKind::PostIncrement(name) => (format!("${name}++"), ATOM),
+        ExprKind::PreIncrement(name) => (format!("++${name}"), ATOM),
+        ExprKind::PostDecrement(name) => (format!("${name}--"), ATOM),
+        ExprKind::PreDecrement(name) => (format!("--${name}"), ATOM),
         ExprKind::Negate(inner) => (format!("-{}", at(inner, 85)), 85),
         ExprKind::Not(inner) => (format!("!{}", at(inner, 75)), 75),
+        ExprKind::ErrorSuppress(inner) => (format!("@{}", at(inner, 35)), 35),
         ExprKind::Cast { target, expr } => {
             (format!("({}) {}", cast_type(target), at(expr, 85)), 85)
         }
@@ -916,6 +987,13 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::ClosureCall { var, args } => {
             (format!("${var}({})", argument_list(args)), ATOM)
         }
+        // The grouped callee is REQUIRED: printing `"name"()` would not parse back as an
+        // expression call, while `("name")()` goes through the parser's grouped-expression
+        // call path and rebuilds this node.
+        ExprKind::ExprCall { callee, args } => (
+            format!("({})({})", expression(callee), argument_list(args)),
+            ATOM,
+        ),
         ExprKind::Spread(value) => (format!("...{}", at(value, ATOM)), ATOM),
         ExprKind::Closure {
             params,
@@ -1231,6 +1309,132 @@ mod tests {
     #[test]
     fn printing_round_trips_simplexml() {
         round_trip("simplexml", &crate::simplexml_prelude::declarations());
+    }
+
+    /// The built DOM HTML prelude prints and reparses to the same node tree.
+    ///
+    /// `Dom\XMLDocument` is excluded: it is a hand-built interop class whose fully-qualified
+    /// class name has no top-level PHP declaration spelling (`class Dom\XMLDocument` is not
+    /// valid PHP), so it is covered by its own structural test below.
+    #[test]
+    fn printing_round_trips_dom_html() {
+        use crate::parser::ast::StmtKind;
+        let prelude: crate::parser::ast::Program = crate::dom_html_prelude::declarations()
+            .into_iter()
+            .filter(|statement| {
+                !matches!(
+                    &statement.kind,
+                    StmtKind::ClassDecl { name, .. } if name.contains('\\')
+                )
+            })
+            .collect();
+        round_trip("dom_html", &prelude);
+    }
+
+    /// The DOM prelude keeps the PHP 8.4 `Dom\XMLDocument` interop surface.
+    #[test]
+    fn dom_html_declares_modern_xml_document_interop() {
+        use crate::parser::ast::StmtKind;
+        let modern = crate::dom_html_prelude::declarations()
+            .into_iter()
+            .find(|statement| {
+                matches!(
+                    &statement.kind,
+                    StmtKind::ClassDecl { name, .. } if name == "Dom\\XMLDocument"
+                )
+            })
+            .expect("Dom\\XMLDocument must be declared");
+        let StmtKind::ClassDecl {
+            extends, methods, ..
+        } = &modern.kind
+        else {
+            unreachable!("filtered above");
+        };
+        assert_eq!(
+            extends.as_ref().map(|parent| parent.as_canonical()),
+            Some("DOMDocument".to_string())
+        );
+        for name in ["createFromFile", "createFromString"] {
+            let method = methods
+                .iter()
+                .find(|method| method.name == name)
+                .unwrap_or_else(|| panic!("{name} must be declared"));
+            assert!(method.is_static, "{name} must be static");
+        }
+    }
+
+    /// Hooked properties print their `{ get … set … }` block and their accessors once.
+    #[test]
+    fn printing_round_trips_property_hooks() {
+        let source = r#"<?php
+class Node {
+    public mixed $value = null {
+        get { return $this->value; }
+        set { $this->value = $value; }
+    }
+    public $label {
+        get { return "node"; }
+    }
+}
+"#;
+        let tokens = crate::lexer::tokenize(source).unwrap();
+        let program = crate::parser::parse_internal(&tokens).unwrap();
+        let rendered = print_program(&program);
+        assert!(rendered.contains("get {"), "{rendered}");
+        assert!(rendered.contains("set {"), "{rendered}");
+        round_trip("property hooks", &program);
+    }
+
+    /// The four increment/decrement forms survive a source round trip.
+    #[test]
+    fn printing_round_trips_increment_forms() {
+        use crate::synthetic_class::{e_post_dec, e_post_inc, e_pre_dec, e_pre_inc, s_expr};
+        let program = vec![
+            function("bump")
+                .body(vec![
+                    s_expr(e_post_inc("i")),
+                    s_expr(e_pre_inc("i")),
+                    s_expr(e_post_dec("i")),
+                    s_expr(e_pre_dec("i")),
+                ])
+                .build(),
+        ];
+        round_trip("increment forms", &program);
+    }
+
+    /// `@expr` prints as PHP error suppression and reparses to the same node.
+    #[test]
+    fn printing_round_trips_error_suppression() {
+        use crate::synthetic_class::{e_call, e_error_suppress, e_var, s_return};
+        let program = vec![
+            function("read_file")
+                .param("path", TypeExpr::Str)
+                .returns(TypeExpr::Str)
+                .body(vec![s_return(e_error_suppress(e_call(
+                    "file_get_contents",
+                    vec![e_var("path")],
+                )))])
+                .build(),
+        ];
+        let rendered = print_program(&program);
+        assert!(rendered.contains("return @file_get_contents($path);"), "{rendered}");
+        round_trip("error suppression", &program);
+    }
+
+    /// A string/expression callee prints as a grouped call so the parser rebuilds `ExprCall`.
+    #[test]
+    fn printing_round_trips_callable_expressions() {
+        use crate::synthetic_class::{e_expr_call, e_str, e_var, s_return};
+        let program = vec![
+            function("invoke")
+                .param("value", TypeExpr::Int)
+                .returns(TypeExpr::Int)
+                .body(vec![s_return(e_expr_call(e_str("count"), vec![e_var("value")]))])
+                .build(),
+        ];
+        let rendered = print_program(&program);
+        assert!(rendered.contains("return ('count')($value);"), "{rendered}");
+        round_trip("callable expression", &program);
     }
 
     /// Round-trips nested matches, grouped labels, missing defaults and the empty form.

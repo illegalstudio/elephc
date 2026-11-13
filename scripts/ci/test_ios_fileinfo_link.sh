@@ -49,13 +49,23 @@ export "ELEPHC_NATIVE_AR_${TARGET_ENV}=$AR_WRAPPER"
 export "ELEPHC_NATIVE_RANLIB_${TARGET_ENV}=$RANLIB_WRAPPER"
 
 echo "==> building compiler and materializing libmagic for $ELEPHC_TARGET"
-(cd "$PROJECT_DIR" && cargo build --bin elephc)
+if [[ ${ELEPHC_CI_PREBUILT_COMPILER:-0} == 1 ]]; then
+    test -x "$PROJECT_DIR/target/debug/elephc"
+else
+    (cd "$PROJECT_DIR" && cargo build --bin elephc)
+fi
 "$ELEPHC_BIN" native install --locked \
   --target "$ELEPHC_TARGET" \
   --manifest-path "$PROJECT_DIR/examples/fileinfo/elephc.toml"
 
 echo "==> cross-building the Rust fileinfo, phar and TLS bridges for $RUST_TARGET"
-(cd "$PROJECT_DIR" && cargo build -p elephc-fileinfo -p elephc-phar -p elephc-tls --target "$RUST_TARGET")
+if [[ ${ELEPHC_CI_PREBUILT_IOS_BRIDGES:-0} == 1 ]]; then
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_fileinfo.a"
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_tls.a"
+else
+    (cd "$PROJECT_DIR" && cargo build -p elephc-fileinfo -p elephc-phar -p elephc-tls --target "$RUST_TARGET")
+fi
 BRIDGE_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_fileinfo.a"
 PHAR_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
 TLS_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_tls.a"

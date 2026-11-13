@@ -10,10 +10,17 @@
 
 use std::path::{Path, PathBuf};
 
+/// Uses nextest's remapped checkout when archived tests move between runner layouts.
+fn fixture_root() -> PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+}
+
 /// Lowers the tokenizer example through the shared prelude pipeline for all supported targets.
 #[test]
 fn lowers_tokenizer_example_on_every_target() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/tokenizer/main.php");
+    let path = fixture_root().join("examples/tokenizer/main.php");
     let source = std::fs::read_to_string(&path).expect("tokenizer example");
     let parent = path.parent().expect("example directory");
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -31,7 +38,7 @@ fn lowers_tokenizer_example_on_every_target() {
 /// Lowers the PCNTL example for each desktop target without requiring cross-target linking.
 #[test]
 fn lowers_pcntl_example_on_every_desktop_target() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/pcntl/main.php");
+    let path = fixture_root().join("examples/pcntl/main.php");
     let source = std::fs::read_to_string(&path).expect("PCNTL example");
     let parent = path.parent().expect("example directory");
     for target in ["macos-aarch64", "linux-aarch64", "linux-x86_64"] {
@@ -98,8 +105,8 @@ fn lowers_examples_corpus_part_3() { verify_examples_corpus(3); }
 /// user function named after an extension builtin, which only PHP-compatible
 /// (strict) resolution accepts.
 fn verify_examples_corpus(part: usize) {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut fixtures = example_main_files(root);
+    let root = fixture_root();
+    let mut fixtures = example_main_files(&root);
     fixtures.sort();
     assert!(!fixtures.is_empty(), "expected example PHP fixtures");
 

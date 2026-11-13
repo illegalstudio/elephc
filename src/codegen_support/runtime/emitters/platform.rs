@@ -28,6 +28,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_cstr(emitter);
     io::emit_disk_space(emitter);
     io::emit_fopen(emitter);
+    io::emit_simplexml_wrapper_failure(emitter);
     io::emit_fileinfo_streams(emitter);
     io::emit_fgets(emitter);
     io::emit_feof(emitter);

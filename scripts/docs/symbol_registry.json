@@ -1460,6 +1460,24 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "dom",
+      "name": "Dom\\XMLDocument",
+      "php_manual": null,
+      "since": "8.4"
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },
@@ -21116,6 +21134,24 @@
       "route": "predefined",
       "since": null,
       "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "libxml",
+      "name": "LIBXML_NO_XXE",
+      "route": "predefined",
+      "since": "8.4",
+      "value": 8388608
     },
     {
       "aot": {

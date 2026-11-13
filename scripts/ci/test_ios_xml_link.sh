@@ -56,7 +56,11 @@ export "ELEPHC_NATIVE_AR_${TARGET_ENV}=$AR_WRAPPER"
 export "ELEPHC_NATIVE_RANLIB_${TARGET_ENV}=$RANLIB_WRAPPER"
 
 echo "==> building compiler and materializing libxml2 for $ELEPHC_TARGET"
-(cd "$PROJECT_DIR" && cargo build --bin elephc)
+if [[ ${ELEPHC_CI_PREBUILT_COMPILER:-0} == 1 ]]; then
+    test -x "$PROJECT_DIR/target/debug/elephc"
+else
+    (cd "$PROJECT_DIR" && cargo build --bin elephc)
+fi
 "$ELEPHC_BIN" native install --locked \
   --target "$ELEPHC_TARGET" \
   --manifest-path "$PROJECT_DIR/examples/xml/elephc.toml"
@@ -67,11 +71,24 @@ echo "==> building compiler and materializing libxml2 for $ELEPHC_TARGET"
 # zlib/bzip2) exactly as the Linux managed-native smoke documents. Neither bridge is
 # whole-archived, so both are plain archive inputs below.
 echo "==> cross-building the Rust xml and phar bridges for $RUST_TARGET"
-(cd "$PROJECT_DIR" && cargo build -p elephc-xml -p elephc-phar --target "$RUST_TARGET")
+if [[ ${ELEPHC_CI_PREBUILT_IOS_BRIDGES:-0} == 1 ]]; then
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_xml.a"
+    test -s "$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
+else
+    (cd "$PROJECT_DIR" && cargo build -p elephc-xml -p elephc-phar --target "$RUST_TARGET")
+fi
 BRIDGE_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_xml.a"
 PHAR_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
 test -s "$BRIDGE_ARCHIVE"
 test -s "$PHAR_ARCHIVE"
+
+# Read the pinned package version and recipe from the lock: hardcoding them here silently
+# diverged when the lock moved to recipe 11, leaving this job looking under r9.
+LIBXML2_LOCK="$PROJECT_DIR/examples/xml/elephc.lock"
+LIBXML2_VERSION="$(sed -n 's/^version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$LIBXML2_LOCK" | head -n 1)"
+LIBXML2_RECIPE="$(sed -n 's/^recipe[[:space:]]*=[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$LIBXML2_LOCK" | head -n 1)"
+test -n "$LIBXML2_VERSION"
+test -n "$LIBXML2_RECIPE"
 
 # Select an installed archive for this exact package recipe and target. More than one
 # toolchain fingerprint can remain after an Xcode update; every candidate has already
@@ -94,8 +111,8 @@ find_native_archive() {
 
 # Shim first: it reaches into libxml2's parser-context structs on the bridge's behalf,
 # so it must precede libxml2.a (src/linker/bridges.rs LIBXML2_ARCHIVES).
-SHIM_ARCHIVE="$(find_native_archive libxml2 2.15.3 9 libelephc_libxml2_shim.a)"
-LIBXML2_ARCHIVE="$(find_native_archive libxml2 2.15.3 9 libxml2.a)"
+SHIM_ARCHIVE="$(find_native_archive libxml2 "$LIBXML2_VERSION" "$LIBXML2_RECIPE" libelephc_libxml2_shim.a)"
+LIBXML2_ARCHIVE="$(find_native_archive libxml2 "$LIBXML2_VERSION" "$LIBXML2_RECIPE" libxml2.a)"
 
 WORK_DIR="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/elephc-ios-xml-link.XXXXXX")"
 cleanup() {

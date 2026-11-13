@@ -8,9 +8,9 @@ sidebar:
 <!-- GENERATED FILE - do not edit by hand. -->
 <!-- Regenerate with: python3 scripts/docs/gen_php_comparison.py -->
 
-Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3180 constants).
+Baseline: **PHP 8.5.10** (CLI snapshot of 2026-09-04, 68 extensions, 2169 functions, 329 classes, 3181 constants).
 
-Overall coverage: functions **1078 / 2169** (50%), classes **190 / 329** (58%), constants **1419 / 3180** (45%).
+Overall coverage: functions **1078 / 2169** (50%), classes **191 / 329** (58%), constants **1420 / 3181** (45%).
 
 ## Coverage by PHP module
 
@@ -26,7 +26,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | [`curl`](./curl.md#functions) | 34 / 35 · 97% | 6 / 6 · 100% | 689 / 689 · 100% |
 | [`date`](./datetime.md#functions) | 48 / 48 · 100% | 15 / 15 · 100% | 3 / 17 · 18% |
 | `dba` | 0 / 15 · 0% | 0 / 1 · 0% | - |
-| [`dom`](./dom-html.md#functions) | 0 / 2 · 0% | 9 / 50 · 18% | 0 / 61 · 0% |
+| [`dom`](./dom-html.md#functions) | 0 / 2 · 0% | 10 / 50 · 20% | 0 / 61 · 0% |
 | `enchant` | 0 / 25 · 0% | 0 / 2 · 0% | 0 / 3 · 0% |
 | [`exif`](./image.md#functions) | 4 / 4 · 100% | - | 1 / 1 · 100% |
 | `ffi` | - | 0 / 5 · 0% | - |
@@ -41,7 +41,7 @@ Each cell counts the PHP-visible symbols a compiled elephc program has, against 
 | `intl` | 0 / 187 · 0% | 0 / 22 · 0% | 0 / 170 · 0% |
 | `json` | 5 / 5 · 100% | 2 / 2 · 100% | 29 / 29 · 100% |
 | `ldap` | 0 / 55 · 0% | 0 / 3 · 0% | 0 / 92 · 0% |
-| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 17 / 28 · 61% |
+| `libxml` | 0 / 8 · 0% | 0 / 1 · 0% | 18 / 29 · 62% |
 | `mbstring` | 65 / 65 · 100% | - | 9 / 9 · 100% |
 | [`mysqli`](./mysqli.md#functions) | 106 / 106 · 100% | 6 / 6 · 100% | 110 / 110 · 100% |
 | `odbc` | 0 / 48 · 0% | 0 / 2 · 0% | 0 / 57 · 0% |
@@ -146,7 +146,7 @@ elephc also provides 91 symbols from PECL extensions php-src does not bundle, wh
 | Feature | Status | Notes |
 |---|---|---|
 | [PDO](./pdo.md) ([PHP](https://www.php.net/manual/en/book.pdo.php)) | ✅ Supported | Driver matrix documented on the PDO page |
-| [mysqli](./mysqli.md) ([PHP](https://www.php.net/manual/en/book.mysqli.php)) | 🟡 Partial | Locked v1 subset over the elephc-pdo bridge; divergences on the mysqli page |
+| [mysqli](./mysqli.md) ([PHP](https://www.php.net/manual/en/book.mysqli.php)) | 🟡 Partial | Complete selected-profile function, class, method and constant surface over the elephc-pdo bridge; behavioral divergences remain documented on the mysqli page |
 | [Sessions](./sessions.md) ([PHP](https://www.php.net/manual/en/book.session.php)) | ✅ Supported | In --web binaries |
 | [Streams](./streams.md) ([PHP](https://www.php.net/manual/en/book.stream.php)) | 🟡 Partial |  |
 | [SPL](./spl.md) ([PHP](https://www.php.net/manual/en/book.spl.php)) | 🟡 Partial |  |
@@ -218,7 +218,7 @@ Constants: `ARRAY_FILTER_USE_VALUE` (`standard`), `MYSQLI_TYPE_VARCHAR` (`mysqli
 
 ## Known limitations
 
-**eval() coverage of the prelude-implemented modules.** The generated eval() counts are zero for gd, exif, mysqli, PDO, and session because their functions use injected PHP preludes without interpreter bindings. OPcache has a separate supported route through native prelude declarations or dedicated interpreter handlers, including the live script cache and API restrictions. The remaining module gaps are tracked by mysqli #746, PDO #748, session #1211, gd and exif #1212, with #906 as the umbrella; call those functions from compiled code and pass the results into the fragment until their eval() surfaces are implemented.
+**eval() coverage of the prelude-implemented modules.** Generated eval() counts track explicit interpreter bindings and supported contract routes; a zero for a prelude module does not by itself mean its linked declarations are unavailable at runtime. In particular, eval() can call the PDO and mysqli surface linked into the compiled program. Use --with-pdo or --with-mysqli when only opaque eval source names that surface. OPcache also has native prelude and dedicated interpreter routes. Consult each module page for its runtime availability, required capabilities and remaining limitations.
 
 **Static subset, AOT only.** Ordinary source is compiled ahead of time with no opcode fallback; runtime code loading exists only through the experimental eval() interpreter bridge.
 

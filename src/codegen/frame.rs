@@ -74,8 +74,12 @@ pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    /// Frame cells a runtime-typed `min()`/`max()` selection fills when a number wins.
+    pub(super) guarded_cell_offsets: HashMap<ValueId, usize>,
     pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
+    /// Numeric locals whose every writer uses physically selected frame storage.
+    pub(super) numeric_frame_only_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     pub(super) ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     pub(super) try_handler_offsets: HashMap<i64, usize>,
@@ -153,6 +157,14 @@ pub(super) fn layout_for_function(
         offset += 24;
         numeric_seed_offsets.insert(slot, offset);
     }
+    let mut guarded_cell_offsets = HashMap::new();
+    for value in numeric.guarded {
+        offset += 24;
+        guarded_cell_offsets.insert(value, offset);
+    }
+    let numeric_frame_only_slots = super::stack_numeric::frame_only_locals(
+        function, &numeric.locals, &numeric_cell_offsets, &numeric_seed_offsets,
+    );
     let mut ref_cell_state_offsets = HashMap::new();
     let mut ref_cell_slots = local_analysis.ref_cell_slots().collect::<Vec<_>>();
     ref_cell_slots.sort_by_key(|slot| slot.as_raw());
@@ -219,8 +231,10 @@ pub(super) fn layout_for_function(
         value_placement,
         local_offsets,
         numeric_cell_offsets,
+        guarded_cell_offsets,
         numeric_seed_offsets,
         numeric_local_slots: numeric.locals,
+        numeric_frame_only_slots,
         numeric_values: numeric.proven_values,
         ref_cell_state_offsets,
         try_handler_offsets,
@@ -1223,6 +1237,14 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     if ctx.shared.counters {
         emit_counters_dump(ctx);
     }
+    // A worker never reaches the exit path that prints the heap-debug report, so it prints here,
+    // once per request, after the request's locals are released: the counters are the worker's
+    // running totals, so a leak shows as live blocks that grow from one request to the next.
+    if ctx.heap_debug {
+        ctx.emitter
+            .comment("heap-debug: print allocator summary and leak report to stderr");
+        abi::emit_call_label(ctx.emitter, "__rt_heap_debug_report");
+    }
     // The EXACT profile is not dumped here either. The bridge brackets every
     // request — `elephc_instr_request(1|2)` before the handler, `(0)` after — and
     // that close is what ends a slice and writes it, once, and only if one was
@@ -1290,6 +1312,13 @@ pub(super) fn emit_web_entry_stub(
     // request. (A `--no-web-heap-guard` opt-out for benchmarking is a follow-up.)
     ctx.emitter.comment("enable web heap-guard flag");
     abi::emit_enable_web_heap_guard_flag(ctx.emitter);
+    // `--heap-debug` turns on its validation the same way: once, here in the master, so every
+    // forked worker inherits it. `emit_main_prologue` does this for a CLI program, but a `--web`
+    // build never runs that prologue, so the flag stayed 0 and `--heap-debug` did nothing.
+    if ctx.heap_debug {
+        ctx.emitter.comment("enable heap debug flag");
+        abi::emit_enable_heap_debug_flag(ctx.emitter);
+    }
     // BEFORE the preload, not after. The preload's own code can call `opcache_*`, and every
     // one of those answers comes from the bridge. Running it first left the bridge at its
     // DEFAULT configuration — a disabled cache — so `opcache_compile_file()` in a preload
@@ -1308,18 +1337,29 @@ pub(super) fn emit_web_entry_stub(
     let handler_reg = abi::int_arg_reg_name(target, 2);
     abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
     abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
+    // The bridge calls these bodies from Rust. On x86_64 it goes through an entry that keeps
+    // the registers Rust expects preserved (`Emitter::sysv_callee_saved_entry`).
+    let mut rust_entries = Vec::new();
+    let mut rust_called = |symbol: String| {
+        if target.arch != Arch::X86_64 {
+            return symbol;
+        }
+        let entry = format!("{}_rust_entry", symbol);
+        rust_entries.push((entry.clone(), symbol));
+        entry
+    };
     let bridge_symbol = if ctx.module.web_application {
         use crate::codegen::data_section::DataWord;
         let callbacks = ctx.data.add_words(vec![
-            DataWord::Symbol(WEB_HANDLER_SYMBOL.to_string()),
-            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::READY)),
-            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::REQUEST)),
-            DataWord::Symbol(crate::names::function_symbol(crate::web_prelude::application::SHUTDOWN)),
+            DataWord::Symbol(rust_called(WEB_HANDLER_SYMBOL.to_string())),
+            DataWord::Symbol(rust_called(crate::names::function_symbol(crate::web_prelude::application::READY))),
+            DataWord::Symbol(rust_called(crate::names::function_symbol(crate::web_prelude::application::REQUEST))),
+            DataWord::Symbol(rust_called(crate::names::function_symbol(crate::web_prelude::application::SHUTDOWN))),
         ]);
         abi::emit_symbol_address(ctx.emitter, handler_reg, &callbacks);
         "elephc_web_run_application"
     } else {
-        abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
+        abi::emit_symbol_address(ctx.emitter, handler_reg, &rust_called(WEB_HANDLER_SYMBOL.to_string()));
         isolation.bridge_symbol()
     };
     // The selected entry is a `#[no_mangle] extern "C"` Rust symbol in the bridge
@@ -1328,6 +1368,9 @@ pub(super) fn emit_web_entry_stub(
     let bridge_entry = target.extern_symbol(bridge_symbol);
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
+    for (entry, body) in rust_entries {
+        ctx.emitter.sysv_callee_saved_entry(&entry, &body);
+    }
     if ctx.module.web_application {
         crate::codegen::lower_inst::builtins::io::emit_application_stream_closer(ctx);
     }
@@ -1880,6 +1923,11 @@ pub(super) fn emit_owned_local_cleanup(
 ) {
     if ctx.numeric_local_slots.contains(&slot) {
         // -- numeric cells have no child that can run a PHP destructor --
+        if ctx.numeric_frame_only_slots.contains(&slot) {
+            // -- every store to this slot publishes storage owned by this frame --
+            abi::emit_store_zero_to_local_slot(ctx.emitter, offset);
+            return;
+        }
         let result = abi::int_result_reg(ctx.emitter);
         abi::load_at_offset(ctx.emitter, result, offset);
         let done = ctx.next_label("numeric_local_cleanup_done");
@@ -2760,6 +2808,8 @@ fn store_argc_local_if_present(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, "_global_argc", 0);
     if matches!(argc_ty, PhpType::Mixed | PhpType::Union(_)) {
+        // This implicit heap writer is absent from the EIR StoreLocal proof.
+        ctx.numeric_frame_only_slots.remove(&argc_slot);
         emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
     }
     abi::store_at_offset(ctx.emitter, result_reg, offset);
@@ -2783,6 +2833,8 @@ fn store_argv_local_if_present(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.comment("build $argv array from OS argv");
     abi::emit_call_label(ctx.emitter, "__rt_build_argv");
     if matches!(argv_ty, PhpType::Mixed | PhpType::Union(_)) {
+        // Preserve retirement of the process-owned array box before an EIR overwrite.
+        ctx.numeric_frame_only_slots.remove(&argv_slot);
         crate::codegen_support::emit_box_current_owned_value_as_mixed(ctx.emitter, &array_ty);
     }
     abi::emit_store(ctx.emitter, &argv_ty, offset);

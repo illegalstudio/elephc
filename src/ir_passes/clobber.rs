@@ -48,7 +48,9 @@ pub(super) fn op_is_volatile_safe(op: Op) -> bool {
         // throwable and calls into the runtime unwinder. `FToI`, `IChecked*ToInt`, and
         // `ICheckedNumericChainToInt` are absent because their overflow/conversion paths
         // call `__rt_php_float_to_int` even though their EIR effects are semantically pure.
-        | IAdd | ISub | IMul | INeg
+        // `IOverflows` recomputes the operation in the same scratch set, or is fused into
+        // its `cond_br` together with the arithmetic it tests.
+        | IAdd | ISub | IMul | IOverflows | INeg
         | IBitAnd | IBitOr | IBitXor | IBitNot
         // Floating-point arithmetic: d0/d1 or xmm0/xmm1 only (`lower_inst::floats`).
         // `FDiv` is excluded: its zero-divisor guard branches into an exception throw.

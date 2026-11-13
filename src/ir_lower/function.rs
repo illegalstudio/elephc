@@ -31,6 +31,7 @@ use crate::types::{
 };
 
 mod builtin_wrappers;
+pub(in crate::ir_lower) use builtin_wrappers::lower_builtin_callable_body;
 mod closure_defaults;
 pub(crate) use crate::types::deferred_defaults::contains_deferred_error;
 mod object_comparisons;
@@ -109,6 +110,7 @@ pub(crate) fn lower_main(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -264,6 +266,7 @@ pub(crate) fn lower_user_function(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -395,6 +398,7 @@ pub(crate) fn lower_class_method(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -524,6 +528,7 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &boxed_reference_promotion_sites,
@@ -662,6 +667,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &boxed_reference_promotion_sites,
@@ -787,6 +793,7 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -1160,6 +1167,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
 
         &check_result.boxed_reference_promotion_sites,
@@ -1289,6 +1297,7 @@ pub(crate) fn lower_clone_override_function(
         &check_result.closure_generator_spans,
         &check_result.array_push_property_plans,
         &check_result.member_receiver_types,
+        &check_result.array_append_element_types,
         &check_result.local_value_read_types,
         &check_result.boxed_reference_promotion_sites,
         &check_result.first_class_builtin_call_types,
@@ -1462,6 +1471,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             &check_result.closure_generator_spans,
             &check_result.array_push_property_plans,
             &check_result.member_receiver_types,
+            &check_result.array_append_element_types,
             &check_result.local_value_read_types,
             &check_result.boxed_reference_promotion_sites,
             &check_result.first_class_builtin_call_types,
@@ -1715,6 +1725,7 @@ fn lower_closure_function_with_signature(
         parent.closure_generator_spans,
         parent.array_push_property_plans,
         parent.member_receiver_types,
+        parent.array_append_element_types,
         parent.local_value_read_types,
 
         parent.boxed_reference_promotion_sites,
@@ -1776,6 +1787,7 @@ fn lower_body_into_function(
     closure_generator_spans: &std::collections::HashSet<Span>,
     array_push_property_plans: &std::collections::HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     member_receiver_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
+    array_append_element_types: &std::collections::HashMap<(String, Span), Option<PhpType>>,
     local_value_read_types: &crate::types::LocalValueReadTypes,
 
     boxed_reference_promotion_sites: &std::collections::HashMap<
@@ -1842,7 +1854,7 @@ fn lower_body_into_function(
             fiber_return_sigs, classes, enums, interfaces, declared_trait_names,
             declared_trait_methods, declared_trait_properties, packed_classes, extern_classes,
             throw_access_sites, builtin_call_types, closure_generator_spans,
-            array_push_property_plans, member_receiver_types, local_value_read_types,
+            array_push_property_plans, member_receiver_types, array_append_element_types, local_value_read_types,
             boxed_reference_promotion_sites, first_class_builtin_call_types, generic_call_sites,
             loop_storage_types, string_incdec_locals, bind_kill_sites, ref_detach_sites,
             retype_sites, mixed_storage_store_sites, sparse_key_write_sites, promotable_arrays,
@@ -1918,6 +1930,7 @@ fn lower_body_into_function(
         closure_generator_spans,
         array_push_property_plans,
         member_receiver_types,
+        array_append_element_types,
         local_value_read_types,
 
         boxed_reference_promotion_sites,
@@ -2297,14 +2310,23 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         if by_ref {
             continue;
         }
+        if index == 1
+            && owner_name.rsplit_once("::").is_some_and(|(_, method)|
+                php_symbol_key(method) == "__call")
+        {
+            // Runtime-selected magic calls can carry any PHP argument tags and string keys.
+            // Call-site specialization must not become the hook body's physical array ABI.
+            *php_type = PhpType::Mixed;
+            has_dynamic_untyped_param = true;
+            continue;
+        }
         if declared && index == 1
             && owner_name.rsplit_once("::").is_some_and(|(_, method)|
-                matches!(php_symbol_key(method).as_str(), "__call" | "__callstatic"))
+                php_symbol_key(method) == "__callstatic")
             && matches!(php_type, PhpType::Array(element)
                 if matches!(element.as_ref(), PhpType::Never | PhpType::Void))
         {
-            // Eval-only magic calls have no static argument evidence. Their array is populated
-            // at runtime, so its seed element type must never become a constant null read.
+            // Eval-only static hooks still require materialized mixed array elements.
             *php_type = PhpType::Array(Box::new(PhpType::Mixed));
         }
         if !declared && !by_ref && !variadic {
@@ -2322,9 +2344,14 @@ pub(crate) fn eir_signature_with_php_param_contracts(
         }
     }
     if has_dynamic_untyped_param && !signature.declared_return {
-        eir_signature.return_type = crate::types::dynamic_params::dynamic_param_container_return_type(
-            &eir_signature.return_type,
-        );
+        eir_signature.return_type = if owner_name.rsplit_once("::")
+            .is_some_and(|(_, method)| php_symbol_key(method) == "__call")
+        {
+            // An untyped hook can forward a boxed argument selected only at runtime.
+            PhpType::Mixed
+        } else {
+            crate::types::dynamic_params::dynamic_param_container_return_type(&eir_signature.return_type)
+        };
     }
     eir_signature
 }

@@ -65,9 +65,14 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) callee_saved_offsets: Vec<(&'static str, usize)>,
     local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    /// Frame cells a runtime-typed `min()`/`max()` selection fills when a number wins; any
+    /// other winner is an owned heap cell, so these values keep their generic consumers.
+    pub(super) guarded_cell_offsets: HashMap<ValueId, usize>,
     /// Frame cells owned by proven numeric locals for their raw scalar seed stores.
     pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
+    /// Numeric locals whose every writer uses physically selected frame storage.
+    pub(super) numeric_frame_only_slots: HashSet<LocalSlotId>,
     pub(super) numeric_values: HashSet<ValueId>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
@@ -215,8 +220,10 @@ impl<'a> FunctionContext<'a> {
             callee_saved_offsets: layout.callee_saved_offsets,
             local_offsets: layout.local_offsets,
             numeric_cell_offsets: layout.numeric_cell_offsets,
+            guarded_cell_offsets: layout.guarded_cell_offsets,
             numeric_seed_offsets: layout.numeric_seed_offsets,
             numeric_local_slots: layout.numeric_local_slots,
+            numeric_frame_only_slots: layout.numeric_frame_only_slots,
             numeric_values: layout.numeric_values,
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,

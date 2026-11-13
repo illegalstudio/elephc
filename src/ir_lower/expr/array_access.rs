@@ -9,14 +9,16 @@
 
 use super::*;
 
-/// Lowers array, hash, string, or ArrayAccess indexing.
+/// Lowers array, hash, string, or ArrayAccess indexing; silently when the context asks for one
+/// quiet array read, which this read takes so that its receiver and key still warn.
 pub(super) fn lower_array_access(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
-    lower_array_access_with_missing_warning(ctx, array, index, expr, true)
+    let warn_on_missing = !ctx.take_quiet_array_read();
+    lower_array_access_with_missing_warning(ctx, array, index, expr, warn_on_missing)
 }
 
 /// Lowers `$base[...][$index]` as the source of a by-reference `foreach`, separating the element
@@ -190,7 +192,11 @@ pub(super) fn lower_array_access_with_missing_warning(
     let array_value = if warn_on_missing {
         lower_element_receiver(ctx, array)
     } else {
-        lower_subscript_receiver_silently(ctx, array)
+        // A silent subscript probe never warns about a never-declared chain root.
+        ctx.begin_quiet_undefined_reads(array);
+        let value = lower_subscript_receiver_silently(ctx, array);
+        ctx.end_quiet_undefined_reads();
+        value
     };
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
 }
@@ -587,9 +593,13 @@ fn lower_array_access_from_values_with_receiver_pins(
     if native_method.is_some() {
         index_value.value = claim_owned_string_operand(ctx, index_value.value, index.span);
     }
-    let owns_string_key = (matches!(op, Op::HashGet | Op::HashGetSilent) || native_method.is_some())
-        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Str
-        && ctx.value_is_owning_temporary(index_value);
+    let is_string_key = (matches!(op, Op::HashGet | Op::HashGetSilent
+        | Op::ArrayGetMixedKey | Op::ArrayGetMixedKeySilent) || native_method.is_some())
+        && ctx.builder.value_php_type(index_value.value).codegen_repr() == PhpType::Str;
+    let owns_string_key = is_string_key && ctx.value_is_owning_temporary(index_value);
+    // A later foreach can make this local read own a detached string copy. Cleanup is
+    // provisional until final storage is known; unwind pins still require an independent owner.
+    let release_string_key = is_string_key && ctx.value_needs_release_after_use(index_value);
     let key_pins = if owns_string_key || native_method.is_some() {
         // A native getter can throw before the existing key cleanup, including on a null path.
         super::pin_in_flight_owners(ctx, &[index_value.value], index.span)
@@ -629,8 +639,8 @@ fn lower_array_access_from_values_with_receiver_pins(
         let normalized_copy = ctx.builder.value_defining_instruction(index_value.value)
             .is_some_and(|producer| producer.op == Op::StrPersist
                 && producer.immediate == Some(Immediate::Bool(true)));
-        if owns_string_key && !normalized_copy {
-            // Hash and native reads never retain the key. Ternaries and calls can own
+        if release_string_key && !normalized_copy {
+            // Indexed, hash and native reads never retain the key. Ternaries and calls can own
             // ordinary string keys independently of the normalized-cast copies below.
             crate::ir_lower::ownership::release_if_owned(ctx, index_value, Some(index.span));
         }

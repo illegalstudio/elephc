@@ -3133,3 +3133,42 @@ mod memory_metrics;
 
 #[path = "web/environment.rs"]
 mod environment;
+
+/// Verifies `--heap-debug` works under `--web`: the flag is set in the master before the workers
+/// fork, and each request ends with the allocator summary on the server's stderr (AIC #68).
+#[test]
+fn web_heap_debug_reports_after_each_request() {
+    let dir = make_test_dir("web_heap_debug");
+    let bin = compile_web_with_flags(
+        &dir,
+        "<?php $a = [str_repeat('x', 40), 'y']; echo count($a), ':', strlen($a[0]);",
+        "app",
+        &["--web-isolation=pool", "--heap-debug"],
+    );
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let stderr_path = dir.join("server.stderr");
+    let stderr = fs::File::create(&stderr_path).expect("create heap-debug stderr capture");
+    let mut child = Command::new(&bin)
+        .args(["--listen", &addr, "--workers", "1"])
+        .stderr(Stdio::from(stderr))
+        .spawn_group()
+        .expect("spawn heap-debug server");
+    wait_until_ready(&addr);
+
+    let first = http_request(&addr, "GET", "/", &[], "");
+    let second = http_request(&addr, "GET", "/", &[], "");
+    let pid = child.id();
+    let _ = Command::new("kill").args(["-TERM", &pid.to_string()]).status();
+    let _ = child.wait();
+    let diagnostics = fs::read_to_string(&stderr_path).expect("read heap-debug diagnostics");
+
+    assert!(raw_response_body(&first).contains("2:40"), "first response: {first:?}");
+    assert!(raw_response_body(&second).contains("2:40"), "second response: {second:?}");
+    assert_eq!(
+        diagnostics.matches("HEAP DEBUG: allocs=").count(),
+        2,
+        "expected one heap-debug report per request: {diagnostics:?}"
+    );
+    assert!(diagnostics.contains("HEAP DEBUG: leak summary"), "no leak summary: {diagnostics:?}");
+}

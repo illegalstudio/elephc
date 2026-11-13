@@ -66,7 +66,8 @@ pub(in crate::codegen::lower_inst) fn literal_function_exists(
     bare_name: &str,
     strict_php: bool,
 ) -> bool {
-    ctx.function_by_name(bare_name).is_some_and(|function| function.source_name.is_none())
+    ctx.function_by_name(bare_name).is_some_and(|function|
+        function.has_source_identity() && function.source_name.is_none())
         || ctx.has_extern_function(bare_name)
         || is_php_visible_builtin_function_for_target(
             bare_name,
@@ -213,7 +214,7 @@ fn dynamic_function_exists_candidates(
     }
     for function in ctx.module.functions.iter().chain(ctx.module.closures.iter()) {
         // Private implementation variants have physical entries, not PHP declarations.
-        if function.source_name.is_some() { continue; }
+        if !function.has_source_identity() || function.source_name.is_some() { continue; }
         push(&function.name, None);
     }
     for extern_decl in &ctx.module.extern_decls {

@@ -38,6 +38,7 @@ macro_rules! supported_target_cases {
 }
 
 mod aggregate_operand_owners;
+mod boxed_operators;
 mod loose_comparison_batch;
 mod argument_evaluation_owners;
 mod computed_property_update_owners;
@@ -56,6 +57,7 @@ mod native_reference_validators;
 mod native_reference_store_modes;
 mod native_reference_parameter_leases;
 mod source_variadic_calls;
+mod method_call_review;
 mod erased_xml_presence;
 mod ordinary_prefix_storage;
 mod scalar_parameter_owners;
@@ -65,10 +67,14 @@ mod borrowed_string_reads;
 mod mbstring_fast_semantics;
 mod buffer_element_updates;
 mod ref_local_append;
+mod foreach_hash_scalars;
+mod settype_foreach;
 mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;
 mod unset_collection;
+mod typed_element_refs;
+mod list_hash_param_binding;
 mod array_edge_guards;
 mod sparse_key_writes;
 mod assoc_push;
@@ -159,6 +165,8 @@ mod reference_return_siblings;
 mod reference_override_results;
 mod callable_operand_owners;
 mod late_string_argument_owners;
+mod native_isset_key_owners;
+mod converted_merge_owners;
 mod capture_view_owners;
 mod static_properties;
 mod nested_append_review;
@@ -263,7 +271,7 @@ fn try_lower_source_at_for_target_with_reachability(
         &mut prelude_inventory,
     );
     let ast = crate::tz_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::list_id_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::list_id_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::var_export_prelude::inject_if_used(ast, &mut prelude_inventory);
     let (ast, _) = crate::opcache_prelude::inject_if_used(
         ast,

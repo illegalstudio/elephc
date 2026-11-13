@@ -151,8 +151,9 @@ unset($foreignReference, $foreignValue, $code);
 }
 
 /// Reference arguments keep selected views without replaying a parent property store.
-#[test]
-fn test_simplexml_reference_argument_selections_bundle() {
+///
+/// The native and opaque-eval programs each compile on their own, so the caller picks one.
+fn assert_reference_argument_selections(opaque_eval: bool) {
     if skip_without_xml_native("test_simplexml_reference_argument_selections_bundle") { return; }
     let body = r#"
 class ReferenceSelectionXml extends SimpleXMLElement {}
@@ -216,12 +217,52 @@ echo 'after|'; unset($keptReferenceRoot); echo 'end|';
     let eval = format!("<?php $capability = new SimpleXMLElement('<r/>'); unset($capability); $source = $argc > 0 ? '{encoded}' : ''; eval($source); unset($source);");
     let row = "old|changed|changed|changed|8|changed|1:4|1:8|kept|stop:changed|0:0|";
     let expected = row.repeat(2) + "drop:r|call|drop:p|tail|call|drop:p|tail|after|drop:r|end|call|drop:b|tail|after|drop:r|drop:a|end|call|drop:p|tail|after|drop:r|end|";
-    for (mode, source) in [native, eval].iter().enumerate() {
-        let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
-        preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[&expected]);
-        assert!(out.success, "mode={mode}: stdout={} stderr={}", out.stdout, out.stderr);
-        assert_eq!(out.stdout, expected, "mode={mode}");
-        assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={mode}: {}", out.stderr);
-        assert!(!out.stderr.contains("Warning:"), "mode={mode}: {}", out.stderr);
-    }
+    let (mode, source) = if opaque_eval { ("eval", &eval) } else { ("native", &native) };
+    let (out, assembly) = compile_and_run_with_heap_debug_and_asm(source);
+    preserve_stdout_mismatches(source, &assembly, std::slice::from_ref(&out), &[&expected]);
+    assert!(out.success, "mode={mode}: stdout={} stderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, expected, "mode={mode}");
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "mode={mode}: {}", out.stderr);
+    assert!(!out.stderr.contains("Warning:"), "mode={mode}: {}", out.stderr);
+}
+
+/// The native program keeps selected reference-argument views.
+#[test]
+fn test_simplexml_reference_argument_selections_bundle() {
+    assert_reference_argument_selections(false);
+}
+
+/// The opaque-eval program keeps selected reference-argument views.
+#[test]
+fn test_simplexml_reference_argument_selections_eval_bundle() {
+    assert_reference_argument_selections(true);
+}
+
+/// Binding a reference to a SimpleXML property seeds an independent cell with the child view.
+///
+/// PHP auto-vivifies the selected child, then writes through the reference cell only: the XML
+/// tree keeps the original value. An ordinary object keeps its shared property cell, so the
+/// XML selection path must not take it over.
+#[test]
+fn test_simplexml_property_reference_binding_bundle() {
+    if skip_without_xml_native("test_simplexml_property_reference_binding_bundle") { return; }
+    let source = r#"<?php
+class PropertyReferencePlain { public int $value = 1; }
+$xml = new SimpleXMLElement('<r><a>old</a></r>');
+$reference =& $xml->a;
+echo get_class($reference), ':', (string)$reference, '|';
+echo $xml->asXML(), '|';
+$missing = new SimpleXMLElement('<a/>');
+$absent =& $missing->a;
+echo $missing->asXML(), '|';
+$plain = new PropertyReferencePlain();
+$shared =& $plain->value;
+$shared = 5;
+echo $plain->value, '|';
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={} stderr={}", out.stdout, out.stderr);
+    let expected = "SimpleXMLElement:old|<?xml version=\"1.0\"?>\n<r><a>old</a></r>\n|<?xml version=\"1.0\"?>\n<a><a/></a>\n|5|";
+    assert_eq!(out.stdout, expected);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

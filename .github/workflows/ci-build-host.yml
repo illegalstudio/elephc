@@ -1,0 +1,955 @@
+name: Build host artifacts
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: Compiler host platform
+        type: string
+        required: true
+      ci-image:
+        description: Immutable CI image resolved by the coordinator
+        type: string
+        default: ''
+      source-sha:
+        description: Exact commit to build (defaults to the triggering commit)
+        type: string
+        default: ''
+      scope:
+        type: string
+        default: tests
+    outputs:
+      artifact-attempt:
+        description: Attempt which produced the immutable host artifacts
+        value: ${{ jobs.build-archive-macos-aarch64.outputs.artifact-attempt || jobs.build-archive-linux-x86_64.outputs.artifact-attempt || jobs.build-archive-linux-aarch64.outputs.artifact-attempt }}
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Same release as RUST_VERSION in .github/docker/ci.Dockerfile. Not `stable`:
+  # a newer rustc must not fail the no-warnings gate unannounced.
+  RUST_TOOLCHAIN: "1.98"
+  # Deep parser/lowering fixtures overflow Rust's small default worker stack on
+  # ARM64 runners. Keep one value for every archived nextest process so shard
+  # placement cannot change whether a test has enough stack.
+  RUST_MIN_STACK: "33554432"
+  BRIDGE_CRATES: >-
+    -p elephc-tls
+    -p elephc-pdo
+    -p elephc-crypto
+    -p elephc-openssl
+    -p elephc-bcmath
+    -p elephc-gmp
+    -p elephc-random
+    -p elephc-mbstring
+    -p elephc-iconv
+    -p elephc-phar
+    -p elephc-tz
+    -p elephc-image
+    -p elephc-pcntl
+    -p elephc-xml
+    -p elephc-fileinfo
+    -p elephc-tokenizer
+    -p elephc-magician
+    -p elephc-reference
+    -p elephc-web
+    -p elephc-instr
+    -p elephc-probe
+    -p elephc-curl
+    -p elephc-zend
+
+
+jobs:
+  resolve-image:
+    if: startsWith(inputs.target, 'linux-') && inputs.ci-image == ''
+    runs-on: ubuntu-24.04
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Resolve immutable container image
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/resolve_ci_image.sh
+
+  build-archive-macos-aarch64:
+    name: Build & Archive Tests (macos-aarch64)
+    if: inputs.target == 'macos-aarch64'
+    outputs:
+      artifact-attempt: ${{ steps.publish-compiler.outputs.attempt }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source-sha || github.sha }}
+
+      - name: Test nextest artifact validation
+        if: inputs.scope == 'tests'
+        run: |
+          sh scripts/ci/test_validate_archived_nextest.sh
+          python3 -B -m unittest discover -s scripts/ci -p 'test_*.py'
+          python3 -B -m unittest scripts.docs.elephc_builtins.test_prebuilt_exporter
+
+      - name: Test the CI tier planner, the eval shard runner and the merge queue cleanup
+        if: inputs.scope == 'tests'
+        run: |
+          bash scripts/ci/test_plan_tiers.sh
+          bash scripts/ci/test_run_eval_codegen_shard.sh
+          bash scripts/ci/test_cancel_superseded_queue_runs.sh
+          bash scripts/ci/test_cancel_rebuilt_queue_runs.sh
+
+      - name: Test macOS notarization gate
+        if: inputs.scope == 'tests'
+        run: python3 -B -m unittest discover -s .github/scripts -p 'test_notarize_macos.py' -v
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Cache Rust build state
+        # Dependencies only (registry, git checkouts, and the dependency
+        # artifacts under target/); the action prunes the workspace crates'
+        # own artifacts before saving. Caching the whole target/ dir put three
+        # 4 GB entries per platform plus every other job's into the repository's
+        # 10 GB allowance, so main's entries were evicted before the next run
+        # and every archive job compiled from scratch.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        with:
+          prefix-key: rust-deps-macos-aarch64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+          cache-on-failure: true
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@e88e69ecdb9658bd172693dcdc2c84e7f0ab6a11 # nextest, 2026-09-20
+
+      - name: Install native test dependencies
+        run: brew install freetds pcre2 unixodbc
+
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --locked --bin elephc 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build combined optional PDO driver profile
+        if: inputs.scope == 'tests'
+        run: |
+          cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
+          cargo clean -p elephc-pdo
+
+      - name: Build bridge/native support crates
+        shell: bash
+        if: inputs.scope != 'compiler'
+        # The codegen test runner links compiled programs against bridge
+        # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
+        # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), libelephc_web.a,
+        # libelephc_curl.a (curl; its symbols stay
+        # unresolved until a PHP-program link pulls in a real managed
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # managed-native-smoke), and libelephc_xml.a (xml; likewise unresolved
+        # until the link pulls in the managed libelephc_libxml2_shim.a +
+        # libxml2.a, materialized below and in every codegen shard). Build
+        # them before archiving so the archive can capture the .a files (see the
+        # archive include list in .config/nextest.toml).
+        run: |
+          set -o pipefail
+          cargo build --locked $BRIDGE_CRATES 2>&1 | tee "$RUNNER_TEMP/bridge-build.log"
+          if grep -qi warning "$RUNNER_TEMP/bridge-build.log"; then exit 1; fi
+          printf '\n' > target/debug/elephc-pdo-features.txt
+
+      - name: Build curl-aware magician staticlib
+        if: inputs.scope != 'compiler'
+        # elephc-magician's DEFAULT build (just above, part of $BRIDGE_CRATES) never
+        # compiles curl's eval homes in at all, so a fixture that needs curl reachable
+        # from eval() needs a SEPARATE archive built `--features curl` -- and that
+        # build must land at a DISTINCT filename (libelephc_magician_curl.a), built
+        # into an ISOLATED --target-dir, never written in-place over the plain
+        # libelephc_magician.a every curl-free eval fixture also needs from this same
+        # archive (Cargo does not vary a staticlib's output filename by feature set).
+        # Mirrors tests/codegen/support/runner.rs's ensure_magician_curl_staticlib and
+        # the production src/linker/bridges.rs build exactly, for the identical
+        # reason documented on both. Must run before "Archive test binaries" below so
+        # the resulting file exists at archive time (see the new
+        # [[profile.ci.archive.include]] entry for it in .config/nextest.toml) --
+        # without it, curl-codegen-tests shards (offline, no cargo registry cache)
+        # cannot build this themselves on demand.
+        run: |
+          cargo build -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-test-build
+          cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
+            target/debug/libelephc_magician_curl.a
+
+      - name: Publish the shared compiler
+        id: publish-compiler
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          sha: ${{ inputs.source-sha || github.sha }}
+          target: macos-aarch64
+          kind: compiler
+
+      - name: Publish the shared bridges
+        if: inputs.scope != 'compiler'
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          sha: ${{ inputs.source-sha || github.sha }}
+          target: macos-aarch64
+          kind: bridges
+
+      - name: Prepare offline Oniguruma test bundle
+        if: inputs.scope == 'tests'
+        run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target macos-aarch64
+
+      - name: Archive test binaries
+        if: inputs.scope == 'tests'
+        # Two archives from one build: the workspace archive for the non-codegen,
+        # CLI and web shards, and a codegen-only one (codegen_tests, the elephc
+        # binary, and the bridge staticlibs from the include list) for the 40-odd
+        # codegen/eval/pdo/curl shards, which never run the other 130 test
+        # binaries and otherwise download and extract them anyway. The macOS
+        # shards take cargo-nextest from the artifact too (no install step there),
+        # so both artifacts carry it.
+        run: |
+          cargo nextest archive --locked --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
+          (cd "$RUNNER_TEMP" && shasum -a 256 cargo-nextest > cargo-nextest.sha256)
+          mkdir -p "$RUNNER_TEMP/codegen-archive"
+          cargo nextest archive --locked --profile ci -p elephc --test codegen_tests \
+            --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
+          cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
+
+      - name: Record archive provenance
+        if: inputs.scope == 'tests'
+        env:
+          GITHUB_SHA: ${{ inputs.source-sha || github.sha }}
+        run: |
+          python3 -B scripts/ci/test_archive_manifest.py write "$RUNNER_TEMP" --target macos-aarch64 --variant workspace
+          python3 -B scripts/ci/test_archive_manifest.py write "$RUNNER_TEMP/codegen-archive" --target macos-aarch64 --variant codegen
+          mkdir -p "$RUNNER_TEMP/workspace-archive"
+          mv "$RUNNER_TEMP/nextest-archive.tar.zst" "$RUNNER_TEMP/cargo-nextest" \
+            "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/nextest-manifest.json" \
+            "$RUNNER_TEMP/workspace-archive/"
+
+      - name: Run doctests
+        if: inputs.scope == 'tests'
+        # Doctests cannot run from a nextest archive, so run them here where the
+        # workspace is already built.
+        run: cargo test --workspace --doc
+
+      # Restore exact package artifacts before installs. A shared native-root cache
+      # can replace current XML shims with another package's older snapshot.
+      - name: Cache managed native libxml2
+        if: inputs.scope == 'tests'
+        # The xml bridge's parser is libxml2 itself (the managed `libxml2` catalog
+        # package: pinned 2.15.3 plus the Elephc-owned shim, see
+        # src/native_deps/recipes/libxml2.rs). Separate package artifacts, keyed on
+        # the committed locks plus all embedded shim and recipe sources that decide
+        # what gets built; the codegen shards below restore the same key, so the
+        # from-source build happens here once and never in a shard.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libxml2
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/sources
+          key: libxml2-native-macos-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
+
+      - name: Cache managed native gmp
+        if: inputs.scope == 'tests'
+        # The gmp bridge links the managed `gmp` catalog package; keyed on the
+        # committed lock plus the recipe sources that decide what gets built.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
+          key: gmp-native-macos-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+
+      - name: Cache managed native openssl-crypto/zlib
+        if: inputs.scope == 'tests'
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/openssl-crypto
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/sources
+          key: openssl-crypto-native-macos-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+
+      - name: Materialize managed native libxml2
+        if: inputs.scope == 'tests'
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/xml/elephc.lock; a fast no-op once the cache above is warm, a
+        # ~1 minute from-source build otherwise.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/xml/elephc.toml
+
+      - name: Ensure GMP configure dependency
+        if: inputs.scope == 'tests'
+        # GMP requires m4, preinstalled in the Linux image and macOS toolchain.
+        run: |
+          command -v m4
+
+      - name: Materialize managed native gmp
+        if: inputs.scope == 'tests'
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/gmp/elephc.lock.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Test the GMP bridge against managed libgmp
+        if: inputs.scope == 'tests'
+        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # the crate's test binary and compiles the libgmp-calling unit tests in
+        # behind cfg(elephc_gmp_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the
+        # archive was taken so the plain libelephc_gmp.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          set -e
+          gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh macos-aarch64)
+          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+      - name: Materialize managed native openssl-crypto/zlib
+        if: inputs.scope == 'tests'
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/openssl-cipher/elephc.toml
+
+      - name: Materialize managed native libmagic
+        if: inputs.scope == 'tests'
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target macos-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Test the fileinfo bridge against managed libmagic
+        if: inputs.scope == 'tests'
+        run: |
+          ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh macos-aarch64)" \
+            cargo test -p elephc-fileinfo
+
+      - name: Test the xml bridge against managed libxml2
+        if: inputs.scope == 'tests'
+        # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
+        # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
+        # into the crate's test binary and compiles the libxml2-calling unit tests in
+        # behind cfg(elephc_xml_native). Without the variable the crate's tests take a
+        # skip path, which is what the archived non-codegen run exercises. Runs AFTER
+        # the archive was taken so the plain libelephc_xml.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh macos-aarch64)" \
+            cargo test -p elephc-xml
+
+      - name: Upload test archive
+        if: inputs.scope == 'tests'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-macos-aarch64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/workspace-archive
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload codegen test archive
+        if: inputs.scope == 'tests'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-codegen-macos-aarch64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/codegen-archive
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+  build-archive-linux-x86_64:
+    name: Build & Archive Tests (linux-x86_64)
+    needs: resolve-image
+    if: always() && !cancelled() && inputs.target == 'linux-x86_64' && (inputs.ci-image != '' || needs.resolve-image.result == 'success')
+    env:
+      ELEPHC_CI_IMAGE: ${{ inputs.ci-image || needs.resolve-image.outputs.image }}
+    outputs:
+      artifact-attempt: ${{ steps.publish-compiler.outputs.attempt }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    # Every Linux job runs inside the prebuilt CI image (multi-arch, built by
+    # ci-image.yml from .github/docker/ci.Dockerfile): the native deps, the
+    # pinned Rust toolchain, and cargo-nextest are baked in, replacing the
+    # per-job apt-get/rustup/nextest install steps that cost ~150s per job on
+    # the arm runners.
+    container:
+      image: ${{ inputs.ci-image || needs.resolve-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source-sha || github.sha }}
+
+      - name: Cache Rust build state
+        # Dependencies only (registry, git checkouts, and the dependency
+        # artifacts under target/); the action prunes the workspace crates'
+        # own artifacts before saving. Caching the whole target/ dir put three
+        # 4 GB entries per platform plus every other job's into the repository's
+        # 10 GB allowance, so main's entries were evicted before the next run
+        # and every archive job compiled from scratch.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        with:
+          prefix-key: rust-deps-container-linux-x86_64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+          cache-on-failure: true
+
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --locked --bin elephc 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build combined optional PDO driver profile
+        if: inputs.scope == 'tests'
+        run: |
+          cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
+          cargo clean -p elephc-pdo
+
+      - name: Build bridge/native support crates
+        shell: bash
+        if: inputs.scope != 'compiler'
+        # The codegen test runner links compiled programs against bridge
+        # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
+        # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), libelephc_web.a,
+        # libelephc_curl.a (curl; its symbols stay
+        # unresolved until a PHP-program link pulls in a real managed
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # managed-native-smoke), and libelephc_xml.a (xml; likewise unresolved
+        # until the link pulls in the managed libelephc_libxml2_shim.a +
+        # libxml2.a, materialized below and in every codegen shard). Build
+        # them before archiving so the archive can capture the .a files (see the
+        # archive include list in .config/nextest.toml).
+        run: |
+          set -o pipefail
+          cargo build --locked $BRIDGE_CRATES 2>&1 | tee "$RUNNER_TEMP/bridge-build.log"
+          if grep -qi warning "$RUNNER_TEMP/bridge-build.log"; then exit 1; fi
+          printf '\n' > target/debug/elephc-pdo-features.txt
+
+      - name: Build curl-aware magician staticlib
+        if: inputs.scope != 'compiler'
+        # elephc-magician's DEFAULT build (just above, part of $BRIDGE_CRATES) never
+        # compiles curl's eval homes in at all, so a fixture that needs curl reachable
+        # from eval() needs a SEPARATE archive built `--features curl` -- and that
+        # build must land at a DISTINCT filename (libelephc_magician_curl.a), built
+        # into an ISOLATED --target-dir, never written in-place over the plain
+        # libelephc_magician.a every curl-free eval fixture also needs from this same
+        # archive (Cargo does not vary a staticlib's output filename by feature set).
+        # Mirrors tests/codegen/support/runner.rs's ensure_magician_curl_staticlib and
+        # the production src/linker/bridges.rs build exactly, for the identical
+        # reason documented on both. Must run before "Archive test binaries" below so
+        # the resulting file exists at archive time (see the new
+        # [[profile.ci.archive.include]] entry for it in .config/nextest.toml) --
+        # without it, curl-codegen-tests shards (offline, no cargo registry cache)
+        # cannot build this themselves on demand.
+        run: |
+          cargo build -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-test-build
+          cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
+            target/debug/libelephc_magician_curl.a
+
+      - name: Ensure Python for Oniguruma bundle preparation
+        shell: bash
+        run: |
+          python3 --version
+
+      - name: Publish the shared compiler
+        id: publish-compiler
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          sha: ${{ inputs.source-sha || github.sha }}
+          target: linux-x86_64
+          kind: compiler
+
+      - name: Publish the shared bridges
+        if: inputs.scope != 'compiler'
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          sha: ${{ inputs.source-sha || github.sha }}
+          target: linux-x86_64
+          kind: bridges
+
+      - name: Prepare offline Oniguruma test bundle
+        if: inputs.scope == 'tests'
+        run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-x86_64
+
+      - name: Archive test binaries
+        if: inputs.scope == 'tests'
+        # Two archives from one build; see the macOS job for why.
+        run: |
+          cargo nextest archive --locked --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
+          (cd "$RUNNER_TEMP" && sha256sum cargo-nextest > cargo-nextest.sha256)
+          mkdir -p "$RUNNER_TEMP/codegen-archive"
+          cargo nextest archive --locked --profile ci -p elephc --test codegen_tests \
+            --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
+          cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
+
+      - name: Record archive provenance
+        if: inputs.scope == 'tests'
+        env:
+          GITHUB_SHA: ${{ inputs.source-sha || github.sha }}
+        run: |
+          python3 -B scripts/ci/test_archive_manifest.py write "$RUNNER_TEMP" --target linux-x86_64 --variant workspace
+          python3 -B scripts/ci/test_archive_manifest.py write "$RUNNER_TEMP/codegen-archive" --target linux-x86_64 --variant codegen
+          mkdir -p "$RUNNER_TEMP/workspace-archive"
+          mv "$RUNNER_TEMP/nextest-archive.tar.zst" "$RUNNER_TEMP/cargo-nextest" \
+            "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/nextest-manifest.json" \
+            "$RUNNER_TEMP/workspace-archive/"
+
+      - name: Run doctests
+        if: inputs.scope == 'tests'
+        # Doctests cannot run from a nextest archive, so run them here where the
+        # workspace is already built.
+        run: cargo test --workspace --doc
+
+      # Restore exact package artifacts before installs. A shared native-root cache
+      # can replace current XML shims with another package's older snapshot.
+      - name: Cache managed native libxml2
+        if: inputs.scope == 'tests'
+        # The xml bridge's parser is libxml2 itself (the managed `libxml2` catalog
+        # package: pinned 2.15.3 plus the Elephc-owned shim, see
+        # src/native_deps/recipes/libxml2.rs). Separate package artifacts, keyed on
+        # the committed locks plus all embedded shim and recipe sources that decide
+        # what gets built; the codegen shards below restore the same key, so the
+        # from-source build happens here once and never in a shard.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libxml2
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/sources
+          key: libxml2-native-linux-x86_64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
+
+      - name: Cache managed native gmp
+        if: inputs.scope == 'tests'
+        # The gmp bridge links the managed `gmp` catalog package; keyed on the
+        # committed lock plus the recipe sources that decide what gets built.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
+          key: gmp-native-linux-x86_64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+
+      - name: Cache managed native openssl-crypto/zlib
+        if: inputs.scope == 'tests'
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/openssl-crypto
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/sources
+          key: openssl-crypto-native-linux-x86_64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+
+      - name: Materialize managed native libxml2
+        if: inputs.scope == 'tests'
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/xml/elephc.lock; a fast no-op once the cache above is warm, a
+        # ~1 minute from-source build otherwise.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/xml/elephc.toml
+
+      - name: Ensure GMP configure dependency
+        if: inputs.scope == 'tests'
+        # GMP requires m4, preinstalled in the Linux image and macOS toolchain.
+        run: |
+          command -v m4
+
+      - name: Materialize managed native gmp
+        if: inputs.scope == 'tests'
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/gmp/elephc.lock.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Test the GMP bridge against managed libgmp
+        if: inputs.scope == 'tests'
+        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # the crate's test binary and compiles the libgmp-calling unit tests in
+        # behind cfg(elephc_gmp_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the
+        # archive was taken so the plain libelephc_gmp.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          set -e
+          gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-x86_64)
+          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+      - name: Materialize managed native openssl-crypto/zlib
+        if: inputs.scope == 'tests'
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/openssl-cipher/elephc.toml
+
+      - name: Materialize managed native libmagic
+        if: inputs.scope == 'tests'
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-x86_64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Test the fileinfo bridge against managed libmagic
+        if: inputs.scope == 'tests'
+        run: |
+          ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-x86_64)" \
+            cargo test -p elephc-fileinfo
+
+      - name: Test the xml bridge against managed libxml2
+        if: inputs.scope == 'tests'
+        # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
+        # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
+        # into the crate's test binary and compiles the libxml2-calling unit tests in
+        # behind cfg(elephc_xml_native). Without the variable the crate's tests take a
+        # skip path, which is what the archived non-codegen run exercises. Runs AFTER
+        # the archive was taken so the plain libelephc_xml.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-x86_64)" \
+            cargo test -p elephc-xml
+
+      - name: Upload test archive
+        if: inputs.scope == 'tests'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-linux-x86_64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/workspace-archive
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload codegen test archive
+        if: inputs.scope == 'tests'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-codegen-linux-x86_64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/codegen-archive
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+  build-archive-linux-aarch64:
+    name: Build & Archive Tests (linux-aarch64)
+    needs: resolve-image
+    if: always() && !cancelled() && inputs.target == 'linux-aarch64' && (inputs.ci-image != '' || needs.resolve-image.result == 'success')
+    env:
+      ELEPHC_CI_IMAGE: ${{ inputs.ci-image || needs.resolve-image.outputs.image }}
+    outputs:
+      artifact-attempt: ${{ steps.publish-compiler.outputs.attempt }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    container:
+      image: ${{ inputs.ci-image || needs.resolve-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source-sha || github.sha }}
+
+      - name: Cache Rust build state
+        # Dependencies only (registry, git checkouts, and the dependency
+        # artifacts under target/); the action prunes the workspace crates'
+        # own artifacts before saving. Caching the whole target/ dir put three
+        # 4 GB entries per platform plus every other job's into the repository's
+        # 10 GB allowance, so main's entries were evicted before the next run
+        # and every archive job compiled from scratch.
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2, 2026-08-06
+        with:
+          prefix-key: rust-deps-container-linux-aarch64
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-bin: false
+          cache-on-failure: true
+
+      - name: Check (no warnings)
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo build --locked --bin elephc 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
+          ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
+
+      - name: Build combined optional PDO driver profile
+        if: inputs.scope == 'tests'
+        run: |
+          cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          scripts/check_pdo_dblib_symbols.sh target/debug/libelephc_pdo.a
+          cargo clean -p elephc-pdo
+
+      - name: Build bridge/native support crates
+        shell: bash
+        if: inputs.scope != 'compiler'
+        # The codegen test runner links compiled programs against bridge
+        # staticlibs: libelephc_tls.a (https:// / TLS), libelephc_pdo.a (PDO),
+        # libelephc_crypto.a (hash / HMAC family), libelephc_bcmath.a (BCMath),
+        # libelephc_iconv.a (charset conversion), libelephc_phar.a (PHAR),
+        # libelephc_tz.a (DateTimeZone introspection), libelephc_image.a
+        # (GD / Exif / Imagick / Gmagick / Cairo), libelephc_pcntl.a (process
+        # control), libelephc_magician.a (eval), libelephc_web.a,
+        # libelephc_curl.a (curl; its symbols stay
+        # unresolved until a PHP-program link pulls in a real managed
+        # libcurl/libssh2/libssl/libcrypto/libz/libnghttp2, see
+        # managed-native-smoke), and libelephc_xml.a (xml; likewise unresolved
+        # until the link pulls in the managed libelephc_libxml2_shim.a +
+        # libxml2.a, materialized below and in every codegen shard). Build
+        # them before archiving so the archive can capture the .a files (see the
+        # archive include list in .config/nextest.toml).
+        run: |
+          set -o pipefail
+          cargo build --locked $BRIDGE_CRATES 2>&1 | tee "$RUNNER_TEMP/bridge-build.log"
+          if grep -qi warning "$RUNNER_TEMP/bridge-build.log"; then exit 1; fi
+          printf '\n' > target/debug/elephc-pdo-features.txt
+
+      - name: Build curl-aware magician staticlib
+        if: inputs.scope != 'compiler'
+        # elephc-magician's DEFAULT build (just above, part of $BRIDGE_CRATES) never
+        # compiles curl's eval homes in at all, so a fixture that needs curl reachable
+        # from eval() needs a SEPARATE archive built `--features curl` -- and that
+        # build must land at a DISTINCT filename (libelephc_magician_curl.a), built
+        # into an ISOLATED --target-dir, never written in-place over the plain
+        # libelephc_magician.a every curl-free eval fixture also needs from this same
+        # archive (Cargo does not vary a staticlib's output filename by feature set).
+        # Mirrors tests/codegen/support/runner.rs's ensure_magician_curl_staticlib and
+        # the production src/linker/bridges.rs build exactly, for the identical
+        # reason documented on both. Must run before "Archive test binaries" below so
+        # the resulting file exists at archive time (see the new
+        # [[profile.ci.archive.include]] entry for it in .config/nextest.toml) --
+        # without it, curl-codegen-tests shards (offline, no cargo registry cache)
+        # cannot build this themselves on demand.
+        run: |
+          cargo build -p elephc-magician --features curl \
+            --target-dir target/elephc-magician-curl-test-build
+          cp target/elephc-magician-curl-test-build/debug/libelephc_magician.a \
+            target/debug/libelephc_magician_curl.a
+
+      - name: Ensure Python for Oniguruma bundle preparation
+        shell: bash
+        run: |
+          python3 --version
+
+      - name: Publish the shared compiler
+        id: publish-compiler
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          sha: ${{ inputs.source-sha || github.sha }}
+          target: linux-aarch64
+          kind: compiler
+
+      - name: Publish the shared bridges
+        if: inputs.scope != 'compiler'
+        uses: ./.github/actions/publish-build-artifact
+        with:
+          sha: ${{ inputs.source-sha || github.sha }}
+          target: linux-aarch64
+          kind: bridges
+
+      - name: Prepare offline Oniguruma test bundle
+        if: inputs.scope == 'tests'
+        run: python3 scripts/ci/prepare_oniguruma_tests.py target/debug/elephc target/debug/elephc-oniguruma --target linux-aarch64
+
+      - name: Archive test binaries
+        if: inputs.scope == 'tests'
+        # Two archives from one build; see the macOS job for why.
+        run: |
+          cargo nextest archive --locked --profile ci --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst"
+          cp "$(command -v cargo-nextest)" "$RUNNER_TEMP/cargo-nextest"
+          (cd "$RUNNER_TEMP" && sha256sum cargo-nextest > cargo-nextest.sha256)
+          mkdir -p "$RUNNER_TEMP/codegen-archive"
+          cargo nextest archive --locked --profile ci -p elephc --test codegen_tests \
+            --archive-file "$RUNNER_TEMP/codegen-archive/nextest-archive.tar.zst"
+          cp "$RUNNER_TEMP/cargo-nextest" "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/codegen-archive/"
+
+      - name: Record archive provenance
+        if: inputs.scope == 'tests'
+        env:
+          GITHUB_SHA: ${{ inputs.source-sha || github.sha }}
+        run: |
+          python3 -B scripts/ci/test_archive_manifest.py write "$RUNNER_TEMP" --target linux-aarch64 --variant workspace
+          python3 -B scripts/ci/test_archive_manifest.py write "$RUNNER_TEMP/codegen-archive" --target linux-aarch64 --variant codegen
+          mkdir -p "$RUNNER_TEMP/workspace-archive"
+          mv "$RUNNER_TEMP/nextest-archive.tar.zst" "$RUNNER_TEMP/cargo-nextest" \
+            "$RUNNER_TEMP/cargo-nextest.sha256" "$RUNNER_TEMP/nextest-manifest.json" \
+            "$RUNNER_TEMP/workspace-archive/"
+
+      - name: Run doctests
+        if: inputs.scope == 'tests'
+        # Doctests cannot run from a nextest archive, so run them here where the
+        # workspace is already built.
+        run: cargo test --workspace --doc
+
+      # Restore exact package artifacts before installs. A shared native-root cache
+      # can replace current XML shims with another package's older snapshot.
+      - name: Cache managed native libxml2
+        if: inputs.scope == 'tests'
+        # The xml bridge's parser is libxml2 itself (the managed `libxml2` catalog
+        # package: pinned 2.15.3 plus the Elephc-owned shim, see
+        # src/native_deps/recipes/libxml2.rs). Separate package artifacts, keyed on
+        # the committed locks plus all embedded shim and recipe sources that decide
+        # what gets built; the codegen shards below restore the same key, so the
+        # from-source build happens here once and never in a shard.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/libxml2
+            ~/.cache/elephc/native/artifacts/libmagic
+            ~/.cache/elephc/native/sources
+          key: libxml2-native-linux-aarch64-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
+
+      - name: Cache managed native gmp
+        if: inputs.scope == 'tests'
+        # The gmp bridge links the managed `gmp` catalog package; keyed on the
+        # committed lock plus the recipe sources that decide what gets built.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/gmp
+            ~/.cache/elephc/native/sources
+          key: gmp-native-linux-aarch64-${{ hashFiles('examples/gmp/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/gmp.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+
+      - name: Cache managed native openssl-crypto/zlib
+        if: inputs.scope == 'tests'
+        # The cipher bridge uses its own OpenSSL pin, independent of curl's package.
+        # Archive jobs build it once; codegen shards restore the same managed cache.
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cache/elephc/native/artifacts/openssl-crypto
+            ~/.cache/elephc/native/artifacts/zlib
+            ~/.cache/elephc/native/sources
+          key: openssl-crypto-native-linux-aarch64-${{ hashFiles('examples/openssl-cipher/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/openssl_crypto.rs', 'src/native_deps/recipes/openssl.rs', 'src/native_deps/recipes/zlib.rs', 'src/native_deps/recipes/util.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs') }}
+
+      - name: Materialize managed native libxml2
+        if: inputs.scope == 'tests'
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/xml/elephc.lock; a fast no-op once the cache above is warm, a
+        # ~1 minute from-source build otherwise.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/xml/elephc.toml
+
+      - name: Ensure GMP configure dependency
+        if: inputs.scope == 'tests'
+        # GMP requires m4, preinstalled in the Linux image and macOS toolchain.
+        run: |
+          command -v m4
+
+      - name: Materialize managed native gmp
+        if: inputs.scope == 'tests'
+        # `install --locked` reproduces exactly the version pinned in the committed
+        # examples/gmp/elephc.lock.
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/gmp/elephc.toml
+
+      - name: Test the GMP bridge against managed libgmp
+        if: inputs.scope == 'tests'
+        # crates/elephc-gmp/build.rs reads ELEPHC_GMP_LIB_DIR, links libgmp.a into
+        # the crate's test binary and compiles the libgmp-calling unit tests in
+        # behind cfg(elephc_gmp_native). Without the variable those tests take the
+        # skip path exercised by the archived non-codegen run. Runs AFTER the
+        # archive was taken so the plain libelephc_gmp.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          set -e
+          gmp_lib_dir=$(sh scripts/ci/gmp_lib_dir.sh linux-aarch64)
+          ELEPHC_GMP_LIB_DIR="$gmp_lib_dir" cargo test -p elephc-gmp
+      - name: Materialize managed native openssl-crypto/zlib
+        if: inputs.scope == 'tests'
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/openssl-cipher/elephc.toml
+
+      - name: Materialize managed native libmagic
+        if: inputs.scope == 'tests'
+        run: |
+          ./target/debug/elephc native install --locked \
+            --target linux-aarch64 \
+            --manifest-path examples/fileinfo/elephc.toml
+
+      - name: Test the fileinfo bridge against managed libmagic
+        if: inputs.scope == 'tests'
+        run: |
+          ELEPHC_FILEINFO_LIBMAGIC_LIB_DIR="$(sh scripts/ci/libmagic_lib_dir.sh linux-aarch64)" \
+            cargo test -p elephc-fileinfo
+
+      - name: Test the xml bridge against managed libxml2
+        if: inputs.scope == 'tests'
+        # crates/elephc-xml/build.rs reads ELEPHC_XML_LIBXML2_LIB_DIR (the artifact's
+        # lib/, holding libelephc_libxml2_shim.a + libxml2.a), links both statically
+        # into the crate's test binary and compiles the libxml2-calling unit tests in
+        # behind cfg(elephc_xml_native). Without the variable the crate's tests take a
+        # skip path, which is what the archived non-codegen run exercises. Runs AFTER
+        # the archive was taken so the plain libelephc_xml.a every codegen shard links
+        # is never the variant this env-var-driven rebuild produces.
+        run: |
+          ELEPHC_XML_LIBXML2_LIB_DIR="$(sh scripts/ci/libxml2_lib_dir.sh linux-aarch64)" \
+            cargo test -p elephc-xml
+
+      - name: Upload test archive
+        if: inputs.scope == 'tests'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-linux-aarch64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/workspace-archive
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Upload codegen test archive
+        if: inputs.scope == 'tests'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nextest-archive-codegen-linux-aarch64-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/codegen-archive
+          retention-days: 3
+          compression-level: 0
+          if-no-files-found: error
+
+  # The non-codegen binaries split into two cost classes. The CLI-driven suites
+  # (opcache_*, eval_*, php_profile_*, extension_loaded_tests,
+  # php_version_surface_tests) spawn the elephc binary to build whole eval-capable
+  # programs and take 20-170s each; on the October 2026 main baseline 264 such
+  # tests consumed 76% of the macOS non-codegen time while 11,400 sub-second tests
+  # consumed the rest. Hash partitioning spread both classes over every shard, so
+  # each of eight serial shards ran 20-32 minutes. The CLI suites now run in their
+  # own `cli-tests-*` jobs below. Share the remaining source/EIR suite across sixteen
+  # shards with at most eight concurrent jobs, retaining the deadline and test filters.

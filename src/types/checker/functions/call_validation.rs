@@ -355,6 +355,7 @@ impl Checker {
             arg,
             caller_env,
             can_widen_local,
+            false,
             &format!("{} variadic parameter ${}", callee_desc, variadic_name),
         )?;
         self.record_boxed_reference_output(
@@ -363,6 +364,7 @@ impl Checker {
             actual_ty,
             call_span,
             caller_env,
+            false,
         )?;
         self.record_reference_alias_root(arg);
         Ok(())
@@ -846,6 +848,8 @@ impl Checker {
         };
         self.validate_callable_spread_elements(sig, args, &plan, caller_env, callee_desc)?;
         let source_has_spread = plan.has_spread_args();
+        let supports_literal_search_rewrite = !source_has_spread
+            && !call_args::has_named_args(args);
         let defaults = plan.default_argument_mask();
         let descriptor_projections = plan.descriptor_projection_mask();
         let normalized_args = plan.normalized_args();
@@ -986,12 +990,18 @@ impl Checker {
                         && (sig.declared_params.get(param_idx).copied().unwrap_or(false)
                             || matches!(expected_ty, PhpType::Mixed));
                     if tracks_boxed_reference_output {
+                        let layout_contract = crate::types::is_written_reference_array_param(
+                            &sig.ref_params,
+                            &sig.param_type_exprs,
+                            param_idx,
+                        );
                         self.require_boxed_by_ref_storage(
                             expected_ty,
                             &actual_ty,
                             arg,
                             caller_env,
                             can_widen_by_ref_local,
+                            layout_contract,
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                         self.record_boxed_reference_output(
@@ -1000,6 +1010,7 @@ impl Checker {
                             &actual_ty,
                             span,
                             caller_env,
+                            layout_contract,
                         )?;
                     }
                     // `strict_types` applies to every declared parameter type, including the
@@ -1026,7 +1037,38 @@ impl Checker {
                         && self
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
-                    if !proven_callable_array && !runtime_descriptor_projection {
+                    // `str_replace([literal, ...], 'x', $s)` is folded into scalar calls by
+                    // the AST optimizer before lowering, so its array search is accepted here
+                    // even though the runtime helper is string-only.
+                    let literal_str_replace_search = supports_literal_search_rewrite
+                        && param_idx == 0
+                        && callee_desc
+                            .trim_start_matches('\\')
+                            .eq_ignore_ascii_case("str_replace")
+                        && args.get(1).is_some_and(|replacement| matches!(
+                            replacement.kind, ExprKind::StringLiteral(_)
+                        ))
+                        && matches!(&arg.kind, crate::parser::ast::ExprKind::ArrayLiteral(items)
+                            if !items.is_empty()
+                                && items.iter().all(|item| matches!(
+                                    item.kind,
+                                    crate::parser::ast::ExprKind::StringLiteral(_)
+                                )));
+                    // A by-value list is rebuilt as the declared hash; refuse what cannot be.
+                    if sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                        && !supplied_reference
+                        && !runtime_descriptor_projection
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                        )?;
+                    }
+                    if !proven_callable_array && !runtime_descriptor_projection
+                        && !literal_str_replace_search
+                    {
                         if (coercive_param_binding
                             && sig.declared_params.get(param_idx).copied().unwrap_or(false))
                             || (supplied_reference && matches!(expected_ty, PhpType::Object(_)))
@@ -1110,6 +1152,21 @@ impl Checker {
                         arg.span,
                         &format!("{} variadic parameter ${}", callee_desc, vname),
                     )?;
+                    // Same list-to-hash rule as a regular declared parameter: a collected list
+                    // is rebuilt as the element hash, or refused when no conversion exists.
+                    if variadic_index
+                        .and_then(|index| sig.declared_params.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                        && !variadic_by_ref
+                    {
+                        self.require_packed_argument_hash_storage(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                        )?;
+                    }
                 }
             }
             param_idx += 1;

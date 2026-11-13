@@ -459,6 +459,19 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
     let _guard = lock_bridge_staticlib_build();
     for bridge in requested_bridge_staticlibs(actual_link_libs) {
         let archive_path = bridge_staticlib_dir.join(format!("lib{}.a", bridge.lib_name));
+        if prebuilt_bridge_staticlibs_are_trusted() {
+            assert!(archive_path.is_file(),
+                "missing prebuilt bridge {}; restore the matching CI build artifact", archive_path.display());
+            if bridge.lib_name == "elephc_pdo" {
+                let required = requested_pdo_features();
+                let marker = bridge_staticlib_dir.join("elephc-pdo-features.txt");
+                let advertised = std::fs::read_to_string(&marker)
+                    .expect("prebuilt PDO archive requires its validated feature manifest");
+                assert!(prebuilt_pdo_features_match(&required, &advertised),
+                    "prebuilt PDO features do not match {:?}; restore the matching CI variant", required);
+            }
+            continue;
+        }
         let requires_libpq_profile = bridge.lib_name == "elephc_pdo"
             && std::env::var_os("ELEPHC_PDO_LIBPQ").is_some()
             && LIBPQ_BRIDGE_BUILT.get().is_none();
@@ -567,6 +580,52 @@ fn ensure_bridge_staticlibs(actual_link_libs: &[&str], bridge_staticlib_dir: &Pa
     }
 }
 
+/// Computes the optional driver configuration required by this test executable.
+fn requested_pdo_features() -> Vec<&'static str> {
+    let enabled = [
+        (std::env::var_os("ELEPHC_PDO_LIBPQ").is_some(), "libpq-gss"),
+        (pdo_dblib_enabled(), "dblib"),
+        (pdo_firebird_enabled(), "firebird"),
+        (pdo_odbc_enabled(), "odbc"),
+        (pdo_informix_enabled(), "informix"),
+        (pdo_ibm_enabled(), "ibm"),
+        (pdo_sqlsrv_enabled(), "sqlsrv"),
+        (pdo_oci_enabled(), "oci"),
+        (pdo_cubrid_enabled(), "cubrid"),
+    ];
+    enabled.into_iter().filter_map(|(enabled, name)| enabled.then_some(name)).collect()
+}
+
+/// Requires an exact driver set, independent of the feature declaration order.
+fn prebuilt_pdo_features_match(required: &[&str], advertised: &str) -> bool {
+    let required: std::collections::BTreeSet<_> = required.iter().copied().collect();
+    let advertised: std::collections::BTreeSet<_> = advertised.trim().split(',')
+        .filter(|feature| !feature.is_empty()).collect();
+    required == advertised
+}
+
+#[cfg(test)]
+mod prebuilt_pdo_feature_tests {
+    use super::prebuilt_pdo_features_match;
+
+    /// Default builds must not accidentally link an optional system driver.
+    #[test]
+    fn prebuilt_pdo_rejects_missing_and_extra_driver_features() {
+        assert!(prebuilt_pdo_features_match(&[], "\n"));
+        assert!(!prebuilt_pdo_features_match(&["libpq-gss"], "\n"));
+        assert!(!prebuilt_pdo_features_match(&[], "libpq-gss\n"));
+        assert!(!prebuilt_pdo_features_match(&["oci"], "odbc\n"));
+    }
+
+    /// Identical feature sets can be serialized in either order.
+    #[test]
+    fn prebuilt_pdo_accepts_only_the_requested_driver_set() {
+        assert!(prebuilt_pdo_features_match(&["libpq-gss"], "libpq-gss\n"));
+        assert!(prebuilt_pdo_features_match(&["oci", "odbc"], "odbc,oci\n"));
+        assert!(!prebuilt_pdo_features_match(&["oci", "odbc"], "oci\n"));
+    }
+}
+
 /// Builds bridge archives needed by CLI-based fixtures before invoking the compiler binary.
 pub(crate) fn ensure_cli_bridge_staticlibs(actual_link_libs: &[&str]) {
     ensure_bridge_staticlibs(actual_link_libs, &bridge_staticlib_dir());
@@ -582,7 +641,28 @@ pub(crate) fn configure_prebuilt_cli_bridges(command: &mut Command) {
     let directory = bridge_staticlib_dir().canonicalize()
         .expect("resolve prebuilt CLI bridge directory");
     for bridge in TEST_BRIDGE_STATICLIBS {
-        command.env(format!("{}_LIB_DIR", bridge.lib_name.to_ascii_uppercase()), &directory);
+        command.env(prebuilt_cli_bridge_variable(bridge.lib_name), &directory);
+    }
+}
+
+/// Uses the production OpenSSL bridge override, distinct from the native package path.
+fn prebuilt_cli_bridge_variable(lib_name: &str) -> String {
+    if lib_name == "elephc_openssl" {
+        "ELEPHC_OPENSSL_BRIDGE_LIB_DIR".to_string()
+    } else {
+        format!("{}_LIB_DIR", lib_name.to_ascii_uppercase())
+    }
+}
+
+#[cfg(test)]
+mod prebuilt_cli_bridge_variable_tests {
+    use super::prebuilt_cli_bridge_variable;
+
+    /// The OpenSSL exception must not trigger a hidden rebuild in archived CLI fixtures.
+    #[test]
+    fn prebuilt_cli_openssl_uses_the_bridge_override() {
+        assert_eq!(prebuilt_cli_bridge_variable("elephc_openssl"), "ELEPHC_OPENSSL_BRIDGE_LIB_DIR");
+        assert_eq!(prebuilt_cli_bridge_variable("elephc_crypto"), "ELEPHC_CRYPTO_LIB_DIR");
     }
 }
 
@@ -1791,61 +1871,66 @@ fn append_macos_signal_diagnostics(
 ) {
 }
 
-/// Runs a child command with a timeout and captures stdout/stderr.
-fn run_command_with_timeout(mut cmd: Command) -> Output {
-    let label = format!("{:?}", cmd);
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .unwrap_or_else(|err| panic!("failed to run compiled binary {label}: {err}"));
-    let mut stdout_pipe = child.stdout.take().expect("compiled binary stdout missing");
-    let mut stderr_pipe = child.stderr.take().expect("compiled binary stderr missing");
-    let stdout_reader = std::thread::spawn(move || {
-        let mut stdout = Vec::new();
-        stdout_pipe
-            .read_to_end(&mut stdout)
-            .expect("failed to read compiled binary stdout");
-        stdout
-    });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut stderr = Vec::new();
-        stderr_pipe
-            .read_to_end(&mut stderr)
-            .expect("failed to read compiled binary stderr");
-        stderr
-    });
+/// Runs a child command with a timeout and captures stdout/stderr separately.
+fn run_command_with_timeout(cmd: Command) -> Output {
+    run_command_with_capture(cmd, None)
+}
 
+/// Uses the ordinary executable watchdog while preserving merged stdout/stderr ordering.
+pub(crate) fn run_command_with_merged_output(cmd: Command, log: &Path) -> Output {
+    run_command_with_capture(cmd, Some(log))
+}
+
+/// Captures a command with either pipes or one shared log and the same deadline.
+fn run_command_with_capture(mut cmd: Command, merged_log: Option<&Path>) -> Output {
+    let label = format!("{:?}", cmd);
+    if let Some(path) = merged_log {
+        let log = fs::File::create(path).expect("merged command log");
+        cmd.stdout(Stdio::from(log.try_clone().expect("merged log handle")));
+        cmd.stderr(Stdio::from(log));
+    } else {
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+    }
+    let mut child = cmd.spawn()
+        .unwrap_or_else(|err| panic!("failed to run compiled binary {label}: {err}"));
+    let stdout_reader = child.stdout.take().map(|mut pipe| std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).expect("compiled binary stdout");
+        bytes
+    }));
+    let stderr_reader = child.stderr.take().map(|mut pipe| std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).expect("compiled binary stderr");
+        bytes
+    }));
     let timeout = codegen_binary_timeout();
     let deadline = Instant::now() + timeout;
-    loop {
-        if let Some(status) = child
-            .try_wait()
+    let status = loop {
+        if let Some(status) = child.try_wait()
             .unwrap_or_else(|err| panic!("failed to wait for compiled binary {label}: {err}"))
         {
-            let stdout = stdout_reader.join().expect("stdout reader panicked");
-            let stderr = stderr_reader.join().expect("stderr reader panicked");
-            return Output {
-                status,
-                stdout,
-                stderr,
-            };
+            break Some(status);
         }
         if Instant::now() >= deadline {
             let _ = child.kill();
             let _ = child.wait();
-            let stdout = stdout_reader.join().expect("stdout reader panicked");
-            let stderr = stderr_reader.join().expect("stderr reader panicked");
-            panic!(
-                "compiled binary timed out after {}s: {}\nstdout:\n{}\nstderr:\n{}",
-                timeout.as_secs(),
-                label,
-                String::from_utf8_lossy(&stdout),
-                String::from_utf8_lossy(&stderr)
-            );
+            break None;
         }
         std::thread::sleep(Duration::from_millis(10));
-    }
+    };
+    let stdout = match merged_log {
+        Some(path) => fs::read(path).expect("merged command output"),
+        None => stdout_reader.expect("stdout reader").join().expect("stdout reader panicked"),
+    };
+    let stderr = stderr_reader.map(|reader| reader.join().expect("stderr reader panicked"))
+        .unwrap_or_default();
+    let status = status.unwrap_or_else(|| panic!(
+        "compiled binary timed out after {}s: {}\nstdout:\n{}\nstderr:\n{}",
+        timeout.as_secs(), label,
+        String::from_utf8_lossy(&stdout), String::from_utf8_lossy(&stderr),
+    ));
+    Output { status, stdout, stderr }
 }
 
 /// Returns the per-binary timeout for codegen fixtures.

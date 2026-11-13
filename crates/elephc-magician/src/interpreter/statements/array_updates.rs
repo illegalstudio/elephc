@@ -10,7 +10,7 @@
 use super::*;
 
 /// Applies member increment/decrement to a runtime value using PHP numeric semantics.
-pub(super) fn eval_inc_dec_value(
+pub(in crate::interpreter) fn eval_inc_dec_value(
     current: RuntimeCellHandle,
     increment: bool,
     values: &mut impl RuntimeValueOps,

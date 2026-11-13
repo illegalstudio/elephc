@@ -270,7 +270,7 @@ routing and web transport verification remain open.
 | `stripos()` | `stripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strpos()`. Folding is ASCII-only (`A`-`Z`), so non-ASCII bytes are matched verbatim. `$offset` behaves exactly as in `strpos()` |
 | `strripos()` | `strripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strrpos()`. Folding is ASCII-only (`A`-`Z`). `$offset` behaves exactly as in `strrpos()` |
 | `strstr()` | `strstr($hay, $needle, $before_needle = false): string\|false` | Find first occurrence and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
-| `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
+| `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences. Array searches are supported only as a non-empty literal array of strings with a literal replacement and three positional arguments; other array-search forms are rejected during type checking |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
 | `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace a substring. Negative `$start` counts from the end; a negative `$len` preserves that many trailing bytes after the replacement, matching PHP |
 | `strtolower()` | `strtolower($str): string` | Convert to lowercase |
@@ -357,7 +357,9 @@ routing and web transport verification remain open.
 `trim()`, `ltrim()`, and `rtrim()` expand PHP's `start..end` character ranges
 (for example `"a..z"`) using the same rules as `php_charmask()`: only an
 increasing range is expanded, and an invalid range leaves its bytes literal.
-The invalid-range warnings are not emitted yet.
+Invalid ranges emit PHP's warning with the called function's name in compiled
+and `eval()` code. The shared warning formatter currently omits the source-file
+and line suffix.
 
 #### Known divergence: `inet_pton()` caps its argument at 255 bytes
 

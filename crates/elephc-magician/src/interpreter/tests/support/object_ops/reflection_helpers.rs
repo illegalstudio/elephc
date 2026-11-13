@@ -119,6 +119,18 @@ impl FakeOps {
         Ok(object)
     }
 
+    /// Mirrors the compiled lazy class getters: a slot holding a class name yields a fresh
+    /// fake `ReflectionClass` per call, and any other slot value comes back unchanged.
+    pub(super) fn reflection_lazy_class_read(
+        &mut self,
+        slot: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        match self.get(slot) {
+            FakeValue::String(name) => self.fake_reflection_class_object(&name),
+            _ => Ok(slot),
+        }
+    }
+
     /// Formats fake ReflectionType objects through their synthetic `__toString()` method.
     pub(super) fn reflection_type_to_string(
         &mut self,

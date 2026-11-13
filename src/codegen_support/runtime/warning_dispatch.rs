@@ -186,6 +186,59 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     abi::emit_load_temporary_stack_slot(e, scratch, LEVEL);
     ins(e, "and x0, x0, x10", "and rax, r10");
     abi::emit_branch_if_int_result_zero(e, "__rt_warning_release");
+    if e.phpext_output {
+        // Under `--emit phpext`, `__rt_diag_write` forwards each write to the host
+        // PHP error handler. The host adds the newline and source location itself,
+        // exactly as for an internal PHP diagnostic, so send only the raw message.
+        abi::emit_jump(e, "__rt_warning_plain_message");
+    } else {
+    // php-src prefixes every displayed diagnostic with one newline.
+    if arm {
+        abi::emit_symbol_address(e, a1, "_rt_diag_leading_newline");
+        abi::emit_load_int_immediate(e, abi::int_arg_reg_name(e.target, 2), 1);
+    } else {
+        abi::emit_symbol_address(e, a0, "_rt_diag_leading_newline");
+        abi::emit_load_int_immediate(e, a1, 1);
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
+    // A warning producer's message is a complete line. PHP adds the caller location itself,
+    // so append it here when the compiler published a source line for this instruction.
+    abi::emit_load_symbol_to_reg(e, result, "_php_diagnostic_line", 0);
+    abi::emit_branch_if_int_result_zero(e, "__rt_warning_plain_message");
+    if arm {
+        arg(e, 1, BUFFER);
+        arg(e, 2, LENGTH);
+        e.instruction("sub x2, x2, #1");                                    // omit the line terminator before the location suffix
+    } else {
+        arg(e, 0, BUFFER);
+        arg(e, 1, LENGTH);
+        e.instruction("sub rsi, 1");                                        // omit the line terminator before the location suffix
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
+    abi::emit_load_temporary_stack_slot(e, scratch, LENGTH);
+    ins(e, "sub x10, x10, #1", "sub r10, 1");
+    abi::emit_store_reg_to_symbol(e, scratch, "_rt_diag_warning_message_len", 0);
+    emit_diag_static(e, "_rt_diag_in", 4);
+    if arm {
+        abi::emit_load_symbol_to_reg(e, "x1", "_php_diagnostic_file", 0);
+        abi::emit_load_symbol_to_reg(e, "x2", "_php_diagnostic_file_len", 0);
+    } else {
+        abi::emit_load_symbol_to_reg(e, "rdi", "_php_diagnostic_file", 0);
+        abi::emit_load_symbol_to_reg(e, "rsi", "_php_diagnostic_file_len", 0);
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
+    emit_diag_static(e, "_rt_diag_on_line", 9);
+    abi::emit_load_symbol_to_reg(e, result, "_php_diagnostic_line", 0);
+    abi::emit_call_label(e, "__rt_itoa");
+    if !arm {
+        e.instruction("mov rdi, rax");                                      // pass the formatted line-number pointer
+        e.instruction("mov rsi, rdx");                                      // pass its byte length
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
+    emit_diag_static(e, "_rt_diag_newline", 1);
+    abi::emit_jump(e, "__rt_warning_release");
+    }
+    e.label("__rt_warning_plain_message");
     if arm {
         arg(e, 1, BUFFER);
         arg(e, 2, LENGTH);
@@ -217,6 +270,21 @@ pub(super) fn emit_warning_dispatch(e: &mut Emitter) {
     emit_cleanup(e);
     super::arrays::emit_native_frame_owners(e, "__rt_gc_warning_frame_owners", &[ARGS, RESULT]);
     emit_reset(e);
+}
+
+/// Writes one static diagnostic fragment through the target's diagnostic ABI.
+fn emit_diag_static(e: &mut Emitter, symbol: &str, len: usize) {
+    match e.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(e, "x1", symbol);
+            abi::emit_load_int_immediate(e, "x2", len as i64);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(e, "rdi", symbol);
+            abi::emit_load_int_immediate(e, "rsi", len as i64);
+        }
+    }
+    abi::emit_call_label(e, "__rt_diag_write");
 }
 
 /// Builds the four handler arguments with copied strings and owned boxed cells.

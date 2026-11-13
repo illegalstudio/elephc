@@ -328,6 +328,18 @@ pub trait RuntimeValueOps {
         value: &str,
     ) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Creates a runtime indexed-array cell specialized for direct object payload slots: the
+    /// storage compiled `array<Class>` readers (a reflector's member list) expect.
+    fn object_array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Appends one object to a runtime object-array cell, retaining it for the array; the
+    /// caller keeps its own owner.
+    fn object_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a runtime associative-array cell with room for at least `capacity` elements.
     fn assoc_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus>;
 

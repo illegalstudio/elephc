@@ -1,10 +1,11 @@
 //! Purpose:
 //! Lowers the internal `__elephc_reflection_class_build` builtin: an indirect call to the
-//! compiled per-class `ReflectionClass` builder whose address a member reflector stored.
+//! compiled per-class `ReflectionClass` builder whose address a member reflector stored, and
+//! its eval twin `__elephc_eval_reflection_class_build`.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::runtime_functions` dispatch, through
-//!   `RuntimeFnId::ElephcReflectionClassBuild`.
+//!   `RuntimeFnId::ElephcReflectionClassBuild` and `RuntimeFnId::ElephcEvalReflectionClassBuild`.
 //!
 //! Key details:
 //! - The builders are module-level helpers emitted by
@@ -14,8 +15,11 @@
 //!   is boxed into a Mixed cell that takes over the builder's reference.
 //! - The address arrives as a boxed `int` slot value, so `resolve_int_operand_to_result`
 //!   unboxes it the same way it unboxes any Mixed integer operand.
+//! - Also lowers the eval twin, `__elephc_eval_reflection_class_build`, for the class NAME an
+//!   eval-built reflector stores: through the eval bridge when the module links it, and as
+//!   `false` otherwise, since no reflector can then hold a name.
 
-use crate::codegen::{abi, emit_box_current_owned_value_as_mixed};
+use crate::codegen::{abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed};
 use crate::codegen::Result;
 use crate::ir::Instruction;
 use crate::types::PhpType;
@@ -47,5 +51,23 @@ pub(crate) fn lower_reflection_class_build(
             );
         }
     }
+    store_if_result(ctx, inst)
+}
+
+/// Builds a fresh `ReflectionClass` for the class name an eval-built reflector stored.
+pub(crate) fn lower_eval_reflection_class_build(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "__elephc_eval_reflection_class_build", 1)?;
+    ctx.emitter.blank();
+    ctx.emitter.comment("__elephc_eval_reflection_class_build()");
+    if ctx.module.required_runtime_features.eval_bridge {
+        return super::eval::lower_eval_reflection_class_build_call(ctx, inst);
+    }
+    // Without the eval bridge no reflector stores a class name, so this branch never runs;
+    // `false` is the value an unresolvable declaring class reads as.
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     store_if_result(ctx, inst)
 }

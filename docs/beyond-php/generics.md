@@ -321,6 +321,26 @@ $ages["bob"] = "not an int";
 A `mixed` element or value type absorbs every write, so `array<mixed>` and
 `array<string, mixed>` impose no contract and stay freely writable.
 
+A class or interface element type holds instances of that class, of its subclasses, and of
+classes implementing that interface. Every object element is one object pointer, so writing
+a subclass instance with `$items[] = ...`, `$items[$i] = ...` or `array_push()` keeps the
+declared object storage, in straight-line code and in loops, and methods still dispatch on each
+element's runtime class:
+
+```php
+<?php
+abstract class Actor { abstract public function value(): int; }
+final class Player extends Actor { public function value(): int { return 42; } }
+
+function spawn(int $count): array<Actor> {
+    array<Actor> $actors = [];
+    for ($i = 0; $i < $count; $i++) {
+        $actors[] = new Player();
+    }
+    return $actors;
+}
+```
+
 An argument whose element type disagrees is rejected rather than widening the parameter:
 
 ```php

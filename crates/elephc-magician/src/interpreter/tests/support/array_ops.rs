@@ -56,6 +56,22 @@ impl FakeOps {
         elements.push(value);
         Ok(array)
     }
+    /// Appends one object to a fake direct-object indexed array, retaining it like the
+    /// runtime push does so the caller's own owner stays releasable.
+    pub(super) fn runtime_object_array_push(
+        &mut self,
+        array: RuntimeCellHandle,
+        object: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let retained = self.runtime_retain(object)?;
+        let id = array.as_ptr() as usize;
+        let Some(FakeValue::Array(elements)) = self.values.get_mut(&id) else {
+            let _ = self.runtime_release(retained);
+            return Err(EvalStatus::UnsupportedConstruct);
+        };
+        elements.push(retained);
+        Ok(array)
+    }
     /// Creates a fake associative array cell.
     pub(super) fn runtime_assoc_new(
         &mut self,

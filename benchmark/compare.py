@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from datetime import datetime, timezone
 
-from common import atomic_json
+from common import PHP_MODE, atomic_json, php_command, php_jit_problem
 
 FIXTURE = Path(__file__).resolve().parent / "diagnostics" / "mixed.php"
 FIELDS = ("arithmetic", "closure", "string", "eval", "json", "body", "wall")
@@ -170,6 +170,9 @@ def main() -> None:
         php = shutil.which(args.php)
         if not php:
             raise ValueError(f"PHP interpreter unavailable: {args.php}")
+        problem = php_jit_problem(php, isolated=True, timeout=args.timeout)
+        if problem:
+            raise ValueError(problem)
         if args.require_idle and not shutil.which("ps"):
             raise ValueError("--require-idle requires ps")
         if args.cpu is not None and (not hasattr(os, "sched_getaffinity")
@@ -209,8 +212,7 @@ def main() -> None:
             source.with_suffix("").rename(destination)
             binaries[label] = file_hash(destination)
             commands[label] = [*prefix, str(destination), *arguments]
-        commands["php"] = [*prefix, php, "-n", "-d", "opcache.enable_cli=0", "-d", "opcache.jit=0",
-                           str(source), *arguments]
+        commands["php"] = [*prefix, *php_command(php, str(source), *arguments, isolated=True)]
         expected = f"{args.size * (args.size-1)//2}:{args.size * (args.size+1)//2}:{args.size}:" \
                    f"{3 * args.eval_count}:{args.rows}"
         measured_at = datetime.now(timezone.utc).isoformat()
@@ -224,7 +226,8 @@ def main() -> None:
                    "measurement_finished_at": datetime.now(timezone.utc).isoformat(),
                    "concurrent_build_guard": args.require_idle,
                    "platform": platform.platform(), "architecture": platform.machine(),
-                   "php_version": execute([php, "-n", "-v"], cwd, args.timeout).splitlines()[0],
+                   "php_version": execute(php_command(php, "-v", isolated=True), cwd, args.timeout).splitlines()[0],
+                   "php_mode": PHP_MODE,
                    "semantic_profile": args.php_version, "ir_opt": args.ir_opt,
                    "cpu": args.cpu, "iterations": args.iterations, "warmup": args.warmup,
                    "size": args.size, "rows": args.rows, "columns": args.columns,

@@ -62,6 +62,7 @@ mod implode_effects;
 mod spread_effects;
 mod call_effect_followups;
 mod strip_tags_effects;
+mod str_replace_search;
 
 #[path = "optimizer/branch_simplification.rs"]
 mod branch_simplification;
@@ -83,12 +84,20 @@ mod checked_int_sink;
 mod buffer_element_incdec;
 #[path = "optimizer/bounded_mixed_counter.rs"]
 mod bounded_mixed_counter;
+#[path = "optimizer/raw_promotable_loop.rs"]
+mod raw_promotable_loop;
+#[path = "optimizer/lazy_boxed_accumulator.rs"]
+mod lazy_boxed_accumulator;
 #[path = "optimizer/method_loop_counters.rs"]
 mod method_loop_counters;
 #[path = "optimizer/checked_numeric_chain.rs"]
 mod checked_numeric_chain;
 mod integer_destinations;
 mod numeric_consumers;
+mod min_max_selection;
+mod min_max_comparison_modes;
+mod min_max_result_ownership;
+mod foreach_key_cells;
 mod counter_fast_paths;
 mod counter_region_comparisons;
 mod integer_property_updates;

@@ -58,7 +58,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [PCNTL](php/pcntl.md) — forking, child waits, signals, process replacement, process groups, sessions, daemonization, and target-specific controls
 - [File information](php/fileinfo.md) - MIME types, encodings, custom magic databases and the complete PHP fileinfo surface
 - [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.
-- [XML](php/xml.md) — the `ext/xml` SAX parser (`XMLParser`, handlers, `xml_parse_into_struct()`, error codes) and `ext/xmlwriter` (`XMLWriter`, memory and URI output, DTDs, namespaces) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`)
+- [XML](php/xml.md): the `ext/xml` SAX parser (`XMLParser`, handlers, `xml_parse_into_struct()`, error codes), `ext/xmlwriter` (`XMLWriter`, memory and URI output, DTDs, namespaces), and SimpleXML (live child/attribute views, XPath, namespaces, and DOM imports) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`)
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers
 - [Namespaces](php/namespaces.md) — namespace, use, include/require/include_once/require_once, Composer/SPL autoloading, class introspection, constants, superglobals
@@ -71,7 +71,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
 - [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, stackful coroutine codegen
 - [PDO (Databases)](php/pdo.md) — PDO connections, prepared statements, fetch modes, transactions, and PDOException for SQLite, PostgreSQL, and MySQL/MariaDB drivers
-- [mysqli (MySQL / MariaDB)](php/mysqli.md) — the mysqli subset over the same pure-Rust MySQL client: buffered results, prepared statements, multi_query, and mysqli_report error handling
+- [mysqli (MySQL / MariaDB)](php/mysqli.md): connections, TLS, streamed and buffered results, reference-bound prepared statements, asynchronous queries, statistics, and the documented differences from mysqlnd
 - [Date and Time](php/datetime.md) — `DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`: construct, format, setters, `add`/`sub`, `diff`
 - [Calendar](php/calendar.md) — `ext/calendar`: Julian Day conversions for the Gregorian, Julian, French Republican and Jewish calendars, Easter, day/month names, `cal_*` dispatch
 - [Images](php/image.md) — GD image creation, I/O, color, drawing, text, transforms/filters, Exif/IPTC metadata, the Imagick (`Imagick`/`ImagickDraw`/`ImagickPixel`/`ImagickPixelIterator`/`ImagickKernel`) and Gmagick (`Gmagick`/`GmagickDraw`/`GmagickPixel`) object APIs, and Cairo 2D vector drawing (`CairoImageSurface`/`CairoContext`/`CairoMatrix`/patterns/gradients), plus `getimagesize`/`image_type_to_*`, backed by a pure-Rust codec/raster bridge (no system GD/ImageMagick/GraphicsMagick/cairo/libpng/libjpeg/libexif)

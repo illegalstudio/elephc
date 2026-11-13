@@ -8293,6 +8293,115 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "class",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Misc",
+    "canonical_name": "__elephc_eval_reflection_class_build",
+    "description": "Internal: build a fresh, complete ReflectionClass for a class an eval-built reflector names.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_eval_reflection_class_build` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/system/__elephc_eval_reflection_class_build.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_eval_reflection_class_build",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_global",
+          "writes_global",
+          "alloc_heap",
+          "refcount_op",
+          "may_throw",
+          "may_fatal"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_eval_reflection_class_build"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "__elephc_eval_reflection_class_build"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "class",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "object",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_eval_reflection_class_build",
+    "sub_area": "System"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "hour",
           "optional": false,
           "type": "int"
@@ -131846,7 +131955,7 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/simplexml_prelude/surface.rs",
+      "codegen_file": "src/simplexml_prelude/generated.rs",
       "codegen_function": "simplexml_import_dom",
       "notes": [
         "Implemented by the compiler-injected xml prelude."
@@ -131990,7 +132099,7 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/simplexml_prelude/surface.rs",
+      "codegen_file": "src/simplexml_prelude/generated.rs",
       "codegen_function": "simplexml_load_file",
       "notes": [
         "Implemented by the compiler-injected xml prelude."
@@ -132155,7 +132264,7 @@
     "is_internal": false,
     "lowering": {
       "checker_file": null,
-      "codegen_file": "src/simplexml_prelude/surface.rs",
+      "codegen_file": "src/simplexml_prelude/generated.rs",
       "codegen_function": "simplexml_load_string",
       "notes": [
         "Implemented by the compiler-injected xml prelude."
