@@ -21,6 +21,7 @@ pub(super) fn binary(
         EvalBinOp::Add => (CheckedNumericOp::Add, elephc_builtin_contract::ObjectArithmetic::Add),
         EvalBinOp::Sub => (CheckedNumericOp::Sub, elephc_builtin_contract::ObjectArithmetic::Sub),
         EvalBinOp::Mul => (CheckedNumericOp::Mul, elephc_builtin_contract::ObjectArithmetic::Mul),
+        EvalBinOp::Div => (CheckedNumericOp::Div, elephc_builtin_contract::ObjectArithmetic::Div),
         EvalBinOp::Pow => (CheckedNumericOp::Pow, elephc_builtin_contract::ObjectArithmetic::Pow),
         _ => return Ok(None),
     };

@@ -966,3 +966,20 @@ PHP-version boundary. Two native fixtures pass: direct handled/throwing callback
 status with both optimizer settings, and an ordinary opaque eval read caught by
 its surrounding PHP handler. Both report a clean heap. No additional semantic
 flag is activated by this infrastructure step.
+
+
+### Protected eval division
+
+The checked eval callback catalog adds an append-only `Div` selector. Both eval
+engines select it for staged Overflow operations while internal PHP hooks keep
+their old entries. The native kernel shares operand capture, numeric-string
+diagnostics, floating materialization and independent result boxing with the
+existing checked operators. It retains the eval backend's Float division result
+contract and throws `DivisionByZeroError` for positive and negative zero.
+
+One interpreter matrix, one all-five-target emitter test and one native fixture
+pass. Native execution covers a handler mutating the original divisor, a throwing
+prefix handler, signed zero, invalid operand kinds and untouched output sentinels
+on failure, with both optimizer settings and clean heaps. Existing arithmetic
+snapshot, power and callback-boundary units and a native arithmetic control pass.
+The public integration mask remains unchanged.

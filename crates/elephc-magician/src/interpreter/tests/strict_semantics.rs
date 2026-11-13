@@ -346,3 +346,46 @@ fn strict_eval_updates_staged_reference_writeback_preserves_original() {
         for (id, count) in &values.cell_owners { assert_eq!(*count, 0, "{source}: {:?}", values.values[id]); }
     }
 }
+
+
+/// Both eval engines keep floating division, checked kinds, zero errors and source owners.
+#[test]
+fn strict_eval_division_staged_walker_vm_values_and_errors() {
+    for (source, expected, error_class) in [
+        ("return 8 / 2;", Some(FakeValue::Float(4.0)), ""),
+        ("return '7.5' / 2;", Some(FakeValue::Float(3.75)), ""),
+        ("return '5x' / 2;", Some(FakeValue::Float(2.5)), ""),
+        ("return true / 2;", Some(FakeValue::Float(0.5)), ""),
+        ("return 1 / 0;", None, "DivisionByZeroError"),
+        ("return 1 / -0.0;", None, "DivisionByZeroError"),
+        ("return 'bad' / 2;", None, "TypeError"),
+        ("$saved = 7; $saved /= 0;", None, "DivisionByZeroError"),
+    ] {
+        for vm in [false, true] {
+            let mut context = ElephcEvalContext::new();
+            context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)).unwrap();
+            let mut scope = ElephcEvalScope::new();
+            let mut values = FakeOps::default();
+            let outcome = staged_numeric_execution(source, vm, &mut context, &mut scope, &mut values);
+            match (expected.clone(), outcome) {
+                (Some(expected), Ok(EvalControl::Return(value))) => {
+                    assert_eq!(values.get(value), expected, "{source}, vm={vm}");
+                    values.release(value).unwrap();
+                }
+                (None, Err(EvalStatus::UncaughtThrowable)) => {
+                    let error = context.take_pending_throw().expect("division exception owner");
+                    assert!(values.object_is_a(error, error_class, false).unwrap(), "{source}, vm={vm}");
+                    values.release(error).unwrap();
+                    if source.contains("$saved") {
+                        assert_eq!(values.get(scope.visible_cell("saved").unwrap()), FakeValue::Int(7));
+                    }
+                }
+                _ => panic!("unexpected division outcome: {source}, vm={vm}"),
+            }
+            for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+            for (id, owners) in &values.cell_owners {
+                assert_eq!(*owners, 0, "{source}, vm={vm}: {:?}", values.values[id]);
+            }
+        }
+    }
+}

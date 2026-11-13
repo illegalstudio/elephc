@@ -75,10 +75,14 @@ impl FakeOps {
         for warn in [left_warning, right_warning] {
             if warn { self.warning("Warning: A non-numeric value encountered\n")?; }
         }
+        if op == CheckedNumericOp::Div {
+            if right.float() == 0.0 { return self.checked_error("DivisionByZeroError", "Division by zero"); }
+            return self.float(left.float() / right.float());
+        }
         let integer_op = match op {
             CheckedNumericOp::Add => IntegerOp::Add, CheckedNumericOp::Sub => IntegerOp::Sub,
             CheckedNumericOp::Mul => IntegerOp::Mul, CheckedNumericOp::Pow => IntegerOp::Pow,
-            CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
+            CheckedNumericOp::Div | CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
                 | CheckedNumericOp::Increment | CheckedNumericOp::Decrement =>
                 unreachable!("unary and reduction operations were handled above"),
         };
@@ -95,7 +99,7 @@ impl FakeOps {
             CheckedNumericOp::Sub => left.float() - right.float(),
             CheckedNumericOp::Mul => left.float() * right.float(),
             CheckedNumericOp::Pow => left.float().powf(right.float()),
-            CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
+            CheckedNumericOp::Div | CheckedNumericOp::Abs | CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct
                 | CheckedNumericOp::Increment | CheckedNumericOp::Decrement =>
                 unreachable!("unary and reduction operations were handled above"),
         })

@@ -21,7 +21,8 @@ pub(super) const PREFIX_LABEL: &str = "_strict_numeric_prefix_warning";
 /// Emits diagnostics from the same byte strings used to materialize runtime lengths.
 pub(in crate::codegen_support::runtime) fn data(profile: SemanticProfile) -> String {
     if !profile.contains(StrictFeature::Overflow) { return String::new(); }
-    format!("\n.data\n{TYPE_LABEL}:\n.ascii {TYPE_MESSAGE:?}\n{PREFIX_LABEL}:\n.ascii {PREFIX_WARNING:?}\n")
+    format!("\n.data\n{TYPE_LABEL}:\n.ascii {TYPE_MESSAGE:?}\n{PREFIX_LABEL}:\n.ascii {PREFIX_WARNING:?}\n{}",
+        super::strict_numeric_div::data())
 }
 
 /// Borrows one Mixed cell and returns tag, exact numeric payload and prefix status.

@@ -14,7 +14,7 @@ pub const INTEGER_OVERFLOW_MESSAGE: &str = "--strict-overflow: integer arithmeti
 /// Version-one checked numeric callback selectors, independent of PHP implementation operations.
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CheckedNumericOp { Add = 0, Sub = 1, Mul = 2, Pow = 3, Abs = 4, ArraySum = 5, ArrayProduct = 6, Increment = 7, Decrement = 8 }
+pub enum CheckedNumericOp { Add = 0, Sub = 1, Mul = 2, Pow = 3, Abs = 4, ArraySum = 5, ArrayProduct = 6, Increment = 7, Decrement = 8, Div = 9 }
 
 /// Shared diagnostic for the preserved PHP null-decrement no-op.
 pub const NULL_DECREMENT_WARNING: &str = "Warning: Decrement on type null has no effect, this will change in the next major version of PHP\n";
