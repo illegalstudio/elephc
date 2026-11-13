@@ -2053,6 +2053,47 @@ fn emit_runtime_object_static_lookup_table(
     method_len_offset: usize,
     miss_label: &str,
 ) -> Result<()> {
+    let identity = ctx.shared.static_cases_identity(object_static_cases);
+    let cached = identity.and_then(|identity| ctx.shared.static_lookup_table(identity, true));
+    let table = match cached {
+        Some(table) => Some(table),
+        None => {
+            let table = build_object_static_lookup_table(ctx, object_static_cases)?;
+            if let (Some(identity), Some(table)) = (identity, &table) {
+                ctx.shared.cache_static_lookup_table(identity, true, table.clone());
+            }
+            table
+        }
+    };
+    let Some(table) = table else {
+        abi::emit_jump(ctx.emitter, miss_label);
+        return Ok(());
+    };
+    let kind_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let class_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    let class_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
+    let method_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+    let method_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+    let table_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, class_arg, receiver_payload_offset);
+    emit_branch_if_register_is_null(ctx, class_arg, miss_label);
+    abi::emit_load_from_address(ctx.emitter, class_arg, class_arg, 0);
+    abi::emit_load_int_immediate(ctx.emitter, kind_arg, 1);
+    abi::emit_load_int_immediate(ctx.emitter, class_len_arg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, method_arg, method_ptr_offset);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, method_len_arg, method_len_offset);
+    emit_composite_lookup_call(ctx, table_arg, table);
+    Ok(())
+}
+
+/// Builds `emit_runtime_object_static_lookup_table`'s table, or `None` when no case names a
+/// compiled class.
+fn build_object_static_lookup_table(
+    ctx: &mut FunctionContext<'_>,
+    object_static_cases: &[callable_dispatch::RuntimeStaticMethodCallableCase],
+) -> Result<Option<StringLookupTable>> {
+    #[cfg(test)]
+    STATIC_TABLE_BUILDS.with(|count| count.set(count.get() + 1));
     let mut seen = crate::fast_hash::FastSet::default();
     let mut cases = Vec::with_capacity(object_static_cases.len());
     for case in object_static_cases {
@@ -2074,29 +2115,18 @@ fn emit_runtime_object_static_lookup_table(
         });
     }
     if cases.is_empty() {
-        abi::emit_jump(ctx.emitter, miss_label);
-        return Ok(());
+        return Ok(None);
     }
-    let table = emit_instance_lookup_table(ctx.data, cases)
-        .map_err(CodegenIrError::invalid_module)?;
-    let kind_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-    let class_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
-    let class_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
-    let method_arg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    let method_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 4);
-    let table_arg = abi::int_arg_reg_name(ctx.emitter.target, 5);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, class_arg, receiver_payload_offset);
-    emit_branch_if_register_is_null(ctx, class_arg, miss_label);
-    abi::emit_load_from_address(ctx.emitter, class_arg, class_arg, 0);
-    abi::emit_load_int_immediate(ctx.emitter, kind_arg, 1);
-    abi::emit_load_int_immediate(ctx.emitter, class_len_arg, 0);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, method_arg, method_ptr_offset);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, method_len_arg, method_len_offset);
-    emit_composite_lookup_call(ctx, table_arg, table);
-    Ok(())
+    emit_instance_lookup_table(ctx.data, cases)
+        .map(Some)
+        .map_err(CodegenIrError::invalid_module)
 }
 
 /// Resolves a static callable-array selector through a compact composite table.
+///
+/// The public static cases are one shared list, and every callable-array search body asked
+/// for its table: each rebuilt and re-interned the same rows. A table built from a list the
+/// codegen state holds is kept by that list's identity and reused.
 fn emit_runtime_static_lookup_table(
     ctx: &mut FunctionContext<'_>,
     cases: &[callable_dispatch::RuntimeStaticMethodCallableCase],
@@ -2105,16 +2135,29 @@ fn emit_runtime_static_lookup_table(
     method_ptr_offset: usize,
     method_len_offset: usize,
 ) -> Result<()> {
-    let table_cases = cases
-        .iter()
-        .map(|case| StaticLookupCase {
-            class_name: case.class_name.clone(),
-            method_name: case.method_name.clone(),
-            descriptor_label: case.case.descriptor_label.clone(),
-        })
-        .collect();
-    let table = emit_static_lookup_table(ctx.data, table_cases)
-        .map_err(CodegenIrError::invalid_module)?;
+    let identity = ctx.shared.static_cases_identity(cases);
+    let cached = identity.and_then(|identity| ctx.shared.static_lookup_table(identity, false));
+    let table = match cached {
+        Some(table) => table,
+        None => {
+            #[cfg(test)]
+            STATIC_TABLE_BUILDS.with(|count| count.set(count.get() + 1));
+            let table_cases = cases
+                .iter()
+                .map(|case| StaticLookupCase {
+                    class_name: case.class_name.clone(),
+                    method_name: case.method_name.clone(),
+                    descriptor_label: case.case.descriptor_label.clone(),
+                })
+                .collect();
+            let table = emit_static_lookup_table(ctx.data, table_cases)
+                .map_err(CodegenIrError::invalid_module)?;
+            if let Some(identity) = identity {
+                ctx.shared.cache_static_lookup_table(identity, false, table.clone());
+            }
+            table
+        }
+    };
     let kind_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     let class_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     let class_len_arg = abi::int_arg_reg_name(ctx.emitter.target, 2);
@@ -2292,8 +2335,8 @@ fn runtime_string_descriptor_cases_at_arity(
     );
     cases.extend(
         runtime_static_method_descriptor_cases(ctx, candidate_names)
-            .into_iter()
-            .map(|case| case.case),
+            .iter()
+            .map(|case| case.case.clone()),
     );
     cases.sort_by(|left, right| {
         left.php_name
@@ -3331,7 +3374,7 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
         return restore_typed_callable_array_after_mixed_use(ctx, callable);
     }
 
-    let mut static_cases = runtime_static_method_descriptor_cases(ctx, None);
+    let mut static_cases = runtime_static_method_descriptor_cases(ctx, None).as_ref().clone();
     // A class name reaches what this scope sees too; see `emit_inline_callable_array_lookup`.
     static_cases.extend(runtime_scope_visible_static_method_cases(ctx));
     if static_cases.is_empty() {
@@ -3610,7 +3653,7 @@ fn emit_string_callable_array_descriptor_value(
         emit_branch_if_lookup_missed(ctx, &miss_label);
         abi::emit_jump(ctx.emitter, &done_label);
     } else {
-        for case in &static_cases {
+        for case in static_cases.iter() {
             let next_label = ctx.next_label("callable_array_static_next");
             emit_branch_if_string_static_case_mismatch(ctx, case, &next_label);
             abi::emit_symbol_address(
@@ -3827,7 +3870,7 @@ fn instance_method_target_base(ctx: &FunctionContext<'_>) -> Vec<RuntimeArrayIns
 fn runtime_static_method_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     candidate_names: Option<&[String]>,
-) -> Vec<callable_dispatch::RuntimeStaticMethodCallableCase> {
+) -> std::sync::Arc<Vec<callable_dispatch::RuntimeStaticMethodCallableCase>> {
     if let Some(cases) = ctx
         .shared
         .runtime_static_method_descriptor_cases(candidate_names)
@@ -3889,8 +3932,9 @@ fn runtime_static_method_descriptor_cases(
     if let Some(case) = closure_from_callable_case(ctx, candidate_names) {
         cases.push(case);
     }
+    let cases = std::sync::Arc::new(cases);
     ctx.shared
-        .cache_runtime_static_method_descriptor_cases(candidate_names, &cases);
+        .cache_runtime_static_method_descriptor_cases(candidate_names, cases.clone());
     cases
 }
 
@@ -3955,8 +3999,50 @@ fn runtime_scope_visible_static_method_cases(
         return Vec::new();
     };
     let scope = scope.trim_start_matches('\\').to_string();
-    let mut collected = Vec::new();
-    let mut classes = ctx.module.class_infos.iter().collect::<Vec<_>>();
+    // The public ones are already in the shared ladder; only the rest are new here. Which
+    // methods those are, and in what order, does not depend on the scope.
+    let base = ctx.shared.non_public_static_base(|| non_public_static_base(ctx.module));
+    let mut cases = Vec::new();
+    for method in base.iter() {
+        if !scope_reaches_member(ctx, &scope, &method.class_name, &method.visibility) {
+            continue;
+        }
+        if !class_method_already_emitted(ctx, &method.impl_class, &method.method_key, true) {
+            continue;
+        }
+        if let Some(case) = build_static_method_descriptor_case(
+            ctx,
+            &method.class_name,
+            &method.method_name,
+            &method.method_key,
+            &method.impl_class,
+            method.class_id,
+            &method.sig,
+        ) {
+            cases.push(case);
+        }
+    }
+    cases
+}
+
+/// One non-public static method of the module; see `non_public_static_base`.
+pub(in crate::codegen) struct NonPublicStaticMethod {
+    class_name: String,
+    method_name: String,
+    method_key: String,
+    impl_class: String,
+    class_id: u64,
+    visibility: Visibility,
+    sig: crate::types::FunctionSig,
+}
+
+/// Every protected or private static method of `module`, sorted by class then method name: the
+/// scope-independent part of `runtime_scope_visible_static_method_cases`.
+fn non_public_static_base(module: &crate::ir::Module) -> Vec<NonPublicStaticMethod> {
+    #[cfg(test)]
+    NON_PUBLIC_STATIC_SCANS.with(|count| count.set(count.get() + 1));
+    let mut methods = Vec::new();
+    let mut classes = module.class_infos.iter().collect::<Vec<_>>();
     classes.sort_by(|left, right| left.0.cmp(right.0));
     for (class_name, class_info) in classes {
         let mut static_methods = class_info.static_methods.iter().collect::<Vec<_>>();
@@ -3965,11 +4051,7 @@ fn runtime_scope_visible_static_method_cases(
             let Some(visibility) = class_info.static_method_visibilities.get(method_name) else {
                 continue;
             };
-            // The public ones are already in the shared ladder; only the rest are new here.
             if matches!(visibility, Visibility::Public) {
-                continue;
-            }
-            if !scope_reaches_member(ctx, &scope, class_name, visibility) {
                 continue;
             }
             let method_key = php_symbol_key(method_name);
@@ -3978,34 +4060,18 @@ fn runtime_scope_visible_static_method_cases(
                 .get(&method_key)
                 .cloned()
                 .unwrap_or_else(|| class_name.clone());
-            if !class_method_already_emitted(ctx, &impl_class, &method_key, true) {
-                continue;
-            }
-            collected.push((
-                class_name.clone(),
-                method_name.clone(),
+            methods.push(NonPublicStaticMethod {
+                class_name: class_name.clone(),
+                method_name: method_name.clone(),
                 method_key,
                 impl_class,
-                class_info.class_id,
-                sig.clone(),
-            ));
+                class_id: class_info.class_id,
+                visibility: visibility.clone(),
+                sig: sig.clone(),
+            });
         }
     }
-    let mut cases = Vec::new();
-    for (class_name, method_name, method_key, impl_class, class_id, sig) in collected {
-        if let Some(case) = build_static_method_descriptor_case(
-            ctx,
-            &class_name,
-            &method_name,
-            &method_key,
-            &impl_class,
-            class_id,
-            &sig,
-        ) {
-            cases.push(case);
-        }
-    }
-    cases
+    methods
 }
 
 /// Whether an `[$object, 'name']` callable built in the function being emitted may reach this
@@ -6466,4 +6532,8 @@ fn emit_undefined_runtime_string_call_fatal(ctx: &mut FunctionContext<'_>) {
 std::thread_local! {
     /// Callable-array instance candidate lists built (once per class scope) on this test thread.
     pub(crate) static INSTANCE_TARGET_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Static callable-array lookup tables (class-name or class-id keyed) built on this thread.
+    pub(crate) static STATIC_TABLE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Scans of the module for its non-public static methods on this thread.
+    pub(crate) static NON_PUBLIC_STATIC_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

@@ -243,6 +243,48 @@ fn callable_array_sites_share_one_candidate_list_per_scope() {
     assert_eq!(small, large, "candidate lists grew with the sites: {small} vs {large}");
 }
 
+/// `count` classes whose method each makes a runtime callable-array call (one class scope per
+/// class), plus public static methods enough for the static tables and a protected one.
+fn many_callable_array_scopes(count: usize) -> String {
+    let mut source = String::from("<?php\nclass S {\n");
+    for index in 0..12 {
+        source.push_str(&format!("    public static function s{index}(int $x): int {{ return $x + {index}; }}\n"));
+    }
+    source.push_str("    protected static function hidden(int $x): int { return -$x; }\n}\n");
+    let mut calls = String::new();
+    for index in 0..count {
+        source.push_str(&format!(
+            "class C{index} extends S {{ public function run($o, $m): int {{ return call_user_func([$o, $m], {index}); }} }}\n"
+        ));
+        calls.push_str(&format!("$n += (new C{index}())->run($argc > 1 ? new C0() : 'S', $argc > 2 ? 's1' : 's0');\n"));
+    }
+    format!("{source}$n = 0;\n{calls}echo $n, \"\\n\";\n")
+}
+
+/// (static lookup tables built, non-public static scans) while generating code for `source`.
+fn static_table_work(source: &str) -> (u64, u64) {
+    let module = lower_source(source);
+    crate::codegen::STATIC_TABLE_BUILDS.with(|count| count.set(0));
+    crate::codegen::NON_PUBLIC_STATIC_SCANS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    (
+        crate::codegen::STATIC_TABLE_BUILDS.with(|count| count.get()),
+        crate::codegen::NON_PUBLIC_STATIC_SCANS.with(|count| count.get()),
+    )
+}
+
+/// The callable-array search body of each class scope shares the public static tables and the
+/// module's non-public static list: each body rebuilt both tables from the same public cases
+/// and re-sorted every class's static methods, 788 bodies on the Symfony demo console.
+#[test]
+fn callable_array_scopes_share_the_public_static_tables() {
+    let (small_tables, small_scans) = static_table_work(&many_callable_array_scopes(4));
+    let (large_tables, large_scans) = static_table_work(&many_callable_array_scopes(32));
+    assert!(small_tables > 0, "the fixture no longer reaches the static lookup tables");
+    assert_eq!(small_tables, large_tables, "static tables grew with the scopes: {small_tables} vs {large_tables}");
+    assert!(small_scans <= 1 && large_scans <= 1, "non-public statics rescanned: {small_scans}, {large_scans}");
+}
+
 /// `class Base` with `count` methods, `count` subclasses each overriding one, and a function
 /// calling every method on a `Base` receiver: `count` dispatch folds over Base's family.
 fn many_base_dispatch_folds(count: usize) -> String {

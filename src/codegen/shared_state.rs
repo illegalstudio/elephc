@@ -35,7 +35,7 @@ use super::shared_reflection::SharedReflectionState;
 type StringCasesEntry = (Option<PhpType>, Option<Vec<String>>, bool, Option<usize>, Vec<RuntimeCallableCase>);
 
 /// Cached static-method callable cases for one candidate-name set.
-type StaticCasesEntry = (Option<Vec<String>>, Vec<RuntimeStaticMethodCallableCase>);
+type StaticCasesEntry = (Option<Vec<String>>, std::sync::Arc<Vec<RuntimeStaticMethodCallableCase>>);
 
 /// Receiver-captured descriptor templates, bucketed by `instance_descriptor_bucket`.
 type InstanceDescriptorMap =
@@ -55,6 +55,12 @@ pub(crate) struct SharedCodegenState {
     wrapper_module: Option<Box<Module>>,
     /// The scope-independent callable-array instance candidates; see
     /// `instance_method_target_base`.
+    /// Every non-public static method of the module, sorted by class then method: the part of a
+    /// scope's visible static cases that does not depend on the scope. Each class scope re-sorted
+    /// every class and static method to find them.
+    non_public_static_base: std::cell::OnceCell<
+        std::sync::Arc<Vec<super::lower_inst::callables::NonPublicStaticMethod>>,
+    >,
     instance_method_target_base: std::cell::OnceCell<
         std::sync::Arc<Vec<super::lower_inst::callables::RuntimeArrayInstanceMethodTarget>>,
     >,
@@ -78,6 +84,11 @@ pub(crate) struct SharedCodegenState {
     /// table; each used to look every target's descriptor up and rebuild the table.
     instance_lookup_tables:
         std::cell::RefCell<crate::fast_hash::FastMap<Vec<usize>, crate::codegen_support::callable_lookup::StringLookupTable>>,
+    /// Finished static lookup tables built from a cached static-case list, keyed by that list's
+    /// identity and the table form. Every callable-array search body asked for the same two
+    /// public tables and rebuilt them: 788 bodies on the Symfony demo console.
+    static_lookup_tables:
+        std::cell::RefCell<crate::fast_hash::FastMap<(usize, bool), crate::codegen_support::callable_lookup::StringLookupTable>>,
     /// Keys of the keyed helpers this state already emitted. Two cache entries can need one
     /// helper (an instance-method entry wrapper serves every receiver class of its implementing
     /// class), and a second copy in the same text is a duplicate definition: only the parallel
@@ -513,6 +524,16 @@ impl SharedCodegenState {
         built
     }
 
+    /// The non-public static methods of the module, collected once by `build`.
+    pub(super) fn non_public_static_base(
+        &self,
+        build: impl FnOnce() -> Vec<super::lower_inst::callables::NonPublicStaticMethod>,
+    ) -> std::sync::Arc<Vec<super::lower_inst::callables::NonPublicStaticMethod>> {
+        self.non_public_static_base
+            .get_or_init(|| std::sync::Arc::new(build()))
+            .clone()
+    }
+
     pub(super) fn instance_method_target_base(
         &self,
         build: impl FnOnce() -> Vec<super::lower_inst::callables::RuntimeArrayInstanceMethodTarget>,
@@ -573,10 +594,12 @@ impl SharedCodegenState {
             reflection: SharedReflectionState::empty(),
             wrapper_module: None,
             instance_method_target_base: std::cell::OnceCell::new(),
+            non_public_static_base: std::cell::OnceCell::new(),
             instance_method_targets_by_scope: std::cell::RefCell::new(Default::default()),
             mixed_method_candidates: Default::default(),
             base_target_signatures: std::cell::OnceCell::new(),
             instance_lookup_tables: Default::default(),
+            static_lookup_tables: Default::default(),
             emitted_instance_methods: EmittedMethods::default(),
             emitted_static_methods: EmittedMethods::default(),
             emitted_keyed_helpers: HashSet::default(),
@@ -1080,6 +1103,7 @@ impl SharedCodegenState {
         // `_data_h…` the serial pass never defines (it spells its own tables by counter), and a
         // Symfony `--web` build without preload failed to link on three such labels.
         self.instance_lookup_tables.borrow_mut().clear();
+        self.static_lookup_tables.borrow_mut().clear();
         self.inaccessible_method_table = None;
     }
 
@@ -1212,7 +1236,7 @@ impl SharedCodegenState {
     pub(super) fn runtime_static_method_descriptor_cases(
         &self,
         candidate_names: Option<&[String]>,
-    ) -> Option<Vec<RuntimeStaticMethodCallableCase>> {
+    ) -> Option<std::sync::Arc<Vec<RuntimeStaticMethodCallableCase>>> {
         let matches =
             |(cached_names, _): &&StaticCasesEntry| cached_names.as_deref() == candidate_names;
         let preset = self.preset.as_ref();
@@ -1230,13 +1254,49 @@ impl SharedCodegenState {
     pub(super) fn cache_runtime_static_method_descriptor_cases(
         &mut self,
         candidate_names: Option<&[String]>,
-        cases: &[RuntimeStaticMethodCallableCase],
+        cases: std::sync::Arc<Vec<RuntimeStaticMethodCallableCase>>,
     ) {
         self.touch_cache();
-        self.runtime_static_method_descriptor_cases.push((
-            candidate_names.map(|names| names.to_vec()),
-            cases.to_vec(),
-        ));
+        self.runtime_static_method_descriptor_cases
+            .push((candidate_names.map(|names| names.to_vec()), cases));
+    }
+
+    /// Names `cases` when it IS one of the static-case lists this state (or its preset) holds,
+    /// not a copy: the list's address while the state keeps it alive. Any other slice, such as a
+    /// scope's own list built for one site, gets no name, so a freed temporary can never pass
+    /// for a cached list at a reused address.
+    pub(super) fn static_cases_identity(&self, cases: &[RuntimeStaticMethodCallableCase]) -> Option<usize> {
+        if cases.is_empty() {
+            return None;
+        }
+        let same = |(_, list): &StaticCasesEntry| {
+            list.as_ptr() == cases.as_ptr() && list.len() == cases.len()
+        };
+        let preset = self.preset.as_ref().map(|preset| preset.static_cases.as_slice()).unwrap_or(&[]);
+        (preset.iter().any(same) || self.runtime_static_method_descriptor_cases.iter().any(same))
+            .then_some(cases.as_ptr() as usize)
+    }
+
+    /// A finished static lookup table built from the cached case list `identity` names, in the
+    /// `object` (class-id keyed) or class-name keyed form. Keyed like the instance tables.
+    pub(super) fn static_lookup_table(
+        &self,
+        identity: usize,
+        object: bool,
+    ) -> Option<crate::codegen_support::callable_lookup::StringLookupTable> {
+        self.touch_cache_keyed();
+        self.static_lookup_tables.borrow().get(&(identity, object)).cloned()
+    }
+
+    /// Records a finished static lookup table; see `static_lookup_table`.
+    pub(super) fn cache_static_lookup_table(
+        &self,
+        identity: usize,
+        object: bool,
+        table: crate::codegen_support::callable_lookup::StringLookupTable,
+    ) {
+        self.touch_cache_keyed();
+        self.static_lookup_tables.borrow_mut().insert((identity, object), table);
     }
 
     /// Returns one static-method descriptor case already emitted for another target set.
