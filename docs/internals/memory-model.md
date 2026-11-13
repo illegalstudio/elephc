@@ -127,6 +127,17 @@ stores, so re-entering a counter loop does not box its seed. References, `eval`,
 retain ordinary heap storage. See
 [Frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells).
 
+### Reused foreach key cells
+
+The key variable of a by-value `foreach` is a boxed `mixed` cell, because a hash key can be
+an integer or a string. Binding a new key used to allocate one cell per entry and release
+the previous one. For an integer key of a source that is statically a PHP array,
+`__rt_mixed_reuse_int_cell` now rewrites the previous cell in place when the key variable
+is its only owner (reference count one) and it holds a scalar, so a keyed loop costs one
+cell in total. A key that was
+copied into an array, another variable, a closure or a property has a higher reference
+count and keeps its value while the loop allocates a new cell for the next entry.
+
 ### Variable allocation
 
 EIR lowering declares PHP locals and hidden temporary slots before codegen.

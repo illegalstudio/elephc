@@ -452,8 +452,11 @@ fn lower_foreach_selected(
         iterator_cleanup: by_ref_origin.map(|_| (iterator_state, array.span)),
         receiver_pin,
     });
+    // Only a source that is statically a PHP array reads its key without user code.
+    let array_source = matches!(source_php_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+        || source_php_ty.is_php_array();
     super::foreach_bindings::bind_current(
-        ctx, iterator, &source_ty, key_var, value_var, value_by_ref, array.span,
+        ctx, iterator, &source_ty, key_var, value_var, value_by_ref, array_source, array.span,
     );
     lower_block(ctx, body);
     ctx.loop_stack.pop();

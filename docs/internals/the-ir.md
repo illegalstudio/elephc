@@ -801,6 +801,32 @@ slot ends in the state one whose store never ran is already in.
 | `IBitAnd`, `IBitOr`, `IBitXor`, `IShl`, `IShrA` | `I64`, `I64` | `I64` | pure |
 | `FAdd`, `FSub`, `FMul`, `FDiv`, `FPow`, `FNeg` | `F64` operands | `F64` | pure or libcall |
 | `MixedNumericBinop(add\|sub\|mul)` | mixed/union operands | mixed/scalar | `reads_heap`, maybe `alloc_heap`, `may_warn`, `may_fatal`, `may_deopt` |
+| `MixedMinMax(rule)` | two operands for a pair rule, three or more for a fold rule; each a raw `int`/`float` or a boxed Mixed cell | owned Mixed copy of the winner | `reads_heap`, `alloc_heap`, `refcount_op`, `may_deopt` |
+
+`MixedMinMax` is a whole variadic `min()` / `max()` call whose arguments are neither all
+statically `int` nor all statically `float`. Its `I64` immediate is a `MinMaxRule`:
+`MaxPair` and `MinPair` are the two-argument forms (`left >= right` and `left < right`
+select the left operand), `MaxFold` and `MinFold` take every argument of a longer call and
+replace the running result only on a strict win. One instruction carries the whole call
+because php-src's comparison mode is state that one argument leaves for the next: a call
+compares numbers directly while every argument so far is an `int` or a `float`, and
+switches for good to the generic `zend_compare` at the first other argument, or when a
+float meets an integer a double cannot represent. The modes differ only on an unordered
+(`NAN`) comparison. Numerically a two-argument call returns its right operand and a longer
+call keeps its running result; generically `zend_compare` reports the pair as "greater",
+so a two-argument `max()` keeps its left operand and a longer `max()` takes the later
+argument, while `min()` behaves the same in both modes.
+
+A call whose operand may hold a GMP object (statically, or runtime-typed in a program that
+declares GMP) never becomes a selection: it keeps the prelude reducer, which follows the
+same modes, because the GMP comparator is PHP code that may throw. Operands are only read.
+The result is a detached copy that keeps the winner's runtime tag, so call lowering treats
+it as fresh and releases every owned argument. It must be a copy: a result that shared the
+winning operand's cell would change when that operand's variable is written through a
+reference, which mutates the cell in place. With only proven numeric operands the selection
+is a numeric observation and a frame-cell producer, and a runtime-typed selection that is
+only read keeps a guarded frame cell (see
+[Frame-local checked numeric cells](the-codegen.md#frame-local-checked-numeric-cells)).
 
 `BinOp::Div` follows PHP division behavior and may produce float. `BinOp::Pow`
 preserves PHP exponentiation result rules.
@@ -1084,7 +1110,7 @@ drifting apart silently.
 | Op | Operands | Result | Effects |
 |---|---|---|---|
 | `IterStart` | iterable value | iterator state | `reads_heap`, maybe `alloc_heap`, `may_deopt` |
-| `IterCurrentKey` | iterator state | key value | `reads_heap`, maybe `may_deopt` |
+| `IterCurrentKey` | iterator state, optional key-variable slot | key value | `reads_heap`, maybe `may_deopt` |
 | `IterCurrentValue` | iterator state | value | `reads_heap`, maybe `may_deopt` |
 | `IterNext` | iterator state | `I64` bool | `reads_heap`, `writes_heap`, maybe `may_deopt` |
 | `IterEnd` | iterator state | `Void` | maybe `refcount_op` |
@@ -1100,6 +1126,17 @@ The backend retains a plain object entry directly; only reference entries, neste
 boxes and null containers take the boxed path and are unboxed there, so the usual
 walk allocates no temporary cell.
 `foreach` over objects uses iterator dispatch metadata and may call user code.
+
+A by-value `foreach` over a source that is statically a PHP array passes the Mixed slot of
+its key variable as the `IterCurrentKey` immediate when that variable is a plain local. For
+an integer key the backend then calls `__rt_mixed_reuse_int_cell`, which rewrites the cell
+the slot still owns when its reference count is one and it holds a scalar, clears the slot
+and returns the cell as the instruction's owned result. A key that anything else still
+holds and a string key keep the allocating box. Such a fetch is emitted after the value
+has been published, so no destructor or handler can observe the emptied slot; the loop
+iterates a retained snapshot, so the key is the same one. Every other source (an object
+iterator, `iterable`, `mixed`) keeps the fetch before both publications and never names a
+slot. Passes treat the instruction as a writer of the named slot.
 
 ### Objects, Classes, Enums, and Attributes
 

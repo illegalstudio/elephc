@@ -28,6 +28,7 @@ use crate::codegen::{CodegenIrError, Result};
 #[path = "arithmetic/borrowed_integer_rhs_tests.rs"]
 mod borrowed_integer_rhs_tests;
 
+pub(super) mod min_max;
 pub(super) mod stack_cell;
 
 /// Lowers a two-operand integer arithmetic or bitwise instruction.

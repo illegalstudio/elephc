@@ -11,7 +11,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::Instruction;
+use crate::ir::{Instruction, MinMaxRule};
 use crate::types::PhpType;
 
 use crate::codegen::{CodegenIrError, Result};
@@ -999,18 +999,22 @@ fn lower_int_min_max(
 }
 
 /// Lowers floating `min()` / `max()`, promoting integer-like operands as needed.
+///
+/// The fold follows php-src's `MinMaxRule` for the call's argument count, so ties, signed
+/// zeros and `NAN` select the same operand on every target.
 fn lower_float_min_max(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     want_max: bool,
 ) -> Result<()> {
+    let rule = MinMaxRule::for_call(want_max, inst.operands.len());
     let first = expect_operand(inst, 0)?;
     load_numeric_as_float(ctx, first, min_max_name(want_max))?;
     for index in 1..inst.operands.len() {
         abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
         let candidate = expect_operand(inst, index)?;
         load_numeric_as_float(ctx, candidate, min_max_name(want_max))?;
-        emit_float_select(ctx, want_max);
+        emit_float_select(ctx, rule);
     }
     Ok(())
 }
@@ -1071,19 +1075,48 @@ fn emit_int_select(ctx: &mut FunctionContext<'_>, want_max: bool) {
     }
 }
 
-/// Selects the lower or greater floating candidate after the previous result is popped.
-fn emit_float_select(ctx: &mut FunctionContext<'_>, want_max: bool) {
+/// Selects between the popped running result (left) and the current candidate (right).
+///
+/// `fmax`/`fmin` and `maxsd`/`minsd` disagree with PHP and with each other on `NAN` and on
+/// signed zeros, so the selection is an explicit ordered comparison: the two-argument rules
+/// keep the left operand only for `left >= right` (max) or `left < right` (min), and the
+/// longer-call rules replace it only on a strict, ordered win of the candidate.
+fn emit_float_select(ctx: &mut FunctionContext<'_>, rule: MinMaxRule) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_float_reg(ctx.emitter, "d1");
-            let op = if want_max { "fmax" } else { "fmin" };
-            ctx.emitter.instruction(&format!("{} d0, d1, d0", op));             // keep the selected floating candidate in the result register
+            let take_candidate = match rule {
+                MinMaxRule::MaxPair => "lt",
+                MinMaxRule::MaxFold => "mi",
+                MinMaxRule::MinPair => "pl",
+                MinMaxRule::MinFold => "gt",
+            };
+            ctx.emitter.instruction("fcmp d1, d0");                             // order the running result against the current candidate
+            ctx.emitter.instruction(&format!("fcsel d0, d0, d1, {}", take_candidate)); // keep the candidate only when the rule selects it
         }
         Arch::X86_64 => {
             abi::emit_pop_float_reg(ctx.emitter, "xmm1");
-            let op = if want_max { "maxsd" } else { "minsd" };
-            ctx.emitter.instruction(&format!("{} xmm1, xmm0", op));             // combine the previous and current floating candidates
-            ctx.emitter.instruction("movsd xmm0, xmm1");                        // move the selected floating candidate into the result register
+            let keep_candidate = ctx.next_label("float_min_max_candidate");
+            match rule {
+                MinMaxRule::MaxPair => {
+                    ctx.emitter.instruction("ucomisd xmm1, xmm0");              // order the running result against the current candidate
+                    ctx.emitter.instruction(&format!("jb {}", keep_candidate)); // a smaller or unordered result fails `left >= right`
+                }
+                MinMaxRule::MaxFold => {
+                    ctx.emitter.instruction("ucomisd xmm0, xmm1");              // order the current candidate against the running result
+                    ctx.emitter.instruction(&format!("ja {}", keep_candidate)); // only an ordered, strictly greater candidate replaces the result
+                }
+                MinMaxRule::MinPair => {
+                    ctx.emitter.instruction("ucomisd xmm0, xmm1");              // order the current candidate against the running result
+                    ctx.emitter.instruction(&format!("jbe {}", keep_candidate)); // a candidate that is not strictly greater, or unordered, wins
+                }
+                MinMaxRule::MinFold => {
+                    ctx.emitter.instruction("ucomisd xmm1, xmm0");              // order the running result against the current candidate
+                    ctx.emitter.instruction(&format!("ja {}", keep_candidate)); // only an ordered, strictly smaller candidate replaces the result
+                }
+            }
+            ctx.emitter.instruction("movsd xmm0, xmm1");                        // keep the running result
+            ctx.emitter.label(&keep_candidate);
         }
     }
 }

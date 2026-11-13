@@ -1713,6 +1713,30 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 .is_some_and(|names| names.contains(name))
     }
 
+    /// Returns the frame slot whose Mixed cell a `foreach` key binding may rewrite in place.
+    ///
+    /// Only a plain PHP local stored as one boxed Mixed cell qualifies: the binding is about to
+    /// replace that cell, and the frame is its owner. A reference alias, a global or static
+    /// backing store, an extern global and an eval-scope name are all written through another
+    /// storage path, so their slot must not lend its cell.
+    pub(crate) fn reusable_foreach_key_slot(&self, name: &str) -> Option<LocalSlotId> {
+        if self.is_ref_bound_local(name)
+            || self.local_uses_global_storage(name)
+            || self.extern_global_type(name).is_some()
+            || self.should_store_to_eval_scope(name)
+            || self.append_update_cell_aliases.contains(name)
+        {
+            return None;
+        }
+        let slot = *self.local_slots.get(name)?;
+        let local = self.builder.function().locals.get(slot.as_raw() as usize)?;
+        (local.kind == LocalKind::PhpLocal
+            && local.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed)
+            && local.php_type.codegen_repr() == PhpType::Mixed
+            && self.local_type(name).codegen_repr() == PhpType::Mixed)
+            .then_some(slot)
+    }
+
     /// Returns true when a local is currently modeled as a by-reference alias.
     pub(crate) fn is_ref_bound_local(&self, name: &str) -> bool {
         self.ref_bound_locals.contains(name)
@@ -4241,6 +4265,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
@@ -4473,6 +4498,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(argument),
             Some(
                 Op::MixedNumericBinop
+                    | Op::MixedMinMax
                     | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub

@@ -74,6 +74,8 @@ pub(super) struct FrameLayout {
     pub(super) value_placement: ValuePlacement,
     pub(super) local_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_cell_offsets: HashMap<ValueId, usize>,
+    /// Frame cells a runtime-typed `min()`/`max()` selection fills when a number wins.
+    pub(super) guarded_cell_offsets: HashMap<ValueId, usize>,
     pub(super) numeric_seed_offsets: HashMap<LocalSlotId, usize>,
     pub(super) numeric_local_slots: HashSet<LocalSlotId>,
     /// Numeric locals whose every writer uses physically selected frame storage.
@@ -155,6 +157,11 @@ pub(super) fn layout_for_function(
         offset += 24;
         numeric_seed_offsets.insert(slot, offset);
     }
+    let mut guarded_cell_offsets = HashMap::new();
+    for value in numeric.guarded {
+        offset += 24;
+        guarded_cell_offsets.insert(value, offset);
+    }
     let numeric_frame_only_slots = super::stack_numeric::frame_only_locals(
         function, &numeric.locals, &numeric_cell_offsets, &numeric_seed_offsets,
     );
@@ -224,6 +231,7 @@ pub(super) fn layout_for_function(
         value_placement,
         local_offsets,
         numeric_cell_offsets,
+        guarded_cell_offsets,
         numeric_seed_offsets,
         numeric_local_slots: numeric.locals,
         numeric_frame_only_slots,

@@ -59,7 +59,9 @@ fn transient_end(proof: &Proof<'_>, value: ValueId, block: crate::ir::BlockId, s
             match inst.op {
                 Op::Release => {}
                 Op::Acquire | Op::Borrow if inst.immediate.is_none() => pending.push(inst.result?),
-                _ if scalar_observation(inst) || tagged_producer(inst) => end = end.max(position),
+                _ if scalar_observation(inst) || output_observation(inst) || tagged_producer(inst) => {
+                    end = end.max(position)
+                }
                 _ => return None,
             }
         }
