@@ -7,7 +7,7 @@
 //!
 //! Key details:
 //! - Each prelude (PDO, mysqli, tz, image, hash, tokenizer, curl, xml, fileinfo, var_export,
-//!   web environment, random, bcmath, gmp, listIdentifiers) is injected only when
+//!   web environment, web request, random, bcmath, gmp, listIdentifiers) is injected only when
 //!   the program uses its surface, and that decision has to be taken before name resolution so a
 //!   namespaced caller resolves to the injected declarations. The Composer/SPL autoload pass runs
 //!   AFTER name resolution, so a class file it loads that uses `PDO` or `CurlHandle` was never
