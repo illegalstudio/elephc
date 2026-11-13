@@ -644,6 +644,19 @@ jobs:
         run: |
           sh scripts/ci/validate_archived_nextest.sh "$RUNNER_TEMP"
 
+      - name: Extract test binaries and bridge archives
+        run: |
+          mkdir -p "$RUNNER_TEMP/nextest-debug"
+          "$RUNNER_TEMP/cargo-nextest" nextest list --list-type binaries-only --message-format json \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --extract-to "$RUNNER_TEMP/nextest-debug" --workspace-remap . > /dev/null
+          echo 'ELEPHC_TEST_PREBUILT_BRIDGES=1' >> "$GITHUB_ENV"
+
+      - name: Pin archived CLI bridges
+        uses: ./.github/actions/pin-test-bridges
+        with:
+          root: nextest-debug
+
       - name: Run focused debugger tests
         run: |
           mkdir -p "$RUNNER_TEMP/nextest-debug"
