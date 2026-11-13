@@ -164,6 +164,13 @@ fn spawn_worker(
                     std::process::exit(1);
                 }
             };
+            #[cfg(target_vendor = "apple")]
+            if let Some(shared) = shared_tcp {
+                // The receiver duplicate is installed; the listener, the other
+                // workers' channels, and the master's pending connections are
+                // master-only. An orphaned worker must not keep the port open.
+                shared.close_in_worker();
+            }
             if let Some(callbacks) = application {
                 worker::install_application_shutdown();
                 crate::request_state::reset_response();

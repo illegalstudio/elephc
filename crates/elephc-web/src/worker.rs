@@ -239,6 +239,9 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
             }
             let (stream, peer) = match accepted {
                 Ok(pair) => pair,
+                // The master owns the descriptor channel. EOF means it is gone,
+                // so this worker has no listener and must not spin.
+                Err(error) if error.kind() == std::io::ErrorKind::ConnectionAborted => break,
                 Err(_) => continue,
             };
             // Small response writes must leave immediately. Without TCP_NODELAY the
@@ -359,7 +362,10 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                             .headers()
                             .iter()
                             .map(|(name, value)| {
-                                (name.as_str().to_string(), value.to_str().unwrap_or("").to_string())
+                                (
+                                    name.as_str().to_string(),
+                                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                                )
                             })
                             .collect();
                         Some(forwarded::apply(&peer, &forwarded_headers, &trusted))

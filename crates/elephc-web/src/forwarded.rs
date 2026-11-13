@@ -210,20 +210,18 @@ pub(crate) fn apply(
     }
     if let Some(value) = header_joined(headers, "forwarded") {
         if let Some(forwarded) = ForwardedHeader::parse(&value) {
-            forwarded.apply(&mut facts, peer, trusted);
-            return facts;
+            if forwarded.apply(&mut facts, trusted) {
+                return facts;
+            }
         }
     }
     if let Some(value) = header_joined(headers, "x-forwarded-for") {
-        // A malformed chain invalidates only the client address: a valid
-        // X-Forwarded-Proto/Port from the same trusted peer is still useful.
-        if let Some(nodes) = parse_xff(&value) {
-            if let Some(node) = resolve_chain(&nodes, trusted, peer.remote_ip()) {
-                facts.remote_addr = node.ip.to_string();
-                if let Some(port) = node.port {
-                    facts.remote_port = port;
-                }
-            }
+        // A bad entry on the client side must not discard the address the
+        // trusted proxy appended on the right. Walk right-to-left and stop at
+        // the first non-parsing entry only if it is closer to the origin.
+        if let Some(node) = resolve_xff(&parse_xff(&value), trusted) {
+            facts.remote_addr = node.ip.to_string();
+            facts.remote_port = node.port.unwrap_or(0);
         }
     }
     let scheme_forwarded = header_last(headers, "x-forwarded-proto")
@@ -249,83 +247,88 @@ pub(crate) fn apply(
     facts
 }
 
-/// One parsed `Forwarded` header.
-struct ForwardedHeader {
-    /// `for=` chain in header order (client first).
-    nodes: Vec<ForwardedNode>,
-    /// Client-facing protocol from the first element.
+/// One element of an RFC 7239 `Forwarded` header.
+struct ForwardedElement {
+    /// The `for=` address, or `None` for unknown/obfuscated/malformed entries.
+    node: Option<ForwardedNode>,
+    /// The element's `proto=` value, when it parsed.
     scheme: Option<&'static str>,
-    /// Port from the first element's `host=` parameter.
+    /// The element's `host=` port, when present and valid.
     host_port: Option<u16>,
 }
 
+/// One parsed `Forwarded` header, retaining every element in wire order.
+struct ForwardedHeader {
+    /// Header elements in wire order (client first).
+    elements: Vec<ForwardedElement>,
+}
+
 impl ForwardedHeader {
-    /// Parses a well-formed RFC 7239 header, or returns `None` to fall back.
+    /// Parses every parseable element instead of rejecting the whole header.
     fn parse(value: &str) -> Option<Self> {
-        let mut nodes = Vec::new();
-        let mut scheme = None;
-        let mut first_host_port = None;
-        let mut saw_element = false;
-        let mut element_index = 0usize;
+        let mut elements = Vec::new();
         for element in split_quoted(value, ',') {
-            if element.is_empty() {
+            if element.trim().is_empty() {
                 continue;
             }
-            saw_element = true;
             let mut node = None;
-            let mut element_scheme = None;
-            let mut element_host_port = None;
+            let mut scheme = None;
+            let mut host_port_value = None;
             for pair in split_quoted(element, ';') {
-                if pair.is_empty() {
+                if pair.trim().is_empty() {
                     continue;
                 }
-                let (key, value) = pair.split_once('=')?;
+                let Some((key, value)) = pair.split_once('=') else {
+                    continue;
+                };
                 let key = key.trim().to_ascii_lowercase();
-                let value = unquote(value);
+                let value = unquote(value.trim());
                 match key.as_str() {
-                    "for" => node = Some(parse_forwarded_node(&value)?),
-                    "proto" => {
-                        element_scheme = Some(normalize_scheme(&value)?);
-                    }
-                    "host" => element_host_port = host_port(&value),
+                    "for" => node = parse_forwarded_node(&value),
+                    "proto" => scheme = normalize_scheme(&value),
+                    "host" => host_port_value = host_port(&value),
                     _ => {}
                 }
             }
-            if let Some(node) = node {
-                nodes.push(node);
-            }
-            if element_index == 0 {
-                scheme = element_scheme;
-                first_host_port = element_host_port;
-            }
-            element_index += 1;
+            elements.push(ForwardedElement {
+                node,
+                scheme,
+                host_port: host_port_value,
+            });
         }
-        saw_element.then_some(Self {
-            nodes,
-            scheme,
-            host_port: first_host_port,
-        })
+        (!elements.is_empty()).then_some(Self { elements })
     }
 
-    /// Applies this header's facts to `facts`.
-    fn apply(&self, facts: &mut ConnectionFacts, peer: &PeerInfo, trusted: &TrustedProxies) {
-        if let Some(node) = resolve_chain(&self.nodes, trusted, peer.remote_ip()) {
-            facts.remote_addr = node.ip.to_string();
-            if let Some(port) = node.port {
-                facts.remote_port = port;
+    /// Applies the closest untrusted element, including its proto and host.
+    ///
+    /// Returns false when no element yields a client address, in which case the
+    /// caller may still fall back to `X-Forwarded-*`.
+    fn apply(&self, facts: &mut ConnectionFacts, trusted: &TrustedProxies) -> bool {
+        for element in self.elements.iter().rev() {
+            let Some(node) = element.node else {
+                // Unknown, obfuscated, or malformed: stop the walk instead of
+                // trusting anything further left or discarding the whole header.
+                return false;
+            };
+            if trusted.is_trusted_ip(node.ip) {
+                continue;
             }
-        }
-        if let Some(scheme) = self.scheme {
-            facts.request_scheme = scheme.to_string();
-            facts.https = scheme == "https";
-        }
-        if let Some(port) = self.host_port {
-            facts.server_port = port;
-        } else if self.scheme.is_some() {
-            if let Some(port) = default_port(&facts.request_scheme) {
+            facts.remote_addr = normalize_ip(node.ip).to_string();
+            facts.remote_port = node.port.unwrap_or(0);
+            if let Some(scheme) = element.scheme {
+                facts.request_scheme = scheme.to_string();
+                facts.https = scheme == "https";
+            }
+            if let Some(port) = element.host_port {
                 facts.server_port = port;
+            } else if element.scheme.is_some() {
+                if let Some(port) = default_port(&facts.request_scheme) {
+                    facts.server_port = port;
+                }
             }
+            return true;
         }
+        false
     }
 }
 
@@ -339,17 +342,21 @@ struct ForwardedNode {
 }
 
 /// Parses an `X-Forwarded-For` value into a client-first chain.
-fn parse_xff(value: &str) -> Option<Vec<ForwardedNode>> {
-    let mut nodes = Vec::new();
-    for entry in value.split(',') {
-        let entry = entry.trim();
-        if entry.is_empty() {
-            return None;
-        }
-        let ip = entry.parse::<IpAddr>().ok()?;
-        nodes.push(ForwardedNode { ip, port: None });
-    }
-    Some(nodes)
+///
+/// Empty entries are skipped; a non-empty token that does not parse becomes
+/// `None`, which ends the right-to-left walk at that point.
+fn parse_xff(value: &str) -> Vec<Option<ForwardedNode>> {
+    value
+        .split(',')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                None
+            } else {
+                Some(parse_forwarded_node(entry))
+            }
+        })
+        .collect()
 }
 
 /// Parses one `for=` identifier, including quoted and bracketed IPv6 forms.
@@ -380,25 +387,26 @@ fn parse_forwarded_node(value: &str) -> Option<ForwardedNode> {
 
 /// Returns the rightmost chain entry that is not a trusted proxy.
 ///
-/// When every header hop is trusted, the socket peer is kept instead of
-/// inventing a client. `fallback` is `None` for a Unix-domain peer.
-fn resolve_chain(
-    nodes: &[ForwardedNode],
+/// A non-parsing entry stops the walk; entries to its left are client-supplied
+/// and untrustworthy. When every parsed hop is trusted, the socket peer stays
+/// authoritative.
+fn resolve_xff(
+    nodes: &[Option<ForwardedNode>],
     trusted: &TrustedProxies,
-    fallback: Option<IpAddr>,
 ) -> Option<ForwardedNode> {
     for node in nodes.iter().rev() {
-        if !trusted.is_trusted_ip(node.ip) {
-            return Some(ForwardedNode {
-                ip: normalize_ip(node.ip),
-                port: node.port,
-            });
+        match node {
+            Some(node) if !trusted.is_trusted_ip(node.ip) => {
+                return Some(ForwardedNode {
+                    ip: normalize_ip(node.ip),
+                    port: node.port,
+                });
+            }
+            Some(_) => {}
+            None => return None,
         }
     }
-    fallback.map(|ip| ForwardedNode {
-        ip: normalize_ip(ip),
-        port: None,
-    })
+    None
 }
 
 /// Returns every value for `name`, in wire order, case-insensitively.
@@ -693,6 +701,119 @@ mod tests {
         assert_eq!(facts.remote_addr, "127.0.0.1");
         assert_eq!(facts.request_scheme, "http");
         assert!(!facts.https);
+    }
+
+    /// A bad entry on the client side must not hide the address the trusted
+    /// proxy appended on the right.
+    #[test]
+    fn xff_bad_left_token_keeps_the_appended_client() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("X-Forwarded-For", "x, 198.51.100.7")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "198.51.100.7");
+    }
+
+    /// A load-balancer `ip:port` entry parses and updates REMOTE_PORT.
+    #[test]
+    fn xff_accepts_address_with_port() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("X-Forwarded-For", "198.51.100.7:4711")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "198.51.100.7");
+        assert_eq!(facts.remote_port, 4711);
+    }
+
+    /// A forwarded address without a port does not keep the proxy's port.
+    #[test]
+    fn xff_without_port_clears_the_proxy_port() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("X-Forwarded-For", "198.51.100.7")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "198.51.100.7");
+        assert_eq!(facts.remote_port, 0);
+    }
+
+    /// The invalid entry closest to the origin ends the walk and keeps the peer.
+    #[test]
+    fn xff_invalid_rightmost_keeps_the_peer() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("X-Forwarded-For", "x")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "127.0.0.1");
+    }
+
+    /// Proto and host come from the element whose `for=` was selected.
+    #[test]
+    fn forwarded_uses_the_chosen_element_proto_and_host() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[(
+                "Forwarded",
+                "for=1.1.1.1;proto=https;host=\"evil:8443\", for=203.0.113.9;proto=http",
+            )]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "203.0.113.9");
+        assert_eq!(facts.request_scheme, "http");
+        assert!(!facts.https);
+        assert_eq!(facts.server_port, 80);
+    }
+
+    /// The chosen element's host port wins over the client-side element.
+    #[test]
+    fn forwarded_host_port_comes_from_the_chosen_element() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[(
+                "Forwarded",
+                "for=1.1.1.1;proto=https;host=\"evil:8443\", for=203.0.113.9;proto=http;host=\"good:8080\"",
+            )]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "203.0.113.9");
+        assert_eq!(facts.server_port, 8080);
+    }
+
+    /// A malformed element left of the chosen client does not invalidate it.
+    #[test]
+    fn forwarded_garbage_left_of_the_client_is_ignored() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("Forwarded", "garbage, for=203.0.113.9")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "203.0.113.9");
+    }
+
+    /// An unknown identifier closest to the origin ends the walk.
+    #[test]
+    fn forwarded_unknown_rightmost_ends_the_walk() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("Forwarded", "for=203.0.113.9, for=unknown")]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "127.0.0.1");
+        assert_eq!(facts.request_scheme, "http");
+    }
+
+    /// A trusted chain followed by an invalid client entry falls back to the peer.
+    #[test]
+    fn xff_trusted_chain_with_invalid_client_falls_back() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[("X-Forwarded-For", "x, 10.0.0.5, 10.0.0.6")]),
+            &trusted("127.0.0.1/32,10.0.0.0/8"),
+        );
+        assert_eq!(facts.remote_addr, "127.0.0.1");
     }
 
     /// `X-Forwarded-Port` wins over the scheme default.

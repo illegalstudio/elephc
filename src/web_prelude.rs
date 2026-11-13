@@ -74,6 +74,11 @@ pub(crate) fn program_observes_environment(program: &[Stmt]) -> bool {
     environment::is_observable(program, &usage::collect_environment(program))
 }
 
+/// Detects `$_REQUEST` observers in the discarded autoload probe before web injection.
+pub(crate) fn program_observes_request(program: &[Stmt]) -> bool {
+    request_is_observable(program, &usage::collect_environment(program))
+}
+
 /// Which request superglobals the handler body can actually observe.
 ///
 /// The prelude used to build every one of them on every request. That is the
@@ -109,17 +114,29 @@ impl SuperglobalNeeds {
 fn superglobal_needs(program: &[Stmt], usage: &usage::Usage) -> SuperglobalNeeds {
     SuperglobalNeeds {
         env: environment::is_observable(program, usage),
-        request: ["_REQUEST", "GLOBALS"].iter().any(|name| {
-            usage.variables.contains(*name) || usage.storage_variables.contains(*name)
-        }) || ["eval", "get_defined_vars", "compact"]
+        request: request_is_observable(program, usage),
+    }
+}
+
+/// Decides whether a program can observe `$_REQUEST`.
+///
+/// The scan uses the same conservative channels as the environment probe:
+/// direct names, storage slots, compact/eval, and calls whose target is unknown.
+fn request_is_observable(program: &[Stmt], usage: &usage::Usage) -> bool {
+    ["_REQUEST", "GLOBALS"]
+        .iter()
+        .any(|name| usage.variables.contains(*name) || usage.storage_variables.contains(*name))
+        || ["eval", "get_defined_vars", "compact"]
             .iter()
             .any(|name| usage.references(name))
-            || ["eval", "get_defined_vars"]
-                .iter()
-                .any(|name| usage.literals.contains(*name))
-            || (usage.callable_names.has_unknown_target()
-                && usage::has_reachable_unknown_callable(program, usage)),
-    }
+        || ["eval", "get_defined_vars"]
+            .iter()
+            .any(|name| usage.literals.contains(*name))
+        // `compact('_REQUEST')` names the array through a literal; the autoload
+        // probe scans a different closure shape than the entry program.
+        || usage.literals.contains("_REQUEST")
+        || (usage.callable_names.has_unknown_target()
+            && usage::has_reachable_unknown_callable(program, usage))
 }
 
 /// The catch-all wrapper: the whole handler body goes inside its `try` so an uncaught exception
@@ -252,7 +269,7 @@ pub fn inject_if_web(
     preload_path: Option<&std::path::Path>,
 ) -> Program {
     inject_if_web_with_autoload_usage(
-        program, web, php_version, ini_overrides, inventory, preload_path, false,
+        program, web, php_version, ini_overrides, inventory, preload_path, false, false,
     )
 }
 
@@ -265,6 +282,7 @@ pub(crate) fn inject_if_web_with_autoload_usage(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload_path: Option<&std::path::Path>,
     autoload_observes_environment: bool,
+    autoload_observes_request: bool,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
         inject_if_web_on_compiler_stack(
@@ -275,6 +293,7 @@ pub(crate) fn inject_if_web_with_autoload_usage(
             inventory,
             preload_path,
             autoload_observes_environment,
+            autoload_observes_request,
         )
     })
 }
@@ -288,6 +307,7 @@ fn inject_if_web_on_compiler_stack(
     inventory: &mut crate::optimize::reachability::PreludeInventory,
     preload_path: Option<&std::path::Path>,
     autoload_observes_environment: bool,
+    autoload_observes_request: bool,
 ) -> Program {
     if !web {
         return program;
@@ -301,7 +321,7 @@ fn inject_if_web_on_compiler_stack(
         php_version,
         ini_overrides,
         superglobals.env || autoload_observes_environment,
-        superglobals.request,
+        superglobals.request || autoload_observes_request,
     );
     if !needs_callable_session_handler {
         combined.retain(|stmt| !is_callable_session_handler_decl(&stmt.kind));
