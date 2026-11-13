@@ -227,6 +227,15 @@ transport for PhpStorm (`elephc-jwio.2`), P4 and outside v1; it is not an xdebug
 API promise. The protocol split is firm; DBGp is deferred until a user needs
 PhpStorm specifically.
 
+**P1 decision (2026-11-13): keep DBGp deferred.** P1 closes with DAP as the
+only v1 adapter. A DBGp endpoint would duplicate transport, sequence and
+breakpoint bookkeeping for one IDE while the same runtime agent, metadata,
+value reader and exception state already serve DAP; it would not make any
+elephc feature work that DAP does not. No xdebug API or Zend-extension ABI is
+added either way. Revisit only if PhpStorm gains native DAP support, or a
+concrete PhpStorm workflow requires DBGp; any implementation then stays a
+transport adapter over the existing agent and metadata, never a second runtime.
+
 ## D6. DAP first, DBGp optional later
 
 DAP surface v1:
