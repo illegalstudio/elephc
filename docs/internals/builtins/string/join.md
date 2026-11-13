@@ -15,7 +15,7 @@ description: "Compiler internals for join(): lowering path, type checks, and run
 ### Lowering notes
 
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.implode` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.join` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
@@ -31,7 +31,7 @@ description: "Compiler internals for join(): lowering path, type checks, and run
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.implode`
+- **Typed EIR target**: `runtime.join`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
