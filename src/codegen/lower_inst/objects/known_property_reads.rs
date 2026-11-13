@@ -573,6 +573,29 @@ pub(in crate::codegen::lower_inst) fn lower_prop_initialized(
     }
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_))
+        && !object_is_this_receiver(ctx, object)?
+    {
+        // A class-typed receiver can still be the null sentinel of a missed element read.
+        // There is no slot to inspect then, so the probe answers false without dereferencing
+        // the sentinel, exactly as the boxed nullable probe answers for a non-object: `isset`,
+        // `empty` and `??` stay silent, and a store goes on to meet the null receiver itself.
+        let null_label = ctx.next_label("prop_initialized_null_receiver");
+        let done_label = ctx.next_label("prop_initialized_done");
+        let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+        crate::codegen::sentinels::emit_branch_if_null_container(
+            ctx.emitter,
+            base_reg,
+            scratch_reg,
+            &null_label,
+        );
+        emit_typed_property_initialized_bool(ctx, &slot, base_reg);
+        abi::emit_jump(ctx.emitter, &done_label);
+        ctx.emitter.label(&null_label);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        ctx.emitter.label(&done_label);
+        return store_if_result(ctx, inst);
+    }
     emit_typed_property_initialized_bool(ctx, &slot, base_reg);
     store_if_result(ctx, inst)
 }

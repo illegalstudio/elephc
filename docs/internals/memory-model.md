@@ -1236,6 +1236,33 @@ live owner allows this snapshot to be retired before deletion, preserving ordina
 destructor interleaving. A detached hash keeps its snapshot through deletion or
 exception unwinding. The old property value is never stored back.
 
+Property element writes (`$o->items[$k] = $v`, `$o->items[] = $v`) into an indexed
+array or hash slot use the same fetch. `PropGetForWrite` lends the property's own
+separated container, borrowed, and the write helper mutates it in place. The
+previous lowering read the property, took a second reference and stored the result
+back, so every write found a shared container, copied all of it and freed the old
+one: filling a property was quadratic. The slot's reference is now the one a split
+or growth consumes, so the backend only publishes the pointer the helper returns,
+without retaining or releasing anything, and only when it differs from the pointer
+the helper was given. An indexed array that grew or a table a warning handler
+shared during key conversion is relocated before any element is released, so a
+changed pointer is always safe to publish. An unchanged pointer is not written
+back: an overwrite releases the replaced element last, and that element's
+destructor may write or replace the same property. A hash key whose conversion
+can report a diagnostic re-reads the property after the conversion, so the write
+targets the container the property holds then. One write keeps the copying shape: a
+boxed `mixed` value stored into concrete element storage (`array<string, string>`,
+`array<int>`) is converted inside the write itself, and that conversion can call
+`__toString` or raise a warning whose handler replaces the property and frees the
+borrowed container. That write therefore takes its own reference, writes to the
+private copy and stores it back with `PropSet`.
+
+The runtime element writers keep the matching order. `__rt_hash_set`,
+`__rt_array_set_refcounted` and `__rt_array_set_mixed` store the replacement into
+the entry or slot before they release the overwritten value, and do not touch the
+container afterwards. A destructor that runs from that release therefore reads the
+new element, and may grow or replace the container, as it can in PHP.
+
 When a boxed property holds an `ArrayAccess` object, the native
 `__rt_mixed_object_offset_unset` helper retains the selected object across dispatch.
 A callback may clear the supplying property while still using its receiver. The

@@ -507,12 +507,18 @@ impl Checker {
                             .callable_array_param_target(arg, caller_env)?
                             .is_some();
                     if supplied_reference {
+                        let layout_contract = crate::types::is_written_reference_array_param(
+                            &decl.ref_params,
+                            &decl.param_types,
+                            arg_idx,
+                        );
                         self.require_boxed_by_ref_storage(
                             &declared_ty,
                             &ty,
                             arg,
                             caller_env,
                             can_widen_by_ref_local,
+                            layout_contract,
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                         self.record_boxed_reference_output(
@@ -521,6 +527,16 @@ impl Checker {
                             &ty,
                             span,
                             caller_env,
+                            layout_contract,
+                        )?;
+                    }
+                    if !supplied_reference {
+                        // A by-value list is rebuilt as the declared hash; refuse what cannot be.
+                        self.require_packed_argument_hash_storage(
+                            &declared_ty,
+                            &ty,
+                            arg.span,
+                            &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                     }
                     if !proven_callable_array {
@@ -534,8 +550,16 @@ impl Checker {
                             supplied_reference,
                         )?;
                     }
-                    let specialized_ty =
-                        Self::specialize_generic_array_param_hint(&declared_ty, &ty);
+                    // A written by-reference array type is a storage contract, not a hint.
+                    let specialized_ty = if Self::is_written_reference_array_param(
+                        &decl.ref_params,
+                        &decl.param_types,
+                        arg_idx,
+                    ) {
+                        declared_ty.clone()
+                    } else {
+                        Self::specialize_generic_array_param_hint(&declared_ty, &ty)
+                    };
                     param_types.push((decl.params[arg_idx].clone(), specialized_ty));
                     arg_idx += 1;
                     continue;
@@ -560,6 +584,7 @@ impl Checker {
                         arg,
                         caller_env,
                         can_widen_by_ref_local,
+                        false,
                         &format!("Function '{}' parameter ${}", name, param_name),
                     )?;
                     self.record_boxed_reference_output(
@@ -568,6 +593,7 @@ impl Checker {
                         &ty,
                         span,
                         caller_env,
+                        false,
                     )?;
                 }
                 param_types.push((decl.params[arg_idx].clone(), storage_ty));
@@ -603,6 +629,15 @@ impl Checker {
                         arg.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
+                    if !decl.variadic_by_ref {
+                        // A collected list is rebuilt as the element hash, or refused.
+                        self.require_packed_argument_hash_storage(
+                            &elem_ty,
+                            &ty,
+                            arg.span,
+                            &format!("Function '{}' variadic parameter ${}", name, vname),
+                        )?;
+                    }
                     // PHP applies `strict_types` to a variadic element exactly like a regular
                     // declared parameter, so the strict rejection runs here too; the coercive
                     // widenings `require_compatible_arg_type` allows are unchanged otherwise.

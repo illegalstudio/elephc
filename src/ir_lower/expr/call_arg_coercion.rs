@@ -753,6 +753,38 @@ pub(super) fn unbox_array_param_storage(
     result
 }
 
+/// Extracts a boxed array for a declared `array<K, V>` parameter, as the hash it is compiled for.
+///
+/// This is the typed contract `unbox_array_param_storage` says needs a layout check: a declared
+/// PHP `array` (or any boxed array value) holds a packed list or a hash depending on what was
+/// stored, and a list is a valid keyed array, but the callee reads hash storage. The payload is
+/// unboxed as a list VIEW and handed to `Op::ArrayToHash`, which reads the runtime heap kind:
+/// a hash is passed through as it is, a list is rebuilt. Either way the result owns one
+/// reference, taken over from the unbox.
+fn unbox_hash_param_storage(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    param_ty: PhpType,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let PhpType::AssocArray { value: entry_ty, .. } = param_ty.codegen_repr() else {
+        return unbox_array_param_storage(ctx, value, param_ty, span);
+    };
+    let list_view_ty = PhpType::Array(entry_ty);
+    let effects = Op::mixed_unbox_effects(&list_view_ty);
+    let list_view =
+        ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, list_view_ty, effects, span);
+    release_coerced_source_if_owned(ctx, value, span);
+    ctx.emit_value(
+        Op::ArrayToHash,
+        vec![list_view.value],
+        None,
+        param_ty,
+        Op::ArrayToHash.default_effects(),
+        span,
+    )
+}
+
 /// Extracts a statically checked callable whose merge storage became a Mixed cell.
 /// The backend retains the descriptor, so the extracted EIR value must own that lease.
 pub(super) fn unbox_callable_param_storage(
@@ -1021,9 +1053,32 @@ pub(super) fn coerce_operands_to_params(
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
             let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
-            let coerced = unbox_array_param_storage(ctx, lowered, param_ty.clone(), None);
+            let declared_hash = sig.declared_params.get(index).copied().unwrap_or(false)
+                && matches!(param_ty, PhpType::AssocArray { .. });
+            let coerced = if declared_hash {
+                unbox_hash_param_storage(ctx, lowered, param_ty.clone(), None)
+            } else {
+                unbox_array_param_storage(ctx, lowered, param_ty.clone(), None)
+            };
             operands[index] =
                 root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
+        } else if let Some(hash_ty) = packed_argument_param_storage(ctx, sig, index, value) {
+            // `ArrayToHash` consumes one owner of its operand, so the argument (a borrowed
+            // local, or a temporary the pass above already rooted) lends it a reference of its
+            // own. The caller's list is untouched and the callee receives an independent hash.
+            let lowered = lowered_value_from_id(ctx, value);
+            let source =
+                crate::ir_lower::ownership::acquire_if_refcounted(ctx, lowered, None);
+            let converted = ctx.emit_value(
+                Op::ArrayToHash,
+                vec![source.value],
+                None,
+                hash_ty,
+                Op::ArrayToHash.default_effects(),
+                None,
+            );
+            operands[index] =
+                root_evaluated_call_argument(ctx, converted, Span::dummy()).value;
         } else if sig.declared_params.get(index).copied().unwrap_or(false) {
             // Same declared-parameter scalar binding the positional path applies, run here in
             // parameter order because named and spread arguments are lowered in source order
@@ -1068,8 +1123,29 @@ fn operand_needs_param_coercion(
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
         || (matches!(param_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_)))
+        || packed_argument_param_storage(ctx, sig, index, operands[index]).is_some()
         || (sig.declared_params.get(index).copied().unwrap_or(false)
             && crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty).is_some())
+}
+
+/// Returns the hash a packed list operand is rebuilt into for a declared by-value hash
+/// parameter, or `None` when the operand already has the parameter's storage.
+///
+/// Only user-declared parameter types take part: a builtin's signature describes what its
+/// runtime helper accepts, and those helpers read either layout through the heap kind.
+fn packed_argument_param_storage(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    operand: crate::ir::ValueId,
+) -> Option<PhpType> {
+    if !sig.declared_params.get(index).copied().unwrap_or(false)
+        || sig.ref_params.get(index).copied().unwrap_or(false)
+    {
+        return None;
+    }
+    let (_, param_ty) = sig.params.get(index)?;
+    crate::types::packed_argument_hash_storage(param_ty, &ctx.builder.value_php_type(operand))
 }
 
 /// Normalizes concrete local arrays to the storage required by their by-reference parameter.
@@ -1095,6 +1171,14 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
         promote_reference_return_local_argument(ctx, sig, index, arg);
         return Some(ctx.load_local(name, Some(arg.span)).value);
     }
+    // Only a written array type is a layout contract; a plain `array` hint keeps the paths below.
+    if crate::types::is_written_reference_array_param(&sig.ref_params, &sig.param_type_exprs, index) {
+        if let Some(storage_ty) =
+            crate::types::packed_reference_argument_storage(param_ty, &ctx.local_type(name))
+        {
+            return Some(convert_packed_local_for_reference(ctx, sig, index, arg, name, storage_ty));
+        }
+    }
     if !by_ref_array_arg_needs_mixed_storage(ctx, name, param_ty) {
         return None;
     }
@@ -1111,6 +1195,64 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
     ctx.store_call_normalized_local(name, converted, array_ty, Some(arg.span));
     promote_reference_return_local_argument(ctx, sig, index, arg);
     Some(ctx.load_local(name, Some(arg.span)).value)
+}
+
+/// Converts a typed list local, in place, to the layout a declared by-reference container
+/// parameter is compiled for: a hash (`array<K, V>`) or a list of boxed values (`array<mixed>`).
+///
+/// The callee reads and writes the caller's variable through the reference, so the variable
+/// has to hold the declared layout before its address is taken. The conversion consumes the
+/// local's owner and the local is re-typed and stored back, which also records the conversion
+/// for the statement fixed point, so a call inside a loop or a branch converts the local at
+/// the region entry instead of mid-flight.
+///
+/// The checker accepts only an ordinary local here (rule 4 of `require_boxed_by_ref_storage`).
+/// A slot lowering cannot convert in place after all is refused rather than bound unconverted.
+fn convert_packed_local_for_reference(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+    name: &str,
+    storage_ty: PhpType,
+) -> crate::ir::ValueId {
+    if ctx.is_ref_bound_local(name)
+        || !crate::ir_lower::stmt::local_slot_is_convertible_here(ctx, name)
+    {
+        crate::ir_lower::diagnostics::refuse(
+            arg.span,
+            "A list variable that other code already reads as a typed list cannot be bound to a \
+             by-reference parameter with another array layout; declare the variable with the \
+             parameter's type",
+        );
+    }
+    let local = ctx.load_local(name, Some(arg.span));
+    if matches!(storage_ty.codegen_repr(), PhpType::AssocArray { .. }) {
+        let hash = ctx.emit_value(
+            Op::ArrayToHash,
+            vec![local.value],
+            None,
+            storage_ty.clone(),
+            Op::ArrayToHash.default_effects(),
+            Some(arg.span),
+        );
+        // The callee reaches the hash through this slot's address, so the slot has to keep
+        // holding the raw container pointer. A plain re-typing store would widen the frame
+        // slot to a boxed cell instead, and the callee would then read the box as the table.
+        ctx.store_retyped_container_local(name, hash, storage_ty, Some(arg.span));
+    } else {
+        let boxed = ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![local.value],
+            None,
+            storage_ty.clone(),
+            Op::ArrayToMixed.default_effects(),
+            Some(arg.span),
+        );
+        ctx.store_mutated_local(name, boxed, storage_ty, Some(arg.span));
+    }
+    promote_reference_return_local_argument(ctx, sig, index, arg);
+    ctx.load_local(name, Some(arg.span)).value
 }
 
 /// Lowers `$array[$index]` as a direct by-reference argument cell address.
