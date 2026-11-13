@@ -855,3 +855,27 @@ controls, the parser provenance regression and a native default-key/value-effect
 fixture pass. Both leading-positional parser controls, the compiler build and
 diff hygiene pass. The native fixture reports a clean heap. Exact-key runtime and
 producer integration remains staged; the public feature mask is unchanged.
+
+
+### Explicit checked eval numeric callbacks
+
+Magician user binary/unary arithmetic and public abs/pow dispatch now select a
+versioned checked callback explicitly. PHP implementation hooks stay permissive.
+The callback borrows its inputs, publishes one independent result on success and
+contains PHP exceptions below Rust through the shared full-handler boundary.
+Unsupported selectors/runtimes return status one without touching output. Native
+class arithmetic keeps the existing reviewed object contracts. Eval fake adapters
+share the host numeric-string grammar with compiler proofs and use the neutral
+checked integer evaluator.
+
+Focused all-five-target boundary emission, all three shared grammar tests, two
+walker/VM/builtin owner matrices (including FCC, CUF/CUFA and case-insensitive
+names), permissive abs/pow controls, compiler/exporter builds, generated builtin
+docs and architecture audits pass. The native callback matrix passes both profiles
+and both optimizer modes with clean heaps, intact failure output and owned Throwable
+retirement. The compiler binding-grammar control and assembly/diff hygiene also pass.
+The initial fixture used an incorrect runtime feature field, a PHP float-form minimum
+literal and an unversioned C import; all were corrected before this verified step.
+The public integrated profile mask remains unchanged until numeric/storage/eval parity is
+complete. Remaining checked reductions, updates and general arithmetic operand
+normalization follow alongside the other strict guarantees.

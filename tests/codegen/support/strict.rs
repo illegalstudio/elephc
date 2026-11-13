@@ -66,6 +66,20 @@ impl StrictFixture {
     pub(crate) fn capture_staged_lowering(
         &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
     ) -> ProgramOutput {
+        self.capture_staged_runtime(profile, optimize, false)
+    }
+
+    /// Links the native eval callback ABI while its public semantic profile remains staged.
+    pub(crate) fn capture_staged_eval_runtime(
+        &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
+    ) -> ProgramOutput {
+        self.capture_staged_runtime(profile, optimize, true)
+    }
+
+    /// Shares isolated assembly/link/heap validation with an explicitly requested eval runtime.
+    fn capture_staged_runtime(
+        &self, profile: elephc_semantics::SemanticProfile, optimize: bool, eval_runtime: bool,
+    ) -> ProgramOutput {
         let source = fs::read_to_string(self.directory.join("main.php")).unwrap();
         let tokens = elephc::lexer::tokenize_with_semantics(&source, elephc::source::SourceMode::Php, 0, profile).unwrap();
         let mut program = elephc::parser::parse(&tokens).unwrap();
@@ -80,6 +94,7 @@ impl StrictFixture {
             program = elephc::optimize::eliminate_dead_code(program, checked.local_binding_decision_spans());
         }
         let mut module = elephc::ir_lower::lower_program(&program, &checked, target(), false).unwrap();
+        module.required_runtime_features.eval_bridge |= eval_runtime;
         if optimize { elephc::ir_passes::optimize_module(&mut module); }
         elephc::ir::validate_module(&module).unwrap();
         let generated = elephc::codegen::generate_user_asm_from_ir_with_options_and_features(

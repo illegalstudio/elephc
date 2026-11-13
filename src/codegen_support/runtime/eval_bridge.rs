@@ -47,6 +47,7 @@ pub(crate) fn emit_eval_value_runtime(emitter: &mut Emitter, features: RuntimeFe
     emit_gc_lifecycle_wrappers(emitter);
     release_boundary::emit(emitter);
     bit_not::emit(emitter);
+    checked_numeric::emit(emitter);
     array_reference_query::emit_array_entry_reference_query(emitter);
     resources::emit_resource_inventory_wrapper(emitter);
     backtrace::emit_backtrace_entry_wrapper(emitter);
@@ -138,6 +139,7 @@ mod backtrace;
 mod gc_boundary;
 mod release_boundary;
 mod bit_not;
+mod checked_numeric;
 mod scope_release;
 mod owner_frames;
 mod semantic_profile;

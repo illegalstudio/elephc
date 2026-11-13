@@ -356,6 +356,16 @@ fn call_shared_runtime_builtin(
     // `pow()` is PHP's one math builtin whose operand overload reaches internal value objects.
     // The generated runtime adapter works on scalars only, so route an object operand through
     // the same `RuntimeValueOps::pow` default that `**` uses.
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Overflow) {
+        use elephc_semantics::numeric::CheckedNumericOp;
+        match (id, args) {
+            (elephc_builtin_contract::RuntimeBuiltinId::Abs, [value]) =>
+                return crate::interpreter::checked_numeric::apply(CheckedNumericOp::Abs, *value, *value, context, values).map(Some),
+            (elephc_builtin_contract::RuntimeBuiltinId::Pow, [base, exponent]) =>
+                return crate::interpreter::checked_numeric::binary(EvalBinOp::Pow, *base, *exponent, context, values),
+            _ => (),
+        }
+    }
     if id == elephc_builtin_contract::RuntimeBuiltinId::Unserialize {
         if let [data] = args {
             if let Some(function) = context.native_function("__elephc_gmp_unserialize") {

@@ -141,3 +141,97 @@ fn strict_profile_native_hooks_require_matching_semantic_policy() {
         }
     }
 }
+
+
+/// Exercises staged numeric consumers without enabling an incomplete profile at host entry points.
+fn staged_numeric_execution(
+    source: &str, vm: bool, context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope, values: &mut FakeOps,
+) -> Result<EvalControl, EvalStatus> {
+    let program = crate::parser::parse_fragment_with_semantics(source.as_bytes(), context.semantic_profile()).unwrap();
+    if vm {
+        let module = bytecode::compile_program(&program).expect("numeric fixture fits the VM");
+        bytecode::execute_module(&module, context, scope, values).map(|(control, _)| control)
+    } else {
+        execute_statements(program.statements(), context, scope, values)
+    }
+}
+
+/// Both eval consumers preserve exact integer kinds and transfer checked failures before storing.
+#[test]
+fn strict_eval_numeric_staged_walker_vm_values_and_failure_owners() {
+    for (source, expected) in [
+        ("return 9007199254740993 + 0;", Some(FakeValue::Int(9007199254740993))),
+        ("return 2 ** 62;", Some(FakeValue::Int(4611686018427387904))),
+        ("return 2 ** -1;", Some(FakeValue::Float(0.5))),
+        ("return 2.0 ** 63;", Some(FakeValue::Float(9223372036854775808.0))),
+        ("return '9007199254740993' + 0;", Some(FakeValue::Int(9007199254740993))),
+        ("return true + null;", Some(FakeValue::Int(1))),
+        ("return 9223372036854775807 + 1;", None),
+        ("return -9223372036854775808 - 1;", None),
+        ("return 9223372036854775807 * 2;", None),
+        ("return 2 ** 63;", None),
+        ("$minimum = -9223372036854775808; return -$minimum;", None),
+        ("return '9223372036854775807' + 1;", None),
+        ("$saved = 9223372036854775807; $saved += 1; return $saved;", None),
+    ] {
+        for vm in [false, true] {
+            let mut context = ElephcEvalContext::new();
+            context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)).unwrap();
+            let mut scope = ElephcEvalScope::new();
+            let mut values = FakeOps::default();
+            let outcome = staged_numeric_execution(source, vm, &mut context, &mut scope, &mut values);
+            match (&expected, outcome) {
+                (Some(expected), Ok(EvalControl::Return(value))) => {
+                    assert_eq!(&values.get(value), expected, "{source}, vm={vm}");
+                    values.release(value).unwrap();
+                }
+                (None, Err(EvalStatus::UncaughtThrowable)) => {
+                    let error = context.take_pending_throw().expect("checked exception owner");
+                    assert!(values.object_is_a(error, "ArithmeticError", false).unwrap(), "{source}");
+                    values.release(error).unwrap();
+                    if source.contains("$saved") {
+                        assert_eq!(values.get(scope.visible_cell("saved").unwrap()), FakeValue::Int(i64::MAX));
+                    }
+                }
+                _ => panic!("unexpected checked numeric outcome: {source}, vm={vm}"),
+            }
+            for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+            for (id, count) in &values.cell_owners {
+                assert_eq!(*count, 0, "{source}, vm={vm}: {:?}", values.values[id]);
+            }
+        }
+    }
+}
+
+/// Public builtin dispatch selects checked abs/pow while PHP implementation hooks stay permissive.
+#[test]
+fn strict_eval_numeric_staged_builtin_boundaries_and_php_controls() {
+    for source in [
+        "return abs(-9223372036854775808);",
+        "return pow(2, 63);",
+        "$callable = 'pow'; return $callable(2, 63);",
+        "$callable = pow(...); return $callable(2, 63);",
+        r"return \PoW(2, 63);",
+        "return call_user_func('abs', -9223372036854775808);",
+        "return call_user_func_array('pow', [2, 63]);",
+    ] {
+        let mut context = ElephcEvalContext::new();
+        context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)).unwrap();
+        let mut scope = ElephcEvalScope::new();
+        let mut values = FakeOps::default();
+        assert!(matches!(staged_numeric_execution(source, false, &mut context, &mut scope, &mut values),
+            Err(EvalStatus::UncaughtThrowable)), "{source}");
+        let error = context.take_pending_throw().expect("builtin checked exception owner");
+        assert!(values.object_is_a(error, "ArithmeticError", false).unwrap(), "{source}");
+        values.release(error).unwrap();
+        for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+        for (id, count) in &values.cell_owners { assert_eq!(*count, 0, "{source}: {:?}", values.values[id]); }
+    }
+    let mut values = FakeOps::default();
+    let maximum = values.int(i64::MAX).unwrap();
+    let one = values.int(1).unwrap();
+    let php = values.add(maximum, one).unwrap();
+    assert_eq!(values.get(php), FakeValue::Float(9223372036854775808.0));
+    for value in [maximum, one, php] { values.release(value).unwrap(); }
+}

@@ -64,9 +64,9 @@ pub(in crate::interpreter) fn eval_unary_value(
             }
             let zero = values.int(0)?;
             let result = if op == EvalUnaryOp::Plus {
-                values.add(zero, value)
+                eval_binary_result(EvalBinOp::Add, zero, value, context, values)
             } else {
-                values.sub(zero, value)
+                eval_binary_result(EvalBinOp::Sub, zero, value, context, values)
             };
             let released = values.release(zero);
             match (result, released) {

@@ -18,6 +18,9 @@ pub(in crate::interpreter) fn eval_binary_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if let Some(result) = super::super::checked_numeric::binary(op, left, right, context, values)? {
+        return Ok(result);
+    }
     match op {
         EvalBinOp::Add => values.add(left, right),
         EvalBinOp::Sub => values.sub(left, right),

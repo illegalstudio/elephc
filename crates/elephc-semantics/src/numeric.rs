@@ -11,6 +11,11 @@
 /// Shared text for catchable checked integer arithmetic failures.
 pub const INTEGER_OVERFLOW_MESSAGE: &str = "--strict-overflow: integer arithmetic overflow";
 
+/// Version-one checked numeric callback selectors, independent of PHP implementation operations.
+#[repr(u64)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CheckedNumericOp { Add = 0, Sub = 1, Mul = 2, Pow = 3, Abs = 4 }
+
 /// Integer arithmetic with an integer result contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IntegerOp { Add, Sub, Mul, Div, Mod, Pow }

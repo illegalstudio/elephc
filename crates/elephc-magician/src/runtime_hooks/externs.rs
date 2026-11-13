@@ -594,6 +594,10 @@ unsafe extern "C" {
         left: *mut RuntimeCell,
         right: *mut RuntimeCell,
     ) -> *mut RuntimeCell;
+    /// Contains checked numeric exceptions and publishes one owned result only on success.
+    pub(super) fn __elephc_eval_checked_numeric_v1(
+        op: u64, left: *mut RuntimeCell, right: *mut RuntimeCell, result: *mut *mut RuntimeCell,
+    ) -> u64;
     /// Returns the boxed result of raising the left operand to the right operand.
     pub(super) fn __elephc_eval_value_pow(
         left: *mut RuntimeCell,

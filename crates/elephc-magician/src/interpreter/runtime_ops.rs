@@ -114,6 +114,15 @@ pub trait RuntimeValueOps {
     /// Restores a previously acquired native formatter recursion depth.
     fn debug_guard_restore(&mut self, _depth: u64) -> Result<(), EvalStatus> { Ok(()) }
 
+    /// Borrows operands for an explicitly checked operation and returns one independent owner.
+    /// The versioned native adapter contains exceptions below Rust; unsupported hosts fail closed.
+    fn checked_numeric(
+        &mut self, _op: elephc_semantics::numeric::CheckedNumericOp,
+        _left: RuntimeCellHandle, _right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        Err(EvalStatus::UnsupportedConstruct)
+    }
+
     /// Applies the shared internal-class handler before scalar runtime arithmetic.
     fn add(&mut self, left: RuntimeCellHandle, right: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
         if let Some(result) = object_operators::arithmetic(self, elephc_builtin_contract::ObjectArithmetic::Add, left, right)? {

@@ -69,7 +69,7 @@ pub(in crate::interpreter) fn clone_native_storage(
 }
 
 /// Calls a typed arithmetic adapter with operands in their original source order.
-pub(super) fn arithmetic(
+pub(in crate::interpreter) fn arithmetic(
     values: &mut (impl RuntimeValueOps + ?Sized), operation: ObjectArithmetic,
     left: RuntimeCellHandle, right: RuntimeCellHandle,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {

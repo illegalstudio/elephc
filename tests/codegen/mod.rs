@@ -35,6 +35,7 @@ mod repl;
 mod php_only;
 mod strict_semantics;
 mod strict_numeric_aggregates;
+mod strict_numeric_eval;
 mod testing;
 mod testing_command;
 mod testing_generic_functions;

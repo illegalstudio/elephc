@@ -23,6 +23,7 @@ mod conversions;
 mod lifecycle_ops;
 mod reference_owners;
 mod numeric_ops;
+mod checked_numeric;
 mod object_ops;
 mod runtime_ops;
 

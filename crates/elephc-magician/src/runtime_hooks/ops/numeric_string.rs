@@ -54,6 +54,18 @@ macro_rules! impl_numeric_string_ops {
         Self::handle(unsafe { __elephc_eval_value_fmod(left.as_ptr(), right.as_ptr()) })
     }
 
+    /// Selects a checked kernel explicitly without changing ordinary PHP runtime hooks.
+    fn checked_numeric(
+        &mut self, op: elephc_semantics::numeric::CheckedNumericOp,
+        left: RuntimeCellHandle, right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        let mut result = core::ptr::null_mut();
+        let status = unsafe { __elephc_eval_checked_numeric_v1(op as u64, left.as_ptr(), right.as_ptr(), &mut result) };
+        if status == 1 { return Err(EvalStatus::UnsupportedConstruct); }
+        self.handle_native_cleanup_status(status)?;
+        Self::handle(result)
+    }
+
     /// Adds two boxed Mixed cells using elephc runtime numeric semantics.
     fn add_raw(
         &mut self,

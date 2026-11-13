@@ -49,6 +49,14 @@ impl RuntimeValueOps for FakeOps {
         Ok(self.pending_runtime_throwable.take())
     }
 
+    /// Models the explicitly checked scalar callback without changing PHP fake primitives.
+    fn checked_numeric(
+        &mut self, op: elephc_semantics::numeric::CheckedNumericOp,
+        left: RuntimeCellHandle, right: RuntimeCellHandle,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_checked_numeric(op, left, right)
+    }
+
     impl_fake_collection_call_ops!();
     impl_fake_reflection_ops!();
     impl_fake_construction_raw_ops!();
