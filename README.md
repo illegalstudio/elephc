@@ -79,7 +79,8 @@ See [getelephc/doom](https://github.com/getelephc/doom) for full source, tests a
 ## Benchmarks
 
 CI measures native execution against equivalent C and PHP fixtures, plus
-Magician eval and buffer/array workloads. The nightly statistics workflow keeps
+Magician eval and buffer/array workloads. PHP runs with OPcache and the tracing
+JIT enabled. The nightly statistics workflow keeps
 the histories and graphs current. Times exclude compilation and linking.
 
 <picture>

@@ -60,6 +60,8 @@ mod loop_optimize_test;
 mod mem2reg_test;
 mod peephole_test;
 mod tagged_box_test;
+mod raw_promotable_loop_test;
+mod lazy_boxed_accumulator_test;
 mod regalloc_edges_test;
 mod regalloc_test;
 mod rematerialize_test;

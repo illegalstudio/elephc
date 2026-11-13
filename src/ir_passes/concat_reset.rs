@@ -801,6 +801,10 @@ impl<'a> ConcatInertAnalysis<'a> {
                             | Op::ZeroLocalSlot
                             | Op::PushCallOperandOwner
                             | Op::PopCallOperandOwner
+                            // A key fetch that names its variable's slot only moves the
+                            // scalar cell the slot holds into its result (or leaves the
+                            // slot alone): it never stores a new value there.
+                            | Op::IterCurrentKey
                     ) {
                         slot_disqualified[s_idx] = true;
                     }
@@ -929,6 +933,11 @@ impl<'a> ConcatInertAnalysis<'a> {
                 return super::numeric_domain::inputs(self.function, &inst.operands);
             }
             Op::PhpRelCmp if super::numeric_domain::comparison(inst) => {
+                return super::numeric_domain::inputs(self.function, &inst.operands);
+            }
+            // Two numeric operands compare without the number-to-string leg, so the selection
+            // only allocates its result cell and never touches concat scratch.
+            Op::MixedMinMax if super::numeric_domain::min_max(inst) => {
                 return super::numeric_domain::inputs(self.function, &inst.operands);
             }
             Op::IterStart

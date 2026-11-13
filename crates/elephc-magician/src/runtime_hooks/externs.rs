@@ -110,6 +110,13 @@ unsafe extern "C" {
         value_ptr: *const u8,
         value_len: u64,
     ) -> *mut RuntimeCell;
+    /// Allocates boxed array storage specialized for direct object elements.
+    pub(super) fn __elephc_eval_value_object_array_new(capacity: u64) -> *mut RuntimeCell;
+    /// Appends a boxed object to a boxed direct-object array, retaining it for the array.
+    pub(super) fn __elephc_eval_value_object_array_push(
+        array: *mut RuntimeCell,
+        object: *mut RuntimeCell,
+    ) -> *mut RuntimeCell;
     /// Allocates a boxed associative array with the requested initial capacity.
     pub(super) fn __elephc_eval_value_assoc_new(capacity: u64) -> *mut RuntimeCell;
     /// Reads a boxed array element after normalizing the supplied PHP key.

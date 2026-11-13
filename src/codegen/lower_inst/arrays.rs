@@ -1366,7 +1366,7 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let value_ty = if nullable_promotable {
         PhpType::TaggedScalar
     } else {
-        effective_array_set_value_type(&elem_ty, &raw_value_ty, inst)?
+        effective_array_set_value_type(ctx, &elem_ty, &raw_value_ty, inst)?
     };
     // A promotable write normalizes a boxed key itself (numeric strings, string hash keys).
     let promotable_write = inst.immediate == Some(Immediate::PromotableArray)
@@ -1396,6 +1396,10 @@ pub(super) fn lower_array_set(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             }
         }
         stamp_scalar_array_write_result(ctx, &value_ty);
+    }
+    if let Some(property) = super::objects::in_place_property_container(ctx, array)? {
+        // A property lent its own separated array: only a relocated array is published back.
+        return property.publish_relocated(ctx, array);
     }
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
@@ -1998,6 +2002,10 @@ pub(super) fn lower_array_push_value(
         && inst.immediate == Some(Immediate::PromotableArray)
         && promotable_scalar_element(&elem_ty);
     lower_runtime_polymorphic_array_push(ctx, array, value, &elem_ty, &stored_type, raw_scalar_hash)?;
+    if let Some(property) = super::objects::in_place_property_container(ctx, array)? {
+        // A property lent its own separated array: only a relocated array is published back.
+        return property.publish_relocated(ctx, array);
+    }
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
         ctx.store_mutated_container_writeback_to_local(slot, array)?;
@@ -4097,8 +4105,20 @@ fn indexed_array_element_type(array_ty: &PhpType, inst: &Instruction) -> Result<
     }
 }
 
+/// Returns whether storing a `value` class instance into an `element` class slot is an upcast.
+///
+/// Mirrors `indexed_object_write_keeps_element` in `ir_lower::stmt::array_write_storage`: the
+/// value is the element class, one of its subclasses, or an implementation of the element
+/// interface. The non-nominal `object` element (an empty class name) never qualifies.
+fn object_write_is_nominal_upcast(ctx: &FunctionContext<'_>, value: &str, element: &str) -> bool {
+    !element.is_empty()
+        && (super::objects::object_type_is_a(ctx, value, element)
+            || super::array_access_runtime::class_implements_interface(ctx, value, element))
+}
+
 /// Resolves the runtime value type that an indexed array write can store.
 fn effective_array_set_value_type(
+    ctx: &FunctionContext<'_>,
     elem_ty: &PhpType,
     value_ty: &PhpType,
     inst: &Instruction,
@@ -4111,8 +4131,15 @@ fn effective_array_set_value_type(
     if matches!(elem_ty, PhpType::Never | PhpType::Void) {
         return require_supported_array_set_value(value_ty, inst);
     }
+    // Every pointer is one raw word and every object one counted object pointer, whatever the
+    // target or class. Lowering keeps an object element only for a nominal upcast
+    // (`ir_lower::stmt::array_write_storage`); the same rule is checked again here, so a
+    // lowering bug that stores an unrelated class fails the build instead of letting a
+    // statically resolved property offset read another class's slot.
     if elem_ty == value_ty
         || matches!((&elem_ty, &value_ty), (PhpType::Pointer(_), PhpType::Pointer(_)))
+        || matches!((&elem_ty, &value_ty), (PhpType::Object(element), PhpType::Object(value))
+            if object_write_is_nominal_upcast(ctx, value, element))
     {
         return require_supported_array_set_value(value_ty, inst);
     }
@@ -4738,6 +4765,37 @@ echo implode(",", $a);
                 asm.contains(&call),
                 "{} must copy the self-replacement before the splice ({call})",
                 target.as_str()
+            );
+        }
+    }
+
+    /// An object offset write stays guarded by the nominal upcast rule in the backend.
+    ///
+    /// Lowering keeps `array<Actor>` storage for a `Player` write only because `Player` extends
+    /// `Actor`. With that relation removed from the class graph, the same EIR stores an
+    /// unrelated class into the element slot, and every target must refuse it instead of
+    /// compiling a write whose statically resolved property offsets would read the wrong slot.
+    #[test]
+    fn test_object_offset_write_requires_nominal_upcast_on_every_supported_target() {
+        let source = "<?php abstract class Actor { abstract public function value(): int; } \
+            final class Player extends Actor { public function value(): int { return 42; } } \
+            function run(): void { array<Actor> $items = [new Player()]; \
+            $items[0] = new Player(); echo $items[0]->value(); } run();";
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let mut module = crate::ir_lower::tests::lower_source_at_for_target(
+                source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+            );
+            generate_user_asm_from_ir(&module, false, false)
+                .unwrap_or_else(|error| panic!("{name}: upcast write rejected: {error:?}"));
+            module.class_infos.get_mut("Player").expect("Player class info").parent = None;
+            let error = format!(
+                "{:?}",
+                generate_user_asm_from_ir(&module, false, false)
+                    .expect_err("an unrelated class write must not compile")
+            );
+            assert!(
+                error.contains("array_set element PHP type"),
+                "{name}: unexpected error: {error}"
             );
         }
     }

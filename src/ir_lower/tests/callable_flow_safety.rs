@@ -33,6 +33,7 @@ class EvalOnlyUntypedMagicArguments {
                 let function = module.class_methods.iter().find(|function|
                     function.name == format!("{class}::{method}")).unwrap();
                 let arguments = function.params.iter().find(|parameter| parameter.name == "arguments").unwrap();
+                let expected = if method == "__call" { PhpType::Mixed } else { expected.clone() };
                 assert_eq!(arguments.php_type, expected, "{target}: {class}::{method}");
                 if expected != PhpType::Mixed {
                     assert!(function.instructions.iter().any(|instruction|

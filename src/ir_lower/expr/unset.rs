@@ -57,7 +57,9 @@ pub(super) fn lower_unset_locals(
             unconditional = true;
         }
     }
-    super::unset_collection::collect_after_unset(ctx, changed, unconditional, expr.span);
+    if unconditional || changed.is_some() {
+        super::unset_collection::collect_after_unset(ctx, changed, unconditional, expr.span);
+    }
     Some(null)
 }
 
@@ -156,7 +158,7 @@ pub(super) fn lower_unset_array_access(
     index: &Expr,
     expr: &Expr,
 ) -> Option<LoweredValue> {
-    let can_gate = super::unset_collection::key_has_no_callbacks(ctx, index);
+    let can_gate = super::unset_collection::key_can_gate_removal(ctx, index);
     if matches!(array.kind, ExprKind::Variable(_))
         && unset_array_access_has_object_receiver(ctx, array)
     {
@@ -193,8 +195,10 @@ fn lower_unset_array_access_from_key(
                 lower_unset_readonly_property_element(ctx, object, property, &message, index, expr);
                 return None;
             }
-            lower_unset_property_array_element(ctx, object, property, &property_ty, index, expr);
-            return None;
+            let removed =
+                lower_unset_property_array_element(ctx, object, property, &property_ty, index, expr);
+            let reports = can_gate && property_element_unset_reports_removal(ctx, object, property);
+            return reports.then_some(removed);
         }
         if unset_array_access_has_array_access_property_receiver(ctx, array) {
             lower_unset_array_access_property_offset(ctx, array, object, property, index, expr);
@@ -202,8 +206,8 @@ fn lower_unset_array_access_from_key(
         }
     }
     if let Some((receiver, property)) = unset_array_access_static_php_array_receiver(ctx, array) {
-        lower_unset_static_property_array_element(ctx, receiver, property, index, expr);
-        return None;
+        let removed = lower_unset_static_property_array_element(ctx, receiver, property, index, expr);
+        return removed.filter(|_| can_gate);
     }
     if opaque_property_dimension::supports(ctx, array) {
         opaque_property_dimension::lower(ctx, array, index, expr);

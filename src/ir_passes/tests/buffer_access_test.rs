@@ -1192,3 +1192,78 @@ fn skips_modules_that_enable_async_signals() {
     assert!(!hoist_buffer_resolution(&mut module));
     assert_eq!(count_ops(&module.functions[0], Op::BufferGet), 1);
 }
+
+/// Declares one packed element-view local (`$p = $b[$i]`) and returns its slot.
+fn add_view_local(builder: &mut Builder<'_>, name: &str) -> LocalSlotId {
+    builder.add_local(
+        Some(name.to_string()),
+        IrType::Heap(IrHeapKind::Object),
+        PhpType::Packed("Vec2".to_string()),
+        LocalKind::PhpLocal,
+    )
+}
+
+/// Emits `load_local` of a packed element-view slot.
+fn load_view(builder: &mut Builder<'_>, slot: LocalSlotId) -> ValueId {
+    builder.emit_load_local(slot, IrType::Heap(IrHeapKind::Object), PhpType::Packed("Vec2".to_string()))
+}
+
+/// Returns the value stored by the `nth` `store_local` of `slot` in block order.
+fn stored_value(function: &Function, block: BlockId, slot: LocalSlotId, nth: usize) -> ValueId {
+    block_instructions(function, block)
+        .into_iter()
+        .map(|inst| &function.instructions[inst.as_raw() as usize])
+        .filter(|inst| inst.op == Op::StoreLocal && inst.immediate == Some(Immediate::LocalSlot(slot)))
+        .nth(nth)
+        .and_then(|inst| inst.operands.first().copied())
+        .expect("store of the slot")
+}
+
+/// A loop that keeps the record address in an element-view local still hoists its resolution,
+/// and every read of the view becomes the address stored into it most recently.
+#[test]
+fn forwards_a_packed_element_view_local_inside_a_hoisted_loop() {
+    let mut slots = None;
+    let (function, entry, body) = simple_loop(packed_buffer_type(), |b, handle, index| {
+        let view = add_view_local(b, "p");
+        let first_copy = add_view_local(b, "q");
+        let second_copy = add_view_local(b, "r");
+        let record = emit_record_get(b, handle, index);
+        b.emit_store_local(view, record);
+        let first = load_view(b, view);
+        b.emit_store_local(first_copy, first);
+        let zero = b.emit_const_i64(0);
+        let other = emit_record_get(b, handle, zero);
+        b.emit_store_local(view, other);
+        let second = load_view(b, view);
+        b.emit_store_local(second_copy, second);
+        slots = Some((view, first_copy, second_copy));
+    });
+    let (view, first_copy, second_copy) = slots.expect("loop body ran");
+    let mut module = module_with(function);
+    assert!(hoist_buffer_resolution(&mut module));
+    let function = &module.functions[0];
+    validate_function(function).expect("rewritten function validates");
+    assert_eq!(count_ops(function, Op::BufferResolve), 1);
+    assert_eq!(count_ops(function, Op::BufferGet), 0);
+    assert_eq!(defining_op(function, stored_value(function, body, view, 0)), Op::BufferGetResolved);
+    assert_eq!(
+        stored_value(function, body, first_copy, 0),
+        stored_value(function, body, view, 0),
+        "the first read is the first stored address"
+    );
+    assert_eq!(
+        stored_value(function, body, second_copy, 0),
+        stored_value(function, body, view, 1),
+        "a later store of the view replaces the forwarded address"
+    );
+    let view_loads = block_instructions(function, body)
+        .into_iter()
+        .map(|inst| &function.instructions[inst.as_raw() as usize])
+        .filter(|inst| inst.op == Op::LoadLocal && inst.immediate == Some(Immediate::LocalSlot(view)))
+        .count();
+    assert_eq!(view_loads, 0, "no read of the view slot remains in the loop body");
+    assert!(block_instructions(function, entry).iter().any(|&inst| {
+        function.instructions[inst.as_raw() as usize].op == Op::BufferResolve
+    }));
+}

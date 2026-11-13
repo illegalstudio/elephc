@@ -768,6 +768,11 @@ fn validate_instruction_immediate(
                         .all(|op| !matches!(op, crate::ir::MixedNumericOp::Pow)))
             })
         }
+        // A pair rule selects between exactly two operands, a fold rule among three or more.
+        MixedMinMax => require_immediate(inst_id, inst, "min/max rule for its operand count", |imm| {
+            matches!(imm, Imm::I64(rule) if crate::ir::MinMaxRule::from_immediate(*rule)
+                .is_some_and(|rule| rule.accepts_operand_count(inst.operands.len())))
+        }),
         StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
             matches!(imm, Imm::I64(1) | Imm::I64(-1))
         }),
@@ -933,6 +938,17 @@ fn validate_opcode_rules(
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
+        IOverflows => {
+            check_binary(function, inst_id, inst, IrType::I64, "I64")?;
+            match inst.immediate {
+                Some(Immediate::MixedNumericOp(
+                    crate::ir::MixedNumericOp::Add
+                    | crate::ir::MixedNumericOp::Sub
+                    | crate::ir::MixedNumericOp::Mul,
+                )) => Ok(()),
+                _ => Err(ValidationError::UnexpectedImmediate(inst_id)),
+            }
+        }
         ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt | ICheckedSubToInt
         | ICheckedMulToInt | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
@@ -940,6 +956,10 @@ fn validate_opcode_rules(
         ICheckedNumericChainToInt => check_checked_numeric_chain(function, inst_id, inst),
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
+        // Each operand is a raw int/float scalar or a boxed Mixed cell; the backend dispatches
+        // on the operand's EIR type. The rule immediate pins the exact arity (two for a pair
+        // rule, three or more for a fold rule).
+        MixedMinMax => check_count_at_least(inst_id, inst, 2, "at least 2"),
         // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
         // the arity is pinned here; the backend dispatches on the operand's EIR type.
         StrIncDec => check_count(inst_id, inst, 1, "1"),

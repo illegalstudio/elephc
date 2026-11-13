@@ -88,6 +88,71 @@ pub(super) fn emit_aarch64_arrays(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the string-array-push wrapper frame
     emitter.instruction("ret");                                                 // return the updated boxed string-array handle to Rust
 
+    // Reflector lists (`__methods`, `__properties`, `__parameters`, `__types`) are typed
+    // `array<Class>` in compiled code, whose readers expect one object pointer per 8-byte
+    // slot under value_type 6. A boxed Mixed array there made a compiled `foreach` read
+    // Mixed cells as objects, so eval builds those lists through these two helpers.
+    label_c_global(emitter, "__elephc_eval_value_object_array_new");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for object-array allocation and boxing
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across runtime calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("mov x9, #4");                                          // minimum indexed-array capacity for eval reflector lists
+    emitter.instruction("cmp x0, x9");                                          // compare requested capacity with the minimum capacity
+    emitter.instruction("csel x0, x0, x9, hs");                                 // use max(requested, 4) as the runtime allocation capacity
+    emitter.instruction("mov x1, #8");                                          // direct object arrays store one object pointer per slot
+    emitter.instruction("bl __rt_array_new");                                   // allocate indexed-array storage for direct object slots
+    emitter.instruction("ldr x10, [x0, #-8]");                                  // load the packed indexed-array heap kind word
+    emitter.instruction("mov x12, #0x80ff");                                    // preserve indexed-array kind and persistent COW metadata
+    emitter.instruction("and x10, x10, x12");                                   // clear the default scalar value_type bits
+    emitter.instruction("mov x11, #6");                                         // runtime value_type 6 = object
+    emitter.instruction("lsl x11, x11, #8");                                    // move the value_type tag into the packed kind word
+    emitter.instruction("orr x10, x10, x11");                                   // stamp the array as carrying direct object slots
+    emitter.instruction("str x10, [x0, #-8]");                                  // persist the updated indexed-array metadata
+    emitter.instruction("str x0, [sp, #0]");                                    // save the owned object-array pointer while boxing it
+    emitter.instruction("mov x0, #24");                                         // Mixed cells store tag plus two payload words
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate a boxed Mixed cell without retaining the new array
+    emitter.instruction("mov x9, #5");                                          // low byte 5 = mixed cell heap kind
+    emitter.instruction("str x9, [x0, #-8]");                                   // install the mixed-cell heap kind in the uniform header
+    emitter.instruction("mov x10, #4");                                         // runtime tag 4 = indexed array
+    emitter.instruction("str x10, [x0]");                                       // store the indexed-array tag in the Mixed cell
+    emitter.instruction("ldr x11, [sp, #0]");                                   // reload the owned object-array pointer
+    emitter.instruction("str x11, [x0, #8]");                                   // store the object-array pointer as the Mixed low payload word
+    emitter.instruction("str xzr, [x0, #16]");                                  // indexed arrays do not use the high payload word
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the object-array-new wrapper frame
+    emitter.instruction("ret");                                                 // return the boxed direct-object array Mixed cell to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_object_array_push");
+    emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame while appending one reflector object
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across runtime calls
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // save the boxed object-array owner
+    emitter.instruction("str x1, [sp, #8]");                                    // save the boxed object to append
+    emitter.instruction("cbz x0, __elephc_eval_value_object_array_push_fail");  // reject malformed null object-array handles
+    emitter.instruction("cbz x1, __elephc_eval_value_object_array_push_fail");  // reject malformed null object handles
+    emitter.instruction("mov x0, x1");                                          // unbox the object first: its payload is the pushed child
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the object tag and payload pointer
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means object
+    emitter.instruction("b.ne __elephc_eval_value_object_array_push_fail");     // reject non-object elements for a direct object array
+    emitter.instruction("str x1, [sp, #16]");                                   // save the unboxed object pointer across the array unbox
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed object-array owner
+    emitter.instruction("bl __rt_mixed_unbox");                                 // expose the indexed-array tag and payload pointer
+    emitter.instruction("cmp x0, #4");                                          // runtime tag 4 means indexed array
+    emitter.instruction("b.ne __elephc_eval_value_object_array_push_fail");     // reject non-array containers
+    emitter.instruction("mov x0, x1");                                          // pass the unboxed array payload as the push destination
+    emitter.instruction("ldr x1, [sp, #16]");                                   // pass the borrowed object pointer as the pushed child
+    emitter.instruction("bl __rt_array_push_refcounted");                       // retain the object and append it, keeping the object value_type stamp
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the boxed object-array owner
+    emitter.instruction("str x0, [x9, #8]");                                    // update the boxed payload in case the array grew
+    emitter.instruction("mov x0, x9");                                          // return the boxed object-array owner to Rust
+    emitter.instruction("b __elephc_eval_value_object_array_push_done");        // skip the malformed-input null result
+    emitter.label("__elephc_eval_value_object_array_push_fail");
+    emitter.instruction("mov x0, xzr");                                         // report a null pointer so Rust converts it to RuntimeFatal
+    emitter.label("__elephc_eval_value_object_array_push_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the object-array-push wrapper frame
+    emitter.instruction("ret");                                                 // return the updated boxed object-array handle to Rust
+
     label_c_global(emitter, "__elephc_eval_value_assoc_new");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for hash allocation and boxing
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across runtime calls

@@ -318,8 +318,15 @@ pub(super) fn common_dynamic_method_signature(
     ctx: &LoweringContext<'_, '_>,
     method_key: &str,
 ) -> Option<FunctionSig> {
+    if method_key == "__invoke" { return None; }
     let mut common = None;
     for class_name in ctx.classes.keys() {
+        if ctx.classes[class_name].methods.contains_key("__call")
+            && class_method_signature(ctx, class_name, method_key).is_none()
+        {
+            // A magic hook can return a different representation and accepts its own keys.
+            return None;
+        }
         let Some(signature) = class_method_signature(ctx, class_name, method_key).cloned() else {
             continue;
         };

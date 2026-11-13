@@ -6,8 +6,12 @@
 //!
 //! Key details:
 //! - Parameter names, types, defaults, by-ref flags, and variadics remain index-aligned.
+//! - The optional bytecode image is an execution cache. Equality, cloning of the
+//!   source body, and serde skip it so a compiled body cannot change PHP identity.
 
+use super::bytecode::CompiledBody;
 use super::*;
+use std::sync::Arc;
 
 /// One lexical variable captured by a runtime eval closure literal.
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq)]
@@ -50,6 +54,9 @@ pub struct EvalFunction {
     parameter_is_variadic: Vec<bool>,
     return_type: Option<EvalParameterType>,
     body: Vec<EvalStmt>,
+    /// Compiled body for the positional slice. Absent when the tree walker runs this function.
+    #[serde(skip, default)]
+    bytecode: Option<Arc<CompiledBody>>,
 }
 
 impl PartialEq for EvalFunction {
@@ -88,11 +95,14 @@ impl EvalFunction {
             parameter_is_variadic,
             return_type: None,
             body,
+            bytecode: None,
         }
     }
 
-    /// Returns a copy of this function with source-location metadata attached.
-    pub const fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
+    /// Returns this function with source-location metadata attached.
+    ///
+    /// Not `const`: the compiled body is an `Arc`, and moving it is not a const operation.
+    pub fn with_source_location(mut self, source_location: EvalSourceLocation) -> Self {
         self.source_location = Some(source_location);
         self
     }
@@ -195,6 +205,16 @@ impl EvalFunction {
     /// Returns the dynamic EvalIR statements that form the function body.
     pub fn body(&self) -> &[EvalStmt] {
         &self.body
+    }
+
+    /// Returns the compiled positional body, when this function was admitted to the slice.
+    pub(crate) fn bytecode(&self) -> Option<&Arc<CompiledBody>> {
+        self.bytecode.as_ref()
+    }
+
+    /// Attaches the compiled positional body produced for this function.
+    pub(crate) fn set_bytecode(&mut self, bytecode: Arc<CompiledBody>) {
+        self.bytecode = Some(bytecode);
     }
 }
 

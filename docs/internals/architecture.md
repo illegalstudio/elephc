@@ -58,7 +58,8 @@ Source (.php or .lfc)
 │              │  Injects only the compiler-owned PHP surfaces required by
 │              │  resolved source usage, forced bridge flags, or --web. Before
 │              │  injection, src/autoload/prelude_probe.rs scans an autoloaded
-│              │  copy for PDO/mysqli/tz/image/hash/curl/xml/var_export usage.
+│              │  copy for PDO/mysqli/tz/image/hash/curl/xml/var_export usage,
+│              │  and for Random, BcMath, GMP, and DateTimeZone::listIdentifiers.
 │              │  Includes finfo declarations and wrappers for hosted extensions.
 │              │  The same probe retains per-request web environment copies for
 │              │  autoloaded observers in both request and application lifecycles.
@@ -396,7 +397,7 @@ src/
 ├── var_export_prelude.rs      var_export prelude injection entry point
 ├── var_export_prelude/        var_export prelude usage detection
 ├── dom_html_prelude.rs        Pay-for-use DOM HTML injection before name resolution and after autoload
-├── dom_html_prelude/          Cached declarations, HTML entity data, and DOM usage detection
+├── dom_html_prelude/          Built AST declarations, HTML entity builders, and DOM usage detection
 ├── image_prelude.rs           Image (GD, Exif/IPTC, Imagick, Gmagick, Cairo) prelude injection entry point
 ├── image_prelude/             Image prelude usage detection
 ├── web_prelude.rs             --web request superglobals and session prelude injection (flag-gated, not usage-detected)

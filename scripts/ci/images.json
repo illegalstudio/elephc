@@ -1,0 +1,12 @@
+{
+  "ci": "ghcr.io/illegalstudio/elephc-ci@sha256:7857a8b5e3e90397b9f4077813675afd4c2f246533476b3d8108bd1e254436d0",
+  "kdc": "ghcr.io/illegalstudio/elephc-ci@sha256:5e0ada27fde7b85cb9ec49bb91664fb042e4ca747767af0627087d21a6f235d0",
+  "pdo": "ghcr.io/illegalstudio/elephc-ci@sha256:b1274755f36428fa16bb0e098e64c63286caa099c0f5c5c991244ab3a6937cc0",
+  "pdo-core": "ghcr.io/illegalstudio/elephc-ci@sha256:7857a8b5e3e90397b9f4077813675afd4c2f246533476b3d8108bd1e254436d0",
+  "php-nts": "ghcr.io/illegalstudio/elephc-ci@sha256:67e56f3e4f5444e4e938635a480407c26034199cd16d0bea1c431ec461e5dfb2",
+  "php-ts": "ghcr.io/illegalstudio/elephc-ci@sha256:d11af552b8503ae515808f754ea6a648eb6b0710bbf72bc394596823571ff5e4",
+  "reference84": "ghcr.io/illegalstudio/elephc-ci@sha256:00e34460a9729aff8036d527123d4e2e4dc39f5a5f474a28bf7dd57eb45a05b9",
+  "reference85": "ghcr.io/illegalstudio/elephc-ci@sha256:07a671156356d2127ade4097d48bb18cb44e2e79e8899e7d91ad08898ac25bf8",
+  "smoke": "ghcr.io/illegalstudio/elephc-ci@sha256:599df0ccac800008052356ff469685e291543da321cd41b3da6506e31a68eb6a",
+  "smoke22": "ghcr.io/illegalstudio/elephc-ci@sha256:9f12d2b208ad8907104899df703448d696a1a5d0def35c8d92908d9874bdcb23"
+}

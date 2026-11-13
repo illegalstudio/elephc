@@ -462,6 +462,100 @@ Known gaps against PHP for these nullable by-reference parameters:
 - A `?Item` property passed to `?Item &$item` is rejected at compile time with the same
   message. An `array`-typed property given `null` raises PHP's `TypeError`, as in PHP.
 
+An element of a **typed array** can be passed to a wider by-reference parameter such as
+`mixed &$slot`. For a plain local (`array<int, int> $ids`), the array's entries are widened
+to `mixed` before the element binds, so whatever the callee stores reads back unchanged,
+exactly as for an untyped array. An element of a typed instance or static property
+(`$holder->items[0]`, `Holder::$shared[0]`), or of a typed local that is itself a reference
+(a by-reference parameter or a `&` alias, whose array another scope keeps reading with the
+declared type), keeps the declared element type, the way PHP keeps a typed property's type on
+a reference to it. A compatible value is converted
+like a weak-mode assignment (`"7"` becomes `7` in an `int` element), and anything else raises
+a catchable `TypeError` (`Cannot assign Node to reference held by property Holder::$items
+element of type int`) and leaves the element unchanged:
+
+```php
+<?php
+final class Holder { public array<int, int> $items = [1, 2]; }
+function seven(mixed &$slot): void { $slot = "7"; }
+$h = new Holder();
+seven($h->items[0]);
+echo $h->items[0] + 1; // 8
+```
+
+The element travels through a hidden boxed cell and is written back when the call returns, so
+the callee does not see its own writes through `$h->items[0]` until then.
+
+An element that is itself a typed array is written back the way a declared typed local is.
+An indexed element (`array<array<int>>`) accepts an array of the declared layout, and one the
+callee built from `mixed` values is converted. A typed hash element (`array<array<string,
+int>>`) accepts a hash whose entries already carry the declared scalar kind; entries that are
+boxed `mixed` values (`$slot = ["k" => $n]` with a `mixed` `$n`) are not converted. A value of
+another kind stops the program with `a by-reference argument was replaced by a value its typed
+variable cannot hold`, and an array or hash with entries of another kind with `a by-reference
+argument was replaced by an array whose elements its typed variable cannot hold`. An indexed
+array of such hashes is checked the same way, entry by entry inside each hash. A plain local
+hash of raw pointers, buffers or packed records is never widened (that would turn every
+pointer into an integer), so its element is rejected at compile time like the other shapes
+below. An element holding raw
+pointers, or a hash (at any indexed nesting depth) whose own values are arrays, objects or
+pointers, cannot be validated that way, so passing it to a wider by-reference parameter is
+rejected at compile time; declare the
+parameter with the element's exact type instead.
+
+### Lists passed to `array<K, V>` parameters
+
+A list (`[4, 5]`, or a variable holding one) is a valid value for a declared keyed-array
+parameter such as `array<int, int> $map`, even though a list is stored as a packed vector and
+the parameter as a hash table.
+
+**By value**, the argument is rebuilt as an independent hash for the callee, in functions,
+methods, constructors (promoted properties included), closures, default values and variadic
+collectors. The caller's list is not changed. The elements must have the parameter's value
+storage, or the parameter's values must be `mixed`; anything else (an `int` list for
+`array<int, float>`, a list of lists for `array<int, array<int, int>>`) is rejected at compile
+time with `the element storage differs`.
+
+**By reference**, the callee writes a hash through the caller's own variable, so the variable
+itself becomes that keyed array before the call, exactly as `unset($list[$k])` turns a list
+into one, and stays one afterwards:
+
+```php
+<?php
+function put(array<int, int> &$map, int $key): void { $map[$key] = 7; }
+function run(): void
+{
+    $ids = [4, 5];
+    put($ids, 9);
+    echo count($ids), " ", $ids[9]; // 3 7
+}
+run();
+```
+
+A list first bound this way inside a loop is converted once, at the loop entry. One variable
+may fill two reference slots of the same call; both then name the converted variable.
+
+Only an ordinary local can change representation in place. A variable declared as a list
+(`array<int> $ids`), a property, an array element, a `global` or `static` variable, a variable
+with a `&` alias, and a variable an earlier `mixed &` slot of the same call is boxing are
+rejected at compile time (`a by-reference parameter uses the caller's own storage, and this
+list cannot be converted to the parameter's layout there`). Declare the variable with the
+parameter's type, or declare the parameter as the list or as plain `array`.
+
+A written `array<mixed> &$items` parameter follows the same rule: it is a storage contract (a
+list of boxed values), not a hint that is specialized per caller. A typed list local
+(`[4, 5]`, a list of objects, of strings) bound to it has its elements boxed in place before
+the call and reads back whatever the callee stored; a variable declared `array<int>` or a
+typed list property is rejected with the diagnostic above. Plain `array &$items` accepts every
+array without any of this.
+
+Calls made through a callable (`call_user_func()`, a callable array, a first-class callable
+chosen at run time) pass their arguments boxed, and a boxed list is rebuilt as the hash the
+`array<K, V>` parameter expects in the same way.
+
+Assigning a list to a typed keyed-array property, static property or declared local converts a
+copy in the same way and leaves the source list as it was.
+
 ## References to array elements
 
 A local can alias an element of an **indexed array** (`$b =& $a[0]`). Writing through

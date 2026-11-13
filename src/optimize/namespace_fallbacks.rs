@@ -5,7 +5,7 @@
 //! - `fold_constants_for_target`, `fold_expr`, and first-class callable folding.
 //!
 //! Key details:
-//! - The symbol snapshot includes surviving conditional declarations, not just eager functions.
+//! - The symbol snapshot includes autoloaded functions and surviving conditional declarations.
 //! - Other folding passes do not reconsider function bindings.
 
 use super::*;
@@ -25,7 +25,7 @@ pub(super) fn fold_after_pruning(program: Program) -> Program {
     })
 }
 
-/// Rebinds a direct call only when its recorded conditional namespace declaration is gone.
+/// Rebinds a direct call only when the complete program has no declaration for its local name.
 pub(super) fn resolve_call(name: &Name, args: &[Expr], span: Span) -> Option<Expr> {
     ACTIVE_FALLBACKS.with(|slot| slot.borrow().as_ref()?.resolve_call(name, args, span))
 }

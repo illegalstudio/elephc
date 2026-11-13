@@ -188,6 +188,7 @@ pub(in crate::interpreter) fn execute_stmt(
             if let Some(source_location) = source_location {
                 function = function.with_source_location(*source_location);
             }
+            super::super::bytecode::attach_simple_body(&mut function);
             context
                 .define_function(key, function)
                 .map_err(|_| EvalStatus::RuntimeFatal)?;

@@ -151,44 +151,53 @@ pub(super) fn eval_cast_expr(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     with_eval_operands(&[expr], context, scope, values, |args, context, _, values| {
-        match target {
-            EvalCastType::Array => {
-                if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, args[0], elephc_builtin_contract::ObjectCast::Array)? { return Ok(result); }
-                values.cast_array(args[0])
-            }
-            EvalCastType::Int => {
-                if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, args[0], elephc_builtin_contract::ObjectCast::Int)? { return Ok(result); }
-                match eval_object_scalar_adapter(args[0], "__elephc_to_int", context, values)? {
-                    Some(value) => Ok(value),
-                    None => values.cast_int(args[0]),
-                }
-            }
-            EvalCastType::Float => {
-                if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, args[0], elephc_builtin_contract::ObjectCast::Float)? { return Ok(result); }
-                match eval_object_scalar_adapter(args[0], "__elephc_to_float", context, values)? {
-                    Some(value) => Ok(value),
-                    None => values.cast_float(args[0]),
-                }
-            }
-            EvalCastType::String => {
-                let value = eval_string_context_value(args[0], context, values)?;
-                let result = values.cast_string(value);
-                let released = if value != args[0] {
-                    release_expr_result(value, context, values)
-                } else { Ok(()) };
-                result.and_then(|result| released.map(|()| result))
-            }
-            EvalCastType::Bool => match eval_object_scalar_adapter(
-                args[0],
-                "__elephc_to_bool",
-                context,
-                values,
-            )? {
-                Some(value) => Ok(value),
-                None => values.cast_bool(args[0]),
-            },
-        }
+        eval_cast_value(target, args[0], context, values)
     })
+}
+
+/// Casts an evaluated operand through the same object adapters for both EvalIR consumers.
+pub(in crate::interpreter) fn eval_cast_value(
+    target: &EvalCastType,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    match target {
+        EvalCastType::Array => {
+            if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, value, elephc_builtin_contract::ObjectCast::Array)? { return Ok(result); }
+            values.cast_array(value)
+        }
+        EvalCastType::Int => {
+            if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, value, elephc_builtin_contract::ObjectCast::Int)? { return Ok(result); }
+            match eval_object_scalar_adapter(value, "__elephc_to_int", context, values)? {
+                Some(value) => Ok(value),
+                None => values.cast_int(value),
+            }
+        }
+        EvalCastType::Float => {
+            if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, value, elephc_builtin_contract::ObjectCast::Float)? { return Ok(result); }
+            match eval_object_scalar_adapter(value, "__elephc_to_float", context, values)? {
+                Some(value) => Ok(value),
+                None => values.cast_float(value),
+            }
+        }
+        EvalCastType::String => {
+            let converted = eval_string_context_value(value, context, values)?;
+            let result = values.cast_string(converted);
+            if converted != value {
+                finish_synthesized_method_arguments(result, [converted], context, values)
+            } else { result }
+        }
+        EvalCastType::Bool => match eval_object_scalar_adapter(
+            value,
+            "__elephc_to_bool",
+            context,
+            values,
+        )? {
+            Some(value) => Ok(value),
+            None => values.cast_bool(value),
+        },
+    }
 }
 
 /// Constructs an object after the target class name and constructor arguments have been evaluated.

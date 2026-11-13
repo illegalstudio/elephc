@@ -14,6 +14,8 @@
 //! - Each builder is a global shared helper: it leaves an OWNED `ReflectionClass` in the
 //!   integer result register and holds no reference afterwards, so no reflector is ever
 //!   retained by a static slot or by its own members.
+//! - An enum's builder materializes a complete `ReflectionEnum`, as php's class factory does
+//!   for every getter that hands back a class (`zend_reflection_class_factory`).
 
 use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
@@ -43,6 +45,10 @@ pub(in crate::codegen) fn emit_pending_reflection_class_builders(
             PhpType::Object("ReflectionClass".to_string()),
             &comment,
             |ctx: &mut FunctionContext<'_>| {
+                if is_reflection_enum(ctx, &class_name) {
+                    let metadata = reflection_enum_class_metadata_for_name(ctx, &class_name)?;
+                    return emit_reflection_owner_object(ctx, "ReflectionEnum", &metadata);
+                }
                 let metadata = reflection_class_metadata_for_name(ctx, &class_name)?;
                 emit_reflection_owner_object(ctx, "ReflectionClass", &metadata)
             },

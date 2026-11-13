@@ -245,16 +245,46 @@ echo run('$p = new ReflectionParameter("first", 0); echo (int)$p->isDefaultValue
 }
 
 /// Free-function deferred defaults and reflection metadata agree without EIR optimization.
-#[test]
-fn test_nested_default_grok_fourth_review_free_without_ir_opt() {
-    without_ir_opt(|| {
-        test_nested_default_grok_fourth_review_free_object_callback();
-        test_nested_default_grok_fourth_review_free_array_callback();
-        test_nested_default_grok_fourth_review_free_reflection_constant();
-        test_nested_default_grok_fourth_review_free_nested_eval();
-        test_nested_default_grok_fourth_review_free_eval_reflection();
-        test_nested_default_grok_fourth_review_free_eval_constant_names();
-    });
+///
+/// Each probe compiles its own eval-carrying program, so each one is scheduled on its own.
+mod test_nested_default_grok_fourth_review_free_without_ir_opt {
+    use crate::support::without_ir_opt;
+
+    /// Runs the `object_callback` probe without EIR optimization.
+    #[test]
+    fn object_callback() {
+        without_ir_opt(super::test_nested_default_grok_fourth_review_free_object_callback);
+    }
+
+    /// Runs the `array_callback` probe without EIR optimization.
+    #[test]
+    fn array_callback() {
+        without_ir_opt(super::test_nested_default_grok_fourth_review_free_array_callback);
+    }
+
+    /// Runs the `reflection_constant` probe without EIR optimization.
+    #[test]
+    fn reflection_constant() {
+        without_ir_opt(super::test_nested_default_grok_fourth_review_free_reflection_constant);
+    }
+
+    /// Runs the `nested_eval` probe without EIR optimization.
+    #[test]
+    fn nested_eval() {
+        without_ir_opt(super::test_nested_default_grok_fourth_review_free_nested_eval);
+    }
+
+    /// Runs the `eval_reflection` probe without EIR optimization.
+    #[test]
+    fn eval_reflection() {
+        without_ir_opt(super::test_nested_default_grok_fourth_review_free_eval_reflection);
+    }
+
+    /// Runs the `eval_constant_names` probe without EIR optimization.
+    #[test]
+    fn eval_constant_names() {
+        without_ir_opt(super::test_nested_default_grok_fourth_review_free_eval_constant_names);
+    }
 }
 
 /// Property reflection keeps a class-constant-selected default tree available and lazy.

@@ -160,6 +160,66 @@ fn probe_detects_web_request_observers_in_autoloaded_classes() {
     }
 }
 
+/// Random, BcMath, GMP, and DateTimeZone::listIdentifiers in an autoloaded method
+/// are the only uses that must turn those preludes on.
+#[test]
+fn probe_detects_random_bcmath_gmp_and_list_identifiers() {
+    let project = ProbeProject::new();
+    let cases = [
+        (
+            "random",
+            r"return (new \Random\Randomizer(new \Random\Engine\Mt19937(42)))->getInt(1, 6);",
+        ),
+        ("random", r"\mt_srand(42); return \mt_rand(1, 100);"),
+        ("random", r"return \array_rand([10, 20]);"),
+        ("random", r"mt_srand(42); return mt_rand(1, 100);"),
+        (
+            "bcmath",
+            r#"return (string) (new \BcMath\Number("1.5"))->add("2.25");"#,
+        ),
+        (
+            "gmp",
+            r#"return \gmp_strval(\gmp_add("1", "1"));"#,
+        ),
+        (
+            "list_id",
+            r"return \count(\DateTimeZone::listIdentifiers(\DateTimeZone::EUROPE)) > 10 ? 1 : 0;",
+        ),
+        (
+            "list_id",
+            r"return \count(\timezone_identifiers_list());",
+        ),
+    ];
+    for (group, body) in cases {
+        let groups = groups_for_method_body(&project, body);
+        assert!(
+            groups.contains(group),
+            "autoloaded body was missed for {group}: {body}"
+        );
+    }
+    let untouched = groups_for_method_body(&project, "return 1;");
+    for group in ["random", "bcmath", "gmp", "list_id"] {
+        assert!(
+            !untouched.contains(group),
+            "{group} was reported for an unrelated autoloaded method"
+        );
+    }
+}
+
+/// Writes one autoloaded method and returns the groups the probe reports for it.
+fn groups_for_method_body(project: &ProbeProject, body: &str) -> std::collections::HashSet<&'static str> {
+    fs::write(
+        project.0.join("src/Probe.php"),
+        format!(
+            "<?php namespace App; class Probe {{ public function run() {{ {body} }} }}"
+        ),
+    )
+    .unwrap();
+    let defines = std::collections::HashSet::new();
+    let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+    autoloaded_prelude_groups(&program, &project.0, &registry, &defines)
+}
+
 /// Autoloaded observers retain web environment population while getenv remains independent.
 #[test]
 fn probe_detects_web_environment_observers_in_autoloaded_classes() {

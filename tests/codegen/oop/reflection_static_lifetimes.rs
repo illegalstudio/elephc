@@ -7,6 +7,8 @@
 //! Key details:
 //! - Generic reflector accessors read live values and omit uninitialized properties.
 //! - Constructing a reflector does not postpone a displaced object's destructor.
+//! - Building an enum's reflector fills the constant map compiled `getConstants()` reads, which
+//!   materializes the enum's case singletons; they then keep their process-lifetime owner.
 
 use crate::support::*;
 
@@ -41,7 +43,9 @@ echo $second['value'];
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
 
-/// Eval stores owned name strings, which repeated AOT map reads must continue borrowing.
+/// Eval stores owned name strings, which repeated AOT map reads must continue borrowing. The
+/// only block left live is the enum case the eval-built `ReflectionEnum` materialized for its
+/// constant map, as a compiled `ReflectionEnum` does.
 #[test]
 fn test_eval_reflector_static_name_lifetimes_bundle() {
     let source = r#"<?php
@@ -86,7 +90,11 @@ echo 'done';
     let output = compile_and_run_with_heap_debug(source);
     assert!(output.success, "status={} stdout={} stderr={}", output.status, output.stdout, output.stderr);
     assert_eq!(output.stdout, "1:11|1:11|1:11|1:11|0:-|1:2:1|0:-|done");
-    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+    let live = output.stderr.lines().filter(|line| line.starts_with("HEAP DEBUG: live offset="))
+        .collect::<Vec<_>>();
+    assert_eq!(live.len(), 1, "{}", output.stderr);
+    assert!(live[0].contains("kind=4 refs=1 ") && live[0].ends_with("class=EvalStaticNameEnum"),
+        "{}", output.stderr);
 }
 
 /// Generic class accessors use populated enum slots on builtin and user-derived reflectors.

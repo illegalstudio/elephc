@@ -105,7 +105,9 @@ mod tests {
     /// BUMPED TO 25: main's assignment expressions coexist with the SimpleXML layout.
     /// BUMPED TO 26: property updates return values and retain dynamic name evaluation.
     /// BUMPED TO 27: SimpleXML property updates coexist with native variable increment statements.
-    const RECORDED_FINGERPRINT: u64 = 1223055515294891945;
+    /// BUMPED TO 28: function metadata carries a skipped bytecode cache. The source guard
+    /// requires a new identity even though the serialized field layout is unchanged.
+    const RECORDED_FINGERPRINT: u64 = 2892519213052870583;
 
     /// Returns a stable fingerprint of every source the stored format depends on.
     ///

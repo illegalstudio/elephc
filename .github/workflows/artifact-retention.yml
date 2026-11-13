@@ -54,6 +54,11 @@ jobs:
           if [[ -n "$RUN_ID" ]]; then args+=(--run-id "$RUN_ID"); fi
           if [[ "$APPLY" == true ]]; then args+=(--apply); fi
           python3 -B scripts/ci/artifact_retention.py "${args[@]}"
+      - name: Continue a checkpointed cleanup backlog
+        if: steps.retain.outputs.continue_cleanup == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.dry-run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run artifact-retention.yml --repo "$GITHUB_REPOSITORY" --ref main -f dry-run=false
 
   refresh:
     name: Refresh development build (${{ matrix.target }})

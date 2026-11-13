@@ -68,6 +68,14 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     emit_typed_pointer_receiver_null_check(ctx, object, base_reg)?;
+    if matches!(ctx.value_php_type(object)?.codegen_repr(), PhpType::Object(_)) {
+        emit_null_write_receiver_error(
+            ctx,
+            object,
+            base_reg,
+            &format!("Attempt to assign property \"{}\" on null", property),
+        )?;
+    }
     if is_promoted_reference_property_bind(ctx, object, value, &slot)? {
         return emit_reference_property_bind(ctx, value, &slot, base_reg);
     }

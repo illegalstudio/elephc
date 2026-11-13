@@ -893,7 +893,7 @@ handlers after every instruction) are skipped.
 Loop descriptor hoisting also accepts reviewed box operations whose complete
 value graph contains only integers and floats. `buffer_access/numeric.rs` reuses
 the shared numeric-domain proof for checked add/subtract/multiply, numeric
-increment/decrement, ordered comparisons, scalar casts, boxing and ownership
+increment/decrement, numeric `min()`/`max()` selections, ordered comparisons, scalar casts, boxing and ownership
 operations. A boxed local's stores and cleanup qualify only when every writer
 is numeric, every read has a dominating initialization, and the slot cannot
 escape by reference. Thus `$found++` and `$sum += $b[$i]` can keep one descriptor
@@ -962,6 +962,14 @@ forms. This preserves reuse of an address checked before the loop by an
 equivalent access in the body, including when its property handle was already
 cached outside the loop. Remaining straight-line descriptors are shared after
 loop resolution.
+
+A packed element-view local qualifies too. `$p = $points[$i]` stores the record's raw
+address, which is neither retained nor released, so the store is on the loop allowlist
+like a store of any scalar local. `buffer_access/element_views.rs` then forwards that
+address to the reads of the non-escaping view slot in the same block, and the view loop
+reaches the instructions of the direct `$points[$i]->x` spelling: one preheader
+descriptor, one record address per iteration and no read of the view slot. A view whose
+slot a by-reference alias can rewrite keeps its reads.
 
 Inside a rewritten loop, packed `buffer_get_resolved` instructions with the same
 descriptor and index compute the same record address, so a dominated access
@@ -1487,6 +1495,17 @@ operation, the final integer cast, and removable `Release` instructions into
 `ICheckedNumericChainToInt`; its in-range path stays in i64 registers, while the
 first signed overflow promotes the exact accumulator and operand, finishes the
 remaining suffix in double, and then uses the existing PHP float-to-int conversion.
+
+Before that range proof, `RawPromotableLoop` copies a straight-line loop whose
+accumulators and counters are still mixed only because add, subtract, or multiply may
+overflow. The copy keeps those locals in `I64` until a signed overflow, then keeps each
+promoted local as a raw float for the rest of the loop. A float is boxed only at the
+exit. The original mixed loop remains for a seed that is not an integer.
+
+`LazyBoxedAccumulator` then handles accumulators in loops of any other shape. It keeps a
+raw integer companion and a tag next to the mixed local, runs updates and compares on the
+companion while every operand is an int, and boxes the value only before something else
+reads the local.
 Per-block constant folding then collapses
 operations whose operands are all compile-time constants (`5 * 5` → `25`,
 `0 < 5` → `true`) into a single constant — which, composed with the peephole's

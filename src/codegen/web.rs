@@ -396,6 +396,8 @@ fn emit_gc_state_reset(emitter: &mut Emitter) {
         "_gc_release_suppressed",
         "_gc_runs",
         "_gc_collected",
+        "_gc_safe_point_credit",
+        "_gc_safe_point_live_limit",
         "_gc_destructor_depth",
     ] {
         abi::emit_store_zero_to_symbol(emitter, symbol, 0);

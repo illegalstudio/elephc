@@ -148,29 +148,45 @@ mod tests {
         }
     }
     /// Private ancestor cells retain physical ownership beneath both promoted and raw shadows.
-    #[test]
-    fn hidden_mixed_reference_cells_keep_physical_ownership_on_every_target() {
+    fn verify_hidden_mixed_reference_cells_keep_physical_ownership(name: &str) {
         let source = "<?php class HiddenCellParent { private mixed $value = 'parent'; } \
             class HiddenCellChild extends HiddenCellParent { public mixed $value = 'child'; } \
             class HiddenRawChild extends HiddenCellParent { public string $value = 'raw'; } \
             $code = $argc > 0 ? '' : 'echo 1;'; eval($code);";
-        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
-            let target = Target::parse(name).unwrap();
-            let module = crate::ir_lower::tests::lower_source_at_for_target(
-                source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
-            );
-            for (class_name, owned) in [("HiddenCellParent", vec![0]),
-                ("HiddenCellChild", vec![0, 1]), ("HiddenRawChild", vec![0])] {
-                let class = &module.class_infos[class_name];
-                assert_eq!(class.owned_reference_property_slots, owned.into_iter().collect(), "{name}: {class_name}");
-                assert!(class.property_slot_is_reference(0, "value"), "{name}: hidden ancestor cell");
-            }
-            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-            let raw = &module.class_infos["HiddenRawChild"];
-            let marker = format!("_class_gc_desc_{}:\n", raw.class_id);
-            assert!(assembly.split_once(&marker).unwrap().1.starts_with("    .byte 11, 1\n"),
-                "{name}: hidden cell and raw string keep separate destruction contracts");
+        let target = Target::parse(name).unwrap();
+        let module = crate::ir_lower::tests::lower_source_at_for_target(
+            source, std::path::Path::new("main.php"), std::path::Path::new("."), target,
+        );
+        for (class_name, owned) in [("HiddenCellParent", vec![0]),
+            ("HiddenCellChild", vec![0, 1]), ("HiddenRawChild", vec![0])] {
+            let class = &module.class_infos[class_name];
+            assert_eq!(class.owned_reference_property_slots, owned.into_iter().collect(), "{name}: {class_name}");
+            assert!(class.property_slot_is_reference(0, "value"), "{name}: hidden ancestor cell");
         }
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        let raw = &module.class_infos["HiddenRawChild"];
+        let marker = format!("_class_gc_desc_{}:\n", raw.class_id);
+        assert!(assembly.split_once(&marker).unwrap().1.starts_with("    .byte 11, 1\n"),
+            "{name}: hidden cell and raw string keep separate destruction contracts");
+    }
+
+    /// Schedules the fixture once per supported target.
+    mod hidden_mixed_reference_cells_keep_physical_ownership_on_every_target {
+        /// Verifies the fixture on macos-aarch64.
+        #[test]
+        fn macos_aarch64() { super::verify_hidden_mixed_reference_cells_keep_physical_ownership("macos-aarch64"); }
+        /// Verifies the fixture on ios-arm64.
+        #[test]
+        fn ios_arm64() { super::verify_hidden_mixed_reference_cells_keep_physical_ownership("ios-arm64"); }
+        /// Verifies the fixture on ios-sim-arm64.
+        #[test]
+        fn ios_sim_arm64() { super::verify_hidden_mixed_reference_cells_keep_physical_ownership("ios-sim-arm64"); }
+        /// Verifies the fixture on linux-aarch64.
+        #[test]
+        fn linux_aarch64() { super::verify_hidden_mixed_reference_cells_keep_physical_ownership("linux-aarch64"); }
+        /// Verifies the fixture on linux-x86_64.
+        #[test]
+        fn linux_x86_64() { super::verify_hidden_mixed_reference_cells_keep_physical_ownership("linux-x86_64"); }
     }
 
 }
