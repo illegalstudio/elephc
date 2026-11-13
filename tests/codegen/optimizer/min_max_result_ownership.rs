@@ -10,9 +10,12 @@
 //!   winner into a frame cell, so `$s += max($a, $b)` with `mixed` operands allocates nothing.
 //! - The by-value assignment of a numeric selection (`$r = max($i, $f)`) reads that cell
 //!   instead of boxing the selection first.
-//! - An escaping result retains the winning operand's own heap cell instead of cloning it.
-//!   The value must still behave like a copy: later writes to the operand variable, through
-//!   a reference or between two call arguments, never show through the result.
+//! - An escaping result is a copy of the winner, never the retained operand cell. Later
+//!   writes to the operand variable never show through the result: not between two call
+//!   arguments, not in a loop, and not through a reference, which mutates the variable's
+//!   cell in place (`$kept = [max($ref, $b)]; $ref[] = 1;` once changed `$kept`).
+//! - The array fixture picks winners that are also PHP's result on a tie, because the
+//!   generic comparison does not order two arrays yet; it tests value independence only.
 //! - Expected output comes from PHP 8.5; `ELEPHC_PHP_CHECK=1` re-runs the oracle.
 
 use super::min_max_selection::{function_assembly, php_oracle, run};
@@ -65,12 +68,106 @@ c a b11c2a3\n\
 q1,q1x,q1xx,q1xxx\n\
 ";
 
-/// A retained winner still behaves like a copy of the argument in both optimizer modes.
+/// A stored scalar or string result keeps its value in both optimizer modes.
 #[test]
 fn test_min_max_escaping_result_is_independent_of_later_operand_writes() {
     php_oracle(ESCAPING_RESULTS, ESCAPING_RESULTS_OUTPUT);
     for optimized in [true, false] {
         assert_eq!(run(ESCAPING_RESULTS, optimized), ESCAPING_RESULTS_OUTPUT, "optimized={optimized}");
+    }
+}
+
+/// Array and string results whose operand variable, or the result itself, is modified in
+/// place afterwards, including through a by-reference parameter and a by-reference call.
+const CONTAINER_RESULTS: &str = r#"<?php
+function j(mixed $v): string { return json_encode($v); }
+function e(): mixed { return []; }
+// result stored, then the winning operand variable is modified in place
+function appendAfter(mixed $a, mixed $b): string { $list = []; $list[] = max($a, $b); $a[] = 9; return j($list[0]) . " " . j($a); }
+function setAfter(mixed $a, mixed $b): string { $list = [max($a, $b)]; $a[0] = "changed"; return j($list[0]) . " " . j($a); }
+function nestedAfter(mixed $a, mixed $b): string { $list = [max($a, $b)]; $a["k"]["j"] = 5; return j($list[0]) . " " . j($a); }
+function minAfter(mixed $a, mixed $b): string { $list = [min($a, $b)]; $b[] = 7; return j($list[0]) . " " . j($b); }
+function threeAfter(mixed $a, mixed $b, mixed $c): string { $list = [max($a, $b, $c)]; $c[] = 1; $b[] = 2; $a[] = 3; return j($list[0]) . " " . j($a) . j($b) . j($c); }
+// the stored result is modified in place, the operand must not change
+function resultModified(mixed $a, mixed $b): string { $list = [max($a, $b)]; $list[0][] = 9; return j($list[0]) . " " . j($a); }
+function resultNested(mixed $a, mixed $b): string { $h = ["r" => max($a, $b)]; $h["r"][0] = "x"; return j($h) . " " . j($a); }
+// returned to the caller, which then modifies its own variable
+function pick(mixed $a, mixed $b): mixed { return max($a, $b); }
+function callerModifies(mixed $v): string { $kept = [pick($v, e())]; $v[] = 100; return j($kept[0]) . " " . j($v); }
+function callerModifiesResult(mixed $v): string { $kept = [pick($v, e())]; $kept[0][] = 100; return j($kept[0]) . " " . j($v); }
+// between two call arguments
+function two(mixed $first, mixed $second): string { return j($first) . "|" . j($second); }
+function argThenAppend(mixed $a): string { return two(max($a, e()), $a[] = 4) . " " . j($a); }
+function argThenSet(mixed $a): string { return two(max($a, e()), $a[0] = "w") . " " . j($a); }
+// through a reference
+function viaRef(mixed &$a, mixed $b): string { $list = [max($a, $b)]; $a[] = "ref"; return j($list[0]); }
+// through a by-reference call that appends to the caller's variable
+function addTo(mixed &$x): void { $x[] = "byref"; }
+function byRefCall(mixed $a, mixed $b): string { $list = [max($a, $b)]; addTo($a); return j($list[0]) . " " . j($a); }
+function refScalar(mixed &$a, mixed $b): string { $list = [max($a, $b), min($a, $b)]; $a = "zz"; return j($list); }
+// string offsets on a held winner
+function strOffset(mixed $a, mixed $b): string { $list = [max($a, $b)]; $a[0] = "Z"; return j($list[0]) . " " . j($a); }
+// loop: the same variable wins repeatedly while it grows
+function growing(mixed $a): string { $seen = []; for ($i = 0; $i < 3; $i++) { $seen[] = max($a, e()); $a[] = $i; } return j($seen) . " " . j($a); }
+// operands that are elements of one array
+function elements(mixed $arr): string { $h = [max($arr[0], $arr[1])]; $arr[0][] = "e"; $arr[1][] = "f"; return j($h[0]) . " " . j($arr); }
+// static and property holders
+class Box { public mixed $v; public function __construct(mixed $v) { $this->v = $v; } public function grab(mixed $o): mixed { return max($this->v, $o); } }
+function prop(mixed $v): string { $box = new Box($v); $h = [$box->grab([])]; $box->v[] = "p"; return j($h[0]) . " " . j($box->v); }
+function propResult(mixed $v): string { $box = new Box($v); $h = [$box->grab([])]; $h[0][] = "q"; return j($h[0]) . " " . j($box->v); }
+$base = [1, 2, $argc];
+echo appendAfter($base, [1]), "\n";
+echo setAfter($base, [1]), "\n";
+echo nestedAfter(["k" => ["j" => 1], "z" => $argc], [1]), "\n";
+echo minAfter($base, [1, $argc]), "\n";
+echo threeAfter($base, [1], [2, 2]), "\n";
+echo resultModified($base, [1]), "\n";
+echo resultNested($base, [1]), "\n";
+echo callerModifies($base), "\n";
+echo callerModifiesResult($base), "\n";
+echo argThenAppend($base), "\n";
+echo argThenSet($base), "\n";
+$r = [5, $argc]; echo viaRef($r, [1]), " ", j($r), "\n";
+echo byRefCall($base, [1]), "\n";
+$q = "m" . $argc; echo refScalar($q, "a"), " ", j($q), "\n";
+echo strOffset("abc" . $argc, "abb"), "\n";
+echo growing([$argc]), "\n";
+echo elements([[1, $argc], [1]]), "\n";
+echo prop($base), "\n";
+echo propResult($base), "\n";
+echo j($base), "\n";
+"#;
+
+/// PHP 8.5 output of `CONTAINER_RESULTS`.
+const CONTAINER_RESULTS_OUTPUT: &str = "[1,2,1] [1,2,1,9]\n\
+[1,2,1] [\"changed\",2,1]\n\
+{\"k\":{\"j\":1},\"z\":1} {\"k\":{\"j\":5},\"z\":1}\n\
+[1,1] [1,1,7]\n\
+[1,2,1] [1,2,1,3][1,2][2,2,1]\n\
+[1,2,1,9] [1,2,1]\n\
+{\"r\":[\"x\",2,1]} [1,2,1]\n\
+[1,2,1] [1,2,1,100]\n\
+[1,2,1,100] [1,2,1]\n\
+[1,2,1]|4 [1,2,1,4]\n\
+[1,2,1]|\"w\" [\"w\",2,1]\n\
+[5,1] [5,1,\"ref\"]\n\
+[1,2,1] [1,2,1,\"byref\"]\n\
+[\"m1\",\"a\"] \"zz\"\n\
+\"abc1\" \"Zbc1\"\n\
+[[1],[1,0],[1,0,1]] [1,0,1,2]\n\
+[1,1] [[1,1,\"e\"],[1,\"f\"]]\n\
+[1,2,1] [1,2,1,\"p\"]\n\
+[1,2,1,\"q\"] [1,2,1]\n\
+[1,2,1]\n\
+";
+
+/// A stored array result is independent of its operand variable in both directions, also
+/// when that variable is written through a reference.
+#[test]
+fn test_min_max_escaping_container_result_is_a_copy() {
+    php_oracle(CONTAINER_RESULTS, CONTAINER_RESULTS_OUTPUT);
+    for optimized in [true, false] {
+        assert_eq!(run(CONTAINER_RESULTS, optimized), CONTAINER_RESULTS_OUTPUT, "optimized={optimized}");
     }
 }
 
@@ -119,8 +216,8 @@ echo "texts ", texts("abc", "abd", $n), " ", work("7", 2, 10), "\n";
     }
 }
 
-/// Every target fills the guarded frame cell for a read-only runtime-typed selection, hands
-/// an escaping one straight to the ownership helper, and ships that helper in its runtime.
+/// Every target fills the guarded frame cell for a read-only runtime-typed selection and
+/// clones the winner of an escaping one.
 #[test]
 fn test_min_max_result_storage_emits_on_every_target() {
     let source = r#"<?php
@@ -135,12 +232,9 @@ echo work($argc, 2, 3), keep($argc, 2);
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let work = function_assembly(source, name, "work");
         assert!(work.contains("guarded_min_max_numeric"), "{name}: {work}");
-        assert!(work.contains("__rt_mixed_min_max_own"), "{name}: {work}");
         let keep = function_assembly(source, name, "keep");
-        assert!(keep.contains("__rt_mixed_min_max_own"), "{name}: {keep}");
         assert!(!keep.contains("guarded_min_max_numeric"), "{name}: {keep}");
-        let target = Target::parse(name).expect("supported target");
-        let runtime = elephc::codegen::generate_runtime(8_388_608, target);
-        assert!(runtime.contains("__rt_mixed_min_max_own:"), "{name} runtime lacks the ownership helper");
+        let selection = keep.split("__rt_mixed_min_max_select").nth(1).expect("selection call");
+        assert!(selection.contains("__rt_mixed_clone"), "{name}: {keep}");
     }
 }

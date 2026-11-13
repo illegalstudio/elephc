@@ -11,9 +11,9 @@
 //!   or a float.
 //! - Every other selection calls `__rt_mixed_min_max_select`, which follows php-src's
 //!   comparison modes across all operands and returns the winning operand's borrowed cell.
-//!   A result with a frame cell copies that cell's tag and payload; any other result is made
-//!   owned by `__rt_mixed_min_max_own`, which retains a winner that already is a heap cell
-//!   (no allocation) and copies one that is a temporary or frame-local cell.
+//!   A result with a frame cell copies that cell's tag and payload; any other result is an
+//!   owned `__rt_mixed_clone` of it. The winner is never retained in place of a copy: a
+//!   write through a reference to the operand's variable changes that cell.
 //! - A runtime-typed selection whose result is only read (`guarded_cell_offsets`)
 //!   copies a numeric winner into its own frame cell and allocates nothing; only a
 //!   non-numeric winner takes the owned heap path.
@@ -68,9 +68,8 @@ pub(in crate::codegen::lower_inst) fn lower_mixed_min_max(
     if let Some(offset) = inst.result.and_then(|value| ctx.guarded_cell_offsets.get(&value).copied()) {
         return stack_cell::store_guarded(ctx, inst, offset, staging);
     }
-    // The selected cell pointer is already in the ownership helper's argument register. It
-    // retains a winner that is a heap cell and copies one that lives in the staging area.
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_min_max_own");
+    // The selected cell pointer is already in the clone helper's argument register.
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
     abi::emit_release_temporary_stack(ctx.emitter, staging);
     store_if_result(ctx, inst)
 }

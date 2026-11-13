@@ -1032,9 +1032,9 @@ pub enum Op {
     ///
     /// Operands are raw `int`/`float` scalars or boxed Mixed cells, which are only read. The
     /// `I64` immediate is a [`MinMaxRule`] discriminant fixing the direction and the tie/NaN
-    /// policy. The result owns one reference: the backend retains a winner that already is a
-    /// heap cell and copies any other one, so it may share that cell with the operand, as a
-    /// function returning its argument does. It is never the operand's own reference.
+    /// policy. The result never shares a cell with an operand: it is a copy of the winner in
+    /// an owned heap cell or, for a number that is only read, in a frame cell. A retained
+    /// operand cell would change when the operand's variable is written through a reference.
     MixedMinMax,
     StrIncDec,
     ICmp,
@@ -1729,8 +1729,7 @@ impl Op {
             StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
             // Reads the operand cells, compares non-numeric ones through `__rt_php_compare`
             // (which saves and restores the concat cursor around any number-to-string leg)
-            // and returns the winner retained, or copied into a new cell when it is not a
-            // heap cell.
+            // and boxes a copy of the winner, retaining a string, array or object payload.
             MixedMinMax => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             IterCurrentValueRef | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT

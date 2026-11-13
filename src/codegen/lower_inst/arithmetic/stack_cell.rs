@@ -237,8 +237,8 @@ pub(super) fn store_selected(ctx: &mut FunctionContext<'_>, inst: &Instruction, 
 ///
 /// A winner holding an integer or a float is copied into the selection's own frame cell,
 /// whose address becomes the result, so the common numeric call allocates nothing. Any other
-/// winner (a string, a bool, null, a nested box) becomes an owned heap cell through
-/// `__rt_mixed_min_max_own`. Users of the result read it through the pointer either way,
+/// winner (a string, a bool, null, a nested box) becomes an owned heap copy through
+/// `__rt_mixed_clone`. Users of the result read it through the pointer either way,
 /// and its release ignores the frame cell because it lies outside the managed heap.
 pub(super) fn store_guarded(ctx: &mut FunctionContext<'_>, inst: &Instruction, offset: usize, staging: usize) -> Result<()> {
     let (payload, _, _, _, tag) = registers(ctx);
@@ -264,7 +264,7 @@ pub(super) fn store_guarded(ctx: &mut FunctionContext<'_>, inst: &Instruction, o
         }
     }
     ctx.emitter.label(&owned);
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_min_max_own");
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
     abi::emit_release_temporary_stack(ctx.emitter, staging);
     ctx.emit_branch(&done);
     ctx.emitter.label(&numeric);

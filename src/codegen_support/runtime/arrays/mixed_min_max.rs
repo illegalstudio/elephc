@@ -1,7 +1,7 @@
 //! Purpose:
-//! Emits `__rt_mixed_min_max_select` and `__rt_mixed_min_max_own`, the runtime selection
-//! behind `Op::MixedMinMax`: PHP's variadic `min()` / `max()` over operands whose runtime
-//! types are not all statically `int` or all statically `float`.
+//! Emits `__rt_mixed_min_max_select`, the runtime selection behind `Op::MixedMinMax`: PHP's
+//! variadic `min()` / `max()` over operands whose runtime types are not all statically `int`
+//! or all statically `float`.
 //!
 //! Called from:
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
@@ -14,13 +14,12 @@
 //!   temporary stack cell built from a raw scalar: the helper reads only those three words
 //!   and never retains or frees an operand.
 //! - The result is the **borrowed** pointer of the winning operand. The caller copies its
-//!   tag and payload into a frame cell or passes it to `__rt_mixed_min_max_own`, so the
-//!   result keeps the winner's runtime type: `max(5.5, 0)` stays a float and `max("10", 9)`
-//!   a string.
-//! - `__rt_mixed_min_max_own` turns that borrowed pointer into an owned result without
-//!   allocating when it can: a winner that is a managed heap cell is retained and returned
-//!   itself, exactly as returning the argument would. Only a winner outside the heap (a
-//!   temporary stack cell, a frame-local cell, static data) is copied by `__rt_mixed_clone`.
+//!   tag and payload into a frame cell or clones it with `__rt_mixed_clone`, so the result
+//!   keeps the winner's runtime type: `max(5.5, 0)` stays a float and `max("10", 9)` a
+//!   string.
+//! - The caller must copy, never retain, a winner that outlives the call: a write through a
+//!   reference to the operand's variable mutates that variable's cell in place, so a result
+//!   sharing the cell would change with it (`$kept = [max($ref, $b)]; $ref[] = 1;`).
 //! - The comparison mode is php-src's. A call starts in integer mode when its first operand
 //!   is an `int` and in double mode when it is a `float`, and compares numbers directly. A
 //!   float meeting an integer result that a double cannot represent, such an integer meeting
@@ -38,22 +37,17 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// Emits `__rt_mixed_min_max_select` and `__rt_mixed_min_max_own` for the active target.
+/// Emits `__rt_mixed_min_max_select` for the active target.
 ///
-/// Select input: AArch64 `x0` = array of operand cell pointers, `x1` = operand count (at
-/// least two), `x2` = rule; x86_64 `rdi`, `rsi`, `rdx` in the same order. Output: `x0` /
-/// `rax` = the borrowed cell pointer of the selected operand.
-///
-/// Own input: `x0` / `rax` = a borrowed Mixed-shaped cell. Output: `x0` / `rax` = an owned
-/// Mixed cell with the same value.
+/// Input: AArch64 `x0` = array of operand cell pointers, `x1` = operand count (at least
+/// two), `x2` = rule; x86_64 `rdi`, `rsi`, `rdx` in the same order. Output: `x0` / `rax` =
+/// the borrowed cell pointer of the selected operand.
 pub fn emit_mixed_min_max(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_min_max_x86_64(emitter);
-        emit_mixed_min_max_own_x86_64(emitter);
         return;
     }
     emit_mixed_min_max_select_aarch64(emitter);
-    emit_mixed_min_max_own_aarch64(emitter);
 }
 
 /// Emits the AArch64 implementation of `__rt_mixed_min_max_select`.
@@ -493,48 +487,4 @@ fn emit_mixed_min_max_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsp, rbp");                                        // release the selection frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
-}
-
-/// Emits the AArch64 implementation of `__rt_mixed_min_max_own`.
-fn emit_mixed_min_max_own_aarch64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: mixed_min_max_own ---");
-    emitter.label_global("__rt_mixed_min_max_own");
-    emitter.instruction("cbz x0, __rt_mmx_own_copy");                           // a null cell is copied as PHP null
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_heap_buf");
-    emitter.instruction("cmp x0, x9");                                          // is the cell below the managed heap?
-    emitter.instruction("b.lo __rt_mmx_own_copy");                              // static data has no heap header to retain
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x10", "_heap_off");
-    emitter.instruction("ldr x10, [x10]");                                      // load the current heap extent
-    emitter.instruction("add x10, x9, x10");                                    // compute the managed heap end
-    emitter.instruction("cmp x0, x10");                                         // is the cell beyond the managed heap?
-    emitter.instruction("b.hs __rt_mmx_own_copy");                              // a stack or frame-local cell must be copied to outlive its frame
-    emitter.instruction("b __rt_incref");                                       // tail-call: retain the heap cell and return it as the owned result
-    emitter.label("__rt_mmx_own_copy");
-    emitter.instruction("b __rt_mixed_clone");                                  // tail-call: copy the cell into an owned heap cell
-}
-
-/// Emits the Linux x86_64 implementation of `__rt_mixed_min_max_own`.
-fn emit_mixed_min_max_own_x86_64(emitter: &mut Emitter) {
-    emitter.blank();
-    emitter.comment("--- runtime: mixed_min_max_own ---");
-    emitter.label_global("__rt_mixed_min_max_own");
-    emitter.instruction("test rax, rax");                                       // is the cell a null pointer?
-    emitter.instruction("jz __rt_mmx_own_copy_x86");                            // a null cell is copied as PHP null
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_heap_buf");
-    emitter.instruction("lea r11, [r10 + 16]");                                 // first valid user payload begins after the initial heap header
-    emitter.instruction("cmp rax, r11");                                        // is the cell below the managed heap?
-    emitter.instruction("jb __rt_mmx_own_copy_x86");                            // static data has no heap header to retain
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_heap_off");
-    emitter.instruction("mov r11, QWORD PTR [r11]");                            // load the current heap extent
-    emitter.instruction("add r11, r10");                                        // compute the managed heap end
-    emitter.instruction("cmp rax, r11");                                        // is the cell beyond the managed heap?
-    emitter.instruction("jae __rt_mmx_own_copy_x86");                           // a stack or frame-local cell must be copied to outlive its frame
-    emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the heap kind word from the uniform header
-    emitter.instruction("shr r10, 32");                                         // isolate the x86_64 heap marker
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // does the cell carry an elephc heap header?
-    emitter.instruction("jne __rt_mmx_own_copy_x86");                           // a foreign pointer is copied instead of retained
-    emitter.instruction("jmp __rt_incref");                                     // tail-call: retain the heap cell and return it as the owned result
-    emitter.label("__rt_mmx_own_copy_x86");
-    emitter.instruction("jmp __rt_mixed_clone");                                // tail-call: copy the cell into an owned heap cell
 }

@@ -180,10 +180,9 @@ A `mixed` result is a boxed value, but the call itself rarely allocates one. A r
 is only read where it is computed (added to a sum, compared, cast, echoed, assigned to a
 variable) stays on the stack whenever a number wins, also with runtime-typed arguments such
 as `mixed` parameters or array elements. A result that is returned, stored in an array or
-passed on shares the winning argument's own cell when that argument already is a boxed
-value; only a raw `int`, `float` or `bool` that wins such a call is boxed. Assigning the
-result of a call with runtime-typed arguments to a variable copies it into that variable's
-own cell, as assigning any `mixed` value does.
+passed on is copied into one small cell, as is a string, bool or null that wins a call with
+runtime-typed arguments. Assigning the result of such a call to a variable copies it into
+that variable's own cell, as assigning any `mixed` value does.
 
 ## Math constants
 
