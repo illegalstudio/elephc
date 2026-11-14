@@ -1426,6 +1426,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // with lines from `BlogController.php` (and `Undefined array key` warnings past its end).
     let preload_class_source_files = preload_class_files.clone();
     let mut deferral_class_files = preload_class_files;
+    let mut canonical_declaring_paths: crate::fast_hash::FastMap<String, Option<PathBuf>> =
+        Default::default();
     deferral_class_files.extend(
         declaration_source_files
             .class_likes
@@ -1498,7 +1500,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
             continue;
         }
         if crate::closed_world::is_enabled() {
-            if declares_only_probed_classes(&path, &deferral_class_files, &probe_only_names) {
+            if declares_only_probed_classes(&path, &deferral_class_files, &probe_only_names, &mut canonical_declaring_paths) {
                 probe_only_deferred.insert(path.clone());
                 errors::report_note(&format!(
                     "autoload: '{}' is not compiled ({}; remembered from an earlier build); the \
@@ -1827,7 +1829,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                 if let (true, Some(parent)) = (crate::closed_world::is_enabled(), missing) {
                     add_missing_parent_unit(&mut ast, &mut preload_include_units, &canonical, parent);
                 }
-                if declares_only_probed_classes(&canonical, &deferral_class_files, &probe_only_names) {
+                if declares_only_probed_classes(&canonical, &deferral_class_files, &probe_only_names, &mut canonical_declaring_paths) {
                     probe_only_deferred.insert(canonical.clone());
                     errors::report_note(&format!(
                         "autoload: '{path}' is not compiled ({message}); the program names its \
@@ -2963,13 +2965,23 @@ fn declares_only_probed_classes<V: AsRef<str>>(
     file: &Path,
     class_files: &HashMap<String, V>,
     probe_only_names: &HashSet<String>,
+    canonical_paths: &mut crate::fast_hash::FastMap<String, Option<PathBuf>>,
 ) -> bool {
+    // Each class's declaring file is canonicalized once per build: this ran a `realpath` per
+    // class of the program for every refused file (900 samples of a sampled one-core Symfony
+    // demo build), and a file does not move while the program compiles.
     let declared: Vec<&String> = class_files
         .iter()
         .filter(|(_, declaring)| {
-            Path::new(declaring.as_ref())
-                .canonicalize()
-                .is_ok_and(|declaring| declaring == file)
+            canonical_paths
+                .entry(declaring.as_ref().to_string())
+                .or_insert_with(|| {
+                    #[cfg(test)]
+                    DECLARING_PATH_CANONICALIZATIONS.with(|count| count.set(count.get() + 1));
+                    Path::new(declaring.as_ref()).canonicalize().ok()
+                })
+                .as_deref()
+                .is_some_and(|declaring| declaring == file)
         })
         .map(|(class, _)| class)
         .collect();
@@ -3071,4 +3083,45 @@ fn extends_a_php_load_fatal_class(
         stack.extend(parents_of(&class));
     }
     false
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Declaring files `declares_only_probed_classes` canonicalized on this test thread.
+    static DECLARING_PATH_CANONICALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+mod declaring_path_tests {
+    use super::*;
+
+    /// Asking about several refused files canonicalizes each declaring file once, and still
+    /// answers per file: one whose classes are all probe-only, one with a class used outright.
+    #[test]
+    fn declaring_files_are_canonicalized_once_per_build() {
+        let dir = std::env::temp_dir().join(format!("elephc_declaring_paths_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let probed = dir.join("Probed.php");
+        let used = dir.join("Used.php");
+        std::fs::write(&probed, "<?php\n").unwrap();
+        std::fs::write(&used, "<?php\n").unwrap();
+        let mut class_files: HashMap<String, String> = HashMap::default();
+        for index in 0..4 {
+            class_files.insert(format!("Probed{index}"), probed.display().to_string());
+            class_files.insert(format!("Used{index}"), used.display().to_string());
+        }
+        let probe_only: HashSet<String> =
+            (0..4).map(|index| crate::names::php_symbol_key(&format!("Probed{index}"))).collect();
+        let mut cache = crate::fast_hash::FastMap::default();
+        DECLARING_PATH_CANONICALIZATIONS.with(|count| count.set(0));
+        let probed = probed.canonicalize().unwrap();
+        let used = used.canonicalize().unwrap();
+        for _ in 0..3 {
+            assert!(declares_only_probed_classes(&probed, &class_files, &probe_only, &mut cache));
+            assert!(!declares_only_probed_classes(&used, &class_files, &probe_only, &mut cache));
+        }
+        let canonicalized = DECLARING_PATH_CANONICALIZATIONS.with(|count| count.get());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(canonicalized, 2, "{canonicalized} canonicalizations for two declaring files");
+    }
 }
