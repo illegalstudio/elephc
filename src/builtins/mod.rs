@@ -29,6 +29,7 @@ mod math;
 pub(crate) mod gmp;
 mod spl;
 mod pointers;
+pub(crate) mod proc;
 mod system;
 mod types;
 pub(crate) mod xml;

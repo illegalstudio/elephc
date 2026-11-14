@@ -945,6 +945,16 @@ pub enum RuntimeFnId {
     Settype,
     /// Stamps the source-buffer location on a tokenizer ParseError.
     TokenizerErrorLocation,
+    /// Boxes a proc-bridge pipe descriptor as a stream resource (`__elephc_fd_stream`).
+    ElephcFdStream,
+    /// Boxes a proc-bridge process id as a `process` resource (`__elephc_proc_resource`).
+    ElephcProcResource,
+    /// Marks a resource cell closed without touching its handle (`__elephc_resource_close`).
+    ElephcResourceClose,
+    /// Reads a resource cell's kind word (`__elephc_resource_kind`).
+    ElephcResourceKind,
+    /// Reads a resource cell's payload word (`__elephc_resource_payload`).
+    ElephcResourcePayload,
 }
 
 impl RuntimeFnId {
@@ -2592,6 +2602,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::Opendir
                 | RuntimeFnId::Popen
                 | RuntimeFnId::Tmpfile
+                | RuntimeFnId::ElephcFdStream
+                | RuntimeFnId::ElephcProcResource
         )
     }
 
@@ -2707,6 +2719,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::StreamBucketPrepend
                 | RuntimeFnId::ElephcPtrWriteString
                 | RuntimeFnId::TokenizerErrorLocation
+                // The proc prelude's resource readers answer machine integers, and the
+                // closer answers nothing; none can keep its operand cell alive.
+                | RuntimeFnId::ElephcResourceClose
+                | RuntimeFnId::ElephcResourceKind
+                | RuntimeFnId::ElephcResourcePayload
                 // Both array mutators answer the resulting element count. The returned
                 // machine integer cannot keep any variadic value operand alive.
                 | RuntimeFnId::ArrayPush
@@ -3009,6 +3026,8 @@ impl RuntimeFnId {
                 // Stream results own new cells and cannot retain the filename, mode,
                 // or input resource temporary through a returned argument alias.
                 | RuntimeFnId::Fopen
+                | RuntimeFnId::ElephcFdStream
+                | RuntimeFnId::ElephcProcResource
                 | RuntimeFnId::StreamGetContents
                 // Writes box a fresh count or false and only borrow the input bytes.
                 | RuntimeFnId::Fwrite
@@ -3796,6 +3815,11 @@ impl RuntimeFnId {
             RuntimeFnId::MbGetInfoLen => "mb_get_info_len",
             RuntimeFnId::SharedIni => "__elephc_shared_ini",
             RuntimeFnId::TokenizerErrorLocation => "__elephc_tokenizer_error_location",
+            RuntimeFnId::ElephcFdStream => "__elephc_fd_stream",
+            RuntimeFnId::ElephcProcResource => "__elephc_proc_resource",
+            RuntimeFnId::ElephcResourceClose => "__elephc_resource_close",
+            RuntimeFnId::ElephcResourceKind => "__elephc_resource_kind",
+            RuntimeFnId::ElephcResourcePayload => "__elephc_resource_payload",
             RuntimeFnId::MbParseStr => "mb_parse_str",
             RuntimeFnId::MbSendMail => "mb_send_mail",
             RuntimeFnId::MbHttpInput => "mb_http_input",

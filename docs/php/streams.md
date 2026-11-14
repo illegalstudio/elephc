@@ -333,9 +333,50 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 | `stream_socket_pair()` | `stream_socket_pair(int $domain, int $type, int $protocol): array` | Create a pair of connected socket streams, for example `STREAM_PF_UNIX`, `STREAM_SOCK_STREAM`, `0`. |
 | `popen()` | `popen(string $command, string $mode): resource\|false` | Open a pipe to a process in read (`"r"`) or write (`"w"`) mode. |
 | `pclose()` | `pclose($handle): int` | Close a process pipe and return its termination status. |
+| `proc_open()` | `proc_open(array\|string $command, array $descriptor_spec, &$pipes, ?string $cwd = null, ?array $env_vars = null, ?array $options = null): resource\|false` | Spawn a command with a descriptor table; `$pipes` receives the parent ends of every `pipe` descriptor as ordinary streams. See [Processes](#processes-with-proc_open). |
+| `proc_get_status()` | `proc_get_status($process): array` | PHP 8.5's nine-key status array (`command`, `pid`, `cached`, `running`, `signaled`, `stopped`, `exitcode`, `termsig`, `stopsig`). |
+| `proc_close()` | `proc_close($process): int` | Close the remaining pipes, wait for the child, and return its exit code (`-1` when it can no longer be waited for). |
+| `proc_terminate()` | `proc_terminate($process, int $signal = 15): bool` | Send a signal to the child. |
+| `proc_nice()` | `proc_nice(int $priority): bool` | Change the current process's priority. |
 
 Socket addresses use `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or
 `udg:///path`. Host names are resolved through the system resolver to IPv4.
+
+## Processes with proc_open()
+
+`proc_open()` spawns with `posix_spawn` (`posix_spawnp` for an array command, which
+runs without a shell; a string command runs as `/bin/sh -c`), exactly as PHP 8.5 does on
+macOS and Linux, so a command that cannot be started is PHP's
+`proc_open(): posix_spawn() failed: ...` warning plus `false`. Descriptor specs accept
+`['pipe', 'r'|'w']`, `['file', $path, $mode]`, `['null']`, `['redirect', $n]` and an
+open stream resource (a file, a socket, a pipe from an earlier `proc_open()`, or a
+variable holding `STDIN`/`STDOUT`/`STDERR`). The pipes are ordinary streams:
+`fread()`, `fwrite()`, `fgets()`, `stream_get_contents()`, `stream_set_blocking()`,
+`stream_select()`, `feof()` and `fclose()` all work on them. `$cwd` and `$env_vars` apply
+to the child, and an `$env_vars` array replaces the environment. `$options` is accepted
+and ignored, as on every non-Windows PHP.
+
+`proc_get_status()` follows PHP 8.3+'s cached exit code: once the child's normal exit has
+been observed it is reported again by later calls (`cached` is `true`) and returned by
+`proc_close()`. A signal death is reported once, and `proc_close()` then answers `-1`,
+also as PHP does.
+
+Differences from PHP:
+
+- `['pty']` descriptors raise PHP's `PTY (pseudoterminal) not supported on this system`
+  warning and `proc_open()` answers `false`, as on a PHP build without PTY support.
+- `proc_close()` releases the parent ends of the pipes (the child sees EOF), but the
+  `$pipes` streams still read as open afterwards: each now reads EOF and discards writes,
+  and a later `fclose()` succeeds instead of PHP's `TypeError`. Close them with `fclose()`
+  before `proc_close()`, as PHP's manual recommends.
+- A process resource dropped without `proc_close()` is not reaped.
+- `STDIN`/`STDOUT`/`STDERR` written directly inside an array literal that also holds
+  arrays (`[0 => ['pipe', 'r'], 2 => STDERR]`) currently lose their resource type, so
+  pass them through a variable there (`$err = STDERR;`). A spec made only of streams
+  (`[STDIN, STDOUT, STDERR]`) works as written.
+- `get_resources('process')` does not list process resources yet.
+- The family is not available inside `eval()` yet, and process spawning is refused at
+  compile time on the iOS targets.
 
 ## Directory streams
 

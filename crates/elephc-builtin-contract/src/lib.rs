@@ -24,6 +24,7 @@ mod catalog_data;
 mod catalog_gmp;
 mod catalog_mbstring;
 mod catalog_pcntl;
+mod catalog_proc;
 mod catalog_xml;
 #[cfg(feature = "curl")]
 mod catalog_curl;
@@ -69,6 +70,7 @@ pub use object_operators::{
     ObjectShift, BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS,
 };
 pub use catalog_gmp::FUNCTIONS as GMP_FUNCTIONS;
+pub use catalog_proc::FUNCTIONS as PROC_FUNCTIONS;
 pub use php_version::PhpVersion;
 pub use registry::{contracts, lookup, lookup_id};
 pub use symbol_registry::{canonical_constant_name, classes, constants, lookup_class, lookup_constant};

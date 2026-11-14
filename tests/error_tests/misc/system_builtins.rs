@@ -954,3 +954,42 @@ fn test_error_regex_capture_retyping_raw_reference_payload() {
         }
     }
 }
+
+expect_builtin_arity_error!(
+    test_error_proc_open_wrong_args,
+    "<?php proc_open('true', []);",
+    "proc_open() takes 3 to 6 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_proc_close_wrong_args,
+    "<?php proc_close();",
+    "proc_close() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_proc_get_status_wrong_args,
+    "<?php proc_get_status();",
+    "proc_get_status() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_proc_nice_wrong_args,
+    "<?php proc_nice();",
+    "proc_nice() takes exactly 1 argument"
+);
+
+expect_builtin_arity_error!(
+    test_error_proc_terminate_wrong_args,
+    "<?php proc_terminate();",
+    "proc_terminate() takes 1 or 2 arguments"
+);
+
+/// Verifies `proc_open()` needs a plain variable for its write-only `$pipes` output.
+#[test]
+fn test_error_proc_open_pipes_must_be_variable() {
+    expect_error(
+        "<?php $all = []; proc_open('true', [], $all[0]);",
+        "proc_open() parameter $pipes must be passed a variable",
+    );
+}

@@ -307,6 +307,20 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_proc",
+        env_var: "ELEPHC_PROC_LIB_DIR",
+        crate_name: "elephc-proc",
+        flag_name: "proc",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: false,
+        // `proc_open()` and its family belong to PHP's always-present `standard`
+        // extension, so linking this bridge reports no extension of its own.
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_xml",
         env_var: "ELEPHC_XML_LIB_DIR",
         crate_name: "elephc-xml",

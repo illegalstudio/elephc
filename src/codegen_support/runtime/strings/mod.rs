@@ -332,7 +332,7 @@ pub use trim_mask::emit_trim_mask;
 /// Emit trim with custom mask helper.
 pub use resource_to_string::emit_resource_to_string;
 /// Emit resource-to-string conversion.
-pub use resource_type_name::emit_resource_type_name;
+pub use resource_type_name::{emit_resource_type_name, PROCESS_RESOURCE_KIND};
 /// Emit the resource type-name resolver (`stream` when open, `Unknown` once closed).
 pub use resource_write_stdout::emit_resource_write_stdout;
 /// Emit the PHP-compatible URL component scanner.

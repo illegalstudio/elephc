@@ -1041,6 +1041,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "elephc-proc"
+version = "0.1.0"
+dependencies = [
+ "elephc-process-context",
+ "libc",
+]
+
+[[package]]
 name = "elephc-process-context"
 version = "0.1.0"
 dependencies = [

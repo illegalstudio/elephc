@@ -788,6 +788,11 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`posix_setpgid()`](./builtins/misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./builtins/misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
 | [`print_r()`](./builtins/misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
+| [`proc_close()`](./builtins/misc/proc_close.md) | `(mixed $process): int` | `int` | ✓ | - |
+| [`proc_get_status()`](./builtins/misc/proc_get_status.md) | `(mixed $process): array` | `array` | ✓ | - |
+| [`proc_nice()`](./builtins/misc/proc_nice.md) | `(int $priority): bool` | `bool` | ✓ | - |
+| [`proc_open()`](./builtins/misc/proc_open.md) | `(array|string $command, array $descriptor_spec, mixed $pipes, ?string $cwd = null, ?array $env_vars = null, ?array $options = null): mixed` | `mixed` | ✓ | - |
+| [`proc_terminate()`](./builtins/misc/proc_terminate.md) | `(mixed $process, int $signal = 15): bool` | `bool` | ✓ | - |
 | [`restore_error_handler()`](./builtins/misc/restore_error_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`restore_exception_handler()`](./builtins/misc/restore_exception_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`serialize()`](./builtins/misc/serialize.md) | `(mixed $value): string` | `string` | ✓ | ✓ |

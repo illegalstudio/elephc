@@ -16,6 +16,7 @@ const CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_crypt
 const OPENSSL_CRYPTO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_openssl")];
 const PHAR: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_phar")];
 const PCNTL: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_pcntl")];
+const PROC: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_proc")];
 const FILEINFO: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_fileinfo")];
 const XML: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_xml")];
 const GMP: &[BuiltinRequirement] = &[BuiltinRequirement::Bridge("elephc_gmp")];
@@ -46,6 +47,11 @@ pub(crate) fn fixed_requirements(id: BuiltinId) -> &'static [BuiltinRequirement]
         .any(|name| id == BuiltinId::from_canonical_name(name))
     {
         return GMP;
+    }
+    if crate::catalog_proc::contract_names()
+        .any(|name| id == BuiltinId::from_canonical_name(name))
+    {
+        return PROC;
     }
     if matches_name(
         id,

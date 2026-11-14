@@ -1233,7 +1233,16 @@ impl Scanner<'_> {
     /// Records a free-function/extern callable key.
     pub(super) fn record_callable(&mut self, name: &str) -> String {
         let key = php_symbol_key(name.trim_start_matches('\\'));
-        self.usage.functions.insert(key.clone()); self.usage.externs.insert(key.clone()); key
+        self.usage.functions.insert(key.clone()); self.usage.externs.insert(key.clone());
+        // The proc_open() family's lowerings call their `__elephc_proc_*` prelude twins (and
+        // `proc_open()` a second pipes helper) directly. Root them here rather than at direct
+        // call sites, so `call_user_func('proc_nice', 0)` and other callable references to a
+        // proc builtin keep the helpers alive too.
+        for helper in crate::builtins::proc::prelude_helpers_for(&key) {
+            self.usage.functions.insert(helper.to_string());
+            self.usage.externs.insert(helper.to_string());
+        }
+        key
     }
 
     /// Records a class key and applies conservative Reflection hazards.

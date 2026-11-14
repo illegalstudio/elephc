@@ -323,6 +323,12 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "decoct",
     "hexdec",
     "octdec",
+    // The proc_open() family is AOT-only for now (`.plans/proc-open.md`).
+    "proc_close",
+    "proc_get_status",
+    "proc_nice",
+    "proc_open",
+    "proc_terminate",
     "substr_count",
     "zval_free",
     "zval_pack",
@@ -398,11 +404,12 @@ mod tests {
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
         // Also includes the SimpleXML allocation and diagnostic adapters, and
         // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
-        // only compiled reflector getters call.
-        assert_eq!(eval_internal, 138);
-        // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
-        // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 381);
+        // only compiled reflector getters call. The proc prelude's five resource helpers too.
+        assert_eq!(eval_internal, 143);
+        // 34 registry builtins awaiting eval homes (the five `proc_*` functions among them),
+        // plus the 348 PHP-visible prelude-provided and name-resolver-rewritten functions
+        // eval does not reach (see `eval_support`).
+        assert_eq!(eval_pending, 386);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -412,8 +419,9 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries, and the
-        // compiled and eval `ReflectionClass` builder calls two more.
-        assert_eq!(aot_registry, 828);
+        // compiled and eval `ReflectionClass` builder calls two more, and the `proc_*`
+        // family with its five internal resource helpers ten more.
+        assert_eq!(aot_registry, 838);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 450 + curl_surface);
@@ -470,7 +478,7 @@ mod tests {
         // interpreter adapters, plus the GMP and SimpleXML forwarding homes.
         assert_eq!(interpreter_adapter, 664 + curl_surface);
         // Internal compiler surfaces and pending eval bindings remain unavailable.
-        assert_eq!(unsupported, 519);
+        assert_eq!(unsupported, 529);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {
