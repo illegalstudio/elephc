@@ -245,6 +245,9 @@ elephc --gc-stats heavy.php
 ./heavy
 GC: allocs=120 frees=120
 GC collector: runs=2 collected=7 live=0 peak=4096 last_collected=3 last_duration_ns=18420 last_before=4096 last_after=1024 last_trigger=explicit
+GC runs: 2
+GC run 1: collected=4 duration_ns=12000 before=4096 after=2048 trigger=automatic
+GC run 2: collected=3 duration_ns=18420 before=4096 after=1024 trigger=explicit
 ```
 
 The `GC:` line is the allocation/free contract used by existing tooling. The
@@ -252,13 +255,16 @@ separate `GC collector:` line reports the cycle collector: total productive
 `runs`, cumulative reclaimed graph nodes, live/peak heap bytes, and the most
 recent productive pass (`last_collected`, duration in nanoseconds, live memory
 before/after, and whether PHP called `gc_collect_cycles()` explicitly or an
-automatic safe point ran it). Empty passes do not replace the last productive
-run.
+automatic safe point ran it). `GC runs:` then prints one row per productive run
+in execution order, with the same fields plus the row index; up to 256 rows are
+retained and excess runs are counted on a `GC runs dropped:` line. Empty passes
+do not replace the last productive run.
 
 Combined with `--web`, the server never reaches the process-exit report, so the
 counters are printed to stderr after every handled request instead. The
-collector totals are process-wide, so under `--web` the `last_*` fields describe
-the most recent productive pass, not a per-request slice. In default
+per-run `GC runs:` table is omitted for web sessions; the aggregate line and
+`last_*` fields remain process-wide, so under `--web` they describe the most
+recent productive pass, not a per-request slice. In default
 `worker` isolation, a growing `allocs - frees` gap across requests handled by the
 same worker indicates a per-request leak. In `pool`, the counters belong to each
 persistent handler child and lines from several children may interleave. In

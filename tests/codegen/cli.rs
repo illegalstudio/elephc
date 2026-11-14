@@ -161,6 +161,51 @@ fn test_cli_gc_stats_reports_cycle_collector_runs() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--gc-stats` prints one stable row per productive collector run,
+/// in execution order, with the data xdebug's GC report exposes.
+#[test]
+fn test_cli_gc_stats_prints_each_productive_run() {
+    let dir = make_cli_test_dir("elephc_cli_gc_stats_run_rows");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nclass Node { public $next = null; }\nfunction make_cycle(): int {\n    $a = new Node();\n    $b = new Node();\n    $a->next = $b;\n    $b->next = $a;\n    unset($a, $b);\n    return gc_collect_cycles();\n}\ngc_disable();\necho make_cycle(), \"\\n\";\necho make_cycle(), \"\\n\";\ngc_enable();\n",
+    )
+    .expect("write gc-stats run-row fixture");
+    let compile = elephc_cli_command(&dir)
+        .args(["--gc-stats", "main.php"])
+        .output()
+        .expect("compile gc-stats run-row fixture");
+    assert!(
+        compile.status.success(),
+        "gc-stats run-row compilation failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let output = run_binary(&dir.join("main"), &dir);
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let rows: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("GC run "))
+        .collect();
+    assert_eq!(rows.len(), 2, "{stderr}");
+    assert!(stderr.contains("GC runs: 2"), "{stderr}");
+    for row in rows {
+        assert!(row.contains("collected=2"), "{row}");
+        assert!(row.contains("trigger=explicit"), "{row}");
+        let field = |name: &str| -> u64 {
+            row.split_whitespace()
+                .find_map(|part| part.strip_prefix(name))
+                .unwrap_or_else(|| panic!("missing {name} in {row}"))
+                .parse()
+                .unwrap_or_else(|_| panic!("invalid {name} in {row}"))
+        };
+        assert!(field("duration_ns=") > 0, "{row}");
+        assert!(field("before=") >= field("after="), "{row}");
+    }
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2\n2");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// End-to-end `elephc monitor`: compiles a busy fixture, activates exact
 /// instrumentation through the control channel, and writes a two-view
 /// Speedscope document whose frames are PHP names — not EIR block labels or

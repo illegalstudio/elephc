@@ -743,6 +743,17 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_last_run_duration_ns", 8, target));
     out.push_str(&comm_directive("_gc_last_run_collected", 8, target));
     out.push_str(&comm_directive("_gc_last_run_explicit", 8, target));
+    out.push_str(&comm_directive(
+        "_gc_stats_run_records",
+        crate::codegen_support::runtime::arrays::gc_stats::GC_STATS_RECORD_CAPACITY
+            * crate::codegen_support::runtime::arrays::gc_stats::GC_STATS_RECORD_SIZE,
+        target,
+    ));
+    out.push_str(&comm_directive("_gc_stats_run_count", 8, target));
+    out.push_str(&comm_directive("_gc_stats_run_dropped", 8, target));
+    for (label, text) in crate::codegen_support::runtime::arrays::gc_stats::GC_STATS_LITERALS {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {text:?}\n"));
+    }
     out.push_str(&comm_directive("_gc_application_started", 8, target));
     out.push_str(&comm_directive("_gc_collector_started", 8, target));
     out.push_str(&comm_directive("_gc_free_started", 8, target));

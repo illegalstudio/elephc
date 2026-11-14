@@ -25,6 +25,7 @@ pub fn emit_gc_control(emitter: &mut Emitter) {
         Arch::X86_64 => emit_gc_control_x86_64(emitter),
     }
     super::gc_collect_budget::emit_gc_collect_budget(emitter);
+    super::gc_stats::emit_gc_stats_report(emitter);
 }
 
 /// Emits the GC control entry points for AArch64 targets.

@@ -2761,6 +2761,9 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
     let (newline_label, _) = ctx.data.add_string(b"\n");
     emit_write_literal_stderr(ctx.emitter, &newline_label, 1);
     emit_gc_collector_stats(ctx);
+    if !ctx.web {
+        abi::emit_call_label(ctx.emitter, "__rt_gc_stats_report");
+    }
 }
 
 /// Emits the `--gc-stats` cycle-collector counters and last productive run.

@@ -538,6 +538,7 @@ pub fn emit_gc_collect_cycles(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [x9]");                                       // read whether PHP called the collector explicitly
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_last_run_explicit");
     emitter.instruction("str x10, [x9]");                                       // publish the trigger kind for the report
+    super::gc_stats::emit_record_run(emitter);
     emitter.label("__rt_gc_collect_cycles_stats_done");
     super::gc_host_roots::finish(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_gc_collecting");

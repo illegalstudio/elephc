@@ -527,6 +527,7 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // read whether PHP called the collector explicitly
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_last_run_explicit");
     emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the trigger kind for the report
+    super::gc_stats::emit_record_run(emitter);
     emitter.label("__rt_gc_collect_cycles_stats_done");
     super::gc_host_roots::finish(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collecting");
