@@ -9,7 +9,8 @@
 //!
 //! Key details:
 //! - The public names are registry builtins (`crate::builtins::proc`) whose EIR lowering
-//!   calls these helpers; reachability roots them from those calls, so an unused helper
+//!   calls these helpers; reachability roots them from those calls (and from callable
+//!   references such as `call_user_func('proc_nice', 0)`), so an unused helper
 //!   is pruned like any other prelude declaration.
 //! - Injection is pay-for-use: a program that never names a `proc_*` function neither
 //!   declares the helpers nor links `elephc_proc`. `--with-proc` forces both.
