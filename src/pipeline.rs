@@ -314,7 +314,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let xml_used = with_crates.contains("xml")
         || autoloaded("xml")
         || crate::xml_prelude::program_uses_surface(&ast);
-
+    let ast = crate::php86_declarations::inject(ast);
     let mut prelude_inventory = optimize::reachability::PreludeInventory::new();
     // `curl` belongs here for the same reason `pdo` does, and NOT listing it is a silent
     // no-op rather than a smaller binary: `--with-curl` force-injects the whole surface for
@@ -543,7 +543,29 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         with_crates.contains("tokenizer") || autoloaded("tokenizer"),
         &mut prelude_inventory,
     );
-    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let uri_supported = php_version >= crate::php_version::PhpVersion::Php85;
+    let uri_used = uri_supported
+        && (with_crates.contains("uri")
+            || autoloaded("uri")
+            || crate::uri_prelude::program_uses_uri(&ast));
+    let ast = crate::uri_prelude::inject_if_used_for_version(
+        ast,
+        uri_used,
+        php_version,
+        &mut prelude_inventory,
+    );
+    if uri_used {
+        linked_php_surfaces.push("uri".to_string());
+    }
+    // Declare the URI surface before the core prelude so every later injected prelude sees a
+    // complete class set; the URI prelude itself depends only on checker-injected core classes.
+    let ast = crate::core_prelude::inject_if_used(
+        ast,
+        with_crates.contains("pack"),
+        &mut prelude_inventory,
+    );
+    let ast = crate::time_prelude::inject_if_used(ast, autoloaded("time"), &mut prelude_inventory);
+    let ast = crate::clamp_prelude::inject_if_used(ast, autoloaded("clamp"), &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(
         ast,
         with_crates.contains("bcmath") || autoloaded("bcmath"),
@@ -767,6 +789,19 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         ast
     };
 
+    // Discover Io\Poll use inside newly loaded classes, resolving only injected declarations.
+    crate::progress::phase("io-poll-autoload-prelude");
+    let phase_started = Instant::now();
+    let ast = match crate::io_poll_prelude::inject_after_autoload(ast, &mut prelude_inventory) {
+        Ok(injected) => injected,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("io-poll-autoload-prelude", phase_started);
+
     // Discover DOM use inside newly loaded classes, resolving only injected declarations.
     crate::progress::phase("dom-html-autoload-prelude");
     let phase_started = Instant::now();
@@ -834,6 +869,21 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         }
     };
     timings.record_since("func-args", phase_started);
+
+    // Desugar PHP 8.6 partial function application into the closure php-src synthesizes.
+    // This runs before the AST optimizer and the checker, so every later pass sees ordinary
+    // closures and the placeholder markers never escape this boundary.
+    crate::progress::phase("pfa");
+    let phase_started = Instant::now();
+    let ast = match crate::pfa::desugar(ast) {
+        Ok(desugared) => desugared,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("pfa", phase_started);
 
     // Complete the OPcache script manifest now that all three groups exist, and re-render the
     // manifest-dependent functions injected above against it. This is a pure substitution of

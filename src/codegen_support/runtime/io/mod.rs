@@ -126,6 +126,7 @@ mod unix_socket_client;
 mod unix_socket_server;
 mod stream_isatty;
 mod stream_select;
+mod stream_poll_revents;
 mod stream_set_blocking;
 mod stream_set_timeout;
 mod streams_ext;
@@ -133,6 +134,7 @@ mod symlink;
 mod tempnam;
 mod path_is_wrapper;
 mod readfile_wrapper;
+mod iconv_spec_split;
 mod user_filter;
 mod user_filter_lifecycle;
 mod user_filter_brigade;
@@ -141,6 +143,8 @@ mod touch_meta_array;
 mod user_wrapper;
 mod user_wrapper_unbox;
 mod user_wrapper_cast;
+mod user_wrapper_read_warning;
+mod user_wrapper_write_error;
 mod user_wrapper_dir;
 mod user_wrapper_path_op;
 mod user_wrapper_set_option;
@@ -253,11 +257,13 @@ pub(crate) use unix_socket_client::emit_unix_socket_client;
 pub(crate) use unix_socket_server::emit_unix_socket_server;
 pub(crate) use stream_isatty::emit_stream_isatty;
 pub(crate) use stream_select::emit_stream_select;
+pub(crate) use stream_poll_revents::emit_stream_poll_revents;
 pub(crate) use stream_set_blocking::emit_stream_set_blocking;
 pub(crate) use stream_set_timeout::emit_stream_set_timeout;
 pub(crate) use streams_ext::emit_streams_ext;
 pub(crate) use symlink::emit_symlink;
 pub(crate) use tempnam::emit_tempnam;
+pub(crate) use iconv_spec_split::{emit_iconv_spec_split, ICONV_SPEC_BUFFER_BYTES};
 pub(crate) use user_filter::{
     emit_apply_user_stream_filter, emit_resolve_user_filter_id,
     emit_stream_filter_attach_user, emit_stream_filter_register,
@@ -274,7 +280,9 @@ pub(crate) use user_wrapper::{
 pub(crate) use user_wrapper_unbox::emit_wrapper_unbox_int;
 pub(crate) use path_is_wrapper::emit_path_is_wrapper;
 pub(crate) use readfile_wrapper::emit_readfile_wrapper;
-pub(crate) use user_wrapper_cast::emit_user_wrapper_stream_cast;
+pub(crate) use user_wrapper_cast::{emit_user_wrapper_cast_error, emit_user_wrapper_stream_cast};
+pub(crate) use user_wrapper_read_warning::{emit_user_wrapper_read_excess_warning, emit_user_wrapper_read_missing_error};
+pub(crate) use user_wrapper_write_error::emit_user_wrapper_write_error;
 pub(crate) use user_wrapper_dir::{
     emit_user_wrapper_dir_closedir, emit_user_wrapper_dir_readdir, emit_user_wrapper_dir_rewinddir,
     emit_user_wrapper_opendir,

@@ -552,6 +552,7 @@ def validate_presentation_overrides(repo: Path, entries: list[dict]) -> None:
 # ``prelude_contracts_match_their_injected_signatures`` proves each contract is declared
 # by exactly one of them.
 PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
+    "uri": ("uri_prelude/builders.rs", "uri", "crates/elephc-builtin-contract/src/catalog_data.rs"),
     "io": ("fileinfo_prelude/build.rs", "fileinfo", "crates/elephc-builtin-contract/src/catalog_surfaces.rs"),
     "tokenizer": ("tokenizer_prelude.rs", "tokenizer", "crates/elephc-builtin-contract/src/catalog_data.rs"),
     "curl": (
@@ -633,7 +634,7 @@ def find_prelude_declaration(source: str, canonical: str):
     )
     if built is not None:
         return built
-    return re.search(rf"^function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
+    return re.search(rf"^\s*function\s+{re.escape(canonical)}\s*\(", source, re.MULTILINE)
 
 
 def resolve_non_registry_lowering(
@@ -665,15 +666,24 @@ def resolve_non_registry_lowering(
     lowering = LoweringInfo(sig_file=contract_file)
     kind = aot_support.get("kind")
     if kind == "prelude":
-        try:
-            source, label, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
-        except KeyError:
-            raise ValueError(
-                f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
-                f"PRELUDE_SOURCES does not map to a prelude. Add the area (see the constant's "
-                f"comment) — falling back to another area's prelude would publish a page "
-                f"pointing at the wrong file with the wrong prose."
-            ) from None
+        if canonical in ("pack", "unpack"):
+            # Area::String covers both hash_* and the core pack/unpack prelude; these two
+            # share no source file, so choose by name instead of by area.
+            source, label, sig_file = (
+                "pack_prelude.rs",
+                "pack",
+                "crates/elephc-builtin-contract/src/catalog_data.rs",
+            )
+        else:
+            try:
+                source, label, sig_file = PRELUDE_SOURCES[module if module in PRELUDE_SOURCES else area]
+            except KeyError:
+                raise ValueError(
+                    f"prelude-provided builtin {canonical!r} is in contract area {area!r}, which "
+                    f"PRELUDE_SOURCES does not map to a prelude. Add the area (see the constant's "
+                    f"comment) — falling back to another area's prelude would publish a page "
+                    f"pointing at the wrong file with the wrong prose."
+                ) from None
         lowering.sig_file = sig_file
         sources = (source,) if isinstance(source, str) else source
         prelude, match = None, None

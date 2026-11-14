@@ -416,6 +416,9 @@ pub(in crate::codegen::lower_inst) fn static_property_exists_on_class_info(
     {
         return false;
     }
+    if crate::codegen_support::runtime::data::is_uri_opaque_handle(resolved_class, property_name) {
+        return false;
+    }
     property_visible_from_class_string(
         resolved_class,
         property_name,

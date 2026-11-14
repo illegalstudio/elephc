@@ -34,6 +34,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_feof(emitter);
     io::emit_stream_isatty(emitter);
     io::emit_stream_select(emitter);
+    io::emit_stream_poll_revents(emitter);
     io::emit_stream_set_blocking(emitter);
     io::emit_stream_set_timeout(emitter);
     io::emit_stream_get_contents(emitter);
@@ -101,6 +102,10 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_close_mode(emitter);
     io::emit_user_wrapper_fclose(emitter);
     io::emit_user_wrapper_fread(emitter);
+    io::emit_user_wrapper_read_excess_warning(emitter);
+    io::emit_user_wrapper_read_missing_error(emitter);
+    io::emit_user_wrapper_cast_error(emitter);
+    io::emit_user_wrapper_write_error(emitter);
     io::emit_user_wrapper_fwrite(emitter);
     io::emit_user_wrapper_feof(emitter);
     io::emit_user_wrapper_flock(emitter);
@@ -126,6 +131,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stash_connect_host(emitter);
     io::emit_fire_notification(emitter);
     io::emit_user_wrapper_stream_cast(emitter);
+    io::emit_iconv_spec_split(emitter);
     io::emit_stream_filter_register(emitter);
     io::emit_resolve_user_filter_id(emitter);
     io::emit_stream_filter_attach_user(emitter);

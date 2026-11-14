@@ -101,7 +101,7 @@ pub(crate) use fopen_core::{
 };
 pub(crate) use stream_context::{
     lower_stream_wrapper_register, lower_stream_wrapper_unregister, lower_stream_wrapper_restore, lower_stream_context_create,
-    lower_stream_context_get_default, lower_stream_context_set_default, lower_stream_context_set_option, lower_stream_context_set_params,
+    lower_stream_context_get_default, lower_stream_context_set_default, lower_stream_context_set_option, lower_stream_context_set_options, lower_stream_context_set_params,
     lower_stream_context_get_options, lower_stream_context_get_params, lower_stream_get_contents,
 };
 pub(crate) use stream_copy_queries::{
@@ -116,6 +116,7 @@ pub(crate) use stream_buckets::{
     lower_stream_is_local, lower_stream_supports_lock,
 };
 pub(crate) use stream_options::{
+    lower_elephc_poll_revents,
     lower_stream_isatty, lower_stream_set_blocking, lower_stream_set_chunk_size, lower_stream_set_buffer,
     lower_stream_set_timeout, lower_stream_select, lower_stream_resolve_include_path,
 };

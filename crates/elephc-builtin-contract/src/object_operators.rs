@@ -182,6 +182,75 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
     accepts_any_operands: false,
 };
 
+/// PHP 8.6 `Time\Duration`: ordering only, because arithmetic stays in its methods.
+///
+/// php-src installs a custom object handler whose `compare` slot delegates to
+/// `timelib_duration_compare`; the PHP-visible `+`/`-` operators are deliberately
+/// not overloaded, so every arithmetic adapter stays absent.
+pub const TIME_DURATION_OPERATORS: ClassOperators = ClassOperators {
+    properties: &[],
+    dimensions: &[],
+    native_clone: None,
+    json: None,
+    native_casts: &[],
+    arithmetic: &[],
+    arithmetic_result: ObjectArithmeticResult::Object,
+    operand_dispatch: ObjectOperandDispatch::Handler,
+    bit_not: None,
+    bitwise: &[],
+    shift: &[],
+    compare: Some("__elephc_compare"),
+    boolean: None,
+    casts: None,
+    accepts_any_operands: false,
+};
+
+/// PHP's date objects order by their stored instant, including microseconds.
+///
+/// `DateTime`/`DateTimeImmutable` install a `compare` object handler in php-src; the
+/// synthetic classes expose the same ordering through their timestamp and microsecond
+/// fields so mixed comparisons (including `clamp()` and `<=>`) see it.
+pub const DATE_TIME_OPERATORS: ClassOperators = ClassOperators {
+    properties: &[],
+    dimensions: &[],
+    native_clone: None,
+    json: None,
+    native_casts: &[],
+    arithmetic: &[],
+    arithmetic_result: ObjectArithmeticResult::Object,
+    operand_dispatch: ObjectOperandDispatch::Handler,
+    bit_not: None,
+    bitwise: &[],
+    shift: &[],
+    compare: Some("__elephc_compare"),
+    boolean: None,
+    casts: None,
+    accepts_any_operands: false,
+};
+
+/// php-src's declared `Time\Duration` method surface, in declaration order.
+///
+/// The compiler-only adapters (`__elephc_*`) stay out of reflection, matching the
+/// internal class they model.
+pub const TIME_DURATION_VISIBLE_METHODS: &[&str] = &[
+    "__construct",
+    "__unserialize",
+    "fromSeconds",
+    "fromNanoseconds",
+    "fromMicroseconds",
+    "fromMilliseconds",
+    "fromMinutes",
+    "fromHours",
+    "fromIso8601DurationString",
+    "negate",
+    "absolute",
+    "add",
+    "sub",
+    "multiplyBy",
+    "divideBy",
+    "compare",
+];
+
 /// GMP's PHP 8.5 object handlers: arithmetic, bitwise, shifts, ordering and casts.
 pub const GMP_CASTS: ClassCasts = ClassCasts {
     to_int: Some("__elephc_to_int"),

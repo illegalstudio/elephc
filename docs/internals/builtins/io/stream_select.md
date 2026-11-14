@@ -37,12 +37,12 @@ description: "Compiler internals for stream_select(): lowering path, type checks
 ## Signature summary
 
 ```php
-function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int
+function stream_select(array $read, array $write, array $except, int $seconds, int $microseconds = 0, mixed $context = null): int|false
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 4–5 arguments (1 optional).
+- **Arity**: takes 4–6 arguments (2 optional).
 - **By-reference parameters**: `$read`, `$write`, `$except`.
 
 ## Eval interpreter (magician)

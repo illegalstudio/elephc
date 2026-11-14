@@ -124,6 +124,8 @@ mod runtime_reachability;
 mod runtime_introspection;
 mod math;
 mod gmp_phpt;
+mod time_duration_php_src;
+mod time_duration_serialization;
 mod gmp_eval;
 mod gmp_class;
 mod gmp_math;
@@ -158,3 +160,7 @@ mod fileinfo_validation;
 mod fileinfo_stream_diagnostics;
 mod fileinfo_wrapper_stat;
 mod fileinfo_stream_magic;
+
+mod uri_php_src;
+mod uri86_php_src;
+mod uri;

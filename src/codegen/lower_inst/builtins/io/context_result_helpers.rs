@@ -78,7 +78,7 @@ pub(super) fn store_stream_context_options(
         return Ok(());
     }
     ctx.load_value_to_result(options)?;
-    if ctx.module.web_application { normalize_application_options(ctx); }
+    normalize_context_options(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => store_stream_context_options_aarch64(ctx, clear_on_null),
         Arch::X86_64 => store_stream_context_options_x86_64(ctx, clear_on_null),
@@ -87,7 +87,7 @@ pub(super) fn store_stream_context_options(
 }
 
 /// Opens a physically boxed array before publishing its borrowed raw-container pointer.
-fn normalize_application_options(ctx: &mut FunctionContext<'_>) {
+fn normalize_context_options(ctx: &mut FunctionContext<'_>) {
     let boxed = ctx.next_label("application_options_boxed");
     let array = ctx.next_label("application_options_array");
     let null = ctx.next_label("application_options_null");
@@ -327,6 +327,39 @@ pub(super) fn optional_const_string_operand(
             .cloned()
             .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?,
     ))
+}
+
+/// Emits a fresh implicit stream-context payload below the reserved default.
+///
+/// Every `stream_context_create()` call gets its own payload so resource ids and
+/// per-context option maps can distinguish two live contexts. The window is reserved
+/// by `resource_type_name`, which still reports `stream-context` for every payload in it.
+pub(super) fn emit_unique_context_payload(ctx: &mut FunctionContext<'_>) {
+    let symbol = "_context_payload_next";
+    ctx.data.add_comm(symbol.to_string(), 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", symbol);
+            ctx.emitter.instruction("ldr x10, [x9]");                           // current context-payload cursor
+            ctx.emitter.instruction("cbnz x10, 1f");                            // a started cursor keeps its value
+            abi::emit_load_int_immediate(ctx.emitter, "x10", crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
+            ctx.emitter.label("1");
+            ctx.emitter.instruction("sub x10, x10, #1");                        // take the next payload below the default
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the advanced cursor
+            ctx.emitter.instruction("mov x0, x10");                             // return the unique context payload
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", symbol);
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                 // current context-payload cursor
+            ctx.emitter.instruction("test r10, r10");                           // is the cursor initialized?
+            ctx.emitter.instruction("jnz 1f");                                  // a started cursor keeps its value
+            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen_support::runtime::DEFAULT_CONTEXT_PAYLOAD);
+            ctx.emitter.label("1");
+            ctx.emitter.instruction("dec r10");                                 // take the next payload below the default
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");                 // publish the advanced cursor
+            ctx.emitter.instruction("mov rax, r10");                            // return the unique context payload
+        }
+    }
 }
 
 /// Maps statically-known `php://` standard-stream URLs to native descriptors.

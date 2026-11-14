@@ -13626,6 +13626,107 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "stream",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "__elephc_poll_revents",
+    "description": "Internal prelude helper returning the poll(2) revents flags for a stream.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "internal-compiler-surface"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": false,
+    "is_extension": false,
+    "is_internal": true,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.__elephc_poll_revents` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/io/__elephc_poll_revents.rs"
+    },
+    "module": "elephc",
+    "name": "__elephc_poll_revents",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "__elephc_poll_revents"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "non_heap"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "__elephc_poll_revents"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "stream",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "int",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "__elephc_poll_revents",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
           "name": "pointer",
           "optional": false,
           "type": "pointer"
@@ -33912,28 +34013,26 @@
     "eval_only": false,
     "examples": [],
     "in_catalog": true,
-    "is_extension": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.clamp` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
       "sig_file": "src/builtins/math/clamp.rs"
     },
-    "module": "elephc",
+    "module": "standard",
     "name": "clamp",
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic"
       },
       "effects": {
         "kind": "static",
@@ -33942,12 +34041,11 @@
         ]
       },
       "lowering": {
-        "kind": "runtime_call",
-        "target": "clamp"
+        "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -33957,7 +34055,7 @@
       "runtime_functions": [
         "clamp"
       ],
-      "target_strategy": "runtime_call",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -33997,7 +34095,7 @@
       "return_type": "mixed",
       "variadic": null
     },
-    "since": null,
+    "since": "8.6",
     "slug": "clamp",
     "sub_area": "Math"
   },
@@ -54057,6 +54155,127 @@
   {
     "aot": {
       "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "Type",
+    "canonical_name": "get_debug_type",
+    "description": "Returns the resolved name of the given variable's type.",
+    "eval": {
+      "adapter_reason": "interpreter-specific-value-semantics",
+      "area": "types",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/types/get_debug_type.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 1,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.get_debug_type` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/types/get_debug_type.rs"
+    },
+    "module": "standard",
+    "name": "get_debug_type",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic_target",
+        "target": "get_debug_type"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "get_debug_type"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "independent"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "get_debug_type"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "value",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "get_debug_type",
+    "sub_area": "Type"
+  },
+  {
+    "aot": {
+      "kind": "registry",
       "params": [],
       "required_param_count": 0,
       "signature_override_reason": null,
@@ -66824,7 +67043,7 @@
     "eval_only": false,
     "examples": [],
     "in_catalog": true,
-    "is_extension": true,
+    "is_extension": false,
     "is_internal": false,
     "lowering": {
       "checker_file": null,
@@ -66839,7 +67058,7 @@
       "sig_arm": null,
       "sig_file": "src/builtins/string/grapheme_strrev.rs"
     },
-    "module": "elephc",
+    "module": "intl",
     "name": "grapheme_strrev",
     "semantics": {
       "argument_lowering": "standard",
@@ -66894,7 +67113,7 @@
       "return_type": "mixed",
       "variadic": null
     },
-    "since": null,
+    "since": "8.6",
     "slug": "grapheme_strrev",
     "sub_area": "String"
   },
@@ -114413,6 +114632,67 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "format",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "required_param_count": 1,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": "values"
+    },
+    "area": "String",
+    "canonical_name": "pack",
+    "description": "Packs data into a binary string.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/pack_prelude.rs",
+      "codegen_function": "pack",
+      "notes": [
+        "Implemented by the compiler-injected pack prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "standard",
+    "name": "pack",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "format",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": "values"
+    },
+    "since": null,
+    "slug": "pack",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -137692,6 +137972,167 @@
         {
           "by_ref": false,
           "default": null,
+          "name": "options",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "IO",
+    "canonical_name": "stream_context_set_options",
+    "description": "Sets options on the specified context.",
+    "eval": {
+      "adapter_reason": "runtime-state-or-resource",
+      "area": "filesystem",
+      "execution": "interpreter-adapter",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filesystem/stream_context_set_options.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "options",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "runtime_builtin_id": null,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.stream_context_set_options` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/io/stream_context_set_options.rs"
+    },
+    "module": "standard",
+    "name": "stream_context_set_options",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "refcount_op",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "stream_context_set_options"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "may_alias_arguments"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [
+        "stream_context_set_options"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "ios-arm64",
+        "ios-sim-arm64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "target_support_kind": "all",
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "options",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "bool",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "stream_context_set_options",
+    "sub_area": "IO"
+  },
+  {
+    "aot": {
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
           "name": "params",
           "optional": false,
           "type": "mixed"
@@ -137870,6 +138311,13 @@
           "name": "offset",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -137918,6 +138366,13 @@
           "name": "offset",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 2,
@@ -138032,6 +138487,13 @@
           "name": "offset",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",
@@ -139598,6 +140060,13 @@
           "name": "stream",
           "optional": false,
           "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 1,
@@ -139624,6 +140093,13 @@
           "default": null,
           "name": "stream",
           "optional": false,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
           "type": "mixed"
         }
       ],
@@ -139717,6 +140193,13 @@
           "name": "stream",
           "optional": false,
           "type": "resource"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "bool",
@@ -140041,6 +140524,13 @@
           "name": "microseconds",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 4,
@@ -140050,7 +140540,7 @@
     },
     "area": "IO",
     "canonical_name": "stream_select",
-    "description": "Runs the equivalent of the select() system call on the given arrays of streams.",
+    "description": "Runs the equivalent of the select() system call on the given arrays of streams, or returns false when a descriptor exceeds FD_SETSIZE.",
     "eval": {
       "adapter_reason": "by-reference-or-lvalue",
       "area": "filesystem",
@@ -140095,6 +140585,13 @@
           "name": "microseconds",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 4,
@@ -140215,9 +140712,16 @@
           "name": "microseconds",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
-      "return_type": "int",
+      "return_type": "int|false",
       "variadic": null
     },
     "since": null,
@@ -141752,6 +142256,13 @@
           "name": "protocol",
           "optional": false,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 3,
@@ -141793,6 +142304,13 @@
           "name": "protocol",
           "optional": false,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "required_param_count": 3,
@@ -141899,6 +142417,13 @@
           "name": "protocol",
           "optional": false,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
         }
       ],
       "return_type": "mixed",
@@ -149579,6 +150104,95 @@
   },
   {
     "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "format",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": 0,
+          "name": "offset",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "String",
+    "canonical_name": "unpack",
+    "description": "Unpacks data from a binary string.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/pack_prelude.rs",
+      "codegen_function": "unpack",
+      "notes": [
+        "Implemented by the compiler-injected pack prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "standard",
+    "name": "unpack",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "format",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array|false",
+      "variadic": null
+    },
+    "since": null,
+    "slug": "unpack",
+    "sub_area": "String"
+  },
+  {
+    "aot": {
       "kind": "registry",
       "params": [
         {
@@ -149831,6 +150445,81 @@
     "since": null,
     "slug": "unset",
     "sub_area": "Variable"
+  },
+  {
+    "aot": {
+      "kind": "prelude",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "input",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mode",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "required_param_count": 2,
+      "signature_override_reason": null,
+      "supported": true,
+      "variadic": null
+    },
+    "area": "URI",
+    "canonical_name": "url_percent_encode",
+    "description": "Percent-encodes a string with a WHATWG URL encoding set.",
+    "eval": {
+      "kind": "none",
+      "supported": false,
+      "unsupported_reason": "eval-implementation-pending"
+    },
+    "eval_only": false,
+    "examples": [],
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "codegen_file": "src/uri_prelude/builders.rs",
+      "codegen_function": "url_percent_encode",
+      "notes": [
+        "Implemented by the compiler-injected uri prelude."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "crates/elephc-builtin-contract/src/catalog_data.rs"
+    },
+    "module": "uri",
+    "name": "url_percent_encode",
+    "semantics": null,
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "input",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "mode",
+          "optional": false,
+          "type": "mixed"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "since": "8.6",
+    "slug": "url_percent_encode",
+    "sub_area": "URI"
   },
   {
     "aot": {

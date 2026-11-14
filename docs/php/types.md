@@ -474,6 +474,8 @@ Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are
 
 ### Known incompatibilities with PHP
 
+- A conditional null/typed join (`$x = null; if ($c) { $x = 5; }`) is compiled as boxed `mixed` storage so the `null` and the typed value stay distinct; `--strict-locals` rejects the assignment instead. The joined local loses static dispatch.
+- `get_debug_type()` distinguishes the resource kinds elephc creates (`stream`, `stream-context`, `stream filter`, and `resource (closed)`); there are no `process` or `persistent stream` resources.
 - Appending through `__get()` for a missing or inaccessible ordinary property raises a catchable `Error` in compiled code and opaque `eval()`. This form needs a write fetch that preserves PHP's receiver destruction order. Use a declared array property or an existing dynamic entry instead. SimpleXML native properties use their supported native write-fetch protocol.
 
 - A dimension write to an explicitly unset, accessible typed array property in a class with `__get` or `__set` treats the slot as never initialized and creates an array. PHP can invoke `__get` for the unset slot. Never-initialized declared properties initialize without calling magic methods, matching PHP.

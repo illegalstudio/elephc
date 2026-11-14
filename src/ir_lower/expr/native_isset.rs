@@ -18,6 +18,39 @@ pub(super) fn lower_native_isset_offset_probe(
     index: &Expr,
     expr: &Expr,
 ) -> LoweredValue {
+    // `isset($GLOBALS['name'])` probes the program-global slot directly. Materializing the
+    // bare `$GLOBALS` snapshot here made the probe observe a copy that omitted names created
+    // only by a literal write, and it pulled every superglobal into the IR.
+    if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+        let read = super::array_access::lower_array_access_with_missing_warning(
+            ctx, array, index, expr, false,
+        );
+        let is_null = ctx.emit_value(
+            Op::IsNull,
+            vec![read.value],
+            None,
+            PhpType::Bool,
+            Op::IsNull.default_effects(),
+            Some(expr.span),
+        );
+        crate::ir_lower::ownership::release_if_owned(ctx, read, Some(expr.span));
+        let zero = ctx.emit_value(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(0)),
+            PhpType::Int,
+            Op::ConstI64.default_effects(),
+            Some(expr.span),
+        );
+        return ctx.emit_value(
+            Op::ICmp,
+            vec![is_null.value, zero.value],
+            Some(Immediate::CmpPredicate(crate::ir::CmpPredicate::Eq)),
+            PhpType::Bool,
+            Op::ICmp.default_effects(),
+            Some(expr.span),
+        );
+    }
     let array_value = lower_subscript_receiver_silently(ctx, array);
     if value_is_nullable(ctx, array_value.value) {
         return lower_nullable_native_isset_offset_probe(ctx, array_value, index, expr);

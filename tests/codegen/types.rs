@@ -31,6 +31,9 @@ mod enum_omission_review;
 mod enum_keyed_review;
 #[path = "types/type_annotations.rs"]
 mod type_annotations;
+
+#[path = "types/debug_type.rs"]
+mod debug_type;
 #[path = "types/nullable_array_merge.rs"]
 mod nullable_array_merge;
 #[path = "types/narrowing.rs"]

@@ -38,7 +38,37 @@ pub(super) fn lower_unset_locals(
                 None
             }
             ExprKind::ArrayAccess { array, index } => {
-                lower_unset_array_access(ctx, array, index, arg)
+                if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                    if let ExprKind::StringLiteral(key) = &index.kind {
+                        let data = ctx.intern_global_name(key);
+                        ctx.emit_void(
+                            Op::UnsetGlobal,
+                            Vec::new(),
+                            Some(Immediate::GlobalName(data)),
+                            Op::UnsetGlobal.default_effects(),
+                            Some(arg.span),
+                        );
+                        None
+                    } else {
+                        let key = lower_expr(ctx, index);
+                        let key = coerce_to_string_at_span(ctx, key, Some(index.span));
+                        ctx.emit_void(
+                            Op::StoreGlobalDynamic,
+                            vec![key.value, null.value],
+                            Some(Immediate::Bool(true)),
+                            Op::StoreGlobalDynamic.default_effects(),
+                            Some(arg.span),
+                        );
+                        crate::ir_lower::ownership::release_if_owned(
+                            ctx,
+                            key,
+                            Some(arg.span),
+                        );
+                        None
+                    }
+                } else {
+                    lower_unset_array_access(ctx, array, index, arg)
+                }
             }
             ExprKind::PropertyAccess { object, property }
             | ExprKind::NullsafePropertyAccess { object, property } => {
@@ -68,6 +98,9 @@ pub(super) fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) 
     match &arg.kind {
         ExprKind::Variable(_) => true,
         ExprKind::ArrayAccess { array, .. } => {
+            if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                return true;
+            }
             unset_array_access_has_object_receiver(ctx, array)
                 || unset_array_access_has_local_array_receiver(ctx, array)
                 || mixed_dimension::supports(ctx, array)

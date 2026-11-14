@@ -108,6 +108,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Vsprintf,
     /// Dispatches `gettype(...)`.
     Gettype,
+    /// Dispatches `get_debug_type(...)`.
+    GetDebugType,
     /// Dispatches `intval(...)`.
     Intval,
     /// Dispatches `is_bool(...)`.
@@ -431,7 +433,14 @@ impl EvalValuesHook {
             Self::Filesystem => eval_filesystem_values_result(name, evaluated_args, context, values),
             #[cfg(feature = "curl")]
             Self::Curl => eval_curl_declared_values_result(name, evaluated_args, context, values),
-            Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
+            Self::Gettype => match evaluated_args {
+                [value] => eval_gettype_result_with_context(*value, context, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
+            Self::GetDebugType => match evaluated_args {
+                [value] => eval_get_debug_type_result(*value, context, values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Intval => match evaluated_args {
                 [value] => eval_intval_result(*value, None, values),
@@ -678,13 +687,16 @@ impl EvalValuesHook {
                 "join" => eval_join_declared_values_result(evaluated_args, context, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
-            Self::StreamBoolPredicate => one_arg(evaluated_args, values, |stream, values| {
-                match name {
-                    "stream_is_local" => eval_stream_is_local_result(stream, values),
-                    "stream_supports_lock" => eval_stream_supports_lock_result(stream, values),
+            Self::StreamBoolPredicate => match name {
+                "stream_is_local" => match evaluated_args {
+                    [stream] | [stream, _] => eval_stream_is_local_result(*stream, values),
                     _ => Err(EvalStatus::RuntimeFatal),
+                },
+                "stream_supports_lock" => {
+                    one_arg(evaluated_args, values, eval_stream_supports_lock_result)
                 }
-            }),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::StreamIntrospection => {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);

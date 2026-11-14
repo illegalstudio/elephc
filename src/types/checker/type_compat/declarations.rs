@@ -271,6 +271,36 @@ impl Checker {
         layout_contract: bool,
         context: &str,
     ) -> Result<(), CompileError> {
+        // A supported property place with CONCRETE storage is rewritten through a hidden
+        // boxed temporary and a typed write-back guard, so the caller's property slot never
+        // receives the callee's raw write directly. Accepting it here is what lets
+        // `mixed &$out` receive a `string $property` and raise PHP's typed-reference
+        // TypeError at write-back. Union/nullable properties already carry boxed storage and
+        // keep the existing checks below.
+        let mut property_arg = arg;
+        while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) =
+            &property_arg.kind
+        {
+            property_arg = value;
+        }
+        if matches!(
+            property_arg.kind,
+            ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
+        ) {
+            let property_ty = self.infer_type(property_arg, env)?;
+            // A written array reference is a LAYOUT contract: the callee reads and writes
+            // the caller's slot in the parameter's own storage. A property list bound to a
+            // hash parameter cannot be promoted in place and must keep the layout error,
+            // even though scalar/object/mixed property write-back is supported below.
+            let array_layout_conflict = layout_contract
+                && crate::types::binds_packed_reference_argument(expected_ty, &property_ty);
+            if property_ty.codegen_repr() != PhpType::Mixed
+                && !array_layout_conflict
+                && self.by_ref_property_place(property_arg, expected_ty, env)?
+            {
+                return Ok(());
+            }
+        }
         if matches!(expected_ty.codegen_repr(), PhpType::Mixed | PhpType::Object(_))
             && self.is_native_selection_reference_argument(arg, env)?
         {

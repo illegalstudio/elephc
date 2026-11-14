@@ -492,6 +492,54 @@ pub(crate) fn emit_vd_debuginfo_object(emitter: &mut Emitter) {
     emit_render_epilogue(emitter, "__rt_vd_debuginfo_none");
 }
 
+/// `__rt_vd_debuginfo_enum`: render an enum case through its run-time `__debugInfo()`.
+///
+/// Input: AArch64 x0 / x86_64 rdi = object pointer, already on the `_vd_seen` stack.
+/// Output: result register = 1 when the whole `enum(C::Case) (n) { ... }` block was
+/// written, 0 when the class has no run-time `__debugInfo()` (nothing written).
+pub(crate) fn emit_vd_debuginfo_enum(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
+    let arg1 = abi::int_arg_reg_name(emitter.target, 1);
+
+    emitter.blank();
+    emitter.comment("--- runtime: vd_debuginfo_enum ---");
+    emitter.label_global("__rt_vd_debuginfo_enum");
+    emit_render_prologue(emitter, false, "__rt_vd_enum_debuginfo_none");
+
+    // -- header: the entry count of the returned array replaces the property count --
+    // The tag test uses the result register, which aliases the first argument on AArch64,
+    // so the object pointer is loaded only after the branch.
+    abi::load_at_offset(emitter, result, TAG);
+    branch_if_result_eq(emitter, TAG_EMPTY, "__rt_vd_enum_debuginfo_empty");
+    abi::load_at_offset(emitter, arg1, CONT);
+    abi::emit_load_from_address(emitter, arg1, arg1, 0);                        // entry count at offset 0 of an indexed array or hash
+    abi::emit_jump(emitter, "__rt_vd_enum_debuginfo_header");
+    emitter.label("__rt_vd_enum_debuginfo_empty");
+    abi::emit_load_int_immediate(emitter, arg1, 0);
+    emitter.label("__rt_vd_enum_debuginfo_header");
+    abi::load_at_offset(emitter, arg0, OBJ);
+    abi::emit_call_label(emitter, "__rt_var_dump_open_enum_n");
+    abi::emit_call_label(emitter, "__rt_vd_indent_push");
+
+    // -- body: the array's entries at one level deeper, then the closing brace --
+    abi::load_at_offset(emitter, result, TAG);
+    branch_if_result_eq(emitter, 4, "__rt_vd_enum_debuginfo_indexed");
+    branch_if_result_eq(emitter, 5, "__rt_vd_enum_debuginfo_hash");
+    abi::emit_jump(emitter, "__rt_vd_enum_debuginfo_close");
+    emitter.label("__rt_vd_enum_debuginfo_indexed");
+    abi::load_at_offset(emitter, arg0, CONT);
+    abi::emit_call_label(emitter, "__rt_var_dump_indexed");
+    abi::emit_jump(emitter, "__rt_vd_enum_debuginfo_close");
+    emitter.label("__rt_vd_enum_debuginfo_hash");
+    abi::load_at_offset(emitter, arg0, CONT);
+    abi::emit_call_label(emitter, "__rt_var_dump_hash");
+    emitter.label("__rt_vd_enum_debuginfo_close");
+    abi::emit_call_label(emitter, "__rt_vd_indent_pop");
+    abi::emit_call_label(emitter, "__rt_var_dump_close_container");
+    emit_render_epilogue(emitter, "__rt_vd_enum_debuginfo_none");
+}
+
 /// `__rt_pr_debuginfo_object`: render an object body through its run-time `__debugInfo()`.
 ///
 /// Input: AArch64 x0 / x86_64 rdi = object pointer (already on the `_vd_seen`
@@ -535,7 +583,7 @@ mod tests {
     use super::*;
     use crate::codegen_support::platform::Target;
 
-    /// Every supported target emits the fetch helper and both renderers with the same contract:
+    /// Every supported target emits the fetch helper and all three renderers with the same contract:
     /// table probe, throw guard, indirect call, heap-kind classification, a fatal exit on a
     /// bad result, the null deprecation and a release of the owned return after the walk.
     #[test]
@@ -544,6 +592,7 @@ mod tests {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit_obj_debuginfo_fetch(&mut emitter);
             emit_vd_debuginfo_object(&mut emitter);
+            emit_vd_debuginfo_enum(&mut emitter);
             emit_pr_debuginfo_object(&mut emitter);
             let asm = emitter.output();
             let (fetch, renderers) = asm.split_once("__rt_vd_debuginfo_object:").unwrap();
@@ -557,8 +606,10 @@ mod tests {
             assert!(!fetch.contains("_exc_call_frame_top"), "{name}");
             assert!(fetch.contains("_print_r_mode") && fetch.contains("_print_r_ptr"), "{name}");
             assert!(renderers.contains("__rt_var_dump_open_object_n"), "{name}");
+            assert!(renderers.contains("__rt_var_dump_open_enum_n"), "{name}");
             assert!(renderers.contains("__rt_print_r_hash"), "{name}");
-            assert_eq!(renderers.matches("__rt_decref_any").count(), 2, "{name}");
+            // One release in the object renderer, one in the enum renderer, one in print_r.
+            assert_eq!(renderers.matches("__rt_decref_any").count(), 3, "{name}");
         }
     }
 

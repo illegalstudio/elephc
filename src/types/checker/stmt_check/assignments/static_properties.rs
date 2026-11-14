@@ -346,6 +346,19 @@ fn resolve_static_property_assignment_target(
         .get(property)
         .cloned()
         .unwrap_or_else(|| class_name.clone());
+    if let Some(visibility) = class_info.property_set_visibilities.get(property) {
+        if !checker.can_access_member(&declaring_class, visibility) {
+            return Err(CompileError::new(
+                span,
+                &format!(
+                    "Cannot access {}(set) static property: {}::{}",
+                    Checker::visibility_label(visibility),
+                    class_name,
+                    property
+                ),
+            ));
+        }
+    }
     let property_has_declared_type = class_info.declared_static_properties.contains(property);
     let prop_ty = class_info
         .static_properties

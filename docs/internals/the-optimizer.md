@@ -401,8 +401,17 @@ classes, opaque writes forget the affected receiver, and interprocedural
 wildcard method edges. A literal `$GLOBALS['name']` access applies that rule to
 the matching top-level variable; a computed `$GLOBALS[$key]` makes every tracked
 receiver name opaque. This models PHP's aliasing conservatively for declaration
-retention, but does not implement the still-unsupported `$GLOBALS` runtime alias
-storage itself. Likewise, an expression call such as `($value)()` intentionally
+retention. Literal-key `$GLOBALS['name']` reads and writes are lowered directly to the
+matching program-global slot, so top-level assignments and reads share storage
+across scopes and a literal write kills the key's propagated constant. A computed
+`$GLOBALS[$key]` write lowers through the runtime name table and clears every
+propagated value, because the runtime key can name any top-level global. Nested
+container writes are supported and publish the mutated array back to global storage.
+A computed write whose name misses the static table creates an entry in a runtime
+linked list of stable cells (each with a copied NUL-free name buffer and value), so
+the name need not exist anywhere in the source. A bare `$GLOBALS` read lowers to
+`load_globals_array`, which builds a fresh hash from the static and runtime tables and
+owns one reference per initialized entry. Likewise, an expression call such as `($value)()` intentionally
 sets both the dynamic-function and dynamic-method hazards because the value may
 be a function, closure, or callable array. Keeping every method of every live
 class in that case is a documented precision cost, not a correctness defect.

@@ -150,6 +150,12 @@ fn check_assign_value_type(
     env: &mut TypeEnv,
     stmt_form: bool,
 ) -> Result<PhpType, CompileError> {
+    if name == "GLOBALS" {
+        return Err(CompileError::new(
+            span,
+            "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+        ));
+    }
     // A direct reassignment (`$k = ...`) makes `$k` an ordinary local: it is no
     // longer the boxed `Mixed` `foreach` iteration key. Drop the foreach-key
     // marker so a subsequent `$dst[$k] = $v` is routed by `$k`'s real type (e.g.
@@ -398,6 +404,15 @@ pub(super) fn check_ref_assign(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    if target == "GLOBALS" {
+        return Err(CompileError::new(
+            span,
+            "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+        ));
+    }
+    if matches!(&source.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+        return Err(CompileError::new(span, "Cannot acquire reference to $GLOBALS"));
+    }
     checker.invalidate_local_flow_narrowing(target, env);
     if let ExprKind::Variable(source_name) = &source.kind {
         checker.invalidate_local_flow_narrowing(source_name, env);
@@ -1177,7 +1192,20 @@ fn merge_local_assignment_type(
         return Ok(());
     }
     if let Some(existing) = env.get(name) {
-        let merged_ty = checker.merged_assignment_type(existing, ty).or_else(|| {
+        // Under `--strict-locals` the pre-scan steps aside, so reject a conditional
+        // null/typed join here instead of letting `Void` absorb the typed side and then
+        // restoring the null binding after the branch. Permissive mode never reaches this
+        // branch for the same shape because the scan marks the local Mixed first.
+        let conditional_null_join = checker.strict_locals
+            && (matches!(existing, PhpType::Void) != matches!(ty, PhpType::Void))
+            && checker.local_conditional_depth
+                > checker.local_binding_depth.get(name).copied().unwrap_or(0);
+        let merged_ty = if conditional_null_join {
+            None
+        } else {
+            checker.merged_assignment_type(existing, ty)
+        }
+        .or_else(|| {
             // An inferred boolean flag can widen into a scalar union that already contains
             // every bool value. Its ordinary local slot can become boxed; declared or
             // externally shared boolean storage must retain its existing contract.

@@ -986,6 +986,10 @@ name = "elephc-openssl"
 version = "0.1.0"
 
 [[package]]
+name = "elephc-pack"
+version = "0.1.0"
+
+[[package]]
 name = "elephc-pcntl"
 version = "0.1.0"
 dependencies = [
@@ -1092,6 +1096,15 @@ dependencies = [
 [[package]]
 name = "elephc-tz"
 version = "0.1.0"
+
+[[package]]
+name = "elephc-uri"
+version = "0.1.0"
+dependencies = [
+ "idna",
+ "punycode",
+ "url",
+]
 
 [[package]]
 name = "elephc-web"
@@ -2846,6 +2859,12 @@ dependencies = [
  "quote",
  "syn 1.0.109",
 ]
+
+[[package]]
+name = "punycode"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9e1dcb320d6839f6edb64f7a4a59d39b30480d4d1765b56873f7c858538a5fe"
 
 [[package]]
 name = "pwhash"

@@ -108,7 +108,7 @@ pub(super) fn lower_method_call(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(ctx, Some(object_expr), object, args, expr);
     }
     if op == Op::MethodCall {
         if let Some(value) = lower_reflection_class_static_property_value_call(

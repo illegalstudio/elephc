@@ -143,6 +143,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -174,6 +175,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             pass.leave_closure();
             ExprKind::Closure {
                 params: new_params,
+                param_attributes,
                 variadic,
                 variadic_by_ref,
                 variadic_type: new_variadic_type,
@@ -336,7 +338,8 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(walk_expr(*inner, pass))),
     };
-    Expr { kind, span: pass.transform_expr_span(span) }
+    let expr = pass.transform_expr(Expr { kind, span });
+    Expr { kind: expr.kind, span: pass.transform_expr_span(expr.span) }
 }
 
 /// Transforms a `CallableTarget` by recursively walking any boxed expression inside it.

@@ -180,6 +180,26 @@ pub(super) fn lower_array_access_with_missing_warning(
     expr: &Expr,
     warn_on_missing: bool,
 ) -> LoweredValue {
+    // `$GLOBALS['name']` reads the program-global slot directly. The full `$GLOBALS`
+    // array is not materialized; literal-key reads are the PHP shape stream wrappers
+    // use to reach a context created at the top level. `??`, `isset()`, and `empty()`
+    // share this path through their silent-read variants.
+    if let ExprKind::Variable(name) = &array.kind {
+        if name == "GLOBALS" {
+            if let ExprKind::StringLiteral(key) = &index.kind {
+                let data = ctx.intern_global_name(key);
+                return ctx.emit_value(
+                    Op::LoadGlobal,
+                    Vec::new(),
+                    Some(Immediate::GlobalName(data)),
+                    PhpType::Mixed,
+                    Op::LoadGlobal.default_effects(),
+                    Some(expr.span),
+                );
+            }
+            return lower_dynamic_global_load(ctx, index, expr, warn_on_missing);
+        }
+    }
     if !warn_on_missing {
         if let ExprKind::PropertyAccess { object, property } = &array.kind {
             if property_expr_can_be_uninitialized(ctx, object, property) {
@@ -199,6 +219,33 @@ pub(super) fn lower_array_access_with_missing_warning(
         value
     };
     lower_array_access_from_receiver(ctx, array_value, index, expr, warn_on_missing)
+}
+
+/// Lowers a `$GLOBALS[$name]` read whose key is only known at run time.
+///
+/// The key is coerced to a string first; the runtime lookup returns the storage word for a
+/// program global known to this compilation. A missing name keeps PHP's null read result and
+/// optionally emits the undefined-global warning.
+fn lower_dynamic_global_load(
+    ctx: &mut LoweringContext<'_, '_>,
+    index: &Expr,
+    expr: &Expr,
+    warn_on_missing: bool,
+) -> LoweredValue {
+    let key = lower_expr(ctx, index);
+    let key = coerce_to_string_at_span(ctx, key, Some(index.span));
+    let result = ctx.emit_owned_value(
+        Op::LoadGlobalDynamic,
+        vec![key.value],
+        Some(Immediate::Bool(warn_on_missing)),
+        PhpType::Mixed,
+        Op::LoadGlobalDynamic.default_effects(),
+        Some(expr.span),
+    );
+    // The runtime lookup borrows the key bytes; the release ledger consults the cast's
+    // runtime ownership flag, so a persisted string is freed while itoa scratch is skipped.
+    crate::ir_lower::ownership::release_if_owned(ctx, key, Some(index.span));
+    result
 }
 
 /// Lowers an element receiver, keeping a promotable `array<int>` local in its typed storage.

@@ -38,6 +38,9 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::runtime::resource_inventory::DEFAULT_CONTEXT_PAYLOAD;
 
+/// Number of payloads below `DEFAULT_CONTEXT_PAYLOAD` reserved for implicit contexts.
+const CONTEXT_PAYLOAD_WINDOW: i64 = 1_000_000;
+
 /// Byte length of the open-resource type name `"stream"`.
 const RESOURCE_TYPE_STREAM_LEN: i64 = 6;
 
@@ -72,8 +75,12 @@ pub fn emit_resource_type_name(emitter: &mut Emitter) {
     emitter.label_global("__rt_resource_type_name");
 
     abi::emit_load_int_immediate(emitter, "x9", DEFAULT_CONTEXT_PAYLOAD);
-    emitter.instruction("cmp x0, x9");                                          // recognize PHP's implicit default stream context
-    emitter.instruction("b.eq __rt_resource_type_name_context");                // the reserved context has its own type label
+    emitter.instruction("cmp x0, x9");                                          // is the payload above the context window?
+    emitter.instruction("b.gt __rt_resource_type_name_not_context");            // ordinary resources never enter the context range
+    abi::emit_load_int_immediate(emitter, "x10", DEFAULT_CONTEXT_PAYLOAD - CONTEXT_PAYLOAD_WINDOW);
+    emitter.instruction("cmp x0, x10");                                         // is the payload inside the implicit-context window?
+    emitter.instruction("b.ge __rt_resource_type_name_context");                // every implicit context has its own payload
+    emitter.label("__rt_resource_type_name_not_context");
     emitter.instruction("tbnz x0, #63, __rt_resource_type_name_closed");        // a negative payload is the -id sentinel an explicit close stamped
     emitter.instruction("cmp x3, #9");                                          // stream-filter resources carry subtype 9 in their Mixed cell
     emitter.instruction("b.eq __rt_resource_type_name_filter");                 // preserve PHP's distinct stream filter resource name
@@ -107,8 +114,12 @@ fn emit_resource_type_name_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_resource_type_name");
 
     abi::emit_load_int_immediate(emitter, "r10", DEFAULT_CONTEXT_PAYLOAD);
-    emitter.instruction("cmp rax, r10");                                        // recognize PHP's implicit default stream context
-    emitter.instruction("je __rt_resource_type_name_context_x86");              // the reserved context has its own type label
+    emitter.instruction("cmp rax, r10");                                        // is the payload above the context window?
+    emitter.instruction("jg __rt_resource_type_name_not_context_x86");          // ordinary resources never enter the context range
+    abi::emit_load_int_immediate(emitter, "r10", DEFAULT_CONTEXT_PAYLOAD - CONTEXT_PAYLOAD_WINDOW);
+    emitter.instruction("cmp rax, r10");                                        // is the payload inside the implicit-context window?
+    emitter.instruction("jge __rt_resource_type_name_context_x86");             // every implicit context has its own payload
+    emitter.label("__rt_resource_type_name_not_context_x86");
     emitter.instruction("test rax, rax");                                       // inspect the payload sign before rax is reused as the result pointer
     emitter.instruction("js __rt_resource_type_name_closed_x86");               // a negative payload is the -id sentinel an explicit close stamped
     emitter.instruction("cmp rcx, 9");                                          // stream-filter resources carry subtype 9 in their Mixed cell
@@ -163,7 +174,14 @@ mod tests {
             "    movk x9, #0xffff, lsl #32\n",
             "    movk x9, #0x3fff, lsl #48\n",
             "    cmp x0, x9\n",
-            "    b.eq __rt_resource_type_name_context\n",
+            "    b.gt __rt_resource_type_name_not_context\n",
+            "    movz x10, #0xbdbf\n",
+            "    movk x10, #0xfff0, lsl #16\n",
+            "    movk x10, #0xffff, lsl #32\n",
+            "    movk x10, #0x3fff, lsl #48\n",
+            "    cmp x0, x10\n",
+            "    b.ge __rt_resource_type_name_context\n",
+            "__rt_resource_type_name_not_context:\n",
             "    tbnz x0, #63, __rt_resource_type_name_closed\n",
             "    cmp x3, #9\n",
             "    b.eq __rt_resource_type_name_filter\n",
@@ -201,7 +219,11 @@ mod tests {
             "__rt_resource_type_name:\n",
             "    mov r10, 4611686018427387903\n",
             "    cmp rax, r10\n",
-            "    je __rt_resource_type_name_context_x86\n",
+            "    jg __rt_resource_type_name_not_context_x86\n",
+            "    mov r10, 4611686018426387903\n",
+            "    cmp rax, r10\n",
+            "    jge __rt_resource_type_name_context_x86\n",
+            "__rt_resource_type_name_not_context_x86:\n",
             "    test rax, rax\n",
             "    js __rt_resource_type_name_closed_x86\n",
             "    cmp rcx, 9\n",

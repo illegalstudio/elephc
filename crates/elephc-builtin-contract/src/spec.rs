@@ -58,6 +58,8 @@ pub enum Area {
     /// The `ext/random` surface declared by the random prelude: its procedural functions,
     /// `Random\*` classes, `MT_RAND_*` constants, and internal helpers.
     Random,
+    /// `ext/uri` surfaces declared by the URI prelude.
+    Uri,
 }
 
 /// Describes how a PHP-visible catalog entry reaches executable behavior.

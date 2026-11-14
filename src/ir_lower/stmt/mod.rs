@@ -21,7 +21,7 @@ use crate::ir_lower::context::{
 use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_array_key_to_int_at_span,
-    coerce_container_to_mixed_payload, coerce_to_int_at_span,
+    coerce_container_to_mixed_payload, coerce_to_int_at_span, coerce_to_string_at_span,
     index_expr_key_type, lower_array_access_from_lowered_receiver,
     lower_by_ref_foreach_element_source, lower_by_ref_foreach_property_source,
     lower_callable_array_for_assignment,
@@ -63,6 +63,7 @@ mod includes;
 mod exceptions;
 mod control_exit;
 mod declarations;
+mod globals_nested;
 mod instance_property_writes;
 mod readonly_receiver_guard;
 mod static_property_writes;
@@ -235,12 +236,62 @@ fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
             index,
             value,
         } => {
-            lower_array_assign(ctx, array, index, value, stmt.span);
+            if array == "GLOBALS" {
+                if let ExprKind::StringLiteral(name) = &index.kind {
+                    let value = lower_expr(ctx, value);
+                    let data = ctx.intern_global_name(name);
+                    ctx.emit_void(
+                        Op::StoreGlobal,
+                        vec![value.value],
+                        Some(Immediate::GlobalName(data)),
+                        Op::StoreGlobal.default_effects(),
+                        Some(stmt.span),
+                    );
+                } else {
+                    let key = lower_expr(ctx, index);
+    let key = coerce_to_string_at_span(ctx, key, Some(index.span));
+                    let value = lower_expr(ctx, value);
+                    ctx.emit_void(
+                        Op::StoreGlobalDynamic,
+                        vec![key.value, value.value],
+                        None,
+                        Op::StoreGlobalDynamic.default_effects(),
+                        Some(stmt.span),
+                    );
+                    // The store borrows the key bytes. Release only a value this path owns:
+                    // a cast/string cast, a call result, or a concat. A borrowed local/global
+                    // load must stay untouched.
+                    if ctx.value_is_owning_temporary(key) {
+                        crate::ir_lower::ownership::release_if_owned(
+                            ctx,
+                            key,
+                            Some(index.span),
+                        );
+                    }
+                }
+            } else {
+                lower_array_assign(ctx, array, index, value, stmt.span);
+            }
         }
         StmtKind::NestedArrayAssign { target, value } => {
-            lower_nested_array_assign(ctx, target, value, stmt.span);
+            if write_target_is_globals(target) {
+                if !globals_nested::lower_nested_globals_assign(ctx, target, value, stmt.span) {
+                    crate::ir_lower::diagnostics::refuse(
+                        stmt.span,
+                        "Writes through $GLOBALS are not supported yet; assign the top-level variable directly",
+                    );
+                }
+            } else {
+                lower_nested_array_assign(ctx, target, value, stmt.span);
+            }
         }
-        StmtKind::ArrayPush { array, value } => lower_array_push(ctx, array, value, stmt.span),
+        StmtKind::ArrayPush { array, value } => {
+            if array == "GLOBALS" {
+                crate::ir_lower::diagnostics::refuse(stmt.span, "Cannot append to $GLOBALS");
+            } else {
+                lower_array_push(ctx, array, value, stmt.span);
+            }
+        }
         StmtKind::TypedAssign {
             type_expr,
             name,
@@ -383,3 +434,20 @@ pub(in crate::ir_lower) fn local_slot_is_convertible_here(ctx: &LoweringContext<
 
 /// Exposes captured writable parent cells to compiler-generated append expressions.
 pub(crate) use nested_array_writes::lower_nested_assign_parent;
+
+/// Returns whether a nested assignment target is rooted at the `$GLOBALS` superglobal.
+fn write_target_is_globals(target: &Expr) -> bool {
+    let mut expr = target;
+    loop {
+        match &expr.kind {
+            ExprKind::ArrayAccess { array, .. } => {
+                if matches!(&array.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                    return true;
+                }
+                expr = array;
+            }
+            ExprKind::Variable(name) => return name == "GLOBALS",
+            _ => return false,
+        }
+    }
+}

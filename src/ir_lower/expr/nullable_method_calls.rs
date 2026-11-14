@@ -190,7 +190,7 @@ fn lower_method_call_with_binding(
     if op == Op::MethodCall
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
-        return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+        return lower_reflection_class_new_instance_without_constructor(ctx, None, object, args, expr);
     }
     let dispatch_method = method;
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);

@@ -69,6 +69,10 @@ pub fn emit_mixed_is_empty(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_is_empty_array");                      // hashes are empty when their element count is zero
     emitter.instruction("cmp x9, #6");                                          // is the payload an object?
     emitter.instruction("b.eq __rt_mixed_is_empty_no");                         // objects are never empty in PHP
+    emitter.instruction("cmp x9, #9");                                          // is the payload a PHP resource?
+    emitter.instruction("b.eq __rt_mixed_is_empty_no");                         // open resources are always truthy in PHP
+    emitter.instruction("cmp x9, #10");                                         // is the payload a callable descriptor?
+    emitter.instruction("b.eq __rt_mixed_is_empty_no");                         // closures and other callables are objects, never empty
     emitter.instruction("b __rt_mixed_is_empty_yes");                           // null and unknown payloads are treated as empty
 
     emitter.label("__rt_mixed_is_empty_int");
@@ -151,6 +155,10 @@ fn emit_mixed_is_empty_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_is_empty_array_linux_x86_64");           // hashes are empty when their element count is zero
     emitter.instruction("cmp rax, 6");                                          // check whether the unboxed payload is an object
     emitter.instruction("je __rt_mixed_is_empty_no_linux_x86_64");              // objects are never empty under PHP empty() semantics
+    emitter.instruction("cmp rax, 9");                                          // check whether the unboxed payload is a PHP resource
+    emitter.instruction("je __rt_mixed_is_empty_no_linux_x86_64");              // open resources are always truthy in PHP
+    emitter.instruction("cmp rax, 10");                                         // check whether the unboxed payload is a callable descriptor
+    emitter.instruction("je __rt_mixed_is_empty_no_linux_x86_64");              // closures and other callables are objects, never empty
     emitter.instruction("jmp __rt_mixed_is_empty_yes_linux_x86_64");            // null and unknown payload tags are treated as empty for the current mixed contract
 
     emitter.label("__rt_mixed_is_empty_int_linux_x86_64");

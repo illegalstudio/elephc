@@ -214,6 +214,7 @@ fn expr_carries_decision(expr: &Expr) -> bool {
         }
         ExprKind::Closure {
             params,
+            param_attributes: _,
             variadic: _,
             variadic_type: _,
             return_type: _,

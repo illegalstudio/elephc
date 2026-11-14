@@ -326,6 +326,7 @@ pub enum RuntimeFnId {
     StreamContextGetParams,
     StreamContextSetDefault,
     StreamContextSetOption,
+    StreamContextSetOptions,
     StreamContextSetParams,
     StreamCopyToStream,
     StreamFilterAppend,
@@ -935,7 +936,9 @@ pub enum RuntimeFnId {
     Usleep,
     GetResourceId,
     GetResourceType,
+    ElephcPollRevents,
     Gettype,
+    GetDebugType,
     IntvalBase,
     IsCallable,
     IsFinite,
@@ -1328,10 +1331,13 @@ impl RuntimeFnId {
                 sig.return_type = PhpType::Mixed;
             }
             RuntimeFnId::Clamp => {
-                set_callable_param_type(sig, 0, PhpType::Int);
-                set_callable_param_type(sig, 1, PhpType::Int);
-                set_callable_param_type(sig, 2, PhpType::Int);
-                sig.return_type = PhpType::Int;
+                // PHP 8.6's clamp() is `mixed` in and out; the typed int/float/string
+                // forms are only a direct-call fast path, so the callable wrapper must
+                // keep mixed storage for NAN, null, array, boolean and object operands.
+                set_callable_param_type(sig, 0, PhpType::Mixed);
+                set_callable_param_type(sig, 1, PhpType::Mixed);
+                set_callable_param_type(sig, 2, PhpType::Mixed);
+                sig.return_type = PhpType::Mixed;
             }
             RuntimeFnId::Sort
             | RuntimeFnId::Rsort
@@ -1372,7 +1378,9 @@ impl RuntimeFnId {
             // Persistent web requests retire the preceding ambient context owner on replacement.
             // Captured objects can run destructors, mutate globals, and throw during that release.
             RuntimeFnId::StreamContextCreate | RuntimeFnId::StreamContextSetDefault
-            | RuntimeFnId::StreamContextSetParams | RuntimeFnId::StreamContextSetOption
+            | RuntimeFnId::StreamContextSetParams
+            | RuntimeFnId::StreamContextSetOption
+            | RuntimeFnId::StreamContextSetOptions
             => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::all().bits()
                     & !crate::ir::Effects::BLOCKING_IO.bits()
@@ -1528,7 +1536,9 @@ impl RuntimeFnId {
             RuntimeFnId::Fmod |
             RuntimeFnId::GetResourceId |
             RuntimeFnId::GetResourceType |
+            RuntimeFnId::ElephcPollRevents |
             RuntimeFnId::Gettype |
+            RuntimeFnId::GetDebugType |
             RuntimeFnId::GraphemeStrrev |
             RuntimeFnId::HashAlgos |
             RuntimeFnId::HashEquals |
@@ -2492,6 +2502,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::MemoryGetUsage
                 | RuntimeFnId::MemoryResetPeakUsage
                 | RuntimeFnId::Gettype
+                | RuntimeFnId::GetDebugType
                 | RuntimeFnId::InArray
                 | RuntimeFnId::Trim
         )
@@ -2520,7 +2531,7 @@ impl RuntimeFnId {
                 )
             }),
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Getmypid
-            | RuntimeFnId::Gettype | RuntimeFnId::InArray
+            | RuntimeFnId::Gettype | RuntimeFnId::GetDebugType | RuntimeFnId::InArray
             | RuntimeFnId::MemoryGetAllocations
             | RuntimeFnId::MemoryGetFrees
             | RuntimeFnId::MemoryGetPeakUsage
@@ -2692,6 +2703,7 @@ impl RuntimeFnId {
             self,
             RuntimeFnId::MemoryGetAllocations
                 | RuntimeFnId::MemoryGetFrees
+                | RuntimeFnId::ElephcPollRevents
                 | RuntimeFnId::MemoryGetPeakUsage
                 | RuntimeFnId::MemoryGetUsage
                 | RuntimeFnId::MemoryResetPeakUsage
@@ -3155,6 +3167,7 @@ impl RuntimeFnId {
                 // Type names live in static data, never in the inspected value. A possible
                 // alias would suppress cleanup of boxed array/property read temporaries.
                 | RuntimeFnId::Gettype
+                | RuntimeFnId::GetDebugType
                 // Class names come from metadata, including Closure and incomplete-class
                 // literals, not the inspected object's storage or its boxed read cell.
                 | RuntimeFnId::GetClass
@@ -3433,6 +3446,7 @@ impl RuntimeFnId {
             RuntimeFnId::StreamContextGetParams => "stream_context_get_params",
             RuntimeFnId::StreamContextSetDefault => "stream_context_set_default",
             RuntimeFnId::StreamContextSetOption => "stream_context_set_option",
+            RuntimeFnId::StreamContextSetOptions => "stream_context_set_options",
             RuntimeFnId::StreamContextSetParams => "stream_context_set_params",
             RuntimeFnId::StreamCopyToStream => "stream_copy_to_stream",
             RuntimeFnId::StreamFilterAppend => "stream_filter_append",
@@ -3912,7 +3926,9 @@ impl RuntimeFnId {
             RuntimeFnId::Usleep => "usleep",
             RuntimeFnId::GetResourceId => "get_resource_id",
             RuntimeFnId::GetResourceType => "get_resource_type",
+            RuntimeFnId::ElephcPollRevents => "__elephc_poll_revents",
             RuntimeFnId::Gettype => "gettype",
+            RuntimeFnId::GetDebugType => "get_debug_type",
             RuntimeFnId::IntvalBase => "intval_base",
             RuntimeFnId::IsCallable => "is_callable",
             RuntimeFnId::IsFinite => "is_finite",

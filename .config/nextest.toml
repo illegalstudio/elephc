@@ -112,6 +112,28 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = 'binary(codegen_tests) and test(bcmath) and test(eval)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
+# The eval builtin parity probes compile opaque-eval catalog hosts, including the
+# get_debug_type cross-check; one host measured 305s on a debug macOS machine and emulated
+# Linux runs slower still, so keep a bounded budget well above the measurement.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::eval_builtin_parity)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::eval_builtin_parity)'
+slow-timeout = { period = "60s", terminate-after = 12 }
+
+# The declared-array-property eval heap probes compile opaque-eval catalog hosts; the keyed
+# write fixture measured 94s on a debug macOS host and 1005s under emulated Linux x86_64.
+# Native CI shards are faster, but the heap-debug catalog compile needs a budget above the
+# emulated measurement.
+[[profile.default.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::runtime_gc::eval_declared_array_properties)'
+slow-timeout = { period = "60s", terminate-after = 18 }
+
+[[profile.ci.overrides]]
+filter = 'binary(codegen_tests) and test(~codegen::runtime_gc::eval_declared_array_properties)'
+slow-timeout = { period = "60s", terminate-after = 18 }
 # The ignored GMP PHPT entry runs all 98 upstream cases sequentially. It took
 # 214s under cargo test before archive migration, so the ordinary 180s single-case
 # budget cannot cover it. Keep its corpus intact with a bounded ten-minute budget.
@@ -237,10 +259,16 @@ relative-to = "target"
 path = "debug/libelephc_random.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
+path = "debug/libelephc_uri.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
 path = "debug/libelephc_mbstring.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_iconv.a"
+relative-to = "target"
+[[profile.ci.archive.include]]
+path = "debug/libelephc_pack.a"
 relative-to = "target"
 [[profile.ci.archive.include]]
 path = "debug/libelephc_phar.a"

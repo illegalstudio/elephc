@@ -179,6 +179,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
         monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
+        lib_name: "elephc_uri",
+        env_var: "ELEPHC_URI_LIB_DIR",
+        crate_name: "elephc-uri",
+        flag_name: "uri",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The uri bridge implements PHP 8.5's always-compiled `uri` extension.
+        php_extensions: &["uri"],
+        monitoring: MonitoringPolicy::GenericTiming,
+    },
+    BridgeStaticlib {
         lib_name: "elephc_mbstring",
         env_var: "ELEPHC_MBSTRING_LIB_DIR",
         crate_name: "elephc-mbstring",
@@ -380,6 +393,19 @@ pub(super) const BRIDGES: &[BridgeStaticlib] = &[
             wait: WaitPolicy::Measured,
             trace_context: TraceContextPolicy::Automatic,
         },
+    },
+    BridgeStaticlib {
+        lib_name: "elephc_pack",
+        env_var: "ELEPHC_PACK_LIB_DIR",
+        crate_name: "elephc-pack",
+        flag_name: "pack",
+        whole_archive: false,
+        apple_frameworks: &[],
+        apple_libraries: &[],
+        needs_libdl: true,
+        // The bridge backs PHP's core pack()/unpack() float bit conversions.
+        php_extensions: &[],
+        monitoring: MonitoringPolicy::GenericTiming,
     },
     BridgeStaticlib {
         lib_name: "elephc_zend",

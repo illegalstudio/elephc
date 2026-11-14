@@ -157,9 +157,17 @@ fn test_resource_truthiness_does_not_use_raw_descriptor_zero() {
 echo (bool)STDIN ? "truthy" : "falsy";
 echo "|";
 echo empty(STDIN) ? "empty" : "not-empty";
+echo "|";
+// A resource that crossed a mixed boundary is still truthy: descriptor 0 must not
+// be mistaken for integer 0 by the boxed-Mixed empty() probe.
+function mixedResource(): mixed { return STDIN; }
+function mixedCallable(): mixed { return fn() => 1; }
+echo empty(mixedResource()) ? "empty" : "not-empty";
+echo "|";
+echo empty(mixedCallable()) ? "empty" : "not-empty";
 "#,
     );
-    assert_eq!(out, "truthy|not-empty");
+    assert_eq!(out, "truthy|not-empty|not-empty|not-empty");
 }
 
 /// Verifies var_dump() emits the correct resource shape: "resource(N) of type (stream)".
@@ -1170,6 +1178,11 @@ fclose($m);
 /// under glibc, `'e` under Apple's.
 #[test]
 fn test_stream_filter_iconv_write_keeps_its_options_across_bridge_conversions() {
+    // musl's iconv does not implement glibc's `//TRANSLIT` locale handling; this test
+    // validates the Apple shared-pair restore against glibc and Apple targets.
+    if cfg!(all(target_os = "linux", target_env = "musl")) {
+        return;
+    }
     let out = compile_and_run(
         r#"<?php
 $plain = fopen("php://temp", "r+");
@@ -1191,6 +1204,137 @@ fclose($translit);
     );
     let cafe = if cfg!(any(target_os = "macos", target_os = "ios")) { "caf'e" } else { "cafe" };
     assert_eq!(out, format!("{cafe}|plain|plain|{cafe}|{cafe}"));
+}
+
+/// A `convert.iconv` filter name held in a variable splits at run time, keeps its
+/// `//TRANSLIT` option across a bridge conversion, and matches the literal path's bytes.
+///
+/// The bridge call between the two writes is what detects the per-descriptor option restore
+/// on Apple's shared charset pair: without the run-time bits the filter would stop
+/// transliterating after the plain bridge conversion.
+#[test]
+fn test_stream_filter_iconv_dynamic_name_parses_options() {
+    // musl's iconv lacks `//TRANSLIT` parity; the dynamic split is still covered by the
+    // write-transcode and roundtrip tests on musl.
+    if cfg!(all(target_os = "linux", target_env = "musl")) {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen("php://temp", "r+");
+$name = "convert.iconv.UTF-8/ASCII//TRANSLIT" . ($argv[0] !== "" ? "" : "x");
+echo stream_filter_append($f, $name, STREAM_FILTER_WRITE) !== false ? "attached|" : "missing|";
+fwrite($f, "caf\u{e9}|");
+echo iconv("UTF-8", "ASCII", "plain"), "|";
+fwrite($f, "caf\u{e9}");
+rewind($f);
+echo stream_get_contents($f);
+fclose($f);
+"#,
+    );
+    // The transliteration of `é` is libc-dependent (`e` or `?`), so the contract under test
+    // is that the dynamic name parsed and both writes used the same attached filter.
+    let rest = out.strip_prefix("attached|plain|").expect(&out);
+    let (first, second) = rest.split_once('|').expect(&out);
+    assert!(first.starts_with("caf"), "{out}");
+    assert!(second.starts_with("caf"), "{out}");
+}
+
+/// A `convert.iconv.UTF-8/UTF-16LE` name held in a variable attaches the same streaming
+/// write transcoder as the literal name.
+#[test]
+fn test_stream_filter_iconv_dynamic_name_write_transcodes() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen("php://temp", "r+");
+$name = "convert.iconv.UTF-8/UTF-16LE" . ($argv[0] !== "" ? "" : "x");
+stream_filter_append($f, $name, STREAM_FILTER_WRITE);
+fwrite($f, "Hi");
+rewind($f);
+echo bin2hex(stream_get_contents($f));
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "48006900");
+}
+
+/// Dynamic read and write filter names roundtrip through UTF-16LE, exercising the attach-time
+/// read transform against the run-time charset buffers.
+#[test]
+fn test_stream_filter_iconv_dynamic_name_write_then_read_roundtrips() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$wname = "convert.iconv.UTF-8/UTF-16LE" . ($argv[0] !== "" ? "" : "x");
+$w = fopen("ic.bin", "w");
+stream_filter_append($w, $wname, STREAM_FILTER_WRITE);
+fwrite($w, "Hello");
+fclose($w);
+$rname = "convert.iconv.UTF-16LE/UTF-8" . ($argv[0] !== "" ? "" : "x");
+$r = fopen("ic.bin", "r");
+stream_filter_append($r, $rname, STREAM_FILTER_READ);
+echo fread($r, 64);
+fclose($r);
+"#,
+    );
+    assert_eq!(out, "Hello");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// A dynamic `//IGNORE` target drops the character the target charset cannot encode, like the
+/// literal filter and reference PHP.
+#[test]
+fn test_stream_filter_iconv_dynamic_name_ignore_option() {
+    // musl's iconv ignores `//IGNORE`; glibc and Apple targets validate the filter semantics.
+    if cfg!(all(target_os = "linux", target_env = "musl")) {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen("php://temp", "w+");
+$name = "convert.iconv.UTF-8/ASCII//IGNORE" . ($argv[0] !== "" ? "" : "x");
+echo stream_filter_append($f, $name, STREAM_FILTER_WRITE) !== false ? "attached|" : "missing|";
+fwrite($f, "h\u{e9}llo");
+rewind($f);
+echo stream_get_contents($f);
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "attached|hllo");
+}
+
+/// A callable route through `call_user_func()` still links the iconv bridge and runs the
+/// dynamic filter attach, not only a direct literal call site.
+#[test]
+fn test_stream_filter_iconv_through_call_user_func() {
+    let out = compile_and_run(
+        r#"<?php
+$f = fopen("php://temp", "r+");
+call_user_func("stream_filter_append", $f, "convert.iconv.UTF-8/UTF-16LE", STREAM_FILTER_WRITE);
+fwrite($f, "Hi");
+rewind($f);
+echo bin2hex(stream_get_contents($f));
+"#,
+    );
+    assert_eq!(out, "48006900");
+}
+
+/// A convert.iconv write filter on a descriptor above the old 256-entry table range
+/// (fd ~300 after opening filler files) stores and releases its per-fd state safely.
+#[test]
+fn test_stream_filter_iconv_uses_high_descriptor_slots() {
+    let out = compile_and_run(
+        r#"<?php
+$files = [];
+for ($i = 0; $i < 300; $i++) { $files[] = fopen("/dev/null", "r"); }
+$f = fopen("php://temp", "r+");
+stream_filter_append($f, "convert.iconv.UTF-8/UTF-16LE", STREAM_FILTER_WRITE);
+fwrite($f, "Hi");
+rewind($f);
+echo bin2hex(stream_get_contents($f));
+foreach ($files as $handle) { fclose($handle); }
+"#,
+    );
+    assert_eq!(out, "48006900");
 }
 
 /// Verifies compiled PHP output for stream filter base64 encode pads correctly.
@@ -5981,7 +6125,7 @@ fclose($f);
 echo "|t=" . gettype($f);
 "#,
     );
-    assert_eq!(out, "[hello, world!]|t=resource");
+    assert_eq!(out, "[hello, world!]|t=resource (closed)");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fpassthru writes and counts.
@@ -6007,7 +6151,7 @@ fclose($f);
 echo "|t=" . gettype($f);
 "#,
     );
-    assert_eq!(out, "Hello, world!|n=13|t=resource");
+    assert_eq!(out, "Hello, world!|n=13|t=resource (closed)");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fgets reads lines.
@@ -6032,7 +6176,7 @@ fclose($f);
 echo "|t=" . gettype($f);
 "#,
     );
-    assert_eq!(out, "[line1][line2][last]|t=resource");
+    assert_eq!(out, "[line1][line2][last]|t=resource (closed)");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fscanf reads through stream read.
@@ -6085,7 +6229,7 @@ fclose($src); fclose($dst);
 echo "|st=" . gettype($src);
 "#,
     );
-    assert_eq!(out, "n=13|got=[copy-me-over!]|st=resource");
+    assert_eq!(out, "n=13|got=[copy-me-over!]|st=resource (closed)");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper ftell dispatches to stream tell.
@@ -7258,6 +7402,31 @@ fclose($f);
     assert_eq!(out, "eof:consistent");
 }
 
+/// A user-wrapper stream reports PHP's generic user-space metadata instead of being
+/// probed as a native descriptor (the synthetic fd used to index the EOF table and crash).
+#[test]
+fn test_stream_get_meta_data_user_wrapper_reports_user_space() {
+    let out = compile_and_run(
+        r#"<?php
+class MetaWrapper {
+    public $context;
+    public function stream_open(string $path, string $mode, int $options, ?string &$opened): bool { return true; }
+    public function stream_read(int $count): string { return ""; }
+    public function stream_eof(): bool { return true; }
+}
+stream_wrapper_register("metawrap", "MetaWrapper");
+$s = fopen("metawrap://example", "r");
+$m = stream_get_meta_data($s);
+echo $m["stream_type"], "|", $m["wrapper_type"], "|";
+echo $m["eof"] ? "eof" : "open", "|";
+echo $m["blocked"] ? "blocked" : "nonblocked", "|";
+echo $m["unread_bytes"], "|";
+echo $m["seekable"] ? "seek" : "noseek";
+"#,
+    );
+    assert_eq!(out, "user-space|user-space|open|blocked|0|seek");
+}
+
 /// Verifies compiled PHP output for readdir loop collects results into array.
 #[test]
 fn test_readdir_loop_collects_results_into_array() {
@@ -7316,6 +7485,79 @@ echo $n . ":" . count($r);
 "#,
     );
     assert_eq!(out, "1:1");
+}
+
+/// `stream_select()` observes descriptors above the old 0..63 word-0 limit.
+#[test]
+fn test_stream_select_beyond_63_descriptors() {
+    let out = compile_and_run(
+        r#"<?php
+$pairs = [];
+for ($i = 0; $i < 80; $i++) {
+    $pairs[] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+}
+[$r, $w] = $pairs[70];
+fwrite($w, "hi");
+$read = [$r]; $write = null; $except = null;
+$n = stream_select($read, $write, $except, 0, 0);
+echo $n, ":", count($read), ":", fread($read[0], 2);
+"#,
+    );
+    assert_eq!(out, "1:1:hi");
+}
+
+/// A sub-second timeout with a non-empty except set survives the pselect6 timespec layout.
+#[test]
+fn test_stream_select_timeout_with_except_set() {
+    let out = compile_and_run(
+        r#"<?php
+[$r, $w] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$read = [];
+$write = null;
+$except = [$w];
+$n = stream_select($read, $write, $except, 0, 100000);
+echo $n === 0 ? "ok" : "bad:$n";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// A descriptor at or above `FD_SETSIZE` reports php-src's recompile warning once and
+/// makes `stream_select()` return false without waiting, like PHP.
+#[test]
+fn test_stream_select_warns_and_returns_false_above_fd_setsize() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$pairs = [];
+for ($i = 0; $i < 520; $i++) {
+    [$reader, $writer] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+    $pairs[] = $reader;
+    $pairs[] = $writer;
+}
+$read = [$pairs[count($pairs) - 1]];
+$write = null;
+$except = null;
+var_dump(stream_select($read, $write, $except, 0));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert_eq!(
+        out.stderr.matches("You MUST recompile PHP with a larger value of FD_SETSIZE.").count(),
+        1,
+        "the warning must fire exactly once, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("It is set to 1024, but you have descriptors numbered at least as high as"),
+        "expected php-src's FD_SETSIZE detail, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("--enable-fd-setsize=2048 is recommended"),
+        "expected the rounded suggestion, got stderr={}",
+        out.stderr
+    );
 }
 
 /// Verifies `stream_select()` accepts `null` for a descriptor set, PHP's usual idiom for the
@@ -8279,6 +8521,41 @@ fn test_stream_context_set_option_nested_hash_retain_does_not_leak() {
         live_set(&single.stderr),
         live_set(&repeated.stderr),
         "repeated stream_context_set_option() calls grew the live heap"
+    );
+}
+
+/// Verifies registering and attaching a user stream filter leaves a clean heap.
+///
+/// The registry persists the filter and class names and the attached filter keeps its own
+/// probe state; both must be released when the stream closes instead of accumulating for
+/// the process lifetime.
+#[test]
+fn test_user_filter_registry_and_attached_filter_are_clean() {
+    let output = compile_and_run_with_heap_debug(
+        r#"<?php
+class LeakProbeFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, bool $closing): int {
+        while ($bucket = stream_bucket_make_writeable($in)) {
+            $bucket->data = strtoupper($bucket->data);
+            $consumed += $bucket->datalen;
+            stream_bucket_append($out, $bucket);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register('leak.probe', LeakProbeFilter::class);
+$stream = fopen('php://memory', 'w+');
+stream_filter_append($stream, 'leak.probe', STREAM_FILTER_WRITE);
+fwrite($stream, 'abc');
+fclose($stream);
+echo "done\n";
+"#,
+    );
+    assert_eq!(output.stdout, "done\n", "stderr: {}", output.stderr);
+    assert!(
+        output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        output.stderr
     );
 }
 

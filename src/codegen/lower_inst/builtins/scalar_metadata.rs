@@ -78,6 +78,10 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         emit_mixed_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
     }
+    if matches!(ty, PhpType::Resource(_)) {
+        emit_static_gettype_resource(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
     let Some(type_name) = static_gettype_name(&ty) else {
         return Err(CodegenIrError::unsupported(format!(
             "gettype for PHP type {:?}",
@@ -150,7 +154,8 @@ pub(in crate::codegen::lower_inst) fn emit_mixed_gettype(ctx: &mut FunctionConte
     emit_mixed_gettype_case(ctx, &null_case, b"NULL", &done);
     emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
     emit_mixed_gettype_case(ctx, &object_case, b"object", &done);
-    emit_mixed_gettype_case(ctx, &resource_case, b"resource", &done);
+    ctx.emitter.label(&resource_case);
+    emit_gettype_resource_case(ctx, &done);
     ctx.emitter.label(&done);
     Ok(())
 }
@@ -173,6 +178,46 @@ pub(in crate::codegen::lower_inst) fn emit_branch_on_gettype_mixed_tag(ctx: &mut
 pub(in crate::codegen::lower_inst) fn emit_mixed_gettype_case(ctx: &mut FunctionContext<'_>, label: &str, type_name: &[u8], done: &str) {
     ctx.emitter.label(label);
     emit_type_name_result(ctx, type_name);
+    abi::emit_jump(ctx.emitter, done);
+}
+
+/// Emits `gettype()` for a statically typed resource, detecting the closed marker.
+fn emit_static_gettype_resource(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let closed = ctx.next_label("gettype_resource_closed");
+    let done = ctx.next_label("gettype_resource_done");
+    ctx.load_value_to_result(value)?;
+    emit_branch_if_closed_resource_payload(ctx.emitter, &closed);
+    emit_type_name_result(ctx, b"resource");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&closed);
+    emit_type_name_result(ctx, b"resource (closed)");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits the `gettype()` resource case once `__rt_mixed_unbox` has classified the payload.
+///
+/// The unboxed native resource payload is in `x1`/`rdi`; its sign bit marks a resource
+/// that has already been closed, which PHP names `resource (closed)`.
+fn emit_gettype_resource_case(ctx: &mut FunctionContext<'_>, done: &str) {
+    let closed = ctx.next_label("gettype_resource_closed");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x1, #0");                              // the unboxed resource payload carries the closed marker in its sign
+            ctx.emitter.instruction(&format!("b.mi {}", closed));               // negative payloads are closed resources
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // the unboxed resource payload carries the closed marker in its sign
+            ctx.emitter.instruction(&format!("js {}", closed));                 // negative payloads are closed resources
+        }
+    }
+    emit_type_name_result(ctx, b"resource");
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&closed);
+    emit_type_name_result(ctx, b"resource (closed)");
     abi::emit_jump(ctx.emitter, done);
 }
 
@@ -467,4 +512,283 @@ pub(in crate::codegen::lower_inst) fn dynamic_extension_loaded_candidates() -> V
         }
     }
     candidates
+}
+
+/// Lowers `get_debug_type(value)` for every supported storage representation.
+///
+/// PHP names the resolved type rather than the declared one: `int`, `float`, `bool`,
+/// `null`, `string`, `array`, a class name (including `Closure`), or
+/// `resource (stream)`/`resource (stream filter)` with `resource (closed)` once the
+/// native handle has been released. The resource close state is the sign bit of the
+/// payload, the same marker `get_resource_type()` reads through `__rt_resource_type_name`.
+pub(crate) fn lower_get_debug_type(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "get_debug_type", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.raw_value_php_type(value)?;
+    // Representation first: `Resource` and `Object` share an integer/pointer codegen
+    // representation with scalars, so the PHP-visible kind must come from the declared type.
+    match ty.codegen_repr() {
+        PhpType::TaggedScalar => {
+            emit_tagged_scalar_debug_type(ctx, value)?;
+            return store_if_result(ctx, inst);
+        }
+        PhpType::Mixed => {
+            emit_mixed_debug_type(ctx, value)?;
+            return store_if_result(ctx, inst);
+        }
+        _ => {}
+    }
+    match &ty {
+        PhpType::Object(name) => {
+            if let Some(debug_name) = static_anonymous_debug_name(ctx, name) {
+                emit_type_name_result(ctx, debug_name.as_bytes());
+            } else {
+                ctx.load_value_to_result(value)?;
+                super::types::emit_dynamic_object_class_name(ctx, "get_class");
+            }
+        }
+        PhpType::Callable => emit_type_name_result(ctx, b"Closure"),
+        PhpType::Resource(kind) => {
+            emit_static_resource_debug_type(ctx, value, kind.as_deref())?;
+        }
+        other => {
+            let Some(type_name) = static_debug_type_name(other) else {
+                return Err(CodegenIrError::unsupported(format!(
+                    "get_debug_type for PHP type {:?}",
+                    other
+                )));
+            };
+            emit_type_name_result(ctx, type_name);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Returns PHP's debug name for a statically known anonymous class, or `None` for a named class.
+fn static_anonymous_debug_name(ctx: &FunctionContext<'_>, name: &str) -> Option<String> {
+    if !crate::parser::is_anonymous_class_name(name) {
+        return None;
+    }
+    let class_name = name.trim_start_matches('\\');
+    let info = ctx.module.class_infos.get(class_name)?;
+    if let Some(parent) = info.parent.as_deref() {
+        return Some(format!("{}@anonymous", parent.trim_start_matches('\\')));
+    }
+    if let Some(interface) = info.declared_interfaces.first() {
+        return Some(format!("{}@anonymous", interface.trim_start_matches('\\')));
+    }
+    Some("class@anonymous".to_string())
+}
+
+/// Returns PHP's `get_debug_type()` spelling for concrete statically known types.
+fn static_debug_type_name(ty: &PhpType) -> Option<&'static [u8]> {
+    match ty {
+        PhpType::Int | PhpType::Narrow(_) | PhpType::Pointer(_) | PhpType::Packed(_) => {
+            Some(b"int".as_slice())
+        }
+        PhpType::Float => Some(b"float".as_slice()),
+        PhpType::Str => Some(b"string".as_slice()),
+        PhpType::Bool | PhpType::False => Some(b"bool".as_slice()),
+        PhpType::Void | PhpType::Never => Some(b"null".as_slice()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            Some(b"array".as_slice())
+        }
+        PhpType::Buffer(_) => Some(b"buffer".as_slice()),
+        PhpType::Callable => Some(b"Closure".as_slice()),
+        PhpType::Object(_) | PhpType::Resource(_) | PhpType::Mixed | PhpType::Union(_)
+        | PhpType::TaggedScalar => None,
+    }
+}
+
+/// Emits `get_debug_type()` for an inline nullable scalar: `int` or `null`.
+fn emit_tagged_scalar_debug_type(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let null_case = ctx.next_label("debug_type_tagged_null");
+    let done = ctx.next_label("debug_type_tagged_done");
+    ctx.load_value_to_result(value)?;
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_case);
+    emit_type_name_result(ctx, b"int");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    emit_type_name_result(ctx, b"null");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits `get_debug_type()` for a statically typed resource, detecting the closed marker.
+fn emit_static_resource_debug_type(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    kind: Option<&str>,
+) -> Result<()> {
+    let closed = ctx.next_label("debug_type_resource_closed");
+    let stream = ctx.next_label("debug_type_resource_stream");
+    let filter = ctx.next_label("debug_type_resource_filter");
+    let context = ctx.next_label("debug_type_resource_context");
+    let done = ctx.next_label("debug_type_resource_done");
+    ctx.load_value_to_result(value)?;
+    emit_branch_if_closed_resource_payload(ctx.emitter, &closed);
+    // `__rt_resource_type_name` keys stream filters off subtype 9; every other static
+    // resource is resolved by the payload (contexts) or defaults to a plain stream.
+    let subtype = if kind == Some("stream filter") { 9 } else { 0 };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "x3", subtype);           // pass the static resource's filter subtype
+            abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
+            ctx.emitter.instruction("cmp x2, #14");                             // "stream-context" is the 14-byte type name
+            ctx.emitter.instruction(&format!("b.eq {}", context));              // report the stream-context spelling
+            ctx.emitter.instruction("cmp x2, #13");                             // "stream filter" is the 13-byte type name
+            ctx.emitter.instruction(&format!("b.eq {}", filter));               // report the stream-filter spelling
+            ctx.emitter.instruction(&format!("b {}", stream));                  // every other open resource is a stream
+        }
+        Arch::X86_64 => {
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", subtype);          // pass the static resource's filter subtype
+            abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
+            ctx.emitter.instruction("cmp rdx, 14");                             // "stream-context" is the 14-byte type name
+            ctx.emitter.instruction(&format!("je {}", context));                // report the stream-context spelling
+            ctx.emitter.instruction("cmp rdx, 13");                             // "stream filter" is the 13-byte type name
+            ctx.emitter.instruction(&format!("je {}", filter));                 // report the stream-filter spelling
+            ctx.emitter.instruction(&format!("jmp {}", stream));                // every other open resource is a stream
+        }
+    }
+    ctx.emitter.label(&closed);
+    emit_type_name_result(ctx, b"resource (closed)");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&filter);
+    emit_type_name_result(ctx, b"resource (stream filter)");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&context);
+    emit_type_name_result(ctx, b"resource (stream-context)");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&stream);
+    emit_type_name_result(ctx, b"resource (stream)");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits `get_debug_type()` for a boxed Mixed or Union payload by dispatching on runtime tags.
+fn emit_mixed_debug_type(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    let int_case = ctx.next_label("debug_type_int");
+    let string_case = ctx.next_label("debug_type_string");
+    let float_case = ctx.next_label("debug_type_float");
+    let bool_case = ctx.next_label("debug_type_bool");
+    let array_case = ctx.next_label("debug_type_array");
+    let object_case = ctx.next_label("debug_type_object");
+    let closure_case = ctx.next_label("debug_type_closure");
+    let resource_case = ctx.next_label("debug_type_resource");
+    let null_case = ctx.next_label("debug_type_null");
+    let done = ctx.next_label("debug_type_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_on_gettype_mixed_tag(ctx, 0, &int_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 2, &float_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 3, &bool_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 4, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 5, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 10, &closure_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
+    abi::emit_jump(ctx.emitter, &null_case);
+
+    emit_mixed_gettype_case(ctx, &int_case, b"int", &done);
+    emit_mixed_gettype_case(ctx, &string_case, b"string", &done);
+    emit_mixed_gettype_case(ctx, &float_case, b"float", &done);
+    emit_mixed_gettype_case(ctx, &bool_case, b"bool", &done);
+    emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
+
+    ctx.emitter.label(&object_case);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // expose the unboxed object pointer to the class-name lookup
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // expose the unboxed object pointer to the class-name lookup
+        }
+    }
+    super::types::emit_dynamic_object_debug_name(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&closure_case);
+    emit_type_name_result(ctx, b"Closure");
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&resource_case);
+    emit_mixed_resource_debug_type(ctx, &done);
+
+    ctx.emitter.label(&null_case);
+    emit_type_name_result(ctx, b"null");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits the closed/stream-filter/stream split for a boxed resource payload.
+///
+/// On entry the unboxed payload word is in the integer result register and the resource
+/// subtype is in the second payload register (`x2`/`rdx`, the `__rt_resource_type_name`
+/// convention).
+fn emit_mixed_resource_debug_type(ctx: &mut FunctionContext<'_>, done: &str) {
+    let closed = ctx.next_label("debug_type_resource_closed");
+    let stream = ctx.next_label("debug_type_resource_stream");
+    let filter = ctx.next_label("debug_type_resource_filter");
+    let context = ctx.next_label("debug_type_resource_context");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x1, #0");                              // is the native handle marked closed by its sign bit?
+            ctx.emitter.instruction(&format!("b.mi {}", closed));               // negative payloads are closed resources
+            ctx.emitter.instruction("mov x0, x1");                              // pass the resource payload to the shared type-name helper
+            ctx.emitter.instruction("mov x3, x2");                              // pass the resource subtype to the shared type-name helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // is the native handle marked closed by its sign bit?
+            ctx.emitter.instruction(&format!("js {}", closed));                 // negative payloads are closed resources
+            ctx.emitter.instruction("mov rcx, rdx");                            // pass the resource subtype to the shared type-name helper
+            ctx.emitter.instruction("mov rax, rdi");                            // pass the resource payload to the shared type-name helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #14");                             // "stream-context" is the 14-byte type name
+            ctx.emitter.instruction(&format!("b.eq {}", context));              // report the stream-context spelling
+            ctx.emitter.instruction("cmp x2, #13");                             // "stream filter" is the 13-byte type name
+            ctx.emitter.instruction(&format!("b.eq {}", filter));               // report the stream-filter spelling
+            ctx.emitter.instruction(&format!("b {}", stream));                  // every other open resource is a stream
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 14");                             // "stream-context" is the 14-byte type name
+            ctx.emitter.instruction(&format!("je {}", context));                // report the stream-context spelling
+            ctx.emitter.instruction("cmp rdx, 13");                             // "stream filter" is the 13-byte type name
+            ctx.emitter.instruction(&format!("je {}", filter));                 // report the stream-filter spelling
+            ctx.emitter.instruction(&format!("jmp {}", stream));                // every other open resource is a stream
+        }
+    }
+    ctx.emitter.label(&closed);
+    emit_type_name_result(ctx, b"resource (closed)");
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&filter);
+    emit_type_name_result(ctx, b"resource (stream filter)");
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&context);
+    emit_type_name_result(ctx, b"resource (stream-context)");
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&stream);
+    emit_type_name_result(ctx, b"resource (stream)");
+    abi::emit_jump(ctx.emitter, done);
+}
+
+/// Branches when the resource handle in the integer result register carries the closed marker.
+fn emit_branch_if_closed_resource_payload(emitter: &mut crate::codegen_support::emit::Emitter, closed: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #0");                                  // is the native handle marked closed by its sign bit?
+            emitter.instruction(&format!("b.mi {}", closed));                   // negative payloads are closed resources
+        }
+        Arch::X86_64 => {
+            emitter.instruction("test rax, rax");                               // is the native handle marked closed by its sign bit?
+            emitter.instruction(&format!("js {}", closed));                     // negative payloads are closed resources
+        }
+    }
 }

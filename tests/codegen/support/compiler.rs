@@ -406,6 +406,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
+    let resolved = elephc::php86_declarations::inject(resolved);
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
@@ -441,7 +442,12 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     let resolved =
         elephc::image_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::hash_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::uri_prelude::inject_if_used_for_version(
+        resolved, false, php_version, &mut prelude_inventory,
+    );
+    let resolved = elephc::core_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::time_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
+    let resolved = elephc::clamp_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::bcmath_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let force_gmp = FORCE_GMP_PRELUDE.with(|flag| flag.replace(false));
     let resolved = elephc::gmp_prelude::inject_if_used(resolved, force_gmp, &mut prelude_inventory);
@@ -469,6 +475,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // desugared into a hidden variadic parameter plus plain PHP after autoloading and
     // before the optimizer, so the checker and the backend only ever see ordinary PHP.
     let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
+    let resolved = elephc::pfa::desugar(resolved).expect("pfa desugar failed");
     let resolved = elephc::optimize::fold_constants_for_target(resolved, target());
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint, so every
     // reachable template has become an ordinary monomorphic declaration before lowering. A
@@ -900,6 +907,34 @@ pub(crate) fn compile_and_run_capture_merged_with_heap(
     output
 }
 
+/// Compiles and runs a fixture with an explicit fixed heap, capturing stdout and stderr.
+pub(crate) fn compile_and_run_capture_with_heap_size(
+    source: &str,
+    heap_size: usize,
+) -> ProgramOutput {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, required_libraries) =
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, heap_size, false, false, false, false,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
 /// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.
 pub(crate) fn compile_and_run_capture_with_regex(source: &str) -> ProgramOutput {
     compile_and_run_capture_with_optional_regex(source, true)
@@ -1257,6 +1292,44 @@ pub(crate) fn compile_and_run_with_env(
     );
     let _ = fs::remove_dir_all(&dir);
     output
+}
+
+/// Compiles and captures one PHP-versioned fixture with stderr merged onto stdout.
+pub(crate) fn compile_and_run_capture_merged_with_php_version(
+    source: &str,
+    php_version: elephc::php_version::PhpVersion,
+) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_php_merged_{}_{:?}_{}",
+        pid, tid, id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_defines_repr_and_php_version(
+            source,
+            &dir,
+            &HashSet::new(),
+            8_388_608,
+            false,
+            false,
+            default_null_repr(),
+            php_version,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_capture_merged(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output.stdout
 }
 
 /// Compiles and runs PHP source with an explicit PHP compatibility version.

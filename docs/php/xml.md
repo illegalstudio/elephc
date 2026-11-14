@@ -298,8 +298,8 @@ $w->endDocument();
 echo $w->outputMemory();
 ```
 
-`openUri()` accepts plain file paths and the `php://output`, `php://stdout`
-and `php://stderr` stream URIs. URI writers buffer their output and write it
+`openUri()` accepts plain file paths and the `php://output`, `php://stdout`,
+`php://stderr`, `php://memory` and `php://temp` stream URIs. URI writers buffer their output and write it
 on `flush()`, `endDocument()` and destruction; `flush()` returns the byte count
 for them and the buffered string for memory writers, exactly like PHP. Invalid
 element, attribute, PI and DTD names raise PHP's `ValueError`, and an unopened
@@ -400,9 +400,9 @@ leaked block and byte totals), not guarantees.
   wrong type or an out-of-range `XML_OPTION_SKIP_TAGSTART`.
 - `XMLWriter::openUri()` reports failures through the stream layer's own
   warning rather than PHP's `Unable to resolve file path` text, and supports
-  plain paths plus `php://output`, `php://stdout` and `php://stderr` — not
-  `file://` URIs or `php://memory`. `XMLWriter::toStream()` does not detect a
-  closed resource.
+  plain paths plus `php://output`, `php://stdout`, `php://stderr`,
+  `php://memory` and `php://temp` — not `file://` URIs. `XMLWriter::toStream()`
+  does not detect a closed resource.
 - The `xml_set_object()` swap error names a bound method as the caller spelled
   it; PHP prints the method's declared spelling. `xml_parser_free()` called from
   inside a handler returns `false` like PHP but without PHP's warning.

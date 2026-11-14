@@ -50,9 +50,11 @@ pub(crate) use compilation_context::{
     compile_is_web_sapi, compile_php_version, ini_overrides, linked_extensions,
     opcache_api_restricted, opcache_manifest_len,
 };
+#[allow(unused_imports)]
 pub use compilation_context::{
     autoload_rule_count, set_autoload_rule_count, set_compile_profile, set_ini_overrides,
     set_linked_extensions, set_opcache_api_restricted, set_opcache_manifest_len,
+    parse_memory_limit_bytes,
 };
 pub(crate) use declaration_order::{
     declared_class_names, declared_interface_names, declared_trait_names,

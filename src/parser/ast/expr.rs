@@ -11,7 +11,7 @@
 use crate::names::Name;
 use crate::span::Span;
 
-use super::{BinOp, Stmt, StmtKind, TypeExpr};
+use super::{AttributeGroup, BinOp, Stmt, StmtKind, TypeExpr};
 
 // --- Expressions ---
 
@@ -169,6 +169,10 @@ pub enum ExprKind {
     },
     Closure {
         params: Vec<(String, Option<TypeExpr>, Option<Expr>, bool)>,
+        /// Attribute groups aligned with `params`, plus the variadic tail when present.
+        ///
+        /// PHP 8.6 parameter doc comments are carried as a synthetic attribute here.
+        param_attributes: Vec<Vec<AttributeGroup>>,
         variadic: Option<String>,
         /// Whether the variadic parameter was declared by reference (`&...$args`).
         variadic_by_ref: bool,

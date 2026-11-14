@@ -682,6 +682,15 @@ fn emit_builtin_call_value_with_target(
         {
             crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, Some(&write_names));
             ctx.apply_eval_scope_barrier(&write_names);
+        } else if let Some(write_names) = eval_literal
+            .map(|fragment| eval_literal_all_writes(ctx, fragment))
+            .filter(|writes| !writes.is_empty())
+        {
+            // A fully static fragment still writes the caller's locals through the eval
+            // scope. Widen them before the fragment runs, or its write lands in storage the
+            // outer frame still reads at its original (unboxed) layout.
+            crate::ir_lower::eval_reference_layouts::refuse_unboxed_array_aliases(ctx, span, Some(&write_names));
+            ctx.apply_eval_scope_barrier(&write_names);
         }
     }
     call

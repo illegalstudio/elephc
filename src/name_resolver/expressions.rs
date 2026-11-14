@@ -277,6 +277,7 @@ pub(super) fn resolve_expr(
         },
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -289,6 +290,7 @@ pub(super) fn resolve_expr(
             by_ref_return,
         } => ExprKind::Closure {
             params: resolve_params(params, current_namespace, imports, symbols),
+            param_attributes: param_attributes.clone(),
             variadic: variadic.clone(),
             variadic_by_ref: *variadic_by_ref,
             variadic_type: variadic_type.clone(),

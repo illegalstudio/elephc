@@ -124,6 +124,68 @@ foreach ($argv as $i => $arg) {   // correct
 }
 ```
 
+### `$GLOBALS`
+
+`$GLOBALS['name']` reads and writes the program-global slot for `$name`, so a
+top-level variable is visible and mutable from any function or method without a
+`global` declaration. `isset()`, `empty()`, `??`, simple assignments, compound
+assignments, and increments use the same slot:
+
+```php
+$config = ['mode' => 'debug'];
+
+function current_mode(): string {
+    return $GLOBALS['config']['mode'];
+}
+
+echo current_mode(), "\n";             // debug
+var_dump(isset($GLOBALS['config'])); // bool(true)
+
+$GLOBALS['config'] = ['mode' => 'release'];
+echo current_mode(), "\n";             // release
+$GLOBALS['count'] = 1;
+$GLOBALS['count']++;
+echo $GLOBALS['count'], "\n";          // 2
+```
+
+Computed keys share the same storage: `$GLOBALS[$name]`, `isset($GLOBALS[$name])`,
+`$GLOBALS[$name] ?? ...`, `unset($GLOBALS[$name])`, and writes through a runtime
+name resolve against the program globals the compiler can name — top-level
+variables, `global` declarations, literal `$GLOBALS` keys, and identifier-shaped
+string literals in the program. A computed write whose name matches none of those
+creates a runtime entry in a growable table, so a global whose name is built
+entirely from runtime bytes can be created and then read, tested with `isset()`,
+enumerated, and unset. A direct read of an unset global warns
+`Undefined global variable $name`; `isset()` and `??` stay silent.
+
+Nested container writes (`$GLOBALS['a']['b'] = 1`) update the top-level array and
+autovivify a missing global. Appending to `$GLOBALS` with `$GLOBALS[] = ...` is
+rejected with PHP's `Cannot append to $GLOBALS` diagnostic. A bare `$GLOBALS`
+materializes an associative snapshot of every initialized program global, so
+`count($GLOBALS)` and `foreach ($GLOBALS as $name => $value)` work; its iteration
+order follows the compiler's global name table plus the runtime-created entries
+rather than PHP's insertion order, and writes through the snapshot do not publish
+back.
+
+Known `$GLOBALS` limits:
+
+- The snapshot only contains names the compiler materialized. PHP's CLI SAPI also
+  exposes `_GET`, `_POST`, `_COOKIE`, `_FILES`, and `_SERVER` in `$GLOBALS`; elephc
+  adds one of those only when the source names it, so `count($GLOBALS)` can be lower
+  than PHP's.
+- A direct, straight-line `unset($GLOBALS['x'])` detaches a `global $x` alias:
+  the removed value stays readable through the local reference, later `$x` writes
+  stay local, and `$GLOBALS['x']` remains unset, matching PHP. A conditional
+  `unset($GLOBALS['x'])` is not path-detached yet and still clears the shared cell;
+  keep that shape out of code that relies on the alias surviving.
+- Under `--web`, a computed `$GLOBALS[$name]` lookup treats every named slot as an
+  ordinary boxed global. Request superglobals hold a typed Hash pointer instead, so
+  use `$_SERVER` (or a literal `$GLOBALS['_SERVER']` key) when the name is one of
+  them; a runtime name that resolves to a superglobal does not read the Hash.
+- Runtime-created global entries are released at process shutdown. A `--web` worker
+  does not drain them at the request boundary, so a name created in one request can
+  remain visible to the next until it is unset or the worker exits.
+
 ## PHP version surface
 
 elephc targets a PHP **language profile** selected by `--php-version`
@@ -462,6 +524,69 @@ Stream resources, standard streams, wrappers (`php://`, `data://`, `phar://`,
 `http://`, `https://`, `ftp://`, `ftps://`, compression wrappers, and
 `glob://`), stream contexts, filters, sockets, TLS, process pipes, and user
 wrappers are documented in [Streams](streams.md).
+
+## Io\Poll (PHP 8.6)
+
+`Io\Poll` waits for readiness on stream descriptors without blocking on a single
+stream. `Backend::getAvailableBackends()` reports `[Poll, Kqueue]` on Darwin and
+`[Poll, Epoll]` on Linux; `Backend::Auto` prefers the platform backend. Edge-triggered
+watchers are refused on every backend until a native epoll/kqueue wait exists: the shared
+level-triggered wait cannot observe a readiness transition that happens between two
+calls. `EventPorts` and `WSAPoll` stay unavailable because elephc has no Solaris or
+Windows target.
+
+```php
+<?php
+[$reader, $writer] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+
+$context = new Io\Poll\Context(Io\Poll\Backend::Poll);
+$watcher = $context->add(
+    new StreamPollHandle($reader),
+    [Io\Poll\Event::Read, Io\Poll\Event::OneShot],
+    'reader',
+);
+
+fwrite($writer, "hello from the other side\n");
+
+foreach ($context->wait(Time\Duration::fromSeconds(1)) as $event) {
+    if ($event->hasTriggered(Io\Poll\Event::Read)) {
+        echo fread($event->getHandle()->getStream(), 1024);
+    }
+}
+```
+
+The surface includes `Io\Poll\Backend`, `Event`, `Handle`, `Watcher`, `Context`,
+`StreamPollHandle`, and the `PollException` / `FailedPollOperationException`
+hierarchy with its `ERROR_*` codes. Level-triggered read and write readiness,
+data already buffered by the stream layer, one-shot watchers, `maxEvents`,
+`Time\Duration` timeouts, duplicate-handle rejection, closed-stream
+deactivation, and watcher/context lifetime rules are implemented.
+
+A zero-timeout `poll(2)` probe separates `HangUp`/`ReadHangUp` and `Error` from a
+bare read/write bit, so a closed peer is no longer reported as ordinary readiness.
+Linux requests `POLLRDHUP`, so a TCP half-close reports `ReadHangUp`; Darwin derives
+`ReadHangUp` from `POLLHUP` on a full close. The runtime's `stream_select()` examines
+descriptors `0..1023` (`FD_SETSIZE`).
+
+Known limits:
+
+- `Epoll` and `Kqueue` are portable backend *modes*; the wait itself still runs
+  on the shared `stream_select()` + `poll(2)` machinery rather than issuing
+  epoll/kqueue syscalls directly, which is why edge triggering is refused.
+- `EventPorts` and `WSAPoll` constructors raise `BackendUnavailableException`
+  because elephc does not target Solaris or Windows.
+- A descriptor at or above `FD_SETSIZE` (`1024`) makes `stream_select()` emit PHP's
+  `You MUST recompile PHP with a larger value of FD_SETSIZE` warning once and return
+  `false` without waiting, exactly like PHP. `Io\Poll` observes that `false` and throws
+  `FailedPollWaitException`, so a high-descriptor watcher fails explicitly instead of
+  being silently dropped. Driving the wait with `poll(2)` would remove the limit.
+- `wait()` re-checks a level-ready descriptor that produced no watched event at
+  1 ms granularity, so an `Error`/`HangUp`-only watcher does not return early on
+  ordinary readable data. It can wake up to 1000 times per second while that data
+  remains pending; a native epoll/kqueue wait would remove that polling.
+- A watcher around a user-wrapper stream currently crashes in
+  `stream_get_meta_data()` before the wait; native OS streams are unaffected.
+  Tracked as a follow-up.
 
 ## File system
 

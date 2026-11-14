@@ -57,6 +57,17 @@ fn check_source_with_defines_and_options(
     defines: &[&str],
     options: types::CheckOptions,
 ) -> Result<(), String> {
+    elephc::compiler_stack::with_compiler_stack(|| {
+        check_source_on_compiler_stack(src, defines, options)
+    })
+}
+
+/// The body of [`check_source_with_defines_and_options`], run on the compiler's grown stack.
+fn check_source_on_compiler_stack(
+    src: &str,
+    defines: &[&str],
+    options: types::CheckOptions,
+) -> Result<(), String> {
     let tokens = tokenize(src).map_err(|e| e.message.clone())?;
     let ast = parse(&tokens).map_err(|e| e.message.clone())?;
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
@@ -69,7 +80,15 @@ fn check_source_with_defines_and_options(
     // arity diagnostics. Injection is gated on usage, so no other test is affected.
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::uri_prelude::inject_if_used_for_version(
+        ast,
+        false,
+        elephc::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
+    let ast = elephc::core_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -88,6 +107,7 @@ fn check_source_with_defines_and_options(
     // desugared into a hidden variadic parameter plus plain PHP before the checker runs, so
     // their own diagnostics reach this harness instead of a bare `Undefined function`.
     let ast = elephc::func_args::desugar(ast).map_err(|e| e.message.clone())?;
+    let ast = elephc::pfa::desugar(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
     // CLASS is instantiated by that driver, not by the checker, so a plain `check_with_options`
@@ -107,7 +127,15 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::autoload::collect_aliases(ast)?;
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
     let ast = elephc::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = elephc::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = elephc::uri_prelude::inject_if_used_for_version(
+        ast,
+        false,
+        elephc::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
+    let ast = elephc::core_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = elephc::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = elephc::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -119,6 +147,7 @@ fn check_source_full(src: &str) -> Result<elephc::types::CheckResult, elephc::er
     let ast = elephc::name_resolver::resolve(ast)?;
     let ast = elephc::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory)?;
     let ast = elephc::func_args::desugar(ast)?;
+    let ast = elephc::pfa::desugar(ast)?;
     let ast = elephc::optimize::fold_constants(ast);
     let (_, result) = elephc::generics::monomorphize(ast, |program, bounds| {
         types::check_with_options_and_bounds(program, types::CheckOptions::default(), bounds)
@@ -331,6 +360,18 @@ mod math_builtins;
 mod random;
 #[path = "error_tests/bcmath_number.rs"]
 mod bcmath_number;
+#[path = "error_tests/time_duration.rs"]
+mod time_duration;
+#[path = "error_tests/override_constants.rs"]
+mod override_constants;
+#[path = "error_tests/enum_debug_info.rs"]
+mod enum_debug_info;
+#[path = "error_tests/static_asymmetric_visibility.rs"]
+mod static_asymmetric_visibility;
+#[path = "error_tests/partial_application.rs"]
+mod partial_application;
+#[path = "error_tests/io_poll_php86.rs"]
+mod io_poll_php86;
 #[path = "error_tests/string_builtins.rs"]
 mod string_builtins;
 #[path = "error_tests/mbstring.rs"]

@@ -1364,10 +1364,10 @@ fn test_error_asymmetric_visibility_requires_type() {
 
 /// Verifies that asymmetric visibility on a static property is rejected.
 #[test]
-fn test_error_asymmetric_visibility_on_static_property() {
-    expect_error(
-        "<?php class C { public private(set) static int $v = 1; }",
-        "Static property may not declare asymmetric visibility",
+fn test_static_asymmetric_visibility_is_accepted() {
+    assert!(
+        check_source("<?php class C { public private(set) static int $v = 1; }").is_ok(),
+        "PHP 8.5 allows asymmetric write visibility on static properties"
     );
 }
 

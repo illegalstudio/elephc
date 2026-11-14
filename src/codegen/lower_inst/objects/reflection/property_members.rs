@@ -146,6 +146,7 @@ pub(super) fn reflection_property_hook_members(
                 get_by_ref,
                 return_type,
                 None,
+                None,
             ),
         ));
     }
@@ -154,6 +155,13 @@ pub(super) fn reflection_property_hook_members(
             .and_then(|contract| contract.set_type.as_ref())
             .and_then(|ty| reflection_parameter_type_metadata(None, ty))
             .or_else(|| property_type_metadata.cloned());
+        let set_parameter_doc_comment = info
+            .methods
+            .get(&php_symbol_key(&property_hook_set_method(property_name)))
+            .and_then(|signature| signature.param_attributes.first())
+            .and_then(|groups| {
+                super::parameter_doc_comments::parameter_doc_comment(groups)
+            });
         members.push((
             String::from("set"),
             reflection_property_hook_method_member(
@@ -169,6 +177,7 @@ pub(super) fn reflection_property_hook_members(
                     reflection_builtin_named_type("void", false),
                 )),
                 parameter_type,
+                set_parameter_doc_comment,
             ),
         ));
     }
@@ -187,6 +196,7 @@ pub(super) fn reflection_property_hook_method_member(
     returns_reference: bool,
     return_type: Option<ReflectionParameterTypeMetadata>,
     parameter_type: Option<ReflectionParameterTypeMetadata>,
+    parameter_doc_comment: Option<String>,
 ) -> ReflectionListedMember {
     let visibility = reflection_visibility_from_member_flags(property_flags);
     let flags = reflection_member_flags(false, &visibility, false, is_abstract, false, false);
@@ -209,6 +219,7 @@ pub(super) fn reflection_property_hook_method_member(
             declaring_class_name.clone(),
             declaring_function.clone(),
             parameter_type,
+            parameter_doc_comment,
         )]
     } else {
         Vec::new()
@@ -240,6 +251,7 @@ pub(super) fn reflection_property_hook_parameter_member(
     declaring_class_name: Option<String>,
     declaring_function: ReflectionDeclaringFunctionMember,
     type_metadata: Option<ReflectionParameterTypeMetadata>,
+    doc_comment: Option<String>,
 ) -> ReflectionParameterMember {
     let has_type = type_metadata.is_some();
     let allows_null = type_metadata.as_ref().is_some_and(reflection_type_allows_null);
@@ -251,6 +263,7 @@ pub(super) fn reflection_property_hook_parameter_member(
         declaring_function: Some(declaring_function),
         attr_names: Vec::new(),
         attr_args: Vec::new(),
+        doc_comment,
         position: 0,
         is_optional: false,
         is_variadic: false,

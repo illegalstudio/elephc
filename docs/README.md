@@ -41,6 +41,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [Types](php/types.md) — int, float, string, bool, array, null, mixed, callable, enum, union types, extension types, type casting
 - [Built-in functions](php/builtins.md) — the generated index of every built-in: signature, availability (AOT / `eval()`), and implementation links
 - [PHP compatibility](php/compatibility.md) — the generated builtin-coverage report against the pinned reference PHP version
+- [PHP 8.6](php/php-8.6.md) — delivered 8.6 classes, builtins, and language changes, plus the deliberately deferred items
 - [Operators](php/operators.md) — arithmetic, comparison, `instanceof`, logical, bitwise, string, assignment, ternary, null coalescing, error control
 - [Control Structures](php/control-structures.md) — if/else, while, for, foreach, switch, match, multi-level break/continue, try/catch/finally
 - [Functions](php/functions.md) — declarations, closures, arrow functions, named arguments, variadic, spread, pass-by-reference, first-class callables, static variables
@@ -56,6 +57,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [PCNTL](php/pcntl.md) — forking, child waits, signals, process replacement, process groups, sessions, daemonization, and target-specific controls
 - [File information](php/fileinfo.md) - MIME types, encodings, custom magic databases and the complete PHP fileinfo surface
 - [Tokenizer](php/tokenizer.md): PHP source inspection, lossless tokens, `PhpToken` and `TOKEN_PARSE`.
+- [URI](php/uri.md) — RFC 3986 and WHATWG URL parsing, normalization, mutation, builders, host/URI types, percent encoding, validation errors, and serialization
 - [XML](php/xml.md): the `ext/xml` SAX parser (`XMLParser`, handlers, `xml_parse_into_struct()`, error codes), `ext/xmlwriter` (`XMLWriter`, memory and URI output, DTDs, namespaces), and SimpleXML (live child/attribute views, XPath, namespaces, and DOM imports) on a statically pinned libxml2 2.15.3 from the native catalog (`elephc native add libxml2`)
 - [Classes](php/classes.md) — inheritance, interfaces, abstract/final classes, typed/final/static properties, static property redeclarations, constructor promotion, methods, traits, enums, magic methods
 - [SPL](php/spl.md) — SPL interfaces, exceptions, autoload/introspection helpers, and runtime-backed containers

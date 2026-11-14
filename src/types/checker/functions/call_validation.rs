@@ -251,6 +251,7 @@ impl Checker {
             return Ok(true);
         }
         match &arg.kind {
+            ExprKind::Variable(name) if name == "GLOBALS" => Ok(false),
             ExprKind::Variable(_) => Ok(true),
             ExprKind::ArrayAccess { array, .. } => {
                 self.is_addressable_ref_array_receiver(array, env)

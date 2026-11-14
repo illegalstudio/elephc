@@ -2680,6 +2680,16 @@ fn test_branch_divergent_assignment_errors_under_strict() {
     expect_error_strict("<?php if ($argc > 1) { $a = 0; } else { $a = \"ciao\"; } echo $a;", "cannot reassign");
 }
 
+/// A conditional null/typed join is a valid nullable value: permissive boxing accepts it
+/// silently, while `--strict-locals` rejects the branch-divergent type change.
+#[test]
+fn test_conditional_null_typed_join_is_silent_and_strict_errors() {
+    let source = "<?php class B { public function f(bool $c): void { $x = null; if ($c) { $x = \"s\"; } echo $x === null ? \"null\" : $x; } } $b = new B(); $b->f(true);";
+    expect_no_error(source);
+    expect_no_warning(source, "boxed mixed storage");
+    expect_error_strict(source, "cannot reassign $x from null to string");
+}
+
 /// Single-branch retype of an outer binding is also handled by marking.
 #[test]
 fn test_single_branch_retype_of_outer_binding_is_accepted() {

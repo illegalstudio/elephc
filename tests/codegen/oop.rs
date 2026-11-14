@@ -31,6 +31,22 @@ mod nested_default_compound_review;
 mod nested_default_numeric_review;
 #[path = "oop/readonly_initialization.rs"]
 mod readonly_initialization;
+#[path = "oop/readonly_property_defaults_php86.rs"]
+mod readonly_property_defaults_php86;
+#[path = "oop/reflection_property_access_php86.rs"]
+mod reflection_property_access_php86;
+#[path = "oop/partial_application_php86.rs"]
+mod partial_application_php86;
+#[path = "oop/reflection_parameter_doc_comments_php86.rs"]
+mod reflection_parameter_doc_comments_php86;
+#[path = "oop/static_asymmetric_visibility.rs"]
+mod static_asymmetric_visibility;
+#[path = "oop/override_constants_php86.rs"]
+mod override_constants_php86;
+#[path = "oop/enum_debug_info_php86.rs"]
+mod enum_debug_info_php86;
+#[path = "oop/constructor_deprecation_php86.rs"]
+mod constructor_deprecation_php86;
 #[path = "oop/readonly_native_properties.rs"]
 mod readonly_native_properties;
 #[path = "oop/callables/mod.rs"]

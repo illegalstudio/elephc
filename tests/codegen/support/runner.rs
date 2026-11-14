@@ -94,6 +94,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         php_extensions: &[],
     },
     TestBridgeStaticlib {
+        lib_name: "elephc_pack",
+        package: "elephc-pack",
+        php_extensions: &[],
+    },
+    TestBridgeStaticlib {
         lib_name: "elephc_crypto",
         package: "elephc-crypto",
         php_extensions: &["hash"],
@@ -117,6 +122,11 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_random",
         package: "elephc-random",
         php_extensions: &["random"],
+    },
+    TestBridgeStaticlib {
+        lib_name: "elephc_uri",
+        package: "elephc-uri",
+        php_extensions: &["uri"],
     },
     TestBridgeStaticlib {
         lib_name: "elephc_mbstring",

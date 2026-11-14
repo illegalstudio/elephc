@@ -14,7 +14,7 @@ mod members;
 mod stmts;
 
 use crate::names::Name;
-use crate::parser::ast::{ExprKind, MagicConstant};
+use crate::parser::ast::{Expr, ExprKind, MagicConstant};
 use crate::span::Span;
 
 pub(super) use members::{walk_class_constant, walk_class_method, walk_class_property};
@@ -185,6 +185,14 @@ pub(crate) trait Pass {
     /// Transforms a rebuilt statement after its children have been visited.
     fn transform_stmt(&self, stmt: crate::parser::ast::Stmt) -> crate::parser::ast::Stmt {
         stmt
+    }
+
+    /// Transforms a fully rebuilt expression after all of its children have been visited.
+    ///
+    /// The default returns it unchanged. Callers that synthesize expressions (partial function
+    /// application) use this hook to consume parser markers bottom-up.
+    fn transform_expr(&self, expr: Expr) -> Expr {
+        expr
     }
 
     /// Transforms the span of a rebuilt expression. Default returns it unchanged; a pass that

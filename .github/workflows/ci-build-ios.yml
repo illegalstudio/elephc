@@ -48,6 +48,10 @@ jobs:
             ios-sim-arm64) triple=aarch64-apple-ios-sim ;;
             *) exit 1 ;;
           esac
+          # The Swift/rust-cache key does not change when a bridge C-ABI symbol is
+          # added. Force the fileinfo archive to be recompiled so the consumer job
+          # cannot restore an archive that predates `elephc_fileinfo_open_failed`.
+          cargo clean -p elephc-fileinfo --target "$triple"
           cargo build --locked --target "$triple" \
             -p elephc-curl -p elephc-xml -p elephc-fileinfo -p elephc-gmp \
             -p elephc-tokenizer -p elephc-phar -p elephc-tls

@@ -999,7 +999,18 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    if crate::codegen::global_lookup::module_uses_dynamic_globals(ctx.module) {
+        abi::emit_call_label(ctx.emitter, "__rt_dynamic_globals_cleanup");
+    }
     let mut globals = ctx.module.data.global_names.clone();
+    // Names interned while lowering a nested store can be absent from the data pool's final
+    // vector (the speculative lowering truncates it). `program_global_names` is the complete
+    // set, so include it before deciding which symbols to release.
+    for name in &ctx.module.program_global_names {
+        if !globals.iter().any(|global| global == name) {
+            globals.push(name.clone());
+        }
+    }
     // Eval exposes process globals even when no source-level global instruction names them.
     for name in ["argc", "argv"] {
         if superglobal_storage_needed(ctx, name) && !globals.iter().any(|global| global == name) {
@@ -1020,7 +1031,15 @@ fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
         }
         let symbol = ir_global_symbol(&name);
         if !ctx.data.has_comm(&symbol) {
-            continue;
+            if !ctx.module.program_global_names.contains(&name)
+                || (ctx.module.web && crate::superglobals::is_superglobal(&name))
+            {
+                continue;
+            }
+            // Later lowering can intern a program-global symbol after this epilogue block was
+            // planned. Allocate its storage now so the cleanup below has a real slot to clear.
+            ctx.data
+                .add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
         }
         ctx.emitter.comment(&format!("epilogue cleanup global ${}", name));
         emit_static_symbol_value_cleanup(ctx, &symbol, &ty);

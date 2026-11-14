@@ -286,7 +286,15 @@ fn try_lower_source_at_for_target_with_reachability(
     );
     let ast = crate::image_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::hash_prelude::inject_if_used(ast, false, &mut prelude_inventory);
-    let ast = crate::core_prelude::inject_if_used(ast, &mut prelude_inventory);
+    let ast = crate::uri_prelude::inject_if_used_for_version(
+        ast,
+        false,
+        crate::php_version::PhpVersion::default(),
+        &mut prelude_inventory,
+    );
+    let ast = crate::core_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::time_prelude::inject_if_used(ast, false, &mut prelude_inventory);
+    let ast = crate::clamp_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::bcmath_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::random_prelude::inject_if_used(ast, false, &mut prelude_inventory);
     let ast = crate::testing_prelude::inject_if_used(ast, false, &mut prelude_inventory);
@@ -316,6 +324,7 @@ fn try_lower_source_at_for_target_with_reachability(
     // `autoload::run` and constant folding. Without it an example using those functions
     // reaches the checker as an undefined call, so the corpus would fail on valid PHP.
     let ast = crate::func_args::desugar(ast).expect("func_args desugar failed");
+    let ast = crate::pfa::desugar(ast).expect("pfa desugar failed");
     let ast = crate::optimize::fold_constants_for_target(ast, target);
     // Mirrors `pipeline::compile`: checking runs to a generic-instantiation fixpoint. A generic
     // CLASS is instantiated by that driver rather than by the checker, so a plain

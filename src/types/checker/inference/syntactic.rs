@@ -396,6 +396,18 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             "ptr_sizeof" | "ptr_get" | "__elephc_ptr_get" | "ptr_read8" | "ptr_read32" => PhpType::Int,
             _ => PhpType::Int,
         },
+        // `Enum::Case->name` is always a string and `->value` is the backing scalar.
+        // The syntactic walk has no class table, so recognize the enum-case shape before
+        // the `_ => Int` fallback would type a readonly default as an integer.
+        ExprKind::PropertyAccess { object, property }
+            if matches!(object.kind, ExprKind::ScopedConstantAccess { .. }) =>
+        {
+            match property.as_str() {
+                "name" => PhpType::Str,
+                "value" => PhpType::Mixed,
+                _ => PhpType::Int,
+            }
+        }
         ExprKind::NullCoalesce { value, default } => {
             let left_ty = infer_expr_type_syntactic(value);
             // A default that never yields (`throw`, `exit`) is not a null arm.
@@ -500,6 +512,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             }
         }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
+        // `new $class` names its class at run time, so the syntactic walk can only say
+        // "some object". Falling through to the `_ => Int` default made a `cond ? new $class : null`
+        // merge a nullable-int temp and box the object pointer as an integer.
+        ExprKind::NewDynamic { .. } => PhpType::Object(String::new()),
         ExprKind::NewDynamicObject { fallback_class, .. } => {
             PhpType::Object(fallback_class.as_str().to_string())
         }

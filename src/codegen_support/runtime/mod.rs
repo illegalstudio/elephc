@@ -32,6 +32,7 @@ mod fibers;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
 mod io;
+pub(crate) use io::ICONV_SPEC_BUFFER_BYTES;
 /// The shared PHP `float`→`int` conversion (`__rt_php_float_to_int`).
 mod numeric;
 mod objects;

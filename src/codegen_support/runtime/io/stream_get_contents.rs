@@ -20,9 +20,9 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Initial accumulation capacity, in bytes. Two read chunks wide so the first `__rt_fread`
 /// never has to grow, and small enough that short streams still stay in concat scratch.
-const INITIAL_CAPACITY: usize = 8192;
+const INITIAL_CAPACITY: usize = 16384;
 /// Bytes requested from `__rt_fread` per iteration.
-const READ_CHUNK: usize = 4096;
+const READ_CHUNK: usize = 8192;
 
 /// Emits the read-all stream helper.
 ///

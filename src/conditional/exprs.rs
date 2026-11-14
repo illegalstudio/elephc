@@ -121,6 +121,7 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         },
         ExprKind::Closure {
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,
@@ -138,6 +139,7 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
                     (name, type_ann, default.map(|expr| rewrite_expr(expr, defines)), is_ref)
                 })
                 .collect(),
+            param_attributes,
             variadic,
             variadic_by_ref,
             variadic_type,

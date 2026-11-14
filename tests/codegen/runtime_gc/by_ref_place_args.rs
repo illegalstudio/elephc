@@ -153,3 +153,25 @@ echo implode(",", $b->items);
     );
     assert_clean(out, "0,1,1,2,2,3,3,4");
 }
+
+/// A promoted scalar property reference cell is retired on both the compatible write and the
+/// rejected typed-reference throw, leaving no box or reference cell behind.
+#[test]
+fn test_typed_property_by_ref_writeback_leaves_clean_heap() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class B { public string $x = "unchanged"; }
+function reject(mixed &$v): void { $v = ["a" => 1]; }
+function accept(mixed &$v): void { $v = "changed"; }
+$b = new B();
+try { reject($b->x); } catch (TypeError $e) { echo $e->getMessage(), "|"; }
+echo $b->x, "|";
+accept($b->x);
+echo $b->x;
+"#,
+    );
+    assert_clean(
+        out,
+        "Cannot assign array to reference held by property B::$x of type string|unchanged|changed",
+    );
+}

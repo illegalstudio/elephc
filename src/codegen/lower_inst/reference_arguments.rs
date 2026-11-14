@@ -1509,6 +1509,11 @@ pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instructio
         move_reg_to_int_result(ctx, mixed_unbox_low_payload_reg(ctx));
     } else {
         emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+        if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+            // Only an unbox explicitly marked by a packed-slot callee is normalized. Property
+            // reads and bare `array` parameters keep the hash's own keys.
+            abi::emit_call_label(ctx.emitter, "__rt_array_payload_to_mixed_indexed");
+        }
     }
     store_if_result(ctx, inst)
 }

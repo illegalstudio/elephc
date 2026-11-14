@@ -369,6 +369,7 @@ fn check_array_callback_builtin_call_in_engine_frame(
         )?;
         let sig = checker.resolve_closure_signature_with_param_hints(
             params,
+            &[],
             variadic,
             *variadic_by_ref,
             variadic_type,

@@ -833,3 +833,99 @@ ok -9223372036854775808\n\
 err Cannot assign float to reference held by property C::$n of type int\n"
     );
 }
+
+/// A `mixed &$out` parameter can bind a typed scalar property: a compatible write updates
+/// it, while an incompatible write raises PHP's typed-reference `TypeError` and leaves the
+/// property unchanged.
+#[test]
+fn test_typed_property_by_ref_writeback_guard() {
+    let out = compile_and_run(
+        r#"<?php
+class Box { public string $value = "unchanged"; }
+function replaceWithArray(mixed &$out): void { $out = ["a" => 1]; }
+function replaceWithString(mixed &$out): void { $out = "changed"; }
+$box = new Box();
+try {
+    replaceWithArray($box->value);
+    echo "unguarded|";
+} catch (TypeError $error) {
+    echo $error->getMessage(), "|";
+}
+echo $box->value, "|";
+replaceWithString($box->value);
+echo $box->value;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign array to reference held by property Box::$value of type string|unchanged|changed"
+    );
+}
+
+/// A `mixed &$out` parameter also binds a typed static property through the same
+/// hidden-temporary write-back, with the same typed-reference guard.
+#[test]
+fn test_typed_static_property_by_ref_writeback_guard() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticBox { public static string $value = "unchanged"; }
+function replaceStaticWithArray(mixed &$out): void { $out = ["a" => 1]; }
+function replaceStaticWithString(mixed &$out): void { $out = "changed"; }
+try {
+    replaceStaticWithArray(StaticBox::$value);
+    echo "unguarded|";
+} catch (TypeError $error) {
+    echo $error->getMessage(), "|";
+}
+echo StaticBox::$value, "|";
+replaceStaticWithString(StaticBox::$value);
+echo StaticBox::$value;
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot assign array to reference held by property StaticBox::$value of type string|unchanged|changed"
+    );
+}
+
+/// A straight-line `unset($GLOBALS['x'])` detaches a `global $x` alias: the removed value
+/// stays readable locally, later writes stay local, and the global remains unset.
+#[test]
+fn test_global_alias_detaches_after_globals_unset() {
+    let out = compile_and_run(
+        r#"<?php
+function detachAlias(): void {
+    global $z;
+    $z = "inner";
+    unset($GLOBALS["z"]);
+    var_dump(isset($z), $z, isset($GLOBALS["z"]));
+    $z = "after";
+    var_dump(isset($z), $z, isset($GLOBALS["z"]), $GLOBALS["z"] ?? "missing");
+}
+detachAlias();
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nstring(5) \"inner\"\nbool(false)\nbool(true)\nstring(5) \"after\"\nbool(false)\nstring(7) \"missing\"\n"
+    );
+}
+
+/// A closure created after the unset captures the detached local, not the removed global.
+#[test]
+fn test_global_alias_detach_closure_capture() {
+    let out = compile_and_run(
+        r#"<?php
+function captureDetached(): void {
+    global $x;
+    $x = "inner";
+    unset($GLOBALS["x"]);
+    $read = function () use ($x): string { return $x; };
+    $x = "after";
+    echo $read(), "|", $x, "|", isset($GLOBALS["x"]) ? "set" : "unset";
+}
+captureDetached();
+"#,
+    );
+    assert_eq!(out, "inner|after|unset");
+}

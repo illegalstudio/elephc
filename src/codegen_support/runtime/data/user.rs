@@ -50,8 +50,23 @@ fn emit_class_native_xml_table(
 
 /// Returns whether a declared property is compiler storage hidden from PHP enumeration.
 fn class_property_is_hidden(class_name: &str, property: &str) -> bool {
-    elephc_builtin_contract::lookup_class(class_name)
-        .is_some_and(|class| class.property_is_hidden(property))
+    is_uri_opaque_handle(class_name, property)
+        || elephc_builtin_contract::lookup_class(class_name)
+            .is_some_and(|class| class.property_is_hidden(property))
+}
+
+/// Returns whether `declaring_class::$prop_name` is the URI prelude's opaque native handle slot.
+///
+/// PHP's internal `Uri\Rfc3986\Uri` and `Uri\WhatWg\Url` expose no properties. The prelude
+/// keeps the bridge handle in this private slot, so every property walker omits it while the
+/// prelude itself can still read and write it. The check is gated on the DECLARING class:
+/// a user class may legitimately declare its own property with that name.
+pub(crate) fn is_uri_opaque_handle(declaring_class: &str, prop_name: &str) -> bool {
+    prop_name == "__elephc_uri_handle"
+        && matches!(
+            crate::names::php_symbol_key(declaring_class.trim_start_matches('\\')).as_str(),
+            "uri\\rfc3986\\uri" | "uri\\whatwg\\url"
+        )
 }
 
 
@@ -197,7 +212,7 @@ pub(crate) fn emit_runtime_data_user(
     emit_callable_function_data(&mut out, functions, function_variant_groups);
     out.push_str(".p2align 3\n");
     super::instanceof::emit_instanceof_target_lookup_data(&mut out, &sorted_interfaces, &sorted_classes);
-    emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id);
+    emit_class_name_lookup_data(&mut out, max_class_id, &class_name_by_id, &class_info_by_id);
     super::throwable_previous::emit_previous_slots(&mut out, max_class_id, &class_info_by_id);
     emit_class_native_xml_table(&mut out, max_class_id, &class_name_by_id, classes);
     let weak_map_retire = classes.get("WeakMap")
@@ -1966,6 +1981,7 @@ fn emit_class_name_lookup_data(
     out: &mut String,
     max_class_id: Option<u64>,
     class_name_by_id: &HashMap<u64, &String>,
+    class_info_by_id: &HashMap<u64, &ClassInfo>,
 ) {
     out.push_str(".p2align 3\n");
     out.push_str(".globl _class_name_count\n_class_name_count:\n");
@@ -1999,7 +2015,61 @@ fn emit_class_name_lookup_data(
             out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(class_name)));
         }
     }
+
+    // -- PHP's debug spelling for get_debug_type(): an anonymous class uses its parent
+    //    (or first declared interface) as the prefix instead of elephc's synthetic
+    //    `class@anonymous#N` identity.
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _class_debug_name_entries\n_class_debug_name_entries:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let Some(class_name) = class_name_by_id.get(&class_id) else {
+                out.push_str("    .quad _class_name_missing\n    .quad 0\n");
+                continue;
+            };
+            let debug_name = debug_class_name(class_name, class_info_by_id.get(&class_id).copied());
+            if debug_name == **class_name {
+                out.push_str(&format!("    .quad _class_name_{}\n", class_id));
+            } else {
+                out.push_str(&format!("    .quad _class_debug_name_{}\n", class_id));
+            }
+            out.push_str(&format!("    .quad {}\n", debug_name.len()));
+        }
+    }
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let Some(class_name) = class_name_by_id.get(&class_id) else {
+                continue;
+            };
+            let debug_name = debug_class_name(class_name, class_info_by_id.get(&class_id).copied());
+            if debug_name == **class_name {
+                continue;
+            }
+            out.push_str(&format!(
+                ".globl _class_debug_name_{0}\n_class_debug_name_{0}:\n",
+                class_id
+            ));
+            out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(&debug_name)));
+        }
+    }
     out.push_str("    .p2align 3\n");
+}
+
+/// Returns PHP's `get_debug_type()` name for a class: anonymous classes use the parent,
+/// then the first declared interface, then the bare `class@anonymous` spelling.
+fn debug_class_name(class_name: &str, class_info: Option<&ClassInfo>) -> String {
+    if !crate::parser::is_anonymous_class_name(class_name) {
+        return class_name.to_string();
+    }
+    if let Some(class_info) = class_info {
+        if let Some(parent) = class_info.parent.as_deref() {
+            return format!("{}@anonymous", parent.trim_start_matches('\\'));
+        }
+        if let Some(interface) = class_info.declared_interfaces.first() {
+            return format!("{}@anonymous", interface.trim_start_matches('\\'));
+        }
+    }
+    "class@anonymous".to_string()
 }
 
 /// Emits a compact `(name_ptr, name_len)` table for runtime class-like name probes.
@@ -3986,7 +4056,9 @@ fn var_dump_descriptor_rows(
                 );
                 // Resolve the physical slot before filtering: a user property can shadow an
                 // inherited Reflection backing name without exposing the backing slot itself.
-                if is_reflection_backing_slot(metadata, owner_name, &prop_name) {
+                if is_reflection_backing_slot(metadata, owner_name, &prop_name)
+                    || is_uri_opaque_handle(owner_name, &prop_name)
+                {
                     return None;
                 }
                 Some(VarDumpRow {
@@ -4013,7 +4085,9 @@ fn var_dump_descriptor_rows(
             let (metadata, owner_name) = physical_property_slot_metadata(
                 classes, class_info, class_name, layout_index, prop_name,
             );
-            if is_reflection_backing_slot(metadata, owner_name, prop_name) {
+            if is_reflection_backing_slot(metadata, owner_name, prop_name)
+                || is_uri_opaque_handle(owner_name, prop_name)
+            {
                 return None;
             }
             Some(VarDumpRow {

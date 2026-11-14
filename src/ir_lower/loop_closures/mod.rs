@@ -41,6 +41,13 @@ pub(crate) fn begin_loop_closure_facts(
     body: &[Stmt],
     new_direct_path: bool,
 ) -> HashMap<String, StaticCallableBinding> {
+    // An `eval` in the body can replace any caller local before the next iteration. The
+    // loop body is lowered once, so widen the locals BEFORE their loads are typed: widening
+    // only at the eval site leaves the already-emitted callable load reading a Mixed cell on
+    // the next iteration.
+    if crate::ir_lower::body_contains_eval_call(body) {
+        ctx.apply_eval_barrier();
+    }
     let original = ctx.static_callable_locals_snapshot();
     let mut facts = original.clone();
     facts.retain(|local, binding| {

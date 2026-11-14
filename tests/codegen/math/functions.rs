@@ -240,7 +240,7 @@ fn test_clamp_string_comparison() {
 /// Verifies clamp() participates in case-insensitive lookup, namespace fallback, function_exists(), and first-class callable syntax.
 #[test]
 fn test_clamp_lookup_and_first_class_callable() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_php_version(
         r#"<?php
 namespace Demo;
 echo function_exists("ClAmP") ? "1" : "0";
@@ -250,6 +250,7 @@ echo ":";
 $clamp = clamp(...);
 echo $clamp(-1, 0, 10);
 "#,
+        elephc::php_version::PhpVersion::Php86,
     );
     assert_eq!(out, "1:10:0");
 }

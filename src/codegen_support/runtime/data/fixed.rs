@@ -72,6 +72,20 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".data\n");
     out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
     out.push_str(&comm_directive("_concat_buf", heap_size.max(65_536), target));
+    for name in [
+        "__elephc_stream_read_count",
+        "__elephc_stream_read_excess",
+        "__elephc_stream_read_class",
+        "__elephc_stream_read_missing",
+        "__elephc_stream_cast_count",
+        "__elephc_stream_cast_class",
+        "__elephc_stream_write_returned",
+        "__elephc_stream_write_requested",
+        "__elephc_stream_write_missing",
+        "__elephc_stream_write_class",
+    ] {
+        out.push_str(&comm_directive(&crate::names::ir_global_symbol(name), 8, target));
+    }
     out.push_str(&comm_directive("_concat_off", 8, target));
     out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
     // User boundary code reads this value from its linked runtime, including cached objects.
@@ -980,6 +994,7 @@ pub(crate) fn emit_runtime_data_fixed(
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _diag_define_already_defined_msg\n_diag_define_already_defined_msg:\n    .ascii \"Warning: define(): Constant already defined\\n\"\n");
+    out.push_str(".globl _diag_undefined_global_prefix\n_diag_undefined_global_prefix:\n    .ascii \"Warning: Undefined global variable $\"\n");
     out.push_str(".globl _diag_undefined_array_key_prefix\n_diag_undefined_array_key_prefix:\n    .ascii \"Warning: Undefined array key \"\n");
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
@@ -1089,24 +1104,24 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".p2align 3\n.globl _cstr_cap\n_cstr_cap:\n    .quad 4096\n");
     out.push_str(".p2align 3\n.globl _cstr2_base\n_cstr2_base:\n    .quad _cstr_buf2\n");
     out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
-    out.push_str(&comm_directive("_eof_flags", 256, target));
-    out.push_str(&comm_directive("_popen_files", 2048, target));
-    out.push_str(&comm_directive("_dir_handles", 2048, target));
-    // Per-fd glob:// state pointers (256 fds × 8B). Each slot is a pointer to
+    out.push_str(&comm_directive("_eof_flags", 1024, target));
+    out.push_str(&comm_directive("_popen_files", 8192, target));
+    out.push_str(&comm_directive("_dir_handles", 8192, target));
+    // Per-fd glob:// state pointers (1024 fds × 8B). Each slot is a pointer to
     // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
     // libc glob_t whose lifetime globfree() needs at closedir time). The
     // readdir/closedir/rewinddir helpers probe this table first; a non-zero
     // entry routes them through the glob iterator instead of the libc DIR*.
-    out.push_str(&comm_directive("_glob_handles", 2048, target));
-    out.push_str(&comm_directive("_stream_read_filters", 256, target));
-    out.push_str(&comm_directive("_stream_write_filters", 256, target));
+    out.push_str(&comm_directive("_glob_handles", 8192, target));
+    out.push_str(&comm_directive("_stream_read_filters", 1024, target));
+    out.push_str(&comm_directive("_stream_write_filters", 1024, target));
     out.push_str(&comm_directive("_stream_filter_buf", 65536, target));
     // 64KB scratch used by length-growing stream filters (convert.base64-encode,
     // convert.quoted-printable-encode). The filter encodes into the scratch and
     // then memcpy()s back into the caller's buffer, capping input at 49152 bytes
     // so the 4/3 base64 expansion still fits the scratch.
     out.push_str(&comm_directive("_stream_grow_scratch", 65536, target));
-    out.push_str(&comm_directive("_zstream_handles", 2048, target));
+    out.push_str(&comm_directive("_zstream_handles", 8192, target));
     out.push_str(&comm_directive("_zlib_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_zlib_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_zlib_inflate_init2_fn", 8, target));
@@ -1116,21 +1131,21 @@ pub(crate) fn emit_runtime_data_fixed(
     // bzip2.compress write-filter state: per-fd bz_stream pointer table
     // (_bzstream_handles, indexed by fd) plus the indirect fn-pointer slots the
     // shared runtime calls through so non-bzip2 programs never link -lbz2.
-    out.push_str(&comm_directive("_bzstream_handles", 2048, target));
+    out.push_str(&comm_directive("_bzstream_handles", 8192, target));
     out.push_str(&comm_directive("_bz2_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_bz2_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_bz2_decompress_fn", 8, target));
     // convert.iconv.* WRITE-filter state: per-fd iconv_t descriptor table
     // (_iconv_handles) plus the indirect fn-pointer slots the shared runtime
     // calls through so it never names libc iconv (which needs -liconv on macOS).
-    out.push_str(&comm_directive("_iconv_handles", 2048, target));
+    out.push_str(&comm_directive("_iconv_handles", 8192, target));
     out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_iconv_close_fn", 8, target));
     // Apple iconv shares //TRANSLIT and //IGNORE per charset pair, so Apple targets record
-    // each write filter's own option bits per fd (256 fds x 1B) for the fwrite helper to
+    // each write filter's own option bits per fd (1024 fds x 1B) for the fwrite helper to
     // restore before converting; glibc keeps them per descriptor and needs no table.
     if target.platform == Platform::MacOS {
-        out.push_str(&comm_directive("_iconv_write_options", 256, target));
+        out.push_str(&comm_directive("_iconv_write_options", 1024, target));
     }
     out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
     out.push_str(&comm_directive("_ftp_data_addr", 64, target));
@@ -1343,18 +1358,18 @@ pub(crate) fn emit_runtime_data_fixed(
     // fd up to 256; the runtime fread/fwrite/fclose paths consult this
     // table and route through the elephc-tls helpers when an entry is
     // non-zero, falling back to read/write/close syscalls otherwise.
-    out.push_str(&comm_directive("_tls_sessions", 2048, target));
+    out.push_str(&comm_directive("_tls_sessions", 8192, target));
     // _stream_chunk_size: per-fd read/write chunk size set by
     // stream_set_chunk_size, indexed by raw fd up to 256 (8 bytes each). A zero
     // entry means "unset" and reports PHP's default of 8192. stream_set_chunk_size
     // returns the previous value (the PHP-observable contract); the size does not
     // currently change read granularity (reads return identical data).
-    out.push_str(&comm_directive("_stream_chunk_size", 2048, target));
+    out.push_str(&comm_directive("_stream_chunk_size", 8192, target));
     // _stream_connect_host: per-fd transport host string (ptr, len) captured by
     // stream_socket_client so stream_socket_enable_crypto can default the TLS
     // SNI / peer-name to the connection host when no ssl.peer_name context
-    // option is set. 256 fds * 16 bytes (ptr + len). A zero len means "unset".
-    out.push_str(&comm_directive("_stream_connect_host", 4096, target));
+    // option is set. 1024 fds * 16 bytes (ptr + len). A zero len means "unset".
+    out.push_str(&comm_directive("_stream_connect_host", 16384, target));
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
     // stream_context_create / stream_context_set_params. __rt_http_open fires
@@ -1612,8 +1627,8 @@ pub(crate) fn emit_runtime_data_fixed(
     // _user_filter_instances: one wrapper-class instance per attached
     // filter, keyed by (fd, direction). Slot = _user_filter_instances[fd*2
     // + dir] where dir=0 is read, dir=1 is write. Slot is null when no
-    // user filter is attached. 256 fds × 2 dirs × 8 B = 4096 bytes.
-    out.push_str(&comm_directive("_user_filter_instances", 4096, target));
+    // user filter is attached. 1024 fds × 2 dirs × 8 B = 16384 bytes.
+    out.push_str(&comm_directive("_user_filter_instances", 16384, target));
     // _stream_context_options: pointer to the current stream-context
     // options hash (nested array of `wrapper => option => value`).
     // stream_context_create() stores its options arg here; consumers
@@ -1716,6 +1731,7 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _vd_enum_prefix\n_vd_enum_prefix:\n    .ascii \"enum(\"\n");
     out.push_str(".globl _vd_enum_sep\n_vd_enum_sep:\n    .ascii \"::\"\n");
     out.push_str(".globl _vd_enum_close\n_vd_enum_close:\n    .ascii \")\\n\"\n");
+    out.push_str(".globl _vd_enum_count_open\n_vd_enum_count_open:\n    .ascii \") (\"\n");
     out.push_str(".globl _pr_spaces\n_pr_spaces:\n    .ascii \"                                                                \"\n");
     out.push_str(".globl _ftp_user_cmd\n_ftp_user_cmd:\n    .ascii \"USER anonymous\\x0d\\n\"\n");
     out.push_str(".globl _ftp_pass_cmd\n_ftp_pass_cmd:\n    .ascii \"PASS anonymous@\\x0d\\n\"\n");
@@ -1853,6 +1869,15 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _stat_key_gid\n_stat_key_gid:\n    .ascii \"gid\"\n");
     out.push_str(".globl _stat_key_rdev\n_stat_key_rdev:\n    .ascii \"rdev\"\n");
     out.push_str(".globl _stat_key_size\n_stat_key_size:\n    .ascii \"size\"\n");
+    out.push_str(".globl _uwrw_prefix\n_uwrw_prefix:\n    .ascii \"Warning: fread(): \"\n");
+    out.push_str(".globl _uwrw_after_class\n_uwrw_after_class:\n    .ascii \"::stream_read - read \"\n");
+    out.push_str(".globl _uwrw_after_excess\n_uwrw_after_excess:\n    .ascii \" bytes more data than requested (\"\n");
+    out.push_str(".globl _uwrw_after_total\n_uwrw_after_total:\n    .ascii \" read, 8192 max) - excess data will be lost\\n\"\n");
+    out.push_str(".globl _php_memory_url\n_php_memory_url:\n    .ascii \"php://memory\"\n");
+    out.push_str(".globl _php_temp_url\n_php_temp_url:\n    .ascii \"php://temp\"\n");
+    out.push_str(".globl _php_stdin_url\n_php_stdin_url:\n    .ascii \"php://stdin\"\n");
+    out.push_str(".globl _php_stdout_url\n_php_stdout_url:\n    .ascii \"php://stdout\"\n");
+    out.push_str(".globl _php_stderr_url\n_php_stderr_url:\n    .ascii \"php://stderr\"\n");
     out.push_str(".globl _stat_key_atime\n_stat_key_atime:\n    .ascii \"atime\"\n");
     out.push_str(".globl _stat_key_mtime\n_stat_key_mtime:\n    .ascii \"mtime\"\n");
     out.push_str(".globl _stat_key_ctime\n_stat_key_ctime:\n    .ascii \"ctime\"\n");
@@ -1892,6 +1917,10 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _meta_key_uri\n_meta_key_uri:\n    .ascii \"uri\"\n");
     out.push_str(".globl _meta_stype_stdio\n_meta_stype_stdio:\n    .ascii \"STDIO\"\n");
     out.push_str(".globl _meta_stype_socket\n_meta_stype_socket:\n    .ascii \"tcp_socket\"\n");
+    out.push_str(".globl _meta_stype_user_space\n_meta_stype_user_space:\n    .ascii \"user-space\"\n");
+    out.push_str(".globl _stream_select_fd_limit_prefix\n_stream_select_fd_limit_prefix:\n    .ascii \"stream_select(): You MUST recompile PHP with a larger value of FD_SETSIZE.\\nIt is set to 1024, but you have descriptors numbered at least as high as \"\n");
+    out.push_str(".globl _stream_select_fd_limit_middle\n_stream_select_fd_limit_middle:\n    .ascii \".\\n --enable-fd-setsize=\"\n");
+    out.push_str(".globl _stream_select_fd_limit_suffix\n_stream_select_fd_limit_suffix:\n    .ascii \" is recommended, but you may want to set it\\nto equal the maximum number of open files supported by your system,\\nin order to avoid seeing this error again at a later date.\\n\"\n");
     out.push_str(".globl _meta_wrapper_plainfile\n_meta_wrapper_plainfile:\n    .ascii \"plainfile\"\n");
     out.push_str(".globl _meta_mode_r\n_meta_mode_r:\n    .ascii \"r\"\n");
     out.push_str(".globl _meta_mode_w\n_meta_mode_w:\n    .ascii \"w\"\n");

@@ -774,15 +774,28 @@ fn type_expr(ty: &TypeExpr) -> String {
 }
 
 /// A C type in an `extern` block.
-fn c_type(ty: &CType) -> &'static str {
+fn c_type(ty: &CType) -> String {
     match ty {
-        CType::Int => "int",
-        CType::Float => "float",
-        CType::Str => "string",
-        CType::Bool => "bool",
-        CType::Void => "void",
-        CType::Ptr => "ptr",
-        other => panic!("print: unmodelled C type {:?}", other),
+        CType::Int => "int".to_string(),
+        CType::IntWidth(width) => match width {
+            crate::parser::ast::CIntWidth::I8 => "i8",
+            crate::parser::ast::CIntWidth::U8 => "u8",
+            crate::parser::ast::CIntWidth::I16 => "i16",
+            crate::parser::ast::CIntWidth::U16 => "u16",
+            crate::parser::ast::CIntWidth::I32 => "i32",
+            crate::parser::ast::CIntWidth::U32 => "u32",
+            crate::parser::ast::CIntWidth::U64 => "u64",
+        }
+        .to_string(),
+        CType::Float => "float".to_string(),
+        CType::F32 => "f32".to_string(),
+        CType::Str => "string".to_string(),
+        CType::NullableStr => "?string".to_string(),
+        CType::Bool => "bool".to_string(),
+        CType::Void => "void".to_string(),
+        CType::Ptr => "ptr".to_string(),
+        CType::TypedPtr(name) => format!("ptr<{name}>"),
+        CType::Callable => "callable".to_string(),
     }
 }
 
@@ -859,10 +872,11 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::StringLiteral(text) => (string_literal(text), ATOM),
         ExprKind::Variable(name) => (format!("${name}"), ATOM),
         ExprKind::ConstRef(name) => (name_source(name), ATOM),
-        ExprKind::PostIncrement(name) => (format!("${name}++"), ATOM),
         ExprKind::PreIncrement(name) => (format!("++${name}"), ATOM),
-        ExprKind::PostDecrement(name) => (format!("${name}--"), ATOM),
+        ExprKind::PostIncrement(name) => (format!("${name}++"), ATOM),
         ExprKind::PreDecrement(name) => (format!("--${name}"), ATOM),
+        ExprKind::PostDecrement(name) => (format!("${name}--"), ATOM),
+        ExprKind::Clone(inner) => (format!("clone {}", at(inner, 85)), 85),
         ExprKind::Negate(inner) => (format!("-{}", at(inner, 85)), 85),
         ExprKind::Not(inner) => (format!("!{}", at(inner, 75)), 75),
         ExprKind::ErrorSuppress(inner) => (format!("@{}", at(inner, 35)), 35),
@@ -997,6 +1011,7 @@ fn render(value: &Expr) -> (String, u8) {
         ExprKind::Spread(value) => (format!("...{}", at(value, ATOM)), ATOM),
         ExprKind::Closure {
             params,
+            param_attributes,
             return_type,
             body,
             captures,
@@ -1024,7 +1039,7 @@ fn render(value: &Expr) -> (String, u8) {
             (
                 format!(
                     "function ({}){use_clause}{} {}",
-                    parameter_list(params, &[]),
+                    parameter_list(params, param_attributes),
                     return_hint(return_type),
                     block(body, 0)
                 ),

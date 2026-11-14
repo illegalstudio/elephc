@@ -630,7 +630,7 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
 /// `preg_match()` sees the removed `/e` modifier. Every real count is non-negative.
 /// The EIR result is a union, so its representation is a Mixed cell and the raw
 /// count must be boxed before storage.
-fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
+pub(crate) fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let false_label = ctx.next_label("preg_count_false");
     let done_label = ctx.next_label("preg_count_done");
     match ctx.emitter.target.arch {

@@ -36,6 +36,7 @@ mod eval_static_property_helpers;
 mod eval_status_helper;
 mod fibers;
 mod frame;
+mod global_lookup;
 mod function_variants;
 mod literal_defaults;
 mod literal_method_index;
@@ -556,6 +557,9 @@ fn finalize_user_asm(
     )
     .map_err(CodegenIrError::invalid_module)?;
 
+    if global_lookup::module_uses_dynamic_globals(module) {
+        global_lookup::emit_dynamic_global_lookup(module, &mut emitter, &mut data);
+    }
     let data_output = data.emit(module.target);
     let mut user_asm = emitter.output();
     if !data_output.is_empty() {

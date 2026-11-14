@@ -43,10 +43,6 @@
         "name": "buffer_ptr"
       },
       {
-        "area": "Math",
-        "name": "clamp"
-      },
-      {
         "area": "Class",
         "name": "class_attribute_args"
       },
@@ -57,10 +53,6 @@
       {
         "area": "Class",
         "name": "class_get_attributes"
-      },
-      {
-        "area": "String",
-        "name": "grapheme_strrev"
       },
       {
         "area": "Type",
@@ -187,7 +179,7 @@
   ],
   "coverage": {
     "classes": {
-      "have": 191,
+      "have": 200,
       "total": 329
     },
     "constants": {
@@ -195,7 +187,7 @@
       "total": 3181
     },
     "functions": {
-      "have": 1078,
+      "have": 1082,
       "total": 2169
     }
   },
@@ -1500,8 +1492,8 @@
       "docs": null,
       "extension": "standard",
       "functions": {
-        "eval": 351,
-        "have": 390,
+        "eval": 353,
+        "have": 394,
         "total": 545
       },
       "name": "standard",
@@ -1606,8 +1598,8 @@
     },
     {
       "classes": {
-        "eval": 0,
-        "have": 0,
+        "eval": 9,
+        "have": 9,
         "total": 9
       },
       "constants": null,
@@ -1742,6 +1734,38 @@
       {
         "name": "SortDirection",
         "since": "8.6"
+      },
+      {
+        "name": "Time\\Duration",
+        "since": "8.6"
+      },
+      {
+        "name": "Time\\TimeException",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\Rfc3986\\UriBuilder",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\Rfc3986\\UriHostType",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\Rfc3986\\UriType",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\WhatWg\\UrlBuilder",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\WhatWg\\UrlHostType",
+        "since": "8.6"
+      },
+      {
+        "name": "Uri\\WhatWg\\UrlPercentEncodingMode",
+        "since": "8.6"
       }
     ],
     "constants": [
@@ -1752,7 +1776,19 @@
     ],
     "functions": [
       {
+        "name": "clamp",
+        "since": "8.6"
+      },
+      {
+        "name": "grapheme_strrev",
+        "since": "8.6"
+      },
+      {
         "name": "mysqli_quote_string",
+        "since": "8.6"
+      },
+      {
+        "name": "url_percent_encode",
         "since": "8.6"
       }
     ]

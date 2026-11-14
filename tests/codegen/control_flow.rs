@@ -30,6 +30,28 @@ mod match_expressions;
 mod closures;
 #[path = "control_flow/guarded_reassignment.rs"]
 mod guarded_reassignment;
+
+/// A method local initialized to `null` and reassigned inside a conditional keeps the
+/// assignment after the merge instead of being lowered as a constant null.
+#[test]
+fn test_method_null_local_conditional_reassignment() {
+    let out = compile_and_run(
+        r#"<?php
+class B {
+    public function show(bool $set): void {
+        $x = null;
+        if ($set) { $x = "str"; }
+        echo $x === null ? "null" : $x, ",";
+    }
+}
+$b = new B();
+$b->show(true);
+$b->show(false);
+"#,
+    );
+    assert_eq!(out, "str,null,");
+}
+
 #[path = "control_flow/branch_join_locals.rs"]
 mod branch_join_locals;
 #[path = "control_flow/switch_initialization.rs"]

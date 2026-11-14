@@ -1051,3 +1051,67 @@ fn test_parse_byref_not_intersection() {
         other => panic!("Expected FunctionDecl, got {:?}", other),
     }
 }
+
+/// Verifies that PHP 8.6 `?` and trailing `...` argument placeholders parse into the transient
+/// sentinel expressions the partial-application desugaring pass consumes.
+#[test]
+fn test_parse_partial_application_placeholders() {
+    let stmts = parse_source("<?php foo(1, ?, c: ?, ...);");
+    let StmtKind::ExprStmt(expr) = &stmts[0].kind else {
+        panic!("Expected ExprStmt, got {:?}", stmts[0].kind);
+    };
+    let ExprKind::FunctionCall { args, .. } = &expr.kind else {
+        panic!("Expected FunctionCall, got {:?}", expr.kind);
+    };
+    assert_eq!(args.len(), 4);
+    assert!(matches!(&args[0].kind, ExprKind::IntLiteral(1)));
+    assert!(matches!(
+        &args[1].kind,
+        ExprKind::Variable(name) if name == "__elephc_pfa_placeholder"
+    ));
+    match &args[2].kind {
+        ExprKind::NamedArg { name, value } => {
+            assert_eq!(name, "c");
+            assert!(matches!(
+                &value.kind,
+                ExprKind::Variable(variable) if variable == "__elephc_pfa_placeholder"
+            ));
+        }
+        other => panic!("Expected NamedArg, got {:?}", other),
+    }
+    match &args[3].kind {
+        ExprKind::Spread(inner) => assert!(matches!(
+            &inner.kind,
+            ExprKind::Variable(name) if name == "__elephc_pfa_variadic_placeholder"
+        )),
+        other => panic!("Expected Spread, got {:?}", other),
+    }
+}
+
+/// Verifies that a PHP 8.6 doc comment before a closure parameter is retained on the closure's
+/// synthetic parameter-attribute channel.
+#[test]
+fn test_parse_closure_parameter_doc_comment() {
+    let stmts = parse_source("<?php $f = function (/** doc */ int $a) {};");
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("Expected Assign, got {:?}", stmts[0].kind);
+    };
+    let ExprKind::Closure {
+        param_attributes, ..
+    } = &value.kind
+    else {
+        panic!("Expected Closure, got {:?}", value.kind);
+    };
+    let group = param_attributes[0]
+        .first()
+        .expect("closure parameter should carry the synthetic doc attribute");
+    let attribute = group
+        .attributes
+        .first()
+        .expect("synthetic doc attribute group should not be empty");
+    assert_eq!(attribute.name.as_str(), "__elephc_param_doc");
+    assert!(matches!(
+        &attribute.args.first().map(|arg| &arg.kind),
+        Some(ExprKind::StringLiteral(doc)) if doc == "/** doc */"
+    ));
+}

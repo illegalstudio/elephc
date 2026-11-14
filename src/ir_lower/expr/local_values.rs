@@ -15,6 +15,19 @@ use super::*;
 pub(super) fn lower_local_value(
     ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span,
 ) -> LoweredValue {
+    if name == "GLOBALS" {
+        return ctx.emit_owned_value(
+            Op::LoadGlobalsArray,
+            Vec::new(),
+            None,
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Mixed),
+            },
+            Op::LoadGlobalsArray.default_effects(),
+            Some(span),
+        );
+    }
     // A branch-local view must not reinterpret a two-word frame slot as a raw scalar.
     let checked = ctx.local_value_read_types.get(&(ctx.loop_storage_scope.clone(), span, name.to_string()));
     let boxed_read = checked == Some(&PhpType::Mixed);

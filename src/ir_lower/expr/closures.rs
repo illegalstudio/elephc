@@ -344,6 +344,14 @@ pub(super) fn lower_closure_with_context(
     let loop_storage_scope =
         crate::types::nested_loop_storage_scope(&ctx.loop_storage_scope, expr.span);
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
+    let variadic_type = match &expr.kind {
+        ExprKind::Closure { variadic_type, .. } => variadic_type.as_ref(),
+        _ => None,
+    };
+    let param_attributes = match &expr.kind {
+        ExprKind::Closure { param_attributes, .. } => param_attributes.as_slice(),
+        _ => &[],
+    };
     let source_is_generator = ctx.closure_generator_spans.contains(&expr.span);
     let hinted_param_types = if contextual_arg_types.is_empty() {
         crate::ir_lower::closure_param_hints::param_hints(expr.span)
@@ -358,8 +366,10 @@ pub(super) fn lower_closure_with_context(
             ctx,
             &name,
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             &capture_params,
@@ -375,8 +385,10 @@ pub(super) fn lower_closure_with_context(
             ctx,
             &name,
             params,
+            param_attributes,
             variadic,
             variadic_by_ref,
+            variadic_type,
             return_type,
             body,
             &capture_params,

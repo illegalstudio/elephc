@@ -326,6 +326,7 @@ pub(super) fn check_setter(
             )?;
             cx.checker.resolve_closure_signature_with_param_hints(
                 &params,
+                &[],
                 variadic,
                 *variadic_by_ref,
                 variadic_type,

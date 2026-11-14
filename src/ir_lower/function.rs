@@ -75,7 +75,22 @@ pub(crate) fn lower_main(
     let web = module.web;
     let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
     function.flags.is_main = true;
-    let all_global_var_names = collect_global_var_names(program);
+    let top_level_env = web_gated_global_env(&check_result.global_env, web);
+    let dynamic_global_candidates = crate::global_decls::dynamic_global_name_candidates(program);
+    let mut all_global_var_names = collect_global_var_names(program);
+    if let Some(candidates) = &dynamic_global_candidates {
+        all_global_var_names.extend(top_level_env.keys().cloned());
+        all_global_var_names.extend(candidates.iter().cloned());
+    }
+    if crate::global_decls::program_reads_globals_array(program) {
+        // The bare superglobal materializes every top-level binding, so each one must live in
+        // program-global storage even when no body declares it with `global`.
+        all_global_var_names.extend(top_level_env.keys().cloned());
+    }
+    for name in &all_global_var_names {
+        module.data.intern_global_name(name);
+    }
+    module.program_global_names = all_global_var_names.iter().cloned().collect();
     let mut function_global_names =
         crate::ir_lower::program::collect_function_global_names(program);
     crate::ir_lower::program::close_function_global_names_over_calls(
@@ -83,7 +98,6 @@ pub(crate) fn lower_main(
         &module.functions,
         &module.data.function_names,
     );
-    let top_level_env = web_gated_global_env(&check_result.global_env, web);
     let closures = lower_body_into_function(
         &mut function,
         None,
@@ -714,7 +728,7 @@ pub(crate) fn method_signature_from_ast(method: &ClassMethod) -> FunctionSig {
     if !method.variadic_by_ref {
         if let Some(variadic_type) = &method.variadic_type {
             if let Some((_, php_type)) = signature.params.last_mut() {
-                *php_type = type_expr_to_php_type(variadic_type);
+                *php_type = PhpType::Array(Box::new(type_expr_to_php_type(variadic_type)));
             }
             if let Some(declared) = signature.declared_params.last_mut() {
                 *declared = true;
@@ -1531,8 +1545,10 @@ pub(crate) fn lower_closure_function(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
     params: &AstParams,
+    param_attributes: &[Vec<crate::parser::ast::AttributeGroup>],
     variadic: Option<&str>,
     variadic_by_ref: bool,
+    variadic_type: Option<&TypeExpr>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -1545,8 +1561,10 @@ pub(crate) fn lower_closure_function(
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(
         params,
+        param_attributes,
         variadic,
         variadic_by_ref,
+        variadic_type,
         return_type,
         body,
         signature_captures,
@@ -1581,8 +1599,10 @@ pub(crate) fn lower_closure_function_with_context(
     parent: &mut LoweringContext<'_, '_>,
     name: &str,
     params: &AstParams,
+    param_attributes: &[Vec<crate::parser::ast::AttributeGroup>],
     variadic: Option<&str>,
     variadic_by_ref: bool,
+    variadic_type: Option<&TypeExpr>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -1597,8 +1617,10 @@ pub(crate) fn lower_closure_function_with_context(
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(
         params,
+        param_attributes,
         variadic,
         variadic_by_ref,
+        variadic_type,
         return_type,
         body,
         signature_captures,
@@ -2535,8 +2557,10 @@ fn signature_from_ast(params: &AstParams, return_type: Option<&TypeExpr>) -> Fun
 /// Builds an EIR closure signature and infers fallthrough-only closures as `void`.
 fn closure_signature_from_ast(
     params: &AstParams,
+    param_attributes: &[Vec<crate::parser::ast::AttributeGroup>],
     variadic: Option<&str>,
     variadic_by_ref: bool,
+    variadic_type: Option<&TypeExpr>,
     return_type: Option<&TypeExpr>,
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
@@ -2545,6 +2569,17 @@ fn closure_signature_from_ast(
 ) -> FunctionSig {
     let mut signature =
         signature_from_ast_with_variadic(params, return_type, variadic, variadic_by_ref);
+    signature.param_attributes = param_attributes.to_vec();
+    if !variadic_by_ref {
+        if let Some(variadic_type) = variadic_type {
+            if let Some((_, php_type)) = signature.params.last_mut() {
+                *php_type = PhpType::Array(Box::new(type_expr_to_php_type(variadic_type)));
+            }
+            if let Some(declared) = signature.declared_params.last_mut() {
+                *declared = true;
+            }
+        }
+    }
     let owner = ctx.current_class.as_deref();
     let parent = owner.and_then(|owner| ctx.classes.get(owner))
         .and_then(|class| class.parent.as_deref());

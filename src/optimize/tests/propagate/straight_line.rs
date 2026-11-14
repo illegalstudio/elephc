@@ -123,6 +123,7 @@ fn test_propagate_constants_stops_at_eval_barrier_in_closure_capture() {
     let closure = Expr::new(
         ExprKind::Closure {
             params: Vec::new(),
+            param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
             variadic_type: None,

@@ -197,6 +197,7 @@ its TLS 1.2/1.3 policy internally.
 | `stream_context_get_default()` | `stream_context_get_default(array $options = []): resource` | Return the default context resource. The optional arg is evaluated for side effects; v1 does not apply it. |
 | `stream_context_set_default()` | `stream_context_set_default(array $options): resource` | Return the default context resource. v1 evaluates `$options` for side effects but does not yet walk and persist the array; use `stream_context_set_option(stream_context_get_default(), ...)` when code needs options stored. |
 | `stream_context_set_option()` | `stream_context_set_option(resource $context, ...): bool` | Accepts PHP's two forms: `(ctx, options_array)` replaces the persisted options hash, while `(ctx, wrapper, option, value)` sets one nested option. In the four-arg form, values are stored as strings in v1. |
+| `stream_context_set_options()` | `stream_context_set_options(resource $context, array $options): bool` | Two-argument options-array form; keeps the same persisted options hash and per-context dispatch map as `stream_context_set_option()`. |
 | `stream_context_set_params()` | `stream_context_set_params(resource $context, array $params): bool` | Captures a literal `notification` closure or first-class callable into the global notification slot and returns `true`. |
 | `stream_context_get_options()` | `stream_context_get_options(resource $context): array` | Return the persisted options hash, or an empty hash when no context has been created. |
 | `stream_context_get_params()` | `stream_context_get_params(resource $context): array` | v1 stub: returns an empty associative array. |
@@ -255,7 +256,10 @@ milestones, `$message`, `$message_code`, and `$bytes_max` are deferred.
 
 `zlib.deflate` and `gzcompress()` use system `libz`. `bzip2.compress`,
 `bzip2.decompress`, and `compress.bzip2://` use `libbz2`. `convert.iconv.*`
-uses libc `iconv` and auto-links `-liconv` on macOS.
+uses libc `iconv` and auto-links `-liconv` on macOS. A `convert.iconv.<from>/<to>`
+name held in a variable splits at run time, including the `//TRANSLIT` and
+`//IGNORE` target suffixes; the parsed options drive the same per-descriptor
+restore the literal filter uses on Apple targets.
 
 Compression filter params can be a bare integer or a literal array. `zlib.deflate`
 reads `level` (`-1..9`). `bzip2.compress` reads `blocks` (`1..9`) and `work`
@@ -325,7 +329,7 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 | `pfsockopen()` | `pfsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): resource\|false` | Alias of `fsockopen()`; persistent connections are not meaningful for standalone native binaries. |
 | `stream_set_blocking()` | `stream_set_blocking($stream, bool $enable): bool` | Toggle `O_NONBLOCK`. Non-blocking read misses return an empty `fread()` result or `false` from `fgetc()`/`fgets()` without setting EOF. User wrappers route through `stream_set_option(STREAM_OPTION_BLOCKING, ...)`. |
 | `stream_set_timeout()` | `stream_set_timeout($stream, int $seconds, int $microseconds = 0): bool` | Set `SO_RCVTIMEO` on socket streams. User wrappers route through `stream_set_option(STREAM_OPTION_READ_TIMEOUT, ...)`. |
-| `stream_select()` | `stream_select(array &$read, array &$write, array &$except, int $seconds, int $microseconds = 0): int` | Wait until stream arrays are ready and rewrite each array to its ready subset. Word-0 only: descriptors must be `0..63`. User wrappers are selectable when `stream_cast(STREAM_CAST_FOR_SELECT)` returns a real stream resource. |
+| `stream_select()` | `stream_select(array &$read, array &$write, array &$except, int $seconds, int $microseconds = 0, mixed $context = null): int\|false` | Wait until stream arrays are ready and rewrite each array to its ready subset. Descriptors `0..1023` (`FD_SETSIZE`) are selectable. A higher descriptor emits PHP's `You MUST recompile PHP with a larger value of FD_SETSIZE` warning once and the call returns `false` without waiting. User wrappers are selectable when `stream_cast(STREAM_CAST_FOR_SELECT)` returns a real stream resource. |
 | `stream_socket_shutdown()` | `stream_socket_shutdown($stream, int $mode): bool` | Shut down socket reads (`0`), writes (`1`), or both (`2`). |
 | `stream_socket_sendto()` | `stream_socket_sendto($socket, string $data, int $flags = 0, string $address = ""): int\|false` | Send bytes to the connected peer or to an explicit datagram address. |
 | `stream_socket_recvfrom()` | `stream_socket_recvfrom($socket, int $length, int $flags = 0, string &$address = ""): string\|false` | Receive bytes and optionally write back the sender address as `host:port`. |
@@ -344,6 +348,46 @@ Directory handles are stream resources too. `opendir()`, `readdir()`,
 [System & I/O](system-and-io.md). Registered userspace wrappers can implement
 `dir_opendir`, `dir_readdir`, `dir_rewinddir`, and `dir_closedir`; the `glob://`
 wrapper exposes glob matches through the same directory-stream API.
+
+## Stream error handling (PHP 8.6)
+
+PHP 8.6 adds a structured stream error surface. elephc implements it for `fopen()`:
+
+```php
+<?php
+$context = stream_context_create([
+    'stream' => [
+        'error_mode' => StreamErrorMode::Exception,
+    ],
+]);
+
+try {
+    fopen('/nonexistent', 'r', false, $context);
+} catch (StreamException $e) {
+    $error = $e->getErrors()[0];
+    echo $error->code->name, ': ', $error->message; // OpenFailed: ...
+}
+```
+
+| Surface | Behavior |
+|---|---|
+| `StreamErrorMode` | `Error` (default, warning), `Exception` (throw `StreamException` for a terminating failure), `Silent` (no warning). |
+| `StreamErrorStore` | `Auto`, `None`, `NonTerminating`, `Terminating`, `All`. `Auto` stores terminating errors in `Silent` mode and non-terminating errors in `Exception` mode. |
+| `StreamError` | Final readonly value with `code`, `message`, `wrapperName`, `severity`, and `terminating`. |
+| `StreamException` | Extends `Exception`; `getErrors()` returns the operation's `StreamError` objects; the first error supplies the message and code 21. |
+| `stream_last_errors()` | Returns the errors stored by the most recent stream operation. |
+| `stream_clear_errors()` | Clears that list. |
+| `error_handler` context option | Callable invoked with the operation's error array, regardless of the error mode. |
+
+The `stream.error_mode`, `stream.error_store`, and `stream.error_handler` options are read from
+the active stream context. Setting any of them through `stream_context_set_default()` raises
+`ValueError`. An option of the wrong type raises `TypeError` when a stream operation reads it.
+`StreamErrorCode` contains the upstream case list.
+
+Only `fopen()` is wrapped in this pass. Other stream operations keep their PHP 8.5 warning
+behavior, and user-stream-wrapper multi-error reporting (for example
+`stream_select()`'s cast errors or an over-reading `stream_read()`) is not accumulated yet.
+`stream_select()` accepts its new optional sixth `$context` argument, but ignores it.
 
 ## Stream metadata and introspection
 

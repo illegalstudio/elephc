@@ -187,7 +187,7 @@ pub(crate) fn lower_stream_is_local(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::super::ensure_arg_count(inst, "stream_is_local", 1)?;
+    super::super::ensure_arg_count_between(inst, "stream_is_local", 1, 2)?;
     let stream = expect_operand(inst, 0)?;
     ctx.load_value_to_result(stream)?;
     emit_bool_result(ctx, true);

@@ -65,9 +65,156 @@ pub(crate) fn lower_stream_filter_attach(
         if let Some(id) = stream_filter_id(&filter_name) {
             return lower_builtin_stream_filter_attach(ctx, inst, id);
         }
+        // A constant name that reached none of the inline shapes is a user filter; it must not
+        // take the run-time arm, which would emit the iconv sequence (and its libc symbols)
+        // for a name the split helper can never match.
         return lower_user_stream_filter_attach(ctx, inst);
     }
-    super::filter_dispatch::lower_dynamic_filter_attach(ctx, inst)
+    let done_label = ctx.next_label("filter_dyn_done");
+    lower_dynamic_iconv_filter_attach(ctx, inst, filter, &done_label)?;
+    super::filter_dispatch::lower_dynamic_filter_attach(ctx, inst)?;
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Lowers a `stream_filter_append()` whose `$filter_name` is only known at run time.
+///
+/// A literal `convert.iconv.<from>/<to>` splits during lowering, but a name carried in a
+/// variable has no spec to split at compile time. The same attach sequence is emitted against
+/// two program-local buffers, which `__rt_iconv_spec_split` fills just before the attach runs.
+/// A name without the `convert.iconv.` prefix falls through to the user-filter registry, and so
+/// does one with no `/` separator, matching PHP's `false` for those names.
+fn lower_dynamic_iconv_filter_attach(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    filter: ValueId,
+    done_label: &str,
+) -> Result<()> {
+    use crate::codegen_support::runtime::ICONV_SPEC_BUFFER_BYTES;
+
+    let next_label = ctx.next_label("iconv_dyn_next");
+    // Comm buffers are real symbols, not assembler-local labels: `.private_extern` rejects the
+    // target's local label prefix, so reserve IDs from the shared counter and name them here.
+    let from_symbol = format!("_eir_iconv_dyn_from_{}", ctx.shared.next_label_id());
+    let to_symbol = format!("_eir_iconv_dyn_to_{}", ctx.shared.next_label_id());
+    ctx.data
+        .add_comm(from_symbol.clone(), ICONV_SPEC_BUFFER_BYTES);
+    ctx.data.add_comm(to_symbol.clone(), ICONV_SPEC_BUFFER_BYTES);
+
+    // Slots: [0] = target option bits, [8] = the raw stream descriptor.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    let stream = expect_operand(inst, 0)?;
+    load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x0", 8);
+            load_string_to_result(ctx, filter, "stream_filter_append name")?;
+            ctx.emitter.instruction("mov x0, x1");                              // the run-time name pointer
+            ctx.emitter.instruction("mov x1, x2");                              // and its byte length
+            abi::emit_symbol_address(ctx.emitter, "x2", &from_symbol);
+            abi::emit_symbol_address(ctx.emitter, "x3", &to_symbol);
+            abi::emit_call_label(ctx.emitter, "__rt_iconv_spec_split");
+            ctx.emitter.instruction(&format!("cbz x0, {next_label}"));          // not an iconv name: try the rest
+            abi::emit_store_to_sp(ctx.emitter, "x1", 0);                        // save the target option bits
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 8);          // reload the stream descriptor
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rax", 8);
+            load_string_to_result(ctx, filter, "stream_filter_append name")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // the run-time name pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // and its byte length
+            ctx.emitter.instruction(&format!("lea rdx, [rip + {from_symbol}]")); // the from-charset buffer
+            ctx.emitter.instruction(&format!("lea rcx, [rip + {to_symbol}]"));  // the to-charset buffer
+            abi::emit_call_label(ctx.emitter, "__rt_iconv_spec_split");
+            ctx.emitter.instruction("test rax, rax");                           // is this an iconv filter name?
+            ctx.emitter.instruction(&format!("jz {next_label}"));               // no: try the user-filter path
+            abi::emit_store_to_sp(ctx.emitter, "rdx", 0);                       // save the target option bits
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 8);         // reload the stream descriptor
+        }
+    }
+    emit_iconv_transform_with_runtime_bits(ctx, inst, &from_symbol, &to_symbol, 0, 8)?;
+    store_if_result(ctx, inst)?;
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {done_label}")),   // skip the user-filter fallback
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {done_label}")),  // skip the user-filter fallback
+    }
+    ctx.emitter.label(&next_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
+}
+
+/// Picks the read or write transcoder from `$mode` for the dynamic-name attach.
+///
+/// The write branch records the option bits the split helper parsed, because the attach
+/// sequence is shared with the literal path and writes zero there. `bits_slot` and `fd_slot`
+/// address the caller's reserved temporary stack.
+fn emit_iconv_transform_with_runtime_bits(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    from_sym: &str,
+    to_sym: &str,
+    bits_slot: usize,
+    fd_slot: usize,
+) -> Result<()> {
+    let write_label = ctx.next_label("iconv_dyn_write");
+    let after_label = ctx.next_label("iconv_dyn_mode_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // preserve the descriptor across mode evaluation
+            materialize_stream_filter_mode(ctx, inst)?;
+            ctx.emitter.instruction("mov x9, x0");                              // hold the selected stream-filter mode
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the stream descriptor
+            ctx.emitter.instruction("cmp x9, #2");                              // test for STREAM_FILTER_WRITE-only mode
+            ctx.emitter.instruction(&format!("b.eq {write_label}"));            // install the streaming write transcoder
+            emit_iconv_read_transform_for_current_fd(ctx, from_sym, to_sym);
+            ctx.emitter.instruction(&format!("b {after_label}"));               // skip the write-filter attach path
+            ctx.emitter.label(&write_label);
+            emit_iconv_write_transform_for_current_fd(ctx, from_sym, to_sym, 0);
+            if ctx.emitter.target.platform == crate::codegen_support::platform::Platform::MacOS {
+                let option_skip = ctx.next_label("iconv_dyn_option_skip");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x11", fd_slot);
+                ctx.emitter.instruction("cmp x11, #1024");                      // is the descriptor inside the option table?
+                ctx.emitter.instruction(&format!("b.hs {option_skip}"));        // out of range: leave the table untouched
+                abi::emit_symbol_address(ctx.emitter, "x9", "_iconv_handles");
+                ctx.emitter.instruction("ldr x10, [x9, x11, lsl #3]");          // did the attach actually install a converter?
+                ctx.emitter.instruction(&format!("cbz x10, {option_skip}"));    // no converter: do not record options
+                abi::emit_symbol_address(ctx.emitter, "x9", "_iconv_write_options");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", bits_slot);
+                ctx.emitter.instruction("strb w10, [x9, x11]");                 // record the run-time option bits
+                ctx.emitter.label(&option_skip);
+            }
+            ctx.emitter.label(&after_label);
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            materialize_stream_filter_mode(ctx, inst)?;
+            ctx.emitter.instruction("mov r9, rax");                             // hold the selected stream-filter mode
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("cmp r9, 2");                               // test for STREAM_FILTER_WRITE-only mode
+            ctx.emitter.instruction(&format!("je {write_label}"));              // install the streaming write transcoder
+            emit_iconv_read_transform_for_current_fd(ctx, from_sym, to_sym);
+            ctx.emitter.instruction(&format!("jmp {after_label}"));             // skip the write-filter attach path
+            ctx.emitter.label(&write_label);
+            emit_iconv_write_transform_for_current_fd(ctx, from_sym, to_sym, 0);
+            if ctx.emitter.target.platform == crate::codegen_support::platform::Platform::MacOS {
+                let option_skip = ctx.next_label("iconv_dyn_option_skip");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "r11", fd_slot);
+                ctx.emitter.instruction("cmp r11, 1024");                       // is the descriptor inside the option table?
+                ctx.emitter.instruction(&format!("jae {option_skip}"));         // out of range: leave the table untouched
+                abi::emit_symbol_address(ctx.emitter, "r9", "_iconv_handles");
+                ctx.emitter.instruction("mov r10, QWORD PTR [r9 + r11*8]");     // did the attach actually install a converter?
+                ctx.emitter.instruction("test r10, r10");                       // no converter => do not record options
+                ctx.emitter.instruction(&format!("jz {option_skip}"));          // skip the option write
+                abi::emit_symbol_address(ctx.emitter, "r9", "_iconv_write_options");
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", bits_slot);
+                ctx.emitter.instruction("mov BYTE PTR [r9 + r11], r10b");       // record the run-time option bits
+                ctx.emitter.label(&option_skip);
+            }
+            ctx.emitter.label(&after_label);
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `stream_filter_append($stream, "zlib.deflate", ...)`.
@@ -425,6 +572,7 @@ pub(super) fn emit_iconv_write_transform_for_current_fd(
         ctx.next_label("iconv_w_after_write"),
         ctx.next_label("iconv_w_done"),
         ctx.next_label("iconv_w_skip_store"),
+        ctx.next_label("iconv_w_store_handle"),
     ];
     let mut labels = labels.into_iter();
     crate::codegen::stream_filters::iconv_write::emit_iconv_write_attach_with_labels(
