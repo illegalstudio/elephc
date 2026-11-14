@@ -74,6 +74,8 @@ pub enum BuiltinValidation {
     Shared(ValidateFn),
     /// Shares explicit cast identity with original-source evidence and full checker validation.
     ExplicitNumericCast(elephc_semantics::numeric_cast::NumericCastTarget),
+    /// Preserves the original GMP integer source before native operand normalization.
+    GmpIntegerCast,
 }
 
 /// Describes the single authoritative return-type resolver for a builtin.

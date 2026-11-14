@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 66 (this commit), following `309bdac54b`. Issue:
+Verified through step 67 (this commit), following `6c74bdaaed`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 66.
+This progress ledger condenses verified implementation through step 67.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -591,8 +591,7 @@ compiler build, architecture gate, assembly comment checks and diff hygiene.
    callbacks, descriptors, reflection and eval re-entry. Complete checked explicit
    casts with range/domain errors, exact strings and native object cast contracts.
    Original GMP and SimpleXML cast projections are now checked. Before Casts
-   admission, finish original-source proofs for registered gmp_intval, settype
-   target domains and host callbacks. Runtime gmp_intval range guards and broad
+   admission, finish settype target domains and host callbacks. Runtime gmp_intval range guards and broad
    object/interface consumers now share reviewed checked paths. Internal
    implementation helpers must not bypass public contracts.
 3. Finish stable Locals bindings across promotion, parameters, captures, globals,
@@ -646,6 +645,24 @@ strict_types error priority. Two existing GMP contract tests, compiler/test-targ
 builds, full builtin-docs regeneration/audits, example syntax, assembly comments
 and diff hygiene pass. Generated metadata is unchanged. Original-source folding
 proofs and complete host admission remain part of the outstanding Casts audit.
+
+### Original public GMP source proof
+
+Step67 adds a neutral conservative proof for canonical decimal GMP integer
+sources and original weak floats. A dedicated builtin semantic descriptor marker
+joins that proof to the original-source argument planner before folding. Known
+decimal range loss and invalid scalar kinds are diagnosed through declaration
+aliases, named/static spread arguments, removed branches, defaults and literal
+eval. Proven integer results participate in independently enabled Overflow proof.
+PHP strict_types domain rejection has priority, and Internal/source declaration
+shadowing retain their existing contract. Native radix, whitespace and other
+unfamiliar spellings stay unknown, validated at runtime by the existing compiled
+helper; the source validator never substitutes intval grammar. Three neutral and
+three compiler proof regressions cover these rules. All five selected-profile
+GMP EIR/emitter tests and two existing source-cast controls pass, together with
+compiler/check-tests/exporter builds, complete builtin-docs regeneration/audits,
+assembly comments and diff hygiene. The generated registry records the dedicated
+GMP cast proof contract. No runtime or public admission policy changes.
 
 ### Verification discipline
 
@@ -731,4 +748,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 63 | `98ae35e13c` | feat(strict): check settype before reference writeback |
 | 64 | `188304e3f4` | feat(strict): validate original native object cast values |
 | 65 | `309bdac54b` | feat(strict): check broad native object cast domains |
-| 66 | this commit | feat(strict): check public gmp integer projections |
+| 66 | `6c74bdaaed` | feat(strict): check public gmp integer projections |
+| 67 | this commit | feat(strict): prove original gmp integer cast sources |

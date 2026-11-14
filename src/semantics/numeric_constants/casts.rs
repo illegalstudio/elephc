@@ -38,6 +38,18 @@ fn number(value: NumericValue) -> Number {
     }
 }
 
+/// Shares GMP-specific original-source proofs without replacing the native string grammar.
+pub(super) fn gmp_builtin(expr: &crate::parser::ast::Expr, name: &str,
+    args: &[crate::parser::ast::Expr], class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
+    -> Result<Option<Number>, crate::errors::CompileError> {
+    let Some(normalized) = planned_builtin_arguments(name, args, expr.span) else { return Ok(None); };
+    let mut call = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
+    let Some(value) = normalized.first() else { return Ok(None); };
+    let Some(value) = evaluate(value, true, class, definitions, &mut call)? else { return Ok(None); };
+    elephc_semantics::gmp_integer_cast::prove_gmp_integer_cast(scalar_input(value, &call), evidence.strict_types)
+        .map(|value| value.map(Number::Int)).map_err(|failure| crate::errors::CompileError::new(expr.span, failure.message()))
+}
+
 /// Proves registered numeric cast builtins through the same planner used by ordinary call binding.
 pub(super) fn builtin(expr: &crate::parser::ast::Expr, name: &str, target: NumericCastTarget,
     args: &[crate::parser::ast::Expr], class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
@@ -58,6 +70,56 @@ pub(super) fn builtin(expr: &crate::parser::ast::Expr, name: &str, target: Numer
 #[cfg(test)]
 mod tests {
     use super::super::*;
+
+    /// GMP metadata proves original decimal magnitudes and weak floats in all source-bearing contexts.
+    #[test]
+    fn strict_gmp_cast_source_proofs_precede_folding() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+        for source in ["<?php if (false) { gmp_intval('9223372036854775808'); }",
+            "<?php const V = '-9223372036854775809'; echo gmp_intval(num: V);",
+            "<?php const V = '9223372036854775808'; echo gmp_intval(...['num' => V]);",
+            "<?php function f($v = gmp_intval(1e999)) {}",
+            "<?php class C { const V = gmp_intval('9223372036854775808'); }",
+            "<?php echo gmp_intval([]);", "<?php eval('gmp_intval(9223372036854775808.0);');"] {
+            for mode in [SourceMode::Php, SourceMode::Lfc] {
+                let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
+                let error = crate::semantics::validate_source(&program, profile).unwrap_err();
+                assert!(error.message.contains("--strict-casts"), "{source} {error:?}");
+                assert!(crate::semantics::validate_source(&program, SemanticProfile::PERMISSIVE).is_ok());
+            }
+        }
+    }
+
+    /// Native spellings remain unknown instead of acquiring intval grammar or incorrect numeric evidence.
+    #[test]
+    fn strict_gmp_cast_source_proofs_preserve_native_and_internal_domains() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+        for source in ["<?php echo gmp_intval('9223372036854775807'); echo gmp_intval('-9223372036854775808');",
+            "<?php echo gmp_intval('0xff'); echo gmp_intval('0o17'); echo gmp_intval('077');",
+            "<?php echo gmp_intval('1 2'); echo gmp_intval($unknown);",
+            "<?php declare(strict_types=1); echo gmp_intval(1e999);",
+            "<?php function gmp_intval($v) { return 0; } echo gmp_intval('9223372036854775808');"] {
+            let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+            assert!(crate::semantics::validate_source(&program, profile).is_ok(), "{source}");
+        }
+        let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(
+            "<?php const V = gmp_intval('9223372036854775808');").unwrap(), SourceMode::Internal).unwrap();
+        assert!(crate::semantics::validate_source(&program, profile).is_ok());
+    }
+
+    /// A proven checked GMP result can participate in independent overflow validation.
+    #[test]
+    fn strict_gmp_cast_source_proofs_retain_composed_integer_results() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true).with(StrictFeature::Overflow, true);
+        let program = crate::parser::parse(&crate::lexer::tokenize(
+            "<?php echo gmp_intval('9223372036854775807') + 1;").unwrap()).unwrap();
+        let error = crate::semantics::validate_source(&program, profile).unwrap_err();
+        assert!(error.message.contains("--strict-overflow"), "{error:?}");
+        assert!(crate::semantics::validate_source(&program, profile.with(StrictFeature::Casts, false)).is_ok());
+        let program = crate::parser::parse(&crate::lexer::tokenize(
+            "<?php echo gmp_intval('077') ** 10;").unwrap()).unwrap();
+        assert!(crate::semantics::validate_source(&program, profile).is_ok());
+    }
 
     /// Builtin metadata shares source proofs across original aliases, radix strings and removed branches.
     #[test]

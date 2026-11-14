@@ -310,6 +310,12 @@ fn builtin_number(
 ) -> Result<Option<Number>, CompileError> {
     use crate::builtins::semantics::BuiltinRuntimeFunctions;
     let Some(def) = crate::builtins::registry::lookup(name.trim_start_matches('\\')) else { return Ok(None); };
+    if let crate::builtins::semantics::BuiltinValidation::GmpIntegerCast = def.spec.semantics.validation {
+        if checked && evidence.profile.contains(StrictFeature::Casts) {
+            return casts::gmp_builtin(expr, def.name, args, class, definitions, evidence);
+        }
+        return Ok(None);
+    }
     if let crate::builtins::semantics::BuiltinValidation::ExplicitNumericCast(target) = def.spec.semantics.validation {
         if checked && evidence.profile.contains(StrictFeature::Casts) {
             return casts::builtin(expr, def.name, target, args, class, definitions, evidence);

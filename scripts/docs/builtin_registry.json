@@ -61791,7 +61791,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "shared"
+        "kind": "shared",
+        "numeric_cast": "gmp_int"
       }
     },
     "sig": {

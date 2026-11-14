@@ -276,6 +276,10 @@ The public `gmp_intval` contract selects a shared compiled checked helper in AOT
 and eval. It validates weak float range before adaptation, then canonical GMP
 magnitude before machine-word extraction, retaining GMP parsing and PHP
 `strict_types` diagnostics. Eval requires that reviewed helper from its host.
+Original-source GMP proof recognizes exact canonical decimal magnitudes and weak
+scalar conversion. Native radix and whitespace spellings defer to the compiled
+helper, keeping GMP grammar distinct from `intval`; strict PHP domain failures
+retain priority over floating range proof.
 A bounded decimal digit parser preserves exact
 integer strings at runtime, and native float-to-int checks precede truncation.
 The eval walker and VM use the same neutral cast kernel through their shared

@@ -15,6 +15,7 @@ builtin! {
 /// Keeps the shared GMP operand contract while selecting its checked integer projection.
 const fn semantics() -> crate::builtins::semantics::BuiltinSemantics {
     let mut semantics = super::int_semantics();
+    semantics.validation = crate::builtins::semantics::BuiltinValidation::GmpIntegerCast;
     semantics.lowering = crate::builtins::semantics::BuiltinLowering::Eir(lower);
     semantics
 }
