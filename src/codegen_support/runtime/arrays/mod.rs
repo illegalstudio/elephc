@@ -77,6 +77,7 @@ mod array_pad_refcounted;
 mod array_product;
 mod array_numeric_aggregate;
 pub(in crate::codegen_support::runtime) mod array_numeric_policy;
+pub(in crate::codegen_support::runtime) mod array_numeric_source;
 mod array_map_sum_probe;
 mod array_sum_probe_small;
 mod array_sum_int;
@@ -378,6 +379,7 @@ pub use array_sum_int::emit_array_sum_int;
 pub use array_type_check::emit_array_type_check;
 pub use keyed_kernels::emit_keyed_kernels;
 pub use array_numeric_aggregate::{emit_array_numeric_aggregate, ARRAY_AGGREGATE_MESSAGES};
+pub use array_numeric_source::numeric_aggregate_source_message;
 /// Emit array product helper.
 pub use array_push_int::emit_array_push_int;
 /// Emit integer-optimized array push helper.

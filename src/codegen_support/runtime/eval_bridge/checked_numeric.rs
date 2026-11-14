@@ -63,6 +63,11 @@ fn body(emitter: &mut Emitter) {
                 abi::emit_load_temporary_stack_slot(emitter, right, TRY_HANDLER_SLOT_SIZE + 16);
             }
             abi::emit_call_label(emitter, target);
+            if matches!(op, CheckedNumericOp::ArraySum | CheckedNumericOp::ArrayProduct) {
+                abi::emit_branch_if_int_result_nonzero(emitter, &success);
+                abi::emit_call_label(emitter, crate::codegen_support::runtime::arrays::array_numeric_source::symbol(
+                    op == CheckedNumericOp::ArrayProduct));
+            }
             abi::emit_jump(emitter, &success);
         }
         emitter.label(&success);
@@ -183,4 +188,37 @@ mod tests {
         }
     }
 
+}
+
+
+#[cfg(test)]
+mod aggregate_source_tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+    use elephc_semantics::SemanticProfile;
+
+    /// Every target refuses a zero aggregate result before publishing any output pointer.
+    #[test]
+    fn strict_eval_aggregate_sources_guard_success_publication_on_all_targets() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            for checked in [false, true] {
+                let mut emitter = Emitter::new(Target::parse(name).unwrap());
+                emitter.semantic_profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, checked);
+                emit(&mut emitter);
+                let messages = crate::codegen_support::runtime::arrays::array_numeric_source::data(emitter.semantic_profile);
+                let asm = emitter.output();
+                for (selector, product) in [(CheckedNumericOp::ArraySum, false), (CheckedNumericOp::ArrayProduct, true)] {
+                    let symbol = crate::codegen_support::runtime::arrays::array_numeric_source::symbol(product);
+                    assert_eq!(asm.contains(symbol), checked, "{name}");
+                    assert_eq!(messages.contains(crate::codegen_support::runtime::arrays::numeric_aggregate_source_message(product)), checked);
+                    if checked {
+                        let start = asm.find(&format!("__rt_eval_checked_numeric_v1_{}:", selector as u64)).unwrap();
+                        let failure = asm[start..].find(symbol).unwrap();
+                        let success = asm[start..].find("__rt_eval_checked_numeric_v1_success").unwrap();
+                        assert!(success < failure, "{name}: a nonzero result bypasses the source failure");
+                    }
+                }
+            }
+        }
+    }
 }

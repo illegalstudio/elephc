@@ -20,6 +20,7 @@ pub(crate) fn data(profile: SemanticProfile) -> String {
     data.push_str(&format!("\n_strict_eval_null_decrement_warning:\n.ascii {:?}\n",
         elephc_semantics::numeric::NULL_DECREMENT_WARNING));
     data.push_str(&super::arrays::strict_abs::data(profile));
+    data.push_str(&super::arrays::array_numeric_source::data(profile));
     data.push_str(&super::arrays::strict_numeric_operand::checked_data());
     data
 }

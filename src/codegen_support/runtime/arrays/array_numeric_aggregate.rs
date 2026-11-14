@@ -60,6 +60,7 @@ pub fn emit_array_numeric_aggregate(emitter: &mut Emitter) {
         }
     }
     super::array_numeric_policy::emit_error_entries(emitter);
+    super::array_numeric_source::emit(emitter);
 }
 
 /// Emits one storage-neutral fold returning an owned numeric cell or zero for an invalid source.

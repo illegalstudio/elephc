@@ -10,6 +10,7 @@
 //! - Keep this surface small: runtime codegen imports these re-exports instead of reaching into leaf emitters directly.
 
 mod arrays;
+pub(crate) use arrays::numeric_aggregate_source_message;
 pub(crate) use arrays::emit_native_frame_owners;
 pub(crate) use arrays::numeric_unary::symbol as numeric_unary_symbol;
 mod buffers;

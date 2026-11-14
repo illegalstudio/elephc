@@ -275,3 +275,51 @@ free($output); free($error);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+
+/// Invalid aggregate sources return a protected TypeError without publishing a null result owner.
+#[test]
+fn test_strict_eval_aggregate_source_failures_preserve_output_and_pending_owners() {
+    let source = r#"<?php
+extern class AggregateSourceCell { public int $tag; public ptr $payload; public int $high; }
+extern class AggregateSourceInteger { public int $tag; public int $low; public int $high; }
+extern class AggregateSourceThrowable { public int $runtime_class; public ptr $message; public int $length; }
+extern function malloc(int $size): ptr;
+extern function free(ptr $memory): void;
+extern function memcmp(ptr $left, string $right, int $length): int;
+extern function __elephc_eval_value_int(int $value): ptr;
+extern function __elephc_eval_checked_numeric_v1(int $op, ptr $left, ptr $right, ptr $output): int;
+extern function __elephc_eval_value_take_pending_throwable_v2(): ptr;
+extern function __elephc_eval_value_release_v3(ptr $cell, ptr $error): int;
+$input = __elephc_eval_value_int(7);
+$output = malloc(8); $error = malloc(8); ptr_set($error, 0);
+foreach ([5, 6] as $operation) {
+    ptr_set($output, 123);
+    $status = __elephc_eval_checked_numeric_v1($operation, $input, $input, $output);
+    echo $status, ':', ptr_get($output);
+    if ($status === 2) {
+        $thrown = __elephc_eval_value_take_pending_throwable_v2();
+        $cell = ptr_cast<AggregateSourceCell>($thrown);
+        $object = ptr_cast<AggregateSourceThrowable>($cell->payload);
+        $message = $operation === 5 ? 'array_sum(): Argument #1 ($array) must be of type array' : 'array_product(): Argument #1 ($array) must be of type array';
+        echo ':', $cell->tag, ':', $object->length === strlen($message) && memcmp($object->message, $message, strlen($message)) === 0 ? 'M' : 'X';
+        echo ':', __elephc_eval_value_release_v3($thrown, $error);
+    }
+    echo '|';
+}
+$integer = ptr_cast<AggregateSourceInteger>($input);
+echo $integer->tag, ':', $integer->low, ':', __elephc_eval_value_release_v3($input, $error);
+free($output); free($error);
+if ($argc < 0) { throw new TypeError('aggregate source metadata'); }
+"#;
+    for overflow in [false, true] {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, overflow);
+        let expected = if overflow { "2:123:6:M:0|2:123:6:M:0|0:7:0" } else { "1:123|1:123|0:7:0" };
+        for optimize in [false, true] {
+            let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+            assert!(output.success, "overflow={overflow}, opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+            assert_eq!(output.stdout, expected, "overflow={overflow}, opt={optimize}");
+            assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "overflow={overflow}, opt={optimize}: {}", output.stderr);
+        }
+    }
+}

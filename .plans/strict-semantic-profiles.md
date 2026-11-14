@@ -16,8 +16,8 @@
 - [ ] Publish the complete umbrella only when every advertised guarantee is enforced.
 
 Analysis baseline: `cdab890c65048707e6c5f3220d5077b78b5ab49b` on
-`feat/strict-mode`. This document is an implementation proposal, not a claim
-that the flags below already exist. Only this plan was added during analysis.
+`feat/strict-mode`. This document retains the approved contract and tracks implementation.
+The original analysis changed only this plan; verified code work is recorded below.
 
 ## Agreed behavior
 
@@ -38,7 +38,7 @@ With `--strict-array-keys`, strings retain their exact bytes and string kind:
 accepted. Hash collisions still compare key kind and original value; hashes are
 not substituted for keys. With no new semantic flags, preserve existing behavior.
 
-## Proposed feature catalog and ownership
+## Feature catalog and ownership
 
 The following catalog includes the already existing `--strict-opcache`.
 Independence means no feature silently enables another. Restrictions can overlap:
@@ -366,1007 +366,209 @@ the full supported-target matrix. Regenerate/audit builtin docs when their
 descriptors or contracts change. Update CLI/types/arrays/internals documentation,
 README, and examples. Leave CHANGELOG release handling to its dedicated workflow.
 
-Analysis validation: no Rust build or test was necessary for this plan-only
-change. Implementation verification remains entirely pending.
+The analysis-only baseline needed no Rust validation. Verified implementation
+evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-The shared `elephc-semantics` rlib, stable 16-feature catalog, independent request
-resolution, and neutral key/numeric/conversion helpers are implemented. The five
-profile tests and initial seven scalar/conversion tests pass. Numeric string
-casts now use checked decimal accumulation, including exponent forms, rather
-than rounding through a double; the extended boundary tests pass.
-
-The public option and maintained compiler/eval identifiers now use `php-only`.
-Builtin documentation was regenerated from the curl-enabled exporter. Catalog,
-site compatibility, and EIR boundary audits pass without errors. The two focused native PHP-only CLI compatibility tests pass.
-
-Explicit profiles flow through CLI configuration, checking results, EIR,
-function/closure lowering, emitters, runtime generation, and runtime-cache
-partitioning. Eval contexts accept a versioned immutable profile through a new
-native setter. The default profile is pinned on first activation. Magician's
-executable and negative-gap caches include semantic, PHP-only, and PHP-version
-identity. Six eval activation/FFI/cache/interpreter tests and seven compiler
-profile tests pass, including setter emission on all five supported targets.
-A shared integration mask rejects execution of incomplete profiles in both the
-compiler and eval embedding APIs. The ordinary compiler build and final type
-check pass; only the pre-existing Magician test-import and local-Rust deprecation
-warnings remain.
-
-The existing exhaustive PHP-only AST audit now uses a shared `AstVisitor`, split
-into statement, expression, and member/type traversal leaves. Policy-specific
-PHP-only diagnostics remain in their own small adapter. All 40 directly affected
-PHP-only AST audit regressions pass. Strict fixtures now use a reusable owned
-project helper that cleans its exact directory even after assertion failures.
-
-`strict-dynamic-code` is implemented at source, EIR, eval FFI, interpreter, and
-REPL boundaries. Source restrictions run before folding, recursively audit
-literal eval, and reject runtime source even in unreachable code. Literal eval
-that still requires the interpreter is rejected at lowering. Validation runs at
-physical source finalization, with the explicit profile propagated through both
-resolver passes and autoloaded/nested includes. All five native strict cases pass,
-including physical include and Composer autoload regressions, literal-eval
-optimizer parity, nonempty-profile ABI installation, and refused interpreter
-fallback. Static includes keep their existing resolver path.
-
-Other new guarantees are still under implementation. Until a guarantee is
-complete, both the CLI pipeline and library checker reject it explicitly rather
-than produce an unenforced strict binary. The full umbrella is therefore not
-available yet. Existing strict-locals behavior remains unchanged and still needs
-the stronger stable numeric/reference/eval contracts described above.
-
-String interpolation is currently lowered by the lexer into ordinary concat
-tokens. Preserve formatting intent before enforcing string-only concat operands,
-so interpolation of a scalar does not become an accidental type violation.
-
-Design issue: https://github.com/illegalstudio/elephc/issues/2347.
-
-Verification summary for this tranche: 72 distinct focused tests passed (12 neutral
-contract tests, 7 compiler profile/target tests, 6 eval profile tests, 40 PHP-only
-AST audits, and 7 native CLI tests). Builtin docs regeneration and all three audits
-passed. Assembly-comment checks passed on all 31 modified backend/runtime files.
-The full suite and native execution on other hosts were not run locally. No task
-fixture directories or generated Python bytecode remain. The foundation is committed
-as `09ab0ce4af`; no PR exists. Each subsequent complete, verified step is committed
-separately, as requested by the user.
-
-
-### Boolean integration
-
-Strict boolean conditions now use a shared kind guard and typed EIR failure
-instructions. Known incompatible kinds are source/checker diagnostics; mixed
-runtime operands raise TypeError. Conditions, lazy logical operations, xor,
-ternaries, predicate callbacks and Iterator results share that rule. Explicit
-boolean casts and intentional absence/data-filtering operations keep their
-separate contracts. PHP and LFC statements carry their source mode into checking
-and lowering, while reviewed internal implementation tests retain their semantics.
-
-The explicit profile also reaches PHP extension runtime generation. A narrowly
-scoped optimizer adapter protects strict conditions during folding, propagation,
-control pruning and effect/exception analysis, without changing backend profile
-ownership. Both Magician engines and callback adapters use the same condition
-helper. Predicate runtime guards distinguish borrowed and consumed result cells.
-
-Focused tests already cover source rejection, both eval engines, native EIR
-optimization on/off, predicate/FCC result ownership, iterator failure ownership,
-and generation on all five targets. An explicit branch between global runtime
-helper entries is required for section GC; the initial fallthrough crashed when
-the destination section was stripped. The iterator's retained descriptor is now
-published to the ordinary exceptional-owner chain and is released on a same-frame
-catch. Both predicate and iterator strict failures pass heap-debug cleanup checks.
-Native opaque eval, the real cached REPL (including session recovery), and all
-builtin-doc generation/audits pass. The REPL bootstrap now compares its integer
-input status explicitly. Fourteen new focused tests pass, plus two permissive
-iterator compatibility regressions. Throwing callback-result destructors retain
-the TypeError as their previous exception and leave a clean heap. All modified
-backend assembly comments and Rust file preambles pass their hygiene checks.
-No task-owned fixture directories or Python bytecode remain.
-
-
-### Integer literal evidence
-
-A shared exact unsigned-magnitude classifier now distinguishes ordinary signed
-integers, the unsigned magnitude of i64::MIN, overflowing integers and malformed
-digits. The compiler and eval lexers expose explicit profile-aware entry points.
-Their parsers accept the minimum magnitude only beneath direct unary minus,
-respecting power and postfix precedence. Deliberately written floats, including
-IEEE infinities, retain floating semantics. Physical entry, include and autoload
-lexing receive the immutable profile; complex interpolation inherits it too.
-Eval numeric scanning now lives in a cohesive lexer/numbers.rs leaf.
-
-Simple interpolation offsets require a separate key-syntax decision. Reference
-PHP classifies canonical numeric text before ArrayAccess dispatch: 1 is an int,
-while 01, -0 and an out-of-range numeric spelling remain exact strings. Both
-lexers now consume the shared key classifier, fixing the compiler's zero fallback
-and eval's rejection of oversized textual offsets. Exact-key policy keeps the
-canonical spelling raw as well. Complex interpolation still parses actual integer
-expressions and therefore observes checked literal bounds.
-
-Ten focused tests pass across the neutral policy, both frontend parsers, native
-array/ArrayAccess output and eval output. Profile-dependent parsed-source caches,
-literal eval plans, runtime arithmetic and checked conversion integration remain
-pending. Overflow and other unfinished flags stay explicitly gated until their
-entire guarantee is implemented. This is supporting frontend work, not completion
-of the strict-overflow feature.
-
-
-### Parsed-source cache profile step
-
-Eval fragments and uncached include memos now partition positive and negative
-parse results by immutable semantic profile with one total FIFO capacity. Eval
-execution, scope scans, deferred native-catalog checks and includes pass the
-context profile explicitly. OPcache keeps one slot per canonical path in memory
-and on disk. A different parser profile is a miss regardless of timestamp
-settings; a failed strict replacement discards the former memory entry. Disk
-headers require the neutral semantic ABI and exact profile, and serialized cache
-format 29 also accounts for the new checked-integer token and parse error. Native
-OPcache path operations use a typed backend operation and pass hidden ABI/profile
-arguments through target-aware register helpers. Legacy host symbols retain an
-explicit permissive default. Profile-aware AOT fragment metadata is the next step.
-
-Validation: seven focused tests passed, covering cached errors and shared FIFO
-capacity, disabled/enabled script caches, profile and ABI disk headers, native
-FFI refusals, hidden arguments on every supported target, the serialized format
-guard, and native/eval OPcache parity with a runtime-created include. Compiler
-builds, builtin docs regeneration/audits and assembly-comment checks passed.
-
-
-### AOT and pre-parsed source provenance step
-
-Literal eval planners receive the composite immutable EvalSourceProfile, joining
-lexical PHP-only visibility with the compilation's semantic guarantees. Source-
-sensitive EIR data retains that profile and module validation rejects incompatible
-metadata. Internal fragment names include semantic ABI and profile bits. The
-compact checked u32 representation preserves Instruction's existing 112-byte
-stack budget; native and disk boundaries retain the full neutral u64 encoding.
-Checked literal parsing now applies to AOT fragments and raw recursive literal
-eval validation before folding. Dependency-only scans explicitly use conservative
-permissive parsing; actual lowering, liveness and codegen use the attached profile.
-
-EvalProgram retains parser-profile provenance, including through serialization.
-A shared execution guard validates context compatibility and supported guarantees
-before either bytecode or walker execution, including direct included-file replay.
-Native deferred-default expression parsing inherits its context profile. Disk
-cache headers must also agree with the decoded AST's profile. Format 30 records
-this new EvalProgram shape. The hostile-length regression includes the new header
-fields and owns its scratch directory through unwinding.
-
-Validation: 17 focused tests passed, including three AOT profile tests (all five
-targets), direct host/walker provenance refusal, existing boolean and dynamic-code
-engine cases, cache identity/format/hostile-length guards, native literal eval in
-both optimization modes, opaque eval, runtime-created cached includes, and PHP/LFC
-visibility isolation. The compiler build, builtin exporter/docs audits and five
-assembly-comment checks passed. No generated builtin documentation changed.
-
-
-### Native value-hook semantic identity step
-
-Before numeric helpers acquire profile-dependent behavior, native runtime value
-hooks must advertise their compiled policy. Two target-aware C getters expose
-the neutral semantic ABI and exact u64 profile. RuntimeValueOps reports a fixed
-profile, defaulting existing host implementations to permissive. Explicitly
-policy-independent adapters may opt out. Shared eval entry validation rejects
-mismatched hooks before any value operation, and native context installation
-rejects mismatches before pinning the context. A shared versioned decoder owns
-ABI/unknown-bit rejection for setters, OPcache calls, native hooks and disk cache
-headers. Unsupported-profile staging remains in force.
-
-Validation: eight focused tests passed: versioned decoding, fixed-hook admission,
-three cache boundary cases, getter emission on every supported target, a real
-native setter rejection followed by successful matching installation, and PHP/LFC
-eval visibility compatibility. The compiler build and assembly-comment checks
-passed. The native handshake fixture confirms a rejected profile does not pin
-or contaminate an otherwise unused context.
-
-
-### Checked scalar arithmetic core
-
-A compact neutral ArithmeticPolicy resolves Overflow, Arithmetic and Coercions
-independently. The compiler adapter selects permissive operations for trusted
-Internal statements while retaining the immutable module profile. User integer
-addition, subtraction, multiplication and unary negation now lower through a
-reusable scalar kernel: wrapping operation, IOverflows and a typed ArithmeticError
-failure edge before the result escapes. The shared guard builder supports a
-failure predicate directly, preserving the existing all-target overflow-branch
-fusion without an extra boolean negation.
-
-The public Overflow feature remains staged. Boxed operations, powers, updates,
-compound/reference stores, builtin boundaries, source diagnostics, optimizer
-effects and eval parity must be completed before accepting the flag.
-
-Validation: four focused tests passed after recovery from the daemon restart:
-independent neutral policy bits, PHP/LFC scalar guards and emission on every
-supported target, trusted internal PHP operations, and existing boolean guards.
-Compiler build, diff hygiene, module preambles and writing checks passed.
-
-### Checked boxed arithmetic and power core
-
-EIR numeric operations now carry an explicit compact ArithmeticPolicy immediate.
-The validator checks its required module profile, throwing effects and boxed
-operand representation. Legacy PHP frame-cell and chain optimizations refuse
-these checked operations. Lowering creates any needed Mixed boxes explicitly
-and publishes their unwind roots before invoking a throwing arithmetic helper.
-User and trusted PHP helper entries coexist in one runtime, with the selected
-overflow policy saved across operand conversion and square-and-multiply calls.
-
-Checked integer powers and genuine boxed integer powers throw ArithmeticError
-instead of promoting on overflow. Overflow alone continues to permit negative
-integer exponents with their existing float result and ordinary float powers.
-The x86 jump-only failure entry supplies the alignment expected by the shared
-exception allocation sequence. Every target uses explicit failure and shared
-body edges so native section collection retains the necessary helper code.
-
-Validation: two focused EIR/runtime tests passed across all five targets,
-including optimized and unoptimized module checks and profile mismatch
-rejection. A native fixture passed in both optimization modes under heap debug,
-covering add/sub/mul, scalar and boxed power, signed minimum, negative exponents,
-mixed scalar operands and nested owned temporaries. Both runs report a clean
-heap. The public Overflow option remains staged while the remaining source,
-update, builtin and eval boundaries are implemented.
-
-### Checked arithmetic through AST optimization
-
-The AST optimizer keeps its immutable semantic profile separate from a scoped
-statement source mode. Folding, propagation, pruning, DCE, effect analysis and
-exception summaries now restore that source mode on every nested return. An
-Internal wrapper therefore keeps PHP implementation semantics without erasing
-the strict policy of a nested user statement.
-
-Checked addition, subtraction, multiplication, power and unary negation no longer
-fold an overflowing integer to a float. The effect model retains potential
-ArithmeticError even when an expression result is discarded. Callable exception
-summaries carry the same failure so DCE preserves the matching catch clauses.
-
-Validation: the focused folding regression passes for PHP, LFC, Internal and a
-mixed nested wrapper. The native arithmetic/ownership fixture now runs both AST
-and EIR optimizers when enabled, including unused addition and negation results
-inside catches. Both optimization settings pass and report a clean heap.
-
-### Source-known integer overflow
-
-Source validation now rejects proven integer overflow before folding can erase
-dead branches or declaration expressions. Its numeric evidence keeps exact i64
-intermediates, distinguishes float results and delegates checked operations to
-the neutral arithmetic kernel. Unconditional global aliases and direct lexical
-class constants support forward references; duplicate declarations, cycles and
-unresolved namespace names remain unknown. Resolved `use const` aliases use the
-canonical names supplied by the existing name resolver.
-
-Each physical source tree and parsed literal eval fragment owns its own memoized
-evidence. Trusted implementation constants keep their PHP result kind when user
-code consumes them. The shared source visitor covers defaults, attributes,
-closures and unreachable branches without duplicating those traversal rules.
-
-Validation: four focused tests passed, covering overflow and valid boundaries,
-numeric strings, floats, negative powers, aliases, cycles, source modes, literal
-eval and declaration expression positions. The additional resolved namespace
-and imported-alias cases pass. The pre-existing eager predefined-constant token
-binding issue is tracked separately as Code Journal task d0932767; this adapter
-does not infer a replacement value for names the parser has already erased.
-
-### Checked updates and storage
-
-Integer local/reference updates and typed integer buffer steps now use the shared
-checked scalar kernel before storing. Boxed/string updates carry NumericUpdate
-policy metadata with throwing effects; legacy PHP counter specializations refuse
-that metadata. Explicit operand roots and separately acquired postfix snapshots
-remain published through the update and store so an exception cannot lose them.
-
-The strict boxed runtime entry checks genuine integer payloads before the PHP
-helper can mutate a unique cell. String payloads share the existing exact numeric
-scanner and integer parser through a separate checked entry. Only overflow of an
-actual integer step throws: out-of-range numeric strings retain their PHP float
-classification, alphabetic strings retain carry semantics, and float updates
-retain their ordinary behavior. Trusted Internal updates still select PHP
-entries. The overflow transfer uses a reusable wide conditional ABI helper.
-
-Validation: two focused EIR/runtime tests pass across all five targets; the
-lowering test also covers PHP/LFC/Internal statements with EIR optimization on
-and off. A native fixture passes with AST/EIR optimizers enabled and disabled,
-covering prefix/postfix updates, mixed and typed references, numeric strings,
-properties, array elements, compound stores and typed buffers. Failed operations
-leave values unchanged, successful updates preserve their expected results, and
-both runs report a clean heap. Compiler build, assembly-comment alignment and
-diff hygiene pass. Builtin numeric contracts and eval parity remain next.
-
-
-### Builtin invocation profile propagation
-
-Builtin semantic inputs, checker hooks and normalized EIR calls now retain the
-immutable semantic profile and an explicit invocation source contract. Numeric
-policies remain available to shared semantic hooks. Profile-aware signature entry points
-cover checking, EIR, reflection and generated callable descriptors; legacy audit
-entry points select permissive PHP semantics explicitly.
-
-Public builtin callables use the user contract even when invoked by an Internal
-statement. Their argument expressions still use the physical statement mode.
-Known callable inference, result resolution, exceptional operand rooting and
-packed argument effects share this separation; lowering never temporarily changes
-the source policy while evaluating arguments. Generated wrappers copy the module
-profile instead of silently defaulting to permissive semantics.
-
-Validation: the two focused profile tests pass, including direct, first-class,
-call_user_func and call_user_func_array paths on all five targets and all three
-source modes. Internal-only argument conditions verify that callable contract
-selection does not leak into expression checking. Architecture and assembly
-comment audits pass. Compiler and docs-exporter builds pass, and the generated
-builtin docs audits pass with no generated changes. Subsequent compiler builds
-also confirm the cleanup of unused convenience methods. Numeric operations are
-integrated in the following steps.
-
-
-### Checked absolute values and typed builtin operation policies
-
-Numeric runtime calls now carry an explicit ArithmeticPolicy beside the existing
-RuntimeFnId, with module identity and throwing-result validation. The ordinary
-Function target remains the PHP entry, so legacy integer-sink specializations
-cannot erase the new contract. Shared identity readers support dependency,
-resource, export and eval metadata analysis without reconstructing a call and
-losing its invocation policy.
-
-The abs home declares shared effects and EIR result normalization. Checked
-integer inputs retain Int contracts; dynamic inputs preserve runtime int/float
-kinds. The backend reuses borrowed stack-cell materialization instead of allocating
-untracked argument boxes. A separate checked runtime entry rejects INT_MIN with
-ArithmeticError, classifies full numeric strings without float rounding, retains
-float kinds and rejects unsupported numeric parameters with TypeError. Trusted
-Internal operations keep the ordinary PHP-promoting entry.
-
-Source evidence also covers abs through its typed runtime inventory and shared
-argument planner, including named arguments and static positional spreads. It
-retains numeric-string completeness, bool/null provenance and PHP strict_types
-state, so a parameter error cannot be mistaken for a proven overflow. Normalized
-argument clones use fresh address memos with the active constant cycle guard.
-Forward or conditional source/extern declarations prevent guessing a builtin
-binding, and unresolved namespaces remain conservative.
-
-Validation so far: checker, EIR and runtime tests pass on all five targets and all
-source modes. The source-constant regression and four prior numeric-evidence
-regressions pass. A native fixture passes with AST/EIR optimization enabled and
-disabled and a clean heap across direct, typed, first-class, CUF/CUFA and dynamic
-calls, fresh string inputs, exceptions/finally and numeric kind controls. Six
-ordinary PHP abs regressions pass. Compiler and docs-exporter builds, full builtin
-docs generation/audits, assembly comment alignment and diff hygiene pass. The
-final shared-identity refactor passes the same four new unit tests, four prior
-constant-evidence tests, both native optimization modes and the compiler build.
-Overflow remains staged until power, reductions, conversions, storage contracts
-and eval parity are complete.
-
-
-### Checked builtin power and prepared callable contracts
-
-The pow home now reuses numeric operator graphs under checked overflow, including
-GMP dispatch and integer-versus-float result selection. Already evaluated SSA
-operands receive explicit Borrow views; fresh intermediate boxes keep independent
-ownership. The original Mixed parameter contract already preserves numeric kinds,
-so no new argument strategy or signature projection is needed.
-
-A Prepared callable policy routes graph-dependent builtins through the full EIR
-lowering context. Generated function metadata marks public builtin invocations
-separately from the physical source mode of nested implementation statements.
-This preserves checked callable results without imposing user syntax rules on
-argument evaluation or generated guards.
-
-Validation: two power units and two profile propagation units pass, including
-all five target emitters and all source modes. The native power fixture passes
-with both optimizer settings and a clean heap across direct, typed, first-class,
-CUF/CUFA and runtime-selected calls. Compiler/exporter builds and the complete generated docs/architecture audits
-pass, as do the focused permissive PHP scalar and GMP controls.
-Numeric-string power normalization and pre-fold source proofs follow
-before exposing the complete overflow guarantee.
-
-
-### Exact numeric power normalization and source evidence
-
-Checked boxed powers classify both operands through a reusable bounded numeric
-parser adapter before dispatching warning callbacks. Integer-form strings, bools
-and null keep integer power and overflow checks; floating-form and out-of-range
-strings retain float kinds. Invalid kinds raise TypeError. Warning handlers cannot
-replace an already captured operand. PHP entries remain separate.
-
-A shared numeric result helper unboxes and releases implementation cells only
-when the checker promises an Int or Float contract. Abs and checked pow consume
-the same helper. AST effects, throw summaries, global-fact invalidation and EIR
-effects preserve warning callbacks and discarded checked powers. Source evidence
-now covers pow through its typed inventory and common named/spread planner. Its
-Mixed parameters retain operator conversion rules even with PHP strict_types.
-
-Four focused units pass, including all targets and source modes, constant proofs
-and typed string/float result normalization. Both native power fixtures pass with
-AST/EIR optimization enabled and disabled, exact result kinds, source mutation
-from a warning callback, thrown callbacks, discarded results and clean heaps.
-Compiler/exporter builds and the complete docs/architecture audits pass. Four
-abs units, its native fixture and the earlier boxed arithmetic/power fixture
-also pass after sharing the numeric result helper. The pre-existing permissive typed-string
-pow backend gap is tracked separately as journal task 85c52504.
-
-
-### Checked numeric array reductions and guarded map fallbacks
-
-Array sum/product homes now emit typed NumericFunction policies through a shared
-EIR descriptor. Separate checked runtime entries reuse numeric classification and
-resumable cleanup, with checked add/multiply and no PHP-promoting packed sum fast
-path. Callable refinements follow DynamicRuntime metadata, and activation-owned
-aggregate operands remain rooted independently of the lowering representation.
-Unchecked reduce/map-sum fusion declines checked numeric contracts; the normal
-callback path then preserves the checked operation and its failure order.
-
-The newly exercised untyped map fallback revealed a pre-existing Mixed map leak
-on callback exceptions. Scalar and Mixed maps now share one guarded emitter. The
-Mixed result keeps its descriptor environment ABI and element stamp, and each
-transferred owner advances the destination length before the next callback.
-Exceptional cleanup therefore retires the initialized prefix, including owned
-Mixed cells and strings. Shared callback effects no longer claim direct network
-or blocking I/O operations.
-
-Validation: three new runtime/EIR units pass on all five targets and all source
-modes. Native fixtures pass both optimizer settings and clean-heap checks across
-direct, FCC, CUF/CUFA, dynamic, numeric-string, COW and callback-fusion paths. A
-default-profile regression verifies partial Mixed map cleanup after a second-item
-PHP exception for scalar and string source widths. Ten existing boxed aggregate
-controls, three map controls, the original aggregate runtime unit and both prior
-checked power native fixtures pass. Compiler/exporter builds, complete generated
-builtin docs and architecture audits, and assembly/diff hygiene pass. Source
-evidence for reductions and remaining numeric/storage/eval integration follow
-before exposing the overflow flag.
-
-
-### Dense reduction evidence and integer division boundaries
-
-Source evidence now evaluates dense array_sum/product operands in order, including
-forward global/class constant aliases, empty identities and intermediate overflow
-before a later float. Unknown keyed/spread layouts remain conservative until the
-shared literal-key planner is integrated; they are still checked at runtime.
-Intdiv evidence respects strict PHP integer parameters, weak conversion range,
-full numeric strings and invalid-call precedence. Proof contexts retain the full
-semantic profile, so strict-arithmetic division keeps Float rather than creating
-a false overflowing integer intermediate. Cohesive proof tests moved to their
-own module.
-
-Integer division reuses the shared target-aware ArithmeticError emitter instead
-of duplicating Throwable allocation and unwind assembly. Its existing typed
-wrapper now also participates in runtime-selected callable dispatch; this fixes
-the accepted dynamic call reaching an undefined-function fatal.
-
-Validation: seven source-evidence tests and all-five-target/source-mode division
-emission pass. The native division fixture passes permissive and checked profiles
-with both optimizer settings and clean heaps across direct, FCC, CUF/CUFA, dynamic,
-overflow, zero-divisor and valid-boundary cases. Two existing PHP intdiv overflow
-regressions pass. Compiler/exporter builds, generated builtin docs/architecture
-audits, assembly comments and diff hygiene pass. The final dynamic-target unit
-and native control rerun also pass on the final sources. Keyed literal evidence,
-eval arithmetic and remaining strict guarantees continue in the following steps.
-
-
-### Typed literal keys and preserved append provenance
-
-A shared literal-array planner retains integer/string identity, original string
-bytes, explicit key expressions, all value evaluations and insertion order.
-Append history follows the selected PHP version and exact-key profile. Numeric
-source evidence uses that plan for keyed/mixed reductions, applies last-wins
-values at the original insertion position and keeps unknown spreads conservative.
-The parser preserves trailing implicit entries until semantic planning instead
-of stamping PHP keys before a profile exists. Default folding retains explicit
-conversion expressions and overwritten value effects; fractional float keys now
-advance the append cursor correctly.
-
-Validation: two focused planner/proof units, all eight numeric source-evidence
-controls, the parser provenance regression and a native default-key/value-effect
-fixture pass. Both leading-positional parser controls, the compiler build and
-diff hygiene pass. The native fixture reports a clean heap. Exact-key runtime and
-producer integration remains staged; the public feature mask is unchanged.
-
-
-### Explicit checked eval numeric callbacks
-
-Magician user binary/unary arithmetic and public abs/pow dispatch now select a
-versioned checked callback explicitly. PHP implementation hooks stay permissive.
-The callback borrows its inputs, publishes one independent result on success and
-contains PHP exceptions below Rust through the shared full-handler boundary.
-Unsupported selectors/runtimes return status one without touching output. Native
-class arithmetic keeps the existing reviewed object contracts. Eval fake adapters
-share the host numeric-string grammar with compiler proofs and use the neutral
-checked integer evaluator.
-
-Focused all-five-target boundary emission, all three shared grammar tests, two
-walker/VM/builtin owner matrices (including FCC, CUF/CUFA and case-insensitive
-names), permissive abs/pow controls, compiler/exporter builds, generated builtin
-docs and architecture audits pass. The native callback matrix passes both profiles
-and both optimizer modes with clean heaps, intact failure output and owned Throwable
-retirement. The compiler binding-grammar control and assembly/diff hygiene also pass.
-The initial fixture used an incorrect runtime feature field, a PHP float-form minimum
-literal and an unversioned C import; all were corrected before this verified step.
-The public integrated profile mask remains unchanged until numeric/storage/eval parity is
-complete. Remaining checked reductions, updates and general arithmetic operand
-normalization follow alongside the other strict guarantees.
-
-
-### Shared exact operands for checked scalar arithmetic
-
-Checked Add/Sub/Mul now share the power operand classifier, numeric snapshots,
-warning dispatch and result boxing in strict_mixed_numeric. PHP-promoting helper
-entries retain their original kernels; the obsolete checked selector bit inside
-those PHP kernels is removed. Checked integer operations retain hardware overflow
-guards on both architectures. Invalid numeric kinds throw TypeError; numeric
-prefixes invoke their warning handler after both operand payloads are captured.
-AST effects and exception-flow summaries cover these conversion callbacks even
-when a float operand excludes integer overflow, preserving discarded operations,
-global invalidation and catch clauses.
-
-A new native regression failed on872d1c3749 with missing TypeError and warning
-markers, then passes both optimizer modes with a clean heap. The new all-five-
-target graph unit and existing power unit pass. Existing boxed arithmetic/power,
-checked array reductions and callback fusions, numeric-string powers and native
-eval callback status/ownership matrices also pass. The compiler build, assembly
-comment checks and diff hygiene pass. No builtin contract or documentation
-metadata changed in this step. Remaining eval reductions/updates and other strict
-features continue before exposing the complete profile family.
-
-
-### Checked eval array reductions
-
-The versioned numeric callback now appends ArraySum/ArrayProduct selectors and
-reuses the checked native aggregate kernels. Eval direct, first-class, dynamic,
-CUF/CUFA and case-insensitive routes select the same explicit operation. Direct
-source evaluation uses the shared operand-owner boundary instead of leaving a
-fresh input array unretired. The fake callback evaluates numeric payloads without
-unrooted intermediate cells and retires optional internal-class numeric adapters.
-
-Validation: the focused interpreter matrix covers identities, exact integer
-strings, float continuation and overflowing reductions across call routes with
-balanced owners. The native callback fixture passes both optimizer modes with
-clean heaps, unchanged failure output and retired partial carries/Throwable boxes.
-The all-five-target boundary unit, permissive aggregate control and preceding
-numeric interpreter matrices pass. Compiler/exporter builds, generated builtin
-docs/architecture audits and assembly/diff hygiene pass; generated docs are
-unchanged. The older permissive interpreter loop's intermediate-owner cleanup is
-tracked separately as journal task b388f531. Checked eval updates and the remaining
-strict guarantees continue before public activation.
-
-
-### Checked eval updates and borrowed native inputs
-
-The numeric callback appends Increment/Decrement selectors. Each selected update
-canonicalizes its borrowed input into the protected callback's headerless spills
-before invoking the existing update kernel, preventing its unique-cell fast path
-from mutating the caller's original value. The output pointer keeps its separate
-spill, and no extra retained input can be stranded by a native throw. Warnings for decrementing null execute inside the protected callback. Internal-class update
-arithmetic retains the reviewed object adapters. Invalid scalar update domains
-throw through the shared TypeError path before replacement.
-
-Walker/VM, member/static and reference consumers pass their context through the
-same checked operation selector. Checked update EIR effects and AST exception/
-mutation summaries include arbitrary callbacks, retaining catch clauses and
-invalidating affected facts. The existing PHP boolean update kind deviation is
-tracked in the pre-existing task03217601; duplicate audit task afea61a3 was
-explicitly dismissed in favor of that original.
-
-Validation: both focused eval matrices pass for numeric/string domains, empty
-strings, null warnings, overflow, original-value preservation and by-ref cleanup.
-Both native fixtures pass both optimizer settings with clean heaps, independent
-results from uniquely owned inputs, intact failure outputs, protected warning
-exceptions and retained AOT catch clauses. The all-five-target callback/update
-units, existing AOT storage/update matrix and prior native arithmetic/reduction
-callback matrices pass. Compiler build, assembly comments and diff hygiene pass.
-Updates use the shared stack-pointer address helper through a crate-local ABI
-re-export. No builtin surface or generated documentation metadata changed. Other
-strict guarantees and remaining boundary audits continue before activation.
-
-
-### Protected eval warnings and PHP version parity
-
-The native warning adapter now uses `__elephc_eval_warning_v2`, a protected
-status-returning boundary. PHP error handlers can return normally or throw
-without jumping across Rust interpreter frames. Existing raw native diagnostic
-entries retain their ABI. Known-null AOT decrement and checked eval decrement
-emit PHP's warning only for PHP 8.3 and later; the message has one shared source.
-
-Three focused units cover all five supported targets and both sides of the
-PHP-version boundary. Two native fixtures pass: direct handled/throwing callback
-status with both optimizer settings, and an ordinary opaque eval read caught by
-its surrounding PHP handler. Both report a clean heap. No additional semantic
-flag is activated by this infrastructure step.
-
-
-### Protected eval division
-
-The checked eval callback catalog adds an append-only `Div` selector. Both eval
-engines select it for staged Overflow operations while internal PHP hooks keep
-their old entries. The native kernel shares operand capture, numeric-string
-diagnostics, floating materialization and independent result boxing with the
-existing checked operators. It retains the eval backend's Float division result
-contract and throws `DivisionByZeroError` for positive and negative zero.
-
-One interpreter matrix, one all-five-target emitter test and one native fixture
-pass. Native execution covers a handler mutating the original divisor, a throwing
-prefix handler, signed zero, invalid operand kinds and untouched output sentinels
-on failure, with both optimizer settings and clean heaps. Existing arithmetic
-snapshot, power and callback-boundary units and a native arithmetic control pass.
-The public integration mask remains unchanged.
-
-
-### Ordered numeric diagnostic dispatch
-
-Numeric snapshot classification now returns invalid status as data. A shared
-ordered dispatcher emits each operand's prefix warning or kind failure only
-after both numeric values have been captured. This preserves PHP's observable
-warning-before-error behavior without allowing callbacks to change the operands.
-The fake runtime follows the same split, and the capture-only helper can support
-modulo's per-operand prefix and precision diagnostics.
-
-A new walker/VM matrix, all-five-target classification unit and native callback
-fixture pass across add/subtract/multiply/power/division. Reversed operands fail
-without the later warning; throwing first handlers retain priority. Native tests
-pass with both optimizer settings and clean heaps. Existing arithmetic, power
-and division controls also pass. Emitter assertions now identify actual calls
-rather than counting matching failure-symbol declarations or branches.
-
-Remaining numeric audit includes protected modulo (MIN modulo -1, zero, distinct
-float-value and float-string conversions), arithmetic/coercion/cast domains,
-stable bindings and the remaining public activation checks. Reference-PHP
-conversion and diagnostic-order discoveries are recorded in journal entries
-72b2ec1c and 43dc4a07. The public integration mask is unchanged.
-
-
-### Protected eval modulo and guarded conversion snapshots
-
-The append-only checked `Mod` selector now serves both eval engines. The native
-kernel owns two detached operand snapshots through existing exception guards,
-then interleaves each operand's prefix and precision diagnostics. Numeric strings
-reuse capped `str_to_int` conversion and quote the original bytes; float values
-reuse the shared modulo conversion and precision/range diagnostics. Zero throws
-`DivisionByZeroError`; signed-minimum modulo minus one returns zero without a
-hardware divide trap. Successful results own one independent integer box.
-
-The dependency-neutral numeric module now owns the PHP float-value conversion
-previously private to literal array keys, reused by compiler key planning and the
-fake eval adapter. Checked explicit-cast conversion remains a separate function.
-One scalar boundary unit, one walker/VM matrix, one all-five-target emitter unit
-and one both-optimizer native fixture pass. Native coverage includes capped
-versus float conversion, alternating diagnostics, callback input mutation,
-throwing handlers, zero and kind failures, unchanged output sentinels and clean
-heaps. Six directly affected compatibility controls and the compiler build pass.
-
-This completes the eval kernel step only. AOT mixed division/modulo still need
-explicit operation policy and matching conversion/callback behavior before the
-public numeric flags can be activated. Continue the numeric domains, binding
-contracts and remaining catalog guarantees; do not expose a partial umbrella.
-
-
-### Explicit AOT division and modulo policies
-
-EIR numeric operation metadata now represents `Div` and `Mod`. Staged checked
-AOT dynamic division and non-integer remainder operands share the reviewed eval
-kernels with explicit ownership roots. Existing scalar division/remainder guards
-remain available. Scalar result normalization reuses the existing backend-neutral
-builtin lowering interface already implemented by `LoweringContext`, including
-temporary-box retirement. Trusted Internal operations keep their prior entries.
-
-Unprofiled boxed division/remainder fail EIR validation. The shared checked-chain
-predicate accepts only add/subtract/multiply, preventing the new operations from
-entering a promoting fused chain or raw-loop specialization. Modulo type inference
-now returns Int before operand-driven float promotion, agreeing with EIR storage.
-AST callback effects and exception analysis include dynamic division and modulo
-precision diagnostics, preserving discarded expressions and handler mutations.
-
-Two focused compiler units and two native tests pass. Coverage includes all five
-targets, PHP/LFC/Internal source, optimizer on/off, malformed operation metadata,
-unsupported fused chains, global warning-handler mutation, catch retention,
-reference failure atomicity and successful integer/float writeback, default-mode
-remainder result kinds and clean heaps. Six directly affected runtime/optimizer
-controls pass, along with compiler check/build, architecture audit and assembly/
-diff hygiene. The architecture audit was rerun under the build lock with a fresh
-prebuilt exporter after an accidental indirect Cargo invocation was detected.
-
-The next numeric work is shared arithmetic/coercion/cast domain planning and
-stable bindings, followed by the remaining semantic families. The integrated
-public mask remains unchanged until the complete guarantees are enforced.
-
-
-### Shared numeric operand domains
-
-The dependency-neutral numeric-domain catalog selects concrete operand kinds for
-Arithmetic and Coercions independently of Overflow. Numeric arithmetic accepts
-native int/float values; remainder, shifts and binary bit operations require
-integers. Arithmetic also rejects negative integer/integer powers while preserving
-explicit floating power. The compiler adapter owns AST/type mapping, shared EIR
-kind predicates guard original operands, and both originals remain independently
-rooted across exceptions. Native class adapters and typed array unions run first.
-Trusted Internal implementation operations retain their original contracts.
-
-Both eval engines consume the same rules before their scalar hooks. Integer bit
-operations share exact signed shift bounds with source proofs and constant folding;
-negative counts throw, counts beyond 63 saturate, and bit patterns may wrap.
-Non-overflow eval division/remainder boundaries preserve catchable zero failures
-and the MIN modulo -1 result. General eval numeric-result normalization, unary
-operations, updates, builtin invocation domains and binding conversions remain
-separate pending integration work.
-
-Original numeric and nonnumeric string kinds survive constant aliases and early
-validation, including unreachable expressions and literal eval. Every feature
-that requests literal-source auditing supplies its own diagnostic flag. Arithmetic
-constant division stays Float and negative integer power cannot fold past its
-runtime guard. Domain failures participate in both effects and exception-flow
-analysis, preserving discarded operations and catch clauses during optimization.
-
-Six new focused tests pass: two pure contract tables, all-five-target EIR/source
-policy/optimizer coverage, raw source and literal eval evidence, walker/VM kind and
-owner parity, and native failures with both optimizers and clean heaps. Six
-focused compatibility controls, the compiler build, the prebuilt architecture
-audit, assembly-comment alignment and diff hygiene pass. The public integration
-mask is unchanged until the complete feature paths enforce these guarantees.
-
-
-### Catchable eval integer division
-
-Eval intdiv now schedules DivisionByZeroError for a zero divisor and ArithmeticError
-for MIN divided by -1. The signed-overflow message is shared with the AOT emitter.
-The direct expression hook uses the common operand-lease helper, including cleanup
-when evaluating a later argument throws. Already-evaluated, named, first-class and
-call_user_func variants use the same context-aware result helper. Failed calls leave
-the destination and borrowed source values unchanged.
-
-Two focused interpreter tests pass for permissive and staged Overflow profiles,
-covering both admitted bytecode calls and the walker, plus direct-hook leases on
-failure. The bytecode slice requires known call shapes: fixtures admit positional
-builtin shapes through unreachable declarations, preserving builtin precedence.
-Named calls, array literals and first-class construction retain the production
-walker fallback. A real opaque-eval native fixture covers all dispatch forms,
-intercepted errors and unchanged assignments with both optimizers and clean heaps.
-The existing math dispatch and all-five-target AOT intdiv controls also pass.
-Compiler and builtin-exporter builds, the complete generated-docs workflow, the
-architecture audit, assembly alignment and diff hygiene pass. Generated builtin
-artifacts remain identical. No additional public strict guarantee is activated.
-
-
-### Exact eval integer powers without checked overflow
-
-Integer power now has a dependency-neutral pure kernel returning an exact Int or
-an explicitly promoted Float. Constant folding reuses that implementation, and
-Arithmetic/Coercions eval operations select it after their original-kind guards
-when Overflow is disabled. Fitting powers retain their full signed integer width;
-overflow promotion begins at the first overflowing product and follows PHP's
-remaining-factor continuation rather than replacing the calculation with one
-floating pow call. Explicit floating power keeps its existing path. Domain rules
-and overflow rejection remain independent decisions owned by callers.
-
-Two pure contract tests and one walker/VM matrix cover integer kinds above 2^53,
-MIN, extreme exponent identities, checked failures, ordinary promotion and exact
-floating rounding. A native fixture cross-checks Mixed integer powers against
-folding with both numeric domains, both optimizers and clean heaps. The existing
-PHP integer-folding and eval domain controls pass, along with the compiler build,
-prebuilt architecture audit and source/diff hygiene. No serialized syntax, native
-ABI or target emitter changes are needed. Public feature admission is unchanged.
-
-
-### Unary and update operand domains
-
-Numeric operator domains now guard negation, bit-not and updates before scalar
-coercion and writeback. Native class adapters retain precedence. Coercions alone
-permits bytewise string complement; Arithmetic requires an integer complement.
-Original literal and constant-alias kinds are audited before folding, and typed
-parameters/locals are checked by the real frontend. A cfg(test)-only staged checker
-shares the complete source/type pipeline without weakening public admission.
-
-Both eval engines apply the same unary/update rules and preserve source values on
-failure. Statement updates still use Magician's existing supported syntax; local
-increment expressions remain its existing parser gap, with native tests covering
-postfix expression results. Non-overflow updates retain PHP promotion, while the
-independent Overflow flag rejects the boundary. The fake runtime now models
-promoting integer subtraction and bytewise string complement for these controls.
-
-Scalar boxed bit-not uses the existing typed MixedBitNot target in every path,
-including ordinary typed strings. Canonical boxing moves into numeric_operands
-and explicitly owns fresh boxes. Existing source operands are rooted before box
-allocation, and postfix old-result owners stay rooted for every guarded numeric
-profile. Effects and exception-flow summaries retain unary failures and callbacks
-under AST optimization. Nonnumeric source evidence remains unknown for permissive
-numeric proofs rather than hitting an impossible-state assertion.
-
-Six new focused tests pass: raw/typed frontend diagnostics, all-five-target
-source/optimizer EIR coverage, two walker/VM value/overflow/owner matrices, native
-storage/postfix/catch behavior across both domains with optional Overflow and both
-optimizers, and a default string-complement control. Five focused compatibility
-controls cover checked boxed arithmetic, source proofs, updates, numeric callback
-owners and native class fallback. Compiler/Magician checks, compiler build, the
-prebuilt architecture audit, assembly alignment and diff hygiene pass.
-
-Further unary IEEE value/provenance work, builtin domains and binding semantics
-remain before feature admission; the public integration mask is unchanged.
-
-
-### Scalar IEEE negation target parity
-
-The broader unary signed-zero regression exposed an independent x86_64 scalar
-FNeg defect: subtracting from positive zero loses the required sign and can alter
-NaN payload behavior. x86_64 now builds an SSE2 sign mask with pcmpeqd/psllq and
-applies xorpd, keeping the existing float scratch-register footprint. AArch64
-retains its sign-preserving fneg instruction.
-
-An all-five-target emitter unit and native positive/negative-zero round trip pass
-with both optimizers and a clean heap. Compiler build, prebuilt architecture audit,
-assembly alignment and diff hygiene pass. The wider prefix-plus/Mixed unary IEEE
-regression remains pending for the next step and is intentionally not part of this
-verified scalar fix. Public feature admission is unchanged.
-
-
-### Exact unary numeric normalization and protected eval boundary
-
-A neutral NumericUnaryOp and NumericValue contract now preserves integer identity,
-signed zero and NaN payloads. Unary integer minimum promotes only without the
-Overflow guarantee. Shared target ABI sign flipping serves scalar codegen and
-boxed helpers. The exact borrowed operand classifier and its diagnostics are
-emitted for PHP unary normalization as well as checked binary arithmetic.
-
-The versioned __elephc_eval_numeric_unary_v1 callback validates its selector and
-numeric policy subset against the linked runtime before reading the input. It
-snapshots the normalized payload before warning callbacks, returns pending
-Throwable status beneath Rust frames, and publishes an independent result only
-after success. Walker and VM use this protected hook after native-class handlers
-and domain validation. Bytecode serialization is unchanged.
-
-Focused tests pass for neutral IEEE bits, walker/VM ownership, all-five-target
-protected emission, native callback payload/capability/overflow cases and callback
-mutation/throw atomicity with both optimizers and clean heaps. Existing unary eval,
-numeric domain and exact-power classification controls pass. The wider compiler
-prefix-plus/Mixed unary regression remains the next integration step: its source
-AST still needs explicit unary-plus provenance and a typed EIR runtime target.
-Public feature admission remains Locals, Bools, DynamicCode and Opcache.
-
-
-### Explicit unary AST, EIR policy and scalar normalization
-
-Numeric unary plus is now an ExprKind::UnaryPlus node with its own span and the
-same exponentiation/multiplication precedence. Numeric unary statements are
-accepted directly. All structural visitors, rewriting passes, source proofs,
-constant/default consumers, reflection renderers and synthetic-source builders
-retain the node. A warning-free literal normalizer serves these adapters after
-source-domain validation; the optimizer refuses to erase stricter source-kind
-guards. Known nonnumeric literals reuse the existing arithmetic diagnostic.
-
-RuntimeCallTarget::NumericUnary carries a compact operator and ArithmeticPolicy.
-Its canonical Mixed signature, owning result, conservative effects, printed
-policy and module capability checks are explicit. Scalar identities are limited
-to matching PHP kinds and physical scalar storage. Boxed and narrowed values use
-exact normalization with original and newly boxed operand roots. Native object
-handlers share the existing dispatch graph without re-entering its binary scalar
-fast path. Floating negation uses the shared target sign operation, and unchecked
-integer-minimum negation retains PHP promotion.
-
-Default PHP unary conversions now contribute warning, exception and global-write
-boundaries to AST effects and exception-flow analysis. Unused results therefore
-retain warning-handler mutations and catches. Module-aware constant resolution
-preserves enum-read effects and resolves unary-plus aliases for native constant
-inventories. Literal eval and static array-key probes retain AOT support, including
-strict-dynamic-code, rather than requiring permissive runtime fallback.
-
-Focused verification covers four library tests, including five-target emitter
-and policy checks, plus the complete AST variant smoke test, lexer tokens, precedence and unary statements, malformed and
-nonnumeric diagnostics, the existing negation diagnostic controls, native typed,
-Mixed and narrowed IEEE signs, exact strings, domain guards, discarded warnings,
-callback mutation/throw cleanup, defaults, reflection, arrays and literal eval.
-Native class, nullable-value and regression-500 ownership controls pass. New
-native tests use both optimizer settings and report clean heaps. The compiler and
-builtin exporter build, generated-doc workflow, architecture gate, all changed
-assembly comment checks, example PHP syntax and diff hygiene pass. Generated
-builtin registries and pages have no content changes. Public feature admission
-is unchanged; builtin numeric domains, conversion/binding guarantees and the
-remaining strict families still precede full umbrella admission.
-
-### Independent numeric policies for builtin power
-
-Public pow invocations now select the shared operator graph for Arithmetic and
-Coercions independently of Overflow. Original operand kinds and integer-negative
-exponents are validated before destructive folding, including named/spread calls
-and forbidden array operands in dead branches. Array-union evidence remains an
-explicit nonnumeric overload. Known native-class power results follow the shared
-operator contract, including BcMath\Number with a floating exponent; unresolved
-objects retain boxed result storage. Internal calls keep their reviewed PHP path.
-
-Magician applies the same independent policy through direct and indirect builtin
-calls, retaining ordinary runtime fallback when no specialized scalar result was
-produced. Focused tests pass for source diagnostics, callable signatures, exact
-integer results, permitted promotion, floats, domain failures, failed-result
-atomicity and owners. Walker and VM cover both numeric profiles with Overflow on
-and off. Real selected-profile frontend tests validate native Number results and
-EIR emission on all five targets with both optimizer settings. Native mixed
-fixtures exercise direct/named/descriptor/callback calls and native Number results
-with clean heaps. Existing integer-power, source-proof, exact-array reduction and
-eval builtin-boundary controls pass. Generated docs and architecture audits,
-assembly comment alignment, example PHP syntax and diff hygiene pass. Compiler
-and exporter builds also pass. Public feature admission
-remains unchanged. Next verify caller policy across outlined boxed helpers before
-continuing builtin domains and the remaining strict families.
-
-### Caller policy in outlined boxed operators
-
-Shared boxed operator helpers now distinguish trusted implementation source from
-user operations whenever a semantic profile is active. User helpers retain their
-selected guards and overflow kernels. Trusted helpers carry an internal identity
-and lower with SourceMode::Internal, preserving PHP promotion, numeric-string
-conversion, negative integer powers and string updates. Permissive helper names
-remain stable. Both paths share parameter ownership and exceptional cleanup with
-callable bodies, while only public builtin adapters carry the builtin invocation
-flag. Native object comparison dispatch also has an explicit Internal contract.
-
-A selected-frontend EIR regression passes on all five targets for Overflow,
-Arithmetic and Coercions, with both optimizer settings and both caller policies
-in one module. Native promotion/conversion/power/update/Number cases pass with
-both optimizers and clean heaps. Existing shared XML/Number dispatch and public
-pow policy controls pass, as does the previous native builtin power coverage.
-The initial native fixture setup was corrected to feed tagless input to the
-Internal lexer before runtime verification. Compiler build, the prebuilt target
-architecture gate, assembly comment checks and diff hygiene pass. No public
-feature admission changes. Builtin domains, conversion/binding contracts and the
-remaining strict families are still active implementation work.
-
-### Original numeric builtin parameter domains
-
-BuiltinArgumentLowering::NumericParameters resolves preparation from the immutable
-profile and invocation source before evaluating arguments. Numeric domains use
-original values and public callable Mixed storage; permissive and Internal paths
-keep their declared PHP signature/preparation. A reusable rooted EIR guard method
-serves both direct calls and prepared builtin bodies. Abs already owns a neutral
-Mixed parameter; intdiv's strict public adapter must retain the original value
-instead of first binding it to an int. Public invocation contracts remain separate
-from physically generated statements.
-
-Abs accepts int/float operands under Arithmetic or Coercions. Intdiv requires int
-operands. Both guards precede PHP conversion, while Overflow independently controls
-abs(PHP_INT_MIN) and ordinary integer division retains its catchable value errors.
-Source proofs preserve each original parameter kind before folding. Intdiv checks
-each known parameter even when another is unknown, including unreachable source.
-It does not reuse binary validation that defers mixed operands for object overloads.
-Magician shares the same domains on walker, VM, named and indirect calls. Its fake
-abs kernel now models PHP's integer-minimum promotion instead of wrapping.
-
-Two selected-frontend units pass, covering source diagnostics, explicit casts,
-callable signatures, three source modes, all five targets and both optimizers.
-The eval unit covers both domains with Overflow on/off, failed-result atomicity,
-call surfaces and balanced owners. Eight native profile/optimizer runs pass for
-direct/named/spread/FCC/callback calls, failed destinations, dynamic tags, integer
-minimum and signed zero, with clean heaps. Existing checked abs all-target,
-permissive abs native, checked abs/intdiv native and eval intdiv controls pass.
-Compiler and curl exporter builds, complete generated-doc workflow and audits,
-assembly comments, example PHP syntax and diff hygiene pass. Generated internal
-abs/intdiv pages and registry metadata are included. Public feature admission is
-unchanged. Numeric aggregate domains, conversion/binding guarantees and all
-remaining strict families continue before full umbrella admission.
-
-### Numeric aggregate element domains and explicit runtime policy
-
-Array sum/product now carry Arithmetic or Coercions domains in typed NumericFunction
-EIR independently of Overflow. Their new profiled runtime entries receive numeric
-bits as a third internal ABI argument, saved in a checked free frame slot128.
-Original numeric tags and explicit native to_number adapters precede scalar folds.
-The passed policy selects diagnostic ownership and checked versus PHP-promoting
-combination. The emitter profile determines capabilities. Existing PHP and
-Overflow-only entry ABIs remain intact, sharing the same source snapshot and
-resumable cleanup loop. Normal call-entry TypeError helpers preserve target stack
-alignment; numeric-domain data is emitted even when Overflow is absent.
-
-Checker hooks validate known element contracts and reviewed Number casts rather
-than treating every object arithmetic handler as an aggregate conversion. Source
-proofs retain partial final-entry evidence, diagnose known invalid elements beside
-unknown values and preserve last-write/key planning, including constant aliases.
-Invocation domains remain separate from trusted constant evaluation semantics.
-
-The strict eval fold uses existing value-copy, insertion-order read, native Number
-cast and protected arithmetic hooks. Source, element, numeric view and prior carry
-have rooted cleanup obligations on success and failure. Identity Number views are
-borrowed; fresh cast results are independent owners. The default insertion-order
-read retires its temporary key. Fake fixtures explicitly retire manually seeded
-child leases, and fake multiplication now models PHP overflow promotion.
-
-New verification passes: three frontend/source/native-Number units and one runtime
-emitter unit across all five targets and both optimizers, a walker/VM unit covering
-ordered failures and every owner, and eight native profile/optimizer executions
-covering direct/FCC/callback calls, map/reduce fallbacks, rejected elements, failed
-destinations, promotion, checked overflow and unchanged sources with clean heaps.
-The neutral policy test and six relevant compatibility controls pass. Compiler
-and curl exporter builds, the complete prebuilt generated-doc workflow, target
-architecture gate, assembly comment checks, example PHP syntax and diff hygiene
-pass. Generated builtin pages and registries have no content changes. Public
-feature admission remains unchanged. Next audit the protected checked-aggregate
-invalid-source result boundary, then finish conversions, stable bindings and every
-remaining strict family before full umbrella admission.
+Verified through step 39 (this commit), following `3413afbaeb`. Issue:
+https://github.com/illegalstudio/elephc/issues/2347.
+
+The full task remains active. The user requested complete implementation, with a
+commit for every verified step and no partial delivery. Do not expose unfinished
+flags as successful no-ops. The public integrated mask still contains only
+Locals, Bools, DynamicCode and Opcache. Existing Locals behavior remains available
+but its stronger numeric/reference/eval binding contract is outstanding. All
+other guarantees and the complete umbrella remain explicitly gated until their
+whole contract is enforced.
+
+This progress ledger replaces the long chronological narrative after step 38.
+The detailed evidence remains in Git history, Code Journal plan revisions through
+56, the linked work logs, and the current agent-facing architecture document
+3739892b. The approved behavior and delivery requirements above are unchanged.
+
+### Verified foundations
+
+- The dependency-neutral elephc-semantics crate owns the immutable ABI1 profile,
+  sixteen-feature catalog, independent request resolution, scalar decisions and
+  exact key classification. Specific positive/negative requests override the
+  umbrella regardless of order, with last-wins explicit requests. PHP-only naming
+  has no legacy CLI alias.
+- Profiles travel through frontend options/results, EIR modules and contexts,
+  backend/runtime generation, eval contexts and host capability checks. Physical
+  SourceMode, PHP strict_types and public builtin invocation contracts are separate.
+  Internal implementation operations retain explicit reviewed PHP semantics.
+- Positive and negative parsed-source/executable caches partition by effective
+  semantic identity, PHP-only visibility and PHP version. Eval source provenance,
+  disk headers and versioned host setters agree. Magician disk format is 30.
+  Runtime build fingerprints include semantic source. EIR EvalSourceProfile uses
+  a checked compact u32 so Instruction remains within its 112-byte budget.
+- DynamicCode audits every syntactic branch, resolver/autoload/include boundary,
+  recursively verified literal eval, EIR fallback, opaque execution and REPL.
+  Statically eligible literal eval remains AOT; runtime source is refused.
+- Bools covers known and dynamic conditions, short-circuit/xor/ternaries, loop and
+  iterator conditions, predicate callbacks, walker/VM, native hosts and cached REPL.
+  Owned predicate/iterator failures clean up through catches and destructors.
+- String interpolation still lowers to ordinary concat tokens. Preserve explicit
+  formatting intent before admitting string-only concatenation.
+
+### Verified numeric implementation
+
+- Exact signed literal provenance distinguishes deliberate floats, integer
+  overflow and the minimum signed magnitude. Both compiler/eval lexers and parsers
+  retain the required source evidence, including interpolation offsets and caches.
+- Compact ArithmeticPolicy travels explicitly in NumericOperation, NumericUpdate,
+  NumericUnary and NumericFunction targets. Native capability does not select an
+  operation's semantics. Module validation, effects, ownership, printing and
+  optimizer transformations retain the policy.
+- Scalar IOverflows guards, boxed exact operand classification, integer power,
+  division/modulo, unary normalization and updates preserve PHP kinds. Arithmetic
+  and Coercions independently guard original numeric domains, while Overflow
+  independently changes integer promotion into catchable ArithmeticError.
+  Negative integer powers are rejected only by Arithmetic. Bit operations retain
+  their reviewed wrapping/shift contracts. IEEE floats, signed zero and NaN bits
+  remain governed by their explicit operations.
+- Source validation precedes folding, retains full numeric-string provenance,
+  declaration/default/call evidence, named/spread planning and constant cycle
+  guards. AST effects and exception-flow summaries preserve warnings, user callback
+  writes and discarded failures. Auditing typed evidence erased by the initial
+  fold remains a required completion check before feature admission.
+- Unary plus is an explicit AST node, traversed by every structural visitor and
+  rebuild/default/reflection/synthetic adapter. Typed EIR unary normalization uses
+  independently owned boxes and preserves native object precedence. Direct scalar
+  identities require matching logical kinds and physical representations.
+- Pow shares the operator graph for every active numeric policy. Native class
+  result contracts, original kinds, exact integer results, named/spread/FCC and
+  indirect calls agree across frontend, native and eval execution.
+- NumericParameters descriptors preserve original builtin arguments before binding
+  can coerce them. Prepared public wrappers and direct calls share rooted EIR
+  guards; Internal and permissive signatures remain unchanged. Abs accepts int or
+  float under numeric domains, while intdiv requires int. Intdiv validates each
+  known parameter even when its companion is unknown. Its value failures remain
+  catchable in all profiles.
+- Sum/product use typed NumericFunction policy for every numeric guarantee.
+  Profiled native entries receive numeric bits as a third internal ABI argument,
+  held in a frame slot checked against the exception record. They guard elements
+  after explicit native to_number adapters, select checked versus promoting
+  combination from caller bits, and share the existing source snapshot/unwind
+  loop. PHP and Overflow-only entries retain their old ABI.
+- Aggregate checker/source proofs retain concrete element contracts, partial final
+  entry evidence, overwrite/key identity and native Number casts. An arithmetic
+  object overload alone does not authorize numeric aggregation. Eval snapshots
+  the array and roots source, element, numeric view and partial carry. Identity
+  numeric views are borrowed; fresh casts and temporary iteration keys are retired.
+- Outlined boxed operators partition trusted Internal and user callers when a
+  profile is active. Only public builtin invocation adapters carry the builtin
+  wrapper flag. Native comparison dispatch uses an explicit Internal contract.
+- Exact typed literal-key planning preserves original string bytes/kinds and
+  append provenance in source reduction proofs. This is groundwork; the complete
+  runtime key, producer, array type and indexing guarantees remain outstanding.
+
+### Native eval boundaries and ownership
+
+Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
+exceptions beneath Rust frames. Success transfers one owner; unsupported requests
+leave outputs untouched; failures use pending Throwable ownership and status2.
+Unary requests validate selector/capability subsets before reading pointers.
+Numeric operands are snapshotted before warning callbacks; C ABI spills, operand
+pins, normal call versus jump-entry stack alignment and cleanup must remain sound
+on every target. No Rust unwinding may implement a PHP Throwable.
+
+Step39 closes invalid checked aggregate sources. A native regression was red on
+step38: sum/product receiving an int returned status0 with a null result. Shared
+source diagnostics and normal call-entry failure helpers now produce protected
+TypeError status2 before result publication, preserve the output slot and borrowed
+input, and transfer the pending Throwable correctly. The new five-target emitter
+unit and native regression pass, along with three boundary/owner controls, the
+compiler build, architecture gate, assembly comment checks and diff hygiene.
+
+### Completion work, in order
+
+1. Audit the remaining numeric call/host paths. Verify initial folding cannot erase required
+   numeric guards or typed source violations. Close any concrete remaining literal,
+   compound-store, update, callable, reference and exception ownership gaps.
+2. Integrate shared conversion plans for implicit assignments, parameters, returns,
+   callbacks, descriptors, reflection and eval re-entry. Complete checked explicit
+   casts with range/domain errors, exact strings and native object cast contracts.
+3. Finish stable Locals bindings across promotion, parameters, captures, globals,
+   by-reference writes, foreach aliases, loop joins, unset/rebind and eval scopes.
+   Locals alone must not silently enable Overflow or widen an inferred int binding.
+4. Complete Comparisons, Strings, Nullability, Mixed and Initialization through
+   source validation, shared checking/plans, EIR/runtime guards, builtin contracts,
+   walker/VM, references and host boundaries. Preserve explicit formatting and
+   intentional probing/narrowing. Follow the approved boundary defaults above.
+5. Complete exact runtime keys for reads/writes/probes/unset/append/spreads and
+   every producer, including JSON, casts and serialization; pin array element/key
+   contracts and mutators; implement checked ordinary indexing while probes retain
+   missing-value semantics. Preserve COW and references through every failure.
+6. Audit executable/web/REPL/staticlib/cdylib/phpext/eval/callback boundaries and
+   effective cache identity for the whole profile. Update user docs, README,
+   examples and generated metadata. Admit every feature only after its complete
+   guarantee is enforced, then enable the full umbrella and verify combinations.
+
+All five supported targets remain first-class. Local native verification has run
+on Linux x86_64; library/runtime emitter checks cover the complete target matrix.
+CI provides executable coverage on the remaining supported hosts and iOS linking.
+The focused checks for each verified commit passed with both optimizer settings
+where relevant, plus ownership/heap evidence for new failure paths. No full local
+suite, push or PR has been requested or performed.
+
+### Verification discipline
+
+Count exact test registrations, use narrow package/test-binary filters, and queue
+all compiling/linking/heavy test commands through me-build-lock. Freeze source
+before verification: the compiler build fingerprint hashes every source file,
+including tests. New Rust files need Purpose/Called from/Key details headers and
+every function needs a docblock. Do not run cargo fmt or edit CHANGELOG.
+
+Builtin homes and eval bindings require the update-builtin-docs workflow. Build
+the curl exporter through the queue, then set ELEPHC_DOCS_PREBUILT=1 and
+PYTHONDONTWRITEBYTECODE=1 for every generator and audit, including the architecture
+boundary gate, to prevent hidden Cargo invocations. Check every modified assembly
+comment, example syntax and git diff --check. Remove only task-owned temporary
+paths. Keep this plan, agent documentation and the current journal log synchronized.
+
+### Verified commit ledger
+
+| Step | Commit | Change |
+|---|---|---|
+| 1 | `09ab0ce4af` | feat(strict): add semantic profiles and separate php-only mode |
+| 2 | `aa19924cdf` | feat(strict): enforce boolean conditions and callback results |
+| 3 | `9c81eca471` | feat(strict): preserve checked integer literal magnitudes |
+| 4 | `fa3c16c2c9` | feat(strict): isolate parsed source caches by semantic profile |
+| 5 | `d3a2f78e07` | feat(strict): retain eval source profiles through parsing and AOT |
+| 6 | `4d090bd18b` | feat(strict): validate native runtime semantic identity |
+| 7 | `3edd7edddb` | feat(strict): lower checked scalar arithmetic through shared guards |
+| 8 | `614987b9f4` | feat(strict): preserve checked boxed arithmetic and power policies |
+| 9 | `ff251eda10` | fix(strict): preserve checked arithmetic through AST optimization |
+| 10 | `9b0a136df5` | feat(strict): reject proven source integer overflow |
+| 11 | `8f60c8398a` | feat(strict): check integer updates before storage mutation |
+| 12 | `4bc4f9441d` | feat(strict): retain builtin invocation profiles across callable paths |
+| 13 | `894e7cfed4` | feat(strict): check absolute values through builtin call contracts |
+| 14 | `2449202cbc` | feat(strict): share checked power graphs across builtin callables |
+| 15 | `e3cf818471` | feat(strict): preserve exact numeric power operands and callback effects |
+| 16 | `317821d610` | feat(strict): check numeric array reductions and callback cleanup |
+| 17 | `2e3940f361` | feat(strict): validate numeric reductions and integer division boundaries |
+| 18 | `6e0cc17eb7` | feat(strict): preserve typed literal keys and append provenance |
+| 19 | `872d1c3749` | feat(strict): contain checked numeric eval callbacks |
+| 20 | `e67790a9a7` | feat(strict): share exact checked numeric operand kernels |
+| 21 | `74267d737e` | feat(strict): check eval numeric array reductions |
+| 22 | `b911cc2942` | feat(strict): check eval updates before mutation |
+| 23 | `8d8a8a3b08` | feat(strict): contain eval warning handler exceptions |
+| 24 | `4aeafcb3b6` | feat(strict): protect eval division and share operand snapshots |
+| 25 | `83b3d69229` | fix(strict): preserve numeric warning and kind error order |
+| 26 | `035e8701ca` | feat(strict): protect eval modulo conversions and ownership |
+| 27 | `1c951eb099` | feat(strict): carry checked division and modulo through eir |
+| 28 | `839f071ddb` | feat(strict): share numeric operand domains across compiler and eval |
+| 29 | `c1927fba57` | fix(strict): preserve catchable intdiv failures across eval calls |
+| 30 | `88de5f36f5` | feat(strict): share exact integer power results with eval |
+| 31 | `b94b9ccfa8` | feat(strict): guard unary operands and updates before writeback |
+| 32 | `e0f29e32e1` | fix(strict): preserve ieee signs in scalar floating negation |
+| 33 | `1b59635ae4` | feat(strict): preserve exact unary values across protected eval hooks |
+| 34 | `22de3cd29b` | feat(strict): preserve unary numeric contracts through ast and eir |
+| 35 | `534ce59174` | feat(strict): apply independent numeric policies to builtin power |
+| 36 | `3d27b323d5` | fix(strict): preserve caller policies in outlined operators |
+| 37 | `266dd4c139` | feat(strict): guard original numeric builtin parameter kinds |
+| 38 | `3413afbaeb` | feat(strict): enforce numeric array reduction domains |
+
+| 39 | this commit | fix(strict): reject invalid checked aggregate callback sources |

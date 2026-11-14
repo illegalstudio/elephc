@@ -36,7 +36,7 @@ pub(super) fn lower_aggregate(ctx: &mut FunctionContext<'_>, inst: &Instruction,
     let valid = ctx.next_label("array_aggregate_valid");
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &valid);
     crate::codegen::lower_inst::exceptions::emit_type_error(ctx,
-        &format!("{name}(): Argument #1 ($array) must be of type array"));
+        crate::codegen_support::runtime::numeric_aggregate_source_message(product));
     ctx.emitter.label(&valid);
     store_if_result(ctx, inst)
 }
