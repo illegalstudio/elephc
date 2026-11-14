@@ -28,6 +28,7 @@ mod generics_docblock_enums;
 mod reflection_enum_declaring_class;
 mod preprocessor;
 mod namespaces;
+mod autoload_files_functions;
 mod null_sentinel;
 mod case_insensitive_symbols;
 mod cli;
