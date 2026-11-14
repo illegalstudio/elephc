@@ -442,6 +442,9 @@ pub(super) fn check_types_impl(
         program,
     ));
     errors.extend(super::schema::validate_noncoercive_defaults(&mut checker, program));
+    for class in checker.classes.values_mut() {
+        crate::types::constant_binding::bind_property_defaults(class);
+    }
     // All class/interface/enum metadata now exists, so deferred symbolic
     // attribute-argument references can be checked for resolvability. Drop any
     // the EIR backend cannot lower (e.g. built-in `Attribute::TARGET_CLASS`) so

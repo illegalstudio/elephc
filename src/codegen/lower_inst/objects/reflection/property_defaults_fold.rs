@@ -25,6 +25,13 @@ pub(super) fn reflection_folded_property_default(
         let value = reflection_literal_parameter_default_value(&Expr::new(literal, default.span))?;
         return Some(ReflectionParameterDefaultValue::Evaluated { value: Box::new(value), enum_cases });
     }
+    if let Some(literal) = const_default_values::resolve_const_default(default, &context)
+        .and_then(const_default_values::resolved_literal_default)
+    {
+        if let Some(value) = reflection_literal_parameter_default_value(&default.with_kind(literal)) {
+            return Some(value);
+        }
+    }
     let mut default = default.clone();
     fold(&mut default, &context);
     crate::types::deferred_defaults::prune_literal_branches(&mut default);

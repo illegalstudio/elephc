@@ -80,3 +80,22 @@ pub(crate) fn bind_declared_value(value: Expr, annotation: Option<&TypeExpr>) ->
         None => bind_value(value, &PhpType::Mixed),
     }
 }
+
+/// Prepares existing property defaults after original declaration validation has completed.
+pub(crate) fn bind_property_defaults(info: &mut crate::types::ClassInfo) {
+    for (index, ((_, ty), default)) in info.properties.iter().zip(&mut info.defaults).enumerate() {
+        if let Some(value) = default {
+            let destination = if info.property_declared_slots.get(index).copied().unwrap_or(false) {
+                ty
+            } else { &PhpType::Mixed };
+            *value = bind_value(value.clone(), destination);
+        }
+    }
+    for ((name, ty), default) in info.static_properties.iter().zip(&mut info.static_defaults) {
+        if let Some(value) = default {
+            let destination = if info.declared_static_properties.contains(name) { ty }
+                else { &PhpType::Mixed };
+            *value = bind_value(value.clone(), destination);
+        }
+    }
+}

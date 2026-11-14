@@ -860,6 +860,31 @@ DynamicCode/Bools profile and leaves no task-owned artifacts. Public admission i
 nonliteral global constant origins, reference/host boundaries and the remaining
 strict families still require integration.
 
+### Verified property default producers
+
+Step56 prepares existing instance and static defaults after original declaration
+validation. Explicit slot declarations select their destination contract; inferred
+slots receive Identity and keep their produced runtime kind. Inherited and trait
+values retain physical producer profiles, and absent typed defaults stay absent.
+The same prepared metadata reaches object initialization, static initialization
+and Reflection default-property reads.
+
+The compact arithmetic resolver now accepts warning-free numeric strings,
+booleans and null through the shared literal unary-plus normalizer after checking
+original operand domains. Warning-producing prefixes still decline. Reflection
+prefers the complete shared resolved value before its deferred-error selector
+fallback, preserving producer policy and binding across selected expressions.
+
+A missing trait-default binding was red on step55. Four new checks pass: metadata,
+all five emitters, native permissive/selected-profile execution with both optimizer
+settings and clean heaps, and a five-target source-domain/warning matrix. Coverage
+includes scalar/nullable/nominal/static/trait/inherited defaults, user overrides,
+untyped arithmetic, scalar normalization, selected negative power and Reflection.
+Seven existing default-producer/declaration/lexical-scope controls pass, plus
+compiler build, architecture828, assembly comments and diff hygiene. Public
+admission is unchanged. Nonliteral global constant origins and the remaining
+reference/host and strict-family integration remain next.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -982,4 +1007,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 52 | `39f10226af` | feat(strict): enforce structural union and callable value contracts |
 | 53 | `6cfe328f09` | feat(strict): validate original source call arguments |
 | 54 | `82c251fd4d` | feat(strict): retain expression producer source profiles |
-| 55 | this commit | feat(strict): bind nonliteral declaration producers before consumption |
+| 55 | `68d8803dfb` | feat(strict): bind nonliteral declaration producers before consumption |
+| 56 | this commit | feat(strict): bind property default producers before initialization |

@@ -12,6 +12,36 @@ use super::*;
 use crate::codegen::platform::Target;
 use crate::span::Span;
 
+/// Warning-free scalar normalization remains conditional on each producer's original domain rules.
+#[test]
+fn property_scalar_default_metadata_preserves_warning_and_source_domains() {
+    use crate::source::{SourceMode, SourceProfile};
+    use elephc_semantics::{SemanticProfile, StrictFeature};
+    let strict = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true).with(StrictFeature::Arithmetic, true);
+    for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        for profile in [SemanticProfile::PERMISSIVE, strict] {
+            let mut module = Module::new(Target::parse(target).unwrap());
+            module.semantic_profile = profile;
+            let context = ConstDefaultContext { module: &module, current_class: None };
+            for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
+                for (left, expected) in [
+                    (ExprKind::StringLiteral("1".into()), Some(2)),
+                    (ExprKind::BoolLiteral(true), Some(2)), (ExprKind::Null, Some(1)),
+                    (ExprKind::StringLiteral("1tail".into()), None),
+                ] {
+                    let expr = crate::source::with_parse_mode(SourceProfile::new(mode), || {
+                        Expr::binop(Expr::new(left, Span::dummy()), BinOp::Add, Expr::int_lit(1))
+                    });
+                    let expr = crate::types::constant_binding::bind_value(expr, &crate::types::PhpType::Mixed);
+                    let expected = if mode != SourceMode::Internal && profile == strict { None } else { expected };
+                    assert!(resolve_const_default(&expr, &context) == expected.map(const_default_int_value),
+                        "{target}: {profile:?} {mode:?} {expr:?}");
+                }
+            }
+        }
+    }
+}
+
 /// Scalar results retain enum evaluation effects so compact ABI consumers cannot erase them.
 #[test]
 fn enum_condition_defaults_retain_materialization_on_all_targets() {
