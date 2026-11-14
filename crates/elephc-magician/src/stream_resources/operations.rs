@@ -295,9 +295,12 @@ impl EvalStreamResources {
         Some(result == 1)
     }
 
-    /// Returns the host file descriptor backing an eval-owned stream resource.
+    /// Returns the host file descriptor backing an eval-owned stream or socket listener.
     pub(crate) fn raw_fd(&self, id: i64) -> Option<i32> {
-        self.streams.get(&id).map(|stream| stream.file.as_raw_fd())
+        self.streams
+            .get(&id)
+            .map(|stream| stream.file.as_raw_fd())
+            .or_else(|| self.socket_listeners.get(&id).map(AsRawFd::as_raw_fd))
     }
 
     /// Toggles blocking mode on a stream's file descriptor.
