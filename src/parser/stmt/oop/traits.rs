@@ -73,13 +73,20 @@ pub(in crate::parser::stmt) fn parse_trait_use(
                         }
                         _ => None,
                     };
+                    // Right after `as`, a member modifier is the visibility change, so a bare alias
+                    // is any other semi-reserved word (`as list`). After a visibility, the alias is
+                    // any word, modifiers included (`as protected match`, `as protected static`).
                     let alias = match tokens.get(*pos).map(|(t, _)| t) {
-                        Some(Token::Identifier(name)) => {
-                            let name = name.clone();
-                            *pos += 1;
-                            Some(name)
-                        }
-                        _ => None,
+                        Some(
+                            Token::Public
+                            | Token::Protected
+                            | Token::Private
+                            | Token::Static
+                            | Token::Abstract
+                            | Token::Final
+                            | Token::ReadOnly,
+                        ) if visibility.is_none() => None,
+                        _ => adaptation_bareword(tokens, *pos).inspect(|_| *pos += 1),
                     };
                     if visibility.is_none() && alias.is_none() {
                         return Err(CompileError::new(
@@ -173,6 +180,14 @@ fn parse_trait_adaptation_target(
     pos: &mut usize,
     span: Span,
 ) -> Result<(Option<Name>, String), CompileError> {
+    // A bare method reference may be any semi-reserved word, as in a method declaration:
+    // `use T { match as protected matchContent; }`.
+    if !super::super::name_starts_at(tokens, *pos) {
+        if let Some(method) = adaptation_bareword(tokens, *pos) {
+            *pos += 1;
+            return Ok((None, method));
+        }
+    }
     let first = parse_name(
         tokens,
         pos,
@@ -181,13 +196,12 @@ fn parse_trait_adaptation_target(
     )?;
     if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleColon {
         *pos += 1;
-        let method = match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Identifier(name)) => {
-                let name = name.clone();
+        let method = match adaptation_bareword(tokens, *pos) {
+            Some(name) => {
                 *pos += 1;
                 name
             }
-            _ => {
+            None => {
                 return Err(CompileError::new(
                     span,
                     "Expected method name after 'TraitName::' in adaptation",
@@ -202,4 +216,13 @@ fn parse_trait_adaptation_target(
             .ok_or_else(|| CompileError::new(span, "Expected method name in adaptation"))?;
         Ok((None, method))
     }
+}
+
+/// Returns the method name spelled by the token at `pos` when it is an identifier or a
+/// semi-reserved keyword (`match`, `list`, `print`…), which PHP accepts wherever a trait
+/// adaptation names a method or an alias.
+fn adaptation_bareword(tokens: &[SpannedToken], pos: usize) -> Option<String> {
+    tokens
+        .get(pos)
+        .and_then(|(token, metadata)| crate::parser::keyword_name::bareword_name_from_token(token, metadata))
 }
