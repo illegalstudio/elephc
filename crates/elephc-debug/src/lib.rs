@@ -205,6 +205,15 @@ fn push_call_event(event: serde_json::Value) -> Option<usize> {
                 }
             }
         });
+        FIBER_STACKS.with(|stacks| {
+            for stack in stacks.borrow_mut().values_mut() {
+                for frame in stack.iter_mut() {
+                    if frame.call_event == Some(index) {
+                        frame.call_event = None;
+                    }
+                }
+            }
+        });
         index
     };
     Some(index)
@@ -1186,7 +1195,13 @@ impl Debugger {
 
     /// Presents one breakpoint stop on the terminal client and waits for commands.
     /// Returns whether `site_id` repeats the exact position a step started from.
-    fn same_step_position(&self, step: &StepState, site_id: u32) -> bool {
+    ///
+    /// Depth is part of the position: a recursive call may enter the same
+    /// function on the same line, and `stepIn` must stop in the deeper frame.
+    fn same_step_position(&self, step: &StepState, site_id: u32, depth: usize) -> bool {
+        if depth != step.depth {
+            return false;
+        }
         let Some(site) = self.sites.get(&site_id) else {
             return false;
         };
@@ -1798,6 +1813,7 @@ impl<'a> WebSessionClaim<'a> {
 }
 
 impl Drop for WebSessionClaim<'_> {
+    /// Releases an active claim when setup returns before the request owns it.
     fn drop(&mut self) {
         if self.active {
             release_web_session(self.directory);
@@ -2358,9 +2374,9 @@ pub extern "C" fn elephc_debug_site_inner(site_id: u32, frame: usize) {
                 StepMode::Next => {
                     depth < step.depth
                         || (depth == step.depth
-                            && !debugger.same_step_position(&step, site_id))
+                            && !debugger.same_step_position(&step, site_id, depth))
                 }
-                StepMode::Step => !debugger.same_step_position(&step, site_id),
+                StepMode::Step => !debugger.same_step_position(&step, site_id, depth),
                 StepMode::Finish => depth < step.depth,
             },
             None => false,
@@ -2371,7 +2387,7 @@ pub extern "C" fn elephc_debug_site_inner(site_id: u32, frame: usize) {
         // behavior as soon as the step reaches a new line or function.
         let suppress_breakpoint = debugger.step.is_some_and(|step| {
             matches!(step.mode, StepMode::Next | StepMode::Step)
-                && debugger.same_step_position(&step, site_id)
+                && debugger.same_step_position(&step, site_id, depth)
         });
         let mut breakpoint_stop = false;
         if !pause
