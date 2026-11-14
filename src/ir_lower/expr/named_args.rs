@@ -34,24 +34,22 @@ pub(super) fn lower_named_builtin_args_with_signature(
     lower_args_with_signature(ctx, Some(&storage), args)
 }
 
-/// Returns the source expression a named-argument call binds to regular parameter `index`.
-///
-/// Leading positional arguments bind by position and named arguments by parameter name.
-/// Returns `None` when a default, a spread or the variadic tail supplies the parameter.
-pub(super) fn named_call_param_source<'a>(
-    sig: &FunctionSig, args: &'a [Expr], index: usize,
-) -> Option<&'a Expr> {
-    let positional = args.iter()
-        .take_while(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. } | ExprKind::Spread(_)))
-        .count();
-    if index < positional {
-        return args.get(index);
+/// Records the class-like parameter check of one evaluated source, through the planner's
+/// source-to-parameter mapping (which also covers statically unpacked named keys).
+fn record_planned_object_param_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    source_index: usize,
+    value: crate::ir::ValueId,
+) {
+    let Some(source) = plan.source_values.iter().find(|source| source.source_index() == source_index)
+    else {
+        return;
+    };
+    if let Some(param_index) = source.param_idx() {
+        super::call_arg_coercion::record_object_param_source(ctx, sig, param_index, value, source.expr());
     }
-    let (param_name, _) = sig.params.get(index)?;
-    args.iter().find_map(|arg| match &arg.kind {
-        ExprKind::NamedArg { name, value } if name == param_name => Some(value.as_ref()),
-        _ => None,
-    })
 }
 
 /// Lowers named arguments with caller-selected trailing-default preservation.
@@ -106,7 +104,9 @@ pub(super) fn lower_named_args_with_signature_options(
                 promote_captured_reference_argument(ctx, source.expr()); None
             } else { prepare_captured_output_argument(ctx, source.expr(), ty) })
         });
-        source_values.push(lower_planned_source_arg(ctx, sig, &plan, source_index, capture_values));
+        let value = lower_planned_source_arg(ctx, sig, &plan, source_index, capture_values);
+        record_planned_object_param_source(ctx, sig, &plan, source_index, value);
+        source_values.push(value);
         if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
     }
 
@@ -508,6 +508,7 @@ fn lower_named_args_with_spread_plan_impl(
                 .unwrap_or_else(|| lower_planned_source_arg(ctx, sig, plan, source_index, capture_values)),
             None => lower_planned_source_arg(ctx, sig, plan, source_index, capture_values),
         };
+        record_planned_object_param_source(ctx, sig, plan, source_index, value);
         if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
         source_values[source_index] = Some(value);
     }
