@@ -65,11 +65,7 @@ impl Checker {
     pub(crate) fn is_subclass_of(&self, class_name: &str, ancestor_name: &str) -> bool {
         // A class under construction is absent from `classes` but its parent is already known;
         // override covariance is validated during that window.
-        let mut current = self
-            .classes
-            .get(class_name)
-            .and_then(|class| class.parent.clone())
-            .or_else(|| self.pending_class_parents.get(class_name).cloned());
+        let mut current = self.parent_of(class_name);
         let mut seen = std::collections::HashSet::new();
         while let Some(parent_name) = current {
             if parent_name == ancestor_name {
@@ -78,11 +74,45 @@ impl Checker {
             if !seen.insert(parent_name.clone()) {
                 return false;
             }
-            current = self
-                .classes
-                .get(&parent_name)
-                .and_then(|class| class.parent.clone())
-                .or_else(|| self.pending_class_parents.get(&parent_name).cloned());
+            current = self.parent_of(&parent_name);
+        }
+        false
+    }
+
+    /// The parent of `class_name`: from its built `ClassInfo`, else from the class being built
+    /// (`pending_class_parents`), else from its declaration while schemas are still being built
+    /// (`declared_class_ancestry`).
+    fn parent_of(&self, class_name: &str) -> Option<String> {
+        if let Some(class) = self.classes.get(class_name) {
+            return class.parent.clone();
+        }
+        self.pending_class_parents.get(class_name).cloned().or_else(|| {
+            self.declared_class_ancestry.get(class_name).and_then(|(parent, _)| parent.clone())
+        })
+    }
+
+    /// Whether a class that is declared but not built yet implements `interface_name`, through
+    /// its own declaration or an ancestor's (built or declared).
+    fn declared_class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
+        let mut current = Some(class_name.to_string());
+        let mut seen = HashSet::new();
+        while let Some(name) = current {
+            if !seen.insert(name.clone()) {
+                return false;
+            }
+            if self.classes.contains_key(&name) {
+                return self.class_implements_interface(&name, interface_name);
+            }
+            let Some((parent, implements)) = self.declared_class_ancestry.get(&name) else {
+                return false;
+            };
+            if implements.iter().any(|implemented| {
+                implemented == interface_name
+                    || self.interface_extends_interface(implemented, interface_name)
+            }) {
+                return true;
+            }
+            current = parent.clone();
         }
         false
     }
@@ -102,8 +132,13 @@ impl Checker {
                     || self.interface_extends_interface(class_name, ancestor_name)))
     }
 
-    /// Returns true if `class_name` directly implements `interface_name` (not via inheritance).
+    /// Returns true if `class_name` implements `interface_name`: from the built class's
+    /// flattened interface list (parents and interface parents included), or, for a class the
+    /// build walk has not reached yet, from its declared ancestry.
     pub(crate) fn class_implements_interface(&self, class_name: &str, interface_name: &str) -> bool {
+        if !self.classes.contains_key(class_name) {
+            return self.declared_class_implements_interface(class_name, interface_name);
+        }
         self.classes.get(class_name).is_some_and(|class_info| {
             class_info
                 .interfaces
@@ -126,7 +161,7 @@ impl Checker {
             return type_name == interface_name
                 || self.interface_extends_interface(type_name, interface_name);
         }
-        false
+        self.class_implements_interface(type_name, interface_name)
     }
 
     /// Accepts ordinary ArrayAccess objects and reviewed internal dimension handlers.
@@ -186,20 +221,19 @@ impl Checker {
 
     /// Returns true if `type_name` (a class or interface) implements `Iterator` or
     /// `IteratorAggregate`, which are the interfaces that make a type usable in `foreach`.
+    /// A class the build walk has not reached yet answers from its declared ancestry, so an
+    /// `iterable` return may be narrowed to it.
     pub(crate) fn object_type_implements_iterable(&self, type_name: &str) -> bool {
         let type_name = type_name.trim_start_matches('\\');
         if canonical_builtin_iterable_interface_name(type_name).is_some() {
             return true;
         }
-        if self.classes.contains_key(type_name) {
-            return self.class_implements_interface(type_name, "Iterator")
-                || self.class_implements_interface(type_name, "IteratorAggregate");
-        }
         if self.interfaces.contains_key(type_name) {
             return self.interface_extends_interface(type_name, "Iterator")
                 || self.interface_extends_interface(type_name, "IteratorAggregate");
         }
-        false
+        self.class_implements_interface(type_name, "Iterator")
+            || self.class_implements_interface(type_name, "IteratorAggregate")
     }
 
     /// Finds the most specific common ancestor object type shared by all type names in
