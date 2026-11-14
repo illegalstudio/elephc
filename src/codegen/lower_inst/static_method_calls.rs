@@ -146,7 +146,13 @@ pub(super) fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Ins
             &format!("{impl_class}::{method_key}"),
         )?;
     }
-    let eval_done_label = if late_bound_static && ctx.module.required_runtime_features.eval_bridge {
+    // Object-based static calls dispatch through the receiver's runtime class and must not
+    // enter the caller's eval late-static override: a native Base object stays on Base::method
+    // even while an eval-declared Child override is active.
+    let eval_done_label = if late_bound_static
+        && object_value.is_none()
+        && ctx.module.required_runtime_features.eval_bridge
+    {
         let no_override_label = ctx.next_label("eval_late_static_no_override");
         let done_label = ctx.next_label("eval_late_static_done");
         builtins::lower_eval_native_frame_static_method_call(

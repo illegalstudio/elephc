@@ -1571,3 +1571,28 @@ var_dump($null?->value(8));
     );
     assert_eq!(out, "ok:7\nNULL\n");
 }
+
+/// An object-based static call must use the object's runtime class, not the eval caller's
+/// active late-static override. A native `Base` object stays on `Base::value()` even after
+/// eval declares a `Child` override.
+#[test]
+fn test_object_static_dispatch_ignores_eval_caller_override() {
+    let out = compile_and_run(
+        r#"<?php
+class NativeEvalBase {
+    public static function value(): string { return "base"; }
+    public static function run(self $object): string { return $object->value(); }
+}
+$base = new NativeEvalBase;
+echo NativeEvalBase::run($base), "\n";
+eval('
+class NativeEvalChild extends NativeEvalBase {
+    public static function value(): string { return "child"; }
+}
+echo NativeEvalBase::run(new NativeEvalBase), "\n";
+echo NativeEvalChild::value(), "\n";
+');
+"#,
+    );
+    assert_eq!(out, "base\nbase\nchild\n");
+}
