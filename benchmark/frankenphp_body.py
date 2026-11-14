@@ -235,33 +235,41 @@ def main() -> None:
     print(f"Geometric mean Elephc body speedup vs FrankenPHP+JIT: **{fp_jit_geomean:.2f}x**")
     print(f"Elephc faster on {sum(value > 1 for value in fp_jit_ratios)}/{len(fp_jit_ratios)} cases")
     print()
-    print("| case | elephc CPU ms | FP CPU ms | FP+JIT CPU ms | CPU×FP | CPU×FP+JIT "
-          "| elephc RSS MB | FP RSS MB | FP+JIT RSS MB | RSS×FP | RSS×FP+JIT |")
-    print("|---|" + "---:|" * 10)
+    resource_labels = ("elephc", "php", "php-jit", "frankenphp", "frankenphp-jit")
+    print("| case | " + " | ".join(f"{label} CPU ms" for label in resource_labels)
+          + " | CPU×FP | CPU×FP+JIT |")
+    print("|---|" + "---:|" * (len(resource_labels) + 2))
     cpu_fp_ratios = []
     cpu_jit_ratios = []
     rss_fp_ratios = []
     rss_jit_ratios = []
     for row in rows:
         variants = row["variants"]
-        elephc_cpu = variants["elephc"]["cpu_ms"]
-        fp_cpu = variants["frankenphp"]["cpu_ms"]
-        jit_cpu = variants["frankenphp-jit"]["cpu_ms"]
-        elephc_rss = variants["elephc"]["rss_kb"] / 1024
-        fp_rss = variants["frankenphp"]["rss_kb"] / 1024
-        jit_rss = variants["frankenphp-jit"]["rss_kb"] / 1024
-        cpu_fp = fp_cpu / elephc_cpu
-        cpu_jit = jit_cpu / elephc_cpu
-        rss_fp = fp_rss / elephc_rss
-        rss_jit = jit_rss / elephc_rss
+        cpu = {label: variants[label]["cpu_ms"] for label in resource_labels}
+        cpu_fp = variants["frankenphp"]["cpu_ms"] / variants["elephc"]["cpu_ms"]
+        cpu_jit = variants["frankenphp-jit"]["cpu_ms"] / variants["elephc"]["cpu_ms"]
         cpu_fp_ratios.append(cpu_fp)
         cpu_jit_ratios.append(cpu_jit)
+        print(
+            f"| {row['case']} | "
+            + " | ".join(f"{cpu[label]:.2f}" for label in resource_labels)
+            + f" | {cpu_fp:.2f}x | {cpu_jit:.2f}x |"
+        )
+    print()
+    print("| case | " + " | ".join(f"{label} RSS MB" for label in resource_labels)
+          + " | RSS×FP | RSS×FP+JIT |")
+    print("|---|" + "---:|" * (len(resource_labels) + 2))
+    for row in rows:
+        variants = row["variants"]
+        rss = {label: variants[label]["rss_kb"] / 1024 for label in resource_labels}
+        rss_fp = rss["frankenphp"] / rss["elephc"]
+        rss_jit = rss["frankenphp-jit"] / rss["elephc"]
         rss_fp_ratios.append(rss_fp)
         rss_jit_ratios.append(rss_jit)
         print(
-            f"| {row['case']} | {elephc_cpu:.2f} | {fp_cpu:.2f} | {jit_cpu:.2f} "
-            f"| {cpu_fp:.2f}x | {cpu_jit:.2f}x | {elephc_rss:.2f} | {fp_rss:.2f} "
-            f"| {jit_rss:.2f} | {rss_fp:.2f}x | {rss_jit:.2f}x |"
+            f"| {row['case']} | "
+            + " | ".join(f"{rss[label]:.2f}" for label in resource_labels)
+            + f" | {rss_fp:.2f}x | {rss_jit:.2f}x |"
         )
     print()
     cpu_fp_geomean = geometric_mean(cpu_fp_ratios)
