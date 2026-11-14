@@ -1561,6 +1561,45 @@ mod tests {
         assert_eq!(&bytes, b"hello");
     }
 
+    /// recv_fd rejects a payload longer than its id and closes the descriptor.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn recv_fd_rejects_a_truncated_payload() {
+        let (sender, receiver) = UnixDatagram::pair().unwrap();
+        let mut pipe_fds = [0; 2];
+        assert_eq!(unsafe { libc::pipe(pipe_fds.as_mut_ptr()) }, 0);
+        let mut payload = [0u8; 16];
+        let mut iov = libc::iovec {
+            iov_base: payload.as_mut_ptr().cast(),
+            iov_len: payload.len(),
+        };
+        let mut control = ControlBuffer([0u8; 64]);
+        let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+        let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+        message.msg_iov = &mut iov;
+        message.msg_iovlen = 1;
+        message.msg_control = control.0.as_mut_ptr().cast();
+        message.msg_controllen = space as _;
+        let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+        assert!(!header.is_null());
+        unsafe {
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+            std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), pipe_fds[0]);
+        }
+        assert_eq!(
+            unsafe { libc::sendmsg(sender.as_raw_fd(), &message, 0) },
+            payload.len() as isize
+        );
+        let error = recv_fd(&receiver).expect_err("a long payload must be rejected");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        unsafe {
+            libc::close(pipe_fds[0]);
+            libc::close(pipe_fds[1]);
+        }
+    }
+
     /// A truncated datagram closes any descriptor already installed by recvmsg.
     #[cfg(target_vendor = "apple")]
     #[test]
