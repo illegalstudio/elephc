@@ -78,9 +78,11 @@ fn lower_resource_word(
 fn emit_unboxed_resource_word(ctx: &mut FunctionContext<'_>, word: ResourceWord) {
     let not_resource = ctx.next_label("resource_word_not_resource");
     let done = ctx.next_label("resource_word_done");
+    // -- unbox the Mixed cell into tag + payload words --
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match (ctx.emitter.target.arch, word) {
         (Arch::AArch64, _) => {
+            // -- keep the selected word of a resource cell, or answer -1 --
             ctx.emitter.instruction("cmp x0, #9");                              // is the boxed value a resource?
             ctx.emitter.instruction(&format!("b.ne {not_resource}"));           // anything else answers -1
             match word {
@@ -92,6 +94,7 @@ fn emit_unboxed_resource_word(ctx: &mut FunctionContext<'_>, word: ResourceWord)
             ctx.emitter.instruction("mov x0, #-1");                             // -1 marks a value that is not a resource
         }
         (Arch::X86_64, _) => {
+            // -- keep the selected word of a resource cell, or answer -1 --
             ctx.emitter.instruction("cmp rax, 9");                              // is the boxed value a resource?
             ctx.emitter.instruction(&format!("jne {not_resource}"));            // anything else answers -1
             match word {
@@ -120,6 +123,7 @@ pub(crate) fn lower_elephc_resource_close(
     }
     let skip = ctx.next_label("resource_close_skip");
     let done = ctx.next_label("resource_close_done");
+    // -- unbox the cell and skip anything that is not an open resource --
     ctx.load_value_to_result(value)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
@@ -137,14 +141,17 @@ pub(crate) fn lower_elephc_resource_close(
             ctx.emitter.instruction("mov rax, rdi");                            // the sentinel helper keys the id on the payload
         }
     }
+    // -- stamp the closed sentinel into the resource cell --
     emit_resource_release_sentinel(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- join the paths, dropping the stash slot on the skip path --
             ctx.emitter.instruction(&format!("b {done}"));                      // the sentinel already released the stash slot
             ctx.emitter.label(&skip);
             ctx.emitter.instruction("add sp, sp, #16");                         // release the unused stash slot
         }
         Arch::X86_64 => {
+            // -- join the paths, dropping the stash slot on the skip path --
             ctx.emitter.instruction(&format!("jmp {done}"));                    // the sentinel already released the stash slot
             ctx.emitter.label(&skip);
             ctx.emitter.instruction("add rsp, 16");                             // release the unused stash slot
