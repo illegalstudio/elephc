@@ -725,8 +725,7 @@ pub(super) fn const_local_string(
         let Some(Immediate::LocalSlot(slot)) = load.immediate else {
             return None;
         };
-        let entry = function.blocks.first()?;
-        let mut stored = None;
+        let mut stores: Vec<(InstId, ValueId)> = Vec::new();
         for (raw, inst) in function.instructions.iter().enumerate() {
             let id = InstId::from_raw(raw as u32);
             let touches_slot = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot);
@@ -735,20 +734,85 @@ pub(super) fn const_local_string(
             }
             match inst.op {
                 Op::StoreLocal if inst.operands.len() == 1 => {
-                    if !entry.instructions.contains(&id) || stored.replace(inst.operands[0]).is_some() {
-                        return None;
-                    }
+                    stores.push((id, inst.operands[0]));
                 }
                 Op::LoadLocal | Op::ReleaseLocalSlot => {}
                 _ => return None,
             }
         }
-        (stored?, true)
+        if stores.is_empty() {
+            return None;
+        }
+        let dominance = super::dominance::compute_dominance(function);
+        let load_block = containing_block(function, load_id)?;
+        // The nearest dominating store is the value at the load. Every other store must
+        // dominate *that* store, so it is overwritten before the load on every path. This
+        // admits a cold fallback store followed by a constant store inside the hot loop.
+        let mut chosen = None;
+        for &(store_id, stored) in &stores {
+            let Some(store_block) = containing_block(function, store_id) else {
+                return None;
+            };
+            if !dominance.dominates(store_block, load_block) {
+                continue;
+            }
+            if chosen.replace((store_block, stored)).is_some() {
+                return None;
+            }
+        }
+        let (chosen_block, stored) = chosen?;
+        for &(store_id, _) in &stores {
+            let store_block = containing_block(function, store_id)?;
+            if store_block != chosen_block
+                && store_reaches_load(function, store_block, load_block, chosen_block)
+            {
+                return None;
+            }
+        }
+        (stored, true)
     } else {
         (value, false)
     };
     let string = const_string_value(function, data, value)?;
     Some((string, if require_load { load_id } else { InstId::from_raw(u32::MAX) }))
+}
+
+/// Returns whether `from` can reach `load` without first executing the chosen store block.
+fn store_reaches_load(
+    function: &Function,
+    from: crate::ir::BlockId,
+    load: crate::ir::BlockId,
+    chosen: crate::ir::BlockId,
+) -> bool {
+    if from == chosen {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![from];
+    while let Some(block_id) = pending.pop() {
+        if block_id == load {
+            return true;
+        }
+        if block_id == chosen || !seen.insert(block_id) {
+            continue;
+        }
+        let Some(block) = function.block(block_id) else {
+            continue;
+        };
+        if let Some(terminator) = &block.terminator {
+            pending.extend(super::cfg::successors(terminator));
+        }
+    }
+    false
+}
+
+/// Returns the block that owns one instruction, or `None` when it is unreachable.
+fn containing_block(function: &Function, id: InstId) -> Option<crate::ir::BlockId> {
+    function
+        .blocks
+        .iter()
+        .find(|block| block.instructions.contains(&id))
+        .map(|block| block.id)
 }
 
 /// Returns the defining instruction and identifier for one SSA value.

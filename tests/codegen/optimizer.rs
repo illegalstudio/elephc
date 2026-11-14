@@ -51,6 +51,7 @@ mod array_map_sum_div_fusion;
 mod array_map_read_fusion;
 mod mb_chr_len_local_sink;
 mod mb_constant_fold;
+mod const_string_observations;
 mod stored_numeric_map;
 mod reduce_product_seed;
 mod reduce_sum_seed;
