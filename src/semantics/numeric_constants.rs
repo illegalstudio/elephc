@@ -82,6 +82,7 @@ struct Definitions {
     values: HashMap<ConstantKey, Option<Definition>>,
     unresolved_namespaces: bool,
     functions: HashSet<String>,
+    calls: source_calls::Signatures,
 }
 
 impl Definitions {
@@ -142,6 +143,9 @@ pub(super) fn validate(program: &Program, profile: SemanticProfile) -> Result<()
     let mut definitions = Definitions::default();
     definitions.collect(program);
     walk_program(program, &mut FunctionDeclarations(&mut definitions.functions));
+    if profile.contains(StrictFeature::Coercions) && !definitions.unresolved_namespaces {
+        definitions.calls = source_calls::Signatures::collect(program);
+    }
     let mut visitor = NumericValidator { definitions, evidence: Evidence { profile, ..Default::default() }, scopes: Vec::new(), error: None };
     walk_program(program, &mut visitor);
     visitor.error.map_or(Ok(()), Err)
@@ -185,6 +189,10 @@ impl AstVisitor for NumericValidator {
         let (mode, class, strict_types) = self.scopes.last().expect("expressions have an enclosing statement");
         if *mode == SourceMode::Internal { return; }
         self.evidence.strict_types = *strict_types;
+        if let Err(error) = source_calls::check(expr, class.as_deref(), &self.definitions, &self.evidence) {
+            self.error = Some(error);
+            return;
+        }
         if let Err(error) = evaluate(expr, true, class.as_deref(), &self.definitions, &mut self.evidence) {
             self.error = Some(error);
         }
@@ -494,6 +502,8 @@ fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, p
 mod declarations;
 #[path = "numeric_constants/selection.rs"]
 mod selection;
+#[path = "numeric_constants/source_calls.rs"]
+mod source_calls;
 
 #[cfg(test)]
 #[path = "numeric_constants/tests.rs"]

@@ -15,13 +15,19 @@ use elephc_semantics::conversions::{plan_implicit_kinds, ConversionPlan};
 pub(super) fn check(annotation: &TypeExpr, value: &Expr, source: SourceMode, class: Option<&str>,
     definitions: &Definitions, evidence: &mut Evidence) -> Result<(), CompileError> {
     if source == SourceMode::Internal || !evidence.profile.contains(StrictFeature::Coercions) { return Ok(()); }
+    check_value(annotation, value, class, definitions, evidence, "declaration value")
+}
+
+/// Shares original-kind proof and diagnostics between declaration producers and explicit arguments.
+pub(super) fn check_value(annotation: &TypeExpr, value: &Expr, class: Option<&str>,
+    definitions: &Definitions, evidence: &mut Evidence, context: &str) -> Result<(), CompileError> {
     let Some(expected) = super::super::conversions::scalar_hint(annotation) else { return Ok(()); };
     let Some(actual) = evaluate(value, true, class, definitions, evidence)? else { return Ok(()); };
     let allowed = super::super::conversions::scalar_contract(&expected).expect("scalar source hint");
     if matches!(plan_implicit_kinds(evidence.profile, actual.value_kind(), allowed), ConversionPlan::Reject(_))
         || super::super::conversions::only_false(&expected) && matches!(actual, Number::Bool(true)) {
         return Err(CompileError::new(value.span, &format!(
-            "--strict-coercions: declaration value requires {expected} without implicit conversion, got {:?}",
+            "--strict-coercions: {context} requires {expected} without implicit conversion, got {:?}",
             actual.value_kind())));
     }
     Ok(())

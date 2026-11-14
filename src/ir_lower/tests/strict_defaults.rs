@@ -50,7 +50,10 @@ fn strict_defaults_reject_original_kinds_across_declaration_surfaces() {
         "<?php $f = fn(float $x = 1) => $x;",
         "<?php const DEFAULT_INT = 1; function f(float $x = DEFAULT_INT) {}",
         "<?php class C { const VALUE = 1; public float $x = self::VALUE; }",
-        "<?php class C { public const float VALUE = 1; }"] {
+        "<?php class C { public const float VALUE = 1; }",
+        "<?php class C { function __construct(float $v) {} } function f(C $v = new C(1)) {}",
+        "<?php class C { function __construct(float $v) {} } class D extends C {} function f(D $v = new D(v: 1)) {}",
+        "<?php trait T { function __construct(float $v) {} } class C { use T; } function f(C $v = new C(...[1])) {}"] {
         for mode in [SourceMode::Php, SourceMode::Lfc] {
             let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
             let error = crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile)

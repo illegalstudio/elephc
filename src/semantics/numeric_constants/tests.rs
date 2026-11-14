@@ -10,6 +10,49 @@
 
 use super::*;
 
+/// Original user-call operands remain checked inside defaults and branches removed by folding.
+#[test]
+fn strict_source_call_arguments_preserve_original_declared_scalar_kinds() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
+    for source in [
+        "<?php function f(float $v) {} if (false) { f(1); }",
+        "<?php function f(float $v) {} f(v: 1);",
+        "<?php function f(float $v) {} f(...['v' => 1]);",
+        "<?php function f(float ...$v) {} f(1.0, 1);",
+        "<?php class C { function __construct(float $v) {} } function f(C $v = new C(1)) {}",
+        "<?php class C { function __construct(float $v) {} } class D extends C {} function f(D $v = new D(v: 1)) {}",
+        "<?php trait T { function __construct(float $v) {} } class C { use T; } function f(C $v = new C(...[1])) {}",
+        "<?php class C { static function f(float $v) {} } if (false) { C::f(1); }",
+        "<?php class C { static function f(false $v) {} } C::f(true);",
+    ] {
+        let error = validate(&parse(source), profile).expect_err(source);
+        assert!(error.message.contains("--strict-coercions"), "{source}: {error:?}");
+        assert!(validate(&parse(source), SemanticProfile::PERMISSIVE).is_ok(), "{source}");
+    }
+}
+
+/// Uncertain calls, exact union alternatives and trusted producers retain their existing rules.
+#[test]
+fn strict_source_call_arguments_keep_unknown_generic_and_internal_controls() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
+    for source in [
+        "<?php function f(float $v) {} f(1.0); f($unknown); f(...$unknown);",
+        "<?php function f(int|float $v) {} f(1); f(1.0);",
+        "<?php function f(float $v = 1.0) {} f();",
+        "<?php function f<T>(T $v) {} f(1);",
+        "<?php class C { function __construct(float $v) {} } function f(C $v = new C(1.0)) {}",
+        "<?php class C { static function f(float $v) {} } C::f(1.0);",
+        "<?php class C { static function f(float $v) {} } class D extends C { static function g() { static::f(1); } }",
+    ] { assert!(validate(&parse(source), profile).is_ok(), "{source}"); }
+    let mut internal = parse("<?php class C { function __construct(float $v) {} } function f(C $v = new C(1)) {} f(1);");
+    for stmt in &mut internal { stmt.source_mode = SourceMode::Internal; }
+    assert!(validate(&internal, profile).is_ok());
+    let mut trusted = parse("<?php function f(float $v) {}");
+    trusted[0].source_mode = SourceMode::Internal;
+    trusted.extend(parse("<?php f(1);"));
+    assert!(validate(&trusted, profile).unwrap_err().message.contains("call argument"));
+}
+
 /// Associative reductions collapse final values while retaining first-insertion order and key kind.
 #[test]
 fn strict_literal_array_plan_reduction_evidence_preserves_overwrites_and_exact_keys() {

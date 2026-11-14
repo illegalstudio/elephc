@@ -791,6 +791,28 @@ container elements, references, producer aliases/expressions and the remaining
 strict families still require their planned integration. Public admission is
 unchanged.
 
+### Verified original source call arguments
+
+Step53 checks proven original scalar arguments before folding can remove calls,
+including constructor expressions in unused declaration defaults. Function,
+constructor and static-method source signatures retain parsed annotations; the
+shared call planner owns named/positional/spread placement. The existing trait
+flattener and inheritance lookup supply constructor and static-method contracts.
+No omitted default is mistaken for an explicit caller argument. Unknown generic
+contracts, dynamic dispatch, late-static receivers and ambiguous declarations
+remain with the existing checker/runtime paths. Producer source mode does not
+exempt a user caller from its own strict policy.
+
+The pruned function-call regression was red on step52. Two new source checks
+cover direct/named/static unpack/variadic calls, inherited/trait constructors,
+false-only parameters and conservative controls. Three complete default checker,
+all-target and native checks pass, including three new invalid constructor
+defaults in PHP and LFC. Three trusted-default planner/emitter/native controls
+also pass, plus compiler build, architecture inventory, assembly-comment and diff
+checks. This closes original argument proof for known source signatures, while
+nonliteral producer binding, dynamic/host/reference boundaries and the remaining
+strict families stay staged. Public admission is unchanged.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -910,4 +932,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 49 | `beac107cab` | feat(strict): bind omitted parameter defaults before invocation |
 | 50 | `87252a0179` | feat(strict): guard public descriptor scalar arguments through eir |
 | 51 | `ec3e9e0feb` | feat(strict): preserve exact scalar and nominal union contracts |
-| 52 | this commit | feat(strict): enforce structural union and callable value contracts |
+| 52 | `39f10226af` | feat(strict): enforce structural union and callable value contracts |
+| 53 | this commit | feat(strict): validate original source call arguments |
