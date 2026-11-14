@@ -117,6 +117,19 @@ fn redirect_to_unknown_target_fails() {
     elephc_proc_builder_free(builder);
 }
 
+/// A descriptor key of `i64::MAX` (PHP_INT_MAX) fails the spawn with a dup() warning
+/// instead of overflowing the move floor and aborting across the C ABI.
+#[test]
+fn largest_descriptor_key_fails_without_overflow() {
+    let builder = elephc_proc_builder_new();
+    unsafe {
+        assert_eq!(elephc_proc_builder_shell(builder, c"true".as_ptr()), 1);
+        assert_eq!(elephc_proc_builder_pipe(builder, i64::MAX, c"w".as_ptr()), 1);
+    }
+    assert_eq!(elephc_proc_spawn(builder), 0);
+    assert!(last_error().starts_with("proc_open(): "), "{}", last_error());
+}
+
 /// `2 => ['redirect', 1]` merges stderr into the stdout pipe.
 #[test]
 fn redirect_merges_stderr_into_stdout() {
