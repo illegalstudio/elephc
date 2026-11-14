@@ -130,7 +130,7 @@ ValueError: clamp(): Argument #2 ($min) must be smaller than or equal to argumen
 /// Compiles and runs the php-src clamp corpus and compares the trimmed stdout.
 #[test]
 fn test_clamp_php86_php_src_fixture() {
-    let out = compile_and_run(source());
+    let out = compile_and_run_with_php_version(source(), elephc::php_version::PhpVersion::Php86);
     assert_eq!(out.trim(), expected().trim());
 }
 
