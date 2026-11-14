@@ -116,7 +116,7 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Assign { name, value }
         | StmtKind::TypedAssign { name, value, .. } => {
             let effect = expr_effect(value).with_side_effects();
-            let effect = if super::semantic_context::implicit_initializer_may_throw(stmt) {
+            let effect = if super::semantic_context::implicit_store_may_throw(stmt) {
                 effect.with_may_throw()
             } else { effect };
             if is_reference_volatile(name) {
@@ -287,7 +287,7 @@ pub(super) fn expr_is_observable(expr: &Expr) -> bool {
 /// For `MagicConstant`, returns `unreachable!` because they must be lowered before optimizer passes.
 pub(super) fn expr_effect(expr: &Expr) -> Effect {
     let effect = expression_effect_without_binding(expr);
-    if super::semantic_context::implicit_binding_may_throw(expr) { effect.with_may_throw() }
+    if super::semantic_context::implicit_value_boundary_may_throw(expr) { effect.with_may_throw() }
     else { effect }
 }
 

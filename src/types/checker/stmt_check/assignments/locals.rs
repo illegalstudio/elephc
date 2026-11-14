@@ -268,6 +268,22 @@ fn check_assign_value_type(
         poison_unbound_local(env, name);
         return Err(error);
     }
+    let contract_key = (checker.current_loop_storage_scope.clone(), span, name.to_string());
+    checker.local_store_contracts.remove(&contract_key);
+    if let Some(declared) = checker.typed_local_names.get(name).cloned() {
+        checker.require_noncoercive_value_type(&declared, &ty, checker.semantic_source_mode,
+            value.span, &format!("Assignment to typed local ${name}"))?;
+        if checker.semantic_source_mode != crate::source::SourceMode::Internal
+            && checker.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+            && crate::semantics::conversions::scalar_contract(&declared).is_some() {
+            if matches!(crate::semantics::conversions::implicit(checker.semantic_profile,
+                checker.semantic_source_mode, &declared, &ty),
+                elephc_semantics::conversions::ConversionPlan::Guard { .. }) {
+                ty = declared.clone();
+            }
+            checker.local_store_contracts.insert(contract_key, declared);
+        }
+    }
     let stored_non_null = checker.stored_value_is_non_null(value, &ty, env);
     // An array element or other unproved read can carry null even when its checker
     // type omits it. A nullable destination must not turn that store into a proof.

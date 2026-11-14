@@ -402,6 +402,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
     /// Checked integer value views, separate from the physical local/reference contract.
     pub local_value_read_types: &'m crate::types::LocalValueReadTypes,
+    /// Checked declaration contracts for statement and expression stores.
+    pub local_store_contracts: &'m crate::types::LocalStoreContracts,
     /// Checker-authorized argument sites that may widen an ordinary local to boxed Mixed.
     pub boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
     pub first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
@@ -623,6 +625,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
         array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
         local_value_read_types: &'m crate::types::LocalValueReadTypes,
+        local_store_contracts: &'m crate::types::LocalStoreContracts,
         boxed_reference_promotion_sites: &'m HashMap<(String, Span), HashSet<String>>,
         first_class_builtin_call_types: &'m HashMap<Span, PhpType>,
         generic_call_sites: &'m HashMap<(String, Span), String>,
@@ -699,6 +702,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             member_receiver_types,
             array_append_element_types,
             local_value_read_types,
+            local_store_contracts,
             boxed_reference_promotion_sites,
             first_class_builtin_call_types,
             generic_call_sites,

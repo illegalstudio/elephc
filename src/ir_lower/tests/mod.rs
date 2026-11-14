@@ -751,3 +751,5 @@ mod native_module;
 mod strict_conditional_results;
 
 mod strict_typed_initializers;
+
+mod strict_typed_stores;

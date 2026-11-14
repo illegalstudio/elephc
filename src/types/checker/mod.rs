@@ -501,6 +501,8 @@ pub(crate) struct Checker {
     pub array_append_element_types: HashMap<(String, Span), Option<PhpType>>,
     /// Integer reads agreed by every authoritative flow visit to one scoped local use.
     pub local_value_read_types: crate::types::LocalValueReadTypes,
+    /// Declared scalar contracts observed at original local write sites.
+    pub local_store_contracts: crate::types::LocalStoreContracts,
     /// Named-function contexts and body scopes queried without their local branch guards.
     pub member_receiver_analysis_scopes: Vec<(Option<String>, String)>,
     /// Caller locals converted to canonical boxed storage by a validated by-reference call.
@@ -1689,6 +1691,7 @@ fn check_types_on_compiler_stack(
         member_receiver_types: checker.member_receiver_types,
         array_append_element_types: checker.array_append_element_types,
         local_value_read_types: checker.local_value_read_types,
+        local_store_contracts: checker.local_store_contracts,
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),

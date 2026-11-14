@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 44 (this commit), following `6d06bfe2db`. Issue:
+Verified through step 45 (this commit), following `efcfed164c`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -590,6 +590,28 @@ conditional binding contracts, defaults, properties and references remain active
 The four parameter/return frontend controls and both native controls pass.
 Compiler build, architecture gate, assembly comments and diff hygiene pass.
 
+### Verified subsequent declared scalar stores
+
+Step45 records original declared scalar contracts in CheckResult.local_store_contracts
+by body, source span and local name. Checker re-visits replace their own facts;
+read narrowing and physical storage do not select the write contract. Successful
+runtime membership checks publish the validated destination type for later reads.
+The immutable map is passed explicitly through function, method, closure, eval
+and synthetic lowering contexts. Generated bodies without source facts receive an
+empty map. conversion_boundaries::local_store shares validation and storage
+adaptation for statement and expression writes before any destination coercion.
+Optimizer effects and exception summaries retain implicit store failures.
+
+The regression was red on step44: a float declaration accepted an int store,
+and native writes replaced prior float/string values without TypeError. Three
+new tests pass with known diagnostics, default/Internal controls, authoritative
+read facts, all five emitters, native statements/expressions, function/closure/
+method scopes, narrowed nullable stores, scalar unions, failure atomicity and
+clean heaps through both AST/EIR optimizer modes. Three initializer controls pass.
+Compiler build, architecture gate, assembly comments and diff hygiene pass.
+References, alias-origin contracts, defaults, properties, eval locals and the
+remaining strict families still require completion. Public admission is unchanged.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -701,4 +723,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 41 | `6ba184fab7` | feat(strict): preserve declared scalar return contracts |
 | 42 | `4fcbe3e803` | feat(strict): preserve inferred scalar return alternatives |
 | 43 | `6d06bfe2db` | feat(strict): carry checked conditional closure result contracts |
-| 44 | this commit | feat(strict): enforce declared scalar initializer contracts |
+| 44 | `efcfed164c` | feat(strict): enforce declared scalar initializer contracts |
+| 45 | this commit | feat(strict): retain declared contracts across local stores |

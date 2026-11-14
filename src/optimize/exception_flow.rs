@@ -679,7 +679,7 @@ impl ExceptionFlowAnalysis {
             // in THIS frame, so a same-frame catch can still see it.
             StmtKind::Assign { name, value }
             | StmtKind::TypedAssign { name, value, .. } => operand(value)
-                .combined(if super::semantic_context::implicit_initializer_may_throw(stmt) {
+                .combined(if super::semantic_context::implicit_store_may_throw(stmt) {
                     ThrownTypes::exact("TypeError")
                 } else { ThrownTypes::default() })
                 .combined(overwrite())
@@ -882,7 +882,7 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
     ) -> ThrownTypes {
         let thrown = self.expr_throws_without_binding(expr, bindings, class_context, include_operands);
-        if super::semantic_context::implicit_binding_may_throw(expr) {
+        if super::semantic_context::implicit_value_boundary_may_throw(expr) {
             thrown.combined(ThrownTypes::exact("TypeError"))
         } else { thrown }
     }

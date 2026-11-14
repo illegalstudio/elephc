@@ -151,6 +151,7 @@ impl Checker {
             member_receiver_types: HashMap::new(),
             array_append_element_types: HashMap::new(),
             local_value_read_types: HashMap::new(),
+            local_store_contracts: HashMap::new(),
             member_receiver_analysis_scopes: Vec::new(),
             boxed_reference_outputs: HashMap::new(),
             declared_reference_bindings: HashMap::new(),

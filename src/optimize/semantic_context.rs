@@ -48,19 +48,23 @@ pub(super) fn active_profile() -> SemanticProfile { PROFILE.with(Cell::get) }
 /// Projects the current statement policy without replacing its full module identity.
 pub(super) fn active_source_mode() -> SourceMode { SOURCE_MODE.with(Cell::get) }
 
-/// Parameter membership may fail independently of a callee's otherwise pure body.
-pub(super) fn implicit_binding_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+/// Implicit binding or store membership may fail independently of operand effects.
+pub(super) fn implicit_value_boundary_may_throw(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::ExprKind;
     enabled(StrictFeature::Coercions) && matches!(expr.kind,
         ExprKind::FunctionCall { .. } | ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. }
         | ExprKind::MethodCall { .. } | ExprKind::NullsafeMethodCall { .. }
         | ExprKind::NullsafeDynamicMethodCall { .. } | ExprKind::StaticMethodCall { .. }
         | ExprKind::NewObject { .. } | ExprKind::NewGeneric { .. } | ExprKind::NewDynamic { .. }
-        | ExprKind::NewDynamicObject { .. } | ExprKind::NewScopedObject { .. })
+        | ExprKind::NewDynamicObject { .. } | ExprKind::NewScopedObject { .. }
+        | ExprKind::Assignment { .. })
 }
 
-/// A declaration can reject its source independently of operand effects or retirement.
-pub(super) fn implicit_initializer_may_throw(stmt: &crate::parser::ast::Stmt) -> bool {
+/// A declared store can reject its source independently of operand effects or retirement.
+pub(super) fn implicit_store_may_throw(stmt: &crate::parser::ast::Stmt) -> bool {
+    if matches!(stmt.kind, crate::parser::ast::StmtKind::Assign { .. }) {
+        return enabled(StrictFeature::Coercions);
+    }
     let crate::parser::ast::StmtKind::TypedAssign { type_expr, .. } = &stmt.kind else { return false; };
     enabled(StrictFeature::Coercions) && crate::semantics::conversions::scalar_contract(
         &super::return_boundaries::parameter_type(Some(type_expr))).is_some()

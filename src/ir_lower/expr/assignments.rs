@@ -190,6 +190,8 @@ fn lower_ordinary_assignment_expr(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
+        let contract_store = crate::ir_lower::conversion_boundaries::local_store(ctx, name, lowered, expr.span);
+        let lowered = contract_store.as_ref().map_or(lowered, |stored| stored.0);
         let lowered = if ctx.integer_local_declarations.contains(name) {
             coerce_integer_arithmetic(ctx, lowered, &PhpType::Int, expr.span)
         } else {
@@ -207,7 +209,9 @@ fn lower_ordinary_assignment_expr(
         );
         let is_ref_bound = ctx.is_ref_bound_local(name);
         let existing_type = ctx.local_types.get(name).cloned();
-        let php_type = if let Some(storage) = crate::ir_lower::stmt::union_local_storage_type(ctx, name, value, &value_php_type) {
+        let php_type = if let Some((_, contract)) = contract_store {
+            contract
+        } else if let Some(storage) = crate::ir_lower::stmt::union_local_storage_type(ctx, name, value, &value_php_type) {
             storage
         } else if is_static || is_ref_bound {
             existing_type.unwrap_or(value_php_type)

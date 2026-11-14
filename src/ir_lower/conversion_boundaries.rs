@@ -56,6 +56,16 @@ pub(super) fn implicit(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
     value
 }
 
+/// Validates a later write using its checked declaration rather than a narrowed local read view.
+pub(super) fn local_store(ctx: &mut LoweringContext<'_, '_>, name: &str, value: LoweredValue,
+    span: Span) -> Option<(LoweredValue, PhpType)> {
+    let destination = ctx.local_store_contracts.get(
+        &(ctx.loop_storage_scope.clone(), span, name.to_string()))?.clone();
+    if !active(ctx, &destination) { return None; }
+    let value = implicit(ctx, value, &destination, span);
+    Some((scalar_storage(ctx, value, &destination, span), destination))
+}
+
 /// Extracts only a kind already accepted by the guard, preserving its PHP-visible value.
 pub(super) fn scalar_storage(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
     destination: &PhpType, span: Span) -> LoweredValue {

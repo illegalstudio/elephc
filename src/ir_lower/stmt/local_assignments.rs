@@ -126,7 +126,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value:
     let int_seed = !mixed_storage_site
         && ctx.is_int_seed_binding(name)
         && crate::ir_lower::numeric_storage::is_checked_int_seed(ctx, lowered.value);
-    let (lowered, php_type) = if int_seed {
+    let (lowered, php_type) = if let Some(stored) =
+        crate::ir_lower::conversion_boundaries::local_store(ctx, name, lowered, span) {
+        stored
+    } else if int_seed {
         (lowered, PhpType::Int)
     } else {
         contextualize_local_assignment(ctx, name, value, lowered, span)
