@@ -288,6 +288,16 @@ The master unlinks the socket on a clean shutdown and replaces a stale socket
 file at startup. A regular file or directory at the configured path is refused
 instead of being deleted. Unix socket paths are limited to 100 bytes.
 
+## Thread scheduling (macOS)
+
+The TCP acceptor and each worker's current-thread runtime run at
+`QOS_CLASS_USER_INITIATED`, so a loaded macOS host schedules the
+new-connection path promptly; the worker runtime is where the AsyncFd
+descriptor handoff, hyper and the PHP handler execute. Set
+`ELEPHC_WEB_WORKER_QOS=default` to leave the worker runtime at the default QoS
+for an A/B measurement; the acceptor stays user-initiated. The variable has no
+effect on Linux targets.
+
 ## systemd
 
 The origin unit is
