@@ -42,15 +42,8 @@ pub(super) fn apply(
     op: CheckedNumericOp, left: RuntimeCellHandle, right: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    match values.checked_numeric(op, left, right) {
-        Err(EvalStatus::UncaughtThrowable) => {
-            if let Some(thrown) = values.take_pending_runtime_throwable()? {
-                context.set_pending_throw(thrown);
-            }
-            Err(EvalStatus::UncaughtThrowable)
-        }
-        result => result,
-    }
+    let result = values.checked_numeric(op, left, right);
+    native_results::finish(result, context, values)
 }
 
 
@@ -61,13 +54,8 @@ pub(super) fn unary(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     numeric_domains::require_unary(elephc_semantics::numeric_domains::NumericOperator::Unary, value, context, values)?;
     let policy = elephc_semantics::arithmetic_policy::ArithmeticPolicy::from_profile(context.semantic_profile());
-    match values.numeric_unary(op, policy, value) {
-        Err(EvalStatus::UncaughtThrowable) => {
-            if let Some(thrown) = values.take_pending_runtime_throwable()? { context.set_pending_throw(thrown); }
-            Err(EvalStatus::UncaughtThrowable)
-        }
-        result => result,
-    }
+    let result = values.numeric_unary(op, policy, value);
+    native_results::finish(result, context, values)
 }
 
 /// Checks a scalar update before writeback and preserves internal-class arithmetic adapters.

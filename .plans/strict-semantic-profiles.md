@@ -959,6 +959,32 @@ controls pass, plus test-target type checking, compiler build, architecture828,
 assembly comments and diff hygiene. Eval, builtin conversion and public host
 integration continue next; Casts public admission remains closed.
 
+### Checked numeric casts in eval
+
+Step60 routes walker and VM numeric casts through the neutral checked conversion
+kernel. Scalar parsing is pure Rust and invalid domains create interpreted
+ValueError/TypeError, without a native throw through Rust frames. IEEE bits,
+exact decimal integer endpoints and intentional bool/null conversions agree with
+native EIR. Non-UTF8 and NUL-bearing invalid strings fail without conversion.
+Reviewed object adapters run first and their result must retain the promised
+exact kind; rejected result owners are retired.
+
+`native_results::finish` now owns protected native Throwable transfer for checked
+binary/unary operations and cast adapters. Success and unsupported status leave
+pending native ownership untouched. Five new eval checks cover both scalar engines,
+independent profiles, exact values, source/Throwable ownership, IEEE payloads,
+aggregate/resource rejection and status transfer. Direct VM failures and walker
+catch/finally are tested separately because the VM delegates Try and Bytes literal
+constructs to the walker. Invalid byte cells are seeded at the runtime boundary.
+
+Two existing arithmetic/unary eval controls and five native EIR/assembly/decimal
+controls pass, together with Magician test-target checking, compiler build,
+architecture828, assembly comments and diff hygiene. A preexisting permissive
+FakeOps prefix/precision limitation is recorded as journal task dc79bdf2; its
+control uses an ordinary nonnumeric string whose PHP result is unambiguous.
+Builtin conversion, object/host parity and remaining strict families continue;
+public admission remains unchanged.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -1085,4 +1111,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 56 | `ea9e76218c` | feat(strict): bind property default producers before initialization |
 | 57 | `a74801937f` | feat(strict): preserve global constant producer expressions |
 | 58 | `58ea161e3b` | feat(strict): share checked numeric cast source contracts |
-| 59 | this commit | feat(strict): lower checked native scalar casts |
+| 59 | `ae8b7a0f8c` | feat(strict): lower checked native scalar casts |
+| 60 | this commit | feat(strict): enforce checked numeric casts in eval |

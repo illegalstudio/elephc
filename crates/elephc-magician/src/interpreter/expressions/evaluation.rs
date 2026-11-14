@@ -165,6 +165,10 @@ pub(in crate::interpreter) fn eval_cast_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts)
+        && matches!(target, EvalCastType::Int | EvalCastType::Float) {
+        return super::super::checked_cast::numeric(target, value, context, values);
+    }
     match target {
         EvalCastType::Array => {
             if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, value, elephc_builtin_contract::ObjectCast::Array)? { return Ok(result); }

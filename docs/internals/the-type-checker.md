@@ -267,7 +267,12 @@ with an exact scalar result and a required Casts capability. Original operands s
 rooted across catchable TypeError/ValueError paths. Reviewed native object adapters
 run before the scalar helper. A bounded decimal digit parser preserves exact
 integer strings at runtime, and native float-to-int checks precede truncation.
-Public feature admission stays gated while remaining consumers are integrated.
+The eval walker and VM use the same neutral cast kernel through their shared
+expression evaluator. Scalar failures become ordinary interpreted Throwables;
+reviewed native adapters transfer pending native failures through
+`native_results::finish`. That helper also serves checked arithmetic and unary
+operations. Adapter result kinds and ownership remain exact. Public feature
+admission stays gated while remaining consumers are integrated.
 
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 
