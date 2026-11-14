@@ -48,10 +48,12 @@ echo $items["key"];
             .0;
         let (construction, arguments) = main.split_once("op=load_array_elem_ref_cell")
             .expect("managed element lookup follows source-array construction");
+        // `["key" => 1]` has no entry that can throw, so it is built in the direct form with no
+        // construction owner at all (`lower_assoc_array_literal_direct`).
         for operation in ["publish", "detach"] {
             let marker = format!("{operation} temporary call operand owner");
-            assert_eq!(construction.matches(&marker).count(), 1,
-                "{name}: source-array construction has one balanced owner");
+            assert_eq!(construction.matches(&marker).count(), 0,
+                "{name}: a constant source array is built without a construction owner");
         }
         assert_eq!(
             arguments.matches("detach temporary call operand owner").count(),

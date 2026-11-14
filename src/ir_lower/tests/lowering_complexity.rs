@@ -718,12 +718,18 @@ $f->resume();
         .iter()
         .position(|line| *line == format!("{table}:"))
         .expect("the table is emitted");
+    // A run of zero words is one `.zero <bytes>` directive (see `DataSection::emit`).
     let words: Vec<u64> = lines[start + 1..]
         .iter()
-        .take_while(|line| line.trim_start().starts_with(".quad"))
-        .map(|line| {
-            let value = line.trim_start().trim_start_matches(".quad").trim();
-            u64::from_str_radix(value.trim_start_matches("0x"), 16).expect("hex word")
+        .map(|line| line.trim_start())
+        .take_while(|line| line.starts_with(".quad") || line.starts_with(".zero"))
+        .flat_map(|line| {
+            if let Some(bytes) = line.strip_prefix(".zero") {
+                let bytes: usize = bytes.trim().parse().expect("zero byte count");
+                return vec![0; bytes / 8];
+            }
+            let value = line.trim_start_matches(".quad").trim();
+            vec![u64::from_str_radix(value.trim_start_matches("0x"), 16).expect("hex word")]
         })
         .collect();
     let count = words[0] as usize;
