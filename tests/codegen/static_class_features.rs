@@ -526,3 +526,25 @@ echo counter(), counter(), counter(), "\n";
     );
     assert_eq!(out, "bool(true)\nbool(true)\n123\n");
 }
+
+/// Probing a static property no class of a FIXED receiver declares (`A::`, `self::`, `parent::`)
+/// is php's quiet answer: `isset()` false, `??` the default, `empty()` true. Only `static::` was
+/// answered that way; the others took the ordinary read and died on `Access to undeclared static
+/// property`.
+#[test]
+fn test_probes_of_undeclared_static_properties_on_fixed_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+class P { public static $inherited = 'p'; public static ?int $typed = null; }
+class C extends P {
+    public static function probe(): string {
+        return (isset(self::$nope) ? 'y' : 'n') . (isset(parent::$nope) ? 'y' : 'n')
+            . (isset(self::$inherited) ? 'y' : 'n') . (self::$missing ?? 'd') . (empty(parent::$gone) ? 'e' : 'f');
+    }
+}
+var_dump(isset(C::$nope), isset(C::$inherited), isset(P::$typed), C::$nope ?? 'default', empty(C::$nope));
+echo C::probe(), "\n";
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\nstring(7) \"default\"\nbool(true)\nnnyde\n");
+}

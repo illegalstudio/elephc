@@ -395,6 +395,10 @@ pub(super) fn lower_lazy_empty(
     // ordinary way to find that out is fatal — the same reason `isset()` and `??` need the
     // slot probe. Uninitialized answers true without the read.
     if let ExprKind::StaticPropertyAccess { receiver, property } = &args[0].kind {
+        // A name no bindable class declares is php's EMPTY, without the read that raises.
+        if late_bound_static_property_is_absent(ctx, receiver, property) {
+            return Some(lower_bool_literal(ctx, true, &args[0]));
+        }
         if static_property_can_be_uninitialized(ctx, receiver, property) {
             return Some(lower_initialized_static_property_empty(
                 ctx, receiver, property, name, &args[0],

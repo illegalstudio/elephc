@@ -206,6 +206,11 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
     // backend rather than in an operation the lowering could branch on — so `??` needs its own
     // probe here too. `S::$s ?? "d"` raised where PHP answers `d`.
     if let ExprKind::StaticPropertyAccess { receiver, property } = &value.kind {
+        // A name no bindable class declares reads as php's null under `??`, without the read
+        // that raises `Access to undeclared static property`.
+        if super::property_access::late_bound_static_property_is_absent(ctx, receiver, property) {
+            return super::scalar_literals::lower_null(ctx, value);
+        }
         if static_property_can_be_uninitialized(ctx, receiver, property) {
             return lower_initialized_static_property_value(ctx, receiver, property, value);
         }

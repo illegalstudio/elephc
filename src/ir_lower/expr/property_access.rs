@@ -1293,9 +1293,6 @@ pub(super) fn late_bound_static_property_is_absent(
     receiver: &StaticReceiver,
     property: &str,
 ) -> bool {
-    if !matches!(receiver, StaticReceiver::Static) {
-        return false;
-    }
     let Some(class_name) = static_receiver_class_name(ctx, receiver) else {
         return false;
     };
@@ -1305,6 +1302,24 @@ pub(super) fn late_bound_static_property_is_absent(
     let Some(class_info) = ctx.classes.get(class_name.as_str()) else {
         return false;
     };
+    // A FIXED receiver (`A::`, `self::`, `parent::`) names one class: when neither it nor an
+    // ancestor declares the name, `isset(A::$nope)` is php's `false`, where the ordinary read
+    // raised `Access to undeclared static property`.
+    if !matches!(receiver, StaticReceiver::Static) {
+        let mut current = Some(class_info);
+        let mut hops = 0usize;
+        while let Some(info) = current {
+            if declares(info) {
+                return false;
+            }
+            hops += 1;
+            if hops > ctx.classes.len() {
+                return false;
+            }
+            current = info.parent.as_deref().and_then(|parent| ctx.classes.get(parent.trim_start_matches('\\')));
+        }
+        return true;
+    }
     !declares(class_info)
         && !ctx.classes.iter().any(|(name, info)| {
             crate::types::class_inherits_from(ctx.classes, name, &class_name) && declares(info)
