@@ -29,12 +29,12 @@ impl AllowedKinds {
     /// Starts an explicit contract with no permitted scalar kinds.
     pub const EMPTY: Self = Self(0);
 
-    /// Returns the set containing one scalar kind, or empty for unresolved/non-scalar kinds.
+    /// Returns one value category; adapters refine nominal membership within NonScalar.
     pub const fn one(kind: ValueKind) -> Self {
         Self(match kind {
             ValueKind::Integer => 1, ValueKind::Float => 2, ValueKind::Boolean => 4,
             ValueKind::String => 8, ValueKind::Null => 16,
-            ValueKind::Dynamic | ValueKind::NonScalar => 0,
+            ValueKind::NonScalar => 32, ValueKind::Dynamic => 0,
         })
     }
 

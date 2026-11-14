@@ -35,8 +35,8 @@ mod argument_owners;
 mod defaults;
 mod mbstring;
 mod owned_value_args;
-mod scalar_parameter_guards;
-pub(super) use scalar_parameter_guards::emit_requested as emit_scalar_parameter_guards;
+mod parameter_guards;
+pub(super) use parameter_guards::emit_requested as emit_parameter_guards;
 mod public_args;
 mod reference_args;
 pub(super) mod reference_return;
@@ -156,7 +156,7 @@ struct InvokerEmitContext {
     /// The declared literal parameter currently being decoded, before ABI coercion.
     literal_parameter: Option<(usize, String)>,
     semantic_profile: elephc_semantics::SemanticProfile,
-    scalar_parameter: Option<PhpType>,
+    parameter_contract: Option<PhpType>,
     materializing_default: bool,
 }
 
@@ -181,7 +181,7 @@ impl InvokerEmitContext {
             mbstring_variable_ref_warnings: false,
             literal_parameter: None,
             semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
-            scalar_parameter: None,
+            parameter_contract: None,
             materializing_default: false,
         }
     }
@@ -193,7 +193,7 @@ impl InvokerEmitContext {
 
     /// Selects original scalar and literal contracts without narrowing inferred parameter types.
     fn select_parameter_contract(&mut self, sig: &FunctionSig, index: usize) {
-        self.scalar_parameter = sig.params.get(index)
+        self.parameter_contract = sig.params.get(index)
             .filter(|_| sig.declared_params.get(index).copied().unwrap_or(false))
             .map(|(_, ty)| {
                 if sig.variadic.as_ref().is_some_and(|name| name == &sig.params[index].0) {
@@ -735,7 +735,7 @@ fn emit_loaded_indexed_array_callback_call(
     }
 
     ctx.literal_parameter = None;
-    ctx.scalar_parameter = None;
+    ctx.parameter_contract = None;
 
     if shape.hidden_argc {
         // The invoker synthesizes argc from the container length; it never consumes a user slot.
@@ -814,7 +814,7 @@ fn emit_loaded_indexed_array_callback_call(
         emit_scale_index_to_offset(emitter, offset_reg, index_reg, elem_size);
         emit_add_reg(emitter, data_reg, offset_reg);
         load_array_element_to_result(emitter, &elem_ty, data_reg, 0);
-        scalar_parameter_guards::check(emitter, ctx, data, &elem_ty);
+        parameter_guards::check(emitter, ctx, data, &elem_ty);
         let (stored_ty, boxed_to_mixed) =
             coerce_current_value_to_target(emitter, ctx, data, &elem_ty, Some(&variadic_elem_ty));
         if !boxed_to_mixed {
@@ -953,7 +953,7 @@ fn emit_loaded_assoc_array_callback_call(
     }
 
     ctx.literal_parameter = None;
-    ctx.scalar_parameter = None;
+    ctx.parameter_contract = None;
     if shape.hidden_argc {
         public_args::push_arg_count_from_reg(emitter, count_reg);
         arg_types.push(PhpType::Int);
@@ -3393,7 +3393,7 @@ fn emit_loaded_assoc_variadic_entries(
     // -- insert the surviving entry into the variadic hash --
     emitter.label(&insert_label);
     if ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
-        && ctx.scalar_parameter.as_ref().is_some_and(|ty| crate::semantics::conversions::scalar_contract(ty).is_some())
+        && ctx.parameter_contract.as_ref().is_some_and(|ty| crate::semantics::conversions::implicit_contract(ty).is_some())
     {
         let (low, high, tag) = raw_hash_value_regs(emitter);
         abi::emit_load_temporary_stack_slot(emitter, low, VALUE_LO_OFF);
@@ -3402,7 +3402,7 @@ fn emit_loaded_assoc_variadic_entries(
         box_raw_hash_value_to_mixed_result(emitter);
         ctx.argument_owners.record_coercion_source(emitter);
         abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
-        scalar_parameter_guards::check(emitter, ctx, data, &PhpType::Mixed);
+        parameter_guards::check(emitter, ctx, data, &PhpType::Mixed);
         ctx.argument_owners.clear_coercion_source(emitter);
         abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
         abi::emit_call_label(emitter, "__rt_decref_mixed");

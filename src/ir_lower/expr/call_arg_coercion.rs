@@ -990,7 +990,7 @@ pub(super) fn coerce_operands_to_params(
         if crate::ir_lower::conversion_boundaries::active(ctx, param_ty) {
             let value = lowered_value_from_id(ctx, operands[index]);
             let checked = crate::ir_lower::conversion_boundaries::implicit(ctx, value, param_ty, Span::dummy());
-            let checked = crate::ir_lower::conversion_boundaries::scalar_storage(ctx, checked, param_ty, Span::dummy());
+            let checked = crate::ir_lower::conversion_boundaries::value_storage(ctx, checked, param_ty, Span::dummy());
             operands[index] = root_evaluated_call_argument(ctx, checked, Span::dummy()).value;
             continue;
         }

@@ -24,7 +24,7 @@ pub(super) fn coerce_to_return_type(
         && crate::ir_lower::conversion_boundaries::active(ctx, &return_php_type) {
         let span = span.unwrap_or_else(Span::dummy);
         let checked = crate::ir_lower::conversion_boundaries::implicit(ctx, value, &return_php_type, span);
-        crate::ir_lower::conversion_boundaries::scalar_storage(ctx, checked, &return_php_type, span)
+        crate::ir_lower::conversion_boundaries::value_storage(ctx, checked, &return_php_type, span)
     } else { value };
     let value = ctx.retype_packed_address_for_pointer_sink(value, &return_php_type, span);
     crate::ir_lower::object_boundaries::guard_return(ctx, value, span);

@@ -275,7 +275,7 @@ fn check_assign_value_type(
             value.span, &format!("Assignment to typed local ${name}"))?;
         if checker.semantic_source_mode != crate::source::SourceMode::Internal
             && checker.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
-            && crate::semantics::conversions::scalar_contract(&declared).is_some() {
+            && crate::semantics::conversions::implicit_contract(&declared).is_some() {
             if matches!(crate::semantics::conversions::implicit(checker.semantic_profile,
                 checker.semantic_source_mode, &declared, &ty),
                 elephc_semantics::conversions::ConversionPlan::Guard { .. }) {
@@ -1452,12 +1452,16 @@ pub(super) fn check_typed_assign(
     }
     // A runtime-named constructor has no statically known class, so inference keeps its result
     // as Mixed. The expression still either produces an object or throws before assignment, which
-    // is sufficient for the non-nominal `object` contract. Do not extend this exception to an
-    // arbitrary Mixed value or to a named class, because neither has a runtime nominal guard here.
+    // is sufficient for the non-nominal `object` contract. Other unknown values need an
+    // explicitly selected runtime contract before the checker can accept the initializer.
     let dynamic_new_satisfies_object =
         matches!(&declared_ty, PhpType::Object(class) if class.is_empty())
             && matches!(value.kind, ExprKind::NewDynamic { .. });
-    if !checker.type_accepts(&declared_ty, &value_ty) && !dynamic_new_satisfies_object {
+    let guarded_unknown = value_ty == PhpType::Mixed
+        && matches!(crate::semantics::conversions::implicit(checker.semantic_profile,
+            checker.semantic_source_mode, &declared_ty, &value_ty),
+            elephc_semantics::conversions::ConversionPlan::Guard { .. });
+    if !checker.type_accepts(&declared_ty, &value_ty) && !dynamic_new_satisfies_object && !guarded_unknown {
         // The initializer typed successfully but violates the declared type. Poison
         // `$name` as `Mixed` for recovery so later uses do not cascade, then report
         // the initialization mismatch as the one real diagnostic.

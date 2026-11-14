@@ -1,5 +1,5 @@
 //! Purpose:
-//! Adapts original descriptor argument values to reusable EIR scalar guards.
+//! Adapts original descriptor argument values to reusable EIR value guards.
 //!
 //! Called from:
 //! - Invoker argument materialization before any PHP scalar conversion.
@@ -16,12 +16,12 @@ use elephc_semantics::conversions::ConversionPlan;
 pub(super) fn check(emitter: &mut Emitter, ctx: &mut InvokerEmitContext,
     data: &mut DataSection, source: &PhpType) {
     if ctx.materializing_default { return; }
-    let Some(expected) = ctx.scalar_parameter.as_ref() else { return; };
-    if crate::semantics::conversions::scalar_contract(expected).is_none() { return; }
+    let Some(expected) = ctx.parameter_contract.as_ref() else { return; };
+    if crate::semantics::conversions::implicit_contract(expected).is_none() { return; }
     let plan = crate::semantics::conversions::implicit(ctx.semantic_profile,
         crate::source::SourceMode::Php, expected, source);
     if matches!(plan, ConversionPlan::ExistingBehavior | ConversionPlan::Identity) { return; }
-    let label = data.scalar_argument_guard(expected);
+    let label = data.parameter_guard(expected);
     let boxed = source.codegen_repr() != PhpType::Mixed;
     if boxed {
         super::emit_box_current_value_as_mixed(emitter, source);
@@ -39,14 +39,14 @@ pub(super) fn check(emitter: &mut Emitter, ctx: &mut InvokerEmitContext,
     }
 }
 
-/// Emits each requested guard as ordinary AST-to-EIR-to-native code exactly once.
+/// Emits each requested scalar or nominal guard through ordinary EIR exactly once.
 pub(in crate::codegen) fn emit_requested(module: &crate::ir::Module, emitter: &mut Emitter,
     data: &mut DataSection, shared: &mut crate::codegen::shared_state::SharedCodegenState)
     -> crate::codegen::Result<()> {
-    for (label, expected) in data.requested_scalar_argument_guards() {
+    for (label, expected) in data.requested_parameter_guards() {
         let mut wrapper_module = shared.take_wrapper_module(module);
         let guard = crate::ir_lower::lower_callable_parameter_guard(&mut wrapper_module, &label, &expected);
-        crate::ir::validate_function(&guard).expect("scalar parameter guard must be valid EIR");
+        crate::ir::validate_function(&guard).expect("parameter guard must be valid EIR");
         let scope = emitter.begin_out_of_line();
         let result = crate::codegen::block_emit::emit_synthetic_function_with_label(
             &wrapper_module, &guard, &label, emitter, data, shared, false,

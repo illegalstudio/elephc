@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 50 (this commit), following `beac107cab`. Issue:
+Verified through step 51 (this commit), following `87252a0179`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -733,6 +733,35 @@ architecture gate, assembly comments and diff checks pass. No ABI or public
 admission changes. Reference aliases, nominal unions and special adapters still
 need their planned integration.
 
+### Verified scalar and nominal value contracts
+
+Step51 separates scalar-only inference from implicit scalar/nominal declarations.
+The neutral allowed-kind set can retain an opaque NonScalar alternative; compiler
+adapters refine it with real class/interface membership. Exact scalar alternatives
+remain mandatory in unions such as ClassName|float. Direct EIR guards and shared
+descriptor helpers combine kind predicates with instanceof, including inherited
+classes and interfaces. Owned object extraction uses the established MixedUnbox
+retaining path before source-cell retirement. Unknown nominal returns and typed
+initializers are admitted only with an explicitly selected runtime guard.
+
+Optimizer source hints and store/return effects retain these full contracts. An
+expanded plain-class initializer probe was red during integration: full AST
+optimization removed its pure-read TypeError catch. The shared effect adapter now
+keeps that catch. Helpers and storage APIs use parameter/value names to reflect
+their broader responsibility, without moving class hierarchy logic into the
+neutral crate. Scalar-only pre-fold generic evidence remains separate.
+
+Three new compiler regressions cover known scalar rejection, legacy/Internal
+controls, all five emitters, native direct/descriptor calls, class/interface
+membership, exact large ints/floats, union and concrete object returns, typed
+initialization/stores, failure atomicity and clean heaps under both full optimizer
+settings. Five neutral conversion tests pass. Extended existing parameter and
+return tests cover nominal/scalar alternatives in the eval walker and bytecode
+callers with exact owner accounting; object setup runs in the walker because
+NewObject is an explicit VM compile gap. Three descriptor and two return controls,
+compiler build, architecture, assembly comments and diff checks pass. Arrays,
+callable/iterable/resource unions, references and full admission remain pending.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -850,4 +879,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 47 | `9c9cbe461a` | feat(strict): preserve declaration kinds and union failures |
 | 48 | `6258e85218` | feat(strict): materialize declared scalar constant literals |
 | 49 | `beac107cab` | feat(strict): bind omitted parameter defaults before invocation |
-| 50 | this commit | feat(strict): guard public descriptor scalar arguments through eir |
+| 50 | `87252a0179` | feat(strict): guard public descriptor scalar arguments through eir |
+| 51 | this commit | feat(strict): preserve exact scalar and nominal union contracts |

@@ -763,3 +763,5 @@ mod strict_trusted_constants;
 mod strict_trusted_defaults;
 
 mod strict_descriptor_parameters;
+
+mod strict_nominal_unions;

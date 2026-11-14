@@ -399,6 +399,12 @@ impl Checker {
         info: &ReturnInfo, span: crate::span::Span, context: &str) -> Result<(), CompileError> {
         if info.has_value && !matches!(expected, PhpType::Void) {
             self.require_noncoercive_value_type(expected, &info.ty, info.source_mode, info.span, context)?;
+            if info.ty == PhpType::Mixed && !crate::semantics::conversions::nominal_members(expected).is_empty()
+                && matches!(crate::semantics::conversions::implicit(self.semantic_profile,
+                    info.source_mode, expected, &info.ty),
+                    elephc_semantics::conversions::ConversionPlan::Guard { .. }) {
+                return Ok(());
+            }
         }
         self.require_compatible_return_hint(hint, expected, &info.ty, info.has_value, span, context)
     }

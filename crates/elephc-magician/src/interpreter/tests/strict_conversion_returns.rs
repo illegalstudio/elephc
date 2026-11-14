@@ -20,10 +20,14 @@ fn strict_conversion_returns_eval_engines_original_kinds_and_owners() {
             ("int", "'2'", false), ("string", "'text'", true), ("string", "2", false),
             ("bool", "false", true), ("bool", "1", false), ("int|string", "'2'", true),
             ("int|string", "2.0", false), ("?int", "null", true),
+            ("stdClass|float", "2.0", true), ("stdClass|float", "2", false),
+            ("stdClass|float", "$nominal", true), ("?stdClass", "null", true),
         ] {
             let declaration = format!("function exactReturn($v): {declaration} {{ return $v; }}");
             let source = format!("{} $result = 23; $result = exactReturn({argument});",
                 if vm { "if (false) { function exactReturn($v) {} }" } else { "" });
+            // Object construction is staged in the walker; both callers consume the same owned value.
+            let declaration = format!("{declaration} $nominal = new stdClass();");
             let mut context = ElephcEvalContext::new();
             context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true)).unwrap();
             let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();

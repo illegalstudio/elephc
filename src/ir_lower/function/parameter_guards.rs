@@ -1,5 +1,5 @@
 //! Purpose:
-//! Builds reusable EIR guards for public callable scalar parameter contracts.
+//! Builds reusable EIR guards for public callable scalar and nominal parameter contracts.
 //!
 //! Called from:
 //! - Final descriptor helper emission after all runtime signatures are known.
@@ -11,11 +11,11 @@
 use super::*;
 use elephc_semantics::conversions::ValueKind;
 
-/// Lowers the same exact scalar kind contract used by direct argument boundaries.
+/// Lowers the same exact value contract used by direct argument boundaries.
 pub(crate) fn lower_callable_parameter_guard(module: &mut Module, label: &str, expected: &PhpType) -> Function {
     let span = Span::dummy();
     let value = Expr::new(ExprKind::Variable("value".into()), span);
-    let allowed = crate::semantics::conversions::scalar_contract(expected).expect("scalar guard contract");
+    let allowed = crate::semantics::conversions::implicit_contract(expected).expect("checked value contract");
     let false_only = crate::semantics::conversions::only_false(expected);
     let mut alternatives = Vec::new();
     for (kind, name) in [(ValueKind::Integer, "is_int"), (ValueKind::Float, "is_float"),
@@ -28,9 +28,17 @@ pub(crate) fn lower_callable_parameter_guard(module: &mut Module, label: &str, e
             Expr::new(ExprKind::FunctionCall { name: Name::unqualified(name), args: vec![value.clone()] }, span)
         });
     }
+    for name in crate::semantics::conversions::nominal_members(expected) {
+        alternatives.push(if name.is_empty() || name.eq_ignore_ascii_case("object") {
+            Expr::new(ExprKind::FunctionCall { name: Name::unqualified("is_object"), args: vec![value.clone()] }, span)
+        } else {
+            Expr::new(ExprKind::InstanceOf { value: Box::new(value.clone()),
+                target: crate::parser::ast::InstanceOfTarget::Name(Name::from(name)) }, span)
+        });
+    }
     let accepted = alternatives.into_iter().reduce(|left, right| Expr::new(ExprKind::BinaryOp {
         left: Box::new(left), op: BinOp::Or, right: Box::new(right),
-    }, span)).expect("a scalar contract accepts at least one kind");
+    }, span)).expect("a checked contract accepts at least one alternative");
     let guard = Stmt::new(StmtKind::If {
         condition: accepted, then_body: Vec::new(), elseif_clauses: Vec::new(),
         else_body: Some(vec![Stmt::new(StmtKind::Throw(Expr::new(ExprKind::NewObject {

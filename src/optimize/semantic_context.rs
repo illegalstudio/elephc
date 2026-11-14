@@ -66,7 +66,7 @@ pub(super) fn implicit_store_may_throw(stmt: &crate::parser::ast::Stmt) -> bool 
         return enabled(StrictFeature::Coercions);
     }
     let crate::parser::ast::StmtKind::TypedAssign { type_expr, .. } = &stmt.kind else { return false; };
-    enabled(StrictFeature::Coercions) && crate::semantics::conversions::scalar_contract(
+    enabled(StrictFeature::Coercions) && crate::semantics::conversions::implicit_contract(
         &super::return_boundaries::parameter_type(Some(type_expr))).is_some()
 }
 

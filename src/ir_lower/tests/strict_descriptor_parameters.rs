@@ -70,7 +70,7 @@ fn strict_descriptor_parameters_share_guards_on_all_targets() {
         let (program, result) = checked(target);
         let module = crate::ir_lower::lower_program(&program, &result, target, false).unwrap();
         let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
-        assert_eq!(assembly.matches("__eir_scalar_argument_guard_0:\n").count(), 1, "{name}");
+        assert_eq!(assembly.matches("__eir_parameter_guard_0:\n").count(), 1, "{name}");
     }
 }
 

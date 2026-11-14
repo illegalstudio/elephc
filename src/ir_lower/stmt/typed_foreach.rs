@@ -32,7 +32,7 @@ pub(super) fn lower_typed_assign(
         .unwrap_or_else(|| lower_expr(ctx, value));
     let lowered = if crate::ir_lower::conversion_boundaries::active(ctx, &php_type) {
         let checked = crate::ir_lower::conversion_boundaries::implicit(ctx, lowered, &php_type, span);
-        crate::ir_lower::conversion_boundaries::scalar_storage(ctx, checked, &php_type, span)
+        crate::ir_lower::conversion_boundaries::value_storage(ctx, checked, &php_type, span)
     } else { lowered };
     let lowered = crate::ir_lower::expr::coerce_integer_arithmetic(ctx, lowered, &php_type, span);
     // `?ptr<T> $x = null` (or a packed record address) stores the pointer word.

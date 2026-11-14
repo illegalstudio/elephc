@@ -68,3 +68,16 @@ fn strict_conversion_scalar_union_membership_is_noncoercive() {
     assert_eq!(plan_implicit_kinds(SemanticProfile::all().with(StrictFeature::Coercions, false),
         ValueKind::Float, allowed), ConversionPlan::ExistingBehavior);
 }
+
+/// Opaque nominal alternatives do not permit conversion of unrelated scalar alternatives.
+#[test]
+fn strict_conversion_nominal_union_keeps_scalar_members_exact() {
+    use elephc_semantics::conversions::plan_implicit_kinds;
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
+    let allowed = AllowedKinds::one(ValueKind::Float).union(AllowedKinds::one(ValueKind::NonScalar));
+    assert_eq!(plan_implicit_kinds(profile, ValueKind::Float, allowed), ConversionPlan::Identity);
+    assert_eq!(plan_implicit_kinds(profile, ValueKind::NonScalar, allowed), ConversionPlan::Identity);
+    assert_eq!(plan_implicit_kinds(profile, ValueKind::Integer, allowed), ConversionPlan::Reject(StrictFeature::Coercions));
+    assert_eq!(plan_implicit_kinds(profile, ValueKind::Dynamic, allowed),
+        ConversionPlan::Guard { feature: StrictFeature::Coercions, allowed });
+}

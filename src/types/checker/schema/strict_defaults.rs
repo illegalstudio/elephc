@@ -55,7 +55,7 @@ impl AstVisitor for DefaultValidator<'_> {
         let source = self.source_modes.last().copied().unwrap_or(SourceMode::Internal);
         if source == SourceMode::Internal { return; }
         let Ok(expected) = self.checker.resolve_type_expr(annotation, value.span) else { return; };
-        if crate::semantics::conversions::scalar_contract(&expected).is_none() { return; }
+        if crate::semantics::conversions::implicit_contract(&expected).is_none() { return; }
         let owner = self.checker.current_class.clone();
         let parent = owner.as_ref().and_then(|name| self.checker.classes.get(name))
             .and_then(|class| class.parent.clone());

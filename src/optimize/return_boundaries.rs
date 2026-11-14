@@ -111,7 +111,7 @@ impl ReturnBoundaryFacts {
 
 /// Resolves only representations whose syntax is authoritative before checker specialization.
 pub(super) fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
-    hint.and_then(crate::semantics::conversions::scalar_hint).unwrap_or(PhpType::Mixed)
+    hint.and_then(crate::semantics::conversions::implicit_hint).unwrap_or(PhpType::Mixed)
 }
 
 /// Installs one lexical return contract and restores the caller's context afterwards.

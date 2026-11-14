@@ -43,6 +43,31 @@ pub(crate) fn scalar_contract(ty: &PhpType) -> Option<AllowedKinds> {
     })
 }
 
+/// Projects scalar or nominal declarations while leaving nominal membership to typed adapters.
+pub(crate) fn implicit_contract(ty: &PhpType) -> Option<AllowedKinds> {
+    match ty {
+        PhpType::Object(_) => Some(AllowedKinds::one(ValueKind::NonScalar)),
+        PhpType::Union(members) => members.iter().try_fold(AllowedKinds::EMPTY,
+            |allowed, member| Some(allowed.union(implicit_contract(member)?))),
+        _ => scalar_contract(ty),
+    }
+}
+
+/// Retains nominal syntax for conservative effects without resolving it to an ABI representation.
+pub(crate) fn implicit_hint(hint: &crate::parser::ast::TypeExpr) -> Option<PhpType> {
+    let ty = crate::types::constant_binding::declared_type(hint);
+    implicit_contract(&ty).map(|_| ty)
+}
+
+/// Collects nominal alternatives separately from the neutral scalar kind projection.
+pub(crate) fn nominal_members(ty: &PhpType) -> Vec<&str> {
+    match ty {
+        PhpType::Object(name) => vec![name],
+        PhpType::Union(members) => members.iter().flat_map(nominal_members).collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Distinguishes the literal false declaration from a contract accepting every boolean.
 pub(crate) fn only_false(ty: &PhpType) -> bool {
     match ty {
@@ -64,7 +89,7 @@ pub(crate) fn inferred_scalar_join(profile: SemanticProfile, source: SourceMode,
 pub(crate) fn implicit(profile: SemanticProfile, source: SourceMode, expected: &PhpType,
     actual: &PhpType) -> ConversionPlan {
     if source == SourceMode::Internal { return ConversionPlan::ExistingBehavior; }
-    let Some(allowed) = scalar_contract(expected) else { return ConversionPlan::ExistingBehavior; };
+    let Some(allowed) = implicit_contract(expected) else { return ConversionPlan::ExistingBehavior; };
     if let PhpType::Union(members) = actual {
         let plans: Vec<_> = members.iter().map(|member| implicit(profile, source, expected, member)).collect();
         if plans.iter().all(|plan| *plan == ConversionPlan::Identity) { return ConversionPlan::Identity; }
@@ -74,6 +99,9 @@ pub(crate) fn implicit(profile: SemanticProfile, source: SourceMode, expected: &
         return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
     }
     if *actual == PhpType::Never { return ConversionPlan::Identity; }
+    if !nominal_members(expected).is_empty() && super::numeric::value_kind(actual) == ValueKind::NonScalar {
+        return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
+    }
     if only_false(expected) && *actual == PhpType::Bool {
         return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
     }
