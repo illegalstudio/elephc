@@ -402,6 +402,10 @@ fn accept_loop(shared: Arc<SharedTcp>) {
                                 eprintln!("elephc-web: accept failed: {error}");
                                 last_error_log = Some(now);
                             }
+                            // Do not hold the fork gate through the backoff:
+                            // a worker respawn waiting on fork() must not be
+                            // delayed by fd or memory pressure.
+                            drop(_gate);
                             std::thread::sleep(Duration::from_millis(50));
                         }
                         _ => {
@@ -644,6 +648,51 @@ fn send_fd(socket: RawFd, fd: RawFd, id: u64) -> io::Result<()> {
     }
 }
 
+/// Closes every `SCM_RIGHTS` descriptor present in a received control buffer.
+///
+/// `recvmsg` can install descriptors and still report a truncated payload or
+/// `MSG_CTRUNC`. The caller cannot use them, so close each one before returning
+/// the protocol error.
+#[cfg(target_vendor = "apple")]
+unsafe fn close_received_fds(message: &libc::msghdr) {
+    let control_start = message.msg_control as usize;
+    if control_start == 0 || message.msg_controllen == 0 {
+        return;
+    }
+    let control_end = control_start.saturating_add(message.msg_controllen as usize);
+    let mut header = libc::CMSG_FIRSTHDR(message);
+    while !header.is_null() {
+        let header_addr = header as usize;
+        if header_addr < control_start || header_addr >= control_end {
+            break;
+        }
+        let cmsg_len = (*header).cmsg_len as usize;
+        let data_start = libc::CMSG_DATA(header) as usize;
+        let data_end = header_addr.saturating_add(cmsg_len).min(control_end);
+        if (*header).cmsg_level == libc::SOL_SOCKET
+            && (*header).cmsg_type == libc::SCM_RIGHTS
+            && data_start < data_end
+        {
+            let count = (data_end - data_start) / std::mem::size_of::<RawFd>();
+            for index in 0..count {
+                let fd = std::ptr::read_unaligned(
+                    (data_start as *const u8)
+                        .add(index * std::mem::size_of::<RawFd>())
+                        .cast::<RawFd>(),
+                );
+                if fd >= 0 {
+                    libc::close(fd);
+                }
+            }
+        }
+        let next = libc::CMSG_NXTHDR(message, header);
+        if next.is_null() || next as usize <= header_addr {
+            break;
+        }
+        header = next;
+    }
+}
+
 /// Receives one descriptor and its id from a Unix datagram channel.
 #[cfg(target_vendor = "apple")]
 fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
@@ -683,7 +732,13 @@ fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
             "descriptor channel closed",
         ));
     }
-    if result as usize != payload.len() || message.msg_flags & libc::MSG_CTRUNC != 0 {
+    if result as usize != payload.len()
+        || message.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0
+    {
+        // `recvmsg` installs SCM_RIGHTS descriptors before reporting a
+        // truncated payload or control buffer. They are unusable here, so
+        // close them instead of leaking one fd per malformed datagram.
+        unsafe { close_received_fds(&message) };
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "truncated descriptor datagram",
@@ -1504,6 +1559,34 @@ mod tests {
         let mut bytes = [0u8; 5];
         received.read_exact(&mut bytes).unwrap();
         assert_eq!(&bytes, b"hello");
+    }
+
+    /// A truncated datagram closes any descriptor already installed by recvmsg.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn truncated_datagram_closes_received_descriptors() {
+        let mut pipe = [0; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        let mut control = ControlBuffer([0u8; 64]);
+        let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+        let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+        message.msg_control = control.0.as_mut_ptr().cast();
+        message.msg_controllen = space as _;
+        let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+        assert!(!header.is_null());
+        unsafe {
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+            std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), pipe[0]);
+            close_received_fds(&message);
+        }
+        assert_eq!(unsafe { libc::fcntl(pipe[0], libc::F_GETFD) }, -1);
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::EBADF)
+        );
+        unsafe { libc::close(pipe[1]) };
     }
 
     /// The master holds its accepted socket until the worker acknowledges the
