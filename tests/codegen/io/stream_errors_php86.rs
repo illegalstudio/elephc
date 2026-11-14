@@ -1036,6 +1036,46 @@ var_dump(isset($GLOBALS[$key]), $GLOBALS[$key] ?? 'gone');
     );
 }
 
+/// A dynamic `$GLOBALS[$name] = $value` store retains the boxed cell it publishes.
+///
+/// The caller's local or parameter keeps its own reference and releases it when its scope
+/// ends, so the global slot must own a second reference. Heap debugging poisons the freed
+/// cell, which makes the missing retain deterministic instead of dependent on whether the
+/// allocator reused the block before the next read.
+#[test]
+fn test_globals_computed_write_retains_the_assigned_cell_php86() {
+    let out = compile_and_run_with_php_version_and_heap_debug(
+        r#"<?php
+function setComputedGlobal(string $name, $value): void {
+    $GLOBALS[$name] = $value;
+}
+function setLiteralGlobal($value): void {
+    $GLOBALS['count'] = $value;
+}
+$counter = 1;
+$key = $argc > 0 ? 'counter' : 'counterx';
+setComputedGlobal($key, 7);
+var_dump($counter, $GLOBALS[$key]);
+setComputedGlobal($key, [1, 2]);
+var_dump($GLOBALS[$key]);
+$count = 1;
+setLiteralGlobal(9);
+var_dump($count, $GLOBALS['count']);
+"#,
+        PhpVersion::Php86,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "int(7)\nint(7)\narray(2) {\n  [0]=>\n  int(1)\n  [1]=>\n  int(2)\n}\nint(9)\nint(9)\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// A bare `$GLOBALS` snapshot is an array copy of the current global values: mutating a
 /// global in place after taking it does not publish through the snapshot.
 #[test]

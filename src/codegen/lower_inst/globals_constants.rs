@@ -73,10 +73,10 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let symbol = ir_global_symbol(&name);
     let value = expect_operand(inst, 0)?;
     let ty = ctx.load_value_to_result(value)?;
+    let source_ty = ty.codegen_repr();
     let store_ty = if ctx.module.web && crate::superglobals::is_superglobal(&name) {
-        ty.codegen_repr()
+        source_ty.clone()
     } else {
-        let source_ty = ty.codegen_repr();
         if source_ty != PhpType::Mixed {
             // The declared type for a `?ptr<T>`, so address 0 boxes as PHP null.
             let box_ty = ctx.mixed_box_type(value)?;
@@ -90,9 +90,29 @@ pub(super) fn lower_store_global(ctx: &mut FunctionContext<'_>, inst: &Instructi
         }
         PhpType::Mixed
     };
+    if source_ty == PhpType::Mixed && store_ty.codegen_repr() == PhpType::Mixed {
+        retain_mixed_value_for_global_store(ctx, value)?;
+    }
     ctx.data
         .add_comm(symbol.clone(), store_ty.codegen_repr().stack_size().max(8));
     abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &store_ty, true);
+    Ok(())
+}
+
+/// Retains a Mixed cell the global store publishes when the source keeps its own reference.
+///
+/// A boxed local or parameter owns one reference that its scope releases later, while the
+/// global slot becomes a second owner of the same cell. Publishing the pointer without an
+/// increment left the global dangling once that scope ended; under heap debugging the freed
+/// cell is poisoned and a later read of the global answers null. A value this store consumes
+/// outright (`value_can_transfer_ownership_to_consumer`) needs no extra reference.
+fn retain_mixed_value_for_global_store(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    if !ctx.value_can_transfer_ownership_to_consumer(value)? {
+        abi::emit_call_label(ctx.emitter, "__rt_incref");
+    }
     Ok(())
 }
 
@@ -239,7 +259,12 @@ pub(super) fn lower_store_global_dynamic(
     }
     let ty = ctx.load_value_to_result(value)?;
     let source_ty = ty.codegen_repr();
-    if source_ty != PhpType::Mixed {
+    if source_ty == PhpType::Mixed {
+        // The dynamic store publishes the caller's cell into program-global storage. The
+        // caller still owns its reference and releases it when its scope ends, so the new
+        // global owner must be counted separately.
+        retain_mixed_value_for_global_store(ctx, value)?;
+    } else {
         let box_ty = ctx.mixed_box_type(value)?;
         if ctx.value_can_transfer_ownership_to_consumer(value)?
             || global_store_owns_persisted_string(ctx, value, &source_ty)
