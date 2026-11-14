@@ -246,6 +246,7 @@ impl PcntlRuntime {
             ),
             Self::SetCpuAffinity
             | Self::Daemon
+            | Self::PosixIsatty
             | Self::PosixKill
             | Self::SetNs
             | Self::SetProcessGroup
