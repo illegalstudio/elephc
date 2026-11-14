@@ -77,6 +77,7 @@ mod cfg;
 mod clobber;
 mod concat_reset;
 mod const_fold;
+mod const_string_array_intval_fold;
 mod count_hoist;
 mod cse;
 mod dead_inst;

@@ -82,6 +82,7 @@ use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
 use super::concat_reset::{ConcatResetElim, ConcatResetHoist};
 use super::const_fold::ConstFold;
+use super::const_string_array_intval_fold::ConstStringArrayIntvalFold;
 use super::count_hoist::CountHoist;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
@@ -234,6 +235,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(ArrayFillLoop),
         Box::new(CheckedNumericChain),
         Box::new(ConstFold),
+        Box::new(ConstStringArrayIntvalFold),
         Box::new(Cse),
         Box::new(Licm),
         Box::new(DeadInst),

@@ -693,6 +693,22 @@ promotion. Any observed map, dynamic divisor, parameter source, reassigned map
 local, zero divisor or intervening source write keeps the materialized map and its
 generic path.
 
+`src/ir_passes/const_string_array_intval_fold.rs` folds an integer cast of a
+masked read over an immutable literal string array, `(int) $texts[$i & M]`. The
+array must be a PHP local built from `array_new` plus single-use `ConstStr`
+pushes, stored once and loaded only by the read; all construction instructions
+must dominate the read (or precede it in the same block), and no slot release may
+sit inside the read's loop or dominate it. The index must be a literal in
+`0..len` or `value & (len - 1)` for a power-of-two literal length. The pass
+replaces each pushed string in place with the compile-time PHP integer cast of
+that literal, retypes the slot and its ownership wrappers to `array<int>`, turns
+the checked read into `array_get_unchecked`, and removes the acquire/cast/release
+scaffolding. The shared AST cast fold supplies PHP's leading-numeric-run grammar,
+float-form truncation and out-of-range saturation. Dynamic indices, mismatched or
+non-power-of-two masks, observed or mutated arrays, runtime-built arrays,
+explicit-base `intval()` and non-dominating construction keep the checked read and
+runtime string conversion.
+
 `src/ir_lower/stmt/stored_numeric_map.rs` marks a stored
 `$mapped = array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
 $v * $v + C | $v * F | $v * F + G | $v + F | $v - F | $v / F, $ints)` when every

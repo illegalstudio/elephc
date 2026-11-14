@@ -82,6 +82,7 @@ mod call_result_alias;
 mod numeric_closure_calls;
 #[path = "optimizer/constant_folding.rs"]
 mod constant_folding;
+mod const_string_array_intval_fold;
 #[path = "optimizer/constant_propagation.rs"]
 mod constant_propagation;
 #[path = "optimizer/control_flow_normalization.rs"]
