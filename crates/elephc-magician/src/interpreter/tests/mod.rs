@@ -106,3 +106,5 @@ mod trait_adaptations;
 mod strict_conversion_parameters;
 
 mod strict_conversion_returns;
+
+mod strict_string_conversions;

@@ -162,7 +162,9 @@ pub(super) fn first_class_callable_descriptor(
 pub(super) fn builtin_returns_owned_string(name: &str) -> bool {
     crate::builtins::registry::lookup(name).is_some_and(|definition| {
         let semantics = &definition.spec.semantics;
-        matches!(semantics.argument_lowering,
+        matches!(semantics.callable, crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_))
+            && matches!(semantics.result_ownership, crate::builtins::semantics::BuiltinResultOwnership::Fresh)
+            || matches!(semantics.argument_lowering,
             crate::builtins::semantics::BuiltinArgumentLowering::WeakStringUnion { .. }
         ) || matches!(
             semantics.runtime_functions,

@@ -783,3 +783,4 @@ mod strict_object_cast_domains;
 mod strict_gmp_intval;
 
 mod strict_settype_collections;
+mod strict_string_conversions;

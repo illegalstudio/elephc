@@ -40,9 +40,7 @@ const fn semantics() -> crate::builtins::semantics::BuiltinSemantics {
 /// String conversion may invoke user code and mutate globals inside the checked value graph.
 fn effects(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> crate::ir::Effects {
     if crate::semantics::conversions::checked_casts(input.semantic_profile, input.source_mode) {
-        crate::ir::Effects::from_bits_retain(crate::ir::Effects::all().bits()
-            & !crate::ir::Effects::REFCOUNT_OP.bits() & !crate::ir::Effects::BLOCKING_IO.bits()
-            & !crate::ir::Effects::NETWORK_IO.bits())
+        crate::ir::Effects::php_conversion()
     } else { crate::ir::RuntimeFnId::Settype.effects() }
 }
 

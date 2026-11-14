@@ -184,7 +184,9 @@ pub(super) fn lower_scalar_cast_value(
         vec![value.value],
         Some(Immediate::CastTarget(value_ir_type(&php_type))),
         php_type,
-        Op::Cast.default_effects(),
+        if matches!(target, CastType::String | CastType::Bool) {
+            crate::ir::Effects::php_conversion()
+        } else { Op::Cast.default_effects() },
         Some(expr.span),
     );
     if matches!(target, CastType::String) {

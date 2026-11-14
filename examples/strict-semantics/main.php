@@ -38,3 +38,6 @@ function showSettings(mixed $settings): void {
 }
 
 showSettings(['timeout' => $timeout]);
+
+$display = $argc > 0 ? 'strval' : 'STRVAL';
+echo "Displayed timeout: ", $display($timeout), PHP_EOL;

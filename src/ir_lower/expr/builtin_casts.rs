@@ -1,5 +1,5 @@
 //! Purpose:
-//! Shares rooted explicit numeric cast graphs between syntax and builtin invocations.
+//! Shares rooted explicit scalar cast graphs between syntax and builtin invocations.
 //!
 //! Called from:
 //! - BuiltinLoweringContext after shared argument planning and source-order evaluation.
@@ -24,6 +24,27 @@ pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, target: Nume
             let target = if target == NumericCastTarget::Int { CastType::Int } else { CastType::Float };
             super::ternary_cast::lower_scalar_cast_value(ctx, &target, input, &expression)
         }
+    });
+    ctx.source_mode = previous; result
+}
+
+/// Roots borrowed scalar operands and publishes an independent owner for string builtin results.
+pub(in crate::ir_lower) fn scalar(ctx: &mut LoweringContext<'_, '_>, target: &CastType,
+    value: ValueId, source_mode: crate::source::SourceMode, span: Span) -> LoweredValue {
+    let previous = ctx.source_mode; ctx.source_mode = source_mode;
+    let result = ctx.with_independent_write_receiver(|ctx| {
+        let pins = pin_in_flight_owners(ctx, &[value], span);
+        let input = super::builtin_numeric::borrowed_operand(ctx, value, span);
+        let expression = Expr::new(ExprKind::Variable("__builtin_scalar_cast".into()), span);
+        let result = super::ternary_cast::lower_scalar_cast_value(ctx, target, input, &expression);
+        let result = if *target == CastType::String {
+            let owned = ctx.emit_owned_value(Op::StrPersist, vec![result.value], None, PhpType::Str,
+                Op::StrPersist.default_effects(), Some(span));
+            release_binary_operand_temporary(ctx, result, span);
+            owned
+        } else { result };
+        unpin_in_flight_owners(ctx, pins, span);
+        result
     });
     ctx.source_mode = previous; result
 }

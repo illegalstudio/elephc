@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 70 (this commit), following `05cef3fb07`. Issue:
+Verified through step 71 (this commit), following `222c4281fb`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 70.
+This progress ledger condenses verified implementation through step 71.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -755,6 +755,42 @@ controls, implicit dependency and reserved-name diagnostics, the real opaque-eva
 assignment test, check --tests, build and the curl exporter passed. The example
 uses an explicit mixed container for intentional array-to-object retagging.
 
+### Scalar builtin conversions
+
+Step71 shares boolval/strval semantic descriptors and prepared callable lowering
+through the full explicit scalar cast adapter. Checked boolean conversion uses
+reviewed native handlers while permissive IsTruthy behavior remains unchanged.
+String results publish an independent owner, matching a Fresh semantic contract;
+source arguments stay borrowed and rooted, and intermediate string owners retire
+after persistence. Effects::php_conversion reuses the existing PHP callback
+summary without marking the operation itself as a refcount instruction or direct
+blocking I/O. The validator admits that complete cast summary as an explicit
+alternative to legacy cast effects.
+
+The new string regression failed on step70 with an undefined dynamic function.
+After callable support was added, fresh-owner regressions exposed descriptor and
+array_map leaks. One shared predicate now selects full PHP wrapper construction
+and return-status consumption by its invoker; Prepared/Fresh string metadata also
+reaches the callback ownership predicate. These root string regressions pass all
+five emitters and both native profile/optimizer settings, with each call path
+checked separately for clean heaps. Eval strval now uses shared operand leases and
+the existing cast evaluator, which retires object-hook result owners. Its new
+call-surface owner regression passes.
+
+The checked shared Boolval hook uses the ordinary eval cast path. Boolean casts
+adopt protected native failures before returning to a catch; an injected native
+failure regression was red before this handoff. Native SimpleXML parity passes for both profiles and optimizer modes, with clean
+heaps. Its complete matrix took 64.81 seconds and uses the bundle CI timeout.
+The permissive native-handler mismatch is preserved and tracked separately as
+6a5ed1e4. Eight compiler tests, two eval regressions and the effects validator
+pass, as do the focused settype/numeric controls, six existing boolval cases,
+strval dispatch, owned/borrowed descriptor-string cleanup, opaque eval (48.15 s),
+check --tests, build and the curl exporter. Full generated docs and architecture
+audits pass (828 AOT, 77 graph, 56 primitive, 695 runtime, 679 eval). The updated
+PHP-compatible example compiles and runs with Bools/DynamicCode. Task temporary
+directories are removed. No admission change is made before all Casts and
+remaining feature contracts are complete.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -843,4 +879,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 67 | `2802808721` | feat(strict): prove original gmp integer cast sources |
 | 68 | `95f5d407ec` | feat(strict): share settype target validation |
 | 69 | `05cef3fb07` | feat(strict): prepare checked settype callable conversions |
-| 70 | this commit | feat(strict): complete settype collection conversions |
+| 70 | `222c4281fb` | feat(strict): complete settype collection conversions |
+| 71 | this commit | feat(strict): share scalar builtin conversion graphs |

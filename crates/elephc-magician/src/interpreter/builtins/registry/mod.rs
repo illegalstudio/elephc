@@ -355,6 +355,7 @@ fn call_shared_runtime_builtin(
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts) {
         match (id, args) {
+            (RuntimeBuiltinId::Boolval, [value]) => return eval_cast_value(&EvalCastType::Bool, *value, context, values).map(Some),
             (RuntimeBuiltinId::Floatval, [value]) => return eval_cast_value(&EvalCastType::Float, *value, context, values).map(Some),
             (RuntimeBuiltinId::Intval, [value]) => return eval_intval_result(*value, None, context, values).map(Some),
             (RuntimeBuiltinId::Intval, [value, base]) => return eval_intval_result(*value, Some(*base), context, values).map(Some),

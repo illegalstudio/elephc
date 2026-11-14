@@ -27389,7 +27389,7 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
@@ -27401,10 +27401,30 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "dynamic"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
-        "kind": "shared"
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
       },
       "lowering": {
         "kind": "eir"
@@ -27419,7 +27439,7 @@
       },
       "result_type": "declared",
       "runtime_functions": [],
-      "target_strategy": "eir_primitive",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -145606,7 +145626,7 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
@@ -145618,18 +145638,37 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "runtime-selected strval requires a statically represented source value"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
-        "kind": "shared"
+        "kind": "static",
+        "names": [
+          "reads_local",
+          "writes_local",
+          "reads_heap",
+          "writes_heap",
+          "reads_global",
+          "writes_global",
+          "reads_fs",
+          "writes_fs",
+          "reads_process",
+          "writes_process",
+          "output",
+          "alloc_heap",
+          "alloc_concat",
+          "may_throw",
+          "may_fatal",
+          "may_warn",
+          "may_deopt"
+        ]
       },
       "lowering": {
         "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -145637,7 +145676,7 @@
       },
       "result_type": "declared",
       "runtime_functions": [],
-      "target_strategy": "eir_primitive",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",

@@ -195,14 +195,11 @@ pub(in crate::interpreter) fn eval_cast_value(
                 finish_synthesized_method_arguments(result, [converted], context, values)
             } else { result }
         }
-        EvalCastType::Bool => match eval_object_scalar_adapter(
-            value,
-            "__elephc_to_bool",
-            context,
-            values,
-        )? {
-            Some(value) => Ok(value),
-            None => values.cast_bool(value),
+        EvalCastType::Bool => {
+            let result = (|| match eval_object_scalar_adapter(value, "__elephc_to_bool", context, values)? {
+                Some(value) => Ok(value), None => values.cast_bool(value),
+            })();
+            native_results::finish(result, context, values)
         },
     }
 }

@@ -432,6 +432,9 @@ fn validate_instruction_effects_with_operand(
         && operand_type.is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool));
     let expected = if pure_int_restamp {
         Effects::PURE
+    } else if inst.op == Op::Cast && matches!(inst.result_php_type, PhpType::Str | PhpType::Bool)
+        && inst.effects == Effects::php_conversion() {
+        Effects::php_conversion()
     } else if matches!(inst.immediate, Some(Immediate::NumericOperation { .. } | Immediate::NumericUpdate { .. })) {
         inst.op.arithmetic_effects(inst.arithmetic_policy())
     } else if inst.op == Op::MixedUnbox {
@@ -480,6 +483,22 @@ fn validate_instruction_effects_with_operand(
 mod instruction_effect_tests {
     use super::*;
     use crate::ir::Ownership;
+
+    /// Scalar callback casts require the complete callback summary while legacy casts retain defaults.
+    #[test]
+    fn scalar_conversion_callback_effect_contract() {
+        for (ty, ir_type) in [(PhpType::Str, IrType::Str), (PhpType::Bool, IrType::I64)] {
+            let mut instruction = Instruction::new(Op::Cast, Vec::new(),
+                Some(Immediate::CastTarget(ir_type)), None, ir_type, ty.clone(), Ownership::for_php_type(&ty),
+                Effects::php_conversion(), None);
+            let id = InstId::from_raw(0);
+            assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+            instruction.effects.remove(Effects::MAY_THROW);
+            assert!(matches!(validate_instruction_effects(id, &instruction), Err(ValidationError::EffectMismatch { .. })));
+            instruction.effects = Op::Cast.default_effects();
+            assert_eq!(validate_instruction_effects(id, &instruction), Ok(()));
+        }
+    }
 
     /// Unresolved calls accept their default effects and reject unproven purity claims.
     #[test]

@@ -368,6 +368,12 @@ pub trait BuiltinLoweringContext {
         Err(BuiltinLoweringError::new("checked numeric casts require a prepared builtin wrapper"))
     }
 
+    /// Uses the full explicit scalar cast graph for a borrowed, already evaluated operand.
+    fn emit_scalar_cast(&mut self, _target: &crate::parser::ast::CastType, _value: ValueId,
+        _source_mode: crate::source::SourceMode, _span: Span) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("scalar conversion requires a prepared builtin wrapper"))
+    }
+
     /// Converts an evaluated settype operand before publishing it to its original reference binding.
     fn emit_settype_conversion(&mut self, _value: ValueId, _target: ValueId,
         _source_mode: crate::source::SourceMode, _span: Span) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {

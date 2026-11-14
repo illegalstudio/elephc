@@ -322,6 +322,20 @@ builtins through their checked hooks before selecting native implementations.
 Source policy comes from the invocation, including calls through descriptors
 created by trusted code. Internal implementation conversions retain their policy.
 
+`strval` and `boolval` share a prepared scalar-conversion descriptor. The full
+lowering context borrows and roots each evaluated source before using the syntax
+cast adapter. String builtin results have a `Fresh` contract: persistence produces
+an independent result and retires any owned conversion intermediate. The complete
+`Effects::php_conversion` summary preserves object hooks, warning callbacks and
+exceptions, and has an explicit validator contract. Checked boolean conversion
+uses reviewed native handlers; the existing permissive truthiness path is retained.
+
+Prepared builtin wrappers publish PHP's return-status ABI. Wrapper construction
+and descriptor invocation share one predicate so invokers do not copy an owned
+string again. Prepared/Fresh descriptor metadata also informs callback consumers
+such as `array_map`. Eval `strval` shares the operand-lease and cast evaluators,
+and boolean casts adopt protected native failures before dispatching catches.
+
 Numeric `settype` targets share the same original-kind checker validation and EIR
 cast/store sequence. Prepared bodies convert runtime scalar, null, array and object
 targets before writeback. Array casts reuse the evaluated-value cast lowerer; object

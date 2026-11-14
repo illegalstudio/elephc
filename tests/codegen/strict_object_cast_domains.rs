@@ -59,3 +59,31 @@ try { domainXmlNullable(new DomainViewXml('<n>9223372036854775808</n>')); echo '
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
     }
 }
+
+/// Checked native boolean handlers agree across call paths while permissive controls retain existing behavior.
+#[test]
+fn test_strict_boolval_native_object_cast_parity_bundle() {
+    if skip_without_xml_native("test_strict_boolval_native_object_cast_parity_bundle") { return; }
+    let source = r#"<?php
+class BoolConversionXml extends SimpleXMLElement { public function __toString(): string { return 'override'; } }
+function erasedExplicitBool(mixed $value): bool { return boolval($value); }
+$cast = boolval(...); $name = $argc > 0 ? 'boolval' : 'BOOLVAL';
+foreach (['<n/>', '<n>0</n>', '<n>1</n>', '<n a="v"/>', '<n><x/></n>'] as $xml) {
+    $value = new BoolConversionXml($xml);
+    echo (bool)$value ? '1' : '0'; echo boolval($value) ? '1' : '0';
+    echo erasedExplicitBool($value) ? '1' : '0'; echo $cast($value) ? '1' : '0';
+    echo $name($value) ? '1' : '0'; $mapped = array_map('boolval', [$value]);
+    echo $mapped[0] ? '1|' : '0|';
+}
+"#;
+    for casts in [false, true] {
+        for optimize in [false, true] {
+            let output = StrictFixture::new(source).capture_staged_xml(
+                SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, casts), optimize);
+            assert!(output.success, "casts={casts} opt={optimize}: {} {}", output.stdout, output.stderr);
+            assert_eq!(output.stdout, if casts { "000000|111111|111111|111111|111111|" }
+                else { "011111|111111|111111|111111|111111|" });
+            assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+        }
+    }
+}

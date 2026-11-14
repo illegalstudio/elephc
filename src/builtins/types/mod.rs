@@ -14,6 +14,8 @@
 //! - Builtins with validation logic (`settype`) use `lazy_check: true` so the
 //!   check hook controls argument inference order.
 
+mod scalar_conversion;
+
 pub mod boolval;
 pub mod floatval;
 pub mod get_resource_id;

@@ -46,6 +46,9 @@ impl Effects {
             & !Effects::BLOCKING_IO.bits() & !Effects::NETWORK_IO.bits())
     }
 
+    /// Describes a PHP conversion callback while retaining ordinary value ownership semantics.
+    pub const fn php_conversion() -> Effects { Self::php_callback().difference(Self::REFCOUNT_OP) }
+
     /// Returns true when no effect bits are set.
     pub fn is_pure(self) -> bool {
         self.is_empty()

@@ -64,6 +64,16 @@ impl FakeOps {
                 self.null()
             }
             (FakeValue::Object(_), "answer") if args.is_empty() => self.int(42),
+            (FakeValue::Object(properties), "__elephc_bool") if args.is_empty() => {
+                if Self::object_property(&properties, "__bool_failure").is_some() {
+                    let thrown = self.new_object("ValueError")?;
+                    self.pending_runtime_throwable = Some(thrown);
+                    return Err(EvalStatus::UncaughtThrowable);
+                }
+                let source = Self::object_property(&properties, "__boolean")
+                    .ok_or(EvalStatus::UnsupportedConstruct)?;
+                self.retain(source)
+            }
             (FakeValue::Object(properties), "__elephc_numeric_source") if args.is_empty() => {
                 let source = Self::object_property(&properties, "__elephc_num")
                     .ok_or(EvalStatus::UnsupportedConstruct)?;

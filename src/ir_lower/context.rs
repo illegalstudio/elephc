@@ -5859,6 +5859,18 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
     }
 
+    /// Reuses the original-operand cast adapter without consuming any caller argument owner.
+    fn emit_scalar_cast(&mut self, target: &crate::parser::ast::CastType, value: ValueId,
+        source_mode: crate::source::SourceMode, span: Span)
+        -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        if !matches!(target, crate::parser::ast::CastType::Bool | crate::parser::ast::CastType::String
+            | crate::parser::ast::CastType::Int | crate::parser::ast::CastType::Float) {
+            return Err(crate::builtins::semantics::BuiltinLoweringError::new("scalar conversion requires a scalar target"));
+        }
+        let result = super::expr::builtin_casts::scalar(self, target, value, source_mode, span);
+        Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
+    }
+
     /// Uses one original-value conversion graph and the ordinary local/reference store boundary.
     fn emit_settype_conversion(&mut self, value: ValueId, target: ValueId,
         source_mode: crate::source::SourceMode, span: Span)
