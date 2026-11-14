@@ -14,7 +14,7 @@ use elephc_semantics::{SemanticProfile, StrictFeature};
 #[test]
 fn test_strict_conversion_parameters_native_order_kinds_and_owners() {
     let source = r#"<?php
-function parameterFloat(float $value): void { echo is_float($value) ? 'F' : 'X'; }
+function parameterFloat(float $value): void { echo is_float($value) ? 'F' : 'X'; echo ':', $value; }
 function parameterInteger(int $value): void { echo is_int($value) ? 'I' : 'X'; }
 function parameterString(string $value): void { echo $value; }
 function parameterBool(bool $value): void { echo $value ? 'B' : 'b'; }
@@ -25,7 +25,7 @@ function parameterTail(float $first, mixed ...$rest): void { echo 'X'; }
 function parameterDiscard(float $value): void {}
 function parameterMembers(int|false|null $value): void { echo $value === false ? 'f' : ($value === null ? 'n' : 'i'); }
 function parameterOwned(): string { echo 'L'; return 'temporary-' . $GLOBALS['argc']; }
-parameterFloat(parameterValue(2.0)); parameterInteger(parameterValue(2));
+parameterFloat(parameterValue(4.25)); parameterInteger(parameterValue(2));
 parameterString(parameterValue('S')); parameterBool(parameterValue(false));
 $result = 23;
 try { parameterPair(parameterValue('bad'), parameterLater()); $result = 0; } catch (TypeError $e) { echo 'T'; }
@@ -47,7 +47,7 @@ echo ':', $result;
         let output = StrictFixture::new(source).capture_staged_lowering(
             SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true), optimize);
         assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
-        assert_eq!(output.stdout, "FISbETNDSBEMLVCUPifnQ:23", "opt={optimize}");
+        assert_eq!(output.stdout, "F:4.25ISbETNDSBEMLVCUPifnQ:23", "opt={optimize}");
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }

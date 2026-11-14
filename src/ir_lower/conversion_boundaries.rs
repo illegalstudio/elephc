@@ -61,14 +61,11 @@ pub(super) fn scalar_storage(ctx: &mut LoweringContext<'_, '_>, value: LoweredVa
     destination: &PhpType, span: Span) -> LoweredValue {
     if !matches!(destination, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str)
         || value.ir_type == crate::ir::IrType::from_php(destination) { return value; }
-    let boxed = matches!(value.ir_type, crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
-        | crate::ir::IrType::TaggedScalar);
-    let op = if boxed { Op::MixedUnbox } else { Op::Cast };
-    let immediate = (!boxed).then_some(crate::ir::Immediate::CastTarget(crate::ir::IrType::from_php(destination)));
-    let effects = if boxed { Op::mixed_unbox_effects(destination) } else { op.default_effects() };
-    let result = if *destination == PhpType::Str {
-        ctx.emit_owned_value(op, vec![value.value], immediate, destination.clone(), effects, Some(span))
-    } else { ctx.emit_value(op, vec![value.value], immediate, destination.clone(), effects, Some(span)) };
+    // The guarded identity still needs its full scalar ABI, including F64 and string pairs.
+    // MixedUnbox materializes a pointer-word payload and cannot replace these typed paths.
+    let result = ctx.emit_value(Op::Cast, vec![value.value],
+        Some(crate::ir::Immediate::CastTarget(crate::ir::IrType::from_php(destination))),
+        destination.clone(), Op::Cast.default_effects(), Some(span));
     if ctx.value_is_owning_temporary(value) {
         super::ownership::release_if_owned(ctx, value, Some(span));
     }

@@ -21,6 +21,10 @@ use super::super::Checker;
 pub(crate) struct ReturnInfo {
     pub ty: PhpType,
     pub has_value: bool,
+    /// Source operation retained after the body's checker scope has been restored.
+    pub source_mode: crate::source::SourceMode,
+    /// The return site, independent of the enclosing declaration's diagnostic location.
+    pub span: crate::span::Span,
 }
 
 /// Adds one scalar member to an inferred return type, the way [`nullable_return_type`] adds
@@ -91,6 +95,8 @@ impl Checker {
                     returns.push(ReturnInfo {
                         ty,
                         has_value: true,
+                        source_mode: stmt.source_mode,
+                        span: stmt.span,
                     });
                 }
             }
@@ -98,6 +104,8 @@ impl Checker {
                 returns.push(ReturnInfo {
                     ty: PhpType::Void,
                     has_value: false,
+                    source_mode: stmt.source_mode,
+                    span: stmt.span,
                 });
             }
             StmtKind::If {
@@ -372,6 +380,15 @@ impl Checker {
             return Err(CompileError::new(span, &format!("{context} must return a null value")));
         }
         self.require_compatible_return_type(expected, actual, has_value, span, context)
+    }
+
+    /// Checks a recorded return with its own source contract before declaration compatibility.
+    pub(crate) fn require_return_info_hint(&self, hint: &TypeExpr, expected: &PhpType,
+        info: &ReturnInfo, span: crate::span::Span, context: &str) -> Result<(), CompileError> {
+        if info.has_value && !matches!(expected, PhpType::Void) {
+            self.require_noncoercive_value_type(expected, &info.ty, info.source_mode, info.span, context)?;
+        }
+        self.require_compatible_return_hint(hint, expected, &info.ty, info.has_value, span, context)
     }
 
     /// Checks that an actual return type is compatible with the declared return type.

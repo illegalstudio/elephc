@@ -187,12 +187,7 @@ impl Checker {
         span: Span,
         context: &str,
     ) -> Result<(), CompileError> {
-        if let elephc_semantics::conversions::ConversionPlan::Reject(feature) =
-            crate::semantics::conversions::implicit(self.semantic_profile, self.semantic_source_mode, expected, actual)
-        {
-            return Err(CompileError::new(span, &format!(
-                "--{}: {context} requires {expected} without implicit conversion, got {actual}", feature.flag())));
-        }
+        self.require_noncoercive_value_type(expected, actual, self.semantic_source_mode, span, context)?;
         if !self.strict_types {
             return Ok(());
         }

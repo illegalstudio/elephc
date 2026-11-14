@@ -490,11 +490,10 @@ impl Checker {
                     let skip_compat_check = matches!(declared, PhpType::Never);
                     if !skip_compat_check {
                         for return_info in &return_infos {
-                            if let Err(error) = self.require_compatible_return_hint(
+                            if let Err(error) = self.require_return_info_hint(
                                 type_ann,
                                 &declared,
-                                &return_info.ty,
-                                return_info.has_value,
+                                return_info,
                                 method.span,
                                 &format!("Method '{}::{}' return type", class.name, method.name),
                             ) {

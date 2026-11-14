@@ -15,6 +15,17 @@ use crate::types::{PhpType, TypeEnv};
 use elephc_semantics::StrictFeature;
 
 impl Checker {
+    /// Checks an implicit scalar boundary using its source operation rather than physical storage.
+    pub(crate) fn require_noncoercive_value_type(&self, expected: &PhpType, actual: &PhpType,
+        source: crate::source::SourceMode, span: Span, context: &str) -> Result<(), CompileError> {
+        if let elephc_semantics::conversions::ConversionPlan::Reject(feature) =
+            crate::semantics::conversions::implicit(self.semantic_profile, source, expected, actual) {
+            return Err(CompileError::new(span, &format!(
+                "--{}: {context} requires {expected} without implicit conversion, got {actual}", feature.flag())));
+        }
+        Ok(())
+    }
+
     /// Checks the PHP-visible boolean contract without restricting internal implementation tests.
     pub(crate) fn require_boolean_type(&self, ty: &PhpType, span: Span) -> Result<(), CompileError> {
         if self.semantic_source_mode == crate::source::SourceMode::Internal

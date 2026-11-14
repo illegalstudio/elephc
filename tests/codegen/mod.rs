@@ -171,3 +171,5 @@ mod fileinfo_wrapper_stat;
 mod fileinfo_stream_magic;
 
 mod strict_conversion_parameters;
+
+mod strict_conversion_returns;

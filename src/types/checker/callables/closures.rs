@@ -247,11 +247,10 @@ impl Checker {
             }
 
             for return_info in &all_return_infos {
-                self.require_compatible_return_hint(
+                self.require_return_info_hint(
                     type_ann,
                     &declared_ret,
-                    &return_info.ty,
-                    return_info.has_value,
+                    return_info,
                     span,
                     "Closure return type",
                 )?;

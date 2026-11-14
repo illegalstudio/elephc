@@ -1,5 +1,5 @@
 //! Purpose:
-//! Models the runtime verification at declared int return boundaries.
+//! Models runtime verification at declared scalar return boundaries.
 //!
 //! Called from:
 //! - Callable effect and exception summaries, DCE body scopes, and checker body scopes.
@@ -53,7 +53,18 @@ impl ReturnBoundaryFacts {
 
     /// Tests the same representation predicate used by EIR, with unknown values treated as boxed.
     fn may_throw(&self, expr: &Expr) -> bool {
-        self.declared_int && declared_int_return_requires_validation(true, &PhpType::Int, &self.source_type(expr))
+        let source = self.source_type(expr);
+        self.implicit_may_throw(&source)
+            || self.declared_int && declared_int_return_requires_validation(true, &PhpType::Int, &source)
+    }
+
+    /// Retains an exact-kind failure independently of ordinary PHP return verification.
+    fn implicit_may_throw(&self, source: &PhpType) -> bool {
+        matches!(crate::semantics::conversions::implicit(
+            super::semantic_context::active_profile(), super::semantic_context::active_source_mode(),
+            &self.declared_result, source),
+            elephc_semantics::conversions::ConversionPlan::Guard { .. }
+                | elephc_semantics::conversions::ConversionPlan::Reject(_))
     }
 
     /// Recognizes native values without assuming a mutable local keeps its original hint.
@@ -130,7 +141,8 @@ pub(super) fn active_return_boundary_may_throw(expr: &Expr) -> bool {
 /// Uses the checker's source-point type once inference has established the current read view.
 pub(crate) fn active_return_boundary_checks_source(source: &PhpType) -> bool {
     ACTIVE_RETURN_BOUNDARY.with(|slot| slot.borrow().as_ref().is_some_and(|facts|
-        declared_int_return_requires_validation(facts.declared_int, &PhpType::Int, source)))
+        facts.implicit_may_throw(source)
+            || declared_int_return_requires_validation(facts.declared_int, &PhpType::Int, source)))
 }
 
 /// Collects contracts using the same free-function and method keys as the summary tables.

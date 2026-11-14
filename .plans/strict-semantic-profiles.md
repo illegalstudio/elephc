@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 40 (this commit), following `113f7497ec`. Issue:
+Verified through step 41 (this commit), following `e78091ef0c`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -495,6 +495,33 @@ This is parameter groundwork, not admission of Coercions. Returns, assignments,
 property/reference write-back, defaults, every builtin contract, array element
 adaptation and all indirect/host boundaries still require completion and audit.
 
+### Verified declared scalar return groundwork
+
+Step41 retains source mode and source position on ReturnInfo after body checking
+restores its surrounding scope. Functions, methods, closures and arrows share the
+same pre-compatibility noncoercive checker helper as parameters. Declared dynamic
+scalar/union returns use original-kind guards before return storage adaptation;
+Internal returns and inferred returns retain their existing policy. Eval's shared
+declared-return path rejects coercion after full-type exact acceptance and releases
+rejected result owners. ReturnBoundaryFacts uses the same plan for effects,
+exception summaries and the checker's source-point exception edges.
+
+The shared scalar adapter now uses existing typed CastTarget storage paths after
+a guard. MixedUnbox is a pointer-payload ABI, not a full F64 or string-pair adapter.
+The native regression was red with a NUL string result before this correction;
+new assertions verify float payload 4.25, negative zero, actual owned string bytes,
+and the corresponding parameter ABI (fact7a44bb20).
+
+Two frontend/all-five-target units, one walker/VM return-boundary unit and one
+native regression pass. Native coverage includes failed destination preservation,
+same-frame catches, finally, discarded results, FCC/call_user_func/arrow/array_map,
+false/null unions and fresh string owners, with both optimizers and clean heaps.
+The strengthened parameter regression, its two frontend units, an all-target
+object-return owner control and PHP strict_types widening control pass. Compiler
+build, architecture gate, assembly comment checks, PHP syntax and diff checks pass.
+Public admission remains unchanged. Inferred result kinds, assignments, defaults,
+property/reference contracts, builtin source folds and host parity remain active.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -602,4 +629,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 37 | `266dd4c139` | feat(strict): guard original numeric builtin parameter kinds |
 | 38 | `3413afbaeb` | feat(strict): enforce numeric array reduction domains |
 | 39 | `113f7497ec` | fix(strict): reject invalid checked aggregate callback sources |
-| 40 | this commit | feat(strict): guard original scalar parameter contracts |
+| 40 | `e78091ef0c` | feat(strict): guard original scalar parameter contracts |
+| 41 | this commit | feat(strict): preserve declared scalar return contracts |
