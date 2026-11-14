@@ -186,6 +186,10 @@ pub(super) fn parse_closure(
                     ));
                 }
                 *pos += 1;
+                // A trailing comma closes the list: `use ($a, $b,)` (PHP 8.0+).
+                if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::RParen) {
+                    break;
+                }
             }
             let is_ref = if tokens.get(*pos).map(|(token, _)| token) == Some(&Token::Ampersand) {
                 *pos += 1;
@@ -208,6 +212,13 @@ pub(super) fn parse_closure(
                     ))
                 }
             }
+        }
+        // PHP's grammar requires at least one capture: `use ()` is a syntax error.
+        if captures.is_empty() {
+            return Err(CompileError::new(
+                span,
+                "Expected variable in use() capture list",
+            ));
         }
         if *pos >= tokens.len() || tokens[*pos].0 != Token::RParen {
             return Err(CompileError::new(
