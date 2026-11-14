@@ -498,9 +498,15 @@ fn run_server(
         unsafe { libc::kill(pid, libc::SIGTERM); }
     }
     // A child that missed SIGTERM must not hold the master forever and make a
-    // supervisor wait for its stop timeout. Give the pool one bounded grace
-    // period, then SIGKILL and reap what remains.
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // supervisor wait for its stop timeout. Application workers run their
+    // shutdown hook only after active requests finish, so give them most of
+    // the documented 30 s stop grace; legacy/isolated workers drain quickly.
+    let drain_timeout = if application.is_some() {
+        Duration::from_secs(25)
+    } else {
+        Duration::from_secs(3)
+    };
+    let deadline = Instant::now() + drain_timeout;
     for &(pid, _, _) in &children {
         let mut status = 0;
         loop {

@@ -373,6 +373,34 @@ Elephc\Web\Worker::register(new Application());
     assert_eq!(fs::read_to_string(fixture.0.join("lifecycle.log")).unwrap(), "stopped");
 }
 
+/// A normal stop lets an in-flight request and the shutdown hook finish.
+#[test]
+fn web_application_review_shutdown_drains_slow_request() {
+    let fixture = Fixture(make_test_dir("web_application_review_slow_shutdown"));
+    let binary = application(&fixture, r#"<?php
+class Application implements Elephc\Web\WorkerApplication {
+    public function handle(Elephc\Web\Request $request): void {
+        usleep(4_000_000);
+        echo 'slow';
+    }
+    public function shutdown(): void { file_put_contents('__LOG__', 'stopped'); }
+}
+Elephc\Web\Worker::register(new Application());
+"#);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut server = spawn_server(&binary, &addr, "1");
+    let request_addr = addr.clone();
+    let request = std::thread::spawn(move || body(&request_addr, "/"));
+    std::thread::sleep(Duration::from_millis(250));
+    server.kill().unwrap();
+    assert_eq!(request.join().unwrap(), "slow");
+    server.wait().unwrap();
+    assert_eq!(
+        fs::read_to_string(fixture.0.join("lifecycle.log")).unwrap(),
+        "stopped"
+    );
+}
+
 /// Bootstrap and handler signal-mask changes survive the callback termination guard.
 #[test]
 fn web_application_review_callback_preserves_application_signal_mask() {
