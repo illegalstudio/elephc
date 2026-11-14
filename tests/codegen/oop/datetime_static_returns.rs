@@ -182,3 +182,33 @@ echo get_class($b), " ", $b->format("Y-m-d"), "\n";
          Bumped 2024-01-03\n"
     );
 }
+
+/// Verifies an immutable fluent method still returns its modified clone when the subclass
+/// declares a private or protected `__clone()`: PHP's internal date copy runs the hook without
+/// the access check, while an explicit `clone` from global scope is still rejected.
+#[test]
+fn test_datetime_immutable_fluent_clone_runs_non_public_hook() {
+    let out = compile_and_run(
+        r#"<?php
+class Locked extends DateTimeImmutable { private function __clone() { echo "private hook\n"; } }
+class Guarded extends DateTimeImmutable { protected function __clone() { echo "protected hook\n"; } }
+$l = (new Locked("2024-01-02", new DateTimeZone("UTC")))->modify("+1 day");
+echo get_class($l), " ", $l->format("Y-m-d"), "\n";
+$g = (new Guarded("2024-01-02", new DateTimeZone("UTC")))->add(new DateInterval("P1D"));
+echo get_class($g), " ", $g->format("Y-m-d"), "\n";
+try {
+    $c = clone $l;
+} catch (Error $e) {
+    echo $e->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "private hook\n\
+         Locked 2024-01-03\n\
+         protected hook\n\
+         Guarded 2024-01-03\n\
+         Call to private method Locked::__clone() from global scope\n"
+    );
+}
