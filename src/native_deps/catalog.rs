@@ -44,11 +44,16 @@ impl ArchiveFormat {
 
 impl SourceArchive {
     /// Derives the archive format from the catalog URL suffix, failing closed on any other suffix
-    /// so an unrecognised container can never reach the extractor.
+    /// so an unrecognised container can never reach the extractor. Codeload URLs carry the
+    /// compression as a path segment (`/tar.gz/refs/tags/...`) rather than a file suffix.
     pub fn format(&self) -> Result<ArchiveFormat, NativeError> {
         [ArchiveFormat::TarGz, ArchiveFormat::TarXz]
             .into_iter()
-            .find(|format| self.https_url.ends_with(&format!(".{}", format.extension())))
+            .find(|format| {
+                let extension = format.extension();
+                self.https_url.ends_with(&format!(".{extension}"))
+                    || self.https_url.contains(&format!("/{extension}/"))
+            })
             .ok_or_else(|| {
                 NativeError::new(
                     NativeErrorKind::Catalog,
@@ -401,7 +406,9 @@ const GMP_VERSIONS: &[PackageVersion] = &[PackageVersion {
 ///
 /// libtidy is a pure-C library with no catalogued dependencies. The bridge reaches it
 /// through its public API only, so `libtidy.a` is the sole link output and the four
-/// public headers are retained for future extensions.
+/// public headers are retained for future extensions. Upstream publishes only binary
+/// installers as release assets, so the source comes from GitHub's codeload endpoint
+/// (byte-identical to the tag archive); the release-asset fallback does not apply.
 const LIBTIDY_ARCHIVES: &[&str] = &["lib/libtidy.a"];
 /// Every public libtidy 5.8.0 header installed by the upstream build.
 const LIBTIDY_HEADERS: &[&str] = &[
@@ -413,7 +420,7 @@ const LIBTIDY_HEADERS: &[&str] = &[
 const LIBTIDY_VERSIONS: &[PackageVersion] = &[PackageVersion {
     version: "5.8.0",
     source: SourceArchive {
-        https_url: "https://github.com/htacg/tidy-html5/archive/refs/tags/5.8.0.tar.gz",
+        https_url: "https://codeload.github.com/htacg/tidy-html5/tar.gz/refs/tags/5.8.0",
         sha256: "59c86d5b2e452f63c5cdb29c866a12a4c55b1741d7025cf2f3ce0cde99b0660e",
         exact_size: 1_015_303,
         body_limit: 16 * 1024 * 1024,
@@ -799,10 +806,23 @@ mod tests {
                 let format = version.source.format().unwrap_or_else(|error| {
                     panic!("{} {}: {error}", package.name, version.version)
                 });
-                assert!(version.source.https_url.ends_with(format.extension()));
+                assert!(
+                    version.source.https_url.ends_with(format.extension())
+                        || version
+                            .source
+                            .https_url
+                            .contains(&format!("/{}/", format.extension()))
+                );
             }
         }
         assert_eq!(version("zlib", None).unwrap().source.format().unwrap(), ArchiveFormat::TarGz);
+        let codeload = SourceArchive {
+            https_url: "https://codeload.github.com/htacg/tidy-html5/tar.gz/refs/tags/5.8.0",
+            sha256: "",
+            exact_size: 0,
+            body_limit: 0,
+        };
+        assert_eq!(codeload.format().unwrap(), ArchiveFormat::TarGz);
         let unknown = SourceArchive { https_url: "https://example.invalid/source.zip", sha256: "", exact_size: 0, body_limit: 0 };
         let error = unknown.format().unwrap_err();
         assert_eq!(error.kind, NativeErrorKind::Catalog);
