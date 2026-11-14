@@ -161,6 +161,12 @@ pub(super) fn lower_static_callable_call(
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             // Keep literal eval demand instead of requesting the full runtime catalog.
             let eval_literal = eval_literal_fragment(&function_name, callback_args);
+            let previous = ctx.prepared_builtin_invocation;
+            let legacy_value_call = matches!(&expr.kind, ExprKind::FunctionCall { name, .. }
+                if matches!(php_symbol_key(name.as_str().trim_start_matches('\\')).as_str(), "call_user_func" | "call_user_func_array"));
+            ctx.prepared_builtin_invocation |= !legacy_value_call && crate::builtins::registry::lookup(&function_name)
+                .is_some_and(|def| matches!(def.spec.semantics.callable,
+                    crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_)));
             let call = emit_builtin_call_value_with_source_mode(
                 ctx,
                 &function_name,
@@ -170,6 +176,7 @@ pub(super) fn lower_static_callable_call(
                 eval_literal,
                 crate::source::SourceMode::Php,
             );
+            ctx.prepared_builtin_invocation = previous;
             retire_call_argument_intermediates(ctx, &evaluation_intermediates);
             Some(call)
         }

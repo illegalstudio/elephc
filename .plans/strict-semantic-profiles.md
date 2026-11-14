@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 68 (this commit), following `2802808721`. Issue:
+Verified through step 69 (this commit), following `95f5d407ec`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 68.
+This progress ledger condenses verified implementation through step 69.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -686,6 +686,42 @@ assembly comments and diff hygiene pass; generated metadata is unchanged. Journa
 task 67c8492a tracks the separate permissive invalid-target mismatch, with the
 existing valid-null and property-reference tasks retained.
 
+### Prepared checked settype calls
+
+Step69 replaces the checked callable's legacy constant-target backend with a
+prepared EIR value conversion graph. Runtime scalar/null target names share the
+neutral alias catalog; numeric conversion delegates the original-value cast
+adapters. One preserve_binding helper retains failed original tags without
+widening an existing reference ABI. Normal stores own writeback and retirement.
+Source and normalized target owners remain rooted. The graph runs with an
+independent write receiver so an enclosing assignment cannot suppress ownership
+of its fresh intermediates. String conversion carries user/global effects.
+
+The AOT callable regression was red on step68: a literal target at the caller
+became a parameter in the generic wrapper, which rejected it as nonconstant.
+Native first-class, string-selected and runtime-target calls now work. Explicit
+call_user_func value contexts need copied cells rather than synthesized caller
+references under the checked contract. Prepared builtin reference signatures
+therefore retain descriptor invocation instead of static argument flattening;
+shared value-container builders detach cells. Direct/native descriptor references
+and actual references in prebuilt arrays remain live. Permissive/Internal routing
+is retained. Array-literal reference syntax remains a target-independent parser
+diagnostic; that limitation does not imply references in existing arrays fail.
+
+Four compiler tests cover every emitter, both native optimizer settings (AST and
+EIR), first-class/dynamic/call_user_func* calls, null/scalar aliases, invalid and
+NUL-bearing target names, by-value copies, actual references, enclosing assignment,
+string callback global effects and clean heaps. Prepared bodies also run with
+ordinary numeric conversion in permissive catalogs. An explicit prepared-invocation
+role keeps static callable inlining consistent with the generated body, without
+selecting it for ordinary legacy direct/value-call lowering. One eval test covers null alias
+and COW-container publication. Valid array/object targets retain an explicit staged
+unsupported error until their conversions and helper dependencies are completed.
+Public Casts admission remains unchanged. Focused compiler, Magician and neutral
+tests, the real opaque-eval assignment regression, cargo check --tests, cargo build,
+the curl exporter, generated builtin audits, assembly comments and diff hygiene
+passed. The updated example also compiled and ran with Bools and DynamicCode.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -772,4 +808,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 65 | `309bdac54b` | feat(strict): check broad native object cast domains |
 | 66 | `6c74bdaaed` | feat(strict): check public gmp integer projections |
 | 67 | `2802808721` | feat(strict): prove original gmp integer cast sources |
-| 68 | this commit | feat(strict): share settype target validation |
+| 68 | `95f5d407ec` | feat(strict): share settype target validation |
+| 69 | this commit | feat(strict): prepare checked settype callable conversions |

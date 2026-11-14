@@ -90,9 +90,7 @@ pub(super) fn lower_static_settype(
     if checked_storage {
         // A catch can still observe the original kind. Keep both possible values in tagged
         // storage instead of reading the failed conversion through its success-only type.
-        let slot = ctx.declare_local(local_name, PhpType::Mixed);
-        ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
-        ctx.set_local_logical_type(local_name, PhpType::Mixed);
+        super::builtin_settype::preserve_binding(ctx, local_name);
     }
     if ctx.local_type(local_name).codegen_repr() == PhpType::Mixed || boxed_storage || checked_numeric {
         if boxed_storage {

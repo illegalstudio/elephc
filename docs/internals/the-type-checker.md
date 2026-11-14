@@ -283,8 +283,17 @@ retain priority over floating range proof.
 The neutral `SettypeTarget` classifier owns complete names and aliases across
 checking, lowering and eval. Checked invalid targets (including resource requests)
 fail before writeback, and original-source validation retains those errors across
-folding. Classifying valid array/object/null targets does not yet implement their
-remaining `settype` backend conversions.
+folding. Checked scalar/null `settype` calls use a prepared EIR conversion graph,
+including runtime target names and callable wrappers. Ordinary stores publish the
+converted value only after success. Explicit `call_user_func*` value containers
+detach their cells, and prepared builtin reference signatures prevent static
+flattening from inventing a writable caller argument. Native descriptor calls
+preserve real references. Valid array/object targets still require their backend
+conversions; array-literal reference syntax retains its existing parser error.
+Prepared bodies retain ordinary cast policy when checked casts are off. An
+explicit prepared-invocation role keeps statically resolved native calls aligned
+with their wrapper body; ordinary legacy direct/value-call lowering keeps its
+existing route.
 A bounded decimal digit parser preserves exact
 integer strings at runtime, and native float-to-int checks precede truncation.
 The eval walker and VM use the same neutral cast kernel through their shared

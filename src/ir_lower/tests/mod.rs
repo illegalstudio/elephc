@@ -777,6 +777,7 @@ mod strict_checked_casts;
 mod strict_checked_radix;
 mod strict_builtin_casts;
 mod strict_settype;
+mod strict_settype_domains;
 mod strict_object_casts;
 mod strict_object_cast_domains;
 mod strict_gmp_intval;

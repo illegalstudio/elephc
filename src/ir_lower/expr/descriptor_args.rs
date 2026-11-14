@@ -83,7 +83,7 @@ pub(super) fn lower_indexed_descriptor_invoker_arg_array(
     for arg in args {
         let value = lower_signature_invoker_ref_arg_marker(ctx, sig, positional_index, arg, native_references)
             .unwrap_or_else(|| {
-                let value = lower_expr(ctx, arg);
+                let value = lower_value_invoker_argument(ctx, arg, native_references);
                 coerce_variadic_tail_value(ctx, value, &array_ty, arg.span)
             });
         let array = load_published_container(ctx, owner, array_ty.clone(), arg.span);
@@ -163,7 +163,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                 } else {
                     None
                 }
-                .unwrap_or_else(|| lower_expr(ctx, value));
+                .unwrap_or_else(|| lower_value_invoker_argument(ctx, value, native_references));
                 bind_descriptor_unpack_named(ctx, &state, key, value, None, arg.span);
             }
             _ => {
@@ -174,7 +174,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
                     arg,
                     native_references,
                 )
-                .unwrap_or_else(|| lower_expr(ctx, arg));
+                .unwrap_or_else(|| lower_value_invoker_argument(ctx, arg, native_references));
                 positional_index += 1;
                 bind_descriptor_unpack_positional(ctx, &state, value, None, arg.span);
             }
@@ -184,6 +184,15 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
     let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(span));
     retire_owned_call_operand(ctx, owner, span);
     boxed
+}
+
+/// Detaches value-call cells from caller reference payloads before a checked mutator can retag them.
+pub(super) fn lower_value_invoker_argument(ctx: &mut LoweringContext<'_, '_>, argument: &Expr,
+    native_references: bool) -> LoweredValue {
+    let value = lower_expr(ctx, argument);
+    if !native_references && crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+        ctx.box_value_as_mixed(value, PhpType::Mixed, Some(argument.span))
+    } else { value }
 }
 
 /// Returns the variable name when this literal argument should be passed by reference.
@@ -214,6 +223,12 @@ pub(super) fn lower_signature_invoker_ref_arg_marker(
     item: &Expr,
     native_references: bool,
 ) -> Option<LoweredValue> {
+    if !native_references
+        && crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+        // Explicit call_user_func* arguments carry values. A checked mutator must write
+        // to its temporary argument cell instead of synthesizing a reference to the caller.
+        return None;
+    }
     if native_references && sig.is_some_and(|sig| {
         let regular = crate::types::call_args::regular_param_count(sig);
         (index >= regular && variadic_param_is_by_ref(sig))

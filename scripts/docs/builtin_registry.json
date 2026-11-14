@@ -130965,9 +130965,8 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.settype` through `BuiltinLoweringContext`.",
-        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
+        "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -130978,33 +130977,14 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "static_only",
-        "reason": "typed backend operation has no runtime-selected wrapper contract"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
-        "kind": "static",
-        "names": [
-          "reads_local",
-          "writes_local",
-          "reads_heap",
-          "writes_heap",
-          "reads_global",
-          "reads_fs",
-          "writes_fs",
-          "reads_process",
-          "writes_process",
-          "output",
-          "alloc_heap",
-          "alloc_concat",
-          "may_throw",
-          "may_fatal",
-          "may_warn",
-          "may_deopt"
-        ]
+        "kind": "shared"
       },
       "lowering": {
-        "kind": "runtime_call",
-        "target": "settype"
+        "kind": "eir"
       },
       "ownership": {
         "argument_indexes": [],
@@ -131018,7 +130998,7 @@
       "runtime_functions": [
         "settype"
       ],
-      "target_strategy": "runtime_call",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",

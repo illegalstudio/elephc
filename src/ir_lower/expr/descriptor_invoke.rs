@@ -247,7 +247,14 @@ pub(super) fn signature_for_static_callable_binding(
             .extern_functions
             .get(&name)
             .map(function_sig_from_extern_for_descriptor),
-        StaticCallableBinding::Builtin(_) => None,
+        StaticCallableBinding::Builtin(name) => {
+            let prepared_reference = crate::builtins::registry::lookup(&name).is_some_and(|def|
+                def.ref_params.iter().any(|is_ref| *is_ref)
+                    && matches!(def.spec.semantics.callable, crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_)));
+            if prepared_reference && crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+                crate::types::first_class_callable_builtin_sig_with_semantics(&name, ctx.semantic_profile)
+            } else { None }
+        }
         StaticCallableBinding::Closure { signature, .. } => Some(signature),
         StaticCallableBinding::StaticMethod { receiver, method }
         | StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
@@ -327,7 +334,7 @@ pub(super) fn lower_descriptor_invoker_arg_array_for_call_user_func_array(
     for (index, item) in items.iter().enumerate() {
         let value = lower_signature_invoker_ref_arg_marker(ctx, sig, index, item, false)
             .unwrap_or_else(|| {
-                let value = lower_expr(ctx, item);
+                let value = lower_value_invoker_argument(ctx, item, false);
                 coerce_variadic_tail_value(ctx, value, &array_ty, item.span)
             });
         let array = load_published_container(ctx, owner, array_ty.clone(), item.span);
@@ -387,6 +394,10 @@ pub(super) fn call_user_func_should_use_descriptor(
     let has_named_or_spread =
         crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg);
     if has_named_or_spread {
+        return true;
+    }
+    if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+        && sig.is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) {
         return true;
     }
     if call_user_func_has_incompatible_ref_marker_arg(ctx, args, sig) {

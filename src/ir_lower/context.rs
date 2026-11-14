@@ -322,6 +322,8 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) semantic_profile: elephc_semantics::SemanticProfile,
     /// Physical source of the operation; internal implementation control flow is explicit.
     pub(crate) source_mode: crate::source::SourceMode,
+    /// A statically resolved callable invocation retains the prepared builtin body contract.
+    pub(crate) prepared_builtin_invocation: bool,
     pub builder: Builder<'f>,
     pub data: &'m mut DataPool,
     pub local_slots: HashMap<String, LocalSlotId>,
@@ -674,6 +676,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         Self {
             semantic_profile,
             source_mode: crate::source::SourceMode::Internal,
+            prepared_builtin_invocation: false,
             builder,
             data,
             local_slots: HashMap::new(),
@@ -5843,12 +5846,28 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
     }
 
+    /// Reports the explicit prepared-builtin lowering role to profile-dependent semantic homes.
+    fn uses_prepared_builtin_semantics(&self) -> bool {
+        self.prepared_builtin_invocation || self.builder.function().flags.is_builtin_contract_wrapper
+    }
+
     /// Reuses the rooted explicit-cast graph while preserving the builtin invocation's policy.
     fn emit_numeric_cast(&mut self, target: elephc_semantics::numeric_cast::NumericCastTarget,
         value: ValueId, base: Option<ValueId>, source_mode: crate::source::SourceMode, span: Span)
         -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
         let result = super::expr::builtin_casts::lower(self, target, value, base, source_mode, span);
         Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
+    }
+
+    /// Uses one original-value conversion graph and the ordinary local/reference store boundary.
+    fn emit_settype_conversion(&mut self, value: ValueId, target: ValueId,
+        source_mode: crate::source::SourceMode, span: Span)
+        -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        let previous = self.source_mode; self.source_mode = source_mode;
+        let result = self.with_independent_write_receiver(|ctx|
+            super::expr::builtin_settype::lower(ctx, value, target, span));
+        self.source_mode = previous;
+        result.map(|result| crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
     }
 
     /// Reports whether one of the program's declared classes is the named internal class.
@@ -6037,7 +6056,7 @@ impl LoweringContext<'_, '_> {
     /// Frame, `static` and reference-cell loads carry their `LocalSlot`, which maps back
     /// to the name through `local_slots`; `global`, extern-global and eval-scope loads
     /// carry the interned `GlobalName`, which maps back through the module data pool.
-    fn operand_local_name(&self, operand: ValueId) -> Option<String> {
+    pub(in crate::ir_lower) fn operand_local_name(&self, operand: ValueId) -> Option<String> {
         let inst = self.builder.value_defining_instruction(operand)?;
         match (inst.op, &inst.immediate) {
             (

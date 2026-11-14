@@ -93,6 +93,7 @@ pub(in crate::interpreter) fn eval_settype_cast_value(
             Ok(target) => target,
             Err(failure) => return eval_throw_builtin_exception("ValueError", failure.message(), context, values),
         };
+        if target == elephc_semantics::settype_target::SettypeTarget::Null { return values.null().map(Some); }
         if let Some(target) = target.numeric_target() {
             let target = match target {
                 elephc_semantics::numeric_cast::NumericCastTarget::Int => EvalCastType::Int,

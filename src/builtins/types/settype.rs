@@ -19,9 +19,40 @@ builtin! {
     contract: "settype",
     check: check,
     lazy_check: true,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::Settype,
-    ),
+    semantics: semantics(),
+}
+
+/// Keeps the ordinary typed backend while giving checked callable bodies the full EIR context.
+const fn semantics() -> crate::builtins::semantics::BuiltinSemantics {
+    use crate::builtins::semantics::*;
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Settype);
+    semantics.target_strategy = BuiltinTargetStrategy::EirGraph;
+    semantics.effects = BuiltinEffects::Shared(effects);
+    semantics.callable = BuiltinCallablePolicy::Prepared(callable_accepts_any_source);
+    semantics.lowering = BuiltinLowering::Eir(lower);
+    semantics
+}
+
+/// String conversion may invoke user code and mutate globals inside the checked value graph.
+fn effects(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    if crate::semantics::conversions::checked_casts(input.semantic_profile, input.source_mode) {
+        crate::ir::Effects::from_bits_retain(crate::ir::Effects::all().bits()
+            & !crate::ir::Effects::REFCOUNT_OP.bits() & !crate::ir::Effects::BLOCKING_IO.bits()
+            & !crate::ir::Effects::NETWORK_IO.bits())
+    } else { crate::ir::RuntimeFnId::Settype.effects() }
+}
+
+/// Shares evaluated original values and reference storage between direct and callable checked paths.
+fn lower(ctx: &mut dyn crate::builtins::semantics::BuiltinLoweringContext,
+    call: &crate::builtins::semantics::NormalizedBuiltinCall<'_>)
+    -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+    if crate::semantics::conversions::checked_casts(call.semantic_profile, call.source_mode)
+        || ctx.uses_prepared_builtin_semantics() {
+        return ctx.emit_settype_conversion(call.operand(0)?, call.operand(1)?, call.source_mode, call.span);
+    }
+    let target = crate::ir::RuntimeFnId::Settype;
+    Ok(ctx.emit_runtime_call(crate::ir::RuntimeCallTarget::Function(target), call.operands.to_vec(),
+        call.result_type.clone(), target.effects(), Some(call.span)))
 }
 
 /// Validates the `settype` arguments: infers both in source order and rejects a non-string type.

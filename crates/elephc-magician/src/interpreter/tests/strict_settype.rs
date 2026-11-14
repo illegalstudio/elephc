@@ -55,6 +55,22 @@ fn strict_settype_eval_invalid_target_permissive_control() {
     values.release(result).unwrap(); clean(&mut scope, &mut values);
 }
 
+/// Null conversion rebinds aliases and writable containers through the same checked call boundary.
+#[test]
+fn strict_settype_eval_null_target_aliases_containers_and_owners() {
+    let mut context = ElephcEvalContext::new();
+    context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+    let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+    let source = r#"$value = 'kept'; $alias =& $value; $cast = settype(...);
+$cast($value, 'NuLl'); echo is_null($alias) ? 'A' : 'X';
+$items = ['k' => 'kept']; $copy = $items; $name = 'settype';
+$name($items['k' . ''], 'null'); echo is_null($items['k']) ? 'N' : 'X'; echo $copy['k'];
+return true;"#;
+    let Ok(EvalControl::Return(result)) = staged_numeric_execution(source, false, &mut context, &mut scope, &mut values)
+        else { panic!("null settype target"); };
+    assert_eq!(values.output, "ANkept"); values.release(result).unwrap(); clean(&mut scope, &mut values);
+}
+
 /// Direct, named, dynamic and callable failures preserve the source value and its aliases.
 #[test]
 fn strict_settype_eval_failed_conversions_preserve_reference_values() {

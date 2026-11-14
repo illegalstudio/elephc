@@ -19,6 +19,14 @@ pub enum SettypeTarget { Bool, Int, Float, String, Array, Object, Null }
 pub enum SettypeTargetFailure { Invalid, Resource }
 
 impl SettypeTargetFailure {
+    /// Supplies the ordinary PHP message when a prepared callable runs without checked casts.
+    pub const fn php_message(self) -> &'static str {
+        match self {
+            Self::Invalid => "settype(): Argument #2 ($type) must be a valid type",
+            Self::Resource => "Cannot convert to resource type",
+        }
+    }
+
     /// Keeps original-source diagnostics and checked runtime target errors consistent.
     pub const fn message(self) -> &'static str {
         match self {
@@ -29,17 +37,23 @@ impl SettypeTargetFailure {
 }
 
 impl SettypeTarget {
+    /// Enumerates valid targets independently of backend conversion support.
+    pub const ALL: [Self; 7] = [Self::Bool, Self::Int, Self::Float, Self::String, Self::Array, Self::Object, Self::Null];
+
+    /// Supplies canonical names and aliases to both static and runtime target planners.
+    pub const fn names(self) -> &'static [&'static str] {
+        match self {
+            Self::Bool => &["bool", "boolean"], Self::Int => &["int", "integer"],
+            Self::Float => &["float", "double"], Self::String => &["string"],
+            Self::Array => &["array"], Self::Object => &["object"], Self::Null => &["null"],
+        }
+    }
+
     /// Resolves complete target names without trimming or accepting trailing bytes.
     pub fn parse(name: &str) -> Result<Self, SettypeTargetFailure> {
-        if name.eq_ignore_ascii_case("bool") || name.eq_ignore_ascii_case("boolean") { Ok(Self::Bool) }
-        else if name.eq_ignore_ascii_case("int") || name.eq_ignore_ascii_case("integer") { Ok(Self::Int) }
-        else if name.eq_ignore_ascii_case("float") || name.eq_ignore_ascii_case("double") { Ok(Self::Float) }
-        else if name.eq_ignore_ascii_case("string") { Ok(Self::String) }
-        else if name.eq_ignore_ascii_case("array") { Ok(Self::Array) }
-        else if name.eq_ignore_ascii_case("object") { Ok(Self::Object) }
-        else if name.eq_ignore_ascii_case("null") { Ok(Self::Null) }
-        else if name.eq_ignore_ascii_case("resource") { Err(SettypeTargetFailure::Resource) }
-        else { Err(SettypeTargetFailure::Invalid) }
+        if name.eq_ignore_ascii_case("resource") { return Err(SettypeTargetFailure::Resource); }
+        Self::ALL.into_iter().find(|target| target.names().iter().any(|alias| name.eq_ignore_ascii_case(alias)))
+            .ok_or(SettypeTargetFailure::Invalid)
     }
 
     /// Selects numeric conversion without conflating other valid settype targets with bad names.

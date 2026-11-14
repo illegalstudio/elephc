@@ -344,6 +344,9 @@ pub trait BuiltinLoweringContext {
     /// Identifies whether the operation implements a user builtin contract or trusted PHP code.
     fn source_mode(&self) -> crate::source::SourceMode;
 
+    /// Identifies a prepared public builtin body or invocation rather than an ordinary source call.
+    fn uses_prepared_builtin_semantics(&self) -> bool { false }
+
     /// Guards original numeric argument kinds through the full rooted EIR control-flow path.
     fn emit_numeric_domain_guard(
         &mut self, _operator: elephc_semantics::numeric_domains::NumericOperator, _operands: &[ValueId],
@@ -363,6 +366,12 @@ pub trait BuiltinLoweringContext {
         _value: ValueId, _base: Option<ValueId>, _source_mode: crate::source::SourceMode, _span: Span)
         -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
         Err(BuiltinLoweringError::new("checked numeric casts require a prepared builtin wrapper"))
+    }
+
+    /// Converts an evaluated settype operand before publishing it to its original reference binding.
+    fn emit_settype_conversion(&mut self, _value: ValueId, _target: ValueId,
+        _source_mode: crate::source::SourceMode, _span: Span) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("checked settype requires a prepared builtin wrapper"))
     }
 
     /// Returns the current source path when the lowering owns a user-written call site.
