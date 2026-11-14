@@ -482,6 +482,29 @@ fn test_error_match_missing_paren() {
     expect_error("<?php $x = match $x {};", "Expected '(' after 'match'");
 }
 
+/// Verifies that a match arm made of a lone comma is rejected (`, => 1`): the trailing comma
+/// PHP allows must follow at least one condition.
+#[test]
+fn test_error_match_arm_lone_comma() {
+    expect_error("<?php echo match (1) { , => 1, default => 2 };", "Unexpected token");
+}
+
+/// Verifies that a doubled trailing comma after a match arm's condition list is rejected
+/// (`1,, => …`), matching PHP.
+#[test]
+fn test_error_match_arm_double_trailing_comma() {
+    expect_error("<?php echo match (1) { 1,, => 1, default => 2 };", "Unexpected token");
+}
+
+/// Verifies that a doubled trailing comma after `default` is rejected (`default,, => …`).
+#[test]
+fn test_error_match_default_double_trailing_comma() {
+    expect_error(
+        "<?php echo match (1) { default,, => 1 };",
+        "Expected '=>' after 'default'",
+    );
+}
+
 /// Verifies the error diagnostic for arrow function missing arrow.
 #[test]
 fn test_error_arrow_function_missing_arrow() {
