@@ -485,6 +485,8 @@ mod tests {
             server_addr: "127.0.0.1".to_string(),
             server_port: 2,
             protocol: "HTTP/1.1".to_string(),
+            request_scheme: "http".to_string(),
+            https: false,
         }
     }
 

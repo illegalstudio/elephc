@@ -17,11 +17,12 @@
 //! - Save paths follow php-src's `[depth;[mode;]]path` grammar; every operation
 //!   shares the same ID-derived path calculation and no-follow/owner checks.
 //! - BUG-3: `write` now writes in place on the held fd/inode as its *primary*
-//!   path (`ftruncate`+`pwrite`+`fsync`), since the `flock` is held on that
-//!   inode — a temp+rename would swap in a new inode the lock no longer
-//!   covers, breaking concurrent-writer serialization. Temp+rename remains the
-//!   fallback for the no-fd-held branch (e.g. `session_regenerate_id`'s fresh
-//!   id, which has no concurrent reader to serialize against).
+//!   path (`ftruncate`+`pwrite`), since the `flock` is held on that inode — a
+//!   temp+rename would swap in a new inode the lock no longer covers, breaking
+//!   concurrent-writer serialization. Temp+rename remains the fallback for the
+//!   no-fd-held branch (e.g. `session_regenerate_id`'s fresh id, which has no
+//!   concurrent reader to serialize against). Neither path calls `fsync`:
+//!   php-src's files handler writes with `pwrite` without a durability barrier.
 //! - §2.5 `touch` (lazy_write) MUST release the held lock exactly like
 //!   `write` does — leaving it held would self-deadlock the next `read`
 //!   (BUG-1's mechanism).
@@ -255,13 +256,14 @@ pub unsafe extern "C" fn elephc_web_session_read(
 ///
 /// BUG-3: when this request already holds the session fd (from an earlier
 /// `elephc_web_session_read`), that is the **primary** path — write in place
-/// on the held fd (`ftruncate`+`pwrite`+`fsync`), since the `flock` is on that
+/// on the held fd (`ftruncate`+`pwrite`), since the `flock` is on that
 /// specific inode. Writing to a temp file and `rename`-ing over the original
 /// would swap in a *new* inode the held lock no longer covers, breaking
 /// serialization against any other process still waiting on the old inode's
 /// lock. When no fd is held (e.g. `session_regenerate_id`'s fresh id, which
 /// has no concurrent reader to serialize against), fall back to the atomic
-/// temp+rename path.
+/// temp+rename path. Neither path calls `fsync`: php-src's files handler
+/// writes the session payload without a durability barrier.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_web_session_write_bytes(
     id_ptr: *const c_char,
@@ -307,7 +309,6 @@ pub unsafe extern "C" fn elephc_web_session_write_bytes(
                 ok = false;
             }
         }
-        ok = ok && libc::fsync(fd) == 0;
         release_lock();
         return i64::from(ok);
     }
@@ -328,9 +329,6 @@ pub unsafe extern "C" fn elephc_web_session_write_bytes(
                 .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
                 .open(&tmp_path)?;
             tmp.write_all(data)?;
-            // Ensure the data hits disk before the rename.
-            let tmp_fd = tmp.as_raw_fd();
-            let _ = libc::fsync(tmp_fd);
         }
         fs::rename(&tmp_path, &path)?;
         Ok(())
@@ -876,8 +874,8 @@ mod tests {
     }
 
     /// BUG-3: when a read already holds the session fd/lock, a subsequent
-    /// write goes through the in-place path (ftruncate+pwrite+fsync on the
-    /// held fd), not temp+rename — and still releases the lock afterward.
+    /// write goes through the in-place path (ftruncate+pwrite on the held fd),
+    /// not temp+rename — and still releases the lock afterward.
     #[test]
     fn session_write_in_place_round_trip() {
         let _g = lock();

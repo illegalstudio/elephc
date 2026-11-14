@@ -147,29 +147,107 @@ pub(super) static mut UPLOAD_PROGRESS_MIN_FREQ: Option<CString> = None;
 /// Default: seeded from `ELEPHC_SESSION_AUTO_START`.
 pub(super) static mut SESSION_AUTO_START: i64 = 0;
 
-/// Process-level `session.auto_start` config, read once per worker process from
-/// the `ELEPHC_SESSION_AUTO_START` environment variable. This is the immutable
-/// startup value (php.ini PERDIR analog); the per-request working copy lives in
-/// [`SESSION_AUTO_START`].
-static AUTO_START_CONFIG: OnceLock<i64> = OnceLock::new();
+/// Process-level session deployment configuration, read once per worker process
+/// from the `ELEPHC_SESSION_*` environment variables. This is the immutable
+/// startup value (php.ini PERDIR analog); the per-request working copies live in
+/// the `static mut` fields above. Reading it once keeps the per-request reset off
+/// `getenv`, which otherwise scans the environment a dozen times per request.
+struct SessionDeploymentConfig {
+    /// `session.auto_start` (`ELEPHC_SESSION_AUTO_START`).
+    auto_start: i64,
+    /// Validated `session.name` from `ELEPHC_SESSION_NAME`.
+    name: Option<CString>,
+    /// `session.save_path` from `ELEPHC_SESSION_SAVE_PATH`.
+    save_path: Option<CString>,
+    /// Validated `session.serialize_handler`.
+    serializer: Option<CString>,
+    /// `session.use_only_cookies` (defaults to on).
+    use_only_cookies: bool,
+    /// `session.upload_progress.enabled` (defaults to on).
+    upload_progress_enabled: bool,
+    /// `session.upload_progress.cleanup` (defaults to on).
+    upload_progress_cleanup: bool,
+}
 
-/// Returns the process-level `session.auto_start` config, parsing
-/// `ELEPHC_SESSION_AUTO_START` on first call. `"1"`, `"on"`, or `"true"`
-/// (case-insensitive, trimmed) map to 1; anything else (including an unset
-/// variable) maps to 0. Single-threaded per worker, so the lazy init cannot
-/// race.
-fn auto_start_config() -> i64 {
-    *AUTO_START_CONFIG.get_or_init(|| match std::env::var("ELEPHC_SESSION_AUTO_START") {
-        Ok(v) => {
-            let v = v.trim().to_ascii_lowercase();
-            if v == "1" || v == "on" || v == "true" {
-                1
-            } else {
-                0
+/// Lazily-initialized process-level session deployment configuration.
+static DEPLOYMENT_CONFIG: OnceLock<SessionDeploymentConfig> = OnceLock::new();
+
+/// Returns the process-level session deployment configuration, parsing the
+/// `ELEPHC_SESSION_*` environment on first call. Single-threaded per worker, so
+/// the lazy init cannot race.
+fn deployment_config() -> &'static SessionDeploymentConfig {
+    DEPLOYMENT_CONFIG.get_or_init(|| {
+        let auto_start = match std::env::var("ELEPHC_SESSION_AUTO_START") {
+            Ok(v) => {
+                let v = v.trim().to_ascii_lowercase();
+                if v == "1" || v == "on" || v == "true" {
+                    1
+                } else {
+                    0
+                }
             }
+            Err(_) => 0,
+        };
+        let name = std::env::var("ELEPHC_SESSION_NAME")
+            .ok()
+            .filter(|value| {
+                !value.is_empty()
+                    && value.parse::<f64>().is_err()
+                    && !value.bytes().any(|byte| {
+                        matches!(
+                            byte,
+                            b'=' | b',' | b';' | b'.' | b'[' | b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c
+                        )
+                    })
+            })
+            .and_then(|value| CString::new(value).ok());
+        let save_path = std::env::var("ELEPHC_SESSION_SAVE_PATH")
+            .ok()
+            .and_then(|value| CString::new(value).ok());
+        let serializer = std::env::var("ELEPHC_SESSION_SERIALIZE_HANDLER")
+            .ok()
+            .filter(|value| matches!(value.as_str(), "php" | "php_serialize" | "php_binary"))
+            .and_then(|value| CString::new(value).ok());
+        let use_only_cookies = std::env::var("ELEPHC_SESSION_USE_ONLY_COOKIES")
+            .map(|value| {
+                !matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "0" | "off" | "false" | "no"
+                )
+            })
+            .unwrap_or(true);
+        let upload_progress_enabled = std::env::var("ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED")
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "on" | "true"
+                )
+            })
+            .unwrap_or(true);
+        let upload_progress_cleanup = std::env::var("ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP")
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "on" | "true"
+                )
+            })
+            .unwrap_or(true);
+        SessionDeploymentConfig {
+            auto_start,
+            name,
+            save_path,
+            serializer,
+            use_only_cookies,
+            upload_progress_enabled,
+            upload_progress_cleanup,
         }
-        Err(_) => 0,
     })
+}
+
+/// Returns the process-level `session.auto_start` config, parsed once per worker
+/// process. Single-threaded per worker, so the lazy init cannot race.
+fn auto_start_config() -> i64 {
+    deployment_config().auto_start
 }
 
 // ── Return-string buffers (per-worker, valid until next session call) ──
@@ -230,11 +308,20 @@ pub(super) unsafe fn opt_ptr(slot: *const Option<CString>) -> *const c_char {
     }
 }
 
+/// Replaces an `Option<CString>` static and drops the previous allocation.
+///
+/// `core::ptr::write` would overwrite the old `CString` without running its
+/// destructor, leaking one allocation per replacement; every request that
+/// touches session config replaces these slots during reset.
+pub(super) unsafe fn reset_cstr(slot: *mut Option<CString>, value: Option<CString>) {
+    drop(core::ptr::replace(slot, value));
+}
+
 /// Stores a Rust string into a `Option<CString>` static via raw pointer, replacing
 /// any prior value. Interior NULs are stripped (CString cannot hold them).
 pub(super) unsafe fn set_cstr(slot: *mut Option<CString>, s: &str) {
     let cstr = CString::new(s.replace('\0', "")).unwrap_or_default();
-    core::ptr::write(slot, Some(cstr));
+    reset_cstr(slot, Some(cstr));
 }
 
 /// Converts a NUL-terminated C string pointer into an owned Rust string.
@@ -842,77 +929,40 @@ pub unsafe extern "C" fn elephc_web_session_reset() {
     // Release any held session-file lock.
     super::file_io::release_lock();
 
-    // Read immutable deployment configuration before resetting the per-request
-    // working copies. Invalid values fall back to PHP's defaults.
-    let configured_name = std::env::var("ELEPHC_SESSION_NAME")
-        .ok()
-        .filter(|value| {
-            !value.is_empty()
-                && value.parse::<f64>().is_err()
-                && !value.bytes().any(|byte| {
-                    matches!(
-                        byte,
-                        b'=' | b',' | b';' | b'.' | b'[' | b' ' | b'\t' | b'\r' | b'\n' | 0x0b | 0x0c
-                    )
-                })
-        })
-        .and_then(|value| CString::new(value).ok());
-    let configured_save_path = std::env::var("ELEPHC_SESSION_SAVE_PATH")
-        .ok()
-        .and_then(|value| CString::new(value).ok());
-    let configured_serializer = std::env::var("ELEPHC_SESSION_SERIALIZE_HANDLER")
-        .ok()
-        .filter(|value| matches!(value.as_str(), "php" | "php_serialize" | "php_binary"))
-        .and_then(|value| CString::new(value).ok());
-    let configured_use_only_cookies = std::env::var("ELEPHC_SESSION_USE_ONLY_COOKIES")
-        .map(|value| {
-            !matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "0" | "off" | "false" | "no"
-            )
-        })
-        .unwrap_or(true);
-    let configured_upload_enabled = std::env::var("ELEPHC_SESSION_UPLOAD_PROGRESS_ENABLED")
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "on" | "true"
-            )
-        })
-        .unwrap_or(true);
-    let configured_upload_cleanup = std::env::var("ELEPHC_SESSION_UPLOAD_PROGRESS_CLEANUP")
-        .map(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "on" | "true"
-            )
-        })
-        .unwrap_or(true);
+    // Read the immutable deployment configuration cached at fork. Invalid values
+    // already fell back to PHP's defaults when the cache was built.
+    let config = deployment_config();
+    let configured_name = config.name.clone();
+    let configured_save_path = config.save_path.clone();
+    let configured_serializer = config.serializer.clone();
+    let configured_use_only_cookies = config.use_only_cookies;
+    let configured_upload_enabled = config.upload_progress_enabled;
+    let configured_upload_cleanup = config.upload_progress_cleanup;
 
     // Reset all state to PHP defaults plus the deployment-level overrides.
-    core::ptr::write(core::ptr::addr_of_mut!(SESSION_NAME), configured_name);
-    core::ptr::write(core::ptr::addr_of_mut!(SESSION_ID), None);
+    reset_cstr(core::ptr::addr_of_mut!(SESSION_NAME), configured_name);
+    reset_cstr(core::ptr::addr_of_mut!(SESSION_ID), None);
     core::ptr::write(core::ptr::addr_of_mut!(SESSION_STATUS), 1);
-    core::ptr::write(
+    reset_cstr(
         core::ptr::addr_of_mut!(SESSION_SAVE_PATH),
         configured_save_path,
     );
-    core::ptr::write(core::ptr::addr_of_mut!(SESSION_CACHE_LIMITER), None);
+    reset_cstr(core::ptr::addr_of_mut!(SESSION_CACHE_LIMITER), None);
     core::ptr::write(core::ptr::addr_of_mut!(SESSION_CACHE_EXPIRE), 180);
     core::ptr::write(core::ptr::addr_of_mut!(COOKIE_LIFETIME), 0);
-    core::ptr::write(core::ptr::addr_of_mut!(COOKIE_PATH), None);
-    core::ptr::write(core::ptr::addr_of_mut!(COOKIE_DOMAIN), None);
+    reset_cstr(core::ptr::addr_of_mut!(COOKIE_PATH), None);
+    reset_cstr(core::ptr::addr_of_mut!(COOKIE_DOMAIN), None);
     core::ptr::write(core::ptr::addr_of_mut!(COOKIE_SECURE), false);
     core::ptr::write(core::ptr::addr_of_mut!(COOKIE_PARTITIONED), false);
     core::ptr::write(core::ptr::addr_of_mut!(COOKIE_HTTPONLY), false);
-    core::ptr::write(core::ptr::addr_of_mut!(COOKIE_SAMESITE), None);
+    reset_cstr(core::ptr::addr_of_mut!(COOKIE_SAMESITE), None);
     (*core::ptr::addr_of_mut!(SESSION_SNAPSHOT)).clear();
     (*core::ptr::addr_of_mut!(DATA_BUFFER)).clear();
     (*core::ptr::addr_of_mut!(PUBLISHED_BUFFERS)).clear();
     (*core::ptr::addr_of_mut!(STAGING_BUFFER)).clear();
     core::ptr::write(core::ptr::addr_of_mut!(SESSION_FD), -1);
     core::ptr::write(core::ptr::addr_of_mut!(STRICT_MODE), 0);
-    core::ptr::write(
+    reset_cstr(
         core::ptr::addr_of_mut!(SERIALIZE_HANDLER),
         configured_serializer,
     );
@@ -923,7 +973,7 @@ pub unsafe extern "C" fn elephc_web_session_reset() {
     core::ptr::write(core::ptr::addr_of_mut!(SID_BITS_PER_CHARACTER), 4);
     // v4 ini config layer: strings reset to None (getters re-init to defaults),
     // ints reset to their PHP defaults.
-    core::ptr::write(core::ptr::addr_of_mut!(SESSION_REFERER_CHECK), None);
+    reset_cstr(core::ptr::addr_of_mut!(SESSION_REFERER_CHECK), None);
     core::ptr::write(core::ptr::addr_of_mut!(USE_COOKIES), 1);
     core::ptr::write(
         core::ptr::addr_of_mut!(USE_ONLY_COOKIES),
@@ -931,8 +981,8 @@ pub unsafe extern "C" fn elephc_web_session_reset() {
     );
     core::ptr::write(core::ptr::addr_of_mut!(LAZY_WRITE), 1);
     core::ptr::write(core::ptr::addr_of_mut!(USE_TRANS_SID), 0);
-    core::ptr::write(core::ptr::addr_of_mut!(TRANS_SID_TAGS), None);
-    core::ptr::write(core::ptr::addr_of_mut!(TRANS_SID_HOSTS), None);
+    reset_cstr(core::ptr::addr_of_mut!(TRANS_SID_TAGS), None);
+    reset_cstr(core::ptr::addr_of_mut!(TRANS_SID_HOSTS), None);
     core::ptr::write(
         core::ptr::addr_of_mut!(UPLOAD_PROGRESS_ENABLED),
         i64::from(configured_upload_enabled),
@@ -941,10 +991,10 @@ pub unsafe extern "C" fn elephc_web_session_reset() {
         core::ptr::addr_of_mut!(UPLOAD_PROGRESS_CLEANUP),
         i64::from(configured_upload_cleanup),
     );
-    core::ptr::write(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_PREFIX), None);
-    core::ptr::write(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_NAME), None);
-    core::ptr::write(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_FREQ), None);
-    core::ptr::write(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_MIN_FREQ), None);
+    reset_cstr(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_PREFIX), None);
+    reset_cstr(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_NAME), None);
+    reset_cstr(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_FREQ), None);
+    reset_cstr(core::ptr::addr_of_mut!(UPLOAD_PROGRESS_MIN_FREQ), None);
     // auto_start is seeded from the process-level env config, NOT a fixed
     // default, so a `session.auto_start=1` deployment auto-starts every request.
     core::ptr::write(

@@ -1,0 +1,70 @@
+name: elephc-edge-tcp
+
+# Loopback-TCP variant of the Caddy stack.
+#
+#   docker compose -f examples/web-edge/deploy/compose.tcp.yml up --build
+#
+# The edge shares the app's network namespace, so the app owns the published
+# ports and Caddy binds 80/443 inside that same namespace. The origin listens
+# only on 127.0.0.1:8080 and trusts exactly that loopback peer.
+
+services:
+  init:
+    image: busybox:1.36
+    command:
+      - sh
+      - -c
+      - |
+        mkdir -p /var/lib/elephc/sessions /data /config
+        chown -R 10001:10001 /var/lib/elephc /data /config
+    volumes:
+      - elephc-sessions:/var/lib/elephc/sessions
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: "no"
+
+  app:
+    build:
+      context: ../../..
+      dockerfile: examples/web-edge/deploy/Dockerfile.app
+    user: "10001:10001"
+    command:
+      - "--listen"
+      - "127.0.0.1:8080"
+      - "--workers"
+      - "4"
+      - "--trusted-proxy"
+      - "127.0.0.1/32"
+    environment:
+      ELEPHC_SESSION_SAVE_PATH: /var/lib/elephc/sessions
+    volumes:
+      - elephc-sessions:/var/lib/elephc/sessions
+    ports:
+      # Caddy binds these inside the shared network namespace.
+      - "80:80"
+      - "443:443"
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  edge:
+    image: caddy:2.10-alpine
+    user: "10001:10001"
+    cap_add:
+      - NET_BIND_SERVICE
+    network_mode: "service:app"
+    volumes:
+      - ../Caddyfile.tcp:/etc/caddy/Caddyfile:ro
+      - ../public:/srv/app/public:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      app:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  elephc-sessions:
+  caddy-data:
+  caddy-config:

@@ -28,7 +28,7 @@ fn application_environment_parameter_proof_accepts_literal_arguments() {
         "<?php class JsonBody { public static function decode(string $body, callable $decoder) { return $decoder($body); } } class Query { public static function decode(string $body, int $limit) {} public static function read(string $body, int $limit) { self::decode($body, $limit); } } Query::read('ok', 100); JsonBody::decode('ok', fn(string $body) => $body);",
         "<?php interface Decoder { public function decode(string $input); } class JsonBody { public static function decode(string $body, callable $decoder) { return $decoder($body); } } class TextDecoder implements Decoder { public function decode(string $input) { return $input; } } $decoder = new TextDecoder(); $decoder->decode('ok'); JsonBody::decode('ok', fn(string $body) => $body);",
     ] {
-        assert!(!application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(!application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
@@ -41,7 +41,7 @@ fn application_environment_parameter_proof_isolates_scopes() {
         "<?php function through(callable $factory) { $inner = function(callable $factory) { $factory(); }; $inner($runtime); } through(fn() => 'ok');",
         "<?php function through(callable $factory) { global $factory; $factory(); } through(fn() => 'ok');",
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
@@ -71,7 +71,7 @@ fn application_environment_parameter_proof_rejects_uncertain_entries() {
         "<?php class Host { public static function through(callable $factory) { $factory(); } } use Host as Alias; Host::through(fn() => 'ok'); Alias::through($runtime);",
         "<?php function through(callable $factory) { $factory(); } use function through as alias; alias($runtime); through(fn() => 'ok');",
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
@@ -84,7 +84,7 @@ fn application_environment_parameter_proof_keeps_capture_dependencies() {
         "<?php $callback = 'strlen'; for ($i = 0; $i < 2; $i++) { $outer = function() use ($callback) { $reader = fn() => $callback('code'); $reader(); }; $outer(); $callback = $runtime; }",
         "<?php $callback = $runtime; $reader = function() use ($callback) { $callback('code'); $callback = 'strlen'; }; $reader();",
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
@@ -96,7 +96,7 @@ fn application_environment_parameter_proof_keeps_global_mutations() {
         "<?php $callback = 'strlen'; replace_callback(); $callback('code'); function replace_callback() { global $callback; $callback = $runtime; }",
         "<?php $callback = 'strlen'; function outer_callback() { inner_callback(); } function inner_callback() { global $callback; $callback = $runtime; } outer_callback(); $callback('code');",
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
@@ -119,6 +119,6 @@ function replace_method(string &$name): void {{ $name = 'ha' . 'fe'; }}
 function through_array(array $factory): void {{ {body} $factory(); }}
 through_array(['Host', 'safe']);
 "#);
-        assert!(application_request_usage(&source, false).references("elephc_web_env_count"), "{body}");
+        assert!(application_request_usage(&source, false, false).references("elephc_web_env_count"), "{body}");
     }
 }

@@ -9,7 +9,8 @@
 //! - fork() happens BEFORE any tokio runtime is created (tokio does not survive
 //!   fork); pool/request workers prestart a threadless handler broker, while
 //!   worker isolation retains the original in-process serving path.
-//! - --listen host:port is required; without it the process errors and exits.
+//! - --listen host:port or unix:/path is required; a Unix listener is bound
+//!   once here, before the fork loop, and inherited by every worker.
 
 mod args;
 
@@ -20,6 +21,7 @@ use std::time::{Duration, Instant};
 use args::{parse_args, ParsedArgs, ServerArgs};
 use crate::handler_broker::BrokerMode;
 use crate::isolated_worker;
+use crate::listener::{self, ListenAddr, ListenSource, SharedTcp};
 use crate::worker;
 
 /// Version-one generated callbacks; all PHP exceptions are contained before returning to Rust.
@@ -134,19 +136,69 @@ fn reset_signal_handlers_to_default() {
 /// master. The child restores default signal disposition and never returns. A
 /// fork failure aborts the whole process. Used for both initial spawn and respawn.
 fn spawn_worker(
-    listen: &str,
+    listen: &ListenAddr,
+    master_unix: Option<&std::os::unix::net::UnixListener>,
+    shared_tcp: Option<&SharedTcp>,
+    worker_index: usize,
     handler: extern "C" fn(),
     args: &ServerArgs,
     isolation: IsolationMode,
     application: Option<ApplicationCallbacks>,
 ) -> libc::pid_t {
+    // A SIGTERM can arrive between the master's shutdown check and the
+    // child's handler reset. Block both signals across `fork()`, reset the
+    // child dispositions, then unblock: the child never runs the master's
+    // flag-only handler and swallows its own teardown signal.
+    let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+    let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigemptyset(&mut blocked);
+        libc::sigaddset(&mut blocked, libc::SIGINT);
+        libc::sigaddset(&mut blocked, libc::SIGTERM);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut previous);
+    }
     match unsafe { libc::fork() } {
         -1 => {
+            unsafe {
+                libc::pthread_sigmask(
+                    libc::SIG_SETMASK,
+                    &previous,
+                    std::ptr::null_mut(),
+                );
+            }
             eprintln!("error: fork failed");
             std::process::exit(1);
         }
         0 => {
             reset_signal_handlers_to_default();
+            unsafe {
+                libc::pthread_sigmask(
+                    libc::SIG_SETMASK,
+                    &previous,
+                    std::ptr::null_mut(),
+                );
+            }
+            #[cfg(target_vendor = "apple")]
+            listener::raise_worker_qos();
+            let source = match ListenSource::for_worker(
+                listen,
+                master_unix,
+                shared_tcp,
+                worker_index,
+            ) {
+                Ok(source) => source,
+                Err(error) => {
+                    eprintln!("elephc-web: failed to inherit the listening socket: {error}");
+                    std::process::exit(1);
+                }
+            };
+            #[cfg(target_vendor = "apple")]
+            if let Some(shared) = shared_tcp {
+                // The receiver duplicate is installed; the listener, the other
+                // workers' channels, and the master's pending connections are
+                // master-only. An orphaned worker must not keep the port open.
+                shared.close_in_worker();
+            }
             if let Some(callbacks) = application {
                 worker::install_application_shutdown();
                 crate::request_state::reset_response();
@@ -159,16 +211,16 @@ fn spawn_worker(
                     std::process::exit(BOOTSTRAP_FAILURE_EXIT_CODE);
                 }
                 APPLICATION_PHASE.store(2, Ordering::Relaxed);
-                worker::serve_application(listen, callbacks.request, args.worker_config());
+                worker::serve_application(source, callbacks.request, args.worker_config());
                 crate::request_state::set_capture(false);
                 APPLICATION_PHASE.store(3, Ordering::Relaxed);
                 worker::with_application_signals_blocked(|| (callbacks.shutdown)());
                 std::process::exit(worker::RECYCLE_EXIT_CODE);
             }
             match isolation.broker_mode() {
-                None => worker::serve(listen, handler, args.worker_config()),
+                None => worker::serve(source, handler, args.worker_config()),
                 Some(mode) => {
-                    isolated_worker::serve(listen, handler, args.isolated_worker_config(mode))
+                    isolated_worker::serve(source, handler, args.isolated_worker_config(mode))
                 }
             }
             // serve() only returns when the worker stopped accepting on purpose
@@ -176,7 +228,16 @@ fn spawn_worker(
             // so the reaper skips the crash-loop accounting for this death.
             std::process::exit(worker::RECYCLE_EXIT_CODE);
         }
-        pid => pid,
+        pid => {
+            unsafe {
+                libc::pthread_sigmask(
+                    libc::SIG_SETMASK,
+                    &previous,
+                    std::ptr::null_mut(),
+                );
+            }
+            pid
+        }
     }
 }
 
@@ -201,11 +262,12 @@ fn is_planned_recycle(status: libc::c_int) -> bool {
 /// when the master is PID 1; those PIDs are reaped but must not trigger a worker
 /// replacement or change the configured pool size.
 fn remove_tracked_worker(
-    children: &mut Vec<(libc::pid_t, Instant)>,
+    children: &mut Vec<(libc::pid_t, Instant, usize)>,
     pid: libc::pid_t,
-) -> Option<Instant> {
-    let index = children.iter().position(|(child, _)| *child == pid)?;
-    Some(children.remove(index).1)
+) -> Option<(Instant, usize)> {
+    let index = children.iter().position(|(child, _, _)| *child == pid)?;
+    let (_, spawned_at, worker_index) = children.remove(index);
+    Some((spawned_at, worker_index))
 }
 
 /// Server entry: parse args, prefork workers, supervise. Returns an exit code.
@@ -269,16 +331,62 @@ fn run_server(
         ParsedArgs::Exit(code) => return code,
     };
     install_signal_handlers();
+    // Bind the shared TCP socket before forking on Apple targets. On Linux
+    // install_shared is a no-op and workers keep their per-process
+    // SO_REUSEPORT sockets. A Unix listener must always be bound once before
+    // the fork loop: SO_REUSEPORT does not balance accept() across AF_UNIX
+    // listeners. This runs before any worker fork or Tokio runtime, so
+    // bind_unix_master may temporarily narrow the process umask without racing
+    // another thread. A bind failure is a master startup error, not a worker
+    // crash loop.
+    let (master_unix, shared_tcp) = match &args.listen {
+        ListenAddr::Tcp(addr) => match listener::install_shared(*addr, args.workers) {
+            Ok(shared) => (None, shared),
+            Err(error) => {
+                eprintln!("elephc-web: failed to bind {addr}: {error}");
+                return 1;
+            }
+        },
+        ListenAddr::Unix(path) => match listener::bind_unix_master(path) {
+            Ok(listener) => (Some(listener), None),
+            Err(error) => {
+                eprintln!(
+                    "elephc-web: failed to bind unix:{}: {error}",
+                    path.display()
+                );
+                return 1;
+            }
+        },
+    };
+    // Make descriptor-map mutation safe across the forks below. A child forked
+    // while the acceptor holds `pending` would inherit a locked pthread mutex.
+    #[cfg(target_vendor = "apple")]
+    listener::install_fork_gate();
     // Fork workers BEFORE creating any tokio runtime. Track each worker's spawn
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
-    let mut children: Vec<(libc::pid_t, Instant)> = Vec::new();
-    for _ in 0..args.workers {
-        let pid = spawn_worker(&args.listen, handler, &args, isolation, application);
-        children.push((pid, Instant::now()));
+    let mut children: Vec<(libc::pid_t, Instant, usize)> = Vec::new();
+    for worker_index in 0..args.workers {
+        let pid = spawn_worker(
+            &args.listen,
+            master_unix.as_ref(),
+            shared_tcp.as_deref(),
+            worker_index,
+            handler,
+            &args,
+            isolation,
+            application,
+        );
+        children.push((pid, Instant::now(), worker_index));
     }
+    #[cfg(target_vendor = "apple")]
+    let accept_thread = shared_tcp
+        .as_ref()
+        .map(|shared| shared.start_accepting());
+    #[cfg(not(target_vendor = "apple"))]
+    let accept_thread: Option<std::thread::JoinHandle<()>> = None;
     eprintln!(
-        "elephc-web: listening on http://{} ({} worker{}, isolation={})",
-        args.listen,
+        "elephc-web: listening on {} ({} worker{}, isolation={})",
+        args.listen.display(),
         args.workers,
         if args.workers == 1 { "" } else { "s" },
         isolation.name()
@@ -291,12 +399,27 @@ fn run_server(
             break;
         }
         let mut status = 0;
-        let pid = unsafe { libc::waitpid(-1, &mut status, 0) };
+        // A blocking `waitpid` can miss SIGTERM when the signal arrives after
+        // the check above but before the call: the handler runs, then the
+        // supervisor sleeps in `waitpid` with no child event to wake it. Poll
+        // with `WNOHANG` so the shutdown flag is always re-checked.
+        let pid = loop {
+            if SHUTDOWN.load(Ordering::SeqCst) {
+                break 0;
+            }
+            let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+            if pid != 0 {
+                break pid;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
         if SHUTDOWN.load(Ordering::SeqCst) {
             break;
         }
         if pid > 0 {
-            let Some(spawned_at) = remove_tracked_worker(&mut children, pid) else {
+            let Some((spawned_at, worker_index)) =
+                remove_tracked_worker(&mut children, pid)
+            else {
                 continue;
             };
             if SHUTDOWN.load(Ordering::SeqCst) {
@@ -341,8 +464,17 @@ fn run_server(
                 }
             }
             // The worker is gone (crash or recycle): replace it to keep the pool at N.
-            let new_pid = spawn_worker(&args.listen, handler, &args, isolation, application);
-            children.push((new_pid, Instant::now()));
+            let new_pid = spawn_worker(
+                &args.listen,
+                master_unix.as_ref(),
+                shared_tcp.as_deref(),
+                worker_index,
+                handler,
+                &args,
+                isolation,
+                application,
+            );
+            children.push((new_pid, Instant::now(), worker_index));
         } else if pid == -1 {
             // ECHILD: nothing left to wait for. EINTR: a signal arrived → re-loop
             // and re-check SHUTDOWN at the top.
@@ -351,13 +483,52 @@ fn run_server(
             }
         }
     }
+    if let Some(shared) = &shared_tcp {
+        shared.stop();
+    }
+    // Stop accepting before stopping the workers. Joining the acceptor also
+    // gives a descriptor that was just handed off a moment to reach a worker's
+    // accept loop, so shutdown does not reset the last accepted connection.
+    if let Some(handle) = accept_thread {
+        let _ = handle.join();
+        std::thread::sleep(Duration::from_millis(50));
+    }
     // Clean teardown: ask every still-tracked worker to terminate, then reap.
-    for &(pid, _) in &children {
+    for &(pid, _, _) in &children {
         unsafe { libc::kill(pid, libc::SIGTERM); }
     }
-    for &(pid, _) in &children {
+    // A child that missed SIGTERM must not hold the master forever and make a
+    // supervisor wait for its stop timeout. Application workers run their
+    // shutdown hook only after active requests finish, so give them most of
+    // the documented 30 s stop grace; legacy/isolated workers drain quickly.
+    let drain_timeout = if application.is_some() {
+        Duration::from_secs(25)
+    } else {
+        Duration::from_secs(3)
+    };
+    let deadline = Instant::now() + drain_timeout;
+    for &(pid, _, _) in &children {
         let mut status = 0;
-        unsafe { libc::waitpid(pid, &mut status, 0); }
+        loop {
+            let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if waited == pid
+                || (waited == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD))
+            {
+                break;
+            }
+            if Instant::now() >= deadline {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+    if let ListenAddr::Unix(path) = &args.listen {
+        listener::remove_unix_socket(path);
     }
     exit_code
 }
@@ -407,12 +578,15 @@ mod tests {
     fn untracked_reaped_pid_does_not_change_worker_set() {
         let first = Instant::now();
         let second = Instant::now();
-        let mut children = vec![(101, first), (202, second)];
+        let mut children = vec![(101, first, 0), (202, second, 1)];
 
         assert!(remove_tracked_worker(&mut children, 303).is_none());
         assert_eq!(children.len(), 2);
         assert!(remove_tracked_worker(&mut children, 101).is_some());
-        assert_eq!(children.iter().map(|(pid, _)| *pid).collect::<Vec<_>>(), vec![202]);
+        assert_eq!(
+            children.iter().map(|(pid, _, _)| *pid).collect::<Vec<_>>(),
+            vec![202]
+        );
     }
 
 }

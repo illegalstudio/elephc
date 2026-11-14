@@ -460,7 +460,8 @@ runtime arguments (not elephc compiler flags):
 
 | Argument | Required | Default | Description |
 |---|---|---|---|
-| `--listen host:port` | Yes | — | Address and port to bind. Missing `--listen` prints an error to stderr and exits non-zero. |
+| `--listen host:port \| unix:/path` | Yes | — | TCP address to bind, or a Unix-domain socket path. Missing `--listen` prints an error to stderr and exits non-zero. Unix socket paths are limited to 100 bytes; a stale socket file is replaced, but a regular file at the path is refused. |
+| `--trusted-proxy LIST` | No | — | Comma-separated IPv4/IPv6 addresses, CIDRs, or `unix` allowed to supply `Forwarded` / `X-Forwarded-*`; repeatable. Without it, forwarded headers do not change `$_SERVER`. |
 | `--workers N` | No | CPU count | Number of prefork worker processes. Minimum 1. |
 | `--max-body-size N` | No | `8388608` (8 MiB) | Max request body in bytes; oversized bodies get `413`. `0` removes the cap in `worker` only — `pool` and `request` still refuse a body over the 64 MiB the broker protocol carries to the handler process. |
 | `--max-requests N` | No | `0` (never) | Recycle each worker after N completed requests; stop accepting, drain active HTTP connections, then respawn it. |
@@ -479,6 +480,7 @@ elephc --web --web-isolation=pool app.php
 elephc --web --web-isolation=request app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4 --max-body-size 1048576 --access-log
+./app --listen unix:/run/elephc/app.sock
 ```
 
 The isolation choice is compile-time: the generated entry stub calls the
