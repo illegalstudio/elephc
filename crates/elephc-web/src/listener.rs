@@ -124,7 +124,10 @@ pub(crate) fn install_fork_gate() {
     if result != 0 {
         // Forking without the gate can inherit a locked pending map. A
         // supervisor restart is safer than continuing ungated.
-        eprintln!("elephc-web: pthread_atfork failed: {}", io::Error::last_os_error());
+        eprintln!(
+            "elephc-web: pthread_atfork failed: {}",
+            io::Error::from_raw_os_error(result)
+        );
         std::process::exit(1);
     }
     FORK_GATE_INSTALLED.store(true, Ordering::Release);
@@ -726,10 +729,10 @@ unsafe fn close_received_fds(
                         .add(index * std::mem::size_of::<RawFd>())
                         .cast::<RawFd>(),
                 );
-                // Descriptor 0 is never passed by the master; a zero slot is
-                // padding, not a received descriptor. Do not close the
-                // worker's stdin on a malformed control message.
-                if fd > 0 && Some(fd) != keep {
+                // SCM_RIGHTS assigns receiver-side numbers: 0 is a valid
+                // received descriptor when the worker closed stdin. Padding
+                // slots are outside the cmsg data length.
+                if fd >= 0 && Some(fd) != keep {
                     libc::close(fd);
                 }
             }
@@ -1784,6 +1787,15 @@ mod tests {
             (*header).cmsg_type = libc::SCM_RIGHTS;
             (*header).cmsg_len = 80;
             std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), pipe[1]);
+            // Mark the synthetic padding as invalid descriptors so the helper
+            // does not close the test process's fd 0.
+            std::ptr::write_bytes(
+                libc::CMSG_DATA(header)
+                    .cast::<u8>()
+                    .add(std::mem::size_of::<RawFd>()),
+                0xFF,
+                control.0.len() - std::mem::size_of::<libc::cmsghdr>() - std::mem::size_of::<RawFd>(),
+            );
             close_received_fds(&message, control.0.len(), None);
         }
         assert_eq!(
