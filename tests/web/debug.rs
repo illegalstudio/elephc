@@ -511,6 +511,15 @@ fn web_debug_disconnect_resumes_request_and_keeps_server_healthy() {
     let source = dir.join("disconnect.php");
     let mut broker = Broker::spawn(&dir, &binary, "/selected");
 
+    // Let the matching request reach its wait before feeding DAP. The broker
+    // forwards stdin only after it attaches to a worker, and starting the
+    // request first avoids relying on the host pipe still holding a full
+    // handshake while no session exists yet.
+    let address = broker.address.clone();
+    let selected = thread::spawn(move || {
+        http_get_with_timeout(&address, "/selected", Duration::from_secs(20))
+            .expect("selected request")
+    });
     let initialize = broker.send(
         "initialize",
         json!({
@@ -526,11 +535,6 @@ fn web_debug_disconnect_resumes_request_and_keeps_server_healthy() {
     );
     let configuration = broker.send("configurationDone", json!({}));
 
-    let address = broker.address.clone();
-    let selected = thread::spawn(move || {
-        http_get_with_timeout(&address, "/selected", Duration::from_secs(20))
-            .expect("selected request")
-    });
     broker.wait_response(initialize);
     broker.wait_event("initialized");
     broker.wait_response(launch);
