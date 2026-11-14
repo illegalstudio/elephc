@@ -36,6 +36,7 @@ MODULE_PAGES: dict[str, str] = {
     "simplexml": "xml.md",
     "tokenizer": "tokenizer.md",
     "xml": "xml.md",
+    "tidy": "tidy.md",
     "xmlwriter": "xml.md",
     "zend opcache": "opcache.md",
 }

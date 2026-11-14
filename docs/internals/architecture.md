@@ -599,6 +599,7 @@ crates/
 ├── elephc-process-context/    Shared worker signal deferral and child-process inheritance
 ├── elephc-random/             Pure-Rust `ext/random` engines, CSPRNG, and global Mt19937 state bridge
 ├── elephc-reference/          Dependency-neutral native property-reference metadata and validation
+├── elephc-tidy/               ext/tidy bridge over the catalog's static libtidy 5.8.0
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
 ├── elephc-tokenizer-engine/   Shared byte-preserving PHP tokenizer and parse validation
 ├── elephc-tokenizer/          Standalone tokenizer C bridge over the shared engine

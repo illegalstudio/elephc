@@ -11,7 +11,7 @@ records immutable catalog metadata, and `elephc native` builds verified static
 archives into a target- and toolchain-specific cache.
 
 The catalog contains PCRE2 10.47, zlib 1.3.2, OpenSSL 3.5.8, nghttp2 1.70.0,
-libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, GMP 6.3.0,
+libssh2 1.11.1, curl 8.21.0, Oniguruma 6.9.10, libxml2 2.15.3, libtidy 5.8.0, GMP 6.3.0,
 libmagic 5.46, and the libcrypto-only `openssl-crypto` 3.6.4 package.
 Programs using `preg_*`, `RegexIterator`, or `RecursiveRegexIterator` require
 PCRE2 at final link time. Mbstring uses the same managed package only when a
@@ -38,6 +38,13 @@ built with the platform's iconv (built into glibc; `-liconv` on Apple targets)
 and without zlib, ICU, Python, readline, or dynamic modules, so it has no
 catalog dependencies of its own. Its complete public header set is retained
 so later XML extensions can compile against the same artifact.
+
+libtidy is the parser behind the `tidy` bridge: `--with-tidy`, or any program
+whose link plan pulls in `elephc_tidy`, requires `libtidy.a` at final link time.
+It is compiled from the pinned tidy-html5 5.8.0 sources by a reviewed recipe
+(`src/native_deps/recipes/libtidy.rs`), has no catalog dependencies, and is
+declared with `elephc native add libtidy`. There is no system `-ltidy` fallback.
+
 GMP 6.3.0 is the integer engine behind the `gmp` bridge: `--with-gmp`, or any
 program that calls a `gmp_*` function or names the `GMP` class, requires the
 managed `libgmp.a` at final link time. The recipe builds the same static

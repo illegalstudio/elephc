@@ -126,6 +126,49 @@ TypeError: get_parent_class(): Argument #1 ($object_or_class) must be an object 
     );
 }
 
+/// Verifies PHP's `$object->staticMethod()` shape resolves statically: the receiver is
+/// evaluated for side effects but never passed as `$this`, and the call returns the
+/// static method's value. Regression for the tidy `repairString()` instance-form fixture.
+#[test]
+fn test_static_method_through_an_instance_expression() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticOnly {
+    public static function value(): string { return "ok"; }
+}
+$object = new StaticOnly;
+echo $object->value(), "\n";
+echo (new StaticOnly)->value();
+"#,
+    );
+    assert_eq!(out.trim_end(), "ok\nok");
+}
+
+/// `$object->staticMethod()` binds `static` to the object's runtime class and dispatches
+/// an override declared by a subclass, even when the receiver is a base-typed parameter.
+#[test]
+fn test_static_method_through_instance_binds_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticDispatchBase {
+    public static function value(): string { return "base:" . static::class; }
+}
+class StaticDispatchChild extends StaticDispatchBase {
+    public static function value(): string { return "child:" . static::class; }
+}
+function callStaticThroughBase(StaticDispatchBase $object): string {
+    return $object->value();
+}
+$base = new StaticDispatchBase;
+$child = new StaticDispatchChild;
+echo callStaticThroughBase($base), "\n";
+echo callStaticThroughBase($child), "\n";
+echo $child?->value(), "\n";
+"#,
+    );
+    assert_eq!(out, "base:StaticDispatchBase\nchild:StaticDispatchChild\nchild:StaticDispatchChild\n");
+}
+
 /// Verifies a named class can be instantiated without constructor parentheses.
 #[test]
 fn test_class_instantiation_without_constructor_parentheses() {
@@ -1443,6 +1486,37 @@ echo (new Over())->viaParent(), "\n";
     assert_eq!(out, "base:1|base:2\nhi trait\nover:3\n");
 }
 
+/// PHP resolves `$object->staticMethod()` through the receiver's class, without binding
+/// `$this`; a same-named instance method keeps ordinary instance dispatch, including when
+/// the static method is inherited by a subclass.
+#[test]
+fn test_instance_receiver_can_call_static_methods() {
+    let out = compile_and_run(
+        r#"<?php
+class Factory {
+    public static function make(int $n): string { return "static:" . $n; }
+}
+class ChildFactory extends Factory {}
+class ShadowStatic {
+    public static function shadow(): string { return "static-shadow"; }
+}
+class ShadowInstance {
+    public function shadow(): string { return "instance-shadow"; }
+}
+$factory = new Factory();
+$child = new ChildFactory();
+echo $factory->make(3), "\n";
+echo $child->make(4), "\n";
+echo (new ShadowStatic)->shadow(), "\n";
+echo (new ShadowInstance)->shadow(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "static:3\nstatic:4\nstatic-shadow\ninstance-shadow\n"
+    );
+}
+
 /// `$this(...)` invokes the current object through its `__invoke`, with positional or named
 /// arguments, as a statement or inside an expression. It failed to parse with
 /// `Expected ';'`. Regression for #846.
@@ -1477,4 +1551,48 @@ echo $c->chained(), "\n";
             "4\n",
         )
     );
+}
+
+/// PHP's nullsafe form of `$object->staticMethod()` must take the same static-only reroute as
+/// the ordinary form: `null?->method()` stays null, while a non-null receiver calls the static
+/// method without binding `$this`.
+#[test]
+fn test_nullsafe_instance_receiver_can_call_static_methods() {
+    let out = compile_and_run(
+        r#"<?php
+class NullsafeStaticOnly {
+    public static function value(int $n): string { return "ok:" . $n; }
+}
+$object = new NullsafeStaticOnly;
+echo $object?->value(7), "\n";
+$null = null;
+var_dump($null?->value(8));
+"#,
+    );
+    assert_eq!(out, "ok:7\nNULL\n");
+}
+
+/// An object-based static call must use the object's runtime class, not the eval caller's
+/// active late-static override. A native `Base` object stays on `Base::value()` even after
+/// eval declares a `Child` override.
+#[test]
+fn test_object_static_dispatch_ignores_eval_caller_override() {
+    let out = compile_and_run(
+        r#"<?php
+class NativeEvalBase {
+    public static function value(): string { return "base"; }
+    public static function run(self $object): string { return $object->value(); }
+}
+$base = new NativeEvalBase;
+echo NativeEvalBase::run($base), "\n";
+eval('
+class NativeEvalChild extends NativeEvalBase {
+    public static function value(): string { return "child"; }
+}
+echo NativeEvalChild::run(new NativeEvalBase), "\n";
+echo NativeEvalChild::value(), "\n";
+');
+"#,
+    );
+    assert_eq!(out, "base\nbase\nchild\n");
 }

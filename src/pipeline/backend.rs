@@ -344,14 +344,14 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             LinkRequirement::Bridge(_) | LinkRequirement::SystemLibrary(_) => None,
         })
         .collect();
-    // Bridges that are thin adapters over a C library (curl, xml, gmp, fileinfo,
-    // openssl) declare that library's symbols without linking them. A bridge
-    // reaches `planned_link_libraries` either because the program uses its surface
-    // (its prelude's `extern` block or a `BuiltinRequirement::Bridge`) or because
-    // `--with-<name>` forces it, and in both cases the final link resolves the
-    // library from the project's managed native package instead of failing on
-    // undefined symbols. `crate::linker::native_packages` owns the bridge-to-package
-    // table and its link order; `--print-capabilities` reports the same table.
+    // Bridges that are thin adapters over a C library declare that library's
+    // symbols without linking them. A bridge reaches `planned_link_libraries`
+    // either because the program uses its surface (its prelude's `extern` block
+    // or a `BuiltinRequirement::Bridge`) or because `--with-<name>` forces it,
+    // and in both cases the final link resolves the library from the project's
+    // managed native package instead of failing on undefined symbols.
+    // `crate::linker::native_packages` owns the bridge-to-package table and its
+    // link order; `--print-capabilities` reports the same table.
     native_requirements.extend(
         crate::linker::native_packages_for_libraries(&planned_link_libraries)
             .into_iter()

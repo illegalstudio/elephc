@@ -232,6 +232,17 @@ elephc native add libxml2
 elephc app.php --with-xml
 ```
 
+`--with-tidy` has the same shape. The `elephc_tidy` archive carries the
+`tidy` / `tidyNode` surface, and its parser is libtidy itself, so the final link
+also needs the `libtidy` package's `libtidy.a`, declared and installed with
+`elephc native add libtidy`. Auto-detected tidy use requires the package just
+the same; the flag only adds the force-link and the prelude injection.
+
+```bash
+elephc native add libtidy
+elephc app.php --with-tidy
+```
+
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
 mode, which owns the program entry point). An unknown capability name is
 rejected with the list of valid names. Forcing a bridge increases binary size,
@@ -242,9 +253,9 @@ installed or versioned by `elephc native`. A bridge or runtime-capability flag
 may require a separately declared managed package: `--with-regex` requires
 `pcre2`, `--with-curl` requires `curl` (which declares `libssh2`, `nghttp2`,
 `openssl` and `zlib`), `--with-mbstring` requires `oniguruma` and `pcre2`, and `--with-xml`
-requires `libxml2`. `--with-gmp` requires `gmp`, `--with-fileinfo` requires
-`libmagic`, and `--with-openssl` requires `openssl-crypto` (with its zlib
-dependency). Ordinary mbstring and opaque eval use the contract-owned
+requires `libxml2`. `--with-tidy` requires `libtidy`, `--with-gmp` requires `gmp`,
+`--with-fileinfo` requires `libmagic`, and `--with-openssl` requires
+`openssl-crypto` (with its zlib dependency). Ordinary mbstring and opaque eval use the contract-owned
 default MIME matcher without PCRE2. Custom MIME expressions in opaque eval need
 the complete `--with-mbstring` capability. These flags do not
 install the packages. Composer dependencies are

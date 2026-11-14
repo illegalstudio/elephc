@@ -52,6 +52,7 @@ mod oniguruma;
 mod openssl_native;
 mod projects;
 pub(crate) mod xml_native;
+pub(crate) mod tidy_native;
 
 pub(crate) use platform::*;
 pub(crate) use runner::*;
@@ -76,3 +77,4 @@ pub(crate) use xml_native::{
     skip_without_xml_native, xml_native_archives, xml_native_package, XmlNativePackage,
     XML_APPLE_LIBRARIES, XML_NATIVE_ARCHIVES, XML_NATIVE_PACKAGE,
 };
+pub(crate) use tidy_native::skip_without_tidy_native;
