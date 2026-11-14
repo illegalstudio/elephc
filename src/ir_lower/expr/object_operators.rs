@@ -347,7 +347,8 @@ pub(super) fn lower_object_cast(
         crate::types::object_operators::cast_method(class, cast)?;
         return Some(emit_cast_method(ctx, class, cast, value, expr));
     }
-    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+    if !matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && !(super::checked_cast::active(ctx, target) && can_contain_object(&ty)) {
         return None;
     }
     let mut class_names: Vec<String> = ctx.classes.keys().cloned().collect();

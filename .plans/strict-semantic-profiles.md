@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 52 (this commit), following `ec3e9e0feb`. Issue:
+Verified through step 65 (this commit), following `188304e3f4`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -1152,6 +1152,18 @@ The focused checks for each verified commit passed with both optimizer settings
 where relevant, plus ownership/heap evidence for new failure paths. No full local
 suite, push or PR has been requested or performed.
 
+### Broad native cast domains
+
+Step65 admits generic object, interface and nullable/union source domains to the
+same checked native cast dispatch. Known concrete classes without a reviewed
+numeric projection remain compile diagnostics. Unsupported runtime values in a
+partial nominal domain throw TypeError before conversion. The frontend helper
+preparing real GMP/XML/DOM declarations is shared by the independent regressions.
+Six selected-profile checker/EIR tests cover the complete target matrix and known
+invalid inputs. Two managed-native bundles exercise generic object, interface,
+nullable, union and first-class calls with both optimizer settings, exact integer
+limits, failed conversion, caller preservation and clean heaps.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1234,4 +1246,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 61 | `31ffb78d5b` | feat(strict): share exact checked integer radix kernels |
 | 62 | `7977298569` | feat(strict): share checked builtin numeric cast contracts |
 | 63 | `98ae35e13c` | feat(strict): check settype before reference writeback |
-| 64 | this commit | feat(strict): validate original native object cast values |
+| 64 | `188304e3f4` | feat(strict): validate original native object cast values |
+| 65 | this commit | feat(strict): check broad native object cast domains |

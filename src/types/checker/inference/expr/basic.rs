@@ -441,7 +441,7 @@ impl Checker {
         target: &crate::parser::ast::CastType, ty: &PhpType, span: crate::span::Span) -> Result<(), CompileError> {
         if crate::semantics::conversions::checked_casts(self.semantic_profile, source)
             && matches!(target, crate::parser::ast::CastType::Int | crate::parser::ast::CastType::Float)
-            && !checked_numeric_cast_possible(ty, &self.classes, target) {
+            && !checked_numeric_cast_possible(ty, &self.classes, &self.interfaces, target) {
             return Err(CompileError::new(span, elephc_semantics::numeric_cast::NumericCastFailure::UnsupportedKind.message()));
         }
         Ok(())
@@ -450,11 +450,13 @@ impl Checker {
 
 /// Keeps known scalar and reviewed object domains distinct from dynamically guarded alternatives.
 fn checked_numeric_cast_possible(ty: &PhpType, classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
     target: &crate::parser::ast::CastType) -> bool {
     match ty {
         PhpType::Int | PhpType::Narrow(_) | PhpType::Float | PhpType::Bool | PhpType::False
         | PhpType::Void | PhpType::Never | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar => true,
-        PhpType::Union(members) => members.iter().any(|member| checked_numeric_cast_possible(member, classes, target)),
+        PhpType::Union(members) => members.iter().any(|member| checked_numeric_cast_possible(member, classes, interfaces, target)),
+        PhpType::Object(name) if name.is_empty() || interfaces.contains_key(name) => true,
         PhpType::Object(_) => {
             let cast = if *target == crate::parser::ast::CastType::Int { crate::types::object_operators::ObjectCast::Int }
                 else { crate::types::object_operators::ObjectCast::Float };

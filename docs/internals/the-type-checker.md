@@ -269,6 +269,9 @@ original numeric text through `ClassOperators::checked_numeric_source`, a final
 internal adapter independent of public `__toString` overrides. The same checked
 scalar helper validates that text before a legacy numeric adapter can narrow it.
 Explicit class float adapters retain their rounding contract after that proof.
+Broad `object`, interface and nullable/union input domains retain runtime native
+dispatch. A concrete class with no reviewed numeric contract stays a compile
+diagnostic; an unsupported value within a broad domain raises TypeError.
 A bounded decimal digit parser preserves exact
 integer strings at runtime, and native float-to-int checks precede truncation.
 The eval walker and VM use the same neutral cast kernel through their shared

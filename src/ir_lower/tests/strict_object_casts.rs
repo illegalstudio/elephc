@@ -13,6 +13,11 @@ use elephc_semantics::{SemanticProfile, StrictFeature};
 /// Prepares the real native declarations with their ordinary cross-prelude dependencies.
 fn program() -> (crate::parser::ast::Program, crate::optimize::reachability::PreludeInventory) {
     let source = "<?php function gmpCast(GMP $v): int { return (int)$v; } function gmpFloat(GMP $v): float { return floatval($v); } function xmlCast(SimpleXMLElement $v): float { return floatval($v); } function erasedCast(mixed $v): int { return intval($v); } class StrictXmlCast extends SimpleXMLElement { public function __toString(): string { return '0'; } } function inheritedCast(StrictXmlCast $v): int { return (int)$v; }";
+    prepare(source)
+}
+
+/// Shares native frontend preparation with independent cast-domain regressions.
+pub(super) fn prepare(source: &str) -> (crate::parser::ast::Program, crate::optimize::reachability::PreludeInventory) {
     let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
     let mut inventory = crate::optimize::reachability::PreludeInventory::new();
     let program = crate::core_prelude::inject_if_used(program, &mut inventory);
