@@ -195,3 +195,48 @@ fn test_posix_eval_builtins_share_bridge_state() {
         "3|notty|25|notty|9|euid|pgrp|alive|No such process|value-error|9"
     );
 }
+
+/// Keeps a store observed only by the catch block alive across a throwing `posix_isatty()`.
+#[test]
+fn test_posix_isatty_closed_stream_throw_preserves_catch_visible_store() {
+    let out = compile_and_run(
+        r#"<?php
+        function probe($file): int {
+            $state = 1;
+            try {
+                $state = 2;
+                posix_isatty($file);
+                $state = 3;
+            } catch (TypeError $error) {
+                return $state;
+            }
+            return $state;
+        }
+        $path = tempnam(sys_get_temp_dir(), 'posix');
+        $file = fopen($path, 'w');
+        fclose($file);
+        echo probe($file);
+        unlink($path);"#,
+    );
+    assert_eq!(out, "2");
+}
+
+/// Probes an open socket listener inside `eval()` instead of reporting it as closed.
+///
+/// The probe errno is ENOTTY on Linux and ENXIO on Darwin, so only "not EBADF" is asserted.
+#[test]
+fn test_posix_isatty_eval_probes_socket_listener() {
+    let out = compile_and_run(
+        r#"<?php
+        echo eval('
+            $server = stream_socket_server("tcp://127.0.0.1:0");
+            try { $result = posix_isatty($server) ? "tty" : "notty"; }
+            catch (TypeError $error) { $result = $error->getMessage(); }
+            $errno = posix_get_last_error();
+            $result .= $errno !== 0 && $errno !== 9 ? ":probed" : ":errno-" . $errno;
+            fclose($server);
+            return $result;
+        ');"#,
+    );
+    assert_eq!(out, "notty:probed");
+}
