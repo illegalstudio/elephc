@@ -800,14 +800,23 @@ fn received_rights_fd(message: &libc::msghdr, capacity: usize) -> io::Result<Raw
             "missing SCM_RIGHTS descriptor",
         ));
     }
-    Ok(unsafe { std::ptr::read_unaligned(libc::CMSG_DATA(header).cast::<RawFd>()) })
+    let fd = unsafe { std::ptr::read_unaligned(libc::CMSG_DATA(header).cast::<RawFd>()) };
+    if fd < 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid SCM_RIGHTS descriptor",
+        ));
+    }
+    Ok(fd)
 }
 
 /// Receives one descriptor and its id from a Unix datagram channel.
 #[cfg(target_vendor = "apple")]
 fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
     // If fd 0 is free, the kernel may install a received descriptor there;
-    // otherwise a zero slot can only be zero padding.
+    // otherwise a zero slot can only be zero padding. This probe is a
+    // snapshot: stdin is normally open in a worker, so the race only exists
+    // if another thread reopens fd 0 while a malformed datagram is handled.
     let fd0_was_free = unsafe { libc::fcntl(0, libc::F_GETFD) } == -1;
     // One byte beyond the id makes an over-long datagram visible in `result`
     // even if the kernel does not report MSG_TRUNC.
@@ -1526,6 +1535,54 @@ mod tests {
         fds
     }
 
+    /// Asserts that a pipe read end reaches EOF within a bounded window.
+    ///
+    /// A fork in a parallel test can briefly inherit a write end, so poll
+    /// briefly instead of trusting one non-blocking read.
+    #[cfg(target_vendor = "apple")]
+    fn assert_pipe_eof(fd: RawFd, context: &str) {
+        assert_eq!(
+            unsafe { libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK) },
+            0
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let mut entry = libc::pollfd {
+                fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            let timeout = remaining.as_millis().min(i32::MAX as u128) as i32;
+            let ready = unsafe { libc::poll(&mut entry, 1, timeout) };
+            if ready < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                panic!("{context}: poll failed: {error}");
+            }
+            if ready == 0 {
+                assert!(Instant::now() < deadline, "{context}: pipe never reached EOF");
+                continue;
+            }
+            let mut byte = [0u8; 1];
+            let read = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), byte.len()) };
+            if read == 0 {
+                return;
+            }
+            if read < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::WouldBlock {
+                    assert!(Instant::now() < deadline, "{context}: pipe never reached EOF");
+                    continue;
+                }
+                panic!("{context}: read failed: {error}");
+            }
+            panic!("{context}: pipe still contains data");
+        }
+    }
+
     /// A per-worker socket can bind an ephemeral port and reports it back.
     #[test]
     fn reuseport_listener_binds_an_ephemeral_port() {
@@ -1733,16 +1790,7 @@ mod tests {
         unsafe { libc::close(pipe_fds[1]) };
         let error = recv_fd(&receiver).expect_err("a long payload must be rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(
-            unsafe { libc::fcntl(pipe_fds[0], libc::F_SETFL, libc::O_NONBLOCK) },
-            0
-        );
-        let mut byte = [0u8; 1];
-        assert_eq!(
-            unsafe { libc::read(pipe_fds[0], byte.as_mut_ptr().cast(), 1) },
-            0,
-            "the descriptor delivered by recvmsg was not closed"
-        );
+        assert_pipe_eof(pipe_fds[0], "the descriptor delivered by recvmsg was not closed");
         unsafe { libc::close(pipe_fds[0]) };
     }
 
@@ -1869,6 +1917,28 @@ mod tests {
         }
     }
 
+    /// A negative rights slot is rejected instead of handed to the caller.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn synthetic_negative_descriptor_is_rejected() {
+        let mut control = ControlBuffer([0u8; 64]);
+        let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
+        let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+        message.msg_control = control.0.as_mut_ptr().cast();
+        message.msg_controllen = space as _;
+        let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+        assert!(!header.is_null());
+        unsafe {
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+            std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), -1);
+        }
+        let error = received_rights_fd(&message, control.0.len())
+            .expect_err("a negative rights slot");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
     /// Multiple SCM_RIGHTS cmsgs are all walked and closed.
     #[cfg(target_vendor = "apple")]
     #[test]
@@ -1898,13 +1968,7 @@ mod tests {
         }
         unsafe { close_received_fds(&message, control.0.len(), None, false) };
         for fd in [first[0], second[0]] {
-            assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK) }, 0);
-            let mut byte = [0u8; 1];
-            assert_eq!(
-                unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) },
-                0,
-                "a descriptor from a multi-cmsg buffer was not closed"
-            );
+            assert_pipe_eof(fd, "a descriptor from a multi-cmsg buffer was not closed");
             unsafe { libc::close(fd) };
         }
         assert!(unsafe { libc::fcntl(unrelated[1], libc::F_GETFD) } >= 0);
@@ -1935,16 +1999,7 @@ mod tests {
             // valid first slot is still closed.
             close_received_fds(&message, control.0.len(), None, false);
         }
-        assert_eq!(
-            unsafe { libc::fcntl(pipe[0], libc::F_SETFL, libc::O_NONBLOCK) },
-            0
-        );
-        let mut byte = [0u8; 1];
-        assert_eq!(
-            unsafe { libc::read(pipe[0], byte.as_mut_ptr().cast(), 1) },
-            0,
-            "the valid descriptor in an overlong cmsg was not closed"
-        );
+        assert_pipe_eof(pipe[0], "the valid descriptor in an overlong cmsg was not closed");
         assert!(unsafe { libc::fcntl(unrelated[1], libc::F_GETFD) } >= 0);
         unsafe {
             libc::close(pipe[0]);
@@ -1985,16 +2040,7 @@ mod tests {
         unsafe { libc::close(pipe_fds[1]) };
         let error = recv_fd(&receiver).expect_err("an empty descriptor datagram");
         assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
-        assert_eq!(
-            unsafe { libc::fcntl(pipe_fds[0], libc::F_SETFL, libc::O_NONBLOCK) },
-            0
-        );
-        let mut byte = [0u8; 1];
-        assert_eq!(
-            unsafe { libc::read(pipe_fds[0], byte.as_mut_ptr().cast(), 1) },
-            0,
-            "the zero-length datagram leaked its descriptor"
-        );
+        assert_pipe_eof(pipe_fds[0], "the zero-length datagram leaked its descriptor");
         unsafe { libc::close(pipe_fds[0]) };
     }
 
@@ -2071,20 +2117,14 @@ mod tests {
             io::Error::last_os_error().raw_os_error(),
             Some(libc::EBADF)
         );
-        assert_eq!(
-            unsafe { libc::fcntl(pipe_fds[0], libc::F_SETFL, libc::O_NONBLOCK) },
-            0
-        );
-        let mut byte = [0u8; 1];
-        assert_eq!(
-            unsafe { libc::read(pipe_fds[0], byte.as_mut_ptr().cast(), 1) },
-            0,
-            "the descriptor installed as fd 0 was not closed"
-        );
+        assert_pipe_eof(pipe_fds[0], "the descriptor installed as fd 0 was not closed");
         unsafe { libc::close(pipe_fds[0]) };
     }
 
     /// The resource-exhaustion backoff releases the fork gate before waiting.
+    ///
+    /// The accept loop delegates every resource-exhaustion error to this
+    /// helper; inlining the sleep at the call site would reintroduce #2356.
     #[cfg(target_vendor = "apple")]
     #[test]
     fn resource_backoff_releases_the_fork_gate_before_waiting() {
@@ -2149,16 +2189,7 @@ mod tests {
             std::ptr::write_unaligned(libc::CMSG_DATA(tail_header).cast::<RawFd>(), unrelated[1]);
             close_received_fds(&message, guarded.control.0.len(), None, false);
         }
-        assert_eq!(
-            unsafe { libc::fcntl(pipe[0], libc::F_SETFL, libc::O_NONBLOCK) },
-            0
-        );
-        let mut byte = [0u8; 1];
-        assert_eq!(
-            unsafe { libc::read(pipe[0], byte.as_mut_ptr().cast(), 1) },
-            0,
-            "the helper did not close the received write end"
-        );
+        assert_pipe_eof(pipe[0], "the helper did not close the received write end");
         assert!(
             unsafe { libc::fcntl(unrelated[1], libc::F_GETFD) } >= 0,
             "the helper followed the over-reported control length into the tail"
@@ -2214,16 +2245,7 @@ mod tests {
         assert_eq!(id, u64::from_ne_bytes(payload));
         assert!(unsafe { libc::fcntl(kept, libc::F_GETFD) } >= 0);
         // The second received write end must be closed; its read end is EOF.
-        assert_eq!(
-            unsafe { libc::fcntl(second[0], libc::F_SETFL, libc::O_NONBLOCK) },
-            0
-        );
-        let mut byte = [0u8; 1];
-        assert_eq!(
-            unsafe { libc::read(second[0], byte.as_mut_ptr().cast(), 1) },
-            0,
-            "the extra descriptor was leaked"
-        );
+        assert_pipe_eof(second[0], "the extra descriptor was leaked");
         unsafe {
             libc::close(kept);
             libc::close(first[0]);
