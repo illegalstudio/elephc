@@ -392,22 +392,12 @@ fn accept_loop(shared: Arc<SharedTcp>) {
                         Some(libc::EMFILE)
                         | Some(libc::ENFILE)
                         | Some(libc::ENOBUFS)
-                        | Some(libc::ENOMEM) => {
-                            // Resource exhaustion: log at most once per second
-                            // and back off before retrying.
-                            let now = Instant::now();
-                            if last_error_log.map_or(true, |last| {
-                                now.duration_since(last) >= Duration::from_secs(1)
-                            }) {
-                                eprintln!("elephc-web: accept failed: {error}");
-                                last_error_log = Some(now);
-                            }
-                            // Do not hold the fork gate through the backoff:
-                            // a worker respawn waiting on fork() must not be
-                            // delayed by fd or memory pressure.
-                            drop(_gate);
-                            std::thread::sleep(Duration::from_millis(50));
-                        }
+                        | Some(libc::ENOMEM) => backoff_after_accept_error(
+                            _gate,
+                            &error,
+                            &mut last_error_log,
+                            || std::thread::sleep(Duration::from_millis(50)),
+                        ),
                         _ => {
                             if shared.stop.load(Ordering::SeqCst) {
                                 break;
@@ -584,6 +574,28 @@ pub(crate) fn raise_worker_qos() {
         return;
     }
     set_user_initiated_qos();
+}
+
+/// Releases the fork gate, logs a rate-limited resource error, then backs off.
+///
+/// The gate must be dropped before the wait: a worker respawn blocked in
+/// `fork()` must not be delayed by fd or memory pressure.
+#[cfg(target_vendor = "apple")]
+fn backoff_after_accept_error(
+    gate: ForkGateGuard,
+    error: &io::Error,
+    last_error_log: &mut Option<Instant>,
+    wait: impl FnOnce(),
+) {
+    drop(gate);
+    let now = Instant::now();
+    if last_error_log.map_or(true, |last| {
+        now.duration_since(last) >= Duration::from_secs(1)
+    }) {
+        eprintln!("elephc-web: accept failed: {error}");
+        *last_error_log = Some(now);
+    }
+    wait();
 }
 
 /// Polls one descriptor for `events` and reports whether it is ready.
@@ -1598,6 +1610,28 @@ mod tests {
             libc::close(pipe_fds[0]);
             libc::close(pipe_fds[1]);
         }
+    }
+
+    /// The resource-exhaustion backoff releases the fork gate before waiting.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn resource_backoff_releases_the_fork_gate_before_waiting() {
+        install_fork_gate();
+        let gate = lock_fork_gate();
+        let (released, acquired) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            let _guard = lock_fork_gate();
+            let _ = released.send(());
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        let error = io::Error::from_raw_os_error(libc::EMFILE);
+        let mut last_error_log = None;
+        backoff_after_accept_error(gate, &error, &mut last_error_log, || {
+            acquired
+                .recv_timeout(Duration::from_millis(500))
+                .expect("the fork gate must be released before the backoff wait");
+        });
+        waiter.join().unwrap();
     }
 
     /// A truncated datagram closes any descriptor already installed by recvmsg.
