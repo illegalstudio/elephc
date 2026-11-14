@@ -49,12 +49,8 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
         let offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
         let offset = eval_preg_offset_value(offset, values)?;
         let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
-            let flags = eval_preg_match_all_require_supported_flags(flags, context, values)?;
-            let (result, matches_array) = eval_preg_match_all_capture_result(
-                pattern.value, subject.value, flags, offset, values,
-            )?;
-            values.release(matches_array)?;
-            return Ok(result);
+            eval_preg_match_all_require_supported_flags(flags, context, values)?;
+            return eval_preg_match_all_result(pattern.value, subject.value, offset, values);
         };
         let target = matches
             .ref_target
@@ -69,15 +65,21 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_all_call(
     })
 }
 
-/// Counts all non-overlapping regex matches in one subject string.
+/// Counts all non-overlapping regex matches from the PHP `$offset` without building captures.
+///
+/// An offset past the end returns `false`, as PHP does.
 pub(in crate::interpreter) fn eval_preg_match_all_result(
     pattern: RuntimeCellHandle,
     subject: RuntimeCellHandle,
+    offset: i64,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let regex = eval_preg_regex(pattern, values)?;
     let subject = values.string_bytes(subject)?;
-    let count = regex.captures_iter(&subject).count();
+    let Some(start) = eval_preg_start_offset(offset, subject.len()) else {
+        return values.bool_value(false);
+    };
+    let count = regex.captures_iter_from(&subject, start).count();
     values.int(i64::try_from(count).map_err(|_| EvalStatus::RuntimeFatal)?)
 }
 
@@ -223,7 +225,7 @@ pub(in crate::interpreter) fn eval_preg_match_all_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
-        [pattern, subject] => eval_preg_match_all_result(*pattern, *subject, values),
+        [pattern, subject] => eval_preg_match_all_result(*pattern, *subject, 0, values),
         [pattern, subject, _matches] => {
             values.warning(
                 "preg_match_all(): Argument #3 ($matches) must be passed by reference, value given",

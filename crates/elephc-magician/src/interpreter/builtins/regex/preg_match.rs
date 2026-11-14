@@ -50,10 +50,7 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_call(
         let flags = eval_preg_match_flags(flags, context, values)?;
         let offset = eval_preg_offset_value(offset, values)?;
         let Some(matches) = optional_evaluated_ref_arg(&bound, 2) else {
-            let (result, matches_array) =
-                eval_preg_match_capture_result(pattern.value, subject.value, flags, offset, values)?;
-            values.release(matches_array)?;
-            return Ok(result);
+            return eval_preg_match_result(pattern.value, subject.value, offset, values);
         };
         let target = matches
             .ref_target
@@ -64,6 +61,23 @@ pub(in crate::interpreter) fn eval_builtin_preg_match_call(
         eval_write_preg_matches_target(&target, matches_array, context, values)?;
         Ok(result)
     })
+}
+
+/// Returns whether one regex matches from the PHP `$offset` without building captures.
+///
+/// An offset past the end returns `false`, as PHP does.
+pub(in crate::interpreter) fn eval_preg_match_result(
+    pattern: RuntimeCellHandle,
+    subject: RuntimeCellHandle,
+    offset: i64,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let regex = eval_preg_regex(pattern, values)?;
+    let subject = values.string_bytes(subject)?;
+    let Some(start) = eval_preg_start_offset(offset, subject.len()) else {
+        return values.bool_value(false);
+    };
+    values.int(i64::from(regex.captures_at(&subject, start).is_some()))
 }
 
 /// Returns the match flag plus PHP `$matches` capture array for one regex search.
@@ -136,11 +150,12 @@ pub(in crate::interpreter) fn eval_preg_match_values_result(
         [pattern, subject, rest @ ..] if rest.len() <= 3 => (*pattern, *subject, rest),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    if !rest.is_empty() {
-        values.warning(
-            "preg_match(): Argument #3 ($matches) must be passed by reference, value given",
-        )?;
+    if rest.is_empty() {
+        return eval_preg_match_result(pattern, subject, 0, values);
     }
+    values.warning(
+        "preg_match(): Argument #3 ($matches) must be passed by reference, value given",
+    )?;
     let flags = eval_preg_match_flags(rest.get(1).copied(), context, values)?;
     let offset = eval_preg_offset_value(rest.get(2).copied(), values)?;
     let (matched, matches) =
