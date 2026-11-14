@@ -1020,7 +1020,9 @@ function getComputedGlobal(string $name) {
     return $GLOBALS[$name] ?? null;
 }
 $counter = 1;
-$key = 'counter' . ($argc > 0 ? '' : 'x');
+// Select a persistent literal at run time: the computed-key path is still dynamic, without
+// depending on a concatenation scratch buffer surviving the call boundary.
+$key = $argc > 0 ? 'counter' : 'counterx';
 var_dump($GLOBALS[$key]);
 setComputedGlobal($key, 7);
 var_dump($counter, getComputedGlobal($key), isset($GLOBALS[$key]));
