@@ -110,7 +110,7 @@ impl ReturnBoundaryFacts {
 }
 
 /// Resolves only representations whose syntax is authoritative before checker specialization.
-fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
+pub(super) fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
     match hint {
         Some(TypeExpr::Int) => PhpType::Int,
         Some(TypeExpr::Float) => PhpType::Float,

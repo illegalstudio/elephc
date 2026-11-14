@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 43 (this commit), following `4fcbe3e803`. Issue:
+Verified through step 44 (this commit), following `6d06bfe2db`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -567,6 +567,29 @@ No eval cache format, runtime ABI or public admission change is needed. Local-fl
 joins, default/assignment/property/reference contracts, builtin folds and complete
 host boundaries remain active completion work.
 
+### Verified declared scalar initializer contracts
+
+Step44 validates original scalar initializer kinds before weak declaration
+compatibility and before EIR storage adaptation. It reuses the parameter/return
+implicit conversion plan and catchable TypeError guard, preserving an earlier
+binding on failure. Nullable integer storage uses the existing tagged-scalar
+adapter after validation, with the replaced owning Mixed cell released. The
+runtime fallback now shares the same target-aware adapter as call argument
+materialization instead of carrying a narrower duplicate conversion switch.
+AST effects and exception summaries retain initializer TypeError independently
+of RHS effects, including a pure local read in a same-frame try/catch.
+
+The original native probe was red on step43: invalid kinds passed, a string
+payload disappeared and a float was corrupted. The completed regressions cover
+known invalid sources, explicit conversions, all five emitters, exact large
+integers, F64 values, owned strings, bool, nullable and false/null unions. Native
+isolated nullable cases and the combined program verify clean ownership and
+both full AST/EIR optimization settings. Untyped numeric branches already kept
+both original kinds and required no speculative flow rewrite. Subsequent stores,
+conditional binding contracts, defaults, properties and references remain active.
+The four parameter/return frontend controls and both native controls pass.
+Compiler build, architecture gate, assembly comments and diff hygiene pass.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -677,4 +700,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 40 | `e78091ef0c` | feat(strict): guard original scalar parameter contracts |
 | 41 | `6ba184fab7` | feat(strict): preserve declared scalar return contracts |
 | 42 | `4fcbe3e803` | feat(strict): preserve inferred scalar return alternatives |
-| 43 | this commit | feat(strict): carry checked conditional closure result contracts |
+| 43 | `6d06bfe2db` | feat(strict): carry checked conditional closure result contracts |
+| 44 | this commit | feat(strict): enforce declared scalar initializer contracts |

@@ -59,6 +59,13 @@ pub(super) fn implicit_binding_may_throw(expr: &crate::parser::ast::Expr) -> boo
         | ExprKind::NewDynamicObject { .. } | ExprKind::NewScopedObject { .. })
 }
 
+/// A declaration can reject its source independently of operand effects or retirement.
+pub(super) fn implicit_initializer_may_throw(stmt: &crate::parser::ast::Stmt) -> bool {
+    let crate::parser::ast::StmtKind::TypedAssign { type_expr, .. } = &stmt.kind else { return false; };
+    enabled(StrictFeature::Coercions) && crate::semantics::conversions::scalar_contract(
+        &super::return_boundaries::parameter_type(Some(type_expr))).is_some()
+}
+
 /// Tests one policy while keeping the immutable profile owned by the caller.
 pub(super) fn enabled(feature: StrictFeature) -> bool {
     SOURCE_MODE.with(|slot| slot.get() != SourceMode::Internal)

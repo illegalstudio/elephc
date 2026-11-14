@@ -1429,6 +1429,11 @@ pub(super) fn check_typed_assign(
             return Err(error);
         }
     };
+    if let Err(error) = checker.require_noncoercive_value_type(
+        &declared_ty, &value_ty, checker.semantic_source_mode, value.span, &format!("Typed local ${name}")) {
+        poison_unbound_local(env, name);
+        return Err(error);
+    }
     // A runtime-named constructor has no statically known class, so inference keeps its result
     // as Mixed. The expression still either produces an object or throws before assignment, which
     // is sufficient for the non-nominal `object` contract. Do not extend this exception to an

@@ -109,6 +109,7 @@ pub(crate) use property_array_writes::{
 };
 use metadata_control::*;
 use return_coercions::*;
+pub(super) use return_coercions::coerce_to_tagged_scalar;
 use static_property_helpers::*;
 
 pub(crate) use control_exit::{

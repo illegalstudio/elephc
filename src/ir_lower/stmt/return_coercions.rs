@@ -204,7 +204,7 @@ pub(super) fn coerce_return_scalar_source(
 }
 
 /// Coerces an integer-or-null value into the two-word tagged-scalar return shape.
-pub(super) fn coerce_to_tagged_scalar(
+pub(in crate::ir_lower) fn coerce_to_tagged_scalar(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     span: Option<Span>,

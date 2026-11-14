@@ -116,6 +116,9 @@ pub(super) fn stmt_effect(stmt: &Stmt) -> Effect {
         StmtKind::Assign { name, value }
         | StmtKind::TypedAssign { name, value, .. } => {
             let effect = expr_effect(value).with_side_effects();
+            let effect = if super::semantic_context::implicit_initializer_may_throw(stmt) {
+                effect.with_may_throw()
+            } else { effect };
             if is_reference_volatile(name) {
                 // A property-backed alias can validate or invoke Stringable callbacks.
                 effect.with_may_throw().with_writes_globals()

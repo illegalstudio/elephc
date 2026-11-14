@@ -2,7 +2,7 @@
 //! Enforces implicit scalar contracts before PHP conversions can erase original kinds.
 //!
 //! Called from:
-//! - EIR parameter and return value preparation.
+//! - EIR parameter, return and declared-local value preparation.
 //!
 //! Key details:
 //! - Physical boxing and unboxing remain legal after an exact value-kind check.
@@ -59,6 +59,13 @@ pub(super) fn implicit(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
 /// Extracts only a kind already accepted by the guard, preserving its PHP-visible value.
 pub(super) fn scalar_storage(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
     destination: &PhpType, span: Span) -> LoweredValue {
+    if crate::ir::IrType::from_php(&destination.codegen_repr()) == crate::ir::IrType::TaggedScalar {
+        let result = super::stmt::coerce_to_tagged_scalar(ctx, value, Some(span));
+        if result.value != value.value && ctx.value_is_owning_temporary(value) {
+            super::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return result;
+    }
     if !matches!(destination, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str)
         || value.ir_type == crate::ir::IrType::from_php(destination) { return value; }
     // The guarded identity still needs its full scalar ABI, including F64 and string pairs.

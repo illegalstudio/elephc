@@ -749,3 +749,5 @@ mod strict_inferred_returns;
 mod native_module;
 
 mod strict_conditional_results;
+
+mod strict_typed_initializers;

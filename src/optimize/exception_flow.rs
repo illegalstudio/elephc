@@ -679,6 +679,9 @@ impl ExceptionFlowAnalysis {
             // in THIS frame, so a same-frame catch can still see it.
             StmtKind::Assign { name, value }
             | StmtKind::TypedAssign { name, value, .. } => operand(value)
+                .combined(if super::semantic_context::implicit_initializer_may_throw(stmt) {
+                    ThrownTypes::exact("TypeError")
+                } else { ThrownTypes::default() })
                 .combined(overwrite())
                 .combined(if reference_write.unwrap_or_else(|| is_reference_volatile(name)) { ThrownTypes::unknown() }
                     else { ThrownTypes::default() }),
