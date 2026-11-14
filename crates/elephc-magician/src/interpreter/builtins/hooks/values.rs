@@ -294,7 +294,7 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StringPosition,
     /// Dispatches string search predicate builtins.
     StringSearch,
-    /// Dispatches `explode(...)` and `implode(...)`.
+    /// Dispatches `explode(...)`, `implode(...)` and its `join(...)` alias.
     StringSplitJoin,
     /// Dispatches stream boolean predicate builtins.
     StreamBoolPredicate,
@@ -684,6 +684,7 @@ impl EvalValuesHook {
             Self::StringSplitJoin => match name {
                 "explode" => eval_explode_declared_values_result(evaluated_args, values),
                 "implode" => eval_implode_declared_values_result(evaluated_args, context, values),
+                "join" => eval_join_declared_values_result(evaluated_args, context, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StreamBoolPredicate => match name {

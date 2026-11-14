@@ -143,6 +143,159 @@ return function_exists("implode");"#,
     assert_eq!(values.output, "3:a:b::a|b|:x-2-1-:n:p/q:1");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Invalid array operands throw through direct, named, and evaluated builtin dispatch.
+#[test]
+fn execute_program_implode_array_type_errors_are_catchable() {
+    let program = parse_fragment(br#"
+class ImplodeArgumentObject {}
+foreach ([null, 12, 1.5, false, true, "text", new ImplodeArgumentObject(), $handle] as $item) {
+    try { implode(",", $item); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+    try { implode(array: $item, separator: ","); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+    try { call_user_func_array("implode", [",", $item]); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+return true;
+"#).expect("parse implode TypeError fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let handle = values.alloc(FakeValue::Resource(6));
+    scope.set("handle".to_string(), handle, ScopeCellOwnership::Borrowed);
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("catch implode errors");
+
+    let mut expected = String::new();
+    for given in ["null", "int", "float", "false", "true", "string", "ImplodeArgumentObject", "resource"] {
+        let message = if given == "null" {
+            "implode(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\n".to_string()
+        } else {
+            format!("implode(): Argument #2 ($array) must be of type ?array, {given} given\n")
+        };
+        expected.push_str(&message.repeat(3));
+    }
+    assert_eq!(values.output, expected);
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// One-argument joins use an empty separator and diagnose the first overload parameter.
+#[test]
+fn execute_program_implode_one_argument_overload() {
+    let program = parse_fragment(br#"
+echo implode(["a", "b"]), "|", call_user_func("implode", ["c", "d"]), "|";
+try { implode(12); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { call_user_func("implode", $handle); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+class ImplodeSingleArgumentObject {}
+try { implode(new ImplodeSingleArgumentObject()); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+class ImplodeSingleArgumentStringable { public function __toString(): string { echo "cast|"; return "-"; } }
+try { implode(new ImplodeSingleArgumentStringable()); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { call_user_func("implode", new ImplodeSingleArgumentStringable()); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+return true;
+"#).expect("parse one-argument implode fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let handle = values.alloc(FakeValue::Resource(6));
+    scope.set("handle".to_string(), handle, ScopeCellOwnership::Borrowed);
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute implode overload");
+
+    assert_eq!(values.output, concat!(
+        "ab|cd|",
+        "implode(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\n",
+        "implode(): Argument #1 ($separator) must be of type array|string, resource given\n",
+        "implode(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\n",
+        "implode(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\n",
+        "cast|implode(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\n",
+    ));
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// `join()` shares implode's join but reports its own name and skips the direct-call specialization.
+#[test]
+fn execute_program_join_alias_reports_called_name() {
+    let program = parse_fragment(br#"
+class JoinArgumentObject {}
+class JoinArgumentStringable { public function __toString(): string { echo "cast|"; return "-"; } }
+echo join(["a", "b"]), "|", join(",", ["c", "d"]), "|", call_user_func("join", ["e", "f"]), "|";
+echo join(array: ["g", "h"], separator: "-"), "|", join(separator: ["i", "j"]), "\n";
+foreach ([new JoinArgumentObject(), $handle, 12, null, new JoinArgumentStringable()] as $item) {
+    try { join($item); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+    try { call_user_func("join", $item); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+}
+try { join(",", 12); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { join(",", null); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+try { call_user_func_array("join", [",", new JoinArgumentObject()]); } catch (TypeError $error) { echo $error->getMessage(), "\n"; }
+return true;
+"#).expect("parse join alias fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    let handle = values.alloc(FakeValue::Resource(6));
+    scope.set("handle".to_string(), handle, ScopeCellOwnership::Borrowed);
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute join alias");
+
+    let overload = "join(): If argument #1 ($separator) is of type string, argument #2 ($array) must be of type array, null given\n";
+    let mut expected = String::from("ab|c,d|ef|g-h|ij\n");
+    expected.push_str(&"join(): Argument #1 ($separator) must be of type array|string, JoinArgumentObject given\n".repeat(2));
+    expected.push_str(&"join(): Argument #1 ($separator) must be of type array|string, resource given\n".repeat(2));
+    expected.push_str(&overload.repeat(4));
+    expected.push_str(&format!("cast|{overload}").repeat(2));
+    expected.push_str("join(): Argument #2 ($array) must be of type ?array, int given\n");
+    expected.push_str(overload);
+    expected.push_str("join(): Argument #2 ($array) must be of type ?array, JoinArgumentObject given\n");
+    assert_eq!(values.output, expected);
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Eval-declared `__toString()` methods render implode/join separators and elements in PHP order.
+#[test]
+fn execute_program_implode_converts_eval_stringable_operands() {
+    let program = parse_fragment(br#"
+class JoinEvalStringable {
+    public function __construct(private string $text) {}
+    public function __toString(): string { echo "[", $this->text, "]"; return $this->text; }
+}
+class JoinEvalThrowingStringable { public function __toString(): string { throw new RuntimeException("boom"); } }
+echo implode(",", [new JoinEvalStringable("a"), "x", new JoinEvalStringable("b")]), "\n";
+echo join(new JoinEvalStringable("-"), ["p", new JoinEvalStringable("q")]), "\n";
+echo join([new JoinEvalStringable("j"), 1]), "\n";
+try { echo join(",", ["k", new JoinEvalThrowingStringable()]); } catch (RuntimeException $e) { echo "caught:", $e->getMessage(), "\n"; }
+return true;
+"#).expect("parse eval stringable join fixture");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute stringable join");
+
+    assert_eq!(values.output, "[a][b]a,x,b\n[-][q]p-q\n[j]j1\ncaught:boom\n");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Native argument guards can inspect inherited eval stringability without conversion effects.
+#[test]
+fn implode_object_stringability_probe_does_not_invoke_to_string() {
+    let program = parse_fragment(br#"
+class ImplodeProbeStringable {
+    public function __toString(): string { echo "converted"; return "-"; }
+}
+class ImplodeProbeChild extends ImplodeProbeStringable {}
+class ImplodeProbePlain {}
+$stringable = new ImplodeProbeChild();
+$plain = new ImplodeProbePlain();
+"#).expect("parse eval stringability fixture");
+    let mut context = ElephcEvalContext::new();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program_with_context(&mut context, &program, &mut scope, &mut values)
+        .expect("declare eval probe objects");
+
+    for (name, expected) in [("stringable", true), ("plain", false)] {
+        let object = scope.visible_cell(name).expect("eval object remains visible");
+        assert_eq!(
+            execute_context_object_has_to_string(&mut context, object.borrowed(), &mut values),
+            Ok(expected),
+        );
+    }
+    assert_eq!(values.output, "");
+}
 /// Verifies eval `str_split()` builds indexed arrays of fixed-width chunks.
 #[test]
 fn execute_program_dispatches_str_split_builtin() {
