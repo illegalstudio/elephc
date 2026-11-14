@@ -270,7 +270,11 @@ pub(crate) fn collect(
         .get("sites")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| "debug metadata has no sites table".to_string())?;
-    let mut per_source: BTreeMap<u64, BTreeMap<u64, u64>> = BTreeMap::new();
+    // Source -> line -> function -> greatest guard count. A line can have one
+    // guard per block now (loop conditions and updates included), so summing
+    // every site would multiply the real line count. Take the greatest guard
+    // within each function, then sum the functions that execute that line.
+    let mut per_source: BTreeMap<u64, BTreeMap<u64, BTreeMap<u64, u64>>> = BTreeMap::new();
     for site in sites {
         let Some(id) = site.get("id").and_then(serde_json::Value::as_u64) else {
             continue;
@@ -281,12 +285,19 @@ pub(crate) fn collect(
         let Some(line) = site.get("line").and_then(serde_json::Value::as_u64) else {
             continue;
         };
+        let function = site
+            .get("function_id")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(u64::MAX - id);
         let hits = counts.get(&(id as u32)).copied().unwrap_or(0);
-        *per_source
+        let entry = per_source
             .entry(source_id)
             .or_default()
             .entry(line)
-            .or_insert(0) += hits;
+            .or_default()
+            .entry(function)
+            .or_insert(0);
+        *entry = (*entry).max(hits);
     }
     let mut sources_out: Vec<SourceCoverage> = per_source
         .into_iter()
@@ -298,7 +309,10 @@ pub(crate) fn collect(
             Some(SourceCoverage {
                 source_id,
                 path,
-                lines: lines.into_iter().collect(),
+                lines: lines
+                    .into_iter()
+                    .map(|(line, functions)| (line, functions.values().sum()))
+                    .collect(),
             })
         })
         .collect();
@@ -1084,10 +1098,10 @@ mod tests {
                 {"id": 1, "path": "lib.php"}
             ],
             "sites": [
-                {"id": 1, "source_id": 0, "line": 2},
-                {"id": 2, "source_id": 0, "line": 2},
-                {"id": 3, "source_id": 0, "line": 3},
-                {"id": 4, "source_id": 1, "line": 9}
+                {"id": 1, "function_id": 1, "source_id": 0, "line": 2},
+                {"id": 2, "function_id": 2, "source_id": 0, "line": 2},
+                {"id": 3, "function_id": 1, "source_id": 0, "line": 3},
+                {"id": 4, "function_id": 3, "source_id": 1, "line": 9}
             ],
             "branches": [
                 {"source_id": 0, "line": 2, "column": 1, "then_site": 20, "else_site": 21},
