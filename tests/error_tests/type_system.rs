@@ -963,6 +963,55 @@ class Config {
     );
 }
 
+/// A deferred `->value` default is still checked once enum cases exist: a string-backed case's
+/// value is a string, so an `int` property rejects it.
+#[test]
+fn test_error_enum_case_value_default_type_mismatch() {
+    expect_error(
+        r#"<?php
+enum Keymap: string {
+    case Linux = 'linux';
+}
+class Settings {
+    public int $keymap = Keymap::Linux->value;
+}
+"#,
+        "Property Settings::$keymap default expects int, got string",
+    );
+}
+
+/// A pure enum case has no `->value`: the deferred default reports the missing property rather
+/// than the syntactic guess's misleading `got int`.
+#[test]
+fn test_error_pure_enum_case_value_default() {
+    expect_error(
+        r#"<?php
+enum Mode {
+    case Fast;
+}
+class Settings {
+    public function __construct(public string $mode = Mode::Fast->value) {}
+}
+"#,
+        "Undefined property: Mode::value",
+    );
+}
+
+/// A deferred enum-case read whose object holds a lazy branch keeps the syntactic fallback: PHP
+/// never evaluates the untaken `W::Missing`, so the property and method defaults type-check.
+#[test]
+fn test_enum_case_value_default_with_untaken_missing_case() {
+    expect_no_error(
+        r#"<?php
+enum W: int { case A = 7; }
+class C {
+    public int $p = (W::A ? W::A : W::Missing)->value;
+    public function m(int $x = (W::A ? W::A : W::Missing)->value): int { return $x; }
+}
+"#,
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]

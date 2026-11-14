@@ -2189,3 +2189,66 @@ var_dump($fresh->level->name);
         )
     );
 }
+
+/// A member default may read an enum case's `->value` or `->name` (PHP 8.2 constant expressions)
+/// in a declared and a promoted property. The schema pass
+/// cannot type the read before enum cases exist, so it is deferred like `Level::Low` (#566);
+/// before, its syntactic `int` guess rejected `public string $k = Keymap::Linux->value`.
+#[test]
+fn test_enum_case_value_and_name_in_member_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+enum Keymap: string
+{
+    case Linux = 'linux';
+    case Mac = 'mac';
+}
+
+enum Weight: int
+{
+    case Heavy = 9;
+}
+
+final class Settings
+{
+    public string $keymap = Keymap::Linux->value;
+    public string $label = Keymap::Linux->name;
+    public int $weight = Weight::Heavy->value;
+
+    public function __construct(private readonly string $host = Keymap::Linux->value) {}
+
+    public function host(): string { return $this->host; }
+}
+
+$s = new Settings();
+echo Keymap::Mac->value, "|", $s->keymap, "|", $s->label, "|", $s->weight, "|", $s->host(), "|", (new Settings('bsd'))->host();
+"#,
+    );
+    assert_eq!(out, "mac|linux|Linux|9|linux|bsd");
+}
+
+/// The deferred enum-case read also covers a class declared before its enum, a plain method
+/// parameter, and the nullsafe `?->` form PHP 8.2 allows in constant expressions.
+#[test]
+fn test_enum_case_value_member_defaults_before_enum_and_nullsafe() {
+    let out = compile_and_run(
+        r#"<?php
+final class Settings
+{
+    public string $keymap = Keymap::Linux?->value;
+
+    public function pick(string $name = Keymap::Mac->name): string { return $name; }
+}
+
+enum Keymap: string
+{
+    case Linux = 'linux';
+    case Mac = 'mac';
+}
+
+$s = new Settings();
+echo $s->keymap, "|", $s->pick(), "|", $s->pick('x');
+"#,
+    );
+    assert_eq!(out, "linux|Mac|x");
+}
