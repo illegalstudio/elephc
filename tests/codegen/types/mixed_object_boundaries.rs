@@ -420,3 +420,28 @@ echo probe(['k' => 42]), "\n";
     );
     assert_eq!(out, "take(): Argument #1 ($t) must be of type ?T, int given\n");
 }
+
+/// The optimizer must see the runtime class check of a by-value `?T`, union or `object`
+/// parameter: a call into an otherwise pure or non-throwing body keeps its `TypeError` and
+/// the `catch` that observes it.
+#[test]
+fn test_class_parameter_checks_keep_calls_and_catches_in_optimizer() {
+    let out = compile_and_run(
+        r#"<?php
+class T {}
+function nul(?T $t): void { echo "nul body\n"; }
+function uni(T|ArrayObject|null $t): void { echo "uni body\n"; }
+function nobj(?object $o): int { return 1; }
+function obj(object $o): void {}
+function run(mixed $m): void {
+    try { nul($m); } catch (TypeError $e) { echo "caught nul\n"; }
+    try { uni($m); } catch (TypeError $e) { echo "caught uni\n"; }
+    try { nobj($m); echo "kept nothing\n"; } catch (TypeError $e) { echo "caught nobj\n"; }
+    try { obj($m); } catch (TypeError $e) { echo "caught obj\n"; }
+    echo "after\n";
+}
+run(42);
+"#,
+    );
+    assert_eq!(out, "caught nul\ncaught uni\ncaught nobj\ncaught obj\nafter\n");
+}
