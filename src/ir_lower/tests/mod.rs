@@ -747,3 +747,5 @@ mod strict_conversion_returns;
 mod strict_inferred_returns;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod native_module;
+
+mod strict_conditional_results;

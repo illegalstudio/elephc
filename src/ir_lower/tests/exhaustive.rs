@@ -140,6 +140,7 @@ fn dummy_check_result() -> CheckResult {
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),
         closure_param_hints: HashMap::new(),
+        closure_result_types: HashMap::new(),
         interfaces: HashMap::new(),
         classes,
         enums,

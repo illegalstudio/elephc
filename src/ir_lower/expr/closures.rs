@@ -346,14 +346,17 @@ pub(super) fn lower_closure_with_context(
     let by_ref_return = matches!(&expr.kind, ExprKind::Closure { by_ref_return: true, .. });
     let source_is_generator = ctx.closure_generator_spans.contains(&expr.span);
     let hinted_param_types = if contextual_arg_types.is_empty() {
-        crate::ir_lower::closure_param_hints::param_hints(expr.span)
+        crate::ir_lower::closure_hints::param_hints(expr.span)
     } else {
         None
     };
     let contextual_arg_types = hinted_param_types
         .as_deref()
         .unwrap_or(contextual_arg_types);
-    let signature = if contextual_arg_types.is_empty() && bound_this_context.is_none() {
+    let checked_return = crate::ir_lower::closure_hints::result_type(
+        ctx.semantic_profile, ctx.source_mode, &ctx.loop_storage_scope, expr.span);
+    let return_context = bound_this_context.or(checked_return.as_ref());
+    let signature = if contextual_arg_types.is_empty() && return_context.is_none() {
         function::lower_closure_function(
             ctx,
             &name,
@@ -383,7 +386,7 @@ pub(super) fn lower_closure_with_context(
             &logical_capture_params,
             &signature_capture_params,
             contextual_arg_types,
-            bound_this_context,
+            return_context,
             self_ref_callable_capture,
             by_ref_return,
             loop_storage_scope,

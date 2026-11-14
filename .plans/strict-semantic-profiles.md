@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 42 (this commit), following `6ba184fab7`. Issue:
+Verified through step 43 (this commit), following `4fcbe3e803`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -545,6 +545,28 @@ without optimization and through the AST plus EIR pipelines. Both declared-retur
 frontend controls pass. Compiler build, architecture gate, assembly comments,
 PHP syntax and diff checks pass. No admission mask or runtime ABI changes.
 
+### Verified conditional scalar and closure result contracts
+
+Step43 preserves canonical scalar unions for ternary, short-ternary and match
+results. CheckResult.closure_result_types carries inferred scalar/Mixed closure
+contracts by enclosing body and closure span; it avoids a second scalar-biased ABI
+guess. Conflicting visits choose Mixed storage. Container layout stays with the
+existing parameter/capture-aware materializer, and bound-receiver specialization
+keeps precedence. The renamed closure_hints module scopes parameter and result maps
+together, restoring nested lowerings. Result lookup requires the explicit active
+Coercions profile and user SourceMode so Internal closures retain their own policy.
+
+The native test was red on step42: arrows rounded 9007199254740993 through F64,
+converted true to string and null to an empty string. All five new checks pass:
+four conditional/source-identity regressions plus the nested scope/mask unit.
+They cover all target emitters, PHP/LFC, both AST/EIR modes, captured fresh strings,
+function-local arrows, conflicting spans, and overlapping trusted/user spans, with
+clean native heaps. Five focused inferred/declared-return and AST-smoke controls
+pass. Compiler build, architecture, assembly comments, PHP syntax and diff pass.
+No eval cache format, runtime ABI or public admission change is needed. Local-flow
+joins, default/assignment/property/reference contracts, builtin folds and complete
+host boundaries remain active completion work.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -654,4 +676,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 39 | `113f7497ec` | fix(strict): reject invalid checked aggregate callback sources |
 | 40 | `e78091ef0c` | feat(strict): guard original scalar parameter contracts |
 | 41 | `6ba184fab7` | feat(strict): preserve declared scalar return contracts |
-| 42 | this commit | feat(strict): preserve inferred scalar return alternatives |
+| 42 | `4fcbe3e803` | feat(strict): preserve inferred scalar return alternatives |
+| 43 | this commit | feat(strict): carry checked conditional closure result contracts |

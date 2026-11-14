@@ -101,8 +101,8 @@ fn lower_on_compiler_stack(
     web: bool,
 ) -> Result<Module, LoweringError> {
     super::diagnostics::begin_collection();
-    let _closure_param_hints =
-        crate::ir_lower::closure_param_hints::install(&check_result.closure_param_hints);
+    let _closure_hints = crate::ir_lower::closure_hints::install(
+        &check_result.closure_param_hints, &check_result.closure_result_types);
     let mut module = Module::new(target);
     module.semantic_profile = check_result.semantic_profile;
     module.source_path = source_path.map(canonical_source_path);

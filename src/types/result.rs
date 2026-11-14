@@ -162,6 +162,9 @@ pub struct CheckResult {
     /// keyed by the closure expression's span. Lowering replays these hints so the compiled
     /// closure parameter matches the element/accumulator type the checker already proved.
     pub closure_param_hints: HashMap<Span, Vec<PhpType>>,
+    /// Original scalar closure result contracts by enclosing body and source expression span.
+    /// Conflicting source visits retain canonical Mixed storage instead of choosing a narrower ABI.
+    pub closure_result_types: HashMap<(String, Span), PhpType>,
     /// Native array_push property decisions, scoped to the body and original place span.
     pub array_push_property_plans: HashMap<(String, Span), ArrayPushPropertyPlan>,
     /// Checked member receiver types by body scope and source node; conflicting visits are None.

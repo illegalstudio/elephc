@@ -270,7 +270,23 @@ impl Checker {
         } else {
             let inferred_return = self.inferred_return_contract(&all_return_infos, wider_type_syntactic)
                 .expect("nonempty closure returns");
-            Ok((self.caller_visible_direct_call_return(body, inferred_return), false))
+            let inferred_return = self.caller_visible_direct_call_return(body, inferred_return);
+            if self.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+                && self.semantic_source_mode != crate::source::SourceMode::Internal
+                && all_return_infos.iter().any(|info| info.has_value
+                    && info.source_mode != crate::source::SourceMode::Internal)
+                && (inferred_return == PhpType::Mixed
+                    || crate::semantics::conversions::scalar_contract(&inferred_return).is_some())
+            {
+                // Scalar joins own this metadata. Container layout stays with the existing
+                // parameter/capture-aware materializer rather than a checker-only element type.
+                let result = if inferred_return == PhpType::Void { PhpType::Mixed }
+                    else { inferred_return.clone() };
+                self.closure_result_types.entry((self.current_loop_storage_scope.clone(), span))
+                    .and_modify(|previous| if *previous != result { *previous = PhpType::Mixed; })
+                    .or_insert(result);
+            }
+            Ok((inferred_return, false))
         }
     }
 

@@ -254,6 +254,8 @@ fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -
     if next == PhpType::Never {
         return acc;
     }
+    if let Some(exact) = crate::semantics::conversions::inferred_scalar_join(
+        checker.semantic_profile, checker.semantic_source_mode, &acc, &next) { return exact; }
     if acc == PhpType::Void {
         return nullable_match_arm_type(next);
     }
