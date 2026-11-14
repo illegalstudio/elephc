@@ -43,8 +43,9 @@ pub(crate) fn lower_class_like_exists(
         return lower_runtime_interface_exists(ctx, inst, value);
     }
     if let Some(symbol_name) = maybe_const_string_operand(ctx, value)? {
-        let candidates = class_like_exists_candidates(ctx, name);
-        let exists = contains_folded(candidates.iter(), &symbol_name);
+        let exists = class_like_names(ctx, name)
+            .folded
+            .contains(&php_symbol_key(symbol_name.trim_start_matches('\\')));
         if exists && emit_deferred_class_exists(ctx, inst, &symbol_name)? {
             return store_if_result(ctx, inst);
         }
@@ -179,7 +180,8 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_class_like_exists(
             name
         )));
     }
-    let candidates = class_like_exists_candidates(ctx, name);
+    let names = class_like_names(ctx, name);
+    let candidates = names.sorted.as_slice();
     if candidates.is_empty() {
         emit_static_bool(ctx, false);
         return Ok(());
@@ -284,6 +286,31 @@ pub(in crate::codegen::lower_inst) fn emit_packed_name_list_entry(
 }
 
 /// Collects deterministic metadata and intrinsic names for literal and dynamic existence probes.
+/// The names one `class_exists()`-family builtin can find: sorted, and folded for a constant
+/// name's membership test. Built once per builtin and codegen state; every site rebuilt and
+/// sorted the whole class table, and a constant name folded every class again.
+pub(crate) struct ClassLikeNames {
+    sorted: std::sync::Arc<Vec<String>>,
+    folded: crate::fast_hash::FastSet<String>,
+}
+
+/// [`ClassLikeNames`] of builtin `name`, shared by every site of the codegen state.
+fn class_like_names(ctx: &FunctionContext<'_>, name: &str) -> std::sync::Arc<ClassLikeNames> {
+    ctx.shared.class_like_names(name, || {
+        #[cfg(test)]
+        CLASS_LIKE_NAME_BUILDS.with(|count| count.set(count.get() + 1));
+        let sorted = class_like_exists_candidates(ctx, name);
+        let folded = sorted.iter().map(|candidate| php_symbol_key(candidate.trim_start_matches('\\'))).collect();
+        ClassLikeNames { sorted: std::sync::Arc::new(sorted), folded }
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Builds of a builtin's class-like name candidates on this thread.
+    pub(crate) static CLASS_LIKE_NAME_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn class_like_exists_candidates(ctx: &FunctionContext<'_>, name: &str) -> Vec<String> {
     let mut candidates = BTreeSet::new();
     match name {
@@ -791,9 +818,9 @@ pub(in crate::codegen::lower_inst) fn static_method_string_is_callable(
     method_name: &str,
 ) -> bool {
     let class_key = php_symbol_key(class_name.trim_start_matches('\\'));
-    let Some((_, class_info)) = ctx.module.class_infos.iter().find(|(candidate, _)| {
-        php_symbol_key(candidate.trim_start_matches('\\')) == class_key
-    }) else {
+    // The module's folded-name index answers the first class folding to the key, as the scan
+    // over every class (one folded copy each) did.
+    let Some((_, class_info)) = ctx.module.class_info_by_key(&class_key) else {
         return false;
     };
     let method_key = php_symbol_key(method_name);

@@ -60,6 +60,8 @@ pub(crate) use lower_inst::callables::{CLASS_ANCESTOR_BUILDS, INSTANCE_REACH_CHE
 pub(crate) use lower_inst::MIXED_READ_SEARCHES;
 #[cfg(test)]
 pub(crate) use lower_inst::CLASS_DESCENDANT_BUILDS;
+#[cfg(test)]
+pub(crate) use lower_inst::builtins::CLASS_LIKE_NAME_BUILDS;
 mod lower_term;
 mod machine_peephole;
 mod parallel_moves;

@@ -111,10 +111,11 @@ pub(super) fn lower_method_call(
     };
     let object_expr = object;
     let object = lower_member_receiver(ctx, object_expr, expr);
+    // The method name first: the class-table scan ran for every argument-less method call.
     if op == Op::MethodCall && args.is_empty()
-        && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),
             "getdefaultproperties" | "getstaticproperties" | "newinstancewithoutconstructor")
+        && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
     {
         if is_reflection_class_construction_receiver(ctx, object.value) {
             let owns_receiver = ctx.value_is_owning_temporary(object)
@@ -725,8 +726,10 @@ pub(super) fn mixed_receiver_by_ref_signature(
 ) -> Option<FunctionSig> {
     let key = php_symbol_key(method);
     let mut found: Option<&FunctionSig> = None;
-    for class_info in ctx.classes.values() {
-        let Some(sig) = class_info.methods.get(&key) else {
+    // Only the classes naming the method, in class-table order (so the first candidate is the
+    // scan's): every call through a mixed receiver walked the whole class table.
+    for class_name in super::method_metadata::classes_with_method(ctx, &key) {
+        let Some(sig) = ctx.classes.get(class_name).and_then(|class_info| class_info.methods.get(&key)) else {
             continue;
         };
         if !sig.ref_params.iter().any(|by_ref| *by_ref) {

@@ -82,6 +82,11 @@ pub(crate) struct SharedCodegenState {
     /// `types::class_inherits_from` inverted over the module: each class name -> the classes that
     /// inherit from it. Property plans asked it of every class of the module per question.
     class_descendants: std::cell::OnceCell<std::sync::Arc<crate::fast_hash::FastMap<String, Vec<String>>>>,
+    /// The names a `class_exists()`-family builtin can find, per builtin name: every site built
+    /// and sorted the whole class table (and a constant name folded every class) again.
+    class_like_names: std::cell::RefCell<
+        crate::fast_hash::FastMap<String, std::sync::Arc<super::lower_inst::builtins::ClassLikeNames>>,
+    >,
     mixed_hash_arm_base: std::cell::OnceCell<std::sync::Arc<Vec<(u64, std::sync::Arc<str>, usize)>>>,
     non_public_static_base: std::cell::OnceCell<
         std::sync::Arc<Vec<super::lower_inst::callables::NonPublicStaticMethod>>,
@@ -575,6 +580,20 @@ impl SharedCodegenState {
         self.class_descendants.get_or_init(|| std::sync::Arc::new(build()))
     }
 
+    /// The class-like names builtin `name` can find, built by `build` on first request.
+    pub(super) fn class_like_names(
+        &self,
+        name: &str,
+        build: impl FnOnce() -> super::lower_inst::builtins::ClassLikeNames,
+    ) -> std::sync::Arc<super::lower_inst::builtins::ClassLikeNames> {
+        if let Some(found) = self.class_like_names.borrow().get(name) {
+            return found.clone();
+        }
+        let built = std::sync::Arc::new(build());
+        self.class_like_names.borrow_mut().insert(name.to_string(), built.clone());
+        built
+    }
+
     /// The scope-independent mixed hash arms, collected once by `build`; see the field.
     pub(super) fn mixed_hash_arm_base(
         &self,
@@ -657,6 +676,7 @@ impl SharedCodegenState {
             instance_method_target_base: std::cell::OnceCell::new(),
             non_public_static_base: std::cell::OnceCell::new(),
             mixed_hash_arm_base: std::cell::OnceCell::new(),
+            class_like_names: Default::default(),
             class_descendants: std::cell::OnceCell::new(),
             class_ancestors: std::cell::OnceCell::new(),
             instance_target_split: std::cell::OnceCell::new(),

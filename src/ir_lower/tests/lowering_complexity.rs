@@ -852,6 +852,27 @@ fn callable_array_scopes_check_only_non_public_methods() {
     assert_eq!(small, large, "per-scope checks grew with the public methods: {small} vs {large}");
 }
 
+/// Every `class_exists()` site, constant or run-time name, reads one candidate list built once
+/// per builtin: each site sorted the whole class table again, and a constant name folded every
+/// class to test its membership.
+#[test]
+fn class_exists_sites_share_one_candidate_list() {
+    let mut source = String::from("<?php\n");
+    for index in 0..30 {
+        source.push_str(&format!("class K{index} {{}}\n"));
+    }
+    source.push_str("$n = 0;\n");
+    for index in 0..30 {
+        source.push_str(&format!("$n += class_exists('K{index}') ? 1 : 0;\n$n += class_exists($argv[0] . '{index}') ? 1 : 0;\n"));
+    }
+    source.push_str("echo $n, \"\\n\";\n");
+    let module = lower_source(&source);
+    crate::codegen::CLASS_LIKE_NAME_BUILDS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    let builds = crate::codegen::CLASS_LIKE_NAME_BUILDS.with(|count| count.get());
+    assert_eq!(builds, 1, "class_exists candidates built {builds} times for sixty sites");
+}
+
 /// Property plans over a receiver class with subclasses read the subclasses from one index,
 /// built once, instead of asking every class of the module whether it inherits.
 #[test]

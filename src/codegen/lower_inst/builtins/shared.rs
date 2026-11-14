@@ -34,14 +34,6 @@ pub(in crate::codegen::lower_inst) fn callable_name_exists(
         || crate::name_resolver::canonical_function_alias(name.trim_start_matches('\\')).is_some()
 }
 
-/// Checks whether a PHP symbol is present in an iterator of known names.
-pub(in crate::codegen::lower_inst) fn contains_folded<'a>(
-    mut names: impl Iterator<Item = &'a String>,
-    needle: &str,
-) -> bool {
-    let needle_key = php_symbol_key(needle.trim_start_matches('\\'));
-    names.any(|name| php_symbol_key(name.trim_start_matches('\\')) == needle_key)
-}
 
 /// Returns true for internal helper classes that should not be visible to PHP class_exists().
 pub(in crate::codegen::lower_inst) fn is_internal_synthetic_class_name(name: &str) -> bool {

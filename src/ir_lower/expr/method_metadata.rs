@@ -239,7 +239,7 @@ thread_local! {
 /// `ReturnArgAlias::merge`, which is commutative and associative), so visiting the indexed
 /// classes alone gives the full scan's answer. The scans walked every class of the program per
 /// method name: ~3,100 samples of a sampled one-core Symfony demo console build.
-fn classes_with_method<'a>(ctx: &'a LoweringContext<'_, '_>, method_key: &str) -> Vec<&'a String> {
+pub(super) fn classes_with_method<'a>(ctx: &'a LoweringContext<'_, '_>, method_key: &str) -> Vec<&'a String> {
     let private_in_scope = ctx.current_class.as_deref().is_some_and(|scope| {
         ctx.classes
             .get(scope.trim_start_matches('\\'))
