@@ -781,3 +781,5 @@ mod strict_settype_domains;
 mod strict_object_casts;
 mod strict_object_cast_domains;
 mod strict_gmp_intval;
+
+mod strict_settype_collections;

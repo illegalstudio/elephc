@@ -10,6 +10,22 @@
 
 macro_rules! impl_fake_collection_call_ops {
     () => {
+    /// Models the ordinary array cast with independently owned container storage.
+    fn cast_array(&mut self, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
+        let result = match self.get(value) {
+            FakeValue::Array(_) | FakeValue::Assoc(_) => return self.copy_value(value),
+            FakeValue::Null => FakeValue::Array(Vec::new()),
+            FakeValue::Object(properties) => FakeValue::Assoc(properties.into_iter()
+                .map(|(name, value)| {
+                    let key = eval_numeric_string_array_key(name.as_bytes()).map(FakeKey::Int)
+                        .unwrap_or_else(|| FakeKey::String(name.into_bytes()));
+                    (key, value)
+                }).collect()),
+            _ => FakeValue::Array(vec![value.owned()]),
+        };
+        Ok(self.alloc(result))
+    }
+
     /// Creates a fake indexed array cell.
     fn array_new(&mut self, capacity: usize) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_array_new(capacity)

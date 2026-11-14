@@ -10,6 +10,8 @@
 
 use super::super::super::*;
 
+mod collections;
+
 eval_builtin! {
     contract: "settype",
     area: Types,
@@ -79,7 +81,7 @@ pub(in crate::interpreter) fn eval_settype_values_result(
     eval_settype_value_result(*value, *type_name, context, values)
 }
 
-/// Applies the eval-supported `settype()` scalar target conversion.
+/// Applies the checked target through the ordinary shared scalar and collection cast adapters.
 pub(in crate::interpreter) fn eval_settype_cast_value(
     value: RuntimeCellHandle,
     type_name: RuntimeCellHandle,
@@ -93,14 +95,17 @@ pub(in crate::interpreter) fn eval_settype_cast_value(
             Ok(target) => target,
             Err(failure) => return eval_throw_builtin_exception("ValueError", failure.message(), context, values),
         };
-        if target == elephc_semantics::settype_target::SettypeTarget::Null { return values.null().map(Some); }
-        if let Some(target) = target.numeric_target() {
-            let target = match target {
-                elephc_semantics::numeric_cast::NumericCastTarget::Int => EvalCastType::Int,
-                elephc_semantics::numeric_cast::NumericCastTarget::Float => EvalCastType::Float,
-            };
-            return eval_cast_value(&target, value, context, values).map(Some);
-        }
+        use elephc_semantics::settype_target::SettypeTarget;
+        let target = match target {
+            SettypeTarget::Null => return values.null().map(Some),
+            SettypeTarget::Object => return collections::object(value, context, values).map(Some),
+            SettypeTarget::Array => EvalCastType::Array,
+            SettypeTarget::Bool => EvalCastType::Bool,
+            SettypeTarget::Int => EvalCastType::Int,
+            SettypeTarget::Float => EvalCastType::Float,
+            SettypeTarget::String => EvalCastType::String,
+        };
+        return eval_cast_value(&target, value, context, values).map(Some);
     }
     let converted = match type_name.as_str() {
         "bool" | "boolean" => Some(values.cast_bool(value)?),

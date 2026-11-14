@@ -24,7 +24,7 @@ description: "Compiler internals for settype(): lowering path, type checks, and 
 - **Result type source**: `checked`
 - **Result ownership**: `may_alias_arguments`
 - **Effects**: `shared`
-- **Requirements**: `static (0 requirements)`
+- **Requirements**: `static (2 requirements)`
 - **Callable policy**: `dynamic`
 - **Target support**: `macos-aarch64`, `ios-arm64`, `ios-sim-arm64`, `linux-aarch64`, `linux-x86_64`
 

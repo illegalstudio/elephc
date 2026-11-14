@@ -47,9 +47,10 @@ pub(in crate::interpreter) fn eval_write_direct_ref_target(
                     .map(|entry| entry.flags().ownership)
                     .unwrap_or(ScopeCellOwnership::Owned)
             });
-            for replaced in set_scope_cell(context, scope, name.clone(), value, ownership, values)? {
-                values.release(replaced)?;
-            }
+            let replaced = if variable_ownership == Some(ScopeCellOwnership::Owned) {
+                set_owned_scope_cell(context, scope, name.clone(), value, values)?
+            } else { set_scope_cell(context, scope, name.clone(), value, ownership, values)? };
+            for replaced in replaced { values.release(replaced)?; }
             Ok(())
         }
         _ => write_back_method_ref_target(target, value, context, values),

@@ -560,6 +560,13 @@ pub trait RuntimeValueOps {
         value: RuntimeCellHandle,
     ) -> Result<(), EvalStatus>;
 
+    /// Writes a byte-exact property name, with UTF-8 fallback for providers without raw names.
+    fn property_set_bytes(&mut self, object: RuntimeCellHandle, property: &[u8],
+        value: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let property = std::str::from_utf8(property).map_err(|_| EvalStatus::UnsupportedConstruct)?;
+        self.property_set(object, property, value)
+    }
+
     /// Mirrors an eval `__set` pair into the generated runtime's Fiber-local guard chain.
     fn native_magic_set_guard_push(
         &mut self,

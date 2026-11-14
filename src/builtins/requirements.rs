@@ -20,6 +20,8 @@ pub enum BuiltinRequirement {
     SystemLibrary(&'static str),
     /// Link a macOS-only system library while Linux resolves the API from libc.
     MacOsLibrary(&'static str),
+    /// Keep an injected PHP helper available to direct and prepared EIR lowering.
+    PreludeHelper(&'static str),
     /// Enable a named runtime feature collected from the final EIR module.
     RuntimeFeature(&'static str),
 }

@@ -130992,7 +130992,16 @@
       },
       "requirements": {
         "kind": "static",
-        "values": []
+        "values": [
+          {
+            "kind": "prelude_helper",
+            "name": "__elephc_cast_object"
+          },
+          {
+            "kind": "prelude_helper",
+            "name": "__elephc_cast_object_dynamic"
+          }
+        ]
       },
       "result_type": "checked",
       "runtime_functions": [

@@ -626,6 +626,10 @@ impl Scanner<'_> {
                     self.usage.required_libraries.insert(library.to_string());
                 }
                 crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
+                crate::builtins::semantics::BuiltinRequirement::PreludeHelper(helper) => {
+                    self.usage.required_prelude_helpers.insert(php_symbol_key(helper));
+                    self.record_callable(helper);
+                }
             }
         }
     }
@@ -1233,7 +1237,18 @@ impl Scanner<'_> {
     /// Records a free-function/extern callable key.
     pub(super) fn record_callable(&mut self, name: &str) -> String {
         let key = php_symbol_key(name.trim_start_matches('\\'));
-        self.usage.functions.insert(key.clone()); self.usage.externs.insert(key.clone()); key
+        self.usage.functions.insert(key.clone()); self.usage.externs.insert(key.clone());
+        if let Some(def) = crate::builtins::registry::lookup(&key) {
+            if let crate::builtins::semantics::BuiltinRequirements::Static(requirements) = def.spec.semantics.requirements {
+                for requirement in requirements {
+                    if let crate::builtins::semantics::BuiltinRequirement::PreludeHelper(helper) = requirement {
+                        self.usage.functions.insert(php_symbol_key(helper));
+                        self.usage.required_prelude_helpers.insert(php_symbol_key(helper));
+                    }
+                }
+            }
+        }
+        key
     }
 
     /// Records a class key and applies conservative Reflection hazards.

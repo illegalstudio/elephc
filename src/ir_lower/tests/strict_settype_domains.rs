@@ -47,7 +47,7 @@ call_user_func_array('settype', $referencePack); echo is_int($elementAlias) ? '|
 /// Prepared callable conversion graphs validate and emit for every supported target.
 #[test]
 fn strict_settype_callables_eir_all_targets() {
-    let program = crate::parser::parse(&crate::lexer::tokenize(CALLABLES).unwrap()).unwrap();
+    let program = prepared(CALLABLES);
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
     for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
         let target = Target::parse(name).unwrap();
@@ -64,7 +64,7 @@ fn strict_settype_callables_eir_all_targets() {
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
 #[test]
 fn strict_settype_callables_native_values_failures_and_owners() {
-    let program = crate::parser::parse(&crate::lexer::tokenize(CALLABLES).unwrap()).unwrap();
+    let program = prepared(CALLABLES);
     let target = Target::detect_host();
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
     let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
@@ -102,8 +102,7 @@ fn strict_settype_callables_array_literal_references_remain_diagnosed() {
     all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
 #[test]
 fn strict_settype_callables_permissive_prepared_body_control() {
-    let program = crate::parser::parse(&crate::lexer::tokenize(
-        "<?php mixed $value = 'junk'; $cast = settype(...); $cast($value, 'int'); echo $value;").unwrap()).unwrap();
+    let program = prepared("<?php mixed $value = 'junk'; $cast = settype(...); $cast($value, 'int'); echo $value;");
     let target = Target::detect_host();
     let checked = crate::types::checker::check_staged_semantics(&program, target, SemanticProfile::PERMISSIVE).unwrap();
     let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
@@ -111,4 +110,12 @@ fn strict_settype_callables_permissive_prepared_body_control() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "0");
     assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"));
+}
+
+/// Mirrors implicit prelude injection for prepared builtin bodies in the production frontend.
+fn prepared(source: &str) -> crate::parser::ast::Program {
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+    let program = crate::object_cast_prelude::inject_if_used(program, &mut inventory).unwrap();
+    crate::name_resolver::resolve(program).unwrap()
 }

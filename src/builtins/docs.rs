@@ -95,6 +95,7 @@ fn default_spec_json(default: &DefaultSpec) -> Value {
 /// Renders one runtime or linker requirement for semantic inventory tooling.
 fn requirement_json(requirement: BuiltinRequirement) -> Value {
     match requirement {
+        BuiltinRequirement::PreludeHelper(name) => json!({"kind": "prelude_helper", "name": name}),
         BuiltinRequirement::Bridge(name) => json!({"kind": "bridge", "name": name}),
         BuiltinRequirement::SystemLibrary(name) => {
             json!({"kind": "system_library", "name": name})

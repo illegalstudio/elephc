@@ -26,6 +26,10 @@ builtin! {
 const fn semantics() -> crate::builtins::semantics::BuiltinSemantics {
     use crate::builtins::semantics::*;
     let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::Settype);
+    semantics.requirements = BuiltinRequirements::Static(&[
+        BuiltinRequirement::PreludeHelper(crate::object_cast_prelude::CAST_HELPER),
+        BuiltinRequirement::PreludeHelper(crate::object_cast_prelude::DYNAMIC_CAST_HELPER),
+    ]);
     semantics.target_strategy = BuiltinTargetStrategy::EirGraph;
     semantics.effects = BuiltinEffects::Shared(effects);
     semantics.callable = BuiltinCallablePolicy::Prepared(callable_accepts_any_source);

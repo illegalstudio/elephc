@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 69 (this commit), following `95f5d407ec`. Issue:
+Verified through step 70 (this commit), following `05cef3fb07`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 69.
+This progress ledger condenses verified implementation through step 70.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -722,6 +722,39 @@ tests, the real opaque-eval assignment regression, cargo check --tests, cargo bu
 the curl exporter, generated builtin audits, assembly comments and diff hygiene
 passed. The updated example also compiled and ran with Bools and DynamicCode.
 
+### Complete settype collection targets
+
+Step70 completes every valid target in the prepared settype graph. Array conversion
+reuses the evaluated-value array cast lowerer; object conversion calls the existing
+injected PHP graph with rooted original storage and hidden ABI argument support.
+No extra synthetic PHP local extends the operand lifetime. Direct checked and
+prepared permissive bodies share collection conversion while numeric policy remains
+independent. The original value is published only after conversion succeeds.
+
+The builtin home declares reusable PreludeHelper requirements. Shared declaration
+usage distinguishes implicit dependencies from explicit calls to the same names;
+the object-cast injector consults this inventory and dynamic callable/eval hazards.
+Reachability retains dependencies from direct and first-class calls. User helper
+names with no cast or implicit dependency keep their ordinary acceptance.
+
+Eval collection conversion preserves existing object identity, uses ordinary array
+casts, and builds stdClass from insertion-order values and byte-exact property
+names. Every temporary and partial object has an explicit owner through failure.
+String and boolean targets now use the common eval cast adapters, so eval-defined
+Stringable effects and throws remain visible. Explicitly owned variable writeback
+uses set_owned_scope_cell to retire an acquired identity-result lease, fixing the
+leak exposed by the new object round-trip regression.
+
+Two compiler collection tests cover all five emitters, dependency pruning, both
+numeric profiles, EIR optimization, object identity, COW and native clean heaps.
+Two eval regressions cover collection/ref/container ownership and Stringable
+callback effects/failure. The existing checked callable and scalar controls are
+retained. Public Casts admission remains staged while remaining host and reference
+contracts are audited. Focused scalar/callable regressions, prior numeric builtin
+controls, implicit dependency and reserved-name diagnostics, the real opaque-eval
+assignment test, check --tests, build and the curl exporter passed. The example
+uses an explicit mixed container for intentional array-to-object retagging.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -809,4 +842,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 66 | `6c74bdaaed` | feat(strict): check public gmp integer projections |
 | 67 | `2802808721` | feat(strict): prove original gmp integer cast sources |
 | 68 | `95f5d407ec` | feat(strict): share settype target validation |
-| 69 | this commit | feat(strict): prepare checked settype callable conversions |
+| 69 | `05cef3fb07` | feat(strict): prepare checked settype callable conversions |
+| 70 | this commit | feat(strict): complete settype collection conversions |

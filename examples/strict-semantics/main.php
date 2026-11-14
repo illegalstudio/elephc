@@ -30,3 +30,11 @@ $timeout = '30';
 $convert = settype(...);
 $convert($timeout, 'int');
 echo "Timeout: ", $timeout, PHP_EOL;
+
+function showSettings(mixed $settings): void {
+    $convert = settype(...);
+    $convert($settings, 'object');
+    echo "Settings timeout: ", $settings->timeout, PHP_EOL;
+}
+
+showSettings(['timeout' => $timeout]);

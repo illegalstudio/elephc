@@ -90,7 +90,8 @@ impl Checker {
                 crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
                     self.require_macos_builtin_library(library);
                 }
-                crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
+                crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_)
+                | crate::builtins::semantics::BuiltinRequirement::PreludeHelper(_) => {}
             }
         }
     }
@@ -325,7 +326,8 @@ impl Checker {
                     crate::builtins::semantics::BuiltinRequirement::MacOsLibrary(library) => {
                         self.require_macos_builtin_library(library);
                     }
-                    crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_) => {}
+                    crate::builtins::semantics::BuiltinRequirement::RuntimeFeature(_)
+                    | crate::builtins::semantics::BuiltinRequirement::PreludeHelper(_) => {}
                 }
             }
             if !matches!(

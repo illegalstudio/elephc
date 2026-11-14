@@ -249,6 +249,15 @@ macro_rules! impl_collection_call_ops {
         }
     }
 
+    /// Preserves arbitrary PHP property bytes when converting an array to stdClass.
+    fn property_set_bytes(&mut self, object: RuntimeCellHandle, property: &[u8],
+        value: RuntimeCellHandle) -> Result<(), EvalStatus> {
+        let (scope_ptr, scope_len) = self.current_class_scope_abi();
+        let ok = unsafe { __elephc_eval_value_property_set(object.as_ptr(), property.as_ptr(),
+            property.len() as u64, value.as_ptr(), scope_ptr, scope_len) };
+        if ok == 0 { Err(EvalStatus::RuntimeFatal) } else { Ok(()) }
+    }
+
     /// Shares eval magic-set recursion state with native property-write lowering.
     fn native_magic_set_guard_push(
         &mut self,

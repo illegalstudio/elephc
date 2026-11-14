@@ -12,7 +12,7 @@ use super::*;
 use crate::builtins::semantics::{BuiltinLoweringContext, BuiltinLoweringError};
 use elephc_semantics::settype_target::{SettypeTarget, SettypeTargetFailure};
 
-/// Applies scalar/null conversion policy and stores only after the selected conversion succeeds.
+/// Applies conversion policy and stores only after the selected conversion succeeds.
 pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, value: ValueId,
     target: ValueId, span: Span) -> Result<LoweredValue, BuiltinLoweringError> {
     let name = ctx.operand_local_name(value).ok_or_else(|| BuiltinLoweringError::new(
@@ -25,7 +25,7 @@ pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, value: Value
     let text_owner = pin_in_flight_owners(ctx, &[text.value], span);
     let initial = ctx.initialized_slots_snapshot();
     let done = ctx.builder.create_named_block("settype.converted", Vec::new());
-    for target in [SettypeTarget::Bool, SettypeTarget::Int, SettypeTarget::Float, SettypeTarget::String, SettypeTarget::Null] {
+    for target in SettypeTarget::ALL {
         let accepted = matches_names(ctx, text, target.names(), span);
         let convert = ctx.builder.create_named_block("settype.convert", Vec::new());
         let next = ctx.builder.create_named_block("settype.next_target", Vec::new());
@@ -36,10 +36,14 @@ pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, value: Value
         let expression = Expr::new(ExprKind::Variable("__settype_original".into()), span);
         let converted = if target == SettypeTarget::Null {
             ctx.emit_value(Op::ConstNull, Vec::new(), None, PhpType::Void, Op::ConstNull.default_effects(), Some(span))
+        } else if target == SettypeTarget::Array {
+            super::ternary_cast::lower_array_cast_value(ctx, input, &expression)
+        } else if target == SettypeTarget::Object {
+            lower_object_value(ctx, input, span)?
         } else {
             let cast = match target { SettypeTarget::Bool => CastType::Bool, SettypeTarget::Int => CastType::Int,
                 SettypeTarget::Float => CastType::Float, SettypeTarget::String => CastType::String,
-                _ => unreachable!("this graph currently converts scalar/null targets") };
+                _ => unreachable!("remaining targets are scalar") };
             super::ternary_cast::lower_scalar_cast_value(ctx, &cast, input, &expression)
         };
         let converted = ctx.box_value_as_mixed(converted, PhpType::Mixed, Some(span));
@@ -49,11 +53,6 @@ pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, value: Value
         ctx.set_local_logical_type(&name, PhpType::Mixed);
         ctx.builder.terminate(Terminator::Br { target: done, args: Vec::new() });
         ctx.builder.position_at_end(next); ctx.restore_initialized_slots(initial.clone());
-    }
-    for target in [SettypeTarget::Array, SettypeTarget::Object] {
-        let accepted = matches_names(ctx, text, target.names(), span);
-        crate::ir_lower::semantic_guards::require_false(ctx, accepted, Op::ThrowError,
-            "settype(): conversion to this target is not yet supported", Some(span));
     }
     let resource = matches_names(ctx, text, &["resource"], span);
     let resource_message = failure_message(ctx, SettypeTargetFailure::Resource);
@@ -99,4 +98,20 @@ fn matches_names(ctx: &mut LoweringContext<'_, '_>, text: LoweredValue,
             PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
     }
     accepted
+}
+
+/// Reuses the injected PHP object conversion with rooted, already evaluated Mixed storage.
+fn lower_object_value(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
+    span: Span) -> Result<LoweredValue, BuiltinLoweringError> {
+    let helper = crate::object_cast_prelude::DYNAMIC_CAST_HELPER;
+    if !ctx.functions.contains_key(helper) {
+        return Err(BuiltinLoweringError::new("settype object conversion requires its declared prelude helper"));
+    }
+    let value = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span));
+    let pins = pin_in_flight_owners(ctx, &[value.value], span);
+    let result = ctx.emit_user_call(helper, vec![value.value], PhpType::Mixed, Some(span));
+    let result = LoweredValue { value: result.value, ir_type: ctx.builder.value_type(result.value) };
+    unpin_in_flight_owners(ctx, pins, span);
+    release_binary_operand_temporary(ctx, value, span);
+    Ok(result)
 }
