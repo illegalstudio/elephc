@@ -88,7 +88,8 @@ echo preg_last_error(), "\n";
     );
 }
 
-/// Eval keeps its own error state with the same codes, messages and `preg_grep()` result.
+/// Eval keeps its own error state with the same codes, messages and `preg_grep()` result,
+/// including `false` (not a fatal) for an invalid `preg_grep()` pattern.
 #[test]
 fn test_preg_errors_grep_eval_parity() {
     let out = compile_and_run_with_regex(r#"<?php
@@ -97,18 +98,21 @@ echo preg_last_error(), ":", preg_last_error_msg(), "|";
 preg_match("/a/", "a");
 echo preg_last_error(), ":", preg_last_error_msg(), "|";
 echo json_encode(preg_grep("/a/", ["k" => "a", "b", "ca"])), json_encode(preg_grep("/a/", ["a", "b"], PREG_GREP_INVERT)), "|";
+var_dump(preg_grep("/(/", []));
+echo preg_last_error(), "after|";
 echo PREG_BAD_UTF8_ERROR, PCRE_VERSION_MAJOR;' . ' // ' . $argc;
 eval($source);
 "#);
     assert_eq!(
         out,
-        "bool(false)\n4:Malformed UTF-8 characters, possibly incorrectly encoded|0:No error|{\"k\":\"a\",\"1\":\"ca\"}{\"1\":\"b\"}|410"
+        "bool(false)\n4:Malformed UTF-8 characters, possibly incorrectly encoded|0:No error|{\"k\":\"a\",\"1\":\"ca\"}{\"1\":\"b\"}|bool(false)\n1after|410"
     );
 }
 
 /// A nested `preg_*` error inside a `preg_replace_callback()` callback stays visible through
-/// `preg_last_error()` but does not fail the outer call, while the outer call's own match
-/// error still returns `null`; the same holds in eval.
+/// `preg_last_error()` but does not fail the outer call, also when the last match ends at the
+/// subject's end, while the outer call's own match error still returns `null`; the same
+/// holds in eval.
 #[test]
 fn test_preg_replace_callback_keeps_nested_errors() {
     let source = r#"var_dump(preg_replace_callback('/a/', function ($m) { preg_match('/./u', "\xff"); return 'B'; }, 'xax'));
@@ -117,8 +121,10 @@ var_dump(preg_replace_callback('/a/', function ($m) { return preg_replace('/x/u'
 echo preg_last_error(), "\n";
 var_dump(preg_replace_callback('/a/u', function ($m) { preg_match('/a/', 'a'); return 'B'; }, "a\xff"));
 echo preg_last_error(), "\n";
+var_dump(preg_replace_callback('/a$/', function ($m) { preg_match('/./u', "\xff"); return 'B'; }, 'ba'));
+echo preg_last_error(), "\n";
 "#;
-    let expected = "string(3) \"xBx\"\n4\nstring(3) \"zNz\"\n4\nNULL\n4\n";
+    let expected = "string(3) \"xBx\"\n4\nstring(3) \"zNz\"\n4\nNULL\n4\nstring(2) \"bB\"\n4\n";
     assert_eq!(compile_and_run(&format!("<?php\n{source}")), expected);
     let quoted = source.replace('\\', "\\\\").replace('\'', "\\'");
     let eval = compile_and_run_with_regex(&format!("<?php\neval('{quoted}' . ' // ' . $argc);\n"));

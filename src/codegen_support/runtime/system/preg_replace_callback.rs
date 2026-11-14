@@ -21,6 +21,9 @@
 //!   decrefs the matches array, frees the subject, the current output block, a
 //!   pending callback result, the PCRE2 handle, and the offset-pair vector, then
 //!   rethrows the original exception. A retained matches array keeps its extra ref.
+//! - A match that ends at the subject terminator leaves the loop without another exec,
+//!   so that exit clears `_preg_exec_error`: an error a nested `preg_*` call recorded in
+//!   the last callback must not fail this call (it stays in `_preg_last_error`).
 //! - Growth publishes the new output base into its stack slot before returning, so
 //!   the throw path releases that block rather than a register `setjmp` restored.
 
@@ -408,6 +411,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     // -- free regex and return final output slice --
     emitter.label("__rt_preg_replace_callback_empty_subject");
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // load the initialized empty-subject output cursor
+    abi::emit_store_zero_to_symbol(emitter, "_preg_exec_error", 0);             // no outer exec ran after the last callback, so its nested errors do not fail this call
     emitter.label("__rt_preg_replace_callback_done");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save final output pointer
     emit_preg_replace_callback_unlink_boundary(emitter, handler_off);
@@ -818,6 +822,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     // -- free regex and return final output slice --
     emitter.label("__rt_preg_replace_callback_empty_subject_linux_x86_64");
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // load the initialized empty-subject output cursor
+    abi::emit_store_zero_to_symbol(emitter, "_preg_exec_error", 0);             // no outer exec ran after the last callback, so its nested errors do not fail this call
     emitter.label("__rt_preg_replace_callback_done_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save final output pointer
     emit_preg_replace_callback_unlink_boundary(emitter, handler_off);

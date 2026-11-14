@@ -8,6 +8,9 @@
 //! - Mirrors the AOT prelude (`crate::pcre_prelude` in the compiler): the pattern is
 //!   compiled once, each entry is matched as its string value and keeps its key, and a
 //!   match error stops the scan with the entries collected so far.
+//! - Unlike the other eval `preg_*` builtins, which treat a malformed pattern as a runtime
+//!   fatal, an invalid pattern returns `false` with `PREG_INTERNAL_ERROR`, like the AOT
+//!   prelude and PHP.
 
 use super::super::super::*;
 use super::*;
@@ -57,7 +60,14 @@ pub(in crate::interpreter) fn eval_preg_grep_result(
     invert: bool,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let regex = eval_preg_regex(pattern, values)?;
+    let regex = match eval_preg_regex(pattern, values) {
+        Ok(regex) => regex,
+        // An invalid pattern is PHP `false` with `PREG_INTERNAL_ERROR`, not a fatal.
+        Err(_) if eval_preg_last_error_code() == EVAL_PREG_INTERNAL_ERROR => {
+            return values.bool_value(false);
+        }
+        Err(status) => return Err(status),
+    };
     let len = values.array_len(array)?;
     let mut result = values.assoc_new(len)?;
     for position in 0..len {
