@@ -330,7 +330,8 @@ pub(crate) fn check_array_walk_callback_builtin_call(
             arr_ty,
             span,
             env,
-        );
+            false,
+        )?;
     }
     Ok(result)
 }

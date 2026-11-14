@@ -1635,6 +1635,7 @@ pub(super) fn integer_op(op: MixedNumericOp) -> Op {
         MixedNumericOp::Add => Op::IAdd,
         MixedNumericOp::Sub => Op::ISub,
         MixedNumericOp::Mul => Op::IMul,
+        MixedNumericOp::Div => Op::IDiv,
         MixedNumericOp::Pow => Op::IPow,
     }
 }
@@ -1645,6 +1646,7 @@ fn float_op(op: MixedNumericOp) -> Op {
         MixedNumericOp::Add => Op::FAdd,
         MixedNumericOp::Sub => Op::FSub,
         MixedNumericOp::Mul => Op::FMul,
+        MixedNumericOp::Div => Op::FDiv,
         MixedNumericOp::Pow => Op::FPow,
     }
 }

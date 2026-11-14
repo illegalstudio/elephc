@@ -2628,6 +2628,7 @@ echo count(explode(",", countExplodeSubject("a,b,c"))), "\n";
     };
     check();
     without_ir_opt(check);
+}
 
 /// Verifies local indexed arrays with reference, key, string, first-class and callable-array
 /// walk callbacks are promoted to boxed storage, so every element write is visible and the

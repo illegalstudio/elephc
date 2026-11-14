@@ -118,7 +118,7 @@ for ($i = 0; $i < $iters; $i++) { $n ^= mb_strlen($s, "UTF-8") + $i; }
 echo $n;
 "#;
     let ir = emit_main_ir(source);
-    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    let (preheader, body) = ir.split_once("for.body").expect("fixture has a for body");
     assert!(
         preheader.contains("runtime.mb_strlen") && preheader.contains("origin: licm"),
         "the invariant call must be hoisted into the preheader:\n{preheader}"
@@ -162,7 +162,7 @@ for ($i = 0; $i < $iters; $i++) { $n ^= strlen(mb_substr($s, 10, 20, "UTF-8")) +
 echo $n;
 "#;
     let ir = emit_main_ir(source);
-    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    let (preheader, body) = ir.split_once("for.body").expect("fixture has a for body");
     assert!(
         preheader.contains("runtime.mb_substr")
             && preheader.contains("str_len")
@@ -191,7 +191,7 @@ function probe(string $s, int $iters): int {
 echo probe("héllo wörld", 3);
 "#;
     let ir = emit_function_ir(source, "probe");
-    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    let (preheader, body) = ir.split_once("for.body").expect("fixture has a for body");
     assert!(
         preheader.contains("runtime.mb_encode_numericentity_len")
             && preheader.contains("origin: licm"),
@@ -237,7 +237,7 @@ for ($i = 0; $i < 10; $i++) { $total += substr_count($haystack, "abc"); }
 echo $total;
 "#;
     let ir = emit_main_ir(source);
-    let (preheader, body) = ir.split_once("for.body:").expect("fixture has a for body");
+    let (preheader, body) = ir.split_once("for.body").expect("fixture has a for body");
     assert!(
         preheader.contains("runtime.substr_count") && preheader.contains("origin: licm"),
         "the invariant call must be hoisted into the preheader:\n{preheader}"
