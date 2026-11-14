@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 47 (this commit), following `de9ba02ca7`. Issue:
+Verified through step 48 (this commit), following `9c9cbe461a`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -666,6 +666,29 @@ admission remains unchanged. Complete this shared producer boundary next, then
 remaining dynamic/default/property/reference/alias/eval/host contracts and the
 rest of the approved strict families.
 
+### Verified declared scalar constant literals
+
+Step48 moves the existing native constant type projection out of the PHP extension
+adapter into types::constant_binding. One literal binder materializes a validated
+integer-to-float declaration in class, interface and enum schema copies, and the
+PHP extension's existing resolver/materializer uses the same helper. The original
+AST is unchanged, so user strict validation still rejects an implicit conversion
+at its source. Reads consume the producer's bound PHP value rather than treating
+its raw initializer as a new user conversion. No runtime ABI or cache format changes.
+
+The preserved trusted literal probe was red on step47: metadata stayed Int,
+is_float printed X and a user Float default threw TypeError. Three focused checks
+now pass for bound metadata plus original source, all five target emitters, and
+native direct/inherited/interface/enum reads and default invocation, with both
+permissive and Coercions profiles and both full AST/EIR modes, with clean heaps.
+All five existing PHP extension constant selection controls and four default
+source/effect controls pass. This closes the literal case; unresolved constant
+expressions/aliases retain their existing representation and still require full
+producer-boundary completion. Continue with those and trusted declaration defaults,
+then remaining property/reference/alias/eval/builtin/host guarantees, checked casts
+and the other strict families. Public admission remains unchanged. Compiler build,
+architecture gate, assembly comments and diff hygiene pass.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -780,4 +803,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 44 | `efcfed164c` | feat(strict): enforce declared scalar initializer contracts |
 | 45 | `83b2501b36` | feat(strict): retain declared contracts across local stores |
 | 46 | `de9ba02ca7` | feat(strict): validate original scalar declaration defaults |
-| 47 | this commit | feat(strict): preserve declaration kinds and union failures |
+| 47 | `9c9cbe461a` | feat(strict): preserve declaration kinds and union failures |
+| 48 | this commit | feat(strict): materialize declared scalar constant literals |

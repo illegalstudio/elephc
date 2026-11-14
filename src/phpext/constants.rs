@@ -120,12 +120,9 @@ pub fn validate_native_widening(
 
 /// Keeps supported constant trees identical in native schemas and persistent Zend metadata.
 fn native_value(value: &Expr, class: &str, ty: &PhpType, constants: &HashMap<String, (ExprKind, PhpType)>) -> Option<ExprKind> {
-    let mut resolved = resolve(bind_scope(value.clone(), class), constants, &mut HashSet::new(), 0).ok()?;
+    let resolved = resolve(bind_scope(value.clone(), class), constants, &mut HashSet::new(), 0).ok()?;
     super::constant_values::from_expression(&resolved, 0).ok()?;
-    if ty.coerces_integer_to_float() {
-        if let ExprKind::IntLiteral(integer) = resolved.kind { resolved.kind = ExprKind::FloatLiteral(integer as f64); }
-    }
-    Some(resolved.kind)
+    Some(crate::types::constant_binding::bind_literal(resolved, ty).kind)
 }
 
 /// Combines checked source constants with lexical bindings for class constant references.
@@ -249,9 +246,8 @@ fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
                 if let Some((value, ty)) = value {
                     let mut resolved = resolve(Expr { kind: value.clone(), span: expr.span }, constants, active, depth + 1)?;
                     if ty.coerces_integer_to_float() {
-                        if let ConstantValue::Int(value) = super::constant_values::from_expression(&resolved, 0)? {
-                            resolved.kind = ExprKind::FloatLiteral(value as f64);
-                        }
+                        super::constant_values::from_expression(&resolved, 0)?;
+                        resolved = crate::types::constant_binding::bind_literal(resolved, ty);
                     }
                     expr.kind = resolved.kind;
                 }

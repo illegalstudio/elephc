@@ -757,3 +757,5 @@ mod strict_typed_stores;
 mod strict_defaults;
 
 mod strict_default_evidence;
+
+mod strict_trusted_constants;

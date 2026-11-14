@@ -27,6 +27,8 @@ mod array_cast;
 pub(crate) mod call_args;
 /// Shared detection of lazy lexical errors in normalized default expression trees.
 pub(crate) mod deferred_defaults;
+/// Checked scalar constant contracts and literal materialization shared by native and hosted consumers.
+pub(crate) mod constant_binding;
 /// Fiber/stack introspection for async and coroutine analysis.
 pub(crate) mod fibers;
 /// C FFI type mapping utilities.

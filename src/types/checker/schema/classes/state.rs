@@ -152,7 +152,8 @@ impl ClassBuildState {
                 .map(|c| {
                     Ok((
                         c.name.clone(),
-                        resolve_lexical_class_constant_value(&c.value, class)?,
+                        crate::types::constant_binding::bind_declared_literal(
+                            resolve_lexical_class_constant_value(&c.value, class)?, c.type_expr.as_ref()),
                     ))
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
