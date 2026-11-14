@@ -69,6 +69,14 @@ fi
 BRIDGE_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_fileinfo.a"
 PHAR_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_phar.a"
 TLS_ARCHIVE="$PROJECT_DIR/target/$RUST_TARGET/debug/libelephc_tls.a"
+# A restored prebuilt archive can predate a bridge symbol. The fileinfo prelude
+# calls `elephc_fileinfo_open_failed`, so rebuild from source when it is absent
+# instead of failing the link with an opaque undefined-symbol error.
+if [ -s "$BRIDGE_ARCHIVE" ] && ! nm "$BRIDGE_ARCHIVE" 2>/dev/null | grep -q "elephc_fileinfo_open_failed"; then
+  echo "==> restored fileinfo archive is stale; rebuilding for $RUST_TARGET"
+  rm -f "$BRIDGE_ARCHIVE"
+  (cd "$PROJECT_DIR" && cargo build -p elephc-fileinfo --target "$RUST_TARGET")
+fi
 test -s "$BRIDGE_ARCHIVE"
 test -s "$PHAR_ARCHIVE"
 test -s "$TLS_ARCHIVE"
