@@ -603,14 +603,55 @@ fn web_route_matches(pattern: &str, path: &str) -> bool {
             .is_some_and(|prefix| path.starts_with(prefix))
 }
 
-/// Finds the first advertised session matching the broker filters.
-fn find_web_session(directory: &Path, command: &DebugCommand) -> Option<WebSession> {
-    let entries = fs::read_dir(directory).ok()?;
+/// Removes session announcements and the active claim left by a previous run.
+fn clear_web_sessions(directory: &Path) {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
-            continue;
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let session = name.starts_with("session-")
+            && path.extension().and_then(|extension| extension.to_str()) == Some("json");
+        if session || name == "active-session" {
+            let _ = fs::remove_file(path);
         }
+    }
+}
+
+/// Returns whether an announced worker pid is still present.
+fn web_session_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return true;
+    }
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == 0
+        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Finds the newest advertised session matching the broker filters.
+///
+/// Announcements are sorted newest first, so a stale file left in a reused
+/// `--web-dir` cannot win over the request that is waiting now. A missing
+/// socket or a dead worker removes the announcement and keeps looking.
+fn find_web_session(directory: &Path, command: &DebugCommand) -> Option<WebSession> {
+    let entries = fs::read_dir(directory).ok()?;
+    let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                return None;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            Some((modified, path))
+        })
+        .collect();
+    candidates.sort_by(|left, right| right.0.cmp(&left.0));
+    for (_, path) in candidates {
         let Ok(text) = fs::read_to_string(&path) else {
             continue;
         };
@@ -620,6 +661,14 @@ fn find_web_session(directory: &Path, command: &DebugCommand) -> Option<WebSessi
         let Some(socket) = value.get("socket").and_then(serde_json::Value::as_str) else {
             continue;
         };
+        let pid = value
+            .get("pid")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0) as u32;
+        if !Path::new(socket).exists() || !web_session_pid_alive(pid) {
+            let _ = fs::remove_file(&path);
+            continue;
+        }
         let method = value
             .get("method")
             .and_then(serde_json::Value::as_str)
@@ -639,10 +688,7 @@ fn find_web_session(directory: &Path, command: &DebugCommand) -> Option<WebSessi
             }
         }
         return Some(WebSession {
-            pid: value
-                .get("pid")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0) as u32,
+            pid,
             socket: PathBuf::from(socket),
             method: method.to_string(),
             path: request_path.to_string(),
@@ -743,6 +789,7 @@ fn run_web_dap(command: DebugCommand) -> i32 {
         return 1;
     }
     let _ = fs::set_permissions(&directory, fs::Permissions::from_mode(0o700));
+    clear_web_sessions(&directory);
     let _ = fs::remove_file(directory.join("server.pid"));
 
     let mut process = Command::new(&binary);
@@ -1427,6 +1474,55 @@ mod tests {
             .is_err(),
             "--web-isolation requires --web"
         );
+    }
+
+    /// Verifies session discovery ignores stale announcements by picking the
+    /// newest live request and clearing old files between runs.
+    #[test]
+    fn web_session_discovery_prefers_newest_announcement() {
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-web-session-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("session dir");
+        let old_socket = dir.join("old.sock");
+        let new_socket = dir.join("new.sock");
+        fs::write(&old_socket, b"").expect("old socket");
+        fs::write(&new_socket, b"").expect("new socket");
+        let announcement = |socket: &Path| {
+            serde_json::json!({
+                "pid": std::process::id(),
+                "method": "GET",
+                "path": "/selected",
+                "socket": socket.to_string_lossy(),
+            })
+            .to_string()
+        };
+        fs::write(dir.join("session-old.json"), announcement(&old_socket))
+            .expect("old announcement");
+        std::thread::sleep(Duration::from_millis(20));
+        fs::write(dir.join("session-new.json"), announcement(&new_socket))
+            .expect("new announcement");
+        fs::write(dir.join("server.pid"), b"123").expect("server pid");
+
+        let command = parse_args(&[
+            "main.php".to_string(),
+            "--web".to_string(),
+            "--listen".to_string(),
+            "127.0.0.1:9000".to_string(),
+            "--route".to_string(),
+            "/selected".to_string(),
+        ])
+        .expect("web command");
+        let session = find_web_session(&dir, &command).expect("newest session");
+        assert_eq!(session.socket, new_socket);
+
+        clear_web_sessions(&dir);
+        assert!(!dir.join("session-old.json").exists());
+        assert!(!dir.join("session-new.json").exists());
+        assert!(dir.join("server.pid").exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     /// Verifies the loopback TCP attach form parses its address and key, implies

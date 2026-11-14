@@ -211,7 +211,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
         if byte == b'\'' || byte == b'"' {
             let quote = byte;
             index += 1;
-            let mut text = String::new();
+            let mut text = Vec::new();
             let mut closed = false;
             while index < bytes.len() {
                 let current = bytes[index];
@@ -224,27 +224,27 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     let escaped = bytes[index + 1];
                     index += 2;
                     match (quote, escaped) {
-                        (b'\'', b'\\') | (b'"', b'\\') => text.push('\\'),
-                        (b'\'', b'\'') | (b'"', b'"') => text.push(quote as char),
-                        (b'"', b'n') => text.push('\n'),
-                        (b'"', b'r') => text.push('\r'),
-                        (b'"', b't') => text.push('\t'),
-                        (b'"', b'0') => text.push('\0'),
-                        (b'"', b'$') => text.push('$'),
+                        (b'\'', b'\\') | (b'"', b'\\') => text.push(b'\\'),
+                        (b'\'', b'\'') | (b'"', b'"') => text.push(quote),
+                        (b'"', b'n') => text.push(b'\n'),
+                        (b'"', b'r') => text.push(b'\r'),
+                        (b'"', b't') => text.push(b'\t'),
+                        (b'"', b'0') => text.push(b'\0'),
+                        (b'"', b'$') => text.push(b'$'),
                         (_, other) => {
-                            text.push('\\');
-                            text.push(other as char);
+                            text.push(b'\\');
+                            text.push(other);
                         }
                     }
                     continue;
                 }
-                text.push(current as char);
+                text.push(current);
                 index += 1;
             }
             if !closed {
                 return Err("unterminated string literal".to_string());
             }
-            tokens.push(Token::String(text));
+            tokens.push(Token::String(String::from_utf8_lossy(&text).into_owned()));
             continue;
         }
         match byte {
@@ -890,7 +890,13 @@ fn loose_eq(left: &value::Scalar, right: &value::Scalar) -> bool {
         (value::Scalar::Bool(_), _) | (_, value::Scalar::Bool(_)) => {
             truthy(left) == truthy(right)
         }
-        (value::Scalar::Null, _) | (_, value::Scalar::Null) => !truthy(left) || !truthy(right),
+        (value::Scalar::Null, other) | (other, value::Scalar::Null) => match other {
+            value::Scalar::Bool(value) => !*value,
+            value::Scalar::Int(value) => *value == 0,
+            value::Scalar::Float(value) => *value == 0.0,
+            value::Scalar::String(value) => value.is_empty(),
+            _ => false,
+        },
         (value::Scalar::Int(_) | value::Scalar::Float(_), _)
         | (_, value::Scalar::Int(_) | value::Scalar::Float(_)) => {
             numeric(left).ok() == numeric(right).ok()
@@ -948,8 +954,14 @@ fn multiply(left: &value::Scalar, right: &value::Scalar) -> Result<value::Scalar
 /// Division; division by zero and non-numeric strings are errors.
 fn divide(left: &value::Scalar, right: &value::Scalar) -> Result<value::Scalar, String> {
     if let (value::Scalar::Int(left), value::Scalar::Int(right)) = (left, right) {
-        if *right != 0 && left % right == 0 {
-            return Ok(value::Scalar::Int(left / right));
+        if *right != 0 {
+            if let (Some(quotient), Some(remainder)) =
+                (left.checked_div(*right), left.checked_rem(*right))
+            {
+                if remainder == 0 {
+                    return Ok(value::Scalar::Int(quotient));
+                }
+            }
         }
     }
     let denominator = numeric(right)?;
@@ -965,7 +977,10 @@ fn modulo(left: &value::Scalar, right: &value::Scalar) -> Result<value::Scalar, 
     if denominator == 0 {
         return Err("modulo by zero in expression".to_string());
     }
-    Ok(value::Scalar::Int(numeric(left)? as i64 % denominator))
+    let numerator = numeric(left)? as i64;
+    Ok(value::Scalar::Int(
+        numerator.checked_rem(denominator).unwrap_or(0),
+    ))
 }
 
 /// Unary negation.
@@ -1020,6 +1035,41 @@ mod tests {
         assert!(evaluate("$x = 1", &[], 0, &classes).is_err());
         assert!(evaluate("mystery(1)", &[], 0, &classes).is_err());
         assert!(evaluate("$missing", &[], 0, &classes).is_err());
+    }
+
+    /// Verifies integer overflow in division/remainder cannot abort a watch.
+    #[test]
+    fn division_and_remainder_handle_integer_overflow() {
+        let min = value::Scalar::Int(i64::MIN);
+        let minus_one = value::Scalar::Int(-1);
+        assert!(matches!(
+            divide(&min, &minus_one).expect("division result"),
+            value::Scalar::Float(_)
+        ));
+        assert!(matches!(
+            modulo(&min, &minus_one).expect("remainder result"),
+            value::Scalar::Int(0)
+        ));
+    }
+
+    /// Verifies UTF-8 string literals survive tokenization unchanged.
+    #[test]
+    fn preserves_non_ascii_string_literals() {
+        let classes = HashMap::new();
+        match evaluate("'café' === 'café'", &[], 0, &classes).expect("utf8 string") {
+            EvalValue::Scalar(value::Scalar::Bool(value)) => assert!(value),
+            _ => panic!("expected a boolean result"),
+        }
+    }
+
+    /// Verifies PHP's null loose-comparison rules for scalars.
+    #[test]
+    fn null_uses_php_loose_comparison_rules() {
+        let null = value::Scalar::Null;
+        assert!(loose_eq(&null, &value::Scalar::Int(0)));
+        assert!(loose_eq(&value::Scalar::String(String::new()), &null));
+        assert!(!loose_eq(&null, &value::Scalar::String("0".to_string())));
+        assert!(!loose_eq(&null, &value::Scalar::Int(5)));
     }
 
     /// Verifies short-circuit operators do not evaluate the right side.

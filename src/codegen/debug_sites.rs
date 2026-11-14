@@ -169,9 +169,24 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, label: &str, inner: &str) {
     emitter.raw(&asm);
 }
 
+/// Returns an actionable error when a site id would index past the flag table.
+fn site_capacity_error(site_id: usize) -> Option<String> {
+    (site_id >= MAX_SITES).then(|| {
+        format!(
+            "debug site id {site_id} exceeds the fixed flag table ({MAX_SITES} entries);              split the program or build without --debug"
+        )
+    })
+}
+
 /// Emits the site hook call with the compiler-assigned site id and the current
 /// frame pointer. The wrapper preserves every caller-saved register.
-pub(super) fn emit_site_call(ctx: &mut FunctionContext<'_>, site_id: usize) {
+pub(super) fn emit_site_call(
+    ctx: &mut FunctionContext<'_>,
+    site_id: usize,
+) -> crate::codegen::Result<()> {
+    if let Some(error) = site_capacity_error(site_id) {
+        return Err(crate::codegen::CodegenIrError::invalid_module(error));
+    }
     let target = ctx.emitter.target;
     let id_arg = abi::int_arg_reg_name(target, 0);
     let frame_arg = abi::int_arg_reg_name(target, 1);
@@ -210,6 +225,7 @@ pub(super) fn emit_site_call(ctx: &mut FunctionContext<'_>, site_id: usize) {
     // argument registers are restored exactly once.
     ctx.emitter.label(&skip);
     abi::emit_pop_reg_pair(ctx.emitter, id_arg, frame_arg);
+    Ok(())
 }
 
 /// Calls the runtime boot hook with the BSS flag table, its fixed capacity and
@@ -394,6 +410,15 @@ mod tests {
         .expect("debug assembly");
         assert!(!asm.contains("QWORD PTR [sp"), "{asm}");
         assert!(asm.contains("QWORD PTR [rsp"), "{asm}");
+    }
+
+    /// Verifies site ids outside the fixed BSS flag table are rejected at codegen.
+    #[test]
+    fn site_ids_past_the_flag_table_are_rejected() {
+        assert!(site_capacity_error(0).is_none());
+        assert!(site_capacity_error(MAX_SITES - 1).is_none());
+        let error = site_capacity_error(MAX_SITES).expect("overflow must fail");
+        assert!(error.contains("fixed flag table"), "{error}");
     }
 
     /// Verifies the x86_64 wrapper saves the SysV caller-saved registers, XMM

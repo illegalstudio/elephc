@@ -809,9 +809,6 @@ fn capture_concat_base(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("epilogue + exit(0)");
-    if ctx.shared.debug_build {
-        super::debug_sites::emit_dump_call(ctx);
-    }
     // Drain still-active output buffers before any teardown so user output
     // handlers (including eval-registered ones) run while locals, statics, and
     // the eval context are still alive. The exit-path flush in abi::emit_exit
@@ -878,6 +875,13 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         ctx.emitter
             .comment("heap-debug: print allocator summary and leak report to stderr");
         abi::emit_call_label(ctx.emitter, "__rt_heap_debug_report");
+    }
+    if ctx.shared.debug_build {
+        // Shutdown callbacks above may have produced output or PHP calls. Flush
+        // it before closing the DAP output pump, then export calls and coverage
+        // exactly once after every shutdown path has finished.
+        abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+        super::debug_sites::emit_dump_call(ctx);
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
@@ -1211,9 +1215,6 @@ fn emit_opcache_restart_boundary(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
-    if ctx.shared.debug_build {
-        super::debug_sites::emit_dump_call(ctx);
-    }
     emit_main_local_epilogue_cleanup(ctx);
     emit_eval_context_epilogue_cleanup(ctx);
     // Per-request local teardown may run PHP destructors, so it belongs inside
@@ -1253,6 +1254,10 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     // service filled its log.
     if ctx.shared.debug_build {
         super::debug_sites::emit_exit_call(ctx);
+        // Shutdown work above may have written output or made PHP calls. Flush
+        // before closing the DAP pump, then export once for this request.
+        abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+        super::debug_sites::emit_dump_call(ctx);
     }
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);

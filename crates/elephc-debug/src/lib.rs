@@ -28,7 +28,9 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
 use std::io::{self, Write};
+use std::path::Path;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::IntoRawFd;
 use std::os::unix::net::UnixListener;
@@ -73,9 +75,11 @@ const CALL_MODE_TYPES: u8 = 1;
 const CALL_MODE_SCALARS: u8 = 2;
 /// Capture values including bounded nested container children (default).
 const CALL_MODE_FULL: u8 = 3;
-/// Bounded ring of serialized call events, in execution order.
-static CALL_EVENTS: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
-/// Call events refused past the ring cap.
+/// Bounded ring of serialized call events; `None` marks an unwritten slot.
+static CALL_EVENTS: Mutex<Vec<Option<serde_json::Value>>> = Mutex::new(Vec::new());
+/// Total events pushed since the last drain, used to locate the oldest slot.
+static CALL_EVENTS_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// Call events evicted after the ring reached its cap.
 static CALL_EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
 /// Runtime-configurable ring cap; defaults to `MAX_CALL_EVENTS`.
 static CALL_EVENTS_LIMIT: AtomicUsize = AtomicUsize::new(MAX_CALL_EVENTS);
@@ -172,15 +176,60 @@ fn current_segment_path() -> Vec<String> {
     TRACE_SEGMENTS.with(|segments| segments.borrow().clone())
 }
 
-/// Pushes one capture event into the bounded ring, counting overflow.
-fn push_capture_event(event: serde_json::Value) {
-    if let Ok(mut events) = CALL_EVENTS.lock() {
-        if events.len() < CALL_EVENTS_LIMIT.load(Ordering::Relaxed) {
-            events.push(event);
-        } else {
-            CALL_EVENTS_DROPPED.fetch_add(1, Ordering::Relaxed);
+/// Pushes one capture event into the bounded ring and returns its live slot.
+///
+/// The ring keeps the newest events: once full, the oldest slot is overwritten
+/// and any activation still pointing at it is detached so a later return cannot
+/// attach to the replacement event.
+fn push_call_event(event: serde_json::Value) -> Option<usize> {
+    let limit = CALL_EVENTS_LIMIT.load(Ordering::Relaxed);
+    if limit == 0 {
+        return None;
+    }
+    let Ok(mut events) = CALL_EVENTS.lock() else {
+        return None;
+    };
+    let total = CALL_EVENTS_TOTAL.fetch_add(1, Ordering::Relaxed);
+    let index = if events.len() < limit {
+        let index = events.len();
+        events.push(Some(event));
+        index
+    } else {
+        let index = (total as usize) % limit;
+        events[index] = Some(event);
+        CALL_EVENTS_DROPPED.fetch_add(1, Ordering::Relaxed);
+        ACTIVATIONS.with(|stack| {
+            for frame in stack.borrow_mut().iter_mut() {
+                if frame.call_event == Some(index) {
+                    frame.call_event = None;
+                }
+            }
+        });
+        index
+    };
+    Some(index)
+}
+
+/// Returns the ring's events in execution order, draining the slots.
+fn take_call_events(events: &mut Vec<Option<serde_json::Value>>, total: u64) -> Vec<serde_json::Value> {
+    let len = events.len();
+    if len == 0 {
+        return Vec::new();
+    }
+    let start = if total as usize > len { total as usize % len } else { 0 };
+    let mut ordered = Vec::with_capacity(len);
+    for offset in 0..len {
+        let index = (start + offset) % len;
+        if let Some(event) = events[index].take() {
+            ordered.push(event);
         }
     }
+    ordered
+}
+
+/// Pushes one capture event into the bounded ring, counting overflow.
+fn push_capture_event(event: serde_json::Value) {
+    let _ = push_call_event(event);
 }
 
 /// Reads one UTF-8 string argument passed by the generated event call.
@@ -543,6 +592,12 @@ enum StepMode {
 struct StepState {
     mode: StepMode,
     depth: usize,
+    /// Function the step started in, so another function on the same line stops.
+    function_id: u32,
+    /// Source owning the step's starting line.
+    source_id: u64,
+    /// Source line the step started on.
+    line: u64,
 }
 
 /// Returns the PHP-visible function name, stripping the compiler's include-variant prefix.
@@ -983,18 +1038,7 @@ impl Debugger {
                 "line": site.line,
             });
         }
-        let event_index = if let Ok(mut events) = CALL_EVENTS.lock() {
-            if events.len() < CALL_EVENTS_LIMIT.load(Ordering::Relaxed) {
-                let index = events.len();
-                events.push(event);
-                Some(index)
-            } else {
-                CALL_EVENTS_DROPPED.fetch_add(1, Ordering::Relaxed);
-                None
-            }
-        } else {
-            None
-        };
+        let event_index = push_call_event(event);
         if let Some(index) = event_index {
             ACTIVATIONS.with(|stack| {
                 if let Some(frame) = stack.borrow_mut().last_mut() {
@@ -1041,7 +1085,7 @@ impl Debugger {
             None
         };
         if let Ok(mut events) = CALL_EVENTS.lock() {
-            if let Some(event) = events.get_mut(index) {
+            if let Some(event) = events.get_mut(index).and_then(Option::as_mut) {
                 event["alloc_delta"] = serde_json::json!(allocs.saturating_sub(allocs_at_entry));
                 event["free_delta"] = serde_json::json!(frees.saturating_sub(frees_at_entry));
                 event["end_timestamp_us"] = serde_json::json!(call_timestamp_us());
@@ -1085,7 +1129,7 @@ impl Debugger {
             exception["class"] = serde_json::json!(format!("object:0x{throwable:x}"));
         }
         if let Ok(mut events) = CALL_EVENTS.lock() {
-            if let Some(event) = events.get_mut(index) {
+            if let Some(event) = events.get_mut(index).and_then(Option::as_mut) {
                 event["exception"] = exception;
             }
         }
@@ -1094,11 +1138,15 @@ impl Debugger {
     /// Writes captured call events to stderr in execution order.
     fn dump_calls(&self) {
         close_open_trace_segments();
-        let events = CALL_EVENTS
+        let (events, dropped) = CALL_EVENTS
             .lock()
-            .map(|mut events| std::mem::take(&mut *events))
+            .map(|mut events| {
+                let total = CALL_EVENTS_TOTAL.swap(0, Ordering::Relaxed);
+                let events = take_call_events(&mut events, total);
+                (events, CALL_EVENTS_DROPPED.swap(0, Ordering::Relaxed))
+            })
             .unwrap_or_default();
-        // The event vector is drained, so any still-active activation's index is
+        // The event ring is drained, so any still-active activation's slot is
         // stale. A later return must not attach to a new event that reused it.
         ACTIVATIONS.with(|stack| {
             for frame in stack.borrow_mut().iter_mut() {
@@ -1108,12 +1156,12 @@ impl Debugger {
         for event in events {
             eprintln!("elephc-debug-call: {event}");
         }
-        let dropped = CALL_EVENTS_DROPPED.swap(0, Ordering::Relaxed);
         if dropped > 0 {
             eprintln!("elephc-debug-calls-dropped: {dropped}");
         }
     }
 
+    /// Prints the current thread's PHP activation stack to stderr.
     fn print_stack(&self) {
         let frames = ACTIVATIONS.with(|stack| stack.borrow().clone());
         for (index, frame) in frames.iter().rev().enumerate() {
@@ -1136,13 +1184,37 @@ impl Debugger {
         }
     }
 
+    /// Presents one breakpoint stop on the terminal client and waits for commands.
+    /// Returns whether `site_id` repeats the exact position a step started from.
+    fn same_step_position(&self, step: &StepState, site_id: u32) -> bool {
+        let Some(site) = self.sites.get(&site_id) else {
+            return false;
+        };
+        let function_id = ACTIVATIONS.with(|stack| {
+            stack.borrow().last().map(|frame| frame.function_id).unwrap_or(0)
+        });
+        function_id == step.function_id
+            && site.source_id == step.source_id
+            && site.line == step.line
+    }
+
+    /// Presents one breakpoint stop on the terminal client and waits for commands.
     fn stop(&mut self, site_id: u32) {
         let Some(site) = self.sites.get(&site_id) else {
             return;
         };
         self.selected_frame = Some(0);
-        let depth = ACTIVATIONS.with(|stack| stack.borrow().len());
-        let start_step = |mode: StepMode| StepState { mode, depth };
+        let (depth, function_id) = ACTIVATIONS.with(|stack| {
+            let stack = stack.borrow();
+            (stack.len(), stack.last().map(|frame| frame.function_id).unwrap_or(0))
+        });
+        let start_step = |mode: StepMode| StepState {
+            mode,
+            depth,
+            function_id,
+            source_id: site.source_id,
+            line: site.line,
+        };
         eprintln!(
             "Stopped at {}:{}:{} ({})",
             self.site_path(site),
@@ -1303,6 +1375,7 @@ extern "C" {
 /// links. The words are emitted for every target, so a debug build reports
 /// churn without requiring `--with-monitoring`.
 fn allocation_counters() -> (u64, u64) {
+    /// Reads one boot-published counter address, or zero before boot.
     fn read(slot: &AtomicUsize) -> u64 {
         let address = slot.load(Ordering::Relaxed);
         if address == 0 {
@@ -1657,6 +1730,81 @@ fn parse_web_headers(buffer: &[u8]) -> Vec<(&str, &str)> {
     headers
 }
 
+/// Claim file shared by every prefork worker for the current debug run.
+const WEB_CLAIM_FILE: &str = "active-session";
+
+/// Returns whether the pid recorded in one claim file is still alive.
+fn web_claim_pid_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Claims the single debug session for this run, removing a dead worker's claim.
+fn claim_web_session(directory: &Path) -> bool {
+    let path = directory.join(WEB_CLAIM_FILE);
+    let mut attempt = 0;
+    loop {
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                let _ = write!(file, "{}", std::process::id());
+                let _ = file.flush();
+                return true;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && attempt == 0 => {
+                attempt = 1;
+                let owner = std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|text| text.trim().parse::<u32>().ok());
+                if owner.is_some_and(web_claim_pid_alive) {
+                    return false;
+                }
+                let _ = std::fs::remove_file(&path);
+            }
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Releases this worker's claim, leaving a live worker's claim untouched.
+fn release_web_session(directory: &Path) {
+    let path = directory.join(WEB_CLAIM_FILE);
+    let owner = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| text.trim().parse::<u32>().ok());
+    if owner == Some(std::process::id()) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Releases the claim on every early return until the request owns its DAP session.
+struct WebSessionClaim<'a> {
+    /// Broker-owned session directory holding the claim file.
+    directory: &'a Path,
+    /// Cleared once the accepted session must keep the claim until request end.
+    active: bool,
+}
+
+impl<'a> WebSessionClaim<'a> {
+    /// Creates an armed guard for a claim this worker just acquired.
+    fn new(directory: &'a Path) -> Self {
+        Self {
+            directory,
+            active: true,
+        }
+    }
+}
+
+impl Drop for WebSessionClaim<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            release_web_session(self.directory);
+        }
+    }
+}
+
 /// Opens the per-worker DAP session for one matching web request.
 ///
 /// The worker advertises a mode-0600 Unix socket in the broker's 0700 directory,
@@ -1698,6 +1846,13 @@ pub extern "C" fn elephc_debug_web_request(
     if !web_request_matches(filters, method, path, &headers) {
         return;
     }
+    if !claim_web_session(Path::new(&filters.directory)) {
+        // Another worker already owns the run's one debug session. Returning
+        // immediately keeps this request (and its connection) out of the 30 s
+        // wait that only the selected worker should pay.
+        return;
+    }
+    let mut claim = WebSessionClaim::new(Path::new(&filters.directory));
 
     let sequence = WEB_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     // macOS `sun_path` is much shorter than the test/session directory. Keep the
@@ -1801,6 +1956,8 @@ pub extern "C" fn elephc_debug_web_request(
     debugger.variable_refs.clear();
     WEB_ARMED.store(true, Ordering::Relaxed);
     INTERACTIVE.store(true, Ordering::Relaxed);
+    // The request now owns the claim until its end hook runs.
+    claim.active = false;
 }
 
 /// Ends one web request's DAP session, resuming the handler and leaving the
@@ -1809,6 +1966,13 @@ pub extern "C" fn elephc_debug_web_request(
 pub extern "C" fn elephc_debug_web_request_end() {
     if !WEB_ARMED.swap(false, Ordering::Relaxed) {
         return;
+    }
+    if let Some(directory) = WEB_FILTERS
+        .get()
+        .and_then(Option::as_ref)
+        .map(|filters| filters.directory.as_str())
+    {
+        release_web_session(Path::new(directory));
     }
     set_web_site_flags(false);
     if let Ok(mut guard) = DEBUGGER.lock() {
@@ -1914,14 +2078,24 @@ fn write_postmortem(throwable: usize) {
         if details.is_none() {
             exception["class"] = serde_json::json!(format!("object:0x{throwable:x}"));
         }
-        let calls: Vec<serde_json::Value> = CALL_EVENTS
+        let (calls, dropped) = CALL_EVENTS
             .lock()
             .map(|events| {
-                events
-                    .iter()
-                    .filter(|event| event.get("function").is_some())
-                    .cloned()
-                    .collect()
+                let total = CALL_EVENTS_TOTAL.load(Ordering::Relaxed);
+                let mut ordered = Vec::new();
+                let len = events.len();
+                if len > 0 {
+                    let start = if total as usize > len { total as usize % len } else { 0 };
+                    for offset in 0..len {
+                        let index = (start + offset) % len;
+                        if let Some(event) = events[index].as_ref() {
+                            if event.get("function").is_some() {
+                                ordered.push(event.clone());
+                            }
+                        }
+                    }
+                }
+                (ordered, CALL_EVENTS_DROPPED.load(Ordering::Relaxed))
             })
             .unwrap_or_default();
         let captured = calls.len();
@@ -1933,7 +2107,7 @@ fn write_postmortem(throwable: usize) {
             "stack": stack,
             "calls": calls,
             "captured": captured,
-            "dropped": CALL_EVENTS_DROPPED.load(Ordering::Relaxed),
+            "dropped": dropped,
         })
     };
     match serde_json::to_vec_pretty(&document) {
@@ -2181,15 +2355,31 @@ pub extern "C" fn elephc_debug_site_inner(site_id: u32, frame: usize) {
         let entry = debugger.stop_at_first;
         let step_stop = match debugger.step {
             Some(step) => match step.mode {
-                StepMode::Next => depth <= step.depth,
-                StepMode::Step => true,
+                StepMode::Next => {
+                    depth < step.depth
+                        || (depth == step.depth
+                            && !debugger.same_step_position(&step, site_id))
+                }
+                StepMode::Step => !debugger.same_step_position(&step, site_id),
                 StepMode::Finish => depth < step.depth,
             },
             None => false,
         };
         let data_stop = debugger.check_data_breakpoints(frame);
+        // A step that has not left its starting line must not immediately stop
+        // again on another guard for that same line. Breakpoints resume normal
+        // behavior as soon as the step reaches a new line or function.
+        let suppress_breakpoint = debugger.step.is_some_and(|step| {
+            matches!(step.mode, StepMode::Next | StepMode::Step)
+                && debugger.same_step_position(&step, site_id)
+        });
         let mut breakpoint_stop = false;
-        if !pause && !entry && !step_stop && debugger.break_sites.contains(&site_id) {
+        if !pause
+            && !entry
+            && !step_stop
+            && !suppress_breakpoint
+            && debugger.break_sites.contains(&site_id)
+        {
             match debugger.breakpoint_conditions.get(&site_id).cloned() {
                 Some(condition) => match debugger.evaluate_condition(&condition, frame) {
                     Ok(true) => breakpoint_stop = true,
@@ -2284,6 +2474,33 @@ mod tests {
         let both = ExceptionFilters::from_names(&["caught".to_string(), "uncaught".to_string()]);
         assert!(both.should_stop(true));
         assert!(both.should_stop(false));
+    }
+
+    /// Verifies the cross-worker web claim is exclusive and reclaims a dead owner.
+    #[test]
+    fn web_claim_is_exclusive_and_reclaims_dead_owners() {
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-web-claim-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("claim directory");
+        assert!(claim_web_session(&dir), "first request claims the run");
+        assert!(!claim_web_session(&dir), "a second worker must not claim it");
+        release_web_session(&dir);
+        assert!(!dir.join(WEB_CLAIM_FILE).exists(), "owner releases its claim");
+
+        let mut child = std::process::Command::new("true")
+            .spawn()
+            .expect("dead owner fixture");
+        let pid = child.id();
+        child.wait().expect("reap dead owner");
+        std::fs::write(dir.join(WEB_CLAIM_FILE), pid.to_string())
+            .expect("stale claim");
+        assert!(claim_web_session(&dir), "a dead owner's claim is reclaimed");
+        assert!(web_claim_pid_alive(std::process::id()));
+        release_web_session(&dir);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Verifies include-variant symbols display as their PHP-level function names.

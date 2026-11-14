@@ -133,7 +133,7 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
         if byte == b'"' || byte == b'\'' {
             let quote = byte;
             index += 1;
-            let mut text = String::new();
+            let mut text = Vec::new();
             let mut closed = false;
             while index < bytes.len() {
                 let current = bytes[index];
@@ -146,23 +146,26 @@ fn tokenize(input: &str) -> Result<Vec<Token>, String> {
                     let escaped = bytes[index];
                     index += 1;
                     match escaped {
-                        b'n' => text.push('\n'),
-                        b'r' => text.push('\r'),
-                        b't' => text.push('\t'),
-                        b'0' => text.push('\0'),
-                        b'\\' => text.push('\\'),
-                        b'"' => text.push('"'),
-                        b'\'' => text.push('\''),
-                        other => text.push(other as char),
+                        b'n' => text.push(b'\n'),
+                        b'r' => text.push(b'\r'),
+                        b't' => text.push(b'\t'),
+                        b'0' => text.push(b'\0'),
+                        b'\\' => text.push(b'\\'),
+                        b'"' => text.push(b'"'),
+                        b'\'' => text.push(b'\''),
+                        other => {
+                            text.push(b'\\');
+                            text.push(other);
+                        }
                     }
                 } else {
-                    text.push(current as char);
+                    text.push(current);
                 }
             }
             if !closed {
                 return Err("unterminated string literal".to_string());
             }
-            tokens.push(Token::String(text));
+            tokens.push(Token::String(String::from_utf8_lossy(&text).into_owned()));
             continue;
         }
         let (token, length) = match byte {
@@ -211,6 +214,8 @@ where
     tokens: Vec<Token>,
     index: usize,
     lookup: F,
+    /// Non-zero while the current subtree is parsed for syntax only.
+    suppress: usize,
 }
 
 impl<F> Parser<F>
@@ -223,6 +228,7 @@ where
             tokens: tokenize(condition)?,
             index: 0,
             lookup,
+            suppress: 0,
         })
     }
 
@@ -247,24 +253,54 @@ where
         Ok(value)
     }
 
-    /// `||` has the lowest precedence.
+    /// Returns whether the current subtree is being parsed for syntax only.
+    fn syntax_only(&self) -> bool {
+        self.suppress > 0
+    }
+
+    /// Parses `subtree` without evaluating it, restoring the mode even on error.
+    fn discard<T>(
+        &mut self,
+        subtree: impl FnOnce(&mut Self) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.suppress += 1;
+        let result = subtree(self);
+        self.suppress -= 1;
+        result
+    }
+
+    /// `||` has the lowest precedence and short-circuits when the left side wins.
     fn parse_or(&mut self) -> Result<value::Scalar, String> {
         let mut left = self.parse_and()?;
         while self.peek() == &Token::OrOr {
             self.next();
-            let right = self.parse_and()?;
-            left = value::Scalar::Bool(truthy(&left) || truthy(&right));
+            let short_circuit = !self.syntax_only() && truthy(&left);
+            let right = if short_circuit {
+                self.discard(|parser| parser.parse_and())?
+            } else {
+                self.parse_and()?
+            };
+            if !self.syntax_only() {
+                left = value::Scalar::Bool(short_circuit || truthy(&right));
+            }
         }
         Ok(left)
     }
 
-    /// `&&` binds tighter than `||`.
+    /// `&&` binds tighter than `||` and short-circuits when the left side loses.
     fn parse_and(&mut self) -> Result<value::Scalar, String> {
         let mut left = self.parse_comparison()?;
         while self.peek() == &Token::AndAnd {
             self.next();
-            let right = self.parse_comparison()?;
-            left = value::Scalar::Bool(truthy(&left) && truthy(&right));
+            let short_circuit = !self.syntax_only() && !truthy(&left);
+            let right = if short_circuit {
+                self.discard(|parser| parser.parse_comparison())?
+            } else {
+                self.parse_comparison()?
+            };
+            if !self.syntax_only() {
+                left = value::Scalar::Bool(!short_circuit && truthy(&right));
+            }
         }
         Ok(left)
     }
@@ -289,6 +325,10 @@ where
             }
             self.next();
             let right = self.parse_additive()?;
+            if self.syntax_only() {
+                left = value::Scalar::Bool(false);
+                continue;
+            }
             left = value::Scalar::Bool(match operator {
                 Token::EqEq => loose_eq(&left, &right),
                 Token::EqEqEq => strict_eq(&left, &right),
@@ -314,6 +354,10 @@ where
             }
             self.next();
             let right = self.parse_multiplicative()?;
+            if self.syntax_only() {
+                left = value::Scalar::Int(0);
+                continue;
+            }
             left = if operator == Token::Plus {
                 add(&left, &right)?
             } else {
@@ -333,6 +377,10 @@ where
             }
             self.next();
             let right = self.parse_unary()?;
+            if self.syntax_only() {
+                left = value::Scalar::Int(0);
+                continue;
+            }
             left = match operator {
                 Token::Star => multiply(&left, &right)?,
                 Token::Slash => divide(&left, &right)?,
@@ -348,7 +396,12 @@ where
         match self.peek() {
             Token::Not => {
                 self.next();
-                Ok(value::Scalar::Bool(!truthy(&self.parse_unary()?)))
+                let value = self.parse_unary()?;
+                Ok(if self.syntax_only() {
+                    value::Scalar::Bool(false)
+                } else {
+                    value::Scalar::Bool(!truthy(&value))
+                })
             }
             Token::Plus => {
                 self.next();
@@ -356,7 +409,12 @@ where
             }
             Token::Minus => {
                 self.next();
-                negate(&self.parse_unary()?)
+                let value = self.parse_unary()?;
+                Ok(if self.syntax_only() {
+                    value::Scalar::Int(0)
+                } else {
+                    negate(&value)?
+                })
             }
             _ => self.parse_primary(),
         }
@@ -364,14 +422,41 @@ where
 
     /// Literal, local or parenthesized expression.
     fn parse_primary(&mut self) -> Result<value::Scalar, String> {
+        let syntax_only = self.syntax_only();
         match self.next() {
-            Token::Int(value) => Ok(value::Scalar::Int(value)),
-            Token::Float(value) => Ok(value::Scalar::Float(value)),
-            Token::String(value) => Ok(value::Scalar::String(value)),
-            Token::True => Ok(value::Scalar::Bool(true)),
-            Token::False => Ok(value::Scalar::Bool(false)),
-            Token::Null => Ok(value::Scalar::Null),
-            Token::Var(name) | Token::Ident(name) => (self.lookup)(&name),
+            Token::Int(value) => Ok(if syntax_only {
+                value::Scalar::Int(0)
+            } else {
+                value::Scalar::Int(value)
+            }),
+            Token::Float(value) => Ok(if syntax_only {
+                value::Scalar::Int(0)
+            } else {
+                value::Scalar::Float(value)
+            }),
+            Token::String(value) => Ok(if syntax_only {
+                value::Scalar::Int(0)
+            } else {
+                value::Scalar::String(value)
+            }),
+            Token::True => Ok(value::Scalar::Bool(!syntax_only)),
+            Token::False => Ok(if syntax_only {
+                value::Scalar::Int(0)
+            } else {
+                value::Scalar::Bool(false)
+            }),
+            Token::Null => Ok(if syntax_only {
+                value::Scalar::Int(0)
+            } else {
+                value::Scalar::Null
+            }),
+            Token::Var(name) | Token::Ident(name) => {
+                if syntax_only {
+                    Ok(value::Scalar::Int(0))
+                } else {
+                    (self.lookup)(&name)
+                }
+            }
             Token::LParen => {
                 let value = self.parse_or()?;
                 if self.next() != Token::RParen {
@@ -395,7 +480,11 @@ where
 
 /// Validates the condition syntax without resolving frame locals.
 pub(crate) fn validate(condition: &str) -> Result<(), String> {
-    evaluate(condition, |_| Ok(value::Scalar::Int(0))).map(|_| ())
+    let mut parser = Parser::new(condition, |_| Ok(value::Scalar::Int(0)))?;
+    parser.suppress += 1;
+    let result = parser.parse();
+    parser.suppress -= 1;
+    result.map(|_| ())
 }
 
 /// PHP truthiness for the scalar subset.
@@ -446,7 +535,13 @@ fn loose_eq(left: &value::Scalar, right: &value::Scalar) -> bool {
         (value::Scalar::Bool(_), _) | (_, value::Scalar::Bool(_)) => {
             truthy(left) == truthy(right)
         }
-        (value::Scalar::Null, _) | (_, value::Scalar::Null) => !truthy(left) || !truthy(right),
+        (value::Scalar::Null, other) | (other, value::Scalar::Null) => match other {
+            value::Scalar::Bool(value) => !*value,
+            value::Scalar::Int(value) => *value == 0,
+            value::Scalar::Float(value) => *value == 0.0,
+            value::Scalar::String(value) => value.is_empty(),
+            _ => false,
+        },
         (value::Scalar::Int(_) | value::Scalar::Float(_), _)
         | (_, value::Scalar::Int(_) | value::Scalar::Float(_)) => {
             numeric(left).ok() == numeric(right).ok()
@@ -507,7 +602,10 @@ fn modulo(left: &value::Scalar, right: &value::Scalar) -> Result<value::Scalar, 
     if denominator == 0 {
         return Err("modulo by zero in condition".to_string());
     }
-    Ok(value::Scalar::Int(numeric(left)? as i64 % denominator))
+    let numerator = numeric(left)? as i64;
+    Ok(value::Scalar::Int(
+        numerator.checked_rem(denominator).unwrap_or(0),
+    ))
 }
 
 /// Unary negation.
@@ -600,5 +698,35 @@ mod tests {
         assert!(evaluate("$nope === 1", &lookup).is_err());
         assert!(validate("$i === 3").is_ok());
         assert!(validate("$i ===").is_err());
+    }
+
+    /// Verifies syntax validation does not divide by the placeholder zero.
+    #[test]
+    fn validates_without_evaluating_arithmetic() {
+        assert!(validate("$total / $count > 2").is_ok());
+        assert!(validate("$i % $period == 0").is_ok());
+        assert!(validate("$n / ($n - 1) > 0").is_ok());
+        assert!(validate("$n /").is_err());
+    }
+
+    /// Verifies `||` and `&&` skip the right side when the left side decides.
+    #[test]
+    fn short_circuits_guarded_conditions() {
+        let entries = [("ready", value::Scalar::Bool(true))];
+        let ready = lookup(&entries);
+        assert!(evaluate("$ready || 1 / 0 > 0", &ready).is_ok());
+        assert!(evaluate("$ready || $missing > 0", &ready).is_ok());
+        let entries = [("ready", value::Scalar::Bool(false))];
+        let not_ready = lookup(&entries);
+        assert!(!evaluate("$ready && $missing > 0", &not_ready).unwrap());
+    }
+
+    /// Verifies non-ASCII string literals compare with UTF-8 locals.
+    #[test]
+    fn preserves_non_ascii_string_literals() {
+        let entries = [("name", value::Scalar::String("café".to_string()))];
+        let lookup = lookup(&entries);
+        assert!(evaluate("$name === 'café'", &lookup).unwrap());
+        assert!(!evaluate("$name === 'café' && false", &lookup).unwrap());
     }
 }

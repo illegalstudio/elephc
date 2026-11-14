@@ -1542,6 +1542,11 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
+    // Deduplicate guards inside each block only. A loop header is lowered across
+    // an initializer, a condition and an update block; a function-wide set would
+    // leave the guard in the one-shot initializer and stop the breakpoint after
+    // its first iteration.
+    ctx.debug_guarded_lines.clear();
     ctx.emitter.comment(&format!("@block name={}", block.name));
     let block_label = ctx.block_label_for_id(block.id)?;
     ctx.emitter.label(&block_label);
@@ -1593,9 +1598,9 @@ pub(super) fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst
         } else {
             String::new()
         };
-        // One logical guard per source line per function. The guard stays in the
-        // block where the line first appears, so a loop re-enters the same site
-        // and a breakpoint can stop on every iteration.
+        // One logical guard per source line per block. Each block that can run
+        // again (a loop condition or update) keeps its own guard, so a
+        // breakpoint on a loop header stops on every iteration.
         let site_id = if ctx.shared.debug_build {
             source.as_ref().and_then(|(source_id, _)| {
                 let key = (*source_id, span.line);
@@ -1624,7 +1629,7 @@ pub(super) fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst
         }
         ctx.emitter.comment(&marker);
         if let Some(site_id) = site_id {
-            debug_sites::emit_site_call(ctx, site_id);
+            debug_sites::emit_site_call(ctx, site_id)?;
         }
     }
     Ok(())

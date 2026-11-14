@@ -125,7 +125,7 @@ pub(super) fn lower_terminator(
                     let edge_count = branch_edge_count(&ctx.function.branch_sites[index])
                         .expect("dynamic switch branch has a known edge count");
                     let sites = branch_sites(ctx, index, edge_count);
-                    super::debug_sites::emit_site_call(ctx, sites[edge] as usize);
+                    super::debug_sites::emit_site_call(ctx, sites[edge] as usize)?;
                 }
             }
             lower_branch(ctx, block_id, *target, args, "br")?;
@@ -199,10 +199,10 @@ pub(super) fn lower_terminator(
                 emit_conditional_jump(ctx, condition, &then_guard)?;
                 abi::emit_jump(ctx.emitter, &else_guard);
                 ctx.emitter.label(&then_guard);
-                super::debug_sites::emit_site_call(ctx, then_site as usize);
+                super::debug_sites::emit_site_call(ctx, then_site as usize)?;
                 abi::emit_jump(ctx.emitter, &then_edge);
                 ctx.emitter.label(&else_guard);
-                super::debug_sites::emit_site_call(ctx, else_site as usize);
+                super::debug_sites::emit_site_call(ctx, else_site as usize)?;
                 abi::emit_jump(ctx.emitter, &else_edge);
             } else if let Some(case_site) = dynamic_case_site {
                 let then_guard = ctx.next_label("branch_case");
@@ -210,7 +210,7 @@ pub(super) fn lower_terminator(
                 emit_conditional_jump(ctx, condition, &then_guard)?;
                 abi::emit_jump(ctx.emitter, &else_guard);
                 ctx.emitter.label(&then_guard);
-                super::debug_sites::emit_site_call(ctx, case_site as usize);
+                super::debug_sites::emit_site_call(ctx, case_site as usize)?;
                 abi::emit_jump(ctx.emitter, &then_edge);
                 ctx.emitter.label(&else_guard);
                 abi::emit_jump(ctx.emitter, &else_edge);
@@ -777,7 +777,7 @@ fn lower_path_terminal_dispatch(
             Arch::X86_64 => ctx.emitter.instruction(&format!("jne {}", next)),  // not this full-prefix route
         }
         ctx.emitter.label(&matched);
-        super::debug_sites::emit_site_call(ctx, *site as usize);
+        super::debug_sites::emit_site_call(ctx, *site as usize)?;
         abi::emit_jump(ctx.emitter, &edge);
         ctx.emitter.label(&next);
     }
@@ -863,11 +863,11 @@ fn lower_switch(
         abi::emit_jump(ctx.emitter, &default_guard);
         for (guard_label, branch_label, site) in case_guards {
             ctx.emitter.label(&guard_label);
-            super::debug_sites::emit_site_call(ctx, site as usize);
+            super::debug_sites::emit_site_call(ctx, site as usize)?;
             abi::emit_jump(ctx.emitter, &branch_label);
         }
         ctx.emitter.label(&default_guard);
-        super::debug_sites::emit_site_call(ctx, sites[cases.len()] as usize);
+        super::debug_sites::emit_site_call(ctx, sites[cases.len()] as usize)?;
         abi::emit_jump(ctx.emitter, &default_edge);
     } else {
         abi::emit_jump(ctx.emitter, &default_edge);

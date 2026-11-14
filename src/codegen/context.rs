@@ -98,8 +98,8 @@ pub(crate) struct FunctionContext<'a> {
     /// its epilogue's `elephc_instr_exit(id)`. `None` outside `--instrument`.
     pub(super) instr_id: Option<usize>,
     /// Source `(source_id, line)` pairs that already received a debug guard in
-    /// this function. Keeping one logical site per line makes a breakpoint hit
-    /// again on every loop iteration instead of only once.
+    /// the current block. Reset for each block so a loop condition or update
+    /// block keeps its own guard and a line breakpoint stops every iteration.
     pub(super) debug_guarded_lines: std::collections::HashSet<(u32, u32)>,
     /// Compiler-assigned debug function id for enter/exit hooks.
     pub(super) debug_function_id: Option<u32>,

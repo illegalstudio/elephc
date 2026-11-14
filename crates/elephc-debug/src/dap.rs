@@ -1572,8 +1572,26 @@ impl Debugger {
 
     /// Records the depth and mode of the next stepping command.
     fn dap_start_step(&mut self, mode: StepMode) {
-        let depth = super::ACTIVATIONS.with(|stack| stack.borrow().len());
-        self.step = Some(StepState { mode, depth });
+        let (depth, function_id, source_id, line) = super::ACTIVATIONS.with(|stack| {
+            let stack = stack.borrow();
+            let frame = stack.last();
+            let site = frame
+                .and_then(|frame| frame.last_site)
+                .and_then(|site_id| self.sites.get(&site_id));
+            (
+                stack.len(),
+                frame.map(|frame| frame.function_id).unwrap_or(0),
+                site.map(|site| site.source_id).unwrap_or(0),
+                site.map(|site| site.line).unwrap_or(0),
+            )
+        });
+        self.step = Some(StepState {
+            mode,
+            depth,
+            function_id,
+            source_id,
+            line,
+        });
     }
 }
 

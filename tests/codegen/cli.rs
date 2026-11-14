@@ -6713,6 +6713,120 @@ fn test_cli_debug_dap_evaluate_properties_indices_and_scalars() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a breakpoint on a `for` header survives the loop's condition and
+/// update blocks instead of stopping only at the one-shot initializer.
+#[test]
+fn test_cli_debug_dap_loop_header_breakpoint_stops_each_iteration() {
+    let dir = make_cli_test_dir("elephc_cli_debug_dap_loop_header");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfor ($i = 0; $i < 3; $i++) {\n    $value = $i;\n}\necho \"done\\n\";\n",
+    )
+    .expect("write DAP loop fixture");
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [{"line": 2}],
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(
+        response["body"]["breakpoints"][0]["verified"], true,
+        "{response}"
+    );
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+
+    let mut stops = 0;
+    loop {
+        let message = client.recv();
+        if message["type"] == "event" && message["event"] == "stopped" {
+            stops += 1;
+            let seq = client.send("continue", None);
+            assert_eq!(client.response(seq)["success"], true);
+            continue;
+        }
+        if message["type"] == "event" && message["event"] == "terminated" {
+            break;
+        }
+    }
+    assert!(
+        stops >= 2,
+        "loop-header breakpoint stopped {stops} time(s), expected each iteration"
+    );
+    let status = client.child.wait().expect("wait for loop adapter");
+    assert!(status.success(), "loop adapter failed");
+    let output = client.program_output();
+    assert!(output.contains("done"), "{output}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies shutdown destructors and registered shutdown callbacks still reach
+/// the DAP Debug Console before the terminated event.
+#[test]
+fn test_cli_debug_dap_shutdown_output_precedes_terminated() {
+    let dir = make_cli_test_dir("elephc_cli_debug_dap_shutdown_output");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nclass CleanupProbe {\n    public function __destruct() {\n        echo \"dtor-out\\n\";\n    }\n}\n$probe = new CleanupProbe();\necho \"main-out\\n\";\n",
+    )
+    .expect("write DAP shutdown output fixture");
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    loop {
+        let message = client.recv();
+        if message["type"] == "event" && message["event"] == "terminated" {
+            break;
+        }
+    }
+    let status = client.child.wait().expect("wait for shutdown adapter");
+    assert!(status.success(), "shutdown adapter failed");
+    let output = client.program_output();
+    for expected in ["main-out", "dtor-out"] {
+        assert!(output.contains(expected), "missing {expected}: {output:?}");
+    }
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies stdout and stderr chunks are forwarded as DAP output events while
 /// the protocol stream stays free of raw program output.
 #[test]
@@ -6981,7 +7095,7 @@ fn test_cli_debug_postmortem_ring_truncation() {
         .iter()
         .filter_map(|call| call["function"].as_str())
         .collect();
-    assert_eq!(names, ["main", "run", "tick"], "{postmortem}");
+    assert_eq!(names, ["tick", "tick", "tick"], "{postmortem}");
     let _ = fs::remove_dir_all(&dir);
 }
 
