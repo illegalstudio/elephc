@@ -105,7 +105,6 @@ pub(super) fn lower_named_args_with_signature_options(
             } else { prepare_captured_output_argument(ctx, source.expr(), ty) })
         });
         let value = lower_planned_source_arg(ctx, sig, &plan, source_index, capture_values);
-        record_planned_object_param_source(ctx, sig, &plan, source_index, value);
         source_values.push(value);
         if let Some((name, ty)) = previous { ctx.set_local_logical_type(&name, ty); }
     }
@@ -167,7 +166,23 @@ fn lower_normalized_args(
 }
 
 /// Preserves a regular reference argument's place while consuming the shared source-order plan.
+///
+/// Also records the class-like parameter check the evaluated source needs, so every named
+/// lowering branch defers it to parameter-order normalization.
 fn lower_planned_source_arg(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    plan: &crate::types::call_args::CallArgPlan,
+    source_index: usize,
+    capture_values: bool,
+) -> crate::ir::ValueId {
+    let value = lower_planned_source_arg_value(ctx, sig, plan, source_index, capture_values);
+    record_planned_object_param_source(ctx, sig, plan, source_index, value);
+    value
+}
+
+/// Lowers one planned source argument without recording its class-like parameter check.
+fn lower_planned_source_arg_value(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     plan: &crate::types::call_args::CallArgPlan,
