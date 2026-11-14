@@ -209,8 +209,11 @@ pub(crate) fn apply(
     if !trusted.is_trusted(peer) {
         return facts;
     }
-    if let Some(value) = header_joined(headers, "forwarded") {
-        if let Some(forwarded) = ForwardedHeader::parse(&value) {
+    let forwarded_values: Vec<&str> = header_values(headers, "forwarded")
+        .filter(|value| !value.trim().is_empty())
+        .collect();
+    if !forwarded_values.is_empty() {
+        if let Some(forwarded) = ForwardedHeader::parse(&forwarded_values) {
             forwarded.apply(&mut facts, trusted);
             // Do not consult the client-supplied X-Forwarded family once the
             // trusted hop has committed to RFC 7239.
@@ -261,6 +264,18 @@ struct ForwardedElement {
     for_present: bool,
 }
 
+impl ForwardedElement {
+    /// Returns an element that carries no trusted parameter and stops the walk.
+    fn invalid() -> Self {
+        Self {
+            node: None,
+            scheme: None,
+            host_port: None,
+            for_present: false,
+        }
+    }
+}
+
 /// Applies one element's `proto` and `host` without touching the address.
 fn apply_scheme_and_host(facts: &mut ConnectionFacts, element: &ForwardedElement) {
     if let Some(scheme) = element.scheme {
@@ -284,43 +299,63 @@ struct ForwardedHeader {
 
 impl ForwardedHeader {
     /// Parses every parseable element instead of rejecting the whole header.
-    fn parse(value: &str) -> Option<Self> {
+    ///
+    /// Each header line is split on its own: an unbalanced quote in a
+    /// client-supplied line must not swallow the element appended by the
+    /// trusted proxy on the next line. An unbalanced line or element becomes
+    /// an invalid sentinel, which ends the right-to-left walk without trusting
+    /// any parameter from it.
+    fn parse(values: &[&str]) -> Option<Self> {
         let mut elements = Vec::new();
-        for element in split_quoted(value, ',') {
-            if element.trim().is_empty() {
+        let mut has_meaningful = false;
+        for value in values {
+            let Some(line_elements) = split_quoted(value, ',') else {
+                elements.push(ForwardedElement::invalid());
                 continue;
-            }
-            let mut node = None;
-            let mut scheme = None;
-            let mut host_port_value = None;
-            let mut for_present = false;
-            for pair in split_quoted(element, ';') {
-                if pair.trim().is_empty() {
+            };
+            for element in line_elements {
+                if element.trim().is_empty() {
                     continue;
                 }
-                let Some((key, value)) = pair.split_once('=') else {
+                let Some(pairs) = split_quoted(element, ';') else {
+                    elements.push(ForwardedElement::invalid());
                     continue;
                 };
-                let key = key.trim().to_ascii_lowercase();
-                let value = unquote(value.trim());
-                match key.as_str() {
-                    "for" => {
-                        for_present = true;
-                        node = parse_forwarded_node(&value);
+                let mut node = None;
+                let mut scheme = None;
+                let mut host_port_value = None;
+                let mut for_present = false;
+                for pair in pairs {
+                    if pair.trim().is_empty() {
+                        continue;
                     }
-                    "proto" => scheme = normalize_scheme(&value),
-                    "host" => host_port_value = host_port(&value),
-                    _ => {}
+                    let Some((key, value)) = pair.split_once('=') else {
+                        continue;
+                    };
+                    let key = key.trim().to_ascii_lowercase();
+                    let value = unquote(value.trim());
+                    match key.as_str() {
+                        "for" => {
+                            for_present = true;
+                            node = parse_forwarded_node(&value);
+                        }
+                        "proto" => scheme = normalize_scheme(&value),
+                        "host" => host_port_value = host_port(&value),
+                        _ => {}
+                    }
                 }
+                if node.is_some() || scheme.is_some() || host_port_value.is_some() || for_present {
+                    has_meaningful = true;
+                }
+                elements.push(ForwardedElement {
+                    node,
+                    scheme,
+                    host_port: host_port_value,
+                    for_present,
+                });
             }
-            elements.push(ForwardedElement {
-                node,
-                scheme,
-                host_port: host_port_value,
-                for_present,
-            });
         }
-        (!elements.is_empty()).then_some(Self { elements })
+        has_meaningful.then_some(Self { elements })
     }
 
     /// Applies the closest untrusted element, including its proto and host.
@@ -537,7 +572,10 @@ fn host_port(value: &str) -> Option<u16> {
 }
 
 /// Splits on `separator` while ignoring separators inside quoted strings.
-fn split_quoted(input: &str, separator: char) -> Vec<&str> {
+///
+/// Returns `None` when the final quote is unbalanced. Callers must not trust
+/// any element from an unbalanced slice.
+fn split_quoted(input: &str, separator: char) -> Option<Vec<&str>> {
     let mut parts = Vec::new();
     let mut start = 0;
     let mut quoted = false;
@@ -560,8 +598,11 @@ fn split_quoted(input: &str, separator: char) -> Vec<&str> {
             start = index + 1;
         }
     }
+    if quoted || escaped {
+        return None;
+    }
     parts.push(input[start..].trim());
-    parts
+    Some(parts)
 }
 
 /// Removes RFC 7239 quoting and backslash escapes from one parameter value.
@@ -749,6 +790,58 @@ mod tests {
             &trusted("127.0.0.1/32"),
         );
         assert_eq!(facts.remote_addr, "127.0.0.1");
+        assert_eq!(facts.request_scheme, "https");
+        assert!(facts.https);
+        assert_eq!(facts.server_port, 443);
+    }
+
+    /// An unbalanced client quote must not swallow the trusted hop's line.
+    #[test]
+    fn forwarded_unbalanced_quote_does_not_swallow_appended_line() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("Forwarded", "for=1.2.3.4;proto=https;x=\""),
+                ("Forwarded", "for=203.0.113.9"),
+            ]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "203.0.113.9");
+        assert_eq!(facts.request_scheme, "http");
+        assert!(!facts.https);
+        assert_eq!(facts.server_port, 8080);
+    }
+
+    /// An unbalanced quote inside one line invalidates that whole line.
+    #[test]
+    fn forwarded_unbalanced_quote_single_line_stops_walk() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[(
+                "Forwarded",
+                "for=1.2.3.4;proto=https;x=\", for=203.0.113.9",
+            )]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "127.0.0.1");
+        assert_eq!(facts.request_scheme, "http");
+        assert!(!facts.https);
+        assert_eq!(facts.server_port, 8080);
+    }
+
+    /// A Forwarded header with no meaningful parameter does not hide XFF.
+    #[test]
+    fn forwarded_garbage_falls_back_to_xff() {
+        let facts = apply(
+            &peer("127.0.0.1"),
+            &headers(&[
+                ("Forwarded", "x"),
+                ("X-Forwarded-For", "9.9.9.9"),
+                ("X-Forwarded-Proto", "https"),
+            ]),
+            &trusted("127.0.0.1/32"),
+        );
+        assert_eq!(facts.remote_addr, "9.9.9.9");
         assert_eq!(facts.request_scheme, "https");
         assert!(facts.https);
         assert_eq!(facts.server_port, 443);
