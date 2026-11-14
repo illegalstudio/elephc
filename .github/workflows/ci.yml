@@ -2051,6 +2051,7 @@ jobs:
 
       - name: Check benchmark tooling and generated reports
         run: |
+          bash benchmark/tests/test_web_bash.sh
           python3 -B -m unittest discover -s benchmark/tests -v
           python3 -B benchmark/report.py
           git diff --exit-code -- benchmark/assets

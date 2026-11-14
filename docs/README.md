@@ -91,6 +91,7 @@ Compiler-specific extensions that go beyond standard PHP. These features have no
 - [PHP extensions](beyond-php/phpext.md): real PHP 8.5 modules, copied values and NTS/ZTS request isolation
 - [Web Server (--web)](beyond-php/web.md) — compile a PHP file into a standalone HTTP server with worker, pool, or per-request process isolation
 - [Persistent Web Applications](beyond-php/web-application.md): bootstrap a typed application once per worker and prepare fresh HTTP requests
+- [Edge Deployment](beyond-php/web-edge.md) — run a `--web` origin behind Caddy, nginx, HAProxy, Traefik, Apache, Ferron, or a cloud load balancer: TLS, static assets, trusted proxies, systemd, and containers
 - [Testing](beyond-php/testing.md) — the native test runtime: `Elephc\Testing\TestCase`, the PHPUnit-compatible assertion subset, the `Runner` report and exit code, and the `PHPUnit\Framework\TestCase` alias
 - [Hosting PHP Extensions](beyond-php/php-extensions.md) — `elephc extension add` builds a real PECL/PIE or in-house C extension from source and links it, functions and classes included, on Elephc's own Rust implementation of the extension API
 - [zval Bridge](beyond-php/zval-bridge.md) — zval_pack/unpack/type/free convert elephc values to/from PHP zval structs

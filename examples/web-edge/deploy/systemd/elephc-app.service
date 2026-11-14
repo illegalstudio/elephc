@@ -1,0 +1,27 @@
+[Unit]
+Description=elephc web origin (HTTP/1.1 over a Unix socket)
+After=network.target
+
+[Service]
+Type=simple
+User=elephc
+Group=elephc-web
+UMask=0007
+RuntimeDirectory=elephc
+RuntimeDirectoryMode=0750
+StateDirectory=elephc/sessions
+StateDirectoryMode=0750
+Environment=ELEPHC_SESSION_SAVE_PATH=/var/lib/elephc/sessions
+ExecStart=/usr/local/bin/app --listen unix:/run/elephc/app.sock --workers 4 --trusted-proxy unix
+Restart=on-failure
+RestartSec=1
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/run/elephc /var/lib/elephc
+
+[Install]
+WantedBy=multi-user.target

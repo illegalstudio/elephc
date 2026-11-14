@@ -1,0 +1,1 @@
+static asset served by the edge, not by the elephc origin
