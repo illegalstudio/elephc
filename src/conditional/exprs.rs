@@ -29,6 +29,7 @@ use super::stmts::apply_stmts;
 pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
     let span = expr.span;
     let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(rewrite_expr(*left, defines)),
@@ -270,5 +271,5 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         },
         other => other,
     };
-    Expr { kind, span, source_profile }
+    Expr { kind, span, source_profile, producer_binding }
 }

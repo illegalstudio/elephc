@@ -19,6 +19,7 @@ use super::statements::prune_stmt;
 pub(crate) fn prune_expr(expr: Expr) -> Expr {
     let span = expr.span;
     let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
@@ -287,7 +288,7 @@ pub(crate) fn prune_expr(expr: Expr) -> Expr {
         }
     };
     let kind = prune_unused_pure_subexpressions(kind);
-    Expr { kind, span, source_profile }
+    Expr { kind, span, source_profile, producer_binding }
 }
 
 /// Lowers an instanceof target expression or name, applying prune_expr recursively

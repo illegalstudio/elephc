@@ -397,6 +397,11 @@ pub(super) fn php_type_allows_null(php_type: &PhpType) -> bool {
 
 /// Estimates the value type an expression will materialize during branch lowering.
 pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
+    crate::types::constant_binding::bound_result_type(unbound_materialized_expr_type(ctx, expr), expr.producer_binding)
+}
+
+/// Predicts original materialization before a prepared declaration applies its producer binding.
+fn unbound_materialized_expr_type(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> PhpType {
     // A nullsafe postfix chain lowers to its boxed chain temp whatever its last segment reads,
     // so `$o?->floats[0]` must not be predicted as the syntactic `int` and cast back.
     if let Some(storage) = super::nullsafe_chain::result_storage_type(expr) {

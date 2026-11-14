@@ -26,7 +26,7 @@ pub(super) fn reflection_parameter_default_value(
                 info.method_impl_classes.values().chain(info.static_method_impl_classes.values())
                     .any(|owner| owner == scope))))
             && function.callable_default.as_ref()
-                .is_some_and(|value| value == default && value.span == default.span))
+                .is_some_and(|value| value.same_value_producer(default)))
     {
         return Ok(Some(ReflectionParameterDefaultValue::EirHelper(helper.name.clone())));
     }

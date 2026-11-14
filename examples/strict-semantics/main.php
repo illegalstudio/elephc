@@ -3,7 +3,9 @@
 // Literal source is verified and compiled ahead of time.
 eval('echo "Verified at compilation", PHP_EOL;');
 
-function showDecision(mixed $value): void {
+const DEFAULT_DECISION = true;
+
+function showDecision(mixed $value = DEFAULT_DECISION): void {
     try {
         if ($value) {
             echo "Accepted a boolean", PHP_EOL;
@@ -13,6 +15,7 @@ function showDecision(mixed $value): void {
     }
 }
 
+showDecision();
 showDecision(true);
 showDecision(1);
 if ((bool) $argc) {

@@ -32,6 +32,15 @@ pub(in crate::optimize) fn numeric_literal(expr: &Expr) -> Option<f64> {
 
 /// Extracts a ScalarValue from a scalar literal expression (Null, Bool, Int, Float, String).
 pub(in crate::optimize) fn scalar_value(expr: &Expr) -> Option<ScalarValue> {
+    let value = unbound_scalar_value(expr)?;
+    Some(match (expr.producer_binding, value) {
+        (Some(crate::parser::ast::ProducerBinding::IntegerToFloat), ScalarValue::Int(value)) => ScalarValue::Float(value as f64),
+        (_, value) => value,
+    })
+}
+
+/// Reads the underlying literal before a prepared declaration widens its integer value.
+fn unbound_scalar_value(expr: &Expr) -> Option<ScalarValue> {
     match &expr.kind {
         ExprKind::Null => Some(ScalarValue::Null),
         ExprKind::BoolLiteral(value) => Some(ScalarValue::Bool(*value)),

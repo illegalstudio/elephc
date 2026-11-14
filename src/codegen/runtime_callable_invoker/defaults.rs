@@ -88,16 +88,16 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
         .enumerate()
         .map(|(index, default)| {
             let default = default.as_ref()?;
+            let bound_default = sig.default_value(index)?;
             if let Some(message) = deferred_error_message(default) {
                 return Some(InvokerDefaultValue::DeferredError(message.to_string()));
             }
             if let Some(helper) = module.closures.iter().chain(module.functions.iter()).find(|function|
                 function.callable_default.as_ref().is_some_and(|value|
-                    value == default && value.span == default.span)
+                    value.same_value_producer(&bound_default))
                     && function.lexical_class.as_deref() == current_class) {
                 return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
             }
-            let bound_default = sig.default_value(index)?;
             let value = resolve_const_default(&bound_default, &context)?;
             let value = normalize_invoker_default(module, value)?;
             materializable(module, &value).then_some(value)

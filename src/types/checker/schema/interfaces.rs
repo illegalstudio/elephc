@@ -490,7 +490,7 @@ pub(crate) fn build_interface_info_recursive(
                 ));
             }
         }
-        iface_constants.insert(c.name.clone(), crate::types::constant_binding::bind_declared_literal(
+        iface_constants.insert(c.name.clone(), crate::types::constant_binding::bind_declared_value(
             c.value.clone(), c.type_expr.as_ref()));
         if let Some(type_expr) = &c.type_expr {
             constant_types.insert(c.name.clone(), type_expr.clone());

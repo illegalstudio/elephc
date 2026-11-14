@@ -1415,7 +1415,7 @@ pub(crate) fn lower_eval_native_default_helpers(
                             .cloned().unwrap_or_else(|| class_name.clone());
                         specs.push((eval_native_default_helper_name(
                             class_info.class_id, is_static, method_name, param_index,
-                        ), Some(scope), default.clone()));
+                        ), Some(scope), signature.default_value(param_index).expect("present method default")));
                     }
                 }
             }
@@ -1428,7 +1428,7 @@ pub(crate) fn lower_eval_native_default_helpers(
             let Some(default) = default else { continue; };
             if contains_deferred_error(default) && !matches!(default.kind, ExprKind::Throw(_)) {
                 specs.push((format!("__elephc_eval_default\\function\\{name}\\{index}"),
-                    None, default.clone()));
+                    None, signature.default_value(index).expect("present function default")));
             }
         }
     }

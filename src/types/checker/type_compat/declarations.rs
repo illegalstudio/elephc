@@ -516,6 +516,12 @@ impl Checker {
         Ok(())
     }
 
+    /// Infers an omitted value after producer binding while retaining its original declaration tree.
+    pub(crate) fn infer_bound_default(&mut self, value: &Expr, destination: &PhpType,
+        env: &TypeEnv) -> Result<PhpType, CompileError> {
+        self.infer_type(&crate::types::constant_binding::bind_value(value.clone(), destination), env)
+    }
+
     /// Resolves a default's original kind while retaining deferred declaration failures.
     pub(crate) fn resolved_declaration_default_type(
         &mut self, default_expr: Option<&Expr>,

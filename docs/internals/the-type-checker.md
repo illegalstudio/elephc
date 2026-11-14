@@ -234,6 +234,15 @@ existing ambiguity and AST-duplication guards apply to these decisions too.
 
 `declare(strict_types=1)` is scoped to one physical file, while the checker sees the flat program produced by include/autoload merging. The parser records the directive in its per-file `SourceProfile` (`crate::source`). Statements retain `source_mode` and `strict_types`, and expressions retain the whole profile in `Expr::source_profile`. Expression clones and rewrites preserve that producer profile, including default values imported from traits or copied into signature metadata. `Expr::with_kind` rebuilds a node while retaining its span and profile. Statement-rewriting passes re-install the whole profile through `with_parse_mode`/`scoped_parse_mode`. Spans also retain packed source identity for diagnostics; they do not replace the expression policy.
 
+Prepared default and constant copies also carry `Expr::producer_binding`.
+`types::constant_binding::bind_value` records identity or integer-to-float binding
+without replacing a nonliteral source expression. Checker inference, EIR lowering
+and compact default metadata select the expression's producer profile, evaluate
+it once, then apply that binding. Union alternatives retain null, object and other
+non-integer values. Raw signature defaults remain available for reflection names
+and source export. Native lazy-default helpers match syntax, span, profile and
+binding through `Expr::same_value_producer`.
+
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 
 None of this is affected by the permissive local retyping described in [Local retyping and strict locals mode](#local-retyping-and-strict-locals-mode) above: a **declared** type stays strict regardless of `strict_types` or `--strict-locals`.

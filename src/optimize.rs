@@ -119,6 +119,15 @@ pub(crate) fn fold_constant_expression(expr: Expr) -> Expr {
     fold_expr(expr)
 }
 
+/// Evaluates a declaration producer with its physical policy and restores the consuming scope.
+pub(crate) fn with_expression_semantics<T>(profile: elephc_semantics::SemanticProfile,
+    source: crate::source::SourceProfile, f: impl FnOnce() -> T) -> T {
+    let _profile = scoped_semantic_profile(profile);
+    let _mode = semantic_context::scoped_source_mode(source.mode);
+    let _source = crate::source::scoped_parse_mode(source);
+    f()
+}
+
 /// Folds constants whose values or builtin availability depend on the compile target.
 ///
 /// This variant is used before type checking so portable `PHP_OS[_FAMILY]` and

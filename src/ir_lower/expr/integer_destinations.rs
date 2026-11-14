@@ -31,6 +31,9 @@ pub(super) fn lower_expr_for_parameter(
     destination: &PhpType,
     source_typed: bool,
 ) -> LoweredValue {
+    if expr.producer_binding.is_some() {
+        return lower_expr_for_destination(ctx, expr, destination);
+    }
     if crate::ir_lower::conversion_boundaries::active(ctx, destination) {
         return lower_expr(ctx, expr);
     }

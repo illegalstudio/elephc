@@ -17,7 +17,7 @@ mod types;
 
 pub use expr::{
     is_compound_assignment_self_read, is_compound_property_assignment_self_read, ArrayEntry,
-    CallableTarget, CastType, Expr, ExprKind,
+    CallableTarget, CastType, Expr, ExprKind, ProducerBinding,
     InstanceOfTarget, MagicConstant, StaticReceiver,
 };
 pub use ffi::{

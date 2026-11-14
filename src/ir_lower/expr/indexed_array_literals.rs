@@ -134,6 +134,9 @@ pub(crate) fn lower_expr_for_destination(
     expr: &Expr,
     destination: &PhpType,
 ) -> LoweredValue {
+    if let Some(binding) = expr.producer_binding {
+        return super::producer_values::lower_for_destination(ctx, expr, binding, destination);
+    }
     // A named argument (`f(items: [null])`) binds its value to the same destination.
     if let ExprKind::NamedArg { value, .. } = &expr.kind {
         return lower_expr_for_destination(ctx, value, destination);

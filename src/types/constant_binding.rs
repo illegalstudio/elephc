@@ -1,5 +1,5 @@
 //! Purpose:
-//! Shares parsed constant contracts and already-validated scalar literal binding.
+//! Shares parsed constant contracts and prepared declaration producer binding.
 //!
 //! Called from:
 //! - Class, interface and enum schema metadata construction.
@@ -7,10 +7,21 @@
 //!
 //! Key details:
 //! - Original source expressions stay available to strict validation before metadata is bound.
-//! - Only integer-to-float literal widening changes a value; unresolved expressions stay intact.
+//! - Prepared copies retain source expressions and record integer widening after evaluation.
 
 use crate::parser::ast::{Expr, ExprKind, TypeExpr};
 use crate::types::PhpType;
+
+/// Preserves non-integer alternatives when a prepared producer widens its integer result.
+pub(crate) fn bound_result_type(ty: PhpType, binding: Option<crate::parser::ast::ProducerBinding>) -> PhpType {
+    if binding != Some(crate::parser::ast::ProducerBinding::IntegerToFloat) { return ty; }
+    match ty {
+        PhpType::Int => PhpType::Float,
+        PhpType::Union(members) => crate::types::checker::normalize_union_members(
+            members.into_iter().map(|member| bound_result_type(member, binding)).collect()),
+        other => other,
+    }
+}
 
 /// Projects checked annotation categories without imposing the PHP extension's public type subset.
 pub(crate) fn declared_type(ty: &TypeExpr) -> PhpType {
@@ -45,18 +56,27 @@ pub(crate) fn declared_type(ty: &TypeExpr) -> PhpType {
     }
 }
 
-/// Materializes a validated literal under its declaration without treating a read as a new conversion.
-pub(crate) fn bind_literal(mut value: Expr, declared: &PhpType) -> Expr {
-    if declared.coerces_integer_to_float() {
+/// Prepares a validated declaration copy without turning its later read into a new conversion.
+pub(crate) fn bind_value(value: Expr, declared: &PhpType) -> Expr {
+    let binding = if declared.coerces_integer_to_float() {
+        crate::parser::ast::ProducerBinding::IntegerToFloat
+    } else { crate::parser::ast::ProducerBinding::Identity };
+    apply_binding(value, binding)
+}
+
+/// Materializes an integer literal immediately and records binding for unresolved producer results.
+pub(crate) fn apply_binding(mut value: Expr, binding: crate::parser::ast::ProducerBinding) -> Expr {
+    value.producer_binding = Some(binding);
+    if binding == crate::parser::ast::ProducerBinding::IntegerToFloat {
         if let ExprKind::IntLiteral(integer) = value.kind { value.kind = ExprKind::FloatLiteral(integer as f64); }
     }
     value
 }
 
-/// Binds a schema copy while leaving untyped and unresolved source expressions unchanged.
-pub(crate) fn bind_declared_literal(value: Expr, annotation: Option<&TypeExpr>) -> Expr {
+/// Prepares a schema copy while preserving its original source expression and physical policy.
+pub(crate) fn bind_declared_value(value: Expr, annotation: Option<&TypeExpr>) -> Expr {
     match annotation {
-        Some(annotation) => bind_literal(value, &declared_type(annotation)),
-        None => value,
+        Some(annotation) => bind_value(value, &declared_type(annotation)),
+        None => bind_value(value, &PhpType::Mixed),
     }
 }

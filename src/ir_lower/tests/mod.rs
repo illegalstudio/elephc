@@ -767,3 +767,5 @@ mod strict_descriptor_parameters;
 mod strict_nominal_unions;
 
 mod strict_container_unions;
+
+mod strict_default_producers;

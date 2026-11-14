@@ -412,7 +412,7 @@ impl Checker {
                             .defaults
                             .get(i)
                             .and_then(|default| default.as_ref())
-                            .map(|default| self.infer_type(default, caller_env))
+                            .map(|default| self.infer_bound_default(default, &PhpType::Mixed, caller_env))
                             .transpose()?
                             .unwrap_or(PhpType::Int);
                         param_types.push((decl.params[i].clone(), param_ty));
@@ -630,7 +630,7 @@ impl Checker {
                     let default_ty = if deferred_scope_error {
                         declared_ty.clone()
                     } else {
-                        self.infer_type(default_expr, caller_env)?
+                        self.infer_bound_default(default_expr, &declared_ty, caller_env)?
                     };
                     self.require_compatible_arg_type(
                         &declared_ty,
@@ -643,7 +643,7 @@ impl Checker {
                     let ty = if deferred_scope_error {
                         PhpType::Mixed
                     } else {
-                        self.infer_type(default_expr, caller_env)?
+                        self.infer_bound_default(default_expr, &PhpType::Mixed, caller_env)?
                     };
                     param_types.push((decl.params[i].clone(), ty));
                 }

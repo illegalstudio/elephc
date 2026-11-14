@@ -33,6 +33,7 @@ use crate::types::{
 use std::collections::HashSet;
 
 mod constants;
+mod producer_values;
 mod array_merge_values;
 use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
@@ -322,7 +323,9 @@ pub(crate) use static_method_calls::static_receiver_class_name;
 /// Lowers an expression and returns its EIR value.
 pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
     ctx.expression_depth += 1;
-    let value = lower_expr_inner(ctx, expr);
+    let value = if let Some(binding) = expr.producer_binding {
+        producer_values::lower(ctx, expr, binding)
+    } else { lower_expr_inner(ctx, expr) };
     ctx.expression_depth -= 1;
     value
 }

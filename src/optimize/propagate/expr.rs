@@ -76,6 +76,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
     };
     let span = expr.span;
     let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
@@ -193,7 +194,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
             if let ExprKind::Variable(name) = &array.kind {
                 if let Some(PropagatedValue::ArrayLit(fact)) = env.get(name) {
                     if let Some(kind) = try_fold_array_access(fact, &index) {
-                        return fold_expr(Expr { kind, span, source_profile });
+                        return fold_expr(Expr { kind, span, source_profile, producer_binding });
                     }
                 }
             }
@@ -417,7 +418,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         }
     };
 
-    fold_expr(Expr { kind, span, source_profile })
+    fold_expr(Expr { kind, span, source_profile, producer_binding })
 }
 
 /// Proves a whole expression is a constant scalar without skipping any effectful operand.

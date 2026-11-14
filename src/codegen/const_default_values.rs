@@ -253,10 +253,31 @@ pub(in crate::codegen) fn resolve_const_default_at(
     if depth > MAX_CONST_DEFAULT_DEPTH {
         return None;
     }
+    if let Some(binding) = expr.producer_binding {
+        let mut original = expr.clone();
+        original.producer_binding = None;
+        let value = crate::optimize::with_expression_semantics(context.module.semantic_profile,
+            expr.source_profile, || resolve_const_default_at(&original, context, depth))?;
+        return Some(bind_producer_value(value, binding));
+    }
     resolve_literal_const_default(expr)
         .or_else(|| resolve_object_const_default(expr, context, depth))
         .or_else(|| resolve_array_const_default(expr, context, depth))
         .or_else(|| resolve_constant_expression_const_default(expr, context, depth))
+}
+
+/// Applies the same producer integer widening to compact metadata without changing other kinds.
+fn bind_producer_value(value: ConstDefaultValue, binding: crate::parser::ast::ProducerBinding) -> ConstDefaultValue {
+    if binding != crate::parser::ast::ProducerBinding::IntegerToFloat { return value; }
+    match value {
+        ConstDefaultValue::Scalar { kind: CONST_DEFAULT_INT, payload } => ConstDefaultValue::Scalar {
+            kind: CONST_DEFAULT_FLOAT, payload: (payload as f64).to_bits() as i64,
+        },
+        ConstDefaultValue::Evaluated { value, enum_cases } => ConstDefaultValue::Evaluated {
+            value: Box::new(bind_producer_value(*value, binding)), enum_cases,
+        },
+        other => other,
+    }
 }
 
 /// Resolves representable pure constant expressions into a constant value.

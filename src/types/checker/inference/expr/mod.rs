@@ -40,6 +40,20 @@ impl Checker {
     /// references. The result feeds statement checking, function call
     /// validation, and optimizer-visible type metadata.
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
+        if let Some(binding) = expr.producer_binding {
+            let mut original = expr.clone();
+            original.producer_binding = None;
+            let previous_mode = self.semantic_source_mode;
+            let previous_strict = self.strict_types;
+            self.semantic_source_mode = expr.source_profile.mode;
+            self.strict_types = expr.source_profile.strict_types;
+            let result = crate::optimize::with_expression_semantics(self.semantic_profile, expr.source_profile, || {
+                crate::php_only::with_source_mode(expr.source_profile.mode, || self.infer_type(&original, env))
+            });
+            self.semantic_source_mode = previous_mode;
+            self.strict_types = previous_strict;
+            return result.map(|ty| crate::types::constant_binding::bound_result_type(ty, Some(binding)));
+        }
         match &expr.kind {
             ExprKind::IncludeValue { .. }
             | ExprKind::BoolLiteral(_)

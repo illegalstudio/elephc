@@ -122,7 +122,7 @@ pub fn validate_native_widening(
 fn native_value(value: &Expr, class: &str, ty: &PhpType, constants: &HashMap<String, (ExprKind, PhpType)>) -> Option<ExprKind> {
     let resolved = resolve(bind_scope(value.clone(), class), constants, &mut HashSet::new(), 0).ok()?;
     super::constant_values::from_expression(&resolved, 0).ok()?;
-    Some(crate::types::constant_binding::bind_literal(resolved, ty).kind)
+    Some(crate::types::constant_binding::bind_value(resolved, ty).kind)
 }
 
 /// Combines checked source constants with lexical bindings for class constant references.
@@ -247,7 +247,7 @@ fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
                     let mut resolved = resolve(expr.with_kind(value.clone()), constants, active, depth + 1)?;
                     if ty.coerces_integer_to_float() {
                         super::constant_values::from_expression(&resolved, 0)?;
-                        resolved = crate::types::constant_binding::bind_literal(resolved, ty);
+                        resolved = crate::types::constant_binding::bind_value(resolved, ty);
                     }
                     expr.kind = resolved.kind;
                 }

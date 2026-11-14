@@ -22,7 +22,13 @@ pub struct Expr {
     pub span: Span,
     /// Physical producer policy, retained when a default or constant moves into another scope.
     pub source_profile: crate::source::SourceProfile,
+    /// Binding applied to a prepared declaration copy after evaluating its original expression.
+    pub producer_binding: Option<ProducerBinding>,
 }
+
+/// The only conversion PHP declaration values permit besides preserving their original kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProducerBinding { Identity, IntegerToFloat }
 
 #[derive(Debug, Clone, PartialEq)]
 /// One ordered array-literal entry, retaining explicit keys, implicit keys and spreads.
@@ -518,7 +524,7 @@ impl Expr {
     /// Constructs an expression with the given kind and span.
     /// Typically used by parsers; test code may also use this directly.
     pub fn new(kind: ExprKind, span: Span) -> Self {
-        Self { kind, span, source_profile: crate::source::SourceProfile {
+        Self { kind, span, producer_binding: None, source_profile: crate::source::SourceProfile {
             mode: crate::source::current_parse_mode(),
             strict_types: crate::source::current_strict_types(),
         } }
@@ -526,7 +532,13 @@ impl Expr {
 
     /// Rebuilds a producer expression without replacing its physical policy with the current scope.
     pub fn with_kind(&self, kind: ExprKind) -> Self {
-        Self { kind, span: self.span, source_profile: self.source_profile }
+        Self { kind, span: self.span, source_profile: self.source_profile, producer_binding: self.producer_binding }
+    }
+
+    /// Matches prepared native default helpers by syntax, physical origin and value binding.
+    pub fn same_value_producer(&self, other: &Self) -> bool {
+        self == other && self.span == other.span && self.source_profile == other.source_profile
+            && self.producer_binding == other.producer_binding
     }
 
     /// Constructs a string literal expression with the given value.

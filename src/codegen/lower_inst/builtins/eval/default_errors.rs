@@ -57,7 +57,7 @@ fn register_native_reflection_factory(
     let Some(helper) = ctx.module.functions.iter().find(|function|
         function.lexical_class.as_deref() == context.current_class
             && function.callable_default.as_ref().is_some_and(|value|
-                value == default && value.span == default.span)) else { return; };
+                value.same_value_producer(default))) else { return; };
     let Some(signature) = helper.signature.clone() else { return; };
     let entry = crate::names::function_symbol(&helper.name);
     let invoker = crate::codegen::lower_inst::emit_runtime_callable_invoker_with_string_owner(

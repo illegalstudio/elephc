@@ -152,7 +152,7 @@ impl ClassBuildState {
                 .map(|c| {
                     Ok((
                         c.name.clone(),
-                        crate::types::constant_binding::bind_declared_literal(
+                        crate::types::constant_binding::bind_declared_value(
                             resolve_lexical_class_constant_value(&c.value, class)?, c.type_expr.as_ref()),
                     ))
                 })

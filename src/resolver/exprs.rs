@@ -44,6 +44,7 @@ pub(super) fn resolve_expr(
 ) -> Result<Expr, CompileError> {
     let span = expr.span;
     let source_profile = expr.source_profile;
+    let producer_binding = expr.producer_binding;
     let kind = match expr.kind {
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(resolve_expr(*left, base_dir, declared_once, include_chain, state, function_variants)?),
@@ -461,7 +462,7 @@ pub(super) fn resolve_expr(
         },
         other => other,
     };
-    Ok(Expr { kind, span, source_profile })
+    Ok(Expr { kind, span, source_profile, producer_binding })
 }
 
 /// Maps `resolve_expr` over a vector of expressions, returning a vector of resolved expressions.

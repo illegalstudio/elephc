@@ -831,6 +831,35 @@ optimizer controls pass. Test-target type checking, compiler build, architecture
 inventory, assembly comments and diff hygiene also pass. This records producer
 origins for the next binding integration without changing public admission.
 
+### Verified nonliteral default and class-constant producers
+
+Step55 records ProducerBinding on prepared declaration copies. Identity selects
+the physical producer policy; IntegerToFloat widens only an integer after original
+expression evaluation. bind_value and bind_declared_value replace the earlier
+literal-only helper names. Raw AST/signature defaults stay original. Checker
+inference, syntactic/merge typing, AST scalar folding, EIR expression and typed
+literal paths, compact default metadata, reflection and native eval registration
+share the prepared value contract. Native lazy helpers materialize the canonical
+bound default and compare syntax, span, physical profile and binding.
+
+EIR widening evaluates once. Boxed and tagged alternatives use a managed synthetic
+PHP local while checking and converting, because a one-shot OwnedTemp load would
+be consumed by the first predicate. Ordinary merge ownership then preserves the
+result across source retirement. Null and object alternatives remain intact.
+
+The native alias-default probe was red on step54. Three new checks now pass with
+Coercions, Arithmetic and Overflow combined: source preservation, all five emitters
+and native both-optimizer execution with clean heaps. Coverage includes aliases,
+expressions, nullable/nominal values, object alternatives, trusted numeric string
+and negative-power/overflow defaults, direct/descriptor/closure/arrow/trait calls,
+lazy native helpers, reflection, missing dynamic spreads and exact explicit-arg
+rejection. Eleven existing trusted/default/provenance controls, test-target type
+checking, compiler build, architecture828, assembly comments, example PHP syntax and
+CLI execution, and diff hygiene pass. The example uses its existing admitted
+DynamicCode/Bools profile and leaves no task-owned artifacts. Public admission is unchanged. Property initialization,
+nonliteral global constant origins, reference/host boundaries and the remaining
+strict families still require integration.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -952,4 +981,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 51 | `ec3e9e0feb` | feat(strict): preserve exact scalar and nominal union contracts |
 | 52 | `39f10226af` | feat(strict): enforce structural union and callable value contracts |
 | 53 | `6cfe328f09` | feat(strict): validate original source call arguments |
-| 54 | this commit | feat(strict): retain expression producer source profiles |
+| 54 | `82c251fd4d` | feat(strict): retain expression producer source profiles |
+| 55 | this commit | feat(strict): bind nonliteral declaration producers before consumption |

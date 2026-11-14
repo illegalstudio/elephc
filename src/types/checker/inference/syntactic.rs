@@ -312,6 +312,11 @@ fn is_empty_indexed_array_literal(expr: &Expr) -> bool {
 /// casts, null-coalesce, ternary, match, array literals, binary operators, function calls,
 /// and `new` expressions. Returns a conservative type for unrecognized constructs.
 pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
+    crate::types::constant_binding::bound_result_type(infer_unbound_expr_type_syntactic(expr), expr.producer_binding)
+}
+
+/// Estimates the original expression before declaration producer binding changes integer kinds.
+fn infer_unbound_expr_type_syntactic(expr: &Expr) -> PhpType {
     match &expr.kind {
         ExprKind::StringLiteral(_) => PhpType::Str,
         ExprKind::IntLiteral(_) => PhpType::Int,
@@ -733,10 +738,12 @@ mod tests {
                     kind: ExprKind::StringLiteral("return 1;".to_string()),
                     span: Span::dummy(),
                     source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+                    producer_binding: None,
                 }],
             },
             span: Span::dummy(),
             source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+            producer_binding: None,
         };
 
         assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
@@ -982,10 +989,12 @@ mod tests {
                     kind: ExprKind::Throw(Box::new(Expr::string_lit("none"))),
                     span: Span::dummy(),
                     source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+                    producer_binding: None,
                 }),
             },
             span: Span::dummy(),
             source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+            producer_binding: None,
         };
         assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Int);
         let nulled = Expr {
@@ -995,6 +1004,7 @@ mod tests {
             },
             span: Span::dummy(),
             source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+            producer_binding: None,
         };
         assert_eq!(
             infer_expr_type_syntactic(&nulled),
