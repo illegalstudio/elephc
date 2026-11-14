@@ -693,6 +693,10 @@ fn test_tidy_strict_rejects_scalar_config_and_encoding() {
             "<?php declare(strict_types=1); new tidy(null, null, true);",
             "$encoding",
         ),
+        (
+            "<?php declare(strict_types=1); class TidyStrictSubclass extends tidy {} (new TidyStrictSubclass())->parseString('<p>x</p>', null, 123);",
+            "$encoding",
+        ),
     ] {
         let error = compile_expect_type_error(source);
         assert!(
@@ -740,4 +744,25 @@ echo $tidy->configure(123), "\n";
 "#,
     );
     assert_eq!(out, "int\n");
+}
+
+/// A user override of a `tidy` adapter keeps its own `mixed` configuration parameter.
+#[test]
+fn test_tidy_subclass_override_keeps_mixed_under_strict() {
+    if skip_without_tidy_native("test_tidy_subclass_override_keeps_mixed_under_strict") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+class CustomTidyOverride extends tidy {
+    public function parseString(string $string, mixed $config = null, mixed $encoding = null): bool {
+        return is_int($encoding);
+    }
+}
+$tidy = new CustomTidyOverride();
+var_dump($tidy->parseString('<p>x</p>', null, 123));
+"#,
+    );
+    assert_eq!(out, "bool(true)\n");
 }
