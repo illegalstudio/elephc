@@ -84,7 +84,17 @@ pub(super) fn lower_static_settype(
     // Every replacement must publish an EIR store and retire the previous occupant.
     let boxed_storage = ctx.local_slots.get(local_name)
         .is_some_and(|slot| ctx.builder.local_php_type(*slot).codegen_repr() == PhpType::Mixed);
-    if ctx.local_type(local_name).codegen_repr() == PhpType::Mixed || boxed_storage {
+    let checked_numeric = crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+        && matches!(target_ty, PhpType::Int | PhpType::Float);
+    let checked_storage = checked_numeric && !ctx.is_ref_bound_local(local_name);
+    if checked_storage {
+        // A catch can still observe the original kind. Keep both possible values in tagged
+        // storage instead of reading the failed conversion through its success-only type.
+        let slot = ctx.declare_local(local_name, PhpType::Mixed);
+        ctx.builder.widen_local_storage_type(slot, PhpType::Mixed);
+        ctx.set_local_logical_type(local_name, PhpType::Mixed);
+    }
+    if ctx.local_type(local_name).codegen_repr() == PhpType::Mixed || boxed_storage || checked_numeric {
         if boxed_storage {
             ctx.set_local_logical_type(local_name, PhpType::Mixed);
         }
@@ -95,6 +105,7 @@ pub(super) fn lower_static_settype(
             PhpType::Bool => CastType::Bool,
             _ => unreachable!("static settype targets are scalar"),
         };
+        let checked_local = checked_storage.then(|| local_name.clone());
         let cast = Expr::new(ExprKind::Cast { target, expr: Box::new(var_arg.clone()) }, expr.span);
         let assignment = Expr::new(ExprKind::Assignment {
             target: Box::new(var_arg), value: Box::new(cast), result_target: None,
@@ -104,6 +115,7 @@ pub(super) fn lower_static_settype(
         if ctx.value_needs_release_after_use(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(expr.span));
         }
+        if let Some(name) = checked_local { ctx.set_local_logical_type(&name, PhpType::Mixed); }
         return Some(emit_bool_literal(ctx, true, Some(expr.span)));
     }
     let sig = call_signature(ctx, name, source_prefers_extension_builtin(name));

@@ -21,6 +21,7 @@ pub(in crate::interpreter) mod builtin_arguments;
 use super::*;
 
 pub(in crate::interpreter) use argument_owners::eval_owned_call_arg_values;
+pub(in crate::interpreter) use argument_owners::capture_abandoned_reference_owners;
 use argument_owners::eval_call_argument_receiver;
 pub(in crate::interpreter) use argument_modes::*;
 pub(in crate::interpreter) use closure_execution::*;

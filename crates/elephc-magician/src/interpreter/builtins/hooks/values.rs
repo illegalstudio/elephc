@@ -618,7 +618,7 @@ impl EvalValuesHook {
             Self::PtrWriteF32 => eval_ptr_write_f32_values_result(evaluated_args, values),
             Self::PtrWriteF64 => eval_ptr_write_f64_values_result(evaluated_args, values),
             Self::PtrWriteString => eval_ptr_write_string_values_result(evaluated_args, values),
-            Self::Settype => eval_settype_values_result(evaluated_args, values),
+            Self::Settype => eval_settype_values_result(evaluated_args, context, values),
             Self::Sin => one_arg(evaluated_args, values, eval_sin_result),
             Self::Sinh => one_arg(evaluated_args, values, eval_sinh_result),
             Self::Slashes => one_arg(evaluated_args, values, |value, values| match name {

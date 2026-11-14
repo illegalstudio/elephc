@@ -150,7 +150,7 @@ pub(super) fn capture_argument_receiver_owners(
 }
 
 /// Retires keys as well as receivers when reference metadata will never reach a consumer.
-pub(super) fn capture_abandoned_reference_owners(
+pub(in crate::interpreter) fn capture_abandoned_reference_owners(
     target: Option<&mut EvalReferenceTarget>, owners: &mut Vec<RuntimeCellHandle>,
 ) {
     match target {

@@ -143,17 +143,19 @@ fn eval_dynamic_settype_call(
     let Some(target) = var.ref_target.as_ref() else {
         return Ok(None);
     };
-    let Some(converted) = eval_settype_cast_value(var.value, type_name.value, values)? else {
-        return values.bool_value(false).map(Some);
-    };
-    eval_write_direct_ref_target(
-        target,
-        converted,
-        context,
-        values,
-        Some(ScopeCellOwnership::Owned),
-    )?;
-    values.bool_value(true).map(Some)
+    with_direct_ref_target(target.clone(), context, values, |target, context, values| {
+        let Some(converted) = eval_settype_cast_value(var.value, type_name.value, context, values)? else {
+            return values.bool_value(false);
+        };
+        if matches!(target, EvalReferenceTarget::Variable { .. }) {
+            eval_write_direct_ref_target(target, converted, context, values, Some(ScopeCellOwnership::Owned))?;
+            values.bool_value(true)
+        } else {
+            let result = eval_write_direct_ref_target(target, converted, context, values, None)
+                .and_then(|()| values.bool_value(true));
+            finish_synthesized_method_arguments(result, [converted], context, values)
+        }
+    }).map(Some)
 }
 
 /// Evaluates a dynamic `array_walk()` call when the array argument is writable.

@@ -11,6 +11,22 @@
 //!   writeback semantics.
 
 use super::super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
+
+/// Retires a nonescaping builtin target's owned keys and receivers after mutation or failure.
+pub(in crate::interpreter) fn with_direct_ref_target<V: RuntimeValueOps>(
+    mut target: EvalReferenceTarget, context: &mut ElephcEvalContext, values: &mut V,
+    consume: impl FnOnce(&EvalReferenceTarget, &mut ElephcEvalContext, &mut V)
+        -> Result<RuntimeCellHandle, EvalStatus>,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let mut owners = Vec::new();
+    capture_abandoned_reference_owners(Some(&mut target), &mut owners);
+    let owners = owners.into_iter().map(RuntimeOwnerSlot::new).collect::<Vec<_>>();
+    with_runtime_owners(&owners, || {
+        let result = consume(&target, context, values);
+        finish_synthesized_method_arguments(result, owners.iter().map(RuntimeOwnerSlot::take), context, values)
+    })
+}
 
 /// Writes a direct by-reference builtin result back to the captured caller lvalue.
 pub(in crate::interpreter) fn eval_write_direct_ref_target(

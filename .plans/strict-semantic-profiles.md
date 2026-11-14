@@ -1037,6 +1037,32 @@ The complete builtin-docs regeneration and three audits pass (828 AOT homes,
 Settype writeback and original native object magnitude guards follow; public
 admission remains unchanged.
 
+### Checked settype mutation boundaries
+
+Step63 routes numeric settype targets through the shared checked cast contract.
+The checker validates original known kinds and EIR lowering uses the normal
+cast/store sequence rather than backend conversion shortcuts. Ordinary locals
+retain tagged storage and a conservative logical view: a failed conversion must
+not make catch read the unchanged value through a success-only numeric type.
+Existing typed reference storage and authoritative destination contracts remain.
+
+Eval direct, named, dynamic, first-class and by-value callback paths pass their
+context to the shared numeric evaluator. Conversion precedes reference writeback.
+The reusable with_direct_ref_target boundary retains a nonescaping target's
+owned keys/receivers in native root slots, then retires them after success or
+failure. This closes an owned-key leak exposed by a failed array-element cast;
+dynamic non-variable writeback also retires its converted value.
+
+Three new compiler tests and three eval tests pass. Native coverage checks both
+optimizer settings, exact endpoints, original failed receivers, reference aliases
+and clean heaps; all five targets validate and emit the graphs. Eval tests cover
+nested arrays/COW, properties/statics, runtime target names, callable/array-call
+surfaces, permissive controls and complete owner retirement. Existing settype,
+mutator alias/COW and five-target foreach controls pass. Compiler test-target
+checking/build and the complete generated-builtin documentation workflow pass,
+with assembly comment and diff hygiene checks. Public admission remains gated;
+original native object and host conversion contracts are next.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -1170,4 +1196,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 59 | `ae8b7a0f8c` | feat(strict): lower checked native scalar casts |
 | 60 | `72136d03e2` | feat(strict): enforce checked numeric casts in eval |
 | 61 | `31ffb78d5b` | feat(strict): share exact checked integer radix kernels |
-| 62 | this commit | feat(strict): share checked builtin numeric cast contracts |
+| 62 | `7977298569` | feat(strict): share checked builtin numeric cast contracts |
+| 63 | this commit | feat(strict): check settype before reference writeback |

@@ -291,6 +291,16 @@ builtins through their checked hooks before selecting native implementations.
 Source policy comes from the invocation, including calls through descriptors
 created by trusted code. Internal implementation conversions retain their policy.
 
+Numeric `settype` targets share the same original-kind checker validation and EIR
+cast/store sequence. Conversion succeeds before publishing a replacement value.
+Ordinary locals retain tagged storage and a conservative logical view so a catch
+can read the original kind after failure. Typed reference storage keeps its
+existing destination contract.
+The eval direct, dynamic and value-call hooks pass their context to the shared
+cast evaluator. `with_direct_ref_target` owns a nonescaping builtin target's
+temporary keys and receivers through success or failure; it leaves converted
+value ownership to the destination-specific writeback contract.
+
 
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 

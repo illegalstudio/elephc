@@ -437,7 +437,7 @@ impl Checker {
 
 impl Checker {
     /// Shares known-kind diagnostics between cast syntax and registered explicit conversion builtins.
-    pub(in crate::types::checker) fn validate_explicit_numeric_cast(&self, source: crate::source::SourceMode,
+    pub(crate) fn validate_explicit_numeric_cast(&self, source: crate::source::SourceMode,
         target: &crate::parser::ast::CastType, ty: &PhpType, span: crate::span::Span) -> Result<(), CompileError> {
         if crate::semantics::conversions::checked_casts(self.semantic_profile, source)
             && matches!(target, crate::parser::ast::CastType::Int | crate::parser::ast::CastType::Float)

@@ -15,6 +15,15 @@ use crate::{numeric::{checked_float_to_int, checked_string_to_int, NumericFailur
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NumericCastTarget { Int, Float }
 
+impl NumericCastTarget {
+    /// Resolves numeric settype names without changing the policy of other explicit targets.
+    pub fn from_type_name(name: &str) -> Option<Self> {
+        if name.eq_ignore_ascii_case("int") || name.eq_ignore_ascii_case("integer") { Some(Self::Int) }
+        else if name.eq_ignore_ascii_case("float") || name.eq_ignore_ascii_case("double") { Some(Self::Float) }
+        else { None }
+    }
+}
+
 /// Original scalar input, before any PHP normalization or representation change.
 #[derive(Clone, Copy, Debug)]
 pub enum NumericCastInput<'a> {

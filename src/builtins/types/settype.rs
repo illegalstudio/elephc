@@ -26,13 +26,22 @@ builtin! {
 
 /// Validates the `settype` arguments: infers both in source order and rejects a non-string type.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    cx.checker.infer_type(&cx.args[0], cx.env)?;
+    let source = cx.checker.infer_type(&cx.args[0], cx.env)?;
     let ty = cx.checker.infer_type(&cx.args[1], cx.env)?;
     if ty != PhpType::Str {
         return Err(CompileError::new(
             cx.span,
             "settype() second argument must be a string",
         ));
+    }
+    if let crate::parser::ast::ExprKind::StringLiteral(name) = &cx.args[1].kind {
+        if let Some(target) = elephc_semantics::numeric_cast::NumericCastTarget::from_type_name(name) {
+            let target = match target {
+                elephc_semantics::numeric_cast::NumericCastTarget::Int => crate::parser::ast::CastType::Int,
+                elephc_semantics::numeric_cast::NumericCastTarget::Float => crate::parser::ast::CastType::Float,
+            };
+            cx.checker.validate_explicit_numeric_cast(cx.source_mode, &target, &source, cx.span)?;
+        }
     }
     Ok(PhpType::Bool)
 }

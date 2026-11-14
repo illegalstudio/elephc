@@ -25,18 +25,20 @@ pub(in crate::interpreter) fn eval_builtin_settype_call(
     let modes = CallArgumentModes::for_builtin("settype");
     with_eval_call_arguments_with_modes(args, &modes, context, scope, values, |args, context, _, values| {
         let (value, target, type_name) = bind_settype_arguments(args)?;
-        let Some(converted) = eval_settype_cast_value(value, type_name, values)? else {
-            return values.bool_value(false);
-        };
-        if matches!(&target, EvalReferenceTarget::Variable { .. }) {
-            // Variable assignment consumes the converted owner on success and rejection.
-            eval_write_direct_ref_target(&target, converted, context, values, Some(ScopeCellOwnership::Owned))?;
-            values.bool_value(true)
-        } else {
-            let result = eval_write_direct_ref_target(&target, converted, context, values, None)
-                .and_then(|()| values.bool_value(true));
-            finish_synthesized_method_arguments(result, vec![converted], context, values)
-        }
+        with_direct_ref_target(target, context, values, |target, context, values| {
+            let Some(converted) = eval_settype_cast_value(value, type_name, context, values)? else {
+                return values.bool_value(false);
+            };
+            if matches!(target, EvalReferenceTarget::Variable { .. }) {
+                // Variable assignment consumes the converted owner on success and rejection.
+                eval_write_direct_ref_target(target, converted, context, values, Some(ScopeCellOwnership::Owned))?;
+                values.bool_value(true)
+            } else {
+                let result = eval_write_direct_ref_target(target, converted, context, values, None)
+                    .and_then(|()| values.bool_value(true));
+                finish_synthesized_method_arguments(result, vec![converted], context, values)
+            }
+        })
     })
 }
 
@@ -68,22 +70,33 @@ fn bind_settype_arguments(
 /// Dispatches by-value `settype()` callable calls after argument binding.
 pub(in crate::interpreter) fn eval_settype_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let [value, type_name] = evaluated_args else {
         return Err(EvalStatus::RuntimeFatal);
     };
-    eval_settype_value_result(*value, *type_name, values)
+    eval_settype_value_result(*value, *type_name, context, values)
 }
 
 /// Applies the eval-supported `settype()` scalar target conversion.
 pub(in crate::interpreter) fn eval_settype_cast_value(
     value: RuntimeCellHandle,
     type_name: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let type_name = values.string_bytes(type_name)?;
     let type_name = String::from_utf8_lossy(&type_name).to_ascii_lowercase();
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts) {
+        if let Some(target) = elephc_semantics::numeric_cast::NumericCastTarget::from_type_name(&type_name) {
+            let target = match target {
+                elephc_semantics::numeric_cast::NumericCastTarget::Int => EvalCastType::Int,
+                elephc_semantics::numeric_cast::NumericCastTarget::Float => EvalCastType::Float,
+            };
+            return eval_cast_value(&target, value, context, values).map(Some);
+        }
+    }
     let converted = match type_name.as_str() {
         "bool" | "boolean" => Some(values.cast_bool(value)?),
         "float" | "double" => Some(values.cast_float(value)?),
@@ -98,10 +111,11 @@ pub(in crate::interpreter) fn eval_settype_cast_value(
 pub(in crate::interpreter) fn eval_settype_value_result(
     value: RuntimeCellHandle,
     type_name: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     values.warning("settype(): Argument #1 ($var) must be passed by reference, value given")?;
-    if let Some(converted) = eval_settype_cast_value(value, type_name, values)? {
+    if let Some(converted) = eval_settype_cast_value(value, type_name, context, values)? {
         values.release(converted)?;
         return values.bool_value(true);
     }
