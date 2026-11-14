@@ -939,6 +939,23 @@ Casts remains staged. Narrower/hash-backed destinations, unpromoted runtime-name
 slots, nested erased receivers, Internal producers and host admission still need
 their remaining audits. The public integrated feature mask is unchanged.
 
+### Canonical Mixed properties for checked runtime references
+
+Checked casts now request canonical owned cells for eligible declared Mixed
+properties before lowering, through the existing reference-property promotion
+pass. Runtime names and callable passing modes can first select a reference after
+static checking, so they cannot rely on an explicit source alias to choose the
+physical layout. Promotion remains shared across declaring classes and their
+descendants; readonly, hooked, internal and borrowed constructor layouts keep
+their existing exclusions. The permissive profile retains its previous policy.
+
+The five known dynamic-place fixtures now remove the constructor alias and assert
+canonical ownership before EIR lowering. A focused native fixture covers inherited
+properties, successful conversion, rejected array conversion and heap cleanup with
+EIR optimization enabled and disabled. All 29 focused settype regressions,
+check --tests, compiler build, assembly comments and diff checks pass. Casts
+admission remains staged.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1033,4 +1050,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 73 | `0146784a0b` | feat(strict): preserve live builtin reference places |
 | 74 | `180fbf3a6c` | feat(strict): retain erased reference receiver bindings |
 | 75 | `1514409912` | feat(strict): preserve runtime property reference names |
-| 76 | this commit | feat(strict): bind known dynamic property arguments |
+| 76 | `0c94688cfc` | feat(strict): bind known dynamic property arguments |
+| 77 | this commit | feat(strict): canonicalize dynamic mixed property references |

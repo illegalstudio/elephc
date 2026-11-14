@@ -168,9 +168,13 @@ supported_target_cases!(strict_settype_erased_receiver_contexts, verify_strict_s
 /// Known builtin references retain runtime names with selected checker metadata and no XML prelude.
 fn verify_strict_settype_known_dynamic_places(name: &str) {
     let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strict/settype_known_dynamic_places.php"));
-    let program = prepared(source); let target = Target::parse(name).unwrap();
+    let source = source.replace("public function __construct() { $alias =& $this->value; }", "");
+    let program = prepared(&source); let target = Target::parse(name).unwrap();
     let checked = crate::types::checker::check_staged_semantics(&program, target,
         SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+    let info = &checked.classes["KnownDynamicConversionPlace"];
+    let slot = info.visible_property_index("value").unwrap();
+    assert!(info.property_slot_owns_reference(slot), "{name}: runtime references need canonical cells without prior aliases");
     let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
     crate::ir::validate_module(&module).unwrap();
     crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
@@ -178,3 +182,23 @@ fn verify_strict_settype_known_dynamic_places(name: &str) {
 }
 
 supported_target_cases!(strict_settype_known_dynamic_places, verify_strict_settype_known_dynamic_places);
+
+/// Canonical unaliased property cells preserve ordinary reads, inheritance, conversion and cleanup.
+#[cfg(any(all(target_os = "macos", target_arch = "aarch64"),
+    all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64"))))]
+#[test]
+fn strict_settype_unaliased_property_native_owners() {
+    let program = prepared("<?php class UnaliasedConversionPlace { public mixed $value = '18.9'; } class InheritedConversionPlace extends UnaliasedConversionPlace {} $box = new InheritedConversionPlace(); settype($box->value, 'int'); echo $box->value; $box->value = ['kept']; try { settype($box->value, 'int'); echo 'X'; } catch (TypeError $error) { echo '|', $box->value[0]; }");
+    let target = Target::detect_host();
+    let checked = crate::types::checker::check_staged_semantics(&program, target,
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+    for optimize in [false, true] {
+        let mut module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        if optimize { crate::ir_passes::optimize_module(&mut module); }
+        let output = super::native_module::run(&module);
+        let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "opt={optimize}: {stdout} {stderr}");
+        assert_eq!(stdout, "18|kept", "opt={optimize}");
+        assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {stderr}");
+    }
+}

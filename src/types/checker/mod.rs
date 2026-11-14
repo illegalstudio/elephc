@@ -1758,17 +1758,19 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 /// inherits the property, keeping the runtime representation consistent across the
 /// hierarchy. Exact Mixed constructor-promoted references also acquire an object owner;
 /// other constructor-promoted payloads retain their existing representation. Owned cells are recorded
-/// in `owned_reference_properties` so the object allocates and frees them.
+/// in `owned_reference_properties` so the object allocates and frees them. Checked casts also
+/// need canonical Mixed slots when a runtime property name or callable first selects a reference.
 fn apply_reference_property_promotions(checker: &mut Checker) {
     {
-        let contains_eval = checker.program_contains_eval;
+        let canonical_mixed_references = checker.program_contains_eval
+            || checker.semantic_profile.contains(elephc_semantics::StrictFeature::Casts);
         let classes = &checker.classes;
         let candidates = classes.iter().flat_map(|(name, info)| {
             info.properties.iter().enumerate().filter_map(move |(index, (property, ty))| {
                 let declaring = info.property_declaring_classes.get(property).unwrap_or(name);
                 (ty == &PhpType::Mixed && info.visible_property_index(property) == Some(index)
                     && info.property_slot_is_declared(index, property)
-                    && ((!info.reference_properties.contains(property) && contains_eval)
+                    && ((!info.reference_properties.contains(property) && canonical_mixed_references)
                         || (info.reference_properties.contains(property)
                             && info.promoted_properties.contains(property)))
                     && !info.readonly_properties.contains(property)
