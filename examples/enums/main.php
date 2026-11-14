@@ -66,3 +66,24 @@ echo $config->level->name, " ",
      $config->promoted->name, " ",
      Config::$shared->name, " ",
      ($config->level === Level::Low ? "same" : "DIFF");
+echo PHP_EOL;
+
+// PHP 8.2+: a backed case value may be any constant expression, such as a
+// global or class constant, a concatenation, or arithmetic, not only a literal.
+const API_PREFIX = "/api/";
+
+final class HttpCodes {
+    const BASE_ERROR = 400;
+}
+
+enum Route: string {
+    case Users = API_PREFIX . "users";
+    case Orders = API_PREFIX . "orders";
+}
+
+enum Failure: int {
+    case BadRequest = HttpCodes::BASE_ERROR;
+    case NotFound = HttpCodes::BASE_ERROR + 4;
+}
+
+echo Route::Orders->value, " ", Failure::from(404)->name;

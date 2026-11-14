@@ -963,6 +963,25 @@ class Config {
     );
 }
 
+/// A backed-case value must still be a constant expression of the backing type: a string
+/// constant cannot back an int enum, and a non-constant expression is still rejected.
+#[test]
+fn test_error_enum_case_value_must_fold_to_the_backing_type() {
+    expect_error(
+        r#"<?php
+final class Codes { public const NAME = 'n'; }
+enum Level: int { case Low = Codes::NAME; }
+"#,
+        "Enum int backing values must be integer literals",
+    );
+    expect_error(
+        r#"<?php
+enum Level: string { case Low = PHP_EOL . strtoupper('x'); }
+"#,
+        "Enum string backing values must be string literals",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]

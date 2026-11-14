@@ -3,6 +3,8 @@
 //!
 //! Called from:
 //! - `super::defaults::validate_deferred_declaration_defaults()` after schemas are complete.
+//! - `super::enum_backing` (constant binding only) while backed enum case values are folded.
+//! - `crate::types::checker::driver` (global constant collection) before enums are built.
 //!
 //! Key details:
 //! - Only property copies containing deferred errors are rewritten; callable source defaults stay intact.
@@ -55,7 +57,7 @@ pub(super) fn normalize(checker: &mut Checker, program: &Program) {
 }
 
 /// Retains canonical source constants without evaluating runtime `define()` calls.
-fn collect_globals(program: &Program, globals: &mut HashMap<String, Expr>) {
+pub(crate) fn collect_globals(program: &Program, globals: &mut HashMap<String, Expr>) {
     for statement in program {
         match &statement.kind {
             StmtKind::ConstDecl { name, value } => { globals.insert(name.clone(), value.clone()); }
@@ -81,7 +83,7 @@ fn class_constant(checker: &Checker, owner: &str, name: &str, depth: usize) -> O
 }
 
 /// Substitutes known constants and reuses PHP-equivalent folding before lazy-error selection.
-fn bind_constants(
+pub(super) fn bind_constants(
     expr: &mut Expr, owner: &str, checker: &Checker, globals: &HashMap<String, Expr>, depth: usize,
 ) {
     if depth > 64 { return; }

@@ -40,6 +40,7 @@ use super::builtin_stdclass::inject_builtin_stdclass;
 use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
+    collect_global_constants,
     drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
     validate_deferred_declaration_defaults, validate_enum_trait_requirements,
     expand_enum_interfaces, validate_enum_interface_contracts,
@@ -354,6 +355,9 @@ pub(super) fn check_types_impl(
     if let Err(error) = inject_builtin_enums(program, &mut checker, &mut next_class_id) {
         errors.extend(error.flatten());
     }
+    // Backed enum case values may name source `const` declarations (PHP 8.2 constant expressions).
+    let mut global_constants = HashMap::new();
+    collect_global_constants(program, &mut global_constants);
     for stmt in program {
         if let StmtKind::EnumDecl {
             name,
@@ -395,6 +399,7 @@ pub(super) fn check_types_impl(
                 &stmt.attributes,
                 stmt.span,
                 stmt.source_mode == crate::source::SourceMode::Internal,
+                &global_constants,
                 &mut checker,
                 &mut next_class_id,
             ) {
