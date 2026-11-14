@@ -66,6 +66,8 @@ mod iterators;
 mod objects;
 #[cfg(test)]
 pub(crate) use objects::MIXED_READ_SEARCHES;
+#[cfg(test)]
+pub(crate) use objects::CLASS_DESCENDANT_BUILDS;
 mod ownership;
 mod pointers;
 mod scalar_widths;

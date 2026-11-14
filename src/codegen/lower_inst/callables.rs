@@ -4241,23 +4241,35 @@ fn class_descends_from_module_class_name(
     class_name: &str,
     ancestor: &str,
 ) -> bool {
-    let mut current = ctx
-        .module
-        .class_infos
+    // One lookup of the class's precomputed chain instead of one class-table lookup per hop:
+    // the callable-array scope checks ask this twice per protected member and scope.
+    let ancestors = ctx.shared.class_ancestors(|| module_class_ancestors(ctx.module));
+    ancestors
         .get(class_name.trim_start_matches('\\'))
-        .and_then(|info| info.parent.as_deref());
-    while let Some(parent) = current {
-        let normalized = parent.trim_start_matches('\\');
-        if normalized == ancestor {
-            return true;
+        .is_some_and(|chain| chain.iter().any(|parent| parent == ancestor))
+}
+
+/// Every module class's parent chain, nearest first, with each name normalized as the walk it
+/// replaces compared them; a chain ends at a parent the module does not declare. A chain longer
+/// than the class table can only be a cycle, which ends it.
+fn module_class_ancestors(module: &crate::ir::Module) -> crate::fast_hash::FastMap<String, Vec<String>> {
+    #[cfg(test)]
+    CLASS_ANCESTOR_BUILDS.with(|count| count.set(count.get() + 1));
+    let mut chains = crate::fast_hash::FastMap::default();
+    for (class_name, info) in &module.class_infos {
+        let mut chain = Vec::new();
+        let mut current = info.parent.as_deref();
+        while let Some(parent) = current {
+            if chain.len() > module.class_infos.len() {
+                break;
+            }
+            let normalized = parent.trim_start_matches('\\');
+            chain.push(normalized.to_string());
+            current = module.class_infos.get(normalized).and_then(|info| info.parent.as_deref());
         }
-        current = ctx
-            .module
-            .class_infos
-            .get(normalized)
-            .and_then(|info| info.parent.as_deref());
+        chains.insert(class_name.clone(), chain);
     }
-    false
+    chains
 }
 
 /// Emits (or reuses) the descriptor for one static method reachable as a callable.
@@ -6603,6 +6615,8 @@ std::thread_local! {
     pub(crate) static INSTANCE_TARGET_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Static callable-array lookup tables (class-name or class-id keyed) built on this thread.
     pub(crate) static STATIC_TABLE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Builds of the module class ancestor chains on this thread.
+    pub(crate) static CLASS_ANCESTOR_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Per-scope reachability checks of instance-method targets on this thread.
     pub(crate) static INSTANCE_REACH_CHECKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Runtime string-callable lookup tables built on this thread.

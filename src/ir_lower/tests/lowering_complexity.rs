@@ -852,6 +852,34 @@ fn callable_array_scopes_check_only_non_public_methods() {
     assert_eq!(small, large, "per-scope checks grew with the public methods: {small} vs {large}");
 }
 
+/// Property plans over a receiver class with subclasses read the subclasses from one index,
+/// built once, instead of asking every class of the module whether it inherits.
+#[test]
+fn property_plans_share_one_descendant_index() {
+    let mut source = String::from("<?php\n#[\\AllowDynamicProperties]\nclass Base { public int $p = 1; public int $q = 2; }\n");
+    for index in 0..12 {
+        source.push_str(&format!("class C{index} extends Base {{ public int $r{index} = {index}; }}\n"));
+    }
+    source.push_str("function f(Base $b, string $n) { $b->$n = 3; $b->extra = 4; return $b->$n + $b->extra; }\n");
+    source.push_str("echo f($argc > 1 ? new C0() : new C1(), $argc > 2 ? 'p' : 'q'), \"\\n\";\n");
+    let module = lower_source(&source);
+    crate::codegen::CLASS_DESCENDANT_BUILDS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    let builds = crate::codegen::CLASS_DESCENDANT_BUILDS.with(|count| count.get());
+    assert_eq!(builds, 1, "descendant index built {builds} times for one codegen");
+}
+
+/// The scope checks of every callable-array scope read one set of ancestor chains, built once,
+/// instead of walking a parent chain through the class table at every question.
+#[test]
+fn callable_array_scope_checks_share_one_ancestor_table() {
+    let module = lower_source(&callable_array_scopes_over_public_methods(40));
+    crate::codegen::CLASS_ANCESTOR_BUILDS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    let builds = crate::codegen::CLASS_ANCESTOR_BUILDS.with(|count| count.get());
+    assert_eq!(builds, 1, "ancestor chains built {builds} times for one codegen");
+}
+
 /// `count` unrelated classes, two classes declaring `run`, and calls of `run` and `size` through
 /// a receiver of no known class.
 fn many_classes_one_dynamic_method(count: usize) -> String {

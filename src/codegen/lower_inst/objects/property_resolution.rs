@@ -295,6 +295,59 @@ impl PropertyRuntimePlan {
 }
 
 
+/// The module classes that `types::class_inherits_from` says inherit from `class_name`, itself
+/// excluded, read from an index built once per codegen state: property plans asked it of every
+/// class of the module per question (~930 samples of a sampled one-core Symfony demo console
+/// build). The index walks the parent chains exactly as `class_inherits_from` does (raw names,
+/// the same cycle bound), so the set is the scan's; callers order it by class id.
+pub(super) fn module_descendants<'a>(
+    ctx: &FunctionContext<'a>,
+    class_name: &str,
+) -> Vec<(&'a String, &'a crate::types::ClassInfo)> {
+    let module: &'a crate::ir::Module = ctx.module;
+    let descendants = ctx.shared.class_descendants(|| class_descendant_index(module));
+    descendants
+        .get(class_name)
+        .map(|names| {
+            names
+                .iter()
+                .filter(|name| name.as_str() != class_name)
+                .filter_map(|name| module.class_infos.get_key_value(name))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `class_inherits_from` inverted: every ancestor name its walk compares -> the classes reaching it.
+fn class_descendant_index(module: &crate::ir::Module) -> crate::fast_hash::FastMap<String, Vec<String>> {
+    #[cfg(test)]
+    CLASS_DESCENDANT_BUILDS.with(|count| count.set(count.get() + 1));
+    let classes = &module.class_infos;
+    let mut index: crate::fast_hash::FastMap<String, Vec<String>> = Default::default();
+    for (class_name, info) in classes {
+        let mut seen = crate::fast_hash::FastSet::default();
+        let mut current = info.parent.as_deref();
+        let mut guard = 0usize;
+        while let Some(name) = current {
+            if seen.insert(name) {
+                index.entry(name.to_string()).or_default().push(class_name.clone());
+            }
+            guard += 1;
+            if guard > classes.len() + 1 {
+                break;
+            }
+            current = classes.get(name).and_then(|info| info.parent.as_deref());
+        }
+    }
+    index
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Builds of the module class descendant index on this thread.
+    pub(crate) static CLASS_DESCENDANT_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// Resolves what one property access does on a named receiver class, per runtime class.
 ///
 /// `Fixed` is claimed only under a proof, never as an optimization. The proof has two parts and
@@ -333,12 +386,7 @@ pub(super) fn resolve_property_runtime_plan(
         .get(normalized)
         .is_some_and(|class_info| class_info.eval_property_storage);
     let mut arms = Vec::new();
-    for (candidate, candidate_info) in &ctx.module.class_infos {
-        if candidate.as_str() == normalized
-            || !crate::types::class_inherits_from(&ctx.module.class_infos, candidate, normalized)
-        {
-            continue;
-        }
+    for (candidate, candidate_info) in module_descendants(ctx, normalized) {
         arms.push(PropertyRuntimeArm {
             class_id: Some(candidate_info.class_id),
             class_name: candidate.clone(),
@@ -692,19 +740,7 @@ pub(super) fn runtime_name_candidate_properties(
         .iter()
         .map(|(property, _)| property.clone())
         .collect::<Vec<_>>();
-    let mut subclasses = ctx
-        .module
-        .class_infos
-        .iter()
-        .filter(|(candidate, _)| {
-            candidate.as_str() != normalized
-                && crate::types::class_inherits_from(
-                    &ctx.module.class_infos,
-                    candidate.as_str(),
-                    normalized,
-                )
-        })
-        .collect::<Vec<_>>();
+    let mut subclasses = module_descendants(ctx, normalized);
     subclasses.sort_by_key(|(_, candidate_info)| candidate_info.class_id);
     for (_, candidate_info) in subclasses {
         for (property, _) in &candidate_info.properties {

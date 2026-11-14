@@ -76,6 +76,12 @@ pub(crate) struct SharedCodegenState {
     /// Which instance-method targets of the base are public, and the public ones alone: a public
     /// method is a candidate in every scope, so only the others are checked per scope.
     instance_target_split: std::cell::OnceCell<std::sync::Arc<super::lower_inst::callables::InstanceTargetSplit>>,
+    /// Every module class's ancestors, nearest first: asked by the callable-array scope checks,
+    /// which walked the parent chain with one class-table lookup per hop at every question.
+    class_ancestors: std::cell::OnceCell<std::sync::Arc<crate::fast_hash::FastMap<String, Vec<String>>>>,
+    /// `types::class_inherits_from` inverted over the module: each class name -> the classes that
+    /// inherit from it. Property plans asked it of every class of the module per question.
+    class_descendants: std::cell::OnceCell<std::sync::Arc<crate::fast_hash::FastMap<String, Vec<String>>>>,
     mixed_hash_arm_base: std::cell::OnceCell<std::sync::Arc<Vec<(u64, std::sync::Arc<str>, usize)>>>,
     non_public_static_base: std::cell::OnceCell<
         std::sync::Arc<Vec<super::lower_inst::callables::NonPublicStaticMethod>>,
@@ -553,6 +559,22 @@ impl SharedCodegenState {
             .clone()
     }
 
+    /// Every module class's ancestor chain, built once by `build`; see the field.
+    pub(super) fn class_ancestors(
+        &self,
+        build: impl FnOnce() -> crate::fast_hash::FastMap<String, Vec<String>>,
+    ) -> &crate::fast_hash::FastMap<String, Vec<String>> {
+        self.class_ancestors.get_or_init(|| std::sync::Arc::new(build()))
+    }
+
+    /// Every module class's descendants, built once by `build`; see the field.
+    pub(super) fn class_descendants(
+        &self,
+        build: impl FnOnce() -> crate::fast_hash::FastMap<String, Vec<String>>,
+    ) -> &crate::fast_hash::FastMap<String, Vec<String>> {
+        self.class_descendants.get_or_init(|| std::sync::Arc::new(build()))
+    }
+
     /// The scope-independent mixed hash arms, collected once by `build`; see the field.
     pub(super) fn mixed_hash_arm_base(
         &self,
@@ -635,6 +657,8 @@ impl SharedCodegenState {
             instance_method_target_base: std::cell::OnceCell::new(),
             non_public_static_base: std::cell::OnceCell::new(),
             mixed_hash_arm_base: std::cell::OnceCell::new(),
+            class_descendants: std::cell::OnceCell::new(),
+            class_ancestors: std::cell::OnceCell::new(),
             instance_target_split: std::cell::OnceCell::new(),
             instance_method_targets_by_scope: std::cell::RefCell::new(Default::default()),
             mixed_method_candidates: Default::default(),
