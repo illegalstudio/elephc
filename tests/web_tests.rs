@@ -27,6 +27,9 @@ mod application;
 #[path = "web/isolated_json.rs"]
 mod isolated_json;
 
+#[path = "support/managed_pcre2.rs"]
+mod managed_pcre2_support;
+
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
 /// Creates an isolated temp dir unique across parallel test threads/processes.
@@ -53,10 +56,29 @@ fn elephc_bin() -> String {
 
 /// Compiles `source` in web mode with extra compiler flags and returns the binary path.
 fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> PathBuf {
+    compile_web_with_native(dir, source, stem, flags, false)
+}
+
+/// Compiles `source` in web mode against a hermetic managed-PCRE2 project, for `preg_*` fixtures.
+fn compile_web_with_regex(dir: &Path, source: &str, stem: &str, flags: &[&str]) -> PathBuf {
+    compile_web_with_native(dir, source, stem, flags, true)
+}
+
+/// Compiles `source` in web mode, optionally providing the managed PCRE2 package.
+fn compile_web_with_native(
+    dir: &Path,
+    source: &str,
+    stem: &str,
+    flags: &[&str],
+    regex: bool,
+) -> PathBuf {
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
     cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
+    if regex {
+        managed_pcre2_support::configure_host_managed_pcre2(&mut cmd, dir);
+    }
     cmd.current_dir(dir);
     cmd.arg("--web").args(flags).arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");
@@ -875,7 +897,25 @@ echo read_global();
     assert!(r2.ends_with("0"), "second response leaked ordinary global: {:?}", r2);
 }
 
-/// Verifies per-request reset of a function static: each request must see
+/// Verifies that a regex error recorded by one request is not reported by the next one.
+#[test]
+fn web_reset_clears_preg_last_error_between_requests() {
+    let dir = make_test_dir("web_reset_preg_error");
+    let src = r#"<?php
+if (isset($_GET["bad"])) { preg_match('/./u', "\xff"); }
+echo preg_last_error();
+"#;
+    let bin = compile_web_with_regex(&dir, src, "app", &[]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_get(&addr, "/?bad=1");
+    let r2 = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(raw_response_body(&r1), "4", "first response: {r1:?}");
+    assert_eq!(raw_response_body(&r2), "0", "second response leaked the regex error: {r2:?}");
+}
+
 /// the static re-initialized to 0, so each response ends with "1".
 #[test]
 fn web_reset_clears_function_static() {

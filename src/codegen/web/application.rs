@@ -52,6 +52,7 @@ pub(super) fn emit(emitter: &mut Emitter, module: &Module, data: &DataSection) {
         "_json_validate_idx", "_json_validate_ptr", "_json_validate_len",
         "_json_decode_assoc", "_json_error_source_ptr", "_json_error_source_len",
         "_json_error_candidate_ptr", "_json_error_location_active", "_json_last_error",
+        "_preg_last_error", "_preg_exec_error",
         "_json_error_line", "_json_error_column", "_json_error_scan_count", "_json_error_scan_bytes",
         "_ser_value_counter", "_ser_legacy_active", "_unser_legacy_active",
         "_ser_obj_count", "_unser_count", "_unser_active", "_php_backtrace_next_line",
