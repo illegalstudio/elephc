@@ -145,13 +145,39 @@ fn spawn_worker(
     isolation: IsolationMode,
     application: Option<ApplicationCallbacks>,
 ) -> libc::pid_t {
+    // A SIGTERM can arrive between the master's shutdown check and the
+    // child's handler reset. Block both signals across `fork()`, reset the
+    // child dispositions, then unblock: the child never runs the master's
+    // flag-only handler and swallows its own teardown signal.
+    let mut blocked: libc::sigset_t = unsafe { std::mem::zeroed() };
+    let mut previous: libc::sigset_t = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::sigemptyset(&mut blocked);
+        libc::sigaddset(&mut blocked, libc::SIGINT);
+        libc::sigaddset(&mut blocked, libc::SIGTERM);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &blocked, &mut previous);
+    }
     match unsafe { libc::fork() } {
         -1 => {
+            unsafe {
+                libc::pthread_sigmask(
+                    libc::SIG_SETMASK,
+                    &previous,
+                    std::ptr::null_mut(),
+                );
+            }
             eprintln!("error: fork failed");
             std::process::exit(1);
         }
         0 => {
             reset_signal_handlers_to_default();
+            unsafe {
+                libc::pthread_sigmask(
+                    libc::SIG_SETMASK,
+                    &previous,
+                    std::ptr::null_mut(),
+                );
+            }
             let source = match ListenSource::for_worker(
                 listen,
                 master_unix,
@@ -200,7 +226,16 @@ fn spawn_worker(
             // so the reaper skips the crash-loop accounting for this death.
             std::process::exit(worker::RECYCLE_EXIT_CODE);
         }
-        pid => pid,
+        pid => {
+            unsafe {
+                libc::pthread_sigmask(
+                    libc::SIG_SETMASK,
+                    &previous,
+                    std::ptr::null_mut(),
+                );
+            }
+            pid
+        }
     }
 }
 
@@ -449,16 +484,40 @@ fn run_server(
     if let Some(shared) = &shared_tcp {
         shared.stop();
     }
+    // Stop accepting before stopping the workers. Joining the acceptor also
+    // gives a descriptor that was just handed off a moment to reach a worker's
+    // accept loop, so shutdown does not reset the last accepted connection.
+    if let Some(handle) = accept_thread {
+        let _ = handle.join();
+        std::thread::sleep(Duration::from_millis(50));
+    }
     // Clean teardown: ask every still-tracked worker to terminate, then reap.
     for &(pid, _, _) in &children {
         unsafe { libc::kill(pid, libc::SIGTERM); }
     }
+    // A child that missed SIGTERM must not hold the master forever and make a
+    // supervisor wait for its stop timeout. Give the pool one bounded grace
+    // period, then SIGKILL and reap what remains.
+    let deadline = Instant::now() + Duration::from_secs(3);
     for &(pid, _, _) in &children {
         let mut status = 0;
-        unsafe { libc::waitpid(pid, &mut status, 0); }
-    }
-    if let Some(handle) = accept_thread {
-        let _ = handle.join();
+        loop {
+            let waited = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+            if waited == pid
+                || (waited == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ECHILD))
+            {
+                break;
+            }
+            if Instant::now() >= deadline {
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                    libc::waitpid(pid, &mut status, 0);
+                }
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
     if let ListenAddr::Unix(path) = &args.listen {
         listener::remove_unix_socket(path);

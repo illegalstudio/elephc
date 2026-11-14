@@ -54,15 +54,23 @@ use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+#[cfg(target_vendor = "apple")]
+use tokio::io::unix::AsyncFd;
 use tokio::net::{TcpListener, UnixListener};
 
 /// Pending-connection backlog for each listening socket.
 const LISTEN_BACKLOG: i32 = 1024;
 
 /// Maximum accepted sockets handed to one worker before its channel applies
-/// backpressure to the master.
+/// backpressure to the master. The worker reads descriptors directly from the
+/// channel through `AsyncFd`, so this bounds the kernel socket buffers rather
+/// than an in-process queue.
 #[cfg(target_vendor = "apple")]
 const TCP_PASS_QUEUE: usize = 64;
+
+/// Per-channel socket-buffer budget for the descriptor datagrams.
+#[cfg(target_vendor = "apple")]
+const TCP_PASS_BUFFER_BYTES: libc::c_int = (TCP_PASS_QUEUE * 256) as libc::c_int;
 
 /// How long the master keeps a descriptor that no worker has acknowledged.
 /// A replacement worker normally acknowledges queued descriptors immediately;
@@ -154,6 +162,9 @@ fn lock_fork_gate() -> ForkGateGuard {
 pub(crate) struct SharedTcp {
     #[cfg(target_vendor = "apple")]
     listener: RawFd,
+    /// Set once the master closes the listening descriptor during shutdown.
+    #[cfg(target_vendor = "apple")]
+    listener_closed: AtomicBool,
     #[cfg(target_vendor = "apple")]
     master_ends: Vec<RawFd>,
     #[cfg(target_vendor = "apple")]
@@ -205,6 +216,8 @@ pub(crate) fn install_shared(
         master.set_nonblocking(true)?;
         set_no_sigpipe(master.as_raw_fd())?;
         set_no_sigpipe(worker.as_raw_fd())?;
+        set_socket_buffer(master.as_raw_fd(), libc::SO_SNDBUF, TCP_PASS_BUFFER_BYTES)?;
+        set_socket_buffer(worker.as_raw_fd(), libc::SO_RCVBUF, TCP_PASS_BUFFER_BYTES)?;
         set_recv_timeout(worker.as_raw_fd(), 1)?;
         set_close_on_exec(master.as_raw_fd())?;
         set_close_on_exec(worker.as_raw_fd())?;
@@ -224,6 +237,7 @@ pub(crate) fn install_shared(
 
     Ok(Some(Arc::new(SharedTcp {
         listener,
+        listener_closed: AtomicBool::new(false),
         master_ends,
         worker_ends,
         next_worker: AtomicUsize::new(0),
@@ -275,7 +289,14 @@ impl SharedTcp {
     /// Requests acceptor shutdown. The thread exits after its poll timeout.
     pub(crate) fn stop(&self) {
         #[cfg(target_vendor = "apple")]
-        self.stop.store(true, Ordering::SeqCst);
+        {
+            self.stop.store(true, Ordering::SeqCst);
+            // Refuse new connections immediately instead of letting them sit
+            // in the accept queue until the master exits.
+            if !self.listener_closed.swap(true, Ordering::SeqCst) {
+                unsafe { libc::close(self.listener) };
+            }
+        }
     }
 
     /// Closes the descriptors a forked worker inherited from the master.
@@ -299,7 +320,9 @@ impl SharedTcp {
     /// Closes the master-owned raw descriptors exactly once.
     #[cfg(target_vendor = "apple")]
     fn close_raw_descriptors(&self) {
-        unsafe { libc::close(self.listener) };
+        if !self.listener_closed.swap(true, Ordering::SeqCst) {
+            unsafe { libc::close(self.listener) };
+        }
         for &fd in &self.master_ends {
             unsafe { libc::close(fd) };
         }
@@ -387,9 +410,14 @@ fn accept_loop(shared: Arc<SharedTcp>) {
                             std::thread::sleep(Duration::from_millis(50));
                         }
                         _ => {
+                            if shared.stop.load(Ordering::SeqCst) {
+                                break;
+                            }
                             // A permanent listener error cannot be recovered by
-                            // retrying; report it and stop the acceptor.
+                            // retrying. Shut the master down so a supervisor can
+                            // restart it instead of leaving it serving nothing.
                             eprintln!("elephc-web: acceptor stopped: {error}");
+                            unsafe { libc::kill(shared.master_pid, libc::SIGTERM) };
                             break;
                         }
                     }
@@ -663,6 +691,22 @@ fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
     Ok((fd, u64::from_ne_bytes(payload)))
 }
 
+/// Acknowledges one installed descriptor, waiting for channel writability when
+/// the nonblocking datagram socket is temporarily full.
+#[cfg(target_vendor = "apple")]
+async fn send_ack_async(socket: &AsyncFd<UnixDatagram>, id: u64) -> io::Result<()> {
+    loop {
+        match send_ack(socket.get_ref(), id) {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                let mut guard = socket.writable().await?;
+                guard.clear_ready();
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 /// Acknowledges one installed descriptor to the master.
 #[cfg(target_vendor = "apple")]
 fn send_ack(socket: &UnixDatagram, id: u64) -> io::Result<()> {
@@ -679,6 +723,26 @@ fn send_ack(socket: &UnixDatagram, id: u64) -> io::Result<()> {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
         }
+    }
+}
+
+/// Bounds one side of a descriptor channel so a busy worker applies
+/// backpressure to the master instead of letting descriptors accumulate.
+#[cfg(target_vendor = "apple")]
+fn set_socket_buffer(fd: RawFd, option: libc::c_int, bytes: libc::c_int) -> io::Result<()> {
+    let result = unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            option,
+            &bytes as *const libc::c_int as *const libc::c_void,
+            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
     }
 }
 
@@ -723,62 +787,6 @@ fn set_no_sigpipe(fd: RawFd) -> io::Result<()> {
         Ok(())
     } else {
         Err(io::Error::last_os_error())
-    }
-}
-
-/// Drains descriptors from the master channel, acknowledges each installed
-/// socket, and hands it to the worker's accept loop.
-#[cfg(target_vendor = "apple")]
-fn receive_tcp_connections(
-    socket: UnixDatagram,
-    sender: tokio::sync::mpsc::Sender<std::net::TcpStream>,
-    master_pid: libc::pid_t,
-) {
-    // The receiver thread sits on the new-connection path between the master
-    // acceptor and the Tokio runtime; keep it latency-sensitive under load.
-    unsafe {
-        libc::pthread_set_qos_class_self_np(
-            libc::qos_class_t::QOS_CLASS_USER_INITIATED,
-            0,
-        );
-    }
-    loop {
-        let (fd, id) = match recv_fd(&socket) {
-            Ok(descriptor) => descriptor,
-            Err(error) if error.kind() == io::ErrorKind::TimedOut => {
-                // A datagram socket has no EOF. The timeout is how an orphaned
-                // worker notices that its master was killed and exits.
-                if unsafe { libc::getppid() } != master_pid {
-                    break;
-                }
-                continue;
-            }
-            Err(_) => break,
-        };
-        let stream = unsafe { TcpStream::from_raw_fd(fd) };
-        if stream.set_nonblocking(true).is_err() {
-            break;
-        }
-        if send_ack(&socket, id).is_err() {
-            break;
-        }
-        // A bounded queue is the backpressure signal the master's channel
-        // writability check sees. Keep the socket here while the queue is full
-        // so the kernel stops draining new descriptors.
-        let mut pending = stream;
-        loop {
-            match sender.try_send(pending) {
-                Ok(()) => break,
-                Err(tokio::sync::mpsc::error::TrySendError::Full(returned)) => {
-                    pending = returned;
-                    if unsafe { libc::getppid() } != master_pid {
-                        return;
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => return,
-            }
-        }
     }
 }
 
@@ -913,10 +921,13 @@ pub(crate) enum Listener {
     /// Master-accepted TCP descriptors received over a Unix channel.
     #[cfg(target_vendor = "apple")]
     TcpPassed {
-        /// Descriptor receiver filled by the channel thread.
-        receiver: tokio::sync::mpsc::Receiver<std::net::TcpStream>,
+        /// Descriptor channel registered with the Tokio reactor.
+        socket: AsyncFd<UnixDatagram>,
         /// The configured server address.
         server: SocketAddr,
+        /// Master pid captured before the fork; a change means the worker is
+        /// orphaned and must stop.
+        master_pid: libc::pid_t,
     },
 }
 
@@ -936,16 +947,13 @@ impl Listener {
                 })
             }
             #[cfg(target_vendor = "apple")]
-            ListenSource::TcpPassed(receiver, server, master_pid) => {
-                let (sender, receiver_channel) =
-                    tokio::sync::mpsc::channel::<std::net::TcpStream>(TCP_PASS_QUEUE);
-                std::thread::Builder::new()
-                    .name("elephc-tcp-receive".to_string())
-                    .spawn(move || receive_tcp_connections(receiver, sender, master_pid))
-                    .expect("failed to spawn the TCP descriptor receiver");
+            ListenSource::TcpPassed(socket, server, master_pid) => {
+                socket.set_nonblocking(true)?;
+                let socket = AsyncFd::new(socket)?;
                 Ok(Self::TcpPassed {
-                    receiver: receiver_channel,
+                    socket,
                     server,
+                    master_pid,
                 })
             }
             ListenSource::Unix(listener) => {
@@ -977,20 +985,59 @@ impl Listener {
                 Ok(Some((Stream::Unix(stream), PeerInfo::unix())))
             }
             #[cfg(target_vendor = "apple")]
-            Self::TcpPassed { receiver, server } => {
-                let Some(stream) = receiver.recv().await else {
-                    return Ok(None);
-                };
-                let peer = stream.peer_addr()?;
-                let local = stream.local_addr().unwrap_or(*server);
-                let stream = tokio::net::TcpStream::from_std(stream)?;
-                Ok(Some((
-                    Stream::Tcp(stream),
-                    PeerInfo {
-                        remote: Some(peer),
-                        server: Some(local),
-                    },
-                )))
+            Self::TcpPassed {
+                socket,
+                server,
+                master_pid,
+            } => {
+                loop {
+                    // A datagram socket has no EOF and can stay readable with
+                    // an error after the master dies. Check the parent before
+                    // every wait so an orphan cannot spin in the accept loop.
+                    if unsafe { libc::getppid() } != *master_pid {
+                        return Ok(None);
+                    }
+                    // The timeout is how an orphaned worker notices that its
+                    // master was killed and exits instead of waiting forever.
+                    let mut guard =
+                        match tokio::time::timeout(Duration::from_secs(1), socket.readable()).await {
+                            Ok(result) => result?,
+                            Err(_) => {
+                                if unsafe { libc::getppid() } != *master_pid {
+                                    return Ok(None);
+                                }
+                                continue;
+                            }
+                        };
+                    let (fd, id) = match recv_fd(socket.get_ref()) {
+                        Ok(descriptor) => descriptor,
+                        Err(error)
+                            if error.kind() == io::ErrorKind::TimedOut
+                                || error.kind() == io::ErrorKind::WouldBlock =>
+                        {
+                            guard.clear_ready();
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let stream = unsafe { TcpStream::from_raw_fd(fd) };
+                    if stream.set_nonblocking(true).is_err() {
+                        continue;
+                    }
+                    if let Err(error) = send_ack_async(socket, id).await {
+                        return Err(error);
+                    }
+                    let peer = stream.peer_addr()?;
+                    let local = stream.local_addr().unwrap_or(*server);
+                    let stream = tokio::net::TcpStream::from_std(stream)?;
+                    return Ok(Some((
+                        Stream::Tcp(stream),
+                        PeerInfo {
+                            remote: Some(peer),
+                            server: Some(local),
+                        },
+                    )));
+                }
             }
         }
     }

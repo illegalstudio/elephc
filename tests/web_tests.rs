@@ -198,7 +198,11 @@ impl ServerGuard {
             }
             LeaderState::Running => {}
         }
-        unsafe { libc::killpg(pgid, libc::SIGTERM) };
+        // Signal only the master: it forwards SIGTERM to its workers and lets
+        // them shut their brokers down. Signalling the whole group also hits
+        // grandchildren (handler brokers), which then log a normal exit during
+        // shutdown and make lifecycle assertions look like crashes.
+        unsafe { libc::kill(pgid, libc::SIGTERM) };
         // The prefork master must reap its workers and remove the Unix socket
         // before it exits. A loaded host can delay that path past three
         // seconds; killing it early leaves the socket file behind and turns
@@ -2697,6 +2701,55 @@ fn web_max_requests_survives_sustained_recycle_churn() {
     );
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// SIGTERM during --max-requests respawn churn must exit the master.
+///
+/// A worker inherits the master's flag-only SIGTERM handler across `fork` until
+/// it resets it. A teardown SIGTERM delivered in that window used to be
+/// swallowed, leaving the master blocked in `waitpid` for a live child.
+#[test]
+fn web_sigterm_during_respawn_churn_exits_master() {
+    let dir = make_test_dir("web_sigterm_respawn");
+    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    for attempt in 0..12 {
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut server =
+            spawn_server_with_args(&bin, &addr, "2", &["--max-requests", "1"]);
+        let mut flood = Vec::new();
+        for _ in 0..8 {
+            let addr = addr.clone();
+            flood.push(std::thread::spawn(move || {
+                for _ in 0..20 {
+                    let _ = try_http_get(&addr, "/");
+                }
+            }));
+        }
+        std::thread::sleep(Duration::from_millis(300));
+        let master = server.id();
+        unsafe { libc::kill(master as libc::pid_t, libc::SIGTERM); }
+        let deadline = Instant::now() + Duration::from_secs(4);
+        let mut exited = false;
+        while Instant::now() < deadline {
+            if server.try_wait().expect("try_wait").is_some() {
+                exited = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        for handle in flood {
+            let _ = handle.join();
+        }
+        if !exited {
+            unsafe { libc::killpg(master as libc::pid_t, libc::SIGKILL); }
+            panic!(
+                "master did not exit after SIGTERM during respawn churn (attempt {})",
+                attempt + 1
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(&dir);
 }
 
 /// Verifies an uncaught exception in the handler returns HTTP 500 instead of

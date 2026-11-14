@@ -208,6 +208,7 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
         }
     };
 
+    crate::worker::install_worker_shutdown();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -231,6 +232,7 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
             }
         };
         let (recycle, mut recycle_requested) = watch::channel(false);
+        let mut shutdown_tick = tokio::time::interval(Duration::from_millis(50));
         let mut connections = Vec::new();
         loop {
             connections.retain(|connection: &tokio::task::JoinHandle<_>| {
@@ -248,8 +250,16 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                     }
                     continue;
                 }
+                _ = shutdown_tick.tick() => {
+                    if crate::worker::worker_stop_requested() {
+                        let _ = recycle.send(true);
+                        break;
+                    }
+                    continue;
+                }
                 accepted = listener.accept() => accepted,
             };
+            let stopping = *recycle_requested.borrow();
             let (stream, peer) = match accepted {
                 Ok(Some(pair)) => pair,
                 // The master owns the descriptor channel. EOF means it is gone,
@@ -264,6 +274,8 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
             let request_recycle = recycle.clone();
             let trusted = trusted_proxies.clone();
             let mut connection_recycle = recycle.subscribe();
+            let served = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let served_request = served.clone();
             connections.push(tokio::task::spawn_local(async move {
                 let connection = http1::Builder::new()
                     .timer(TokioTimer::new())
@@ -271,8 +283,10 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                     .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| {
                         let broker = broker.clone();
                         let request_recycle = request_recycle.clone();
+                        let served_request = served_request.clone();
                         let trusted = trusted.clone();
                         async move {
+                    served_request.store(true, Ordering::Relaxed);
                     let started = Instant::now();
                     let method = req.method().as_str().to_string();
                     let uri = req.uri().to_string();
@@ -375,9 +389,16 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                     for (name, value) in handler_result.headers {
                         builder = builder.header(name, value);
                     }
-                    let response = builder
+                    let mut response = builder
                         .body(handler_result.body)
                         .unwrap_or_else(|_| fixed_response(500, b"Internal Server Error"));
+                    if *request_recycle.borrow() {
+                        response.headers_mut().insert(
+                            hyper::header::CONNECTION,
+                            hyper::header::HeaderValue::from_static("close"),
+                        );
+                    }
+                    served_request.store(true, Ordering::Relaxed);
                     if let Some((m, p)) = log_method_path {
                         eprintln!(
                             "{} \"{} {}\" {} {}ms",
@@ -395,12 +416,17 @@ pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) 
                     _ = &mut connection => {}
                     changed = connection_recycle.changed() => {
                         if changed.is_ok() && *connection_recycle.borrow() {
-                            connection.as_mut().graceful_shutdown();
+                            if served.load(Ordering::Relaxed) {
+                                connection.as_mut().graceful_shutdown();
+                            }
                             let _ = connection.await;
                         }
                     }
                 }
             }));
+            if stopping {
+                break;
+            }
         }
         drop(listener);
         for connection in connections {

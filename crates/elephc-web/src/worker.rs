@@ -39,6 +39,35 @@ static SERVED: AtomicUsize = AtomicUsize::new(0);
 /// Application workers stop accepting and drain connections when a termination signal arrives.
 static APPLICATION_STOP: AtomicBool = AtomicBool::new(false);
 
+/// Legacy/isolated workers stop accepting and drain when a termination signal arrives.
+static WORKER_STOP: AtomicBool = AtomicBool::new(false);
+
+/// Records a stop request using only async-signal-safe operations.
+extern "C" fn worker_shutdown_signal(_: libc::c_int) {
+    WORKER_STOP.store(true, Ordering::Relaxed);
+}
+
+/// Installs the drain-on-SIGTERM handler for legacy and isolated workers.
+///
+/// The handler is registered with the process context so a PHP `pcntl_fork`
+/// child resets it to the default disposition instead of swallowing SIGTERM.
+pub(crate) fn install_worker_shutdown() {
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = worker_shutdown_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        elephc_process_context::__elephc_process_register_worker_handler(action.sa_sigaction);
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
+        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+    }
+}
+
+/// Reports whether the worker received SIGTERM/SIGINT.
+pub(crate) fn worker_stop_requested() -> bool {
+    WORKER_STOP.load(Ordering::Relaxed)
+}
+
 /// Records a stop request using only async-signal-safe operations.
 extern "C" fn application_shutdown_signal(_: libc::c_int) {
     APPLICATION_STOP.store(true, Ordering::Relaxed);
@@ -175,6 +204,9 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
         install_exec_timeout_handler();
     }
+    if !APPLICATION {
+        install_worker_shutdown();
+    }
     // Re-arm the sampling probe in this worker: the fork disarmed the inherited
     // timer (so exec'd children cannot die from the default SIGPROF action), and
     // a worker keeps running elephc code, so it must sample again. No-op unless
@@ -206,6 +238,7 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
             }
         };
         let (recycle, mut recycle_requested) = watch::channel(false);
+        let mut shutdown_tick = tokio::time::interval(Duration::from_millis(50));
         let mut connections = Vec::new();
         loop {
             connections.retain(|connection: &tokio::task::JoinHandle<_>| {
@@ -230,12 +263,22 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                     }
                     continue;
                 }
+                _ = shutdown_tick.tick(), if !APPLICATION => {
+                    if worker_stop_requested() {
+                        let _ = recycle.send(true);
+                        break;
+                    }
+                    continue;
+                }
                 accepted = listener.accept() => accepted,
             };
-            // The accept future and quota notification can become ready in the same poll.
-            if APPLICATION && (APPLICATION_STOP.load(Ordering::Relaxed) || *recycle_requested.borrow()) {
-                drop(accepted);
-                break;
+            // The accept future and quota notification can become ready in the
+            // same poll. Serve the connection that was already accepted instead
+            // of resetting it; a recycle must not drop a queued client.
+            let stopping =
+                APPLICATION && (APPLICATION_STOP.load(Ordering::Relaxed) || *recycle_requested.borrow());
+            if stopping {
+                let _ = recycle.send(true);
             }
             let (stream, peer) = match accepted {
                 Ok(Some(pair)) => pair,
@@ -252,14 +295,20 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
             let request_recycle = recycle.clone();
             let trusted = trusted_proxies.clone();
             let mut connection_recycle = recycle.subscribe();
+            let served = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let served_request = served.clone();
             connections.push(tokio::task::spawn_local(async move {
                 let connection = http1::Builder::new()
                     .timer(TokioTimer::new())
                     .header_read_timeout(Duration::from_secs(30))
                     .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| {
                         let request_recycle = request_recycle.clone();
+                        let served_request = served_request.clone();
                         let trusted = trusted.clone();
                         async move {
+                    // A request has started: a recycle may now let hyper
+                    // finish this response and close instead of resetting it.
+                    served_request.store(true, Ordering::Relaxed);
                     // Seed session deployment config before upload-progress body
                     // draining. The PHP prelude repeats this reset immediately
                     // before the handler, so both phases see identical values and
@@ -529,9 +578,16 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                     if do_gzip {
                         builder = builder.header("content-encoding", "gzip");
                     }
-                    let response = builder
+                    let mut response = builder
                         .body(Full::new(Bytes::from(resp_body)))
                         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
+                    if *request_recycle.borrow() {
+                        response.headers_mut().insert(
+                            hyper::header::CONNECTION,
+                            hyper::header::HeaderValue::from_static("close"),
+                        );
+                    }
+                    served_request.store(true, Ordering::Relaxed);
                     if let Some((m, p)) = log_method_path {
                         eprintln!(
                             "{} \"{} {}\" {} {}ms",
@@ -550,12 +606,20 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                     _ = &mut connection => {}
                     changed = connection_recycle.changed() => {
                         if changed.is_ok() && *connection_recycle.borrow() {
-                            connection.as_mut().graceful_shutdown();
+                            // Close after the current response. Before the
+                            // first request, let the service answer it with
+                            // `Connection: close` instead of resetting it.
+                            if served.load(Ordering::Relaxed) {
+                                connection.as_mut().graceful_shutdown();
+                            }
                             let _ = connection.await;
                         }
                     }
                 }
             }));
+            if stopping {
+                break;
+            }
         }
         drop(listener);
         for connection in connections {
