@@ -604,7 +604,9 @@ pub(crate) fn raise_worker_qos() {
 /// Releases the fork gate, logs a rate-limited resource error, then backs off.
 ///
 /// The gate must be dropped before the wait: a worker respawn blocked in
-/// `fork()` must not be delayed by fd or memory pressure.
+/// `fork()` must not be delayed by fd or memory pressure. The accept loop
+/// reacquires it at the top of the next iteration, before any descriptor-map
+/// mutation.
 #[cfg(target_vendor = "apple")]
 fn backoff_after_accept_error(
     gate: ForkGateGuard,
