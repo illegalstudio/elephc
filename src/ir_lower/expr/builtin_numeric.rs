@@ -35,7 +35,7 @@ pub(in crate::ir_lower) fn lower(
 }
 
 /// Borrows the original argument without suppressing ownership of newly created numeric boxes.
-fn borrowed_operand(ctx: &mut LoweringContext<'_, '_>, operand: ValueId, span: Span) -> LoweredValue {
+pub(in crate::ir_lower) fn borrowed_operand(ctx: &mut LoweringContext<'_, '_>, operand: ValueId, span: Span) -> LoweredValue {
     let ty = ctx.builder.value_php_type(operand);
     let value = LoweredValue { value: operand, ir_type: ctx.builder.value_type(operand) };
     if !Ownership::php_type_needs_lifetime_tracking(&ty) { return value; }

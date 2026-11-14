@@ -11,13 +11,18 @@
 use crate::{numeric::checked_string_to_int, numeric_cast::{numeric_cast_failure, NumericCastFailure},
     numeric_string::is_php_whitespace};
 
+/// Checks an explicitly requested string radix without needing the string's value.
+pub fn validate_integer_cast_base(base: i64) -> Result<(), NumericCastFailure> {
+    if base == 0 || (2..=36).contains(&base) { Ok(()) } else { Err(NumericCastFailure::InvalidBase) }
+}
+
 /// Parses a complete string in its explicit radix, preserving both signed integer endpoints.
 pub fn checked_string_to_int_base(bytes: &[u8], mut base: i64) -> Result<i64, NumericCastFailure> {
     if base == 10 {
         let text = std::str::from_utf8(bytes).map_err(|_| NumericCastFailure::InvalidString)?;
         return checked_string_to_int(text).map_err(numeric_cast_failure);
     }
-    if base != 0 && !(2..=36).contains(&base) { return Err(NumericCastFailure::InvalidBase); }
+    validate_integer_cast_base(base)?;
     let mut rest = bytes;
     while rest.first().is_some_and(|byte| is_php_whitespace(*byte)) { rest = &rest[1..]; }
     while rest.last().is_some_and(|byte| is_php_whitespace(*byte)) { rest = &rest[..rest.len() - 1]; }

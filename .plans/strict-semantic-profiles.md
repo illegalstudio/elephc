@@ -1011,6 +1011,32 @@ assembly comments and diff hygiene pass. Builtin entry-point integration follows
 no builtin home or binding changes in this kernel commit and public admission
 remains unchanged.
 
+### Checked numeric builtin conversions
+
+Step62 binds `intval` and `floatval` to the shared explicit-conversion contract.
+A semantic descriptor marker drives original-source proofs and typed validation;
+the source evidence pool retains complete string bytes rather than only their
+numeric classification. Named arguments and static spreads reuse CallArgPlan.
+Known failures survive source validation before folding, including aliases,
+removed branches, declaration defaults and literal eval.
+
+Prepared callable bodies, direct calls, dynamic names and callbacks share the
+rooted EIR cast graphs. Only string values select the exact radix kernel, and
+other kinds ignore the base. Invocation policy remains authoritative even when a
+public descriptor was created by trusted implementation code. The eval registry
+selects checked hooks before its native fast path, and protected native result
+adoption shares the existing pending-Throwable helper.
+
+Five new compiler tests, two eval tests and one neutral-kernel test pass. Native
+coverage exercises both optimizer settings, checked and permissive profiles,
+exact values, direct/named/spread/FCC/dynamic/callback paths, catchable failures
+and clean heaps. All five targets validate and emit the prepared graphs. Existing
+source-cast and source-call controls pass. Compiler and test-target checks pass.
+The complete builtin-docs regeneration and three audits pass (828 AOT homes,
+74 graph, 58 primitive, 696 runtime), with assembly comments and diff hygiene.
+Settype writeback and original native object magnitude guards follow; public
+admission remains unchanged.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -1143,4 +1169,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 58 | `58ea161e3b` | feat(strict): share checked numeric cast source contracts |
 | 59 | `ae8b7a0f8c` | feat(strict): lower checked native scalar casts |
 | 60 | `72136d03e2` | feat(strict): enforce checked numeric casts in eval |
-| 61 | this commit | feat(strict): share exact checked integer radix kernels |
+| 61 | `31ffb78d5b` | feat(strict): share exact checked integer radix kernels |
+| 62 | this commit | feat(strict): share checked builtin numeric cast contracts |

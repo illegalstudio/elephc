@@ -24,3 +24,5 @@ if ((bool) $argc) {
 
 $attempts = (int) '3';
 echo "Attempts: ", $attempts, PHP_EOL;
+$ratio = floatval('1.5');
+echo "Ratio: ", $ratio, PHP_EOL;

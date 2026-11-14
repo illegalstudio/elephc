@@ -5,37 +5,90 @@
 //! - The original-source numeric validator, including aliases and declaration defaults.
 //!
 //! Key details:
-//! - Decimal strings carry an exact integer conversion beside their floating arithmetic value.
+//! - Original string bytes stay in the source tree's evidence pool beside numeric classification.
 
-use super::Number;
+use super::{Number, Evidence, Definitions, evaluate, planned_builtin_arguments};
 use crate::parser::ast::CastType;
-use elephc_semantics::{numeric_cast::{checked_numeric_cast, numeric_cast_failure,
+use elephc_semantics::{numeric_cast::{checked_numeric_cast, checked_numeric_builtin_cast,
     NumericCastFailure, NumericCastInput, NumericCastTarget}, numeric_unary::NumericValue};
 
 /// Projects proven original scalar kinds into checked cast results without guessing unknowns.
-pub(super) fn evaluate_cast(target: &CastType, input: Option<Number>) -> Result<Option<Number>, NumericCastFailure> {
+pub(super) fn evaluate_cast(target: &CastType, input: Option<Number>, evidence: &Evidence) -> Result<Option<Number>, NumericCastFailure> {
     let target = match target { CastType::Int => NumericCastTarget::Int, CastType::Float => NumericCastTarget::Float,
         _ => return Ok(None) };
     let Some(input) = input else { return Ok(None); };
-    let value = match input {
-        Number::StringInt { fully_numeric: false, .. } | Number::StringFloat { fully_numeric: false, .. }
-        | Number::NonNumericString { .. } => return Err(NumericCastFailure::InvalidString),
-        Number::StringInt { value, .. } => NumericCastInput::Int(value),
-        Number::StringFloat { checked_integer, .. } if target == NumericCastTarget::Int => {
-            return checked_integer.map(|value| Some(Number::Int(value))).map_err(numeric_cast_failure);
-        }
-        Number::StringFloat { value, .. } | Number::Float(value) => NumericCastInput::Float(value),
+    checked_numeric_cast(target, scalar_input(input, evidence)).map(|value| Some(number(value)))
+}
+
+/// Retains original bytes when a numeric classification alone cannot express explicit radix parsing.
+fn scalar_input(input: Number, evidence: &Evidence) -> NumericCastInput<'_> {
+    match input {
+        Number::StringInt { text, .. } | Number::StringFloat { text, .. } | Number::NonNumericString { text, .. } =>
+            NumericCastInput::String(&evidence.strings[text]),
+        Number::Float(value) => NumericCastInput::Float(value),
         Number::Int(value) => NumericCastInput::Int(value), Number::Bool(value) => NumericCastInput::Bool(value),
         Number::Null => NumericCastInput::Null, Number::Array => NumericCastInput::Unsupported,
-    };
-    checked_numeric_cast(target, value).map(|value| Some(match value {
+    }
+}
+
+/// Adapts exact shared numeric results without projecting their kind through storage representation.
+fn number(value: NumericValue) -> Number {
+    match value {
         NumericValue::Int(value) => Number::Int(value), NumericValue::Float(value) => Number::Float(value),
-    }))
+    }
+}
+
+/// Proves registered numeric cast builtins through the same planner used by ordinary call binding.
+pub(super) fn builtin(expr: &crate::parser::ast::Expr, name: &str, target: NumericCastTarget,
+    args: &[crate::parser::ast::Expr], class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
+    -> Result<Option<Number>, crate::errors::CompileError> {
+    let Some(normalized) = planned_builtin_arguments(name, args, expr.span) else { return Ok(None); };
+    let mut call = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
+    let Some(value) = normalized.first() else { return Ok(None); };
+    let value = evaluate(value, true, class, definitions, &mut call)?;
+    let base = match normalized.get(1) {
+        Some(base) => match evaluate(base, true, class, definitions, &mut call)? { Some(Number::Int(value)) => Some(value), _ => None },
+        None => Some(10),
+    };
+    let Some(value) = value else { return Ok(None); };
+    checked_numeric_builtin_cast(target, scalar_input(value, &call), base).map(|value| value.map(number))
+        .map_err(|failure| crate::errors::CompileError::new(expr.span, failure.message()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::*;
+
+    /// Builtin metadata shares source proofs across original aliases, radix strings and removed branches.
+    #[test]
+    fn strict_builtin_casts_source_metadata_checks_original_values_before_folding() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+        for source in ["<?php if (false) { intval('12tail'); }", "<?php function f($v = floatval('junk')) {}",
+            "<?php const V = '8000000000000000'; echo intval(base: 16, value: V);",
+            "<?php const V = 'fftail'; echo intval(...['base' => 16, 'value' => V]);",
+            "<?php class C { const V = 'junk'; const W = floatval(self::V); }",
+            "<?php echo intval('ff', 1);", "<?php echo floatval([]);",
+            "<?php eval('echo intval(\"junk\");');"] {
+            let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+            let error = crate::semantics::validate_source(&program, profile).unwrap_err();
+            assert!(error.message.contains("--strict-casts"), "{source} {error:?}");
+            assert!(crate::semantics::validate_source(&program, SemanticProfile::PERMISSIVE).is_ok());
+        }
+    }
+
+    /// Exact strings, ignored bases, uncertain values and trusted producers keep their own contracts.
+    #[test]
+    fn strict_builtin_casts_source_metadata_preserves_exact_and_uncertain_controls() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+        for source in ["<?php const V = 'ff'; echo intval(V, 16);", "<?php echo intval('9223372036854775807.9');",
+            "<?php echo intval(7.9, 1); echo floatval('1e999');", "<?php echo intval($unknown, $base);",
+            "<?php const V = 'ff'; echo intval(V, $base);", "<?php const V = 'ff'; const B = 16; echo intval(V, B);"] {
+            let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+            assert!(crate::semantics::validate_source(&program, profile).is_ok(), "{source}");
+        }
+        let trusted = crate::parser::parse_with_mode(&crate::lexer::tokenize("<?php const V = intval('12tail');").unwrap(), SourceMode::Internal).unwrap();
+        assert!(crate::semantics::validate_source(&trusted, profile).is_ok());
+    }
 
     /// Cast syntax survives source auditing in dead branches, defaults, aliases and literal eval.
     #[test]

@@ -281,6 +281,16 @@ other radices keep their selected integer grammar and reviewed prefix rules.
 PHP string result registers are explicitly materialized into the C argument ABI;
 those register pairs differ on x86_64.
 
+`intval` and `floatval` declare `BuiltinValidation::ExplicitNumericCast` in their
+shared semantic descriptors. Original-source validation retains complete string
+bytes and consumes the normal call-argument planner, including named arguments
+and static spreads. The typed checker shares syntax-cast domain validation.
+Prepared callable bodies and direct calls lower through the same rooted cast
+graphs; only string values select the radix parser. The eval registry routes both
+builtins through their checked hooks before selecting native implementations.
+Source policy comes from the invocation, including calls through descriptors
+created by trusted code. Internal implementation conversions retain their policy.
+
 
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 

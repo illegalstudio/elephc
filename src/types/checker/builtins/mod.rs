@@ -350,6 +350,21 @@ impl Checker {
                 {
                     validate(&semantic_input)?;
                 }
+                if let crate::builtins::semantics::BuiltinValidation::ExplicitNumericCast(target) = def.spec.semantics.validation {
+                    let cast = match target {
+                        elephc_semantics::numeric_cast::NumericCastTarget::Int => crate::parser::ast::CastType::Int,
+                        elephc_semantics::numeric_cast::NumericCastTarget::Float => crate::parser::ast::CastType::Float,
+                    };
+                    if let Some(ty) = arg_types.first() { self.validate_explicit_numeric_cast(source_mode, &cast, ty, span)?; }
+                    if crate::semantics::conversions::checked_casts(self.semantic_profile, source_mode)
+                        && target == elephc_semantics::numeric_cast::NumericCastTarget::Int
+                        && arg_types.first() == Some(&PhpType::Str) {
+                        if let Some(Expr { kind: ExprKind::IntLiteral(base), .. }) = args.get(1) {
+                            elephc_semantics::integer_cast_base::validate_integer_cast_base(*base)
+                                .map_err(|failure| CompileError::new(span, failure.message()))?;
+                        }
+                    }
+                }
                 let ret = match def.spec.semantics.result_type {
                     crate::builtins::semantics::BuiltinResultType::Declared => {
                         def.return_type.clone()

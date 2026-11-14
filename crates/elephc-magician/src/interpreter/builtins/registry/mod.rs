@@ -353,6 +353,14 @@ fn call_shared_runtime_builtin(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts) {
+        match (id, args) {
+            (RuntimeBuiltinId::Floatval, [value]) => return eval_cast_value(&EvalCastType::Float, *value, context, values).map(Some),
+            (RuntimeBuiltinId::Intval, [value]) => return eval_intval_result(*value, None, context, values).map(Some),
+            (RuntimeBuiltinId::Intval, [value, base]) => return eval_intval_result(*value, Some(*base), context, values).map(Some),
+            _ => {}
+        }
+    }
     // `pow()` is PHP's one math builtin whose operand overload reaches internal value objects.
     // The generated runtime adapter works on scalars only, so route an object operand through
     // the same `RuntimeValueOps::pow` default that `**` uses.
@@ -407,15 +415,8 @@ fn call_shared_runtime_builtin(
             }
         }
     }
-    match values.runtime_builtin_call(id, args) {
-        Err(EvalStatus::UncaughtThrowable) => {
-            if let Some(thrown) = values.take_pending_runtime_throwable()? {
-                context.set_pending_throw(thrown);
-            }
-            Err(EvalStatus::UncaughtThrowable)
-        }
-        result => result,
-    }
+    let result = values.runtime_builtin_call(id, args);
+    crate::interpreter::native_results::finish(result, context, values)
 }
 
 /// Sends positional mbstring expressions through the same owner-aware builtin argument boundary.

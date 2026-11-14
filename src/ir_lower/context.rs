@@ -5843,6 +5843,14 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
         Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
     }
 
+    /// Reuses the rooted explicit-cast graph while preserving the builtin invocation's policy.
+    fn emit_numeric_cast(&mut self, target: elephc_semantics::numeric_cast::NumericCastTarget,
+        value: ValueId, base: Option<ValueId>, source_mode: crate::source::SourceMode, span: Span)
+        -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+        let result = super::expr::builtin_casts::lower(self, target, value, base, source_mode, span);
+        Ok(crate::builtins::semantics::LoweredBuiltinValue { value: result.value })
+    }
+
     /// Reports whether one of the program's declared classes is the named internal class.
     fn has_class(&self, name: &str) -> bool {
         self.classes

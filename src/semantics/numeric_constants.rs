@@ -20,9 +20,9 @@ use elephc_semantics::numeric::{checked_integer, IntegerOp, NumericFailure, INTE
 #[derive(Clone, Copy)]
 enum Number {
     Int(i64), Float(f64), Bool(bool), Null,
-    StringInt { value: i64, fully_numeric: bool, truthy: bool },
-    StringFloat { value: f64, fully_numeric: bool, truthy: bool, checked_integer: Result<i64, NumericFailure> },
-    NonNumericString { truthy: bool },
+    StringInt { value: i64, fully_numeric: bool, truthy: bool, text: usize },
+    StringFloat { value: f64, fully_numeric: bool, truthy: bool, text: usize },
+    NonNumericString { truthy: bool, text: usize },
     /// A known array kind whose payload is outside scalar numeric evidence.
     Array,
 }
@@ -134,6 +134,7 @@ struct Evidence {
     values: HashMap<(usize, bool, bool), Option<Number>>,
     active: HashSet<ConstantKey>,
     strict_types: bool,
+    strings: Vec<String>,
 }
 
 /// Checks all syntactic branches without sharing address-based memo entries between source trees.
@@ -208,7 +209,7 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
         ExprKind::FloatLiteral(value) => Some(Number::Float(*value)),
         ExprKind::BoolLiteral(value) => Some(Number::Bool(*value)),
         ExprKind::Null => Some(Number::Null),
-        ExprKind::StringLiteral(value) => string_number(value),
+        ExprKind::StringLiteral(value) => string_number(value, evidence),
         ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) | ExprKind::ArrayLiteralMixed(_) => Some(Number::Array),
         ExprKind::ConstRef(name) if !definitions.unresolved_namespaces => {
             let name = name.as_str().trim_start_matches('\\');
@@ -228,7 +229,7 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
             selection::evaluate_selection(expr, checked, class, definitions, evidence)?,
         ExprKind::Cast { target, expr: inner } if checked && evidence.profile.contains(StrictFeature::Casts) => {
             let input = evaluate(inner, checked, class, definitions, evidence)?;
-            casts::evaluate_cast(target, input).map_err(|failure| CompileError::new(expr.span, failure.message()))?
+            casts::evaluate_cast(target, input, evidence).map_err(|failure| CompileError::new(expr.span, failure.message()))?
         }
         ExprKind::UnaryPlus(inner) => match unary_operand(expr, inner, checked, class, definitions, evidence,
             elephc_semantics::numeric_domains::NumericOperator::Unary)?.map(Number::numeric) {
@@ -290,16 +291,16 @@ fn unary_operand(expr: &Expr, inner: &Expr, checked: bool, class: Option<&str>, 
 }
 
 /// Classifies PHP numeric strings without changing full-width integer values through float rounding.
-fn string_number(value: &str) -> Option<Number> {
+fn string_number(value: &str, evidence: &mut Evidence) -> Option<Number> {
+    let text = evidence.strings.len(); evidence.strings.push(value.to_string());
     let truthy = !value.is_empty() && value != "0";
-    let Some(scan) = crate::numeric_string::scan_numeric_prefix(value) else { return Some(Number::NonNumericString { truthy }); };
+    let Some(scan) = crate::numeric_string::scan_numeric_prefix(value) else { return Some(Number::NonNumericString { truthy, text }); };
     if !scan.is_float {
         if let Ok(value) = scan.text.parse::<i64>() {
-            return Some(Number::StringInt { value, fully_numeric: scan.is_fully_numeric(), truthy });
+            return Some(Number::StringInt { value, fully_numeric: scan.is_fully_numeric(), truthy, text });
         }
     }
-    let checked_integer = elephc_semantics::numeric::checked_string_to_int(value);
-    scan.text.parse().ok().map(|value| Number::StringFloat { value, fully_numeric: scan.is_fully_numeric(), truthy, checked_integer })
+    scan.text.parse().ok().map(|value| Number::StringFloat { value, fully_numeric: scan.is_fully_numeric(), truthy, text })
 }
 
 /// Proves typed numeric builtin operations through the shared argument planner and runtime inventory.
@@ -309,20 +310,17 @@ fn builtin_number(
 ) -> Result<Option<Number>, CompileError> {
     use crate::builtins::semantics::BuiltinRuntimeFunctions;
     let Some(def) = crate::builtins::registry::lookup(name.trim_start_matches('\\')) else { return Ok(None); };
+    if let crate::builtins::semantics::BuiltinValidation::ExplicitNumericCast(target) = def.spec.semantics.validation {
+        if checked && evidence.profile.contains(StrictFeature::Casts) {
+            return casts::builtin(expr, def.name, target, args, class, definitions, evidence);
+        }
+        return Ok(None);
+    }
     let BuiltinRuntimeFunctions::One(operation) = def.spec.semantics.runtime_functions else { return Ok(None); };
     use crate::ir::RuntimeFnId;
     if !matches!(operation, RuntimeFnId::Abs | RuntimeFnId::Pow | RuntimeFnId::Intdiv
         | RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) { return Ok(None); }
-    // Only the profile-independent parameter shape is consumed here, never its result type.
-    let Some(signature) = crate::builtins::registry::function_sig(def.name) else { return Ok(None); };
-    let Ok(plan) = crate::types::call_args::plan_call_args(&signature, args, expr.span, true, false) else { return Ok(None); };
-    // Validate unpack ordering before flattening a positional literal spread for evidence.
-    let expanded = crate::types::call_args::expand_planned_positional_spreads(args);
-    let normalized = if let Some(expanded) = expanded {
-        let Ok(expanded_plan) = crate::types::call_args::plan_call_args(&signature, &expanded, expr.span, true, false)
-            else { return Ok(None); };
-        expanded_plan.normalized_args()
-    } else { plan.normalized_args() };
+    let Some(normalized) = planned_builtin_arguments(def.name, args, expr.span) else { return Ok(None); };
     // The planner owns cloned AST nodes. Do not retain their addresses in the source-tree memo.
     // Carry the active declaration guard so a constant cycle through a builtin stays unknown.
     let mut call_evidence = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
@@ -379,6 +377,15 @@ fn builtin_number(
         Number::Float(value) => Some(Number::Float(value.abs())),
         _ => unreachable!("numeric normalization removes string evidence"),
     })
+}
+
+/// Reuses the shared named/spread planner without consuming profile-dependent result inference.
+fn planned_builtin_arguments(name: &str, args: &[Expr], span: crate::span::Span) -> Option<Vec<Expr>> {
+    let signature = crate::builtins::registry::function_sig(name)?;
+    let plan = crate::types::call_args::plan_call_args(&signature, args, span, true, false).ok()?;
+    if let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(args) {
+        Some(crate::types::call_args::plan_call_args(&signature, &expanded, span, true, false).ok()?.normalized_args())
+    } else { Some(plan.normalized_args()) }
 }
 
 /// Rejects a proven original parameter kind before PHP numeric normalization can erase it.

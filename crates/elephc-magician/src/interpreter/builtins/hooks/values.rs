@@ -434,8 +434,8 @@ impl EvalValuesHook {
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Intval => match evaluated_args {
-                [value] => eval_intval_result(*value, None, values),
-                [value, base] => eval_intval_result(*value, Some(*base), values),
+                [value] => eval_intval_result(*value, None, context, values),
+                [value, base] => eval_intval_result(*value, Some(*base), context, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),

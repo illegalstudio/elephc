@@ -45,6 +45,7 @@ mod local_values;
 use local_values::lower_local_value;
 mod numeric_binary;
 pub(super) mod builtin_numeric;
+pub(in crate::ir_lower) mod builtin_casts;
 mod prepared_binary;
 mod integer_destinations;
 pub(crate) use integer_destinations::{

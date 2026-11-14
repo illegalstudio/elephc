@@ -49711,7 +49711,7 @@
       "codegen_file": "src/builtins/semantics.rs",
       "codegen_function": "lower_registry_call",
       "notes": [
-        "Uses the `eir_primitive` strategy from the single-source builtin descriptor.",
+        "Uses the `eir_graph` strategy from the single-source builtin descriptor.",
         "Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`."
       ],
       "runtime_helpers": [],
@@ -49723,7 +49723,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "dynamic"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "shared"
@@ -49741,7 +49742,7 @@
       },
       "result_type": "declared",
       "runtime_functions": [],
-      "target_strategy": "eir_primitive",
+      "target_strategy": "eir_graph",
       "target_support": [
         "macos-aarch64",
         "ios-arm64",
@@ -49751,7 +49752,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "shared",
+        "numeric_cast": "float"
       }
     },
     "sig": {
@@ -81262,7 +81264,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "dynamic"
+        "kind": "dynamic",
+        "prepared": true
       },
       "effects": {
         "kind": "shared"
@@ -81292,7 +81295,8 @@
       ],
       "target_support_kind": "all",
       "validation": {
-        "kind": "signature"
+        "kind": "shared",
+        "numeric_cast": "int"
       }
     },
     "sig": {

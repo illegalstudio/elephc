@@ -8,12 +8,11 @@
 //! - Operands are borrowed by runtime helpers and rooted across catchable failures.
 
 use super::*;
-use elephc_semantics::{numeric_cast::NumericCastTarget, StrictFeature};
+use elephc_semantics::numeric_cast::NumericCastTarget;
 
 /// Selects checked numeric behavior only for explicit user operations.
 pub(super) fn active(ctx: &LoweringContext<'_, '_>, target: &CastType) -> bool {
-    ctx.source_mode != crate::source::SourceMode::Internal
-        && ctx.semantic_profile.contains(StrictFeature::Casts)
+    crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
         && matches!(target, CastType::Int | CastType::Float)
 }
 

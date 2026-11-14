@@ -7,6 +7,8 @@
 //! Key details:
 //! - The one-argument form lowers to the general EIR integer cast instead of a
 //!   builtin-specific opcode; only the two-argument form needs a runtime target.
+//! - Checked user calls and prepared callable bodies share exact scalar/radix graphs.
+//!   Their metadata also identifies casts during validation before source folding.
 //! - The declared signature is PHP's own `intval(mixed $value, int $base = 10)`. PHP applies
 //!   `$base` only when `$value` is a string and otherwise ignores it, which is why the
 //!   two-argument form lowers to `RuntimeFnId::IntvalBase` rather than a string-only helper:
@@ -26,7 +28,7 @@ use crate::types::PhpType;
 builtin! {
     contract: "intval",
     semantics: BuiltinSemantics {
-        validation: BuiltinValidation::SignatureOnly,
+        validation: BuiltinValidation::ExplicitNumericCast(elephc_semantics::numeric_cast::NumericCastTarget::Int),
         result_type: BuiltinResultType::Declared,
         effects: BuiltinEffects::Shared(effects),
         result_ownership: BuiltinResultOwnership::NonHeap,
@@ -35,31 +37,15 @@ builtin! {
         target_support: BuiltinTargetSupport::All,
         runtime_functions: BuiltinRuntimeFunctions::One(RuntimeFnId::IntvalBase),
         argument_lowering: crate::builtins::semantics::BuiltinArgumentLowering::Standard,
-        callable: BuiltinCallablePolicy::Dynamic(callable_accepts),
+        callable: BuiltinCallablePolicy::Prepared(crate::builtins::semantics::callable_accepts_any_source),
         lowering: BuiltinLowering::Eir(lower),
     },
 }
 
 /// Returns the conservative effect contract of the reusable EIR integer cast.
-fn effects(_input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
-    Op::Cast.default_effects()
-}
-
-/// Preserves the source representations accepted by runtime callable wrappers.
-fn callable_accepts(source: Option<&PhpType>) -> bool {
-    source.is_none_or(|source| {
-        matches!(
-            source.codegen_repr(),
-            PhpType::Bool
-                | PhpType::Float
-                | PhpType::Int
-                | PhpType::Mixed
-                | PhpType::Never
-                | PhpType::Str
-                | PhpType::Union(_)
-                | PhpType::Void
-        )
-    })
+fn effects(input: &BuiltinSemanticInput<'_>) -> crate::ir::Effects {
+    let effects = Op::Cast.default_effects();
+    if crate::semantics::conversions::checked_casts(input.semantic_profile, input.source_mode) { effects | crate::ir::Effects::MAY_THROW } else { effects }
 }
 
 /// Lowers `intval` through the reusable EIR integer-cast operation, or through the
@@ -74,6 +60,10 @@ fn lower(
     call: &NormalizedBuiltinCall<'_>,
 ) -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
     let value = call.operand(0)?;
+    if crate::semantics::conversions::checked_casts(call.semantic_profile, call.source_mode) {
+        return ctx.emit_numeric_cast(elephc_semantics::numeric_cast::NumericCastTarget::Int,
+            value, call.operands.get(1).copied(), call.source_mode, call.span);
+    }
     if matches!(
         ctx.value_php_type(value).codegen_repr(),
         PhpType::Object(name) if name.eq_ignore_ascii_case("GMP")

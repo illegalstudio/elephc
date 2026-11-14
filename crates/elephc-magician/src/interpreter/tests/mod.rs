@@ -69,6 +69,7 @@ mod closures;
 mod control_flow;
 mod strict_semantics;
 mod strict_checked_casts;
+mod strict_builtin_casts;
 mod strict_modulo;
 mod strict_numeric_domains;
 mod strict_numeric_parameters;

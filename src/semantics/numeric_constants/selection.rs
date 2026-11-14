@@ -16,7 +16,7 @@ fn truthy(value: Number) -> Option<bool> {
         Number::Int(value) => Some(value != 0), Number::Float(value) => Some(value != 0.0),
         Number::Bool(value) => Some(value), Number::Null => Some(false),
         Number::StringInt { truthy, .. } | Number::StringFloat { truthy, .. }
-        | Number::NonNumericString { truthy } => Some(truthy),
+        | Number::NonNumericString { truthy, .. } => Some(truthy),
         Number::Array => None,
     }
 }

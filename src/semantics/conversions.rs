@@ -11,6 +11,11 @@
 use crate::{source::SourceMode, types::PhpType};
 use elephc_semantics::{SemanticProfile, conversions::{AllowedKinds, ConversionPlan, ValueKind}};
 
+/// Selects explicit user cast checks without changing reviewed implementation operations.
+pub(crate) fn checked_casts(profile: SemanticProfile, source: SourceMode) -> bool {
+    source != SourceMode::Internal && profile.contains(elephc_semantics::StrictFeature::Casts)
+}
+
 /// Projects only scalar source annotations whose meaning needs no class or generic context.
 pub(crate) fn scalar_hint(hint: &crate::parser::ast::TypeExpr) -> Option<PhpType> {
     use crate::parser::ast::TypeExpr;

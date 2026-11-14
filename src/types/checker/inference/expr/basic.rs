@@ -396,13 +396,7 @@ impl Checker {
             ExprKind::Cast { target, expr: inner } => {
                 let source_ty = self.infer_type(inner, env)?;
                 use crate::parser::ast::CastType;
-                if self.semantic_source_mode != crate::source::SourceMode::Internal
-                    && self.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
-                    && matches!(target, CastType::Int | CastType::Float)
-                    && !checked_numeric_cast_possible(&source_ty, &self.classes, target) {
-                    return Err(CompileError::new(expr.span,
-                        elephc_semantics::numeric_cast::NumericCastFailure::UnsupportedKind.message()));
-                }
+                self.validate_explicit_numeric_cast(self.semantic_source_mode, target, &source_ty, expr.span)?;
                 Ok(match target {
                     CastType::Int => PhpType::Int,
                     CastType::Float => PhpType::Float,
@@ -438,6 +432,19 @@ impl Checker {
             }
             _ => unreachable!("non-basic expression routed to basic inference"),
         }
+    }
+}
+
+impl Checker {
+    /// Shares known-kind diagnostics between cast syntax and registered explicit conversion builtins.
+    pub(in crate::types::checker) fn validate_explicit_numeric_cast(&self, source: crate::source::SourceMode,
+        target: &crate::parser::ast::CastType, ty: &PhpType, span: crate::span::Span) -> Result<(), CompileError> {
+        if crate::semantics::conversions::checked_casts(self.semantic_profile, source)
+            && matches!(target, crate::parser::ast::CastType::Int | crate::parser::ast::CastType::Float)
+            && !checked_numeric_cast_possible(ty, &self.classes, target) {
+            return Err(CompileError::new(span, elephc_semantics::numeric_cast::NumericCastFailure::UnsupportedKind.message()));
+        }
+        Ok(())
     }
 }
 

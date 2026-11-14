@@ -71,9 +71,29 @@ pub fn checked_numeric_cast(target: NumericCastTarget, input: NumericCastInput<'
     }))
 }
 
+/// Applies explicit builtin casts, allowing an unknown radix only when it cannot affect the value.
+pub fn checked_numeric_builtin_cast(target: NumericCastTarget, input: NumericCastInput<'_>, base: Option<i64>)
+    -> Result<Option<NumericValue>, NumericCastFailure> {
+    if let (NumericCastTarget::Int, NumericCastInput::String(text)) = (target, input) {
+        let Some(base) = base else { return Ok(None); };
+        return crate::integer_cast_base::checked_string_to_int_base(text.as_bytes(), base)
+            .map(|value| Some(NumericValue::Int(value)));
+    }
+    checked_numeric_cast(target, input).map(Some)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An uncertain string radix stays unknown while non-string casts intentionally ignore it.
+    #[test]
+    fn strict_numeric_cast_builtin_unknown_radix_preserves_original_kind_domains() {
+        assert_eq!(checked_numeric_builtin_cast(NumericCastTarget::Int, NumericCastInput::String("ff"), None), Ok(None));
+        assert_eq!(checked_numeric_builtin_cast(NumericCastTarget::Int, NumericCastInput::Int(42), Some(1)), Ok(Some(NumericValue::Int(42))));
+        assert_eq!(checked_numeric_builtin_cast(NumericCastTarget::Int, NumericCastInput::Float(f64::INFINITY), None), Err(NumericCastFailure::Range));
+        assert_eq!(checked_numeric_builtin_cast(NumericCastTarget::Float, NumericCastInput::String("1.5"), None), Ok(Some(NumericValue::Float(1.5))));
+    }
 
     /// Exact decimal truncation accepts endpoints, exponents and every PHP whitespace byte.
     #[test]

@@ -72,6 +72,8 @@ pub enum BuiltinValidation {
     SignatureOnly,
     /// Run one backend-neutral semantic validator after inferring arguments once.
     Shared(ValidateFn),
+    /// Shares explicit cast identity with original-source evidence and full checker validation.
+    ExplicitNumericCast(elephc_semantics::numeric_cast::NumericCastTarget),
 }
 
 /// Describes the single authoritative return-type resolver for a builtin.
@@ -353,6 +355,13 @@ pub trait BuiltinLoweringContext {
         &mut self, left: ValueId, operation: crate::parser::ast::BinOp, right: ValueId,
         source_mode: crate::source::SourceMode, span: Span,
     ) -> Result<LoweredBuiltinValue, BuiltinLoweringError>;
+
+    /// Applies an explicit numeric cast after source-order argument evaluation and owner rooting.
+    fn emit_numeric_cast(&mut self, _target: elephc_semantics::numeric_cast::NumericCastTarget,
+        _value: ValueId, _base: Option<ValueId>, _source_mode: crate::source::SourceMode, _span: Span)
+        -> Result<LoweredBuiltinValue, BuiltinLoweringError> {
+        Err(BuiltinLoweringError::new("checked numeric casts require a prepared builtin wrapper"))
+    }
 
     /// Returns the current source path when the lowering owns a user-written call site.
     fn source_path(&self) -> Option<&str> {
