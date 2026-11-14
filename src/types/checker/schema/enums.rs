@@ -97,8 +97,9 @@ pub(crate) fn propagate_abstract_return_types(checker: &mut Checker) {
 ///
 /// Checks for duplicate class/enum/interface names, validates backing type (int or string only),
 /// ensures pure enums have no case values and backed enums require values, rejects duplicate
-/// case names and duplicate backing values, and constructs the `EnumInfo` plus a parallel `ClassInfo`
-/// with synthesized `cases()`, `from()`, and `tryFrom()` static methods.
+/// case names, duplicate backing values, and invalid `UnitEnum`/`BackedEnum` implementations, and
+/// constructs the `EnumInfo` plus a parallel `ClassInfo` with synthesized `cases()`, `from()`, and
+/// `tryFrom()` static methods.
 ///
 /// Inputs:
 /// - `name`: enum identifier
@@ -190,17 +191,6 @@ pub(crate) fn build_enum_info(
     };
 
     let mut seen_case_names = HashSet::new();
-    for interface in implements {
-        let key = php_symbol_key(interface.as_str());
-        if matches!(key.as_str(), "unitenum" | "backedenum") {
-            return Err(CompileError::new(span, "Enum cannot explicitly implement UnitEnum or BackedEnum"));
-        }
-        if resolved_backing.is_none()
-            && checker.interface_extends_interface(interface.as_str(), "BackedEnum")
-        {
-            return Err(CompileError::new(span, "Pure enum cannot implement BackedEnum"));
-        }
-    }
     let mut seen_int_values = HashSet::new();
     let mut seen_string_values = HashSet::new();
     let mut enum_cases = Vec::new();
@@ -280,6 +270,9 @@ pub(crate) fn build_enum_info(
         }
     }
 
+    // PHP compiles the enum body before linking its interfaces.
+    validate_enum_interface_names(name, implements, resolved_backing.is_some(), span, checker)?;
+
     insert_enum_metadata(
         name,
         resolved_backing,
@@ -315,6 +308,52 @@ pub(crate) fn build_enum_info(
         // `ReflectionClass` report like a class's.
         class_info.attribute_names = collect_attribute_names(attributes);
         class_info.attribute_args = collect_attribute_args(attributes);
+    }
+    Ok(())
+}
+
+/// Rejects `implements` names that conflict with the enum's implicit interfaces.
+///
+/// PHP appends `UnitEnum`, then `BackedEnum` for a backed enum, to the `implements` list and
+/// rejects duplicates across the whole list before any interface handler runs. `BackedEnum`'s
+/// handler then rejects a pure enum, whether it names the interface or inherits it.
+fn validate_enum_interface_names(
+    name: &str,
+    implements: &[crate::names::Name],
+    is_backed: bool,
+    span: crate::span::Span,
+    checker: &Checker,
+) -> Result<(), CompileError> {
+    let names_interface = |interface_key: &str| {
+        implements
+            .iter()
+            .any(|interface| php_symbol_key(interface.as_str()) == interface_key)
+    };
+    let redeclared_interface = if names_interface("unitenum") {
+        Some("UnitEnum")
+    } else if is_backed && names_interface("backedenum") {
+        Some("BackedEnum")
+    } else {
+        None
+    };
+    if let Some(interface) = redeclared_interface {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Enum {} cannot implement previously implemented interface {}",
+                name, interface,
+            ),
+        ));
+    }
+    let requires_backing = names_interface("backedenum")
+        || implements
+            .iter()
+            .any(|interface| checker.interface_extends_interface(interface.as_str(), "BackedEnum"));
+    if !is_backed && requires_backing {
+        return Err(CompileError::new(
+            span,
+            &format!("Non-backed enum {} cannot implement interface BackedEnum", name),
+        ));
     }
     Ok(())
 }
