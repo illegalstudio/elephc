@@ -44,6 +44,7 @@ mod reflection;
 mod stmt;
 mod scoped_writes;
 mod semantic_guards;
+mod conversion_boundaries;
 mod checked_arithmetic;
 mod numeric_domains;
 mod numeric_operands;

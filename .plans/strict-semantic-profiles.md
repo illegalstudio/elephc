@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 39 (this commit), following `3413afbaeb`. Issue:
+Verified through step 40 (this commit), following `113f7497ec`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -463,6 +463,37 @@ The detailed evidence remains in Git history, Code Journal plan revisions throug
 - Exact typed literal-key planning preserves original string bytes/kinds and
   append provenance in source reduction proofs. This is groundwork; the complete
   runtime key, producer, array type and indexing guarantees remain outstanding.
+
+### Verified implicit scalar parameter groundwork
+
+Step40 adds a shared scalar-contract adapter over the neutral conversion planner.
+It preserves exact scalar union members and distinguishes literal false from bool.
+Known invalid user PHP/LFC bindings fail before permissive assignability; Internal
+operations retain their reviewed behavior. Static unpack proofs reuse the shared
+spread expansion and named/positional planner instead of matching parameters again.
+PHP strict_types remains independent, including its ordinary int-to-float exception.
+
+EIR argument evaluation retains original values until every caller expression has
+finished. The parameter-order pass roots all operands, including an allocated
+variadic collector, before kind guards and representation-only extraction. It
+suppresses literal binding rewrites and destination casts that would erase kinds.
+Selected descriptor guards use exact declaration membership. Eval's common dynamic
+and native parameter binder rejects coercion after full-type exact acceptance.
+
+AST effects and exception-flow boundary queries add the independent binding
+TypeError outside callee summaries. The native regression reproduced a pruned catch
+with optimization enabled before this fix and passes after it. New neutral,
+selected frontend, five-target EIR/emitter, walker/VM call-boundary and native tests
+pass, with both optimizers and clean ownership. VM probes register typed callees
+through the walker and use a dead untyped shape in their compiled caller, preserving
+the existing ParameterType admission gap rather than claiming a typed fast path.
+The initial-fold tests also confirm typed pow/intdiv violations in ordinary dead
+branches survive until checking. Five focused compatibility controls, the compiler
+build, architecture gate, assembly comments, PHP syntax and diff checks pass.
+
+This is parameter groundwork, not admission of Coercions. Returns, assignments,
+property/reference write-back, defaults, every builtin contract, array element
+adaptation and all indirect/host boundaries still require completion and audit.
 
 ### Native eval boundaries and ownership
 
@@ -570,5 +601,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 36 | `3d27b323d5` | fix(strict): preserve caller policies in outlined operators |
 | 37 | `266dd4c139` | feat(strict): guard original numeric builtin parameter kinds |
 | 38 | `3413afbaeb` | feat(strict): enforce numeric array reduction domains |
-
-| 39 | this commit | fix(strict): reject invalid checked aggregate callback sources |
+| 39 | `113f7497ec` | fix(strict): reject invalid checked aggregate callback sources |
+| 40 | this commit | feat(strict): guard original scalar parameter contracts |

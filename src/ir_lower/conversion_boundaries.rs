@@ -1,0 +1,76 @@
+//! Purpose:
+//! Enforces implicit scalar contracts before PHP conversions can erase original kinds.
+//!
+//! Called from:
+//! - EIR parameter and return value preparation.
+//!
+//! Key details:
+//! - Physical boxing and unboxing remain legal after an exact value-kind check.
+//! - The original owner stays rooted across a catchable failure.
+
+use super::{context::{LoweredValue, LoweringContext}, semantic_guards};
+use crate::{ir::{Op, PhpTypePredicate}, span::Span, types::PhpType};
+use elephc_semantics::{conversions::{ConversionPlan, ValueKind}, StrictFeature};
+
+/// Tests whether this user boundary needs the original value before destination lowering.
+pub(super) fn active(ctx: &LoweringContext<'_, '_>, destination: &PhpType) -> bool {
+    ctx.source_mode != crate::source::SourceMode::Internal
+        && ctx.semantic_profile.contains(StrictFeature::Coercions)
+        && crate::semantics::conversions::scalar_contract(destination).is_some()
+}
+
+/// Checks scalar membership and returns the same value and ownership without conversion.
+pub(super) fn implicit(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
+    destination: &PhpType, span: Span) -> LoweredValue {
+    let actual = ctx.builder.value_php_type(value.value);
+    match crate::semantics::conversions::implicit(ctx.semantic_profile, ctx.source_mode, destination, &actual) {
+        ConversionPlan::ExistingBehavior | ConversionPlan::Identity => return value,
+        _ => {}
+    }
+    let Some(allowed) = crate::semantics::conversions::scalar_contract(destination) else { return value; };
+    let false_only = crate::semantics::conversions::only_false(destination);
+    let predicates: Vec<_> = [(ValueKind::Integer, PhpTypePredicate::Int),
+        (ValueKind::Float, PhpTypePredicate::Float), (ValueKind::Boolean, PhpTypePredicate::Bool),
+        (ValueKind::String, PhpTypePredicate::String)]
+        .into_iter().filter_map(|(kind, predicate)| (allowed.allows(kind)
+            && !(false_only && kind == ValueKind::Boolean)).then_some(predicate)).collect();
+    let pins = super::expr::call_operand_owners::pin_in_flight_owners(ctx, &[value.value], span);
+    let mut accepted = semantic_guards::matches_any_kind(ctx, value, &predicates, Some(span));
+    if false_only {
+        let no = ctx.emit_value(Op::ConstBool, Vec::new(), Some(crate::ir::Immediate::Bool(false)),
+            PhpType::Bool, Op::ConstBool.default_effects(), Some(span));
+        let is_false = ctx.emit_value(Op::StrictEq, vec![value.value, no.value], None,
+            PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
+        accepted = ctx.emit_value(Op::IBitOr, vec![accepted.value, is_false.value], None,
+            PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
+    }
+    if allowed.allows(ValueKind::Null) {
+        let null = ctx.emit_value(Op::IsNull, vec![value.value], None, PhpType::Bool,
+            Op::IsNull.default_effects(), Some(span));
+        accepted = ctx.emit_value(Op::IBitOr, vec![accepted.value, null.value], None, PhpType::Bool,
+            Op::IBitOr.default_effects(), Some(span));
+    }
+    semantic_guards::require(ctx, accepted, Op::ThrowTypeError,
+        &format!("--strict-coercions requires {destination} without implicit conversion"), Some(span));
+    super::expr::call_operand_owners::unpin_in_flight_owners(ctx, pins, span);
+    value
+}
+
+/// Extracts only a kind already accepted by the guard, preserving its PHP-visible value.
+pub(super) fn scalar_storage(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
+    destination: &PhpType, span: Span) -> LoweredValue {
+    if !matches!(destination, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False | PhpType::Str)
+        || value.ir_type == crate::ir::IrType::from_php(destination) { return value; }
+    let boxed = matches!(value.ir_type, crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)
+        | crate::ir::IrType::TaggedScalar);
+    let op = if boxed { Op::MixedUnbox } else { Op::Cast };
+    let immediate = (!boxed).then_some(crate::ir::Immediate::CastTarget(crate::ir::IrType::from_php(destination)));
+    let effects = if boxed { Op::mixed_unbox_effects(destination) } else { op.default_effects() };
+    let result = if *destination == PhpType::Str {
+        ctx.emit_owned_value(op, vec![value.value], immediate, destination.clone(), effects, Some(span))
+    } else { ctx.emit_value(op, vec![value.value], immediate, destination.clone(), effects, Some(span)) };
+    if ctx.value_is_owning_temporary(value) {
+        super::ownership::release_if_owned(ctx, value, Some(span));
+    }
+    result
+}

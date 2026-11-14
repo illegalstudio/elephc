@@ -739,3 +739,5 @@ mod strict_numeric_builtins;
 mod strict_division_modulo;
 mod strict_numeric_domains;
 mod strict_unary_domains;
+
+mod strict_conversion_parameters;

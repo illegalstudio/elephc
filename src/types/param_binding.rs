@@ -40,7 +40,7 @@ pub(crate) use native_selections::{
 };
 pub(crate) use union::{
     runtime_int_binding_needs_diagnostics, runtime_scalar_param_binding,
-    runtime_strict_param_acceptance, runtime_weak_int_param_acceptance,
+    runtime_strict_param_acceptance, runtime_exact_param_acceptance, runtime_weak_int_param_acceptance,
 };
 
 /// How a declared parameter binds an argument whose type does not already match.

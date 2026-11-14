@@ -48,6 +48,17 @@ pub(super) fn active_profile() -> SemanticProfile { PROFILE.with(Cell::get) }
 /// Projects the current statement policy without replacing its full module identity.
 pub(super) fn active_source_mode() -> SourceMode { SOURCE_MODE.with(Cell::get) }
 
+/// Parameter membership may fail independently of a callee's otherwise pure body.
+pub(super) fn implicit_binding_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::ExprKind;
+    enabled(StrictFeature::Coercions) && matches!(expr.kind,
+        ExprKind::FunctionCall { .. } | ExprKind::ClosureCall { .. } | ExprKind::ExprCall { .. }
+        | ExprKind::MethodCall { .. } | ExprKind::NullsafeMethodCall { .. }
+        | ExprKind::NullsafeDynamicMethodCall { .. } | ExprKind::StaticMethodCall { .. }
+        | ExprKind::NewObject { .. } | ExprKind::NewGeneric { .. } | ExprKind::NewDynamic { .. }
+        | ExprKind::NewDynamicObject { .. } | ExprKind::NewScopedObject { .. })
+}
+
 /// Tests one policy while keeping the immutable profile owned by the caller.
 pub(super) fn enabled(feature: StrictFeature) -> bool {
     SOURCE_MODE.with(|slot| slot.get() != SourceMode::Internal)

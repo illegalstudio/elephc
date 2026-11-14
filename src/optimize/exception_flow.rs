@@ -878,6 +878,17 @@ impl ExceptionFlowAnalysis {
         &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
     ) -> ThrownTypes {
+        let thrown = self.expr_throws_without_binding(expr, bindings, class_context, include_operands);
+        if super::semantic_context::implicit_binding_may_throw(expr) {
+            thrown.combined(ThrownTypes::exact("TypeError"))
+        } else { thrown }
+    }
+
+    /// Computes callee and operand exceptions before adding the caller's exact binding guard.
+    fn expr_throws_without_binding(
+        &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
+        class_context: Option<&ExceptionClassContext>, include_operands: bool,
+    ) -> ThrownTypes {
         let mut effective_bindings = bindings.clone();
         if include_operands {
             invalidate_throw_bindings(&mut effective_bindings, expr_invalidation(expr));

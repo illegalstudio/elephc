@@ -283,6 +283,13 @@ pub(super) fn expr_is_observable(expr: &Expr) -> bool {
 /// Covers all `ExprKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions.
 /// For `MagicConstant`, returns `unreachable!` because they must be lowered before optimizer passes.
 pub(super) fn expr_effect(expr: &Expr) -> Effect {
+    let effect = expression_effect_without_binding(expr);
+    if super::semantic_context::implicit_binding_may_throw(expr) { effect.with_may_throw() }
+    else { effect }
+}
+
+/// Computes ordinary expression effects before the caller's independent parameter contract.
+fn expression_effect_without_binding(expr: &Expr) -> Effect {
     match &expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.

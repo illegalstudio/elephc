@@ -97,3 +97,5 @@ mod support;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod repl;
 mod trait_adaptations;
+
+mod strict_conversion_parameters;

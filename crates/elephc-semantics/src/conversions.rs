@@ -26,6 +26,9 @@ pub enum ConversionSite {
 pub struct AllowedKinds(u8);
 
 impl AllowedKinds {
+    /// Starts an explicit contract with no permitted scalar kinds.
+    pub const EMPTY: Self = Self(0);
+
     /// Returns the set containing one scalar kind, or empty for unresolved/non-scalar kinds.
     pub const fn one(kind: ValueKind) -> Self {
         Self(match kind {
@@ -40,6 +43,17 @@ impl AllowedKinds {
 
     /// Tests a concrete scalar category against this checked boundary.
     pub const fn allows(self, kind: ValueKind) -> bool { self.0 & Self::one(kind).0 != 0 }
+}
+
+/// Plans exact scalar membership for a resolved declaration, including scalar unions.
+pub fn plan_implicit_kinds(profile: SemanticProfile, source: ValueKind, allowed: AllowedKinds)
+    -> ConversionPlan {
+    if !profile.contains(StrictFeature::Coercions) { return ConversionPlan::ExistingBehavior; }
+    if source == ValueKind::Dynamic {
+        return ConversionPlan::Guard { feature: StrictFeature::Coercions, allowed };
+    }
+    if allowed.allows(source) { ConversionPlan::Identity }
+    else { ConversionPlan::Reject(StrictFeature::Coercions) }
 }
 
 /// Semantic decision consumed by both static and runtime conversion adapters.
@@ -73,7 +87,7 @@ pub fn plan_conversion(profile: SemanticProfile, site: ConversionSite,
             AllowedKinds::one(ValueKind::Integer).union(AllowedKinds::one(ValueKind::String))),
         ImplicitValue => {
             if matches!(target, ValueKind::Dynamic | ValueKind::NonScalar) { return ExistingBehavior; }
-            (StrictFeature::Coercions, AllowedKinds::one(target))
+            return plan_implicit_kinds(profile, source, AllowedKinds::one(target));
         }
     };
     if !profile.contains(feature) { return ExistingBehavior; }

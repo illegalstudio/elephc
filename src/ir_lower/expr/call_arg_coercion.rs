@@ -605,6 +605,10 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
+    if crate::ir_lower::conversion_boundaries::active(ctx, param_ty) {
+        // The parameter-order pass checks original kinds after all caller expressions finish.
+        return value;
+    }
     // PHP accepts a union that names the declared class plus one of `false`/`null` at compile
     // time and throws `TypeError` at runtime for the other alternative. Extract the object
     // payload only after the instance check, so the callee never receives a boxed cell where
@@ -962,11 +966,12 @@ pub(super) fn coerce_operands_to_params(
     let needs_coercion = (0..limit)
         .map(|index| operand_needs_param_coercion(ctx, sig, &operands, index))
         .collect::<Vec<_>>();
-    if needs_coercion.iter().any(|needs_coercion| *needs_coercion) {
+    if needs_coercion.iter().any(|needs_coercion| *needs_coercion)
+        || sig.params.iter().take(limit).any(|(_, ty)| crate::ir_lower::conversion_boundaries::active(ctx, ty)) {
         // Source evaluation has completed, but any parameter conversion below can throw.
         // Publish the one last source value that did not need protection during source
         // evaluation, plus synthesized owned operands, before the first conversion runs.
-        for index in 0..limit {
+        for index in 0..operands.len() {
             if sig.ref_params.get(index).copied().unwrap_or(false) {
                 continue;
             }
@@ -982,6 +987,13 @@ pub(super) fn coerce_operands_to_params(
         let Some((_, param_ty)) = sig.params.get(index) else {
             continue;
         };
+        if crate::ir_lower::conversion_boundaries::active(ctx, param_ty) {
+            let value = lowered_value_from_id(ctx, operands[index]);
+            let checked = crate::ir_lower::conversion_boundaries::implicit(ctx, value, param_ty, Span::dummy());
+            let checked = crate::ir_lower::conversion_boundaries::scalar_storage(ctx, checked, param_ty, Span::dummy());
+            operands[index] = root_evaluated_call_argument(ctx, checked, Span::dummy()).value;
+            continue;
+        }
         let value = operands[index];
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
         let param_ty = param_ty.codegen_repr();
@@ -1327,7 +1339,10 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
-    let literal_bound = rewrite_literal_param_bindings(sig, args);
+    let literal_bound = if ctx.source_mode != crate::source::SourceMode::Internal
+        && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions) {
+        None
+    } else { rewrite_literal_param_bindings(sig, args) };
     let args = literal_bound.as_deref().unwrap_or(args);
     if crate::func_args::sig_collects_surplus_args(sig) {
         if let Some(operands) = dynamic_spreads::lower_boxed_spread_args(ctx, sig, args, "", false) {

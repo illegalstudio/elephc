@@ -31,6 +31,28 @@ use crate::types::{FunctionSig, PhpType, TypeEnv};
 use super::super::Checker;
 
 impl Checker {
+    /// Validates exact static unpack members through the same expansion and named-argument planner.
+    pub(super) fn validate_noncoercive_static_spread(&mut self, sig: &FunctionSig,
+        args: &[Expr], env: &TypeEnv, context: &str) -> Result<(), CompileError> {
+        if self.semantic_source_mode == crate::source::SourceMode::Internal
+            || !self.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions) { return Ok(()); }
+        let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+        let Some(expanded) = crate::types::call_args::expand_planned_positional_spreads(&expanded) else { return Ok(()); };
+        if expanded.iter().any(|arg| matches!(arg.kind, crate::parser::ast::ExprKind::Spread(_))) { return Ok(()); }
+        let span = args.first().map(|arg| arg.span).unwrap_or_else(Span::dummy);
+        let plan = self.plan_named_call_args(sig, &expanded, span, context, env)?;
+        let regular = crate::types::call_args::regular_param_count(sig);
+        let variadic = self.variadic_argument_element_type(sig, span, context)?;
+        for (index, argument) in plan.normalized_args().iter().enumerate() {
+            let expected = if index < regular { sig.params.get(index).map(|(_, ty)| ty) }
+                else { variadic.as_ref() };
+            let Some(expected) = expected else { continue; };
+            let actual = self.infer_type(argument, env)?;
+            self.require_strict_types_param_binding(expected, &actual, argument.span, context)?;
+        }
+        Ok(())
+    }
+
     /// Validates one declared parameter against an argument, allowing PHP's coercive
     /// parameter binding and callable-name strings before reporting a type mismatch.
     ///
@@ -165,6 +187,12 @@ impl Checker {
         span: Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        if let elephc_semantics::conversions::ConversionPlan::Reject(feature) =
+            crate::semantics::conversions::implicit(self.semantic_profile, self.semantic_source_mode, expected, actual)
+        {
+            return Err(CompileError::new(span, &format!(
+                "--{}: {context} requires {expected} without implicit conversion, got {actual}", feature.flag())));
+        }
         if !self.strict_types {
             return Ok(());
         }
@@ -222,7 +250,7 @@ impl Checker {
         CompileError::new(
             span,
             &format!(
-                "{} expects {}, got {} — {}",
+                "{} expects {}, got {}: {}",
                 context, expected, actual, detail
             ),
         )

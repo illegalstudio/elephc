@@ -118,6 +118,16 @@ pub(crate) fn runtime_strict_param_acceptance(expected: &PhpType, value: &Expr) 
     }
 }
 
+/// Accepts declaration members by identity without PHP's int-to-float widening exception.
+pub(crate) fn runtime_exact_param_acceptance(expected: &PhpType, value: &Expr) -> Option<Expr> {
+    match expected {
+        PhpType::Mixed => Some(Expr::new(ExprKind::BoolLiteral(true), value.span)),
+        PhpType::Union(members) => members.iter().map(|member| runtime_exact_param_acceptance(member, value))
+            .collect::<Option<Vec<_>>>()?.into_iter().reduce(|a, b| either(a, b, value.span)),
+        _ => exact_member(expected, value),
+    }
+}
+
 /// Tests identity membership rather than the broader coercive scalar acceptance predicate.
 fn exact_member(ty: &PhpType, value: &Expr) -> Option<Expr> {
     Some(match ty {

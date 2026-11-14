@@ -36,7 +36,10 @@ fn guard_parameter_at(
 ) {
     let Some((name, ty)) = signature.params.get(index) else { return; };
     if !signature.declared_params.get(index).copied().unwrap_or(false) { return; }
-    let accepted = if crate::source::current_strict_types() {
+    let accepted = if ctx.source_mode != crate::source::SourceMode::Internal
+        && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions) {
+        crate::types::param_binding::runtime_exact_param_acceptance(ty, variable)
+    } else if crate::source::current_strict_types() {
         crate::types::param_binding::runtime_strict_param_acceptance(ty, variable)
     } else {
         accepts_type(ty, variable, span)
@@ -72,7 +75,8 @@ fn guard_parameter_at(
 fn bind_implicit_integer(
     ctx: &mut LoweringContext<'_, '_>, ty: &PhpType, variable: &Expr, span: Span,
 ) {
-    if crate::source::current_strict_types() { return; }
+    if crate::source::current_strict_types() || (ctx.source_mode != crate::source::SourceMode::Internal
+        && ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)) { return; }
     let Some(condition) = crate::types::param_binding::runtime_int_binding_needs_diagnostics(ty, variable)
         else { return; };
     let ExprKind::Variable(name) = &variable.kind else {

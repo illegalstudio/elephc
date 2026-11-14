@@ -49,3 +49,22 @@ fn strict_conversion_explicit_contexts_do_not_become_implicit_coercions() {
     assert!(!keys.allows(ValueKind::Float));
     assert!(!keys.allows(ValueKind::Null));
 }
+
+/// Scalar union membership preserves exact kinds and remains independent of the umbrella.
+#[test]
+fn strict_conversion_scalar_union_membership_is_noncoercive() {
+    use elephc_semantics::conversions::plan_implicit_kinds;
+    let allowed = AllowedKinds::EMPTY.union(AllowedKinds::one(ValueKind::Integer))
+        .union(AllowedKinds::one(ValueKind::String));
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
+    for kind in [ValueKind::Integer, ValueKind::String] {
+        assert_eq!(plan_implicit_kinds(profile, kind, allowed), ConversionPlan::Identity);
+    }
+    for kind in [ValueKind::Float, ValueKind::Boolean, ValueKind::Null, ValueKind::NonScalar] {
+        assert_eq!(plan_implicit_kinds(profile, kind, allowed), ConversionPlan::Reject(StrictFeature::Coercions));
+    }
+    assert_eq!(plan_implicit_kinds(profile, ValueKind::Dynamic, allowed),
+        ConversionPlan::Guard { feature: StrictFeature::Coercions, allowed });
+    assert_eq!(plan_implicit_kinds(SemanticProfile::all().with(StrictFeature::Coercions, false),
+        ValueKind::Float, allowed), ConversionPlan::ExistingBehavior);
+}

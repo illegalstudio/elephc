@@ -1195,6 +1195,7 @@ impl Checker {
         if !args.iter().any(|arg| matches!(arg.kind, ExprKind::Spread(_))) {
             return Ok(());
         }
+        self.validate_noncoercive_static_spread(sig, args, caller_env, callee_desc)?;
         let regular_param_count = call_args::regular_param_count(sig);
         let spread_span = args
             .iter()

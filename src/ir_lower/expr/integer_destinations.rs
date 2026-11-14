@@ -31,6 +31,9 @@ pub(super) fn lower_expr_for_parameter(
     destination: &PhpType,
     source_typed: bool,
 ) -> LoweredValue {
+    if crate::ir_lower::conversion_boundaries::active(ctx, destination) {
+        return lower_expr(ctx, expr);
+    }
     if destination.codegen_repr() == PhpType::Callable {
         let source = match &expr.kind {
             ExprKind::NamedArg { value, .. } => value.as_ref(),

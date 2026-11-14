@@ -589,6 +589,9 @@ pub(in crate::interpreter) fn eval_method_parameter_value(
     if eval_method_parameter_type_accepts_exact(param_type, value, context, values)? {
         return Ok(value);
     }
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) {
+        return eval_throw_type_error("--strict-coercions forbids implicit parameter conversion", context, values);
+    }
     if param_type.is_intersection() {
         if context.current_function().is_some_and(|name| name.contains('<')) {
             return eval_throw_type_error("Value does not satisfy the specialized intersection type", context, values);
