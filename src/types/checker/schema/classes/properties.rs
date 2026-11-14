@@ -1122,7 +1122,10 @@ fn validate_asymmetric_visibility(prop: &ClassProperty) -> Result<(), CompileErr
 /// Computes explicit write access or the implicit protected setter of public readonly storage.
 fn effective_set_visibility(class: &FlattenedClass, prop: &ClassProperty) -> Visibility {
     prop.set_visibility.clone().unwrap_or_else(|| {
-        if (class.is_readonly_class || prop.readonly) && prop.visibility == Visibility::Public {
+        if (class.is_readonly_class || prop.readonly)
+            && !prop.is_static
+            && prop.visibility == Visibility::Public
+        {
             Visibility::Protected
         } else { prop.visibility.clone() }
     })

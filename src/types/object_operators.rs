@@ -151,8 +151,29 @@ pub(crate) fn null_comparison_allowed(left: &PhpType, right: &PhpType) -> bool {
 
 /// Selects the class handler and checks that the other operand belongs to its domain.
 pub(crate) fn binary_plan(op: &BinOp, left: &PhpType, right: &PhpType) -> Option<ObjectOperatorPlan> {
-    let class = possible_operator_class(left).or_else(|| possible_operator_class(right))?;
+    let left_class = possible_operator_class(left);
+    let right_class = possible_operator_class(right);
+    // php-src asks the LEFT operand's handler first and, when it reports Unordered, asks
+    // the right operand's handler. DateTime's adapter reports Unordered for every foreign
+    // object, so a `DateTime > GMP` comparison must reach GMP's throwing handler instead
+    // of settling on DateTime's "unordered means false" answer.
+    let class = match (left_class, right_class) {
+        (Some(left_class), Some(right_class))
+            if is_datetime_operator_class(left_class)
+                && !left_class.name.eq_ignore_ascii_case(right_class.name) =>
+        {
+            right_class
+        }
+        (Some(left_class), _) => left_class,
+        (None, Some(right_class)) => right_class,
+        _ => return None,
+    };
     binary_plan_for_class(class, op, left, right)
+}
+
+/// Returns whether an internal operator contract is the DateTime/DateTimeImmutable adapter.
+fn is_datetime_operator_class(class: &ClassContract) -> bool {
+    matches!(class.name, "DateTime" | "DateTimeImmutable")
 }
 
 /// Resolves a reviewed class contract without depending on a particular PHP class name.

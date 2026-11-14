@@ -163,6 +163,15 @@ pub(crate) fn is_php_visible_builtin_function_for_profile(
     if strict_php_hidden_builtin_for_profile(&canonical, strict_php) {
         return false;
     }
+    // A builtin introduced in a later PHP release does not exist on an older profile:
+    // `function_exists('clamp')` is false on PHP 8.5 even though the catalog knows it.
+    if elephc_builtin_contract::lookup(&canonical).is_some_and(|contract| {
+        contract.since.is_some_and(|since| {
+            crate::codegen_support::compile_php_version() < since
+        })
+    }) {
+        return false;
+    }
     COMPILER_RESIDENT_BUILTIN_FUNCTIONS.contains(&canonical.as_str())
         || crate::builtins::registry::lookup(&canonical)
             .map(|def| !def.spec.internal)

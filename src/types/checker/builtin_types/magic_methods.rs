@@ -217,10 +217,14 @@ pub(crate) fn validate_magic_method_contracts(checker: &Checker) -> Result<(), C
                         continue;
                     }
                     if let Some(sig) = class_info.methods.get("__debuginfo") {
-                        if !matches!(
-                            sig.return_type.codegen_repr(),
-                            PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
-                        ) {
+                        if sig.declared_return
+                            && !matches!(
+                                sig.return_type.codegen_repr(),
+                                PhpType::Array(_)
+                                    | PhpType::AssocArray { .. }
+                                    | PhpType::Mixed
+                            )
+                        {
                             errors.push(CompileError::new(
                                 method.span,
                                 &format!(
