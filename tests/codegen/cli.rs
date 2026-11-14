@@ -7144,7 +7144,10 @@ fn test_cli_debug_dap_path_mappings_source_and_loaded_sources() {
     let source_text = "<?php\n$value = 1;\n$value = $value + 1;\necho $value, \"\\n\";\n";
     fs::write(dir.join("main.php"), source_text).expect("write DAP path-mapping fixture");
     let client_root = "/workspace/project";
-    let server_root = dir.to_str().expect("path-mapping fixture path");
+    let canonical_dir = std::fs::canonicalize(&dir).expect("canonical path-mapping fixture");
+    let server_root = canonical_dir
+        .to_str()
+        .expect("path-mapping fixture path");
     let client_source = format!("{client_root}/main.php");
 
     let mut client = DapClient::spawn(
