@@ -46,7 +46,9 @@ pub(crate) fn scalar_contract(ty: &PhpType) -> Option<AllowedKinds> {
 /// Projects scalar or nominal declarations while leaving nominal membership to typed adapters.
 pub(crate) fn implicit_contract(ty: &PhpType) -> Option<AllowedKinds> {
     match ty {
-        PhpType::Object(_) => Some(AllowedKinds::one(ValueKind::NonScalar)),
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. }
+        | PhpType::Iterable | PhpType::Callable | PhpType::Resource(_) =>
+            Some(AllowedKinds::one(ValueKind::NonScalar)),
         PhpType::Union(members) => members.iter().try_fold(AllowedKinds::EMPTY,
             |allowed, member| Some(allowed.union(implicit_contract(member)?))),
         _ => scalar_contract(ty),
@@ -65,6 +67,37 @@ pub(crate) fn nominal_members(ty: &PhpType) -> Vec<&str> {
         PhpType::Object(name) => vec![name],
         PhpType::Union(members) => members.iter().flat_map(nominal_members).collect(),
         _ => Vec::new(),
+    }
+}
+
+/// Runtime predicates that refine non-scalar alternatives without describing their storage ABI.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RuntimeConstraint { Array, Iterable, Callable, Resource }
+
+/// Collects distinct structural contracts in source order, independently of scalar alternatives.
+pub(crate) fn runtime_constraints(ty: &PhpType) -> Vec<RuntimeConstraint> {
+    let constraints = match ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => vec![RuntimeConstraint::Array],
+        PhpType::Iterable => vec![RuntimeConstraint::Iterable],
+        PhpType::Callable => vec![RuntimeConstraint::Callable],
+        PhpType::Resource(_) => vec![RuntimeConstraint::Resource],
+        PhpType::Union(members) => members.iter().flat_map(runtime_constraints).collect(),
+        _ => Vec::new(),
+    };
+    constraints.into_iter().fold(Vec::new(), |mut unique, constraint| {
+        if !unique.contains(&constraint) { unique.push(constraint); }
+        unique
+    })
+}
+
+/// Limits dynamic declaration admission to contracts with a complete value-level guard.
+/// Generic element contracts still require the checker's existing element/layout proof.
+pub(crate) fn permits_guarded_unknown(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Array(element) => **element == PhpType::Mixed,
+        PhpType::AssocArray { key, value } => **key == PhpType::Mixed && **value == PhpType::Mixed,
+        PhpType::Union(members) => members.iter().all(permits_guarded_unknown),
+        _ => implicit_contract(ty).is_some(),
     }
 }
 
@@ -99,7 +132,10 @@ pub(crate) fn implicit(profile: SemanticProfile, source: SourceMode, expected: &
         return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
     }
     if *actual == PhpType::Never { return ConversionPlan::Identity; }
-    if !nominal_members(expected).is_empty() && super::numeric::value_kind(actual) == ValueKind::NonScalar {
+    let constraints = runtime_constraints(expected);
+    if ((!nominal_members(expected).is_empty() || !constraints.is_empty())
+            && super::numeric::value_kind(actual) == ValueKind::NonScalar)
+        || (constraints.contains(&RuntimeConstraint::Callable) && *actual == PhpType::Str) {
         return elephc_semantics::conversions::plan_implicit_kinds(profile, ValueKind::Dynamic, allowed);
     }
     if only_false(expected) && *actual == PhpType::Bool {

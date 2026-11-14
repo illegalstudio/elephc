@@ -1458,6 +1458,7 @@ pub(super) fn check_typed_assign(
         matches!(&declared_ty, PhpType::Object(class) if class.is_empty())
             && matches!(value.kind, ExprKind::NewDynamic { .. });
     let guarded_unknown = value_ty == PhpType::Mixed
+        && crate::semantics::conversions::permits_guarded_unknown(&declared_ty)
         && matches!(crate::semantics::conversions::implicit(checker.semantic_profile,
             checker.semantic_source_mode, &declared_ty, &value_ty),
             elephc_semantics::conversions::ConversionPlan::Guard { .. });

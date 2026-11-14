@@ -55,6 +55,25 @@ pub(super) fn implicit(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue,
         accepted = ctx.emit_value(Op::IBitOr, vec![accepted.value, matches.value], None,
             PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
     }
+    for constraint in crate::semantics::conversions::runtime_constraints(destination) {
+        use crate::semantics::conversions::RuntimeConstraint;
+        let matches = match constraint {
+            RuntimeConstraint::Callable => {
+                let target = crate::ir::RuntimeFnId::IsCallable;
+                ctx.emit_value(Op::RuntimeCall, vec![guarded.value],
+                    Some(crate::ir::Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))),
+                    PhpType::Bool, target.effects(), Some(span))
+            }
+            constraint => semantic_guards::matches_any_kind(ctx, guarded, &[match constraint {
+                RuntimeConstraint::Array => PhpTypePredicate::Array,
+                RuntimeConstraint::Iterable => PhpTypePredicate::Iterable,
+                RuntimeConstraint::Resource => PhpTypePredicate::Resource,
+                RuntimeConstraint::Callable => unreachable!(),
+            }], Some(span)),
+        };
+        accepted = ctx.emit_value(Op::IBitOr, vec![accepted.value, matches.value], None,
+            PhpType::Bool, Op::IBitOr.default_effects(), Some(span));
+    }
     if false_only {
         let no = ctx.emit_value(Op::ConstBool, Vec::new(), Some(crate::ir::Immediate::Bool(false)),
             PhpType::Bool, Op::ConstBool.default_effects(), Some(span));
@@ -92,6 +111,30 @@ pub(super) fn value_storage(ctx: &mut LoweringContext<'_, '_>, value: LoweredVal
     if crate::ir::IrType::from_php(&destination.codegen_repr()) == crate::ir::IrType::TaggedScalar {
         let result = super::stmt::coerce_to_tagged_scalar(ctx, value, Some(span));
         if result.value != value.value && ctx.value_is_owning_temporary(value) {
+            super::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return result;
+    }
+    if *destination == PhpType::Callable && value.ir_type != crate::ir::IrType::from_php(destination) {
+        let pins = super::expr::call_operand_owners::pin_in_flight_owners(ctx, &[value.value], span);
+        let result = ctx.emit_owned_value(Op::NormalizeCallable, vec![value.value], None,
+            PhpType::Callable, Op::NormalizeCallable.default_effects(), Some(span));
+        super::expr::call_operand_owners::unpin_in_flight_owners(ctx, pins, span);
+        if ctx.value_is_owning_temporary(value) { super::ownership::release_if_owned(ctx, value, Some(span)); }
+        return result;
+    }
+    if matches!(destination, PhpType::Iterable | PhpType::Array(_) | PhpType::AssocArray { .. })
+        && value.ir_type != crate::ir::IrType::from_php(&destination.codegen_repr()) {
+        let boxed = if matches!(value.ir_type, crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed | crate::ir::IrHeapKind::Union)) {
+            value
+        } else {
+            ctx.emit_owned_value(Op::MixedBox, vec![value.value], None, PhpType::Mixed,
+                Op::MixedBox.default_effects(), Some(span))
+        };
+        let result = ctx.emit_owned_value(Op::MixedUnbox, vec![boxed.value], None,
+            destination.clone(), Op::mixed_unbox_effects(destination), Some(span));
+        if ctx.value_is_owning_temporary(boxed) { super::ownership::release_if_owned(ctx, boxed, Some(span)); }
+        if boxed.value != value.value && ctx.value_is_owning_temporary(value) {
             super::ownership::release_if_owned(ctx, value, Some(span));
         }
         return result;

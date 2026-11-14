@@ -651,10 +651,13 @@ fn eval_method_parameter_variant_accepts_exact(
         EvalParameterTypeVariant::Generic(ty) => generic_value_accepts(ty, value, context, values),
         EvalParameterTypeVariant::Array => Ok(matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)),
         EvalParameterTypeVariant::Bool => Ok(tag == EVAL_TAG_BOOL),
-        EvalParameterTypeVariant::Callable => Ok(matches!(
-            tag,
-            EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE
-        )),
+        EvalParameterTypeVariant::Callable => {
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) {
+                eval_is_callable_value(value, None, context, values)
+            } else {
+                Ok(matches!(tag, EVAL_TAG_STRING | EVAL_TAG_ARRAY | EVAL_TAG_ASSOC | EVAL_TAG_OBJECT | EVAL_TAG_CALLABLE))
+            }
+        }
         EvalParameterTypeVariant::Class(class_name) => {
             eval_method_parameter_class_accepts(value, tag, class_name, context, values)
         }

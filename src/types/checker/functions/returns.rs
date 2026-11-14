@@ -399,7 +399,7 @@ impl Checker {
         info: &ReturnInfo, span: crate::span::Span, context: &str) -> Result<(), CompileError> {
         if info.has_value && !matches!(expected, PhpType::Void) {
             self.require_noncoercive_value_type(expected, &info.ty, info.source_mode, info.span, context)?;
-            if info.ty == PhpType::Mixed && !crate::semantics::conversions::nominal_members(expected).is_empty()
+            if info.ty == PhpType::Mixed && crate::semantics::conversions::permits_guarded_unknown(expected)
                 && matches!(crate::semantics::conversions::implicit(self.semantic_profile,
                     info.source_mode, expected, &info.ty),
                     elephc_semantics::conversions::ConversionPlan::Guard { .. }) {

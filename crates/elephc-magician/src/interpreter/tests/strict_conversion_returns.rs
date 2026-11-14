@@ -22,12 +22,17 @@ fn strict_conversion_returns_eval_engines_original_kinds_and_owners() {
             ("int|string", "2.0", false), ("?int", "null", true),
             ("stdClass|float", "2.0", true), ("stdClass|float", "2", false),
             ("stdClass|float", "$nominal", true), ("?stdClass", "null", true),
+            ("array|float", "$container", true), ("array|float", "2", false),
+            ("iterable|float", "$container", true), ("iterable|float", "2", false),
+            ("callable|float", "'exactCallback'", true), ("callable|float", "2", false),
+            ("callable|float", "'missing_callback'", false),
+            ("callable", "'exactCallback'", true), ("callable", "'missing_callback'", false),
         ] {
             let declaration = format!("function exactReturn($v): {declaration} {{ return $v; }}");
             let source = format!("{} $result = 23; $result = exactReturn({argument});",
                 if vm { "if (false) { function exactReturn($v) {} }" } else { "" });
-            // Object construction is staged in the walker; both callers consume the same owned value.
-            let declaration = format!("{declaration} $nominal = new stdClass();");
+            // Container and object construction stay in the walker; both callers consume the same owners.
+            let declaration = format!("{declaration} function exactCallback() {{}} $nominal = new stdClass(); $container = [1];");
             let mut context = ElephcEvalContext::new();
             context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true)).unwrap();
             let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();

@@ -36,6 +36,16 @@ pub(crate) fn lower_callable_parameter_guard(module: &mut Module, label: &str, e
                 target: crate::parser::ast::InstanceOfTarget::Name(Name::from(name)) }, span)
         });
     }
+    for constraint in crate::semantics::conversions::runtime_constraints(expected) {
+        use crate::semantics::conversions::RuntimeConstraint;
+        let name = match constraint {
+            RuntimeConstraint::Array => "is_array", RuntimeConstraint::Iterable => "is_iterable",
+            RuntimeConstraint::Callable => "is_callable", RuntimeConstraint::Resource => "is_resource",
+        };
+        alternatives.push(Expr::new(ExprKind::FunctionCall {
+            name: Name::unqualified(name), args: vec![value.clone()],
+        }, span));
+    }
     let accepted = alternatives.into_iter().reduce(|left, right| Expr::new(ExprKind::BinaryOp {
         left: Box::new(left), op: BinOp::Or, right: Box::new(right),
     }, span)).expect("a checked contract accepts at least one alternative");

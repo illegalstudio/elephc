@@ -88,6 +88,13 @@ impl Checker {
             return Ok(());
         }
 
+        if !by_ref && *actual == PhpType::Mixed
+            && crate::semantics::conversions::permits_guarded_unknown(expected)
+            && matches!(crate::semantics::conversions::implicit(self.semantic_profile,
+                self.semantic_source_mode, expected, actual),
+                elephc_semantics::conversions::ConversionPlan::Guard { .. }) {
+            return Ok(());
+        }
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
         }

@@ -43,13 +43,18 @@ pub(super) fn check(emitter: &mut Emitter, ctx: &mut InvokerEmitContext,
 pub(in crate::codegen) fn emit_requested(module: &crate::ir::Module, emitter: &mut Emitter,
     data: &mut DataSection, shared: &mut crate::codegen::shared_state::SharedCodegenState)
     -> crate::codegen::Result<()> {
-    for (label, expected) in data.requested_parameter_guards() {
+    let mut emitted = 0;
+    loop {
+        let requested = data.requested_parameter_guards();
+        if emitted == requested.len() { break; }
+        let (label, expected) = &requested[emitted];
+        emitted += 1;
         let mut wrapper_module = shared.take_wrapper_module(module);
-        let guard = crate::ir_lower::lower_callable_parameter_guard(&mut wrapper_module, &label, &expected);
+        let guard = crate::ir_lower::lower_callable_parameter_guard(&mut wrapper_module, label, expected);
         crate::ir::validate_function(&guard).expect("parameter guard must be valid EIR");
         let scope = emitter.begin_out_of_line();
         let result = crate::codegen::block_emit::emit_synthetic_function_with_label(
-            &wrapper_module, &guard, &label, emitter, data, shared, false,
+            &wrapper_module, &guard, label, emitter, data, shared, false,
         );
         emitter.end_out_of_line(scope);
         shared.recycle_wrapper_module(wrapper_module);

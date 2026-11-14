@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 51 (this commit), following `87252a0179`. Issue:
+Verified through step 52 (this commit), following `ec3e9e0feb`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -762,6 +762,35 @@ NewObject is an explicit VM compile gap. Three descriptor and two return control
 compiler build, architecture, assembly comments and diff checks pass. Arrays,
 callable/iterable/resource unions, references and full admission remain pending.
 
+### Verified structural union and callable value contracts
+
+Step52 adds runtime constraints for arrays, iterable values, callables and
+resources beside exact scalar and nominal alternatives. Array|float and similar
+contracts retain the float member without accepting integer widening. Callable
+membership uses the existing validity probe, including invalid string rejection;
+accepted callable storage uses NormalizeCallable. Retaining MixedUnbox adapters
+preserve concrete iterable/container payload ownership. Unknown declared values
+require a complete value guard; generic element/layout contracts keep their
+existing checker proof. Descriptor helper finalization drains newly discovered
+contracts because emitting a callable probe can discover additional invokers.
+
+Magician exact callable parameter and return checks share eval_is_callable_value
+under Coercions, preserving legacy behavior outside that profile. Extended
+walker/VM tables cover array, iterable and callable unions, valid/invalid callback
+names, and zero remaining owners. Array and object setup is staged in the walker
+because their literal constructors remain explicit bytecode compile gaps.
+
+The known array|float int argument probe was red on step51. Three new compiler
+checks now pass: known rejection, all five emitters and native both-optimizer
+execution, with direct/descriptor inputs, concrete callable/iterable and array
+union returns, exact runtime kinds and clean heaps. Nine nominal/descriptor/default
+controls and both extended eval tests pass, plus compiler build, architecture,
+assembly comments, PHP syntax and diff checks. Resource projection reuses existing
+runtime predicates; complete builtin/resource and host boundaries, generic
+container elements, references, producer aliases/expressions and the remaining
+strict families still require their planned integration. Public admission is
+unchanged.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -880,4 +909,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 48 | `6258e85218` | feat(strict): materialize declared scalar constant literals |
 | 49 | `beac107cab` | feat(strict): bind omitted parameter defaults before invocation |
 | 50 | `87252a0179` | feat(strict): guard public descriptor scalar arguments through eir |
-| 51 | this commit | feat(strict): preserve exact scalar and nominal union contracts |
+| 51 | `ec3e9e0feb` | feat(strict): preserve exact scalar and nominal union contracts |
+| 52 | this commit | feat(strict): enforce structural union and callable value contracts |
