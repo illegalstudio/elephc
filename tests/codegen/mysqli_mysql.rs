@@ -88,12 +88,15 @@ echo $db->real_escape_string("a'b\\c");
 #[test]
 #[ignore]
 fn test_mysqli_quote_string() {
-    let out = compile_and_run(&my_program(
-        r#"
+    let out = compile_and_run_with_php_version(
+        &my_program(
+            r#"
 echo $db->quote_string("a'b\c");
 echo "|", mysqli_quote_string($db, "a'b\c");
 "#,
-    ));
+        ),
+        elephc::php_version::PhpVersion::Php86,
+    );
     assert_eq!(out, r"'a'b\c'|'a'b\c'");
 }
 

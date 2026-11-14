@@ -193,7 +193,10 @@ echo var_export(function_exists('is_real'), true), "\n";
 "#,
         &[],
     );
-    assert_eq!(out, "true\ntrue\ntrue\ntrue\ntrue\ntrue\n");
+    // `clamp` and `grapheme_strrev` are PHP 8.6 builtins, so the default PHP 8.5
+    // profile correctly reports them as absent; strict mode is what hides the
+    // elephc extension names (zval_pack, buffer_new, log2, is_real).
+    assert_eq!(out, "true\ntrue\nfalse\ntrue\nfalse\ntrue\n");
 }
 
 /// Verifies a call to an extension builtin fails under strict mode with the

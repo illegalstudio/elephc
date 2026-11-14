@@ -38,6 +38,7 @@ class Gen {
 "#);
     let messages: Vec<&str> = out.stdout
         .lines()
+        .filter(|line| !line.is_empty())
         .map(|line| line.split(" in ").next().unwrap_or(line))
         .collect();
     assert_eq!(

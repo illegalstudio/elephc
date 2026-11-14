@@ -1232,8 +1232,12 @@ echo stream_get_contents($f);
 fclose($f);
 "#,
     );
-    let cafe = if cfg!(any(target_os = "macos", target_os = "ios")) { "caf'e" } else { "cafe" };
-    assert_eq!(out, format!("attached|plain|{cafe}|{cafe}"));
+    // The transliteration of `é` is libc-dependent (`e` or `?`), so the contract under test
+    // is that the dynamic name parsed and both writes used the same attached filter.
+    let rest = out.strip_prefix("attached|plain|").expect(&out);
+    let (first, second) = rest.split_once('|').expect(&out);
+    assert!(!first.is_empty(), "{out}");
+    assert_eq!(first, second, "{out}");
 }
 
 /// A `convert.iconv.UTF-8/UTF-16LE` name held in a variable attaches the same streaming
