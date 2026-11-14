@@ -6,8 +6,8 @@
 //! - `EvalDirectHook::Gmp` when an explicit source-argument hook is selected.
 //!
 //! Key details:
-//! - The public builtin name and the hidden helper suffix are identical by construction
-//!   (`gmp_strval` -> `__elephc_gmp_strval`); no per-name dispatch table can drift.
+//! - Ordinary helper suffixes match their public builtin (`gmp_strval` ->
+//!   `__elephc_gmp_strval`); checked projections supply their reviewed helper explicitly.
 //! - Evaluated builtin arguments arrive in PHP parameter order. The helper adds one
 //!   compiler-owned leading `bool $strict`; eval is always weak mode, so it is `false`.
 //! - The helper's own defaults, coercions, warnings, and thrown errors are the ones
@@ -18,14 +18,11 @@ use super::*;
 /// Returns the compiled GMP prelude helper backing one public `gmp_*` builtin.
 fn eval_gmp_host_function(
     name: &str,
+    helper: &str,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<NativeFunction, EvalStatus> {
-    let helper = format!(
-        "__elephc_gmp_{}",
-        name.strip_prefix("gmp_").unwrap_or(name)
-    );
-    match context.native_function(&helper) {
+    match context.native_function(helper) {
         Some(function) => Ok(function),
         None => eval_throw_error(
             &format!("Call to undefined function {name}()"),
@@ -42,7 +39,16 @@ pub(in crate::interpreter) fn eval_gmp_values_result(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let function = eval_gmp_host_function(name, context, values)?;
+    let helper = format!("__elephc_gmp_{}", name.strip_prefix("gmp_").unwrap_or(name));
+    eval_gmp_helper_values_result(name, &helper, evaluated_args, context, values)
+}
+
+/// Shares bound argument leases and native exception containment with a reviewed helper variant.
+pub(super) fn eval_gmp_helper_values_result(
+    name: &str, helper: &str, evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let function = eval_gmp_host_function(name, helper, context, values)?;
     let strict = values.bool_value(false)?;
     let mut arguments = Vec::with_capacity(evaluated_args.len() + 1);
     arguments.push(EvaluatedCallArg {

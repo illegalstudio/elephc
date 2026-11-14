@@ -272,6 +272,10 @@ Explicit class float adapters retain their rounding contract after that proof.
 Broad `object`, interface and nullable/union input domains retain runtime native
 dispatch. A concrete class with no reviewed numeric contract stays a compile
 diagnostic; an unsupported value within a broad domain raises TypeError.
+The public `gmp_intval` contract selects a shared compiled checked helper in AOT
+and eval. It validates weak float range before adaptation, then canonical GMP
+magnitude before machine-word extraction, retaining GMP parsing and PHP
+`strict_types` diagnostics. Eval requires that reviewed helper from its host.
 A bounded decimal digit parser preserves exact
 integer strings at runtime, and native float-to-int checks precede truncation.
 The eval walker and VM use the same neutral cast kernel through their shared

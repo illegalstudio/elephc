@@ -779,3 +779,4 @@ mod strict_builtin_casts;
 mod strict_settype;
 mod strict_object_casts;
 mod strict_object_cast_domains;
+mod strict_gmp_intval;

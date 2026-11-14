@@ -25,3 +25,11 @@ echo "gcd = ", gmp_strval($extended['g']),
 var_dump($power > $secret);
 var_dump(gmp_testbit($factorial, 0));
 var_dump((int) gmp_init('42'));
+
+// Checked cast profiles reject magnitudes outside the native integer range.
+$machineValue = gmp_init($argc > 0 ? '9223372036854775808' : '42');
+try {
+    echo "Machine integer: ", gmp_intval($machineValue), "\n";
+} catch (ValueError $error) {
+    echo "Keep the GMP value: ", gmp_strval($machineValue), "\n";
+}

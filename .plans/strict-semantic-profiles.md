@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 65 (this commit), following `188304e3f4`. Issue:
+Verified through step 66 (this commit), following `309bdac54b`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,9 +382,9 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger replaces the long chronological narrative after step 38.
-The detailed evidence remains in Git history, Code Journal plan revisions through
-56, the linked work logs, and the current agent-facing architecture document
+This progress ledger condenses verified implementation through step 66.
+Detailed evidence remains in Git history, historical Code Journal plan revisions,
+the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
 
 ### Verified foundations
@@ -464,639 +464,105 @@ The detailed evidence remains in Git history, Code Journal plan revisions throug
   append provenance in source reduction proofs. This is groundwork; the complete
   runtime key, producer, array type and indexing guarantees remain outstanding.
 
-### Verified implicit scalar parameter groundwork
-
-Step40 adds a shared scalar-contract adapter over the neutral conversion planner.
-It preserves exact scalar union members and distinguishes literal false from bool.
-Known invalid user PHP/LFC bindings fail before permissive assignability; Internal
-operations retain their reviewed behavior. Static unpack proofs reuse the shared
-spread expansion and named/positional planner instead of matching parameters again.
-PHP strict_types remains independent, including its ordinary int-to-float exception.
-
-EIR argument evaluation retains original values until every caller expression has
-finished. The parameter-order pass roots all operands, including an allocated
-variadic collector, before kind guards and representation-only extraction. It
-suppresses literal binding rewrites and destination casts that would erase kinds.
-Selected descriptor guards use exact declaration membership. Eval's common dynamic
-and native parameter binder rejects coercion after full-type exact acceptance.
-
-AST effects and exception-flow boundary queries add the independent binding
-TypeError outside callee summaries. The native regression reproduced a pruned catch
-with optimization enabled before this fix and passes after it. New neutral,
-selected frontend, five-target EIR/emitter, walker/VM call-boundary and native tests
-pass, with both optimizers and clean ownership. VM probes register typed callees
-through the walker and use a dead untyped shape in their compiled caller, preserving
-the existing ParameterType admission gap rather than claiming a typed fast path.
-The initial-fold tests also confirm typed pow/intdiv violations in ordinary dead
-branches survive until checking. Five focused compatibility controls, the compiler
-build, architecture gate, assembly comments, PHP syntax and diff checks pass.
-
-This is parameter groundwork, not admission of Coercions. Returns, assignments,
-property/reference write-back, defaults, every builtin contract, array element
-adaptation and all indirect/host boundaries still require completion and audit.
-
-### Verified declared scalar return groundwork
-
-Step41 retains source mode and source position on ReturnInfo after body checking
-restores its surrounding scope. Functions, methods, closures and arrows share the
-same pre-compatibility noncoercive checker helper as parameters. Declared dynamic
-scalar/union returns use original-kind guards before return storage adaptation;
-Internal returns and inferred returns retain their existing policy. Eval's shared
-declared-return path rejects coercion after full-type exact acceptance and releases
-rejected result owners. ReturnBoundaryFacts uses the same plan for effects,
-exception summaries and the checker's source-point exception edges.
-
-The shared scalar adapter now uses existing typed CastTarget storage paths after
-a guard. MixedUnbox is a pointer-payload ABI, not a full F64 or string-pair adapter.
-The native regression was red with a NUL string result before this correction;
-new assertions verify float payload 4.25, negative zero, actual owned string bytes,
-and the corresponding parameter ABI (fact7a44bb20).
-
-Two frontend/all-five-target units, one walker/VM return-boundary unit and one
-native regression pass. Native coverage includes failed destination preservation,
-same-frame catches, finally, discarded results, FCC/call_user_func/arrow/array_map,
-false/null unions and fresh string owners, with both optimizers and clean heaps.
-The strengthened parameter regression, its two frontend units, an all-target
-object-return owner control and PHP strict_types widening control pass. Compiler
-build, architecture gate, assembly comment checks, PHP syntax and diff checks pass.
-Public admission remains unchanged. Inferred result kinds, assignments, defaults,
-property/reference contracts, builtin source folds and host parity remain active.
-
-### Verified inference across separate scalar returns
-
-Step42 introduces a shared scalar union join under Coercions. Free functions,
-instance/static methods and closures retain the exact alternatives observed at
-separate return statements. It reuses canonical union normalization; arrays,
-nominal types, default mode and trusted Internal inference retain their existing
-join rules. This prevents a large int branch from rounding through an inferred
-float ABI. Conditional-expression and local-flow joins remain a separate audit.
-
-A private native-module test helper executes modules built from the actual staged
-checker result. It writes separate user/runtime assembly into one owned directory,
-links bridge-free fixtures with the supported host C toolchain and removes every
-owned file through Drop. It does not weaken public profile admission. This gives
-native evidence for changes to checker-selected representations, which the older
-permissively checked staged integration fixture cannot establish.
-
-The new five-target unit covers default/user/Internal inference and both EIR
-optimizer settings. The native unit covers functions, both method kinds and a
-closure, preserving int 9007199254740993 versus float 2.5, with clean heaps both
-without optimization and through the AST plus EIR pipelines. Both declared-return
-frontend controls pass. Compiler build, architecture gate, assembly comments,
-PHP syntax and diff checks pass. No admission mask or runtime ABI changes.
-
-### Verified conditional scalar and closure result contracts
-
-Step43 preserves canonical scalar unions for ternary, short-ternary and match
-results. CheckResult.closure_result_types carries inferred scalar/Mixed closure
-contracts by enclosing body and closure span; it avoids a second scalar-biased ABI
-guess. Conflicting visits choose Mixed storage. Container layout stays with the
-existing parameter/capture-aware materializer, and bound-receiver specialization
-keeps precedence. The renamed closure_hints module scopes parameter and result maps
-together, restoring nested lowerings. Result lookup requires the explicit active
-Coercions profile and user SourceMode so Internal closures retain their own policy.
-
-The native test was red on step42: arrows rounded 9007199254740993 through F64,
-converted true to string and null to an empty string. All five new checks pass:
-four conditional/source-identity regressions plus the nested scope/mask unit.
-They cover all target emitters, PHP/LFC, both AST/EIR modes, captured fresh strings,
-function-local arrows, conflicting spans, and overlapping trusted/user spans, with
-clean native heaps. Five focused inferred/declared-return and AST-smoke controls
-pass. Compiler build, architecture, assembly comments, PHP syntax and diff pass.
-No eval cache format, runtime ABI or public admission change is needed. Local-flow
-joins, default/assignment/property/reference contracts, builtin folds and complete
-host boundaries remain active completion work.
-
-### Verified declared scalar initializer contracts
-
-Step44 validates original scalar initializer kinds before weak declaration
-compatibility and before EIR storage adaptation. It reuses the parameter/return
-implicit conversion plan and catchable TypeError guard, preserving an earlier
-binding on failure. Nullable integer storage uses the existing tagged-scalar
-adapter after validation, with the replaced owning Mixed cell released. The
-runtime fallback now shares the same target-aware adapter as call argument
-materialization instead of carrying a narrower duplicate conversion switch.
-AST effects and exception summaries retain initializer TypeError independently
-of RHS effects, including a pure local read in a same-frame try/catch.
-
-The original native probe was red on step43: invalid kinds passed, a string
-payload disappeared and a float was corrupted. The completed regressions cover
-known invalid sources, explicit conversions, all five emitters, exact large
-integers, F64 values, owned strings, bool, nullable and false/null unions. Native
-isolated nullable cases and the combined program verify clean ownership and
-both full AST/EIR optimization settings. Untyped numeric branches already kept
-both original kinds and required no speculative flow rewrite. Subsequent stores,
-conditional binding contracts, defaults, properties and references remain active.
-The four parameter/return frontend controls and both native controls pass.
-Compiler build, architecture gate, assembly comments and diff hygiene pass.
-
-### Verified subsequent declared scalar stores
-
-Step45 records original declared scalar contracts in CheckResult.local_store_contracts
-by body, source span and local name. Checker re-visits replace their own facts;
-read narrowing and physical storage do not select the write contract. Successful
-runtime membership checks publish the validated destination type for later reads.
-The immutable map is passed explicitly through function, method, closure, eval
-and synthetic lowering contexts. Generated bodies without source facts receive an
-empty map. conversion_boundaries::local_store shares validation and storage
-adaptation for statement and expression writes before any destination coercion.
-Optimizer effects and exception summaries retain implicit store failures.
-
-The regression was red on step44: a float declaration accepted an int store,
-and native writes replaced prior float/string values without TypeError. Three
-new tests pass with known diagnostics, default/Internal controls, authoritative
-read facts, all five emitters, native statements/expressions, function/closure/
-method scopes, narrowed nullable stores, scalar unions, failure atomicity and
-clean heaps through both AST/EIR optimizer modes. Three initializer controls pass.
-Compiler build, architecture gate, assembly comments and diff hygiene pass.
-References, alias-origin contracts, defaults, properties, eval locals and the
-remaining strict families still require completion. Public admission is unchanged.
-
-### Verified proven scalar declaration defaults
-
-Step46 adds one shared AstVisitor::declared_value observation for parameter,
-property and typed-constant values. A focused schema adapter validates proven
-scalar kinds after class-like constants are available, using each physical
-statement's SourceMode and lexical class instead of the schema pass's Internal
-policy or a future caller. Existing default resolution is extracted into a
-reusable original-kind query. Raw defaults first use the existing lexical
-normalizer so unbound object factories retain deferred Error behavior. The kind
-query does not duplicate existing deprecation warnings. Unresolved/deferred
-values retain their established validation path.
-
-An unused float parameter with integer default compiled on step45; the new
-regression rejects it independently of invocation. Three tests pass across
-fourteen declaration forms/constants, PHP/LFC, strict_types=0, permissive/Internal
-controls, overlapping trusted/user sources, traits and lazy scope errors. Valid
-defaults emit on all five targets. Native direct/FCC/closure/arrow/method/property
-values retain actual F64 payloads and nullable defaults, while explicit arguments
-bypass unbound defaults and omission still throws Error, with clean heaps and
-both AST/EIR modes. Three adjacent store controls pass. Dynamic or conditional
-default plans, trait receiver resolution, property/reference/alias/eval/host
-contracts and all remaining strict families stay active. Public admission is
-unchanged. Compiler build, architecture gate, assembly comments and diff hygiene pass.
-
-### Verified scalar declaration evidence and nullable union effects
-
-Step47 shares scalar_hint across source declaration evidence and optimizer return/
-store adapters, including named null and false-only union alternatives. The old
-adapter lost null's scalar identity: a pure int|false|null initializer kept its
-catch without optimization but became an uncaught TypeError after DCE. All five
-emitter checks now retain the catch and native execution stays clean in both modes.
-
-The shared source proof engine observes declared values before folding, selects
-known ternary/short-ternary/coalesce values, and retains string truth separately
-from numeric parsing (so '0' and '00' remain distinct conditions). Direct trait
-constants can supply self evidence; unresolved consumer-provided constants remain
-unknown. Typed constant evidence projects the declaration's PHP result kind,
-preventing false integer overflow for a float constant initialized from an int.
-Four new focused checks pass, covering forward constant conditions, original
-kinds, typed constant contracts, false/null contracts, all five emitters and both
-native AST/EIR modes with clean heaps. All three default controls and the exact
-numeric reduction/domain control pass. Compiler build, architecture gate,
-assembly comments and diff hygiene pass. PHP confirms typed float constants return
-float values and inherited trait defaults retain their original self constant.
-
-A further native trusted-producer probe exposed an EIR constant materialization
-gap: Internal const float VALUE=1 still arrives as an int in executable lowering.
-PHP extension emission already has a schema materializer, but its current pipeline
-invocation is extension-only. The red fixture is preserved separately in
-src/ir_lower/tests/strict_trusted_constants.rs for immediate follow-up. Public
-admission remains unchanged. Complete this shared producer boundary next, then
-remaining dynamic/default/property/reference/alias/eval/host contracts and the
-rest of the approved strict families.
-
-### Verified declared scalar constant literals
-
-Step48 moves the existing native constant type projection out of the PHP extension
-adapter into types::constant_binding. One literal binder materializes a validated
-integer-to-float declaration in class, interface and enum schema copies, and the
-PHP extension's existing resolver/materializer uses the same helper. The original
-AST is unchanged, so user strict validation still rejects an implicit conversion
-at its source. Reads consume the producer's bound PHP value rather than treating
-its raw initializer as a new user conversion. No runtime ABI or cache format changes.
-
-The preserved trusted literal probe was red on step47: metadata stayed Int,
-is_float printed X and a user Float default threw TypeError. Three focused checks
-now pass for bound metadata plus original source, all five target emitters, and
-native direct/inherited/interface/enum reads and default invocation, with both
-permissive and Coercions profiles and both full AST/EIR modes, with clean heaps.
-All five existing PHP extension constant selection controls and four default
-source/effect controls pass. This closes the literal case; unresolved constant
-expressions/aliases retain their existing representation and still require full
-producer-boundary completion. Continue with those and trusted declaration defaults,
-then remaining property/reference/alias/eval/builtin/host guarantees, checked casts
-and the other strict families. Public admission remains unchanged. Compiler build,
-architecture gate, assembly comments and diff hygiene pass.
-
-### Verified omitted parameter default literals
-
-Step49 adds FunctionSig::default_value as the shared copy-binding accessor. Raw
-signature and source defaults stay intact for validation, reflection source names
-and lazy-helper identity. Named plans, positional/default/spread lowering, enum
-calls, descriptor metadata, native eval registration and reflection value queries
-consume the declared literal kind. Untyped defaults and explicit caller arguments
-retain their own kinds. The boxed spread binder now fills optional regular slots
-before the same parameter-order guard, instead of falling back to passing the
-whole array as one operand.
-
-The selected-profile probe was red on step48: named omission failed during type
-checking and a boxed optional unpack produced zero instead of its default. Three
-new checks cover source preservation, all five emitters, native direct/FCC/closure/
-arrow/method calls, reflection, named omission, empty and supplied spreads,
-failure cleanup and both full optimizer modes. Three declaration-default controls
-and one invoker hidden-collector control pass, as do compiler build, architecture,
-assembly comments and diff checks. An explicit Mixed int through an escaped native
-descriptor remains accepted by the legacy invoker and is the immediate next
-integration target; no feature admission changes in this step.
-
-### Verified public descriptor scalar argument guards
-
-Step50 carries the immutable module profile into native/eval descriptor invoker
-factories. Original scalar arguments are guarded before conversion at regular and
-variadic materialization points. The guards are ordinary AST-to-EIR functions,
-deduplicated per scalar contract in module data registration and emitted after
-descriptor discovery. Guard inputs and temporary boxes retain normal EIR/native
-ownership. Defaults remain a distinct producer path. Public callable contracts
-also apply when the selected implementation uses physical Internal syntax.
-
-Coercions descriptor calls preserve a callable parameter's actual boxed result;
-an inferred parameter signature can originate in a different caller and cannot
-justify a destructive scalar conversion. The expanded probe returned zero for
-string callbacks through a Float hint before this change. Three new regressions
-cover valid helper EIR, all five emitters, dynamic callbacks with indexed/named/
-unpacked/variadic arguments, exact false/null unions, later source effects before
-parameter errors, native payloads and clean heaps through both full optimizers.
-The earlier escaped-descriptor negative case now also passes. Default, callable
-normalizer, nullable-owner and shared-owner visitor controls, compiler build,
-architecture gate, assembly comments and diff checks pass. No ABI or public
-admission changes. Reference aliases, nominal unions and special adapters still
-need their planned integration.
-
-### Verified scalar and nominal value contracts
-
-Step51 separates scalar-only inference from implicit scalar/nominal declarations.
-The neutral allowed-kind set can retain an opaque NonScalar alternative; compiler
-adapters refine it with real class/interface membership. Exact scalar alternatives
-remain mandatory in unions such as ClassName|float. Direct EIR guards and shared
-descriptor helpers combine kind predicates with instanceof, including inherited
-classes and interfaces. Owned object extraction uses the established MixedUnbox
-retaining path before source-cell retirement. Unknown nominal returns and typed
-initializers are admitted only with an explicitly selected runtime guard.
-
-Optimizer source hints and store/return effects retain these full contracts. An
-expanded plain-class initializer probe was red during integration: full AST
-optimization removed its pure-read TypeError catch. The shared effect adapter now
-keeps that catch. Helpers and storage APIs use parameter/value names to reflect
-their broader responsibility, without moving class hierarchy logic into the
-neutral crate. Scalar-only pre-fold generic evidence remains separate.
-
-Three new compiler regressions cover known scalar rejection, legacy/Internal
-controls, all five emitters, native direct/descriptor calls, class/interface
-membership, exact large ints/floats, union and concrete object returns, typed
-initialization/stores, failure atomicity and clean heaps under both full optimizer
-settings. Five neutral conversion tests pass. Extended existing parameter and
-return tests cover nominal/scalar alternatives in the eval walker and bytecode
-callers with exact owner accounting; object setup runs in the walker because
-NewObject is an explicit VM compile gap. Three descriptor and two return controls,
-compiler build, architecture, assembly comments and diff checks pass. Arrays,
-callable/iterable/resource unions, references and full admission remain pending.
-
-### Verified structural union and callable value contracts
-
-Step52 adds runtime constraints for arrays, iterable values, callables and
-resources beside exact scalar and nominal alternatives. Array|float and similar
-contracts retain the float member without accepting integer widening. Callable
-membership uses the existing validity probe, including invalid string rejection;
-accepted callable storage uses NormalizeCallable. Retaining MixedUnbox adapters
-preserve concrete iterable/container payload ownership. Unknown declared values
-require a complete value guard; generic element/layout contracts keep their
-existing checker proof. Descriptor helper finalization drains newly discovered
-contracts because emitting a callable probe can discover additional invokers.
-
-Magician exact callable parameter and return checks share eval_is_callable_value
-under Coercions, preserving legacy behavior outside that profile. Extended
-walker/VM tables cover array, iterable and callable unions, valid/invalid callback
-names, and zero remaining owners. Array and object setup is staged in the walker
-because their literal constructors remain explicit bytecode compile gaps.
-
-The known array|float int argument probe was red on step51. Three new compiler
-checks now pass: known rejection, all five emitters and native both-optimizer
-execution, with direct/descriptor inputs, concrete callable/iterable and array
-union returns, exact runtime kinds and clean heaps. Nine nominal/descriptor/default
-controls and both extended eval tests pass, plus compiler build, architecture,
-assembly comments, PHP syntax and diff checks. Resource projection reuses existing
-runtime predicates; complete builtin/resource and host boundaries, generic
-container elements, references, producer aliases/expressions and the remaining
-strict families still require their planned integration. Public admission is
-unchanged.
-
-### Verified original source call arguments
-
-Step53 checks proven original scalar arguments before folding can remove calls,
-including constructor expressions in unused declaration defaults. Function,
-constructor and static-method source signatures retain parsed annotations; the
-shared call planner owns named/positional/spread placement. The existing trait
-flattener and inheritance lookup supply constructor and static-method contracts.
-No omitted default is mistaken for an explicit caller argument. Unknown generic
-contracts, dynamic dispatch, late-static receivers and ambiguous declarations
-remain with the existing checker/runtime paths. Producer source mode does not
-exempt a user caller from its own strict policy.
-
-The pruned function-call regression was red on step52. Two new source checks
-cover direct/named/static unpack/variadic calls, inherited/trait constructors,
-false-only parameters and conservative controls. Three complete default checker,
-all-target and native checks pass, including three new invalid constructor
-defaults in PHP and LFC. Three trusted-default planner/emitter/native controls
-also pass, plus compiler build, architecture inventory, assembly-comment and diff
-checks. This closes original argument proof for known source signatures, while
-nonliteral producer binding, dynamic/host/reference boundaries and the remaining
-strict families stay staged. Public admission is unchanged.
-
-### Verified expression producer profiles
-
-Step54 gives every AST expression an immutable physical SourceProfile alongside
-its span. Parsing captures source mode and strict_types; cloning and reconstruction
-retain the profile through conditional/include/name resolution, magic constants,
-constant folding/propagation, control-flow pruning and lexical default binding.
-Expr::with_kind shares reconstruction for borrowed nodes. Synthetic generator
-anchors carry their enclosing body's policy. Source equality continues to compare
-syntax, independently of physical provenance.
-
-Two new tests cover all three source modes and both strict_types states through
-frontend snapshots, then signature/schema metadata. A mixed-source trait test
-verifies an imported trusted default retains its declaration profile in a user
-class. Six trusted-default/constant planner, all-target emitter and native
-optimizer controls pass. Test-target type checking, compiler build, architecture
-inventory, assembly comments and diff hygiene also pass. This records producer
-origins for the next binding integration without changing public admission.
-
-### Verified nonliteral default and class-constant producers
-
-Step55 records ProducerBinding on prepared declaration copies. Identity selects
-the physical producer policy; IntegerToFloat widens only an integer after original
-expression evaluation. bind_value and bind_declared_value replace the earlier
-literal-only helper names. Raw AST/signature defaults stay original. Checker
-inference, syntactic/merge typing, AST scalar folding, EIR expression and typed
-literal paths, compact default metadata, reflection and native eval registration
-share the prepared value contract. Native lazy helpers materialize the canonical
-bound default and compare syntax, span, physical profile and binding.
-
-EIR widening evaluates once. Boxed and tagged alternatives use a managed synthetic
-PHP local while checking and converting, because a one-shot OwnedTemp load would
-be consumed by the first predicate. Ordinary merge ownership then preserves the
-result across source retirement. Null and object alternatives remain intact.
-
-The native alias-default probe was red on step54. Three new checks now pass with
-Coercions, Arithmetic and Overflow combined: source preservation, all five emitters
-and native both-optimizer execution with clean heaps. Coverage includes aliases,
-expressions, nullable/nominal values, object alternatives, trusted numeric string
-and negative-power/overflow defaults, direct/descriptor/closure/arrow/trait calls,
-lazy native helpers, reflection, missing dynamic spreads and exact explicit-arg
-rejection. Eleven existing trusted/default/provenance controls, test-target type
-checking, compiler build, architecture828, assembly comments, example PHP syntax and
-CLI execution, and diff hygiene pass. The example uses its existing admitted
-DynamicCode/Bools profile and leaves no task-owned artifacts. Public admission is unchanged. Property initialization,
-nonliteral global constant origins, reference/host boundaries and the remaining
-strict families still require integration.
-
-### Verified property default producers
-
-Step56 prepares existing instance and static defaults after original declaration
-validation. Explicit slot declarations select their destination contract; inferred
-slots receive Identity and keep their produced runtime kind. Inherited and trait
-values retain physical producer profiles, and absent typed defaults stay absent.
-The same prepared metadata reaches object initialization, static initialization
-and Reflection default-property reads.
-
-The compact arithmetic resolver now accepts warning-free numeric strings,
-booleans and null through the shared literal unary-plus normalizer after checking
-original operand domains. Warning-producing prefixes still decline. Reflection
-prefers the complete shared resolved value before its deferred-error selector
-fallback, preserving producer policy and binding across selected expressions.
-
-A missing trait-default binding was red on step55. Four new checks pass: metadata,
-all five emitters, native permissive/selected-profile execution with both optimizer
-settings and clean heaps, and a five-target source-domain/warning matrix. Coverage
-includes scalar/nullable/nominal/static/trait/inherited defaults, user overrides,
-untyped arithmetic, scalar normalization, selected negative power and Reflection.
-Seven existing default-producer/declaration/lexical-scope controls pass, plus
-compiler build, architecture828, assembly comments and diff hygiene. Public
-admission is unchanged. Nonliteral global constant origins and the remaining
-reference/host and strict-family integration remain next.
-
-### Verified global constant producer expressions
-
-Step57 retains complete expressions and storage types in `GlobalConstants`.
-Builtin producers are explicitly trusted; source `const`, aliases and static
-`define` values retain physical profiles and identity binding through prescan,
-EIR lowering, introspection, eval registration and extension export. Scalar
-metadata resolves original producers before materializing literal values.
-Resource aliases keep their native tags, and existing compound normalization
-contracts remain with their consumers.
-
-A native regression exposed a PHP-promoting arithmetic bug: an integer operation
-inferred as Float could still emit wrapping integer addition. Overflow-capable
-integer addition/subtraction/multiplication now uses the existing boxed PHP path
-for both Mixed and Float result inference. Strict checked integer operations keep
-their independent policy. The default-producer regression also checks the sign,
-so an erroneous wrapped integer widened to float cannot pass.
-
-Four new checks cover source retention, all five emitters, native both-optimizer
-execution with clean heaps and hosted export. Native coverage includes trusted
-numeric strings, negative power, overflow, aliases, static define, direct and
-callable abs, constant(), get_defined_constants() and resource aliases. Eight
-existing producer/default/array/target/eval controls, test-target type checking,
-compiler build, architecture828, assembly comments and diff hygiene pass. Public
-admission is unchanged; remaining conversion/reference/host and strict-family
-integration continues below.
-
-### Checked numeric cast contract and source preservation
-
-Step58 adds one dependency-neutral checked numeric cast contract. Explicit
-integer conversions truncate finite in-range floats and parse complete decimal
-strings exactly, including exponents and both integer endpoints. Float results
-retain IEEE infinity, NaN and signed zero. Invalid strings and integer range
-failures are value errors; unsupported scalar domains are type errors. Boolean
-and null inputs remain intentional explicit numeric conversions. PHP's six ASCII
-whitespace bytes are accepted consistently, including vertical tab.
-
-Original-source evidence now validates cast syntax before folding, through
-constants, aliases, class constants, defaults, dead branches and literal eval.
-Numeric-string evidence retains an exact integer-cast result separately from its
-floating arithmetic value. Folding consumes the shared contract, declines failed
-casts, and both AST effects and exception-flow retain their observable failure.
-Internal producer operations keep reviewed PHP behavior. Runtime execution and
-object-adapter integration remain the immediate next step; Casts admission stays
-closed until all consumers enforce the guarantee.
-
-Five new neutral/source/folding tests and five original-source/PHP-fold controls
-pass. The compiler build, architecture828 audit, assembly comment alignment,
-example PHP syntax and diff hygiene pass. Public admission remains unchanged.
-
-### Checked native scalar casts
-
-Step59 lowers explicit user numeric casts to typed `CheckedNumericCast` runtime
-calls. The result is an exact int or float, and module validation requires the
-Casts capability plus a throwing result contract. Known array/resource/ordinary
-object domains fail checking; dynamic alternatives are checked at runtime.
-Reviewed native object adapters run first, and their scalar fallback follows the
-same checked conversion. Trusted implementation operations keep PHP semantics.
-
-Native helpers inspect original boxed tags, accept intentional scalar bool/null
-conversions, and reject unsupported kinds with TypeError. Complete string grammar
-is validated by the existing bounded parser before an exact negative-accumulator
-decimal conversion handles sign, point, exponent and truncation. Float-to-int
-checks reject unordered/nonfinite and out-of-range inputs before conversion.
-Original values are borrowed and rooted across ValueError/TypeError failures.
-Apple cross-symbol failure transfers use local inverse branches and wide jumps.
-
-Five focused tests cover typed source contracts, all five EIR targets, capability
-and effect validation, both-optimizer native catches/finally with clean heaps,
-95 exact decimal cases compared to the neutral kernel, and real assembly for all
-five targets with PIC and dead-strip settings. Three existing source/folding cast
-controls pass, plus test-target type checking, compiler build, architecture828,
-assembly comments and diff hygiene. Eval, builtin conversion and public host
-integration continue next; Casts public admission remains closed.
-
-### Checked numeric casts in eval
-
-Step60 routes walker and VM numeric casts through the neutral checked conversion
-kernel. Scalar parsing is pure Rust and invalid domains create interpreted
-ValueError/TypeError, without a native throw through Rust frames. IEEE bits,
-exact decimal integer endpoints and intentional bool/null conversions agree with
-native EIR. Non-UTF8 and NUL-bearing invalid strings fail without conversion.
-Reviewed object adapters run first and their result must retain the promised
-exact kind; rejected result owners are retired.
-
-`native_results::finish` now owns protected native Throwable transfer for checked
-binary/unary operations and cast adapters. Success and unsupported status leave
-pending native ownership untouched. Five new eval checks cover both scalar engines,
-independent profiles, exact values, source/Throwable ownership, IEEE payloads,
-aggregate/resource rejection and status transfer. Direct VM failures and walker
-catch/finally are tested separately because the VM delegates Try and Bytes literal
-constructs to the walker. Invalid byte cells are seeded at the runtime boundary.
-
-Two existing arithmetic/unary eval controls and five native EIR/assembly/decimal
-controls pass, together with Magician test-target checking, compiler build,
-architecture828, assembly comments and diff hygiene. A preexisting permissive
-FakeOps prefix/precision limitation is recorded as journal task dc79bdf2; its
-control uses an ordinary nonnumeric string whose PHP result is unambiguous.
-Builtin conversion, object/host parity and remaining strict families continue;
-public admission remains unchanged.
-
-### Checked radix conversion kernel
-
-Step61 shares exact integer radix conversion in the neutral semantic crate and
-an explicitly typed string/base EIR runtime target. Base ten retains checked
-decimal fractional/exponent truncation. Other bases accept complete digit runs,
-reviewed binary/hex prefixes and automatic octal/decimal selection. Invalid bases,
-malformed strings and signed range errors have distinct shared failure messages.
-A complete grammar pass precedes native arithmetic so malformed oversized strings
-retain the same failure priority as eval's neutral kernel.
-
-The native bridge materializes the target's PHP string result registers into C
-pointer/length arguments before loading the radix. The x86_64 result pair differs
-from incoming string arguments, and the both-optimizer regression catches reliance
-on accidentally preserved argument registers. A normal PHP harness retains call,
-catch and owner behavior while only its parser body is EIR-built; its checked
-source stub advertises the same throwing effect as the kernel.
-
-Four new tests cover the neutral rules, all five EIR targets/capability checks,
-and 144 native input/base combinations plus a fresh owned-string failure with
-both optimizer settings and clean heaps. Existing real assembly checks cover the
-new helper across five targets, PIC and dead-strip combinations. Scalar native and
-five eval cast controls, test-target checking, compiler build, architecture828,
-assembly comments and diff hygiene pass. Builtin entry-point integration follows;
-no builtin home or binding changes in this kernel commit and public admission
-remains unchanged.
-
-### Checked numeric builtin conversions
-
-Step62 binds `intval` and `floatval` to the shared explicit-conversion contract.
-A semantic descriptor marker drives original-source proofs and typed validation;
-the source evidence pool retains complete string bytes rather than only their
-numeric classification. Named arguments and static spreads reuse CallArgPlan.
-Known failures survive source validation before folding, including aliases,
-removed branches, declaration defaults and literal eval.
-
-Prepared callable bodies, direct calls, dynamic names and callbacks share the
-rooted EIR cast graphs. Only string values select the exact radix kernel, and
-other kinds ignore the base. Invocation policy remains authoritative even when a
-public descriptor was created by trusted implementation code. The eval registry
-selects checked hooks before its native fast path, and protected native result
-adoption shares the existing pending-Throwable helper.
-
-Five new compiler tests, two eval tests and one neutral-kernel test pass. Native
-coverage exercises both optimizer settings, checked and permissive profiles,
-exact values, direct/named/spread/FCC/dynamic/callback paths, catchable failures
-and clean heaps. All five targets validate and emit the prepared graphs. Existing
-source-cast and source-call controls pass. Compiler and test-target checks pass.
-The complete builtin-docs regeneration and three audits pass (828 AOT homes,
-74 graph, 58 primitive, 696 runtime), with assembly comments and diff hygiene.
-Settype writeback and original native object magnitude guards follow; public
-admission remains unchanged.
-
-### Checked settype mutation boundaries
-
-Step63 routes numeric settype targets through the shared checked cast contract.
-The checker validates original known kinds and EIR lowering uses the normal
-cast/store sequence rather than backend conversion shortcuts. Ordinary locals
-retain tagged storage and a conservative logical view: a failed conversion must
-not make catch read the unchanged value through a success-only numeric type.
-Existing typed reference storage and authoritative destination contracts remain.
-
-Eval direct, named, dynamic, first-class and by-value callback paths pass their
-context to the shared numeric evaluator. Conversion precedes reference writeback.
-The reusable with_direct_ref_target boundary retains a nonescaping target's
-owned keys/receivers in native root slots, then retires them after success or
-failure. This closes an owned-key leak exposed by a failed array-element cast;
-dynamic non-variable writeback also retires its converted value.
-
-Three new compiler tests and three eval tests pass. Native coverage checks both
-optimizer settings, exact endpoints, original failed receivers, reference aliases
-and clean heaps; all five targets validate and emit the graphs. Eval tests cover
-nested arrays/COW, properties/statics, runtime target names, callable/array-call
-surfaces, permissive controls and complete owner retirement. Existing settype,
-mutator alias/COW and five-target foreach controls pass. Compiler test-target
-checking/build and the complete generated-builtin documentation workflow pass,
-with assembly comment and diff hygiene checks. Public admission remains gated;
-original native object and host conversion contracts are next.
-
-### Original native object cast proofs
-
-Step64 adds a shared CheckedNumericProjection contract. Final internal source
-adapters expose original GMP decimal digits and SimpleXML text before a PHP
-numeric adapter can narrow them. The compiler and both eval engines validate
-that source with the existing checked scalar kernel. Original receivers,
-projected strings, proof values and adapter results retain their native root
-slots through every failure. Unreviewed narrowed host results cannot substitute
-for original-value proof.
-
-GMP's explicit floating adapter retains its native rounding after source-domain
-validation. Its get_d operation truncates toward zero, as the GNU MP manual
-specifies; the old bridge comment claiming nearest rounding was corrected.
-SimpleXML numeric casts bypass a public __toString override through the final
-source adapter. Ordinary typed-object intval/floatval calls now share syntax
-adapters as well, closing the previously unsupported SimpleXML typed builtin path.
-AST usage and reachability both retain the new source methods before EIR selects
-them.
-
-Six compiler tests cover all five targets, both profiles, floating proof order
-and pruning. Two walker/VM tests cover source values, unsupported projections and
-complete owner retirement. Two native package bundles pass with real managed GMP
-and XML, both optimizer settings and both profiles, including exact endpoints,
-ranges, first-class calls, temporary failures, alias writeback, custom string
-hooks, GMP floating rounding and clean heaps. Existing builtin/settype/scalar-cast
-and GMP reflection controls pass. Compiler/test-target builds and the complete
-builtin-docs regeneration/audits pass, with assembly comments and diff hygiene.
-
-The permissive erased SimpleXML floatval fallback has an existing PHP mismatch:
-it observes a public string override. The no-flag control intentionally preserves
-that behavior, while the checked profile uses original native text. Journal task
-693969cd tracks the separate baseline fix. Public admission remains unchanged.
-Registered gmp_intval and settype target-domain/host paths still need their own
-checked public-boundary audit before Casts admission.
+### Verified value contracts and declarations
+
+Steps40-52 share exact scalar, nominal and structural membership through the
+neutral conversion planner, full compiler type adapters and typed EIR guards.
+These contracts distinguish false from bool and exact alternatives from physical
+boxed storage. Invalid known PHP/LFC bindings fail before permissive assignability;
+Internal operations retain their reviewed behavior. PHP strict_types remains
+independent, including its ordinary int-to-float exception.
+
+Parameters, declared and inferred returns, conditional closures, local stores,
+initializers, defaults and public descriptors retain original source kinds.
+Runtime guards run after source-order operand evaluation with owners rooted,
+before coercion or representation extraction. Each declared local store consumes
+CheckResult.local_store_contracts instead of success-only narrowed flow facts.
+Exact union membership includes nominal objects, interfaces, callable descriptors,
+arrays, iterables, resources and structural contracts. Reusable condition graphs
+preserve their original rejection class and noninteger union alternatives.
+
+Steps53-57 retain producer expressions rather than only prepared values. Original
+call proofs consume CallArgPlan, static associative spread expansion and actual
+trait/inherited-constructor signatures. Expr.source_profile and producer_binding
+survive copying and folding. Producer binding occurs once under its physical
+source policy, including declaration defaults, omitted arguments, property
+initialization, class constants and global constants. Identity and legal widening
+have explicit binding metadata; lowering does not globally override synthetic
+expression policy. Raw defaults remain available for reflection.
+
+GlobalConstants stores (Expr, PhpType), not an isolated ExprKind. The same declared
+constant materializer serves globals, classes, local consumers and public default
+arguments, preserving signed zero, strings and conditional original kinds. Resource
+alias constants keep their special handling. Effects, exception summaries and
+frontend walkers preserve all required failures before initial folding.
+
+Native verification covers both optimizer settings and clean heaps, with selected
+profile checker/EIR evidence for every supported target. Staged integration
+fixtures currently check permissively and then select the module profile; they
+prove runtime guards, not selected-profile inference. The separate root tests use
+the actual selected checker and remain required evidence.
+
+### Verified explicit numeric conversions
+
+Steps58-61 share NumericCastTarget/Input/Failure, checked_numeric_cast and exact
+radix conversion kernels. Finite float-to-int truncation checks range before
+conversion. Complete decimal strings preserve exact endpoints, fractional and
+exponent truncation without a binary64 round trip. Full-string grammar rejects
+junk and invalid bytes; explicit floating results retain IEEE infinity, NaN and
+signed zero. Radix parsing validates complete digits before reporting range,
+including PHP prefixes and base0 octal. Unknown string bases defer proof, while
+nonstrings intentionally ignore the base.
+
+Original-source validation runs before folding and retains strings in its evidence
+pool. CheckedNumericCast and CheckedRadixInt EIR targets carry exact types,
+capability requirements, effects and validator contracts. Target-aware runtime
+entries share decimal/radix parsers and catchable failures. PHP string result
+registers differ from C arguments, especially x86_64 rax/rdx versus rdi/rsi; the
+ABI string_result_regs helper owns that materialization. Darwin failure branches
+use an inverse local branch followed by a wide global jump. Real clang assembly,
+PIC/dead-strip checks and emitter tests cover all five targets.
+
+Magician walker and VM scalar conversions use the same pure Rust kernel.
+native_results::finish transfers protected native Throwable ownership and keeps
+success/unsupported states independent of pending errors. Reviewed object adapters
+run before scalar conversion. Rejected results, source views and scratch owners
+are retired on every failure. VM positional-call tests use an unreachable same-name
+declaration to admit their shape; unsupported VM syntax is tested through the
+walker. FakeOps has a separate permissive prefix/precision gap tracked by journal
+task dc79bdf2, so controls do not claim unsupported PHP equivalence.
+
+Step62 gives intval/floatval explicit cast semantic descriptors, a shared
+BuiltinLoweringContext::emit_numeric_cast boundary and common rooted EIR graphs.
+The optional intval base applies only to strings. CallArgPlan owns static named
+and spread source proofs. Direct, first-class and indirect eval dispatch select
+the same checked behavior before native fast paths. Checked conversions retain
+MAY_THROW effects, source-order leases and original operand kinds.
+
+Step63 converts numeric settype values before reference writeback. Potentially
+failed ordinary local conversions retain tagged storage and conservative views,
+so catch blocks still read the original value. Authoritative local contracts and
+existing reference storage remain active. Eval with_direct_ref_target owns
+nonescaping array keys/receivers through conversion, writeback and cleanup; its
+owner capture must not be applied blindly to escaped generic reference metadata.
+Known unsupported targets and dynamic target-domain parity still require audit.
+
+Step64 adds CheckedNumericProjection to the shared native class contract. Final
+internal adapters expose original GMP decimal digits and SimpleXML text before
+legacy numeric adapters narrow them. The compiler and eval validate this source
+with the shared kernel, retaining original receivers, projected strings and
+adapter-result owners through failure. GMP floating conversion preserves get_d
+truncation after source proof. SimpleXML bypasses public __toString overrides.
+Typed intval/floatval calls share syntax adapters; AST usage and reachability root
+the original source methods before EIR selects them. Real native preparation
+requires core, GMP/XML, DOM, object-cast and function-argument preludes in order.
+
+The permissive erased SimpleXML floatval fallback retains its preexisting public
+string override behavior; journal task 693969cd tracks that separate baseline
+mismatch. Checked profiles use original native text. Managed GMP/XML bundles,
+walker/VM owner tests, all-target selected checker/EIR tests, compiler gates and
+builtin-docs regeneration pass. The public mask remains unchanged until complete
+numeric cast, settype, source and host guarantees are enforced.
 
 ### Native eval boundaries and ownership
 
@@ -1125,9 +591,9 @@ compiler build, architecture gate, assembly comment checks and diff hygiene.
    callbacks, descriptors, reflection and eval re-entry. Complete checked explicit
    casts with range/domain errors, exact strings and native object cast contracts.
    Original GMP and SimpleXML cast projections are now checked. Before Casts
-   admission, separately audit registered gmp_intval (including original float
-   arguments before weak parameter narrowing), settype target domains and host
-   callbacks, including broad object/interface cast consumers. Internal
+   admission, finish original-source proofs for registered gmp_intval, settype
+   target domains and host callbacks. Runtime gmp_intval range guards and broad
+   object/interface consumers now share reviewed checked paths. Internal
    implementation helpers must not bypass public contracts.
 3. Finish stable Locals bindings across promotion, parameters, captures, globals,
    by-reference writes, foreach aliases, loop joins, unset/rebind and eval scopes.
@@ -1163,6 +629,23 @@ Six selected-profile checker/EIR tests cover the complete target matrix and know
 invalid inputs. Two managed-native bundles exercise generic object, interface,
 nullable, union and first-class calls with both optimizer settings, exact integer
 limits, failed conversion, caller preservation and clean heaps.
+
+### Checked public GMP integer projection
+
+Step66 selects a separate compiled helper for the public gmp_intval contract under
+Casts. Weak floats are checked before the existing operand adapter can truncate
+them. The ordinary GMP validator keeps its parsing, strict_types and error rules;
+its canonical decimal result must fit a signed machine word before get_si runs.
+AOT direct/callable paths share existing argument boxing and unwind owners. Eval
+selects the same checked helper through a typed values hook and the shared bound
+native-call path. A host missing that helper fails closed instead of using the
+legacy helper. Five selected-profile checker/EIR tests pass for all targets, two
+eval tests cover walker/VM selection and host gaps, and three managed-native
+bundles pass both profiles and optimizers with clean heaps, including PHP
+strict_types error priority. Two existing GMP contract tests, compiler/test-target
+builds, full builtin-docs regeneration/audits, example syntax, assembly comments
+and diff hygiene pass. Generated metadata is unchanged. Original-source folding
+proofs and complete host admission remain part of the outstanding Casts audit.
 
 ### Verification discipline
 
@@ -1247,4 +730,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 62 | `7977298569` | feat(strict): share checked builtin numeric cast contracts |
 | 63 | `98ae35e13c` | feat(strict): check settype before reference writeback |
 | 64 | `188304e3f4` | feat(strict): validate original native object cast values |
-| 65 | this commit | feat(strict): check broad native object cast domains |
+| 65 | `309bdac54b` | feat(strict): check broad native object cast domains |
+| 66 | this commit | feat(strict): check public gmp integer projections |
