@@ -210,3 +210,29 @@ echo (new Panel())->rows(), "\n";
     );
     assert_eq!(out, "inv:made:r2\n");
 }
+
+/// An `as` alias of an abstract trait method is a requirement too, so an inherited final method
+/// of the alias name satisfies it, directly and through a nested trait's own `use` block. An
+/// inherited protected method satisfies a public requirement and stays protected, as in PHP.
+#[test]
+fn test_trait_requirement_aliases_and_visibility_satisfied_by_inherited_methods() {
+    let out = compile_and_run(
+        r#"<?php
+class P {
+    final public function foo(): int { return 1; }
+    final public function bar(): int { return 2; }
+    protected function hidden(): int { return 3; }
+}
+trait T {
+    abstract public function foo(): int;
+    abstract public function hidden(): int;
+    public function viaT(): int { return $this->hidden(); }
+}
+trait U { use T { foo as bar; } }
+final class C extends P { use T { foo as bar; } }
+final class D extends P { use U; }
+echo (new C())->bar(), (new D())->bar(), (new C())->viaT(), "\n";
+"#,
+    );
+    assert_eq!(out, "223\n");
+}

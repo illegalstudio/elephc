@@ -108,6 +108,29 @@ final class C extends P { use T; }
     );
 }
 
+/// An inherited method returning by value does not satisfy a trait requirement that returns by
+/// reference, and an `as` alias of an abstract trait method is checked against the inherited
+/// method of the alias name, as PHP reports `Declaration of P::bar() must be compatible`.
+#[test]
+fn test_error_inherited_method_must_keep_trait_requirement_by_ref_and_alias_signature() {
+    expect_error(
+        r#"<?php
+class P { public function foo(): int { return 1; } }
+trait T { abstract public function &foo(): int; }
+final class C extends P { use T; }
+"#,
+        "Cannot remove by-reference return when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+class P { public function foo(): int { return 1; } public function bar(): string { return "s"; } }
+trait T { abstract public function foo(): int; }
+final class C extends P { use T { foo as bar; } }
+"#,
+        "Cannot change return type when implementing trait method: C::bar",
+    );
+}
+
 /// `#[\Override]` on a trait-using class still needs a target: a parent method, an interface
 /// method, or an abstract method of a used trait.
 #[test]
