@@ -816,6 +816,42 @@ fn mixed_reads_of_one_name_search_the_program_once() {
     assert_eq!(small, large, "arm searches grew with the sites: {small} vs {large}");
 }
 
+/// `count` classes with public instance methods, one with a protected one, and runtime
+/// callable-array calls from eight class scopes.
+fn callable_array_scopes_over_public_methods(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..count {
+        source.push_str(&format!("class P{index} {{ public function p{index}(int $x): int {{ return $x + {index}; }} }}\n"));
+    }
+    source.push_str("class Guarded { protected function hidden(int $x): int { return -$x; } public function open(int $x): int { return $x; } }\n");
+    let mut calls = String::new();
+    for scope in 0..8 {
+        source.push_str(&format!(
+            "class S{scope} {{ public function run($o, $m) {{ return call_user_func([$o, $m], {scope}); }} }}\n"
+        ));
+        calls.push_str(&format!("$n += (new S{scope}())->run($argc > 1 ? new P0() : new Guarded(), $argc > 2 ? 'p0' : 'open');\n"));
+    }
+    format!("{source}$n = 0;\n{calls}echo $n, \"\\n\";\n")
+}
+
+/// Per-scope reachability checks while generating code for `source`.
+fn instance_reach_checks(source: &str) -> u64 {
+    let module = lower_source(source);
+    crate::codegen::INSTANCE_REACH_CHECKS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    crate::codegen::INSTANCE_REACH_CHECKS.with(|count| count.get())
+}
+
+/// A public method is a candidate in every scope: each scope asks only about the protected and
+/// private ones, so the per-scope work does not grow with the program's public methods.
+#[test]
+fn callable_array_scopes_check_only_non_public_methods() {
+    let small = instance_reach_checks(&callable_array_scopes_over_public_methods(10));
+    let large = instance_reach_checks(&callable_array_scopes_over_public_methods(120));
+    assert!(small > 0, "the fixture no longer checks a non-public method per scope");
+    assert_eq!(small, large, "per-scope checks grew with the public methods: {small} vs {large}");
+}
+
 /// `count` unrelated classes, two classes declaring `run`, and calls of `run` and `size` through
 /// a receiver of no known class.
 fn many_classes_one_dynamic_method(count: usize) -> String {

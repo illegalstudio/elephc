@@ -3825,31 +3825,80 @@ fn runtime_array_instance_method_targets_for_descriptor(
 /// Builds `runtime_array_instance_method_targets_for_descriptor`'s answer for `ctx`'s scope.
 fn build_runtime_array_instance_method_targets(
     ctx: &FunctionContext<'_>,
-) -> Vec<RuntimeArrayInstanceMethodTarget> {
+) -> std::sync::Arc<Vec<RuntimeArrayInstanceMethodTarget>> {
     #[cfg(test)]
     INSTANCE_TARGET_BUILDS.with(|count| count.set(count.get() + 1));
-    let mut targets = Vec::new();
     let (overrides, shadowed) = scope_private_method_overrides(ctx, None);
     // The scope-independent part (every emitted instance method, sorted by class then method)
     // is built once per codegen state; a site only applies its scope's visibility and private
     // shadowing to it, instead of re-sorting and re-cloning the whole class x method universe.
     let base = ctx.shared.instance_method_target_base(|| instance_method_target_base(ctx));
-    for target in base.iter() {
+    // A public method is a candidate in every scope, so only the others are asked about this
+    // one: each scope asked every target of the base its class and visibility again (~3,600
+    // samples of a sampled one-core Symfony demo console build).
+    let split = ctx.shared.instance_target_split(|| instance_target_split(ctx, &base));
+    let reachable = base
+        .iter()
+        .zip(split.public.iter())
+        .filter(|(_, public)| !**public)
+        .filter(|(target, _)| {
+            #[cfg(test)]
+            INSTANCE_REACH_CHECKS.with(|count| count.set(count.get() + 1));
+            ctx.module.class_infos.get(&*target.class_name).is_some_and(|class_info| {
+                instance_method_reachable_here(ctx, class_info, &target.method_name, &target.impl_class)
+            })
+        })
+        .map(|(target, _)| std::sync::Arc::as_ptr(&target.sig) as usize)
+        .collect::<crate::fast_hash::FastSet<usize>>();
+    // A scope reaching no protected or private method and shadowing none sees exactly the
+    // public candidates: one shared list, which also shares its lookup tables downstream.
+    if reachable.is_empty() && shadowed.is_empty() && overrides.is_empty() {
+        return split.public_only.clone();
+    }
+    let mut targets = Vec::new();
+    for (target, public) in base.iter().zip(split.public.iter()) {
         if !shadowed.is_empty()
             && shadowed.contains(&(target.class_name.to_string(), target.method_key.to_string()))
         {
             continue;
         }
-        let Some(class_info) = ctx.module.class_infos.get(&*target.class_name) else {
-            continue;
-        };
-        if !instance_method_reachable_here(ctx, class_info, &target.method_name, &target.impl_class) {
-            continue;
+        if *public || reachable.contains(&(std::sync::Arc::as_ptr(&target.sig) as usize)) {
+            targets.push(target.clone());
         }
-        targets.push(target.clone());
     }
     targets.extend(overrides);
-    targets
+    std::sync::Arc::new(targets)
+}
+
+/// The base's public targets, flagged in base order, and listed alone; see
+/// `build_runtime_array_instance_method_targets`.
+pub(in crate::codegen) struct InstanceTargetSplit {
+    public: Vec<bool>,
+    public_only: std::sync::Arc<Vec<RuntimeArrayInstanceMethodTarget>>,
+}
+
+/// Flags which base targets are public: reachable from any scope, exactly as
+/// `instance_method_reachable_here` answers for them (a target whose class or visibility is
+/// unknown is not public, and is asked per scope as before).
+fn instance_target_split(
+    ctx: &FunctionContext<'_>,
+    base: &[RuntimeArrayInstanceMethodTarget],
+) -> InstanceTargetSplit {
+    let public = base
+        .iter()
+        .map(|target| {
+            ctx.module.class_infos.get(&*target.class_name).is_some_and(|class_info| {
+                class_info.method_visibilities.get(&*target.method_name) == Some(&Visibility::Public)
+            })
+        })
+        .collect::<Vec<_>>();
+    let public_only = base
+        .iter()
+        .zip(public.iter())
+        .filter(|(_, public)| **public)
+        .map(|(target, _)| target.clone())
+        .collect();
+    InstanceTargetSplit { public, public_only: std::sync::Arc::new(public_only) }
 }
 
 /// Every emitted instance method of the module as a descriptor candidate, sorted by class then
@@ -6554,6 +6603,8 @@ std::thread_local! {
     pub(crate) static INSTANCE_TARGET_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Static callable-array lookup tables (class-name or class-id keyed) built on this thread.
     pub(crate) static STATIC_TABLE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Per-scope reachability checks of instance-method targets on this thread.
+    pub(crate) static INSTANCE_REACH_CHECKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Runtime string-callable lookup tables built on this thread.
     pub(crate) static STRING_TABLE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Scans of the module for its non-public static methods on this thread.

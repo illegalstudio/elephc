@@ -73,6 +73,9 @@ pub(crate) struct SharedCodegenState {
     /// `(class id, class name, default hash offset)` of every name-addressable class but
     /// `stdClass`, sorted by class id: the arms a `$mixed->name` read takes for every class that
     /// does not declare the name. Each site rebuilt them, looking every class up again.
+    /// Which instance-method targets of the base are public, and the public ones alone: a public
+    /// method is a candidate in every scope, so only the others are checked per scope.
+    instance_target_split: std::cell::OnceCell<std::sync::Arc<super::lower_inst::callables::InstanceTargetSplit>>,
     mixed_hash_arm_base: std::cell::OnceCell<std::sync::Arc<Vec<(u64, std::sync::Arc<str>, usize)>>>,
     non_public_static_base: std::cell::OnceCell<
         std::sync::Arc<Vec<super::lower_inst::callables::NonPublicStaticMethod>>,
@@ -528,16 +531,26 @@ impl SharedCodegenState {
     pub(super) fn instance_method_targets_for_scope(
         &self,
         scope: Option<&str>,
-        build: impl FnOnce() -> Vec<super::lower_inst::callables::RuntimeArrayInstanceMethodTarget>,
+        build: impl FnOnce() -> std::sync::Arc<Vec<super::lower_inst::callables::RuntimeArrayInstanceMethodTarget>>,
     ) -> std::sync::Arc<Vec<super::lower_inst::callables::RuntimeArrayInstanceMethodTarget>> {
         let key = scope.map(str::to_string);
         if let Some(found) = self.instance_method_targets_by_scope.borrow().get(&key) {
             return found.clone();
         }
         // Built outside the borrow: building asks this state for the base.
-        let built = std::sync::Arc::new(build());
+        let built = build();
         self.instance_method_targets_by_scope.borrow_mut().insert(key, built.clone());
         built
+    }
+
+    /// The public split of the instance-method target base, built once by `build`.
+    pub(super) fn instance_target_split(
+        &self,
+        build: impl FnOnce() -> super::lower_inst::callables::InstanceTargetSplit,
+    ) -> std::sync::Arc<super::lower_inst::callables::InstanceTargetSplit> {
+        self.instance_target_split
+            .get_or_init(|| std::sync::Arc::new(build()))
+            .clone()
     }
 
     /// The scope-independent mixed hash arms, collected once by `build`; see the field.
@@ -622,6 +635,7 @@ impl SharedCodegenState {
             instance_method_target_base: std::cell::OnceCell::new(),
             non_public_static_base: std::cell::OnceCell::new(),
             mixed_hash_arm_base: std::cell::OnceCell::new(),
+            instance_target_split: std::cell::OnceCell::new(),
             instance_method_targets_by_scope: std::cell::RefCell::new(Default::default()),
             mixed_method_candidates: Default::default(),
             base_target_signatures: std::cell::OnceCell::new(),

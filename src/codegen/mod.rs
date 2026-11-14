@@ -55,7 +55,7 @@ mod local_analysis;
 mod mbstring_configuration;
 pub(crate) mod lower_inst;
 #[cfg(test)]
-pub(crate) use lower_inst::callables::{INSTANCE_TARGET_BUILDS, NON_PUBLIC_STATIC_SCANS, STATIC_TABLE_BUILDS, STRING_TABLE_BUILDS};
+pub(crate) use lower_inst::callables::{INSTANCE_REACH_CHECKS, INSTANCE_TARGET_BUILDS, NON_PUBLIC_STATIC_SCANS, STATIC_TABLE_BUILDS, STRING_TABLE_BUILDS};
 #[cfg(test)]
 pub(crate) use lower_inst::MIXED_READ_SEARCHES;
 mod lower_term;
