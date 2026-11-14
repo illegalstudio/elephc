@@ -997,6 +997,21 @@ class Settings {
     );
 }
 
+/// A deferred enum-case read whose object holds a lazy branch keeps the syntactic fallback: PHP
+/// never evaluates the untaken `W::Missing`, so the property and method defaults type-check.
+#[test]
+fn test_enum_case_value_default_with_untaken_missing_case() {
+    expect_no_error(
+        r#"<?php
+enum W: int { case A = 7; }
+class C {
+    public int $p = (W::A ? W::A : W::Missing)->value;
+    public function m(int $x = (W::A ? W::A : W::Missing)->value): int { return $x; }
+}
+"#,
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]
