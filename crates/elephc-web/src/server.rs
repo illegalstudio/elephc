@@ -362,7 +362,20 @@ fn run_server(
             break;
         }
         let mut status = 0;
-        let pid = unsafe { libc::waitpid(-1, &mut status, 0) };
+        // A blocking `waitpid` can miss SIGTERM when the signal arrives after
+        // the check above but before the call: the handler runs, then the
+        // supervisor sleeps in `waitpid` with no child event to wake it. Poll
+        // with `WNOHANG` so the shutdown flag is always re-checked.
+        let pid = loop {
+            if SHUTDOWN.load(Ordering::SeqCst) {
+                break 0;
+            }
+            let pid = unsafe { libc::waitpid(-1, &mut status, libc::WNOHANG) };
+            if pid != 0 {
+                break pid;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
         if SHUTDOWN.load(Ordering::SeqCst) {
             break;
         }

@@ -179,7 +179,7 @@ impl ServerGuard {
     /// running). Across a suite that spawns dozens of servers those orphans
     /// accumulate and exhaust memory. Sending `SIGTERM` first lets the master
     /// run its shutdown path and reap its own workers; a `SIGKILL` fallback
-    /// covers a wedged master after a short grace period. This inherent method
+    /// covers a wedged master after a ten-second grace period. This inherent method
     /// shadows `Child::kill` through the `Deref`, so every existing
     /// `child.kill()` call site becomes graceful with no change. Idempotent: an
     /// already-reaped child returns `Ok` immediately.
@@ -199,7 +199,11 @@ impl ServerGuard {
             LeaderState::Running => {}
         }
         unsafe { libc::killpg(pgid, libc::SIGTERM) };
-        let deadline = Instant::now() + Duration::from_secs(3);
+        // The prefork master must reap its workers and remove the Unix socket
+        // before it exits. A loaded host can delay that path past three
+        // seconds; killing it early leaves the socket file behind and turns
+        // the cleanup assertions into flakes.
+        let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if self.leader_state() != LeaderState::Running {
                 break;
