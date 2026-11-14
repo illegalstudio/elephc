@@ -12,7 +12,7 @@ use crate::{numeric::{checked_float_to_int, checked_string_to_int, NumericFailur
     numeric_string::scan_numeric_prefix, numeric_unary::NumericValue};
 
 /// Explicit numeric result contract, shared with typed runtime call metadata.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum NumericCastTarget { Int, Float }
 
 /// Original scalar input, before any PHP normalization or representation change.

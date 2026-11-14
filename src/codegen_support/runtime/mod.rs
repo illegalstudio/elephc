@@ -13,6 +13,7 @@ mod arrays;
 pub(crate) use arrays::numeric_aggregate_source_message;
 pub(crate) use arrays::emit_native_frame_owners;
 pub(crate) use arrays::numeric_unary::symbol as numeric_unary_symbol;
+pub(crate) mod checked_numeric_cast;
 mod buffers;
 pub(crate) mod semantic_guards;
 pub(crate) mod strict_numeric;

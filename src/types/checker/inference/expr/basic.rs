@@ -393,9 +393,16 @@ impl Checker {
                 self.validate_finally_throw_type(&thrown_ty, expr.span)?;
                 Ok(PhpType::Void)
             }
-            ExprKind::Cast { target, expr } => {
-                let source_ty = self.infer_type(expr, env)?;
+            ExprKind::Cast { target, expr: inner } => {
+                let source_ty = self.infer_type(inner, env)?;
                 use crate::parser::ast::CastType;
+                if self.semantic_source_mode != crate::source::SourceMode::Internal
+                    && self.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+                    && matches!(target, CastType::Int | CastType::Float)
+                    && !checked_numeric_cast_possible(&source_ty, &self.classes, target) {
+                    return Err(CompileError::new(expr.span,
+                        elephc_semantics::numeric_cast::NumericCastFailure::UnsupportedKind.message()));
+                }
                 Ok(match target {
                     CastType::Int => PhpType::Int,
                     CastType::Float => PhpType::Float,
@@ -431,6 +438,24 @@ impl Checker {
             }
             _ => unreachable!("non-basic expression routed to basic inference"),
         }
+    }
+}
+
+/// Keeps known scalar and reviewed object domains distinct from dynamically guarded alternatives.
+fn checked_numeric_cast_possible(ty: &PhpType, classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    target: &crate::parser::ast::CastType) -> bool {
+    match ty {
+        PhpType::Int | PhpType::Narrow(_) | PhpType::Float | PhpType::Bool | PhpType::False
+        | PhpType::Void | PhpType::Never | PhpType::Str | PhpType::Mixed | PhpType::TaggedScalar => true,
+        PhpType::Union(members) => members.iter().any(|member| checked_numeric_cast_possible(member, classes, target)),
+        PhpType::Object(_) => {
+            let cast = if *target == crate::parser::ast::CastType::Int { crate::types::object_operators::ObjectCast::Int }
+                else { crate::types::object_operators::ObjectCast::Float };
+            crate::types::object_operators::cast_class(ty)
+                .or_else(|| crate::types::object_operators::cast_class_with_classes(ty, classes))
+                .is_some_and(|class| crate::types::object_operators::cast_method(class, cast).is_some())
+        }
+        _ => false,
     }
 }
 

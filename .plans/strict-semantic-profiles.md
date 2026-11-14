@@ -934,6 +934,31 @@ Five new neutral/source/folding tests and five original-source/PHP-fold controls
 pass. The compiler build, architecture828 audit, assembly comment alignment,
 example PHP syntax and diff hygiene pass. Public admission remains unchanged.
 
+### Checked native scalar casts
+
+Step59 lowers explicit user numeric casts to typed `CheckedNumericCast` runtime
+calls. The result is an exact int or float, and module validation requires the
+Casts capability plus a throwing result contract. Known array/resource/ordinary
+object domains fail checking; dynamic alternatives are checked at runtime.
+Reviewed native object adapters run first, and their scalar fallback follows the
+same checked conversion. Trusted implementation operations keep PHP semantics.
+
+Native helpers inspect original boxed tags, accept intentional scalar bool/null
+conversions, and reject unsupported kinds with TypeError. Complete string grammar
+is validated by the existing bounded parser before an exact negative-accumulator
+decimal conversion handles sign, point, exponent and truncation. Float-to-int
+checks reject unordered/nonfinite and out-of-range inputs before conversion.
+Original values are borrowed and rooted across ValueError/TypeError failures.
+Apple cross-symbol failure transfers use local inverse branches and wide jumps.
+
+Five focused tests cover typed source contracts, all five EIR targets, capability
+and effect validation, both-optimizer native catches/finally with clean heaps,
+95 exact decimal cases compared to the neutral kernel, and real assembly for all
+five targets with PIC and dead-strip settings. Three existing source/folding cast
+controls pass, plus test-target type checking, compiler build, architecture828,
+assembly comments and diff hygiene. Eval, builtin conversion and public host
+integration continue next; Casts public admission remains closed.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -1059,4 +1084,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 55 | `68d8803dfb` | feat(strict): bind nonliteral declaration producers before consumption |
 | 56 | `ea9e76218c` | feat(strict): bind property default producers before initialization |
 | 57 | `a74801937f` | feat(strict): preserve global constant producer expressions |
-| 58 | this commit | feat(strict): share checked numeric cast source contracts |
+| 58 | `58ea161e3b` | feat(strict): share checked numeric cast source contracts |
+| 59 | this commit | feat(strict): lower checked native scalar casts |

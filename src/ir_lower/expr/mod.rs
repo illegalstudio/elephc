@@ -34,6 +34,7 @@ use std::collections::HashSet;
 
 mod constants;
 mod producer_values;
+mod checked_cast;
 mod array_merge_values;
 use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;

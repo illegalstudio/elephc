@@ -119,7 +119,10 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
     {
         validate_function(function)?;
         for (index, inst) in function.instructions.iter().enumerate() {
-            let required = inst.arithmetic_policy().requirements().bits();
+            let mut required = inst.arithmetic_policy().requirements().bits();
+            if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::CheckedNumericCast(_)))) {
+                required |= elephc_semantics::StrictFeature::Casts.bit();
+            }
             if required & !module.semantic_profile.bits() != 0 {
                 return Err(ValidationError::SemanticProfileMismatch { inst: InstId::from_raw(index as u32),
                     expected: module.semantic_profile.bits(), actual: required });
@@ -1484,6 +1487,15 @@ fn validate_typed_runtime_call(
             || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
             || inst.result_php_type != PhpType::Mixed) {
         return Err(ValidationError::UnexpectedImmediate(inst_id));
+    }
+    if let crate::ir::RuntimeCallTarget::CheckedNumericCast(target) = target {
+        let expected = match target {
+            elephc_semantics::numeric_cast::NumericCastTarget::Int => PhpType::Int,
+            elephc_semantics::numeric_cast::NumericCastTarget::Float => PhpType::Float,
+        };
+        if !inst.effects.contains(Effects::MAY_THROW) || inst.result_php_type != expected {
+            return Err(ValidationError::UnexpectedImmediate(inst_id));
+        }
     }
     if let crate::ir::RuntimeCallTarget::NumericFunction { target, policy } = target {
         if !matches!(target, crate::ir::RuntimeFnId::Abs | crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct)

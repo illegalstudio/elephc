@@ -126,6 +126,11 @@ pub(super) fn lower(
             abi::emit_call_label(ctx.emitter, crate::codegen_support::runtime::numeric_unary_symbol(operator, policy.checked_overflow()));
             store_if_result(ctx, inst)
         }
+        RuntimeCallTarget::CheckedNumericCast(target) => {
+            ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+            abi::emit_call_label(ctx.emitter, crate::codegen_support::runtime::checked_numeric_cast::symbol(target));
+            store_if_result(ctx, inst)
+        }
         RuntimeCallTarget::StringOffsetSet => lower_string_offset_set(ctx, inst),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)

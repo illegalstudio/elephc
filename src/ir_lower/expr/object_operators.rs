@@ -401,14 +401,16 @@ pub(super) fn lower_object_cast(
     }
     ctx.restore_initialized_slots(initialized.clone());
     let php_type = cast_php_type(target, &ty);
-    let result = ctx.emit_value(
+    let result = if super::checked_cast::active(ctx, target) {
+        super::checked_cast::lower(ctx, target, value, expr)
+    } else { ctx.emit_value(
         Op::Cast,
         vec![value.value],
         Some(Immediate::CastTarget(value_ir_type(&php_type))),
         php_type,
         Op::Cast.default_effects(),
         Some(expr.span),
-    );
+    ) };
     store_value_into_temp(ctx, &temp, result_type, result, expr.span);
     branch_to(ctx, merge);
     let scalar_initialized = ctx.initialized_slots_snapshot();

@@ -773,3 +773,4 @@ mod strict_default_producers;
 mod strict_property_producers;
 
 mod strict_global_producers;
+mod strict_checked_casts;

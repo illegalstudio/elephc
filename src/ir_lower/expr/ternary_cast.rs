@@ -129,6 +129,11 @@ pub(super) fn lower_scalar_cast_value(
             return result;
         }
     }
+    if super::checked_cast::active(ctx, target) {
+        let result = super::checked_cast::lower(ctx, target, value, expr);
+        release_binary_operand_temporary(ctx, value, expr.span);
+        return result;
+    }
     // `(int)` over an integer is the identity: both are already I64 and the explicit cast
     // cannot warn or fail. A resource also has an Int codegen representation, but its PHP
     // cast is the display id, so it must keep the runtime conversion. `(int)` over a boolean

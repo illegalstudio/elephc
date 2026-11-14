@@ -150,6 +150,8 @@ pub enum RuntimeCallTarget {
     MixedCellClone,
     /// Complements a borrowed PHP value, preserving string bytes and implicit float diagnostics.
     MixedBitNot,
+    /// Borrows one original PHP value and performs a checked explicit scalar conversion.
+    CheckedNumericCast(elephc_semantics::numeric_cast::NumericCastTarget),
     /// Normalizes one borrowed scalar and computes an exact, independently owned unary number.
     NumericUnary {
         /// Source operator retained without synthetic binary arithmetic.
@@ -312,6 +314,13 @@ impl RuntimeCallTarget {
                 parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                 result: IrType::Heap(IrHeapKind::Mixed),
             }),
+            RuntimeCallTarget::CheckedNumericCast(target) => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)],
+                result: match target {
+                    elephc_semantics::numeric_cast::NumericCastTarget::Int => IrType::I64,
+                    elephc_semantics::numeric_cast::NumericCastTarget::Float => IrType::F64,
+                },
+            }),
             RuntimeCallTarget::ExceptionGuardOwned => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
@@ -414,6 +423,10 @@ impl RuntimeCallTarget {
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
             RuntimeCallTarget::MixedBitNot => "mixed.bit_not",
+            RuntimeCallTarget::CheckedNumericCast(target) => match target {
+                elephc_semantics::numeric_cast::NumericCastTarget::Int => "cast.checked_int",
+                elephc_semantics::numeric_cast::NumericCastTarget::Float => "cast.checked_float",
+            },
             RuntimeCallTarget::NumericUnary { operator, .. } => match operator {
                 elephc_semantics::numeric_unary::NumericUnaryOp::Plus => "numeric.unary_plus",
                 elephc_semantics::numeric_unary::NumericUnaryOp::Negate => "numeric.unary_negate",
