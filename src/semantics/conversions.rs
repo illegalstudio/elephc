@@ -34,6 +34,14 @@ pub(crate) fn only_false(ty: &PhpType) -> bool {
     }
 }
 
+/// Preserves original scalar alternatives when an inferred result has no coercive declaration.
+pub(crate) fn inferred_scalar_join(profile: SemanticProfile, source: SourceMode,
+    left: &PhpType, right: &PhpType) -> Option<PhpType> {
+    if source == SourceMode::Internal || !profile.contains(elephc_semantics::StrictFeature::Coercions)
+        || scalar_contract(left).is_none() || scalar_contract(right).is_none() { return None; }
+    Some(crate::types::checker::normalize_union_members(vec![left.clone(), right.clone()]))
+}
+
 /// Resolves one implicit scalar boundary independently of PHP's strict_types directive.
 pub(crate) fn implicit(profile: SemanticProfile, source: SourceMode, expected: &PhpType,
     actual: &PhpType) -> ConversionPlan {

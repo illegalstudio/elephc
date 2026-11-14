@@ -743,3 +743,7 @@ mod strict_unary_domains;
 mod strict_conversion_parameters;
 
 mod strict_conversion_returns;
+
+mod strict_inferred_returns;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod native_module;

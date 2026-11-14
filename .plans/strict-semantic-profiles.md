@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 41 (this commit), following `e78091ef0c`. Issue:
+Verified through step 42 (this commit), following `6ba184fab7`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -522,6 +522,29 @@ build, architecture gate, assembly comment checks, PHP syntax and diff checks pa
 Public admission remains unchanged. Inferred result kinds, assignments, defaults,
 property/reference contracts, builtin source folds and host parity remain active.
 
+### Verified inference across separate scalar returns
+
+Step42 introduces a shared scalar union join under Coercions. Free functions,
+instance/static methods and closures retain the exact alternatives observed at
+separate return statements. It reuses canonical union normalization; arrays,
+nominal types, default mode and trusted Internal inference retain their existing
+join rules. This prevents a large int branch from rounding through an inferred
+float ABI. Conditional-expression and local-flow joins remain a separate audit.
+
+A private native-module test helper executes modules built from the actual staged
+checker result. It writes separate user/runtime assembly into one owned directory,
+links bridge-free fixtures with the supported host C toolchain and removes every
+owned file through Drop. It does not weaken public profile admission. This gives
+native evidence for changes to checker-selected representations, which the older
+permissively checked staged integration fixture cannot establish.
+
+The new five-target unit covers default/user/Internal inference and both EIR
+optimizer settings. The native unit covers functions, both method kinds and a
+closure, preserving int 9007199254740993 versus float 2.5, with clean heaps both
+without optimization and through the AST plus EIR pipelines. Both declared-return
+frontend controls pass. Compiler build, architecture gate, assembly comments,
+PHP syntax and diff checks pass. No admission mask or runtime ABI changes.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -630,4 +653,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 38 | `3413afbaeb` | feat(strict): enforce numeric array reduction domains |
 | 39 | `113f7497ec` | fix(strict): reject invalid checked aggregate callback sources |
 | 40 | `e78091ef0c` | feat(strict): guard original scalar parameter contracts |
-| 41 | this commit | feat(strict): preserve declared scalar return contracts |
+| 41 | `6ba184fab7` | feat(strict): preserve declared scalar return contracts |
+| 42 | this commit | feat(strict): preserve inferred scalar return alternatives |

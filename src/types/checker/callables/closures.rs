@@ -268,10 +268,8 @@ impl Checker {
         } else if all_return_infos.is_empty() {
             Ok((PhpType::Int, false))
         } else {
-            let mut inferred_return = all_return_infos[0].ty.clone();
-            for return_info in &all_return_infos[1..] {
-                inferred_return = wider_type_syntactic(&inferred_return, &return_info.ty);
-            }
+            let inferred_return = self.inferred_return_contract(&all_return_infos, wider_type_syntactic)
+                .expect("nonempty closure returns");
             Ok((self.caller_visible_direct_call_return(body, inferred_return), false))
         }
     }

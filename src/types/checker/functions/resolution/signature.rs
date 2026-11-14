@@ -298,10 +298,8 @@ impl Checker {
                 declared_ret
             };
         } else if !all_return_infos.is_empty() {
-            return_type = all_return_infos[0].ty.clone();
-            for return_info in &all_return_infos[1..] {
-                return_type = Self::wider_type(&return_type, &return_info.ty);
-            }
+            return_type = self.inferred_return_contract(&all_return_infos, Self::wider_type)
+                .expect("nonempty inferred returns");
         }
 
         let sig = FunctionSig {

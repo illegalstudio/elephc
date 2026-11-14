@@ -54,6 +54,7 @@ pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
 mod type_compat;
+pub(crate) use type_compat::unions::normalize_union_members;
 /// yield_validation
 pub(crate) mod yield_validation;
 

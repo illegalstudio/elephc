@@ -71,6 +71,18 @@ fn nullable_return_type(other: &PhpType) -> PhpType {
 }
 
 impl Checker {
+    /// Joins recorded return values without inventing a scalar conversion in an inferred ABI.
+    pub(crate) fn inferred_return_contract(&self, infos: &[ReturnInfo],
+        legacy_join: fn(&PhpType, &PhpType) -> PhpType) -> Option<PhpType> {
+        let first = infos.first()?;
+        let source = if infos.iter().any(|info| info.source_mode != crate::source::SourceMode::Internal) {
+            crate::source::SourceMode::Php
+        } else { crate::source::SourceMode::Internal };
+        Some(infos.iter().skip(1).fold(first.ty.clone(), |left, info|
+            crate::semantics::conversions::inferred_scalar_join(self.semantic_profile, source, &left, &info.ty)
+                .unwrap_or_else(|| legacy_join(&left, &info.ty))))
+    }
+
     /// Recursively collects ReturnInfo from all return statements in `stmt` and its
     /// nested blocks (if/while/try/etc.), appending each to `returns`. Untyped or unresolvable
     /// expressions are skipped silently — only well-typed returns contribute to the vector.

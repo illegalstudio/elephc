@@ -418,15 +418,7 @@ impl Checker {
                 &mut callable_array_return_sigs,
             );
         }
-        let raw_inferred = if return_infos.is_empty() {
-            None
-        } else {
-            let mut widest = return_infos[0].ty.clone();
-            for return_info in &return_infos[1..] {
-                widest = Self::wider_type(&widest, &return_info.ty);
-            }
-            Some(widest)
-        };
+        let raw_inferred = self.inferred_return_contract(&return_infos, Self::wider_type);
         let inferred_return = raw_inferred.clone().unwrap_or(PhpType::Void);
         let inferred_php_array = return_infos
             .iter()
