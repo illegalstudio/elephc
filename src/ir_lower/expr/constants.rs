@@ -31,7 +31,7 @@ pub(super) fn register_static_define_call(
     };
     ctx.register_constant(
         constant_name.clone(),
-        args[1].kind.clone(),
+        crate::types::constant_binding::bind_value(args[1].clone(), &PhpType::Mixed),
         constant_expr_type(&args[1].kind),
     );
 }
@@ -205,11 +205,11 @@ pub(super) fn lower_const_ref(
 /// Lowers a prescanned constant value using its checker-visible PHP type.
 fn lower_constant_value(
     ctx: &mut LoweringContext<'_, '_>,
-    value: ExprKind,
+    value: Expr,
     php_type: PhpType,
     expr: &Expr,
 ) -> LoweredValue {
-    match value {
+    match value.kind {
         ExprKind::IntLiteral(value) => emit_typed_constant(
             ctx,
             Op::ConstI64,
@@ -236,10 +236,7 @@ fn lower_constant_value(
             expr,
         ),
         ExprKind::Null => emit_typed_constant(ctx, Op::ConstNull, None, php_type, expr),
-        other => {
-            let synthetic = Expr::new(other, expr.span);
-            super::lower_expr(ctx, &synthetic)
-        }
+        _ => super::lower_expr(ctx, &value),
     }
 }
 

@@ -101,13 +101,14 @@ mod tests {
 /// Recognizes an executable-path constant alias without folding the runtime-owned path.
 pub(crate) fn is_executable_path_alias(
     value: &ExprKind,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
 ) -> bool {
     let ExprKind::ConstRef(name) = value else { return false };
     let mut name = name.as_str();
     for _ in 0..=constants.len() {
         if elephc_builtin_contract::canonical_constant_name(name) == "PHP_BINARY" { return true; }
-        let Some((ExprKind::ConstRef(next), _)) = constants.get(name) else { return false };
+        let Some((next, _)) = constants.get(name) else { return false };
+        let ExprKind::ConstRef(next) = &next.kind else { return false };
         name = next.as_str();
     }
     false

@@ -71,7 +71,7 @@ pub(crate) fn lower_main(
     program: &Program,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let web = module.web;
@@ -195,7 +195,7 @@ pub(crate) fn lower_user_function(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let web = module.web;
@@ -314,7 +314,7 @@ pub(crate) fn lower_class_method(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let web = module.web;
@@ -475,7 +475,7 @@ pub(crate) fn lower_eval_aot_function(
     body: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let return_type = PhpType::Mixed;
@@ -579,7 +579,7 @@ pub(crate) fn lower_eval_aot_scope_function(
     scope_flush_writes: &std::collections::BTreeSet<String>,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let return_type = PhpType::Mixed;
@@ -742,7 +742,7 @@ pub(crate) fn lower_property_init_thunk(
     class_info: &ClassInfo,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     if !super::property_initializers::needs_initializer(class_info) {
@@ -951,7 +951,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
     provided_args: usize,
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let function_name = dynamic_constructor_thunk_name(class_info.class_id, provided_args);
@@ -1240,7 +1240,7 @@ pub(crate) fn lower_clone_override_function(
     module: &mut Module,
     check_result: &CheckResult,
     functions: &std::collections::HashMap<String, FunctionSig>,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) -> FunctionSig {
     let sig = FunctionSig {
@@ -1378,7 +1378,7 @@ pub(crate) fn eval_native_default_helper_name(
 pub(crate) fn lower_eval_native_default_helpers(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, FunctionSig>,
 ) {
     let uses_eval = super::program::all_lowered_functions(module).any(|function| {
@@ -1832,7 +1832,7 @@ fn lower_body_into_function(
     sparse_key_write_sites: &std::collections::HashMap<Span, std::collections::HashSet<String>>,
     promotable_arrays: &crate::types::PromotableArrays,
     loop_storage_scope: String,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     current_class: Option<String>,
     return_php_type: PhpType,
     return_type_is_declared: bool,

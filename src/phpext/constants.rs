@@ -59,14 +59,14 @@ pub fn materialize_native_constants(
     for (owner, info) in classes.iter() {
         for (name, value) in &info.constants {
             let ty = info.constant_types.get(name).map(coercion_type).unwrap_or(PhpType::Mixed);
-            constants.entry(format!("{owner}::{name}")).or_insert((bind_scope(value.clone(), owner).kind, ty));
+            constants.entry(format!("{owner}::{name}")).or_insert((bind_scope(value.clone(), owner), ty));
         }
     }
     for (owner, info) in interfaces.iter() {
         for (name, value) in &info.constants {
             let scope = info.constant_declaring_interfaces.get(name).map(String::as_str).unwrap_or(owner);
             let ty = info.constant_types.get(name).map(coercion_type).unwrap_or(PhpType::Mixed);
-            constants.entry(format!("{owner}::{name}")).or_insert((bind_scope(value.clone(), scope).kind, ty));
+            constants.entry(format!("{owner}::{name}")).or_insert((bind_scope(value.clone(), scope), ty));
         }
     }
     for (owner, info) in classes {
@@ -91,7 +91,7 @@ pub fn materialize_native_constants(
 /// Preserves lexical interface owners while rewriting the supported native constant trees.
 fn native_schema(
     owner: &str, values: &mut HashMap<String, Expr>, types: &HashMap<String, TypeExpr>,
-    declaring: Option<&HashMap<String, String>>, constants: &HashMap<String, (ExprKind, PhpType)>,
+    declaring: Option<&HashMap<String, String>>, constants: &crate::types::GlobalConstants,
 ) {
     for (name, value) in values {
         let ty = types.get(name).map(coercion_type).unwrap_or(PhpType::Mixed);
@@ -119,19 +119,19 @@ pub fn validate_native_widening(
 }
 
 /// Keeps supported constant trees identical in native schemas and persistent Zend metadata.
-fn native_value(value: &Expr, class: &str, ty: &PhpType, constants: &HashMap<String, (ExprKind, PhpType)>) -> Option<ExprKind> {
+fn native_value(value: &Expr, class: &str, ty: &PhpType, constants: &crate::types::GlobalConstants) -> Option<ExprKind> {
     let resolved = resolve(bind_scope(value.clone(), class), constants, &mut HashSet::new(), 0).ok()?;
     super::constant_values::from_expression(&resolved, 0).ok()?;
     Some(crate::types::constant_binding::bind_value(resolved, ty).kind)
 }
 
 /// Combines checked source constants with lexical bindings for class constant references.
-pub(super) fn context(program: &Program, target: Target) -> HashMap<String, (ExprKind, PhpType)> {
+pub(super) fn context(program: &Program, target: Target) -> crate::types::GlobalConstants {
     // Top-level statements never run when PHP loads the module, so define() is not a source.
     let mut constants = crate::codegen_support::collect_constants(&Vec::new(), target);
     for statement in program {
         if let StmtKind::ConstDecl { name, value } = &statement.kind {
-            constants.entry(name.clone()).or_insert((value.kind.clone(), PhpType::Mixed));
+            constants.entry(name.clone()).or_insert((crate::types::constant_binding::bind_value(value.clone(), &PhpType::Mixed), PhpType::Mixed));
         }
     }
     for stmt in program {
@@ -143,14 +143,14 @@ pub(super) fn context(program: &Program, target: Target) -> HashMap<String, (Exp
         for declaration in declarations {
             let ty = declaration.type_expr.as_ref().map(coercion_type).unwrap_or(PhpType::Mixed);
             constants.insert(format!("{class}::{}", declaration.name),
-                (bind_scope(declaration.value.clone(), class).kind, ty));
+                (crate::types::constant_binding::bind_value(bind_scope(declaration.value.clone(), class), &ty), ty));
         }
     }
     constants
 }
 
 /// Keeps class-local self/static references lexical while sharing the scalar evaluator.
-pub(super) fn evaluate_in_class(source: &Expr, class: &str, constants: &HashMap<String, (ExprKind, PhpType)>) -> Result<ConstantValue, CompileError> {
+pub(super) fn evaluate_in_class(source: &Expr, class: &str, constants: &crate::types::GlobalConstants) -> Result<ConstantValue, CompileError> {
     evaluate(&bind_scope(source.clone(), class), constants)
 }
 
@@ -212,7 +212,7 @@ fn bind_scope(mut expr: Expr, class: &str) -> Expr {
 }
 
 /// Resolves metadata values through shared compiler constant folding.
-pub(super) fn evaluate(source: &Expr, constants: &HashMap<String, (ExprKind, PhpType)>) -> Result<ConstantValue, CompileError> {
+pub(super) fn evaluate(source: &Expr, constants: &crate::types::GlobalConstants) -> Result<ConstantValue, CompileError> {
     let expression = resolve(source.clone(), constants, &mut HashSet::new(), 0)?;
     super::constant_values::from_expression(&expression, 0)
 }
@@ -228,7 +228,7 @@ fn float_literal(value: f64) -> String {
 }
 
 /// Expands known references, leaving unresolved or cyclic branches for the shared lazy fold.
-fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
+fn resolve(mut expr: Expr, constants: &crate::types::GlobalConstants,
     active: &mut HashSet<String>, depth: usize) -> Result<Expr, CompileError> {
     if depth > 128 { return Err(CompileError::new(expr.span, "PHP constant export expression nesting limit exceeded")); }
     expr = bind_scope(expr, "");
@@ -244,7 +244,7 @@ fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
                     })
                 });
                 if let Some((value, ty)) = value {
-                    let mut resolved = resolve(expr.with_kind(value.clone()), constants, active, depth + 1)?;
+                    let mut resolved = resolve(value.clone(), constants, active, depth + 1)?;
                     if ty.coerces_integer_to_float() {
                         super::constant_values::from_expression(&resolved, 0)?;
                         resolved = crate::types::constant_binding::bind_value(resolved, ty);
@@ -342,6 +342,25 @@ pub(super) fn registration(constants: &[ExportedConstant]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hosted aliases keep the declaration's numeric policy when consumed from a strict user source.
+    #[test]
+    fn phpext_constant_selection_retains_trusted_global_producer_profiles() {
+        use crate::source::SourceMode;
+        use elephc_semantics::{SemanticProfile, StrictFeature};
+        let trusted = "<?php const HOST_POWER = 2 ** -1; const HOST_OVERFLOW = PHP_INT_MAX + 1;";
+        let mut program = crate::parser::parse_with_mode(&crate::lexer::tokenize(trusted).unwrap(), SourceMode::Internal).unwrap();
+        program.extend(crate::parser::parse(&crate::lexer::tokenize(
+            "<?php const HOST_PUBLIC_POWER = HOST_POWER; const HOST_PUBLIC_OVERFLOW = HOST_OVERFLOW;").unwrap()).unwrap());
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true)
+            .with(StrictFeature::Arithmetic, true).with(StrictFeature::Overflow, true);
+        let _policy = crate::optimize::scoped_semantic_profile(profile);
+        let exports = collect(&program, &["HOST_PUBLIC_POWER".into(), "HOST_PUBLIC_OVERFLOW".into()], Target::detect_host()).unwrap();
+        assert!(matches!(exports[0].value, ConstantValue::Float(value) if value == 0.5));
+        assert!(matches!(exports[1].value, ConstantValue::Float(value) if value > 0.0));
+        let user = crate::parser::parse(&crate::lexer::tokenize("<?php const HOST_BAD = 2 ** -1;").unwrap()).unwrap();
+        assert!(collect(&user, &["HOST_BAD".into()], Target::detect_host()).is_err());
+    }
 
     /// Resolves arithmetic aliases through the shared evaluator and deduplicates explicit names.
     #[test]

@@ -59,7 +59,7 @@ fn sorted_constant_entries(ctx: &FunctionContext<'_>) -> Vec<(String, ExprKind, 
         .module
         .global_constants
         .iter()
-        .map(|(name, (value, ty))| (name.clone(), value.clone(), ty.clone()))
+        .map(|(name, (value, ty))| (name.clone(), crate::codegen::const_default_values::materialized_global_constant(ctx.module, value).kind, ty.clone()))
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries
@@ -185,7 +185,8 @@ fn emit_boxed_constant_value(
             } else {
                 let (value, ty) = ctx.module.global_constants.get(name.as_str()).cloned()
                     .ok_or_else(|| unsupported_constant_value(value))?;
-                emit_boxed_constant_value(ctx, &value, &ty)?;
+                let value = crate::codegen::const_default_values::materialized_global_constant(ctx.module, &value);
+                emit_boxed_constant_value(ctx, &value.kind, &ty)?;
             }
         }
         ExprKind::IntLiteral(value) => {

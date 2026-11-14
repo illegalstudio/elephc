@@ -188,7 +188,7 @@ fn safe_read(ctx: &LoweringContext<'_, '_>, expr: &Expr, string: bool, property_
         ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) | ExprKind::BoolLiteral(_) => !string,
         ExprKind::Null => true,
         ExprKind::ConstRef(name) => ctx.constant_value(name).is_some_and(|(value, _)| {
-            matches!(value, ExprKind::StringLiteral(_)) == string
+            matches!(value.kind, ExprKind::StringLiteral(_)) == string
         }),
         ExprKind::Variable(name) => !ctx.local_uses_global_storage(name)
             && !ctx.extern_globals.contains_key(name)

@@ -20,7 +20,7 @@ fn executable_path_defaults_resolve_and_release_fresh_string_elements_on_all_tar
         let target = Target::parse(name).unwrap();
         let mut module = Module::new(target);
         module.global_constants.insert("PROGRAM_BINARY".to_string(), (
-            ExprKind::ConstRef("PHP_BINARY".into()), PhpType::Str,
+            Expr::new(ExprKind::ConstRef("PHP_BINARY".into()), Span::dummy()), PhpType::Str,
         ));
         let default = Expr::new(ExprKind::ConstRef("PROGRAM_BINARY".into()), Span::dummy());
         let sig = signature(vec![("path".into(), PhpType::Str)], vec![Some(default)], vec![true], None);

@@ -35,7 +35,7 @@ function producerUnknown(mixed $value): mixed { return $value; }
 function producerArguments(bool $present): array { return $present ? [1] : []; }
 echo aliasProducer(), '|', expressionProducer(), '|';
 echo arithmeticProducer(), '|', is_int(identityProducer()) ? 'I' : 'X';
-echo is_float(powerProducer()) ? 'P' : 'X', is_float(overflowProducer()) ? 'B' : 'X';
+echo is_float(powerProducer()) ? 'P' : 'X', is_float(overflowProducer()) && overflowProducer() > 0.0 ? 'B' : 'X';
 $lazy = lazyProducer(...); echo is_float($lazy()) ? 'L' : 'X', is_float($producerLazyClosure()) ? 'K|' : 'X|';
 echo is_float(unionProducer()) ? 'U' : 'X', nullProducer() === null ? 'N' : 'X';
 echo is_float(nominalProducer()) ? 'O|' : 'X|';

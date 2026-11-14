@@ -73,7 +73,7 @@ pub(super) fn register_eval_native_global_constants(
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (name, value, ty) in entries {
-        register_eval_native_global_constant(ctx, context_source, &name, &value, &ty)?;
+        register_eval_native_global_constant(ctx, context_source, &name, &value.kind, &ty)?;
     }
     Ok(())
 }
@@ -147,20 +147,21 @@ pub(super) fn register_eval_native_user_constants(
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     for (name, value, ty) in entries {
-        if crate::types::predefined_constants::is_executable_path_alias(&value, &ctx.module.global_constants) {
+        if crate::types::predefined_constants::is_executable_path_alias(&value.kind, &ctx.module.global_constants) {
             register_eval_executable_constant(ctx, context_source, &name, "__elephc_eval_register_native_user_constant");
             continue;
         }
-        let normalized = if matches!(value, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
+        let normalized = if matches!(value.kind, ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_)
             | ExprKind::ArrayLiteralMixed(_)) {
             let context = crate::codegen::const_default_values::ConstDefaultContext {
                 module: ctx.module, current_class: None,
             };
-            crate::codegen::const_default_values::resolve_const_default(
-                &Expr::new(value.clone(), crate::span::Span::synthetic()), &context,
-            ).and_then(crate::codegen::const_default_values::resolved_literal_default)
+            crate::codegen::const_default_values::resolve_const_default(&value, &context)
+                .and_then(crate::codegen::const_default_values::resolved_literal_default)
         } else { None };
-        let Some(encoded) = eval_native_user_constant_value(normalized.as_ref().unwrap_or(&value), &ty) else {
+        let value = normalized.map(|kind| value.with_kind(kind)).unwrap_or_else(||
+            crate::codegen::const_default_values::materialized_global_constant(ctx.module, &value));
+        let Some(encoded) = eval_native_user_constant_value(&value.kind, &ty) else {
             continue;
         };
         register_eval_native_user_constant(ctx, context_source, &name, &encoded);

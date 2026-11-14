@@ -187,18 +187,18 @@ mod tests {
         let mut module = Module::new(target);
         module.global_constants.insert(
             "USER_TEXT".to_string(),
-            (ExprKind::StringLiteral("seeded".to_string()), PhpType::Str),
+            (Expr::string_lit("seeded"), PhpType::Str),
         );
         module.global_constants.insert(
             "USER_LIST".to_string(),
             (
-                ExprKind::ArrayLiteral(vec![Expr::int_lit(1), Expr::int_lit(2)]),
+                Expr::new(ExprKind::ArrayLiteral(vec![Expr::int_lit(1), Expr::int_lit(2)]), crate::span::Span::dummy()),
                 PhpType::Int,
             ),
         );
         module.global_constants.insert(
             "PHP_INT_SIZE".to_string(),
-            (ExprKind::IntLiteral(8), PhpType::Int),
+            (Expr::int_lit(8), PhpType::Int),
         );
         module.user_defined_constants = vec!["USER_LIST".to_string(), "USER_TEXT".to_string()];
         module

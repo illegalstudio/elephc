@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use elephc_builtin_contract::{lookup_constant, ConstValue};
 
 use crate::codegen_support::platform::{Platform, Target};
-use crate::parser::ast::{ExprKind, Program, Stmt, StmtKind};
+use crate::parser::ast::{Expr, ExprKind, Program, Stmt, StmtKind};
 use crate::types::iconv_constants::{iconv_impl, ICONV_VERSION};
 use crate::types::pcntl_constants::pcntl_int_constants;
 use crate::types::predefined_constants::{literal_of, php_type_of, registered_constants};
@@ -40,7 +40,7 @@ use crate::types::PhpType;
 pub(crate) fn collect_constants(
     program: &Program,
     target: Target,
-) -> HashMap<String, (ExprKind, PhpType)> {
+) -> crate::types::GlobalConstants {
     let target_platform = target.platform;
     let mut constants = HashMap::new();
     for constant in registered_constants() {
@@ -50,20 +50,20 @@ pub(crate) fn collect_constants(
         if let Some(literal) = literal_of(value) {
             constants.insert(
                 constant.name.to_string(),
-                (literal, php_type_of(value)),
+                builtin_value(literal, php_type_of(value)),
             );
         }
     }
     // The runtime materializer replaces this metadata slot at every observable fetch.
-    constants.insert("PHP_BINARY".to_string(), (ExprKind::StringLiteral(String::new()), PhpType::Str));
+    constants.insert("PHP_BINARY".to_string(), builtin_value(ExprKind::StringLiteral(String::new()), PhpType::Str));
     let php_version = crate::codegen_support::compile_php_version();
     let (fnm_noescape, fnm_pathname) = match target_platform {
         Platform::MacOS => (1, 2),
         Platform::Linux => (2, 1),
         Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
     };
-    let str_const = |value: String| (ExprKind::StringLiteral(value), PhpType::Str);
-    let int_const = |value: i64| (ExprKind::IntLiteral(value), PhpType::Int);
+    let str_const = |value: String| builtin_value(ExprKind::StringLiteral(value), PhpType::Str);
+    let int_const = |value: i64| builtin_value(ExprKind::IntLiteral(value), PhpType::Int);
     let computed = [
         ("PHP_OS", str_const(target_platform.php_os_name().to_string())),
         ("PHP_OS_FAMILY", str_const(target_platform.php_os_family_name().to_string())),
@@ -100,11 +100,18 @@ pub(crate) fn collect_constants(
     for (name, value) in pcntl_int_constants(target) {
         constants.insert(
             (*name).to_string(),
-            (ExprKind::IntLiteral(*value), PhpType::Int),
+            builtin_value(ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
     collect_constant_decls(program, &mut constants);
     constants
+}
+
+/// Gives builtin values an explicit trusted producer instead of inheriting a calling parse scope.
+fn builtin_value(kind: ExprKind, ty: PhpType) -> (Expr, PhpType) {
+    let value = crate::source::with_parse_mode(crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
+        || Expr::new(kind, crate::span::Span::dummy()));
+    (crate::types::constant_binding::bind_value(value, &PhpType::Mixed), ty)
 }
 
 /// Recursively scans statements for user-defined constant declarations.
@@ -115,21 +122,21 @@ pub(crate) fn collect_constants(
 /// `IncludeOnceGuard` or synthetic bodies.
 fn collect_constant_decls(
     stmts: &[Stmt],
-    constants: &mut HashMap<String, (ExprKind, PhpType)>,
+    constants: &mut crate::types::GlobalConstants,
 ) {
     for stmt in stmts {
         match &stmt.kind {
             StmtKind::ConstDecl { name, value } => {
                 constants
                     .entry(name.clone())
-                    .or_insert((value.kind.clone(), constant_expr_type(&value.kind)));
+                    .or_insert((crate::types::constant_binding::bind_value(value.clone(), &PhpType::Mixed), constant_expr_type(&value.kind)));
             }
             StmtKind::ExprStmt(expr) => {
                 if let ExprKind::FunctionCall { name, args } = &expr.kind {
                     if name.as_str() == "define" && args.len() == 2 {
                         if let ExprKind::StringLiteral(const_name) = &args[0].kind {
                             constants.entry(const_name.clone()).or_insert((
-                                args[1].kind.clone(),
+                                crate::types::constant_binding::bind_value(args[1].clone(), &PhpType::Mixed),
                                 constant_expr_type(&args[1].kind),
                             ));
                         }
@@ -165,8 +172,8 @@ mod tests {
     use super::*;
 
     /// Implements the `int_constant` operation for this module.
-    fn int_constant(constants: &HashMap<String, (ExprKind, PhpType)>, name: &str) -> i64 {
-        match &constants[name].0 {
+    fn int_constant(constants: &crate::types::GlobalConstants, name: &str) -> i64 {
+        match &constants[name].0.kind {
             ExprKind::IntLiteral(value) => *value,
             _ => panic!("{name} is not an integer constant"),
         }

@@ -202,7 +202,7 @@ pub(super) fn lower_function_declarations(
     statements: &[Stmt],
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     for stmt in statements {

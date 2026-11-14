@@ -61,7 +61,7 @@ pub(super) fn numeric_binary_result_type(
         return PhpType::Float;
     }
     if lhs == IrType::I64 && rhs == IrType::I64 {
-        if fallback == &PhpType::Mixed
+        if matches!(fallback, PhpType::Mixed | PhpType::Float)
             && matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
             && !identity
         {
@@ -314,7 +314,8 @@ fn lower_numeric_binary_values(
         );
     }
     if lhs.ir_type == IrType::I64 && rhs.ir_type == IrType::I64 {
-        // Two ints whose sum, difference, or product can overflow are boxed. The identity
+        // Two ints whose sum, difference, or product can overflow are boxed, including a
+        // literal expression already known to promote to float. The identity
         // cases stay plain ints. Both decisions come from `numeric_binary_result_type`.
         if numeric_ty == PhpType::Mixed {
             let checked_op = match op {

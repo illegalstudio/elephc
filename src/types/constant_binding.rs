@@ -12,6 +12,9 @@
 use crate::parser::ast::{Expr, ExprKind, TypeExpr};
 use crate::types::PhpType;
 
+/// Global constant metadata retains complete producer expressions beside logical PHP types.
+pub(crate) type GlobalConstants = std::collections::HashMap<String, (Expr, PhpType)>;
+
 /// Preserves non-integer alternatives when a prepared producer widens its integer result.
 pub(crate) fn bound_result_type(ty: PhpType, binding: Option<crate::parser::ast::ProducerBinding>) -> PhpType {
     if binding != Some(crate::parser::ast::ProducerBinding::IntegerToFloat) { return ty; }

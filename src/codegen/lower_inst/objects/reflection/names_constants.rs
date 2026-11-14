@@ -456,10 +456,10 @@ pub(super) fn reflection_scoped_constant_value(
 pub(super) fn reflection_global_constant_value(
     ctx: &FunctionContext<'_>,
     name: &crate::names::Name,
-    span: crate::span::Span,
+    _span: crate::span::Span,
     depth: usize,
 ) -> Result<ReflectionConstantValue> {
-    let expr_kind = ctx
+    let expr = ctx
         .module
         .global_constants
         .get(name.as_str())
@@ -471,7 +471,7 @@ pub(super) fn reflection_global_constant_value(
                 name.as_str().trim_start_matches('\\')
             ))
         })?;
-    let expr = crate::parser::ast::Expr::new(expr_kind, span);
+    let expr = crate::codegen::const_default_values::materialized_global_constant(ctx.module, &expr);
     reflection_constant_value(ctx, "", None, &expr, depth + 1)
 }
 

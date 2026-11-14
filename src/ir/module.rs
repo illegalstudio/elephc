@@ -15,7 +15,7 @@ use crate::codegen::platform::Target;
 use crate::codegen::RuntimeFeatures;
 use crate::ir::function::{Function, FunctionId};
 use crate::ir::types::IrType;
-use crate::parser::ast::{Expr, ExprKind, Visibility};
+use crate::parser::ast::{Expr, Visibility};
 use crate::types::{
     ClassInfo, EnumInfo, ExternAbiType, ExternClassInfo, FunctionSig, InterfaceInfo,
     PackedClassInfo, PhpType,
@@ -146,7 +146,8 @@ pub struct Module {
     pub declared_trait_constant_visibilities: HashMap<String, HashMap<String, Visibility>>,
     pub declared_trait_final_constants: HashMap<String, HashSet<String>>,
     /// Prescanned global constant values used by EIR lowering and eval metadata registration.
-    pub global_constants: HashMap<String, (ExprKind, PhpType)>,
+    /// Complete constant producer expressions and PHP storage metadata shared by native consumers.
+    pub global_constants: crate::types::GlobalConstants,
     /// User-declared global constant names, separated from the seeded builtin inventory.
     pub user_defined_constants: Vec<String>,
     pub class_infos: HashMap<String, ClassInfo>,

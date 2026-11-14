@@ -120,6 +120,13 @@ pub(in crate::codegen) fn resolve_const_default(
     resolve_const_default_at(expr, context, 0)
 }
 
+/// Resolves scalar global producers while preserving compound and opaque consumer contracts.
+pub(in crate::codegen) fn materialized_global_constant(module: &Module, value: &Expr) -> Expr {
+    let context = ConstDefaultContext { module, current_class: None };
+    resolve_const_default(value, &context).and_then(resolved_scalar_literal)
+        .map(|kind| value.with_kind(kind)).unwrap_or_else(|| value.clone())
+}
+
 /// Resolves an enum singleton default through bounded aliases in their declaration scope.
 pub(in crate::codegen) fn resolve_enum_case_default(
     expr: &Expr, context: &ConstDefaultContext<'_>,
@@ -645,7 +652,7 @@ fn resolve_global_constant_default(
     if elephc_builtin_contract::canonical_constant_name(name) == "PHP_BINARY" {
         return Some(ConstDefaultValue::Scalar { kind: CONST_DEFAULT_EXECUTABLE_PATH, payload: 0 });
     }
-    let expr_kind = context
+    let expr = context
         .module
         .global_constants
         .get(name)
@@ -655,8 +662,9 @@ fn resolve_global_constant_default(
                 .global_constants
                 .get(name.trim_start_matches('\\'))
         })
-        .map(|(expr_kind, _)| expr_kind.clone())?;
-    let expr = Expr::new(expr_kind, crate::span::Span::dummy());
+        // Compact defaults have no resource tag; retain the alias for native resource materializers.
+        .filter(|(_, ty)| !matches!(ty, crate::types::PhpType::Resource(_)))
+        .map(|(expr, _)| expr.clone())?;
     resolve_const_default_at(&expr, context, depth + 1)
 }
 

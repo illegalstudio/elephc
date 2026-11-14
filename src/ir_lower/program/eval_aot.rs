@@ -35,7 +35,7 @@ pub(super) fn validate_dynamic_source_policy(module: &Module) -> Result<(), Lowe
 pub(super) fn lower_literal_eval_aot_functions(
     module: &mut Module,
     check_result: &CheckResult,
-    constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
+    constants: &crate::types::GlobalConstants,
     fiber_return_sigs: &std::collections::HashMap<String, crate::types::FunctionSig>,
 ) {
     let candidates = collect_literal_eval_aot_function_candidates(module);

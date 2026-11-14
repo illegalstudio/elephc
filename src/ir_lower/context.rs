@@ -209,7 +209,7 @@ pub(crate) struct LoweringSnapshot {
     initialized_slots: HashSet<LocalSlotId>,
     /// PHP slots assigned by an already lowered store, including conditional stores.
     assigned_php_local_slots: HashSet<LocalSlotId>,
-    constants: HashMap<String, (ExprKind, PhpType)>,
+    constants: crate::types::GlobalConstants,
     loop_stack: Vec<LoopFrame>,
     join_edge_arms: Vec<(BlockId, Vec<IfArmExit>)>,
     loop_carried_missing_strings: Vec<HashSet<String>>,
@@ -454,7 +454,7 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub promotable_arrays: &'m crate::types::PromotableArrays,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
-    pub constants: HashMap<String, (ExprKind, PhpType)>,
+    pub constants: crate::types::GlobalConstants,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
     pub loop_stack: Vec<LoopFrame>,
@@ -638,7 +638,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         sparse_key_write_sites: &'m HashMap<Span, HashSet<String>>,
         promotable_arrays: &'m crate::types::PromotableArrays,
         loop_storage_scope: String,
-        constants: &'m HashMap<String, (ExprKind, PhpType)>,
+        constants: &'m crate::types::GlobalConstants,
         top_level_env: TypeEnv,
         current_class: Option<String>,
         owner_name: String,
@@ -1150,7 +1150,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns the prescanned value and PHP type for a global constant name.
-    pub(crate) fn constant_value(&self, name: &str) -> Option<(ExprKind, PhpType)> {
+    pub(crate) fn constant_value(&self, name: &str) -> Option<(crate::parser::ast::Expr, PhpType)> {
         self.constants
             .get(name)
             .or_else(|| self.constants.get(elephc_builtin_contract::canonical_constant_name(name)))
@@ -1217,7 +1217,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Records a constant discovered while lowering source-order `define()` calls.
-    pub(crate) fn register_constant(&mut self, name: String, value: ExprKind, ty: PhpType) {
+    pub(crate) fn register_constant(&mut self, name: String, value: crate::parser::ast::Expr, ty: PhpType) {
         self.constants.entry(name).or_insert((value, ty));
     }
 
@@ -5782,7 +5782,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
     fn error_reporting_mask(&self) -> i64 {
         self.constants
             .get("E_ALL")
-            .and_then(|(value, _)| match value {
+            .and_then(|(value, _)| match &value.kind {
                 ExprKind::IntLiteral(mask) => Some(*mask),
                 _ => None,
             })

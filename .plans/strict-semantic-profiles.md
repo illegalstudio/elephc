@@ -885,6 +885,32 @@ compiler build, architecture828, assembly comments and diff hygiene. Public
 admission is unchanged. Nonliteral global constant origins and the remaining
 reference/host and strict-family integration remain next.
 
+### Verified global constant producer expressions
+
+Step57 retains complete expressions and storage types in `GlobalConstants`.
+Builtin producers are explicitly trusted; source `const`, aliases and static
+`define` values retain physical profiles and identity binding through prescan,
+EIR lowering, introspection, eval registration and extension export. Scalar
+metadata resolves original producers before materializing literal values.
+Resource aliases keep their native tags, and existing compound normalization
+contracts remain with their consumers.
+
+A native regression exposed a PHP-promoting arithmetic bug: an integer operation
+inferred as Float could still emit wrapping integer addition. Overflow-capable
+integer addition/subtraction/multiplication now uses the existing boxed PHP path
+for both Mixed and Float result inference. Strict checked integer operations keep
+their independent policy. The default-producer regression also checks the sign,
+so an erroneous wrapped integer widened to float cannot pass.
+
+Four new checks cover source retention, all five emitters, native both-optimizer
+execution with clean heaps and hosted export. Native coverage includes trusted
+numeric strings, negative power, overflow, aliases, static define, direct and
+callable abs, constant(), get_defined_constants() and resource aliases. Eight
+existing producer/default/array/target/eval controls, test-target type checking,
+compiler build, architecture828, assembly comments and diff hygiene pass. Public
+admission is unchanged; remaining conversion/reference/host and strict-family
+integration continues below.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -1008,4 +1034,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 53 | `6cfe328f09` | feat(strict): validate original source call arguments |
 | 54 | `82c251fd4d` | feat(strict): retain expression producer source profiles |
 | 55 | `68d8803dfb` | feat(strict): bind nonliteral declaration producers before consumption |
-| 56 | this commit | feat(strict): bind property default producers before initialization |
+| 56 | `ea9e76218c` | feat(strict): bind property default producers before initialization |
+| 57 | this commit | feat(strict): preserve global constant producer expressions |

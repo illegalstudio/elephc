@@ -22,7 +22,7 @@ use crate::ir::{
 use crate::ir_lower::{builtin_datetime, function, LoweringError};
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    ClassMethod, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, Visibility,
+    ClassMethod, Expr, Program, StaticReceiver, Stmt, StmtKind, Visibility,
 };
 use crate::types::{CheckResult, ClassInfo, FunctionSig, InterfaceInfo, PhpType};
 
