@@ -314,7 +314,7 @@ fn eval_dynamic_preg_match_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "subject", "matches", "flags"],
+        &["pattern", "subject", "matches", "flags", "offset"],
         evaluated_args,
         false,
     )?;
@@ -327,8 +327,11 @@ fn eval_dynamic_preg_match_call(
         return Ok(None);
     };
     let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
+    let flags = eval_preg_match_flags(flags, context, values)?;
+    let offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
+    let offset = eval_preg_offset_value(offset, values)?;
     let (result, matches_array) =
-        eval_preg_match_capture_result(pattern.value, subject.value, flags, values)?;
+        eval_preg_match_capture_result(pattern.value, subject.value, flags, offset, values)?;
     eval_write_preg_matches_target(target, matches_array, context, values)?;
     Ok(Some(result))
 }
@@ -340,7 +343,7 @@ fn eval_dynamic_preg_match_all_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let (bound, _) = bind_evaluated_ref_builtin_args(
-        &["pattern", "subject", "matches", "flags"],
+        &["pattern", "subject", "matches", "flags", "offset"],
         evaluated_args,
         false,
     )?;
@@ -354,8 +357,10 @@ fn eval_dynamic_preg_match_all_call(
     };
     let flags = optional_evaluated_ref_arg(&bound, 3).map(|arg| arg.value);
     let flags = eval_preg_match_all_require_supported_flags(flags, context, values)?;
+    let offset = optional_evaluated_ref_arg(&bound, 4).map(|arg| arg.value);
+    let offset = eval_preg_offset_value(offset, values)?;
     let (result, matches_array) =
-        eval_preg_match_all_capture_result(pattern.value, subject.value, flags, values)?;
+        eval_preg_match_all_capture_result(pattern.value, subject.value, flags, offset, values)?;
     eval_write_preg_matches_target(target, matches_array, context, values)?;
     Ok(Some(result))
 }

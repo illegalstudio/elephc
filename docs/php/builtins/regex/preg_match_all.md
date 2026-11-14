@@ -1,21 +1,22 @@
 ---
 title: "preg_match_all()"
-description: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends."
+description: "Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. `$offset` starts the search at a byte offset (negative counts from the end). AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends."
 ---
 
 ## preg_match_all()
 
 ```php
-function preg_match_all(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false
+function preg_match_all(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int|false
 ```
 
-Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.
+Performs a global regular expression match, including terminal empty matches, optionally filling `$matches`, and returns the number of matches. `$offset` starts the search at a byte offset (negative counts from the end). AOT capture output supports local variables and local references; unsupported non-local destinations are diagnosed. Unsupported flag bits or conflicting order modes raise PHP's `ValueError` on both backends.
 
 **Parameters**:
 - `$pattern` (`string`)
 - `$subject` (`string`)
 - `$matches` (`mixed`), passed by reference, default `null`, optional
 - `$flags` (`int`), default `0`, optional
+- `$offset` (`int`), default `0`, optional
 
 **Returns**: `int|false`
 

@@ -37,12 +37,12 @@ description: "Compiler internals for preg_match_all(): lowering path, type check
 ## Signature summary
 
 ```php
-function preg_match_all(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false
+function preg_match_all(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int|false
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–4 arguments (2 optional).
+- **Arity**: takes 2–5 arguments (3 optional).
 - **By-reference parameters**: `$matches`.
 
 ## Eval interpreter (magician)

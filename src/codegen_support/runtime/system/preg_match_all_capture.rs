@@ -6,10 +6,12 @@
 //! - `crate::codegen_support::runtime::system::preg_match_all::emit_preg_match_all()`
 //!
 //! Key details:
-//! - ABI matches the count-only helper plus flags: ARM64 `x1`/`x2` pattern,
-//!   `x3`/`x4` subject, `x5` flags; x86_64 `rdi`/`rsi` pattern, `rdx`/`rcx`
-//!   subject, `r8` flags. Count returns in `x0`/`rax`, the matches array in
-//!   `x1`/`rdx`.
+//! - ABI matches the count-only helper plus flags and offset: ARM64 `x1`/`x2`
+//!   pattern, `x3`/`x4` subject, `x5` flags, `x6` start offset; x86_64
+//!   `rdi`/`rsi` pattern, `rdx`/`rcx` subject, `r8` flags, `r9` start offset.
+//!   Count returns in `x0`/`rax`, the matches array in `x1`/`rdx`.
+//! - The start offset, SET_ORDER trailing-group trimming, and the private
+//!   single-match mode used by `preg_match()` live in `preg_match_all_capture_window`.
 //! - Default / `PREG_PATTERN_ORDER` fills `$matches[group][match]`.
 //!   `PREG_SET_ORDER` fills `$matches[match][group]`. `PREG_OFFSET_CAPTURE`
 //!   boxes each cell as `[value, offset]`. `PREG_UNMATCHED_AS_NULL` uses Mixed
@@ -20,12 +22,17 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+use super::preg_match_all_capture_window::{self as window, CaptureWindowSlots};
+
 const PREG_PATTERN_ORDER: i64 = 1;
 const PREG_SET_ORDER: i64 = 2;
 const PREG_OFFSET_CAPTURE: i64 = 256;
 const PREG_UNMATCHED_AS_NULL: i64 = 512;
-const PREG_MATCH_ALL_SUPPORTED_FLAGS: i64 =
-    PREG_PATTERN_ORDER | PREG_SET_ORDER | PREG_OFFSET_CAPTURE | PREG_UNMATCHED_AS_NULL;
+const PREG_MATCH_ALL_SUPPORTED_FLAGS: i64 = PREG_PATTERN_ORDER
+    | PREG_SET_ORDER
+    | PREG_OFFSET_CAPTURE
+    | PREG_UNMATCHED_AS_NULL
+    | window::PREG_CAPTURE_FIRST_ONLY;
 
 /// Emits `__rt_preg_match_all_capture` for the active target.
 pub(crate) fn emit_preg_match_all_capture(emitter: &mut Emitter) {
@@ -58,8 +65,21 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     let pair_ptr_off = piece_offset_off + 8;
     let mixed_ptr_off = pair_ptr_off + 8;
     let row_off = mixed_ptr_off + 8;
-    let stack_size = (row_off + 48 + 15) & !15;
+    let row_limit_off = row_off + 8;
+    let start_offset_off = row_limit_off + 8;
+    let stack_size = (start_offset_off + 32 + 15) & !15;
     let save_off = stack_size - 16;
+    let window_slots = CaptureWindowSlots {
+        handle_off,
+        regmatches_ptr_off,
+        nmatch_off,
+        preg_flags_off,
+        subject_len_off,
+        subject_cstr_off,
+        current_cstr_off,
+        start_offset_off,
+        row_limit_off,
+    };
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match_all_capture ---");
@@ -73,6 +93,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x3, [sp, #{}]", subject_ptr_off));        // preserve the elephc subject pointer
     emitter.instruction(&format!("str x4, [sp, #{}]", subject_len_off));        // preserve the elephc subject length
     emitter.instruction(&format!("str x5, [sp, #{}]", preg_flags_off));         // preserve PHP preg_match_all flags
+    emitter.instruction(&format!("str x6, [sp, #{}]", start_offset_off));       // preserve the PHP start offset
     emitter.instruction(&format!("str xzr, [sp, #{}]", group_rows_off));        // no group-row table until PATTERN_ORDER setup
     emitter.instruction(&format!("str xzr, [sp, #{}]", regmatches_ptr_off));    // no offset-pair buffer until compile succeeds
     emitter.instruction(&format!("str xzr, [sp, #{}]", match_count_off));       // match count starts at zero
@@ -112,6 +133,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x0, [sp, #{}]", current_cstr_off));       // start the search cursor at the subject beginning
     emitter.bl_c("strlen");                                                     // retain the established C-string subject boundary
     emitter.instruction(&format!("str x0, [sp, #{}]", subject_len_off));        // save the complete subject length for offset matching
+    window::emit_start_offset(emitter, &window_slots);
 
     emit_preg_match_all_capture_init_matrix_arm64(
         emitter,
@@ -156,6 +178,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
         pair_ptr_off,
         mixed_ptr_off,
         row_off,
+        &window_slots,
     );
 
     // PCRE2 derives continuation offsets/options from its retained match data.
@@ -201,6 +224,8 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
     emitter.instruction("mov x1, x0");                                          // return the empty array in x1
     emitter.instruction("mov x0, #0");                                          // invalid flags keep the legacy zero count
+    emitter.instruction("b __rt_pma_cap_ret");                                  // skip the out-of-range offset exit
+    window::emit_bad_offset_exit(emitter, &window_slots);
 
     emitter.label("__rt_pma_cap_ret");
     emitter.instruction(&format!("ldr x29, [sp, #{}]", save_off));              // restore frame pointer
@@ -221,6 +246,8 @@ fn emit_preg_match_all_capture_validate_flags_arm64(
     emitter.instruction("orr x10, x10, x11");                                   // include OFFSET_CAPTURE
     emitter.instruction(&format!("mov x11, #{}", PREG_UNMATCHED_AS_NULL));      // materialize UNMATCHED_AS_NULL
     emitter.instruction("orr x10, x10, x11");                                   // include UNMATCHED_AS_NULL
+    emitter.instruction(&format!("mov x11, #{}", window::PREG_CAPTURE_FIRST_ONLY)); // materialize the private single-match bit
+    emitter.instruction("orr x10, x10, x11");                                   // include the single-match mode used by preg_match()
     emitter.instruction("mvn x11, x10");                                        // invert the supported mask
     emitter.instruction("tst x9, x11");                                         // any unsupported extra bit?
     emitter.instruction("b.ne __rt_pma_cap_empty");                             // unsupported flags return count 0 and []
@@ -296,6 +323,7 @@ fn emit_preg_match_all_capture_append_match_arm64(
     pair_ptr_off: usize,
     mixed_ptr_off: usize,
     row_off: usize,
+    window_slots: &CaptureWindowSlots,
 ) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", preg_flags_off));         // reload PHP flags before choosing the append shape
     emitter.instruction(&format!("tst x9, #{}", PREG_SET_ORDER));               // SET_ORDER builds one row for this match
@@ -341,10 +369,11 @@ fn emit_preg_match_all_capture_append_match_arm64(
     emitter.instruction("bl __rt_array_new");                                   // allocate this match's SET_ORDER row
     emit_stamp_indexed_array_mixed_arm64(emitter, "x0");
     emitter.instruction(&format!("str x0, [sp, #{}]", row_off));                // save the SET_ORDER row pointer
+    window::emit_set_row_limit(emitter, window_slots);
     emitter.instruction(&format!("str xzr, [sp, #{}]", group_idx_off));         // start at group 0
     emitter.label("__rt_pma_cap_append_set_loop");
     emitter.instruction(&format!("ldr x12, [sp, #{}]", group_idx_off));         // reload the current group index
-    emitter.instruction(&format!("ldr x13, [sp, #{}]", nmatch_off));            // reload compiled slot count
+    emitter.instruction(&format!("ldr x13, [sp, #{}]", window_slots.row_limit_off)); // reload the exposed group count
     emitter.instruction("cmp x12, x13");                                        // have all groups for this match been stored?
     emitter.instruction("b.ge __rt_pma_cap_append_set_row");                    // box the completed SET_ORDER row
     emit_preg_match_all_capture_box_cell_arm64(
@@ -371,6 +400,7 @@ fn emit_preg_match_all_capture_append_match_arm64(
     emitter.instruction(&format!("str x12, [sp, #{}]", group_idx_off));         // save the next group index
     emitter.instruction("b __rt_pma_cap_append_set_loop");                      // continue filling the SET_ORDER row
     emitter.label("__rt_pma_cap_append_set_row");
+    window::emit_first_only_row_result(emitter, preg_flags_off, outer_off, row_off);
     emitter.instruction("mov x0, #4");                                          // runtime value tag 4 = indexed array
     emitter.instruction(&format!("ldr x1, [sp, #{}]", row_off));                // load the SET_ORDER row for boxing
     emitter.instruction("mov x2, xzr");                                         // indexed-array payload has no high word
@@ -533,7 +563,7 @@ fn emit_preg_match_all_capture_finish_pattern_order_arm64(
 }
 
 /// Emits ARM64 code that stamps an indexed array as boxed-Mixed slots.
-fn emit_stamp_indexed_array_mixed_arm64(emitter: &mut Emitter, array_reg: &str) {
+pub(super) fn emit_stamp_indexed_array_mixed_arm64(emitter: &mut Emitter, array_reg: &str) {
     emitter.instruction(&format!("ldr x10, [{array_reg}, #-8]"));               // load indexed-array packed kind word
     emitter.instruction("mov x11, #0x80ff");                                    // preserve indexed-array kind and persistent COW flag
     emitter.instruction("and x10, x10, x11");                                   // clear stale value_type bits
@@ -565,7 +595,20 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     let pair_ptr_off = piece_offset_off + 8;
     let mixed_ptr_off = pair_ptr_off + 8;
     let row_off = mixed_ptr_off + 8;
-    let stack_size = (row_off + 32 + 15) & !15;
+    let row_limit_off = row_off + 8;
+    let start_offset_off = row_limit_off + 8;
+    let stack_size = (start_offset_off + 16 + 15) & !15;
+    let window_slots = CaptureWindowSlots {
+        handle_off,
+        regmatches_ptr_off,
+        nmatch_off,
+        preg_flags_off,
+        subject_len_off,
+        subject_cstr_off,
+        current_cstr_off,
+        start_offset_off,
+        row_limit_off,
+    };
 
     emitter.blank();
     emitter.comment("--- runtime: preg_match_all_capture ---");
@@ -577,6 +620,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rdx", subject_ptr_off)); // preserve the elephc subject pointer
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rcx", subject_len_off)); // preserve the elephc subject length
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r8", preg_flags_off)); // preserve PHP preg_match_all flags
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", start_offset_off)); // preserve the PHP start offset
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_rows_off)); // no group-row table until PATTERN_ORDER setup
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", regmatches_ptr_off)); // no offset-pair buffer until compile succeeds
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", match_count_off)); // match count starts at zero
@@ -628,6 +672,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(                                                        // save the complete subject length for offset matching
         &format!("mov QWORD PTR [rsp + {}], rax", subject_len_off)
     );
+    window::emit_start_offset(emitter, &window_slots);
 
     emit_preg_match_all_capture_init_matrix_linux_x86_64(
         emitter,
@@ -677,6 +722,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
         pair_ptr_off,
         mixed_ptr_off,
         row_off,
+        &window_slots,
     );
 
     // PCRE2 derives continuation offsets/options from its retained match data.
@@ -715,6 +761,8 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
     emitter.instruction("mov rdx, rax");                                        // return the empty array in rdx
     emitter.instruction("mov rax, -1");                                         // failure sentinel: PHP false
+    emitter.instruction("jmp __rt_pma_cap_ret_linux_x86_64");                   // skip the out-of-range offset exit
+    window::emit_bad_offset_exit(emitter, &window_slots);
 
     emitter.label("__rt_pma_cap_ret_linux_x86_64");
     emitter.instruction(&format!("add rsp, {}", stack_size));                   // release capture helper local storage
@@ -799,6 +847,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     pair_ptr_off: usize,
     mixed_ptr_off: usize,
     row_off: usize,
+    window_slots: &CaptureWindowSlots,
 ) {
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", preg_flags_off)); // reload PHP flags before choosing the append shape
     emitter.instruction(&format!("test r9, {}", PREG_SET_ORDER));               // SET_ORDER builds one row for this match
@@ -841,10 +890,11 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter.instruction("call __rt_array_new");                                 // allocate this match's SET_ORDER row
     emit_stamp_indexed_array_mixed_x86_64(emitter, "rax");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], rax", row_off));    // save the SET_ORDER row pointer
+    window::emit_set_row_limit(emitter, window_slots);
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], 0", group_idx_off)); // start at group 0
     emitter.label("__rt_pma_cap_append_set_loop_linux_x86_64");
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", group_idx_off)); // reload the current group index
-    emitter.instruction(&format!("cmp r9, QWORD PTR [rsp + {}]", nmatch_off));  // have all groups for this match been stored?
+    emitter.instruction(&format!("cmp r9, QWORD PTR [rsp + {}]", window_slots.row_limit_off)); // have all exposed groups been stored?
     emitter.instruction("jge __rt_pma_cap_append_set_row_linux_x86_64");        // box the completed SET_ORDER row
     emit_preg_match_all_capture_box_cell_linux_x86_64(
         emitter,
@@ -870,6 +920,7 @@ fn emit_preg_match_all_capture_append_match_linux_x86_64(
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r9", group_idx_off)); // save the next group index
     emitter.instruction("jmp __rt_pma_cap_append_set_loop_linux_x86_64");       // continue filling the SET_ORDER row
     emitter.label("__rt_pma_cap_append_set_row_linux_x86_64");
+    window::emit_first_only_row_result(emitter, preg_flags_off, outer_off, row_off);
     emitter.instruction("mov rax, 4");                                          // runtime value tag 4 = indexed array
     emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", row_off));    // load the SET_ORDER row for boxing
     emitter.instruction("xor esi, esi");                                        // indexed-array payload has no high word
@@ -1029,7 +1080,7 @@ fn emit_preg_match_all_capture_finish_pattern_order_linux_x86_64(
 }
 
 /// Emits x86_64 code that stamps an indexed array as boxed-Mixed slots.
-fn emit_stamp_indexed_array_mixed_x86_64(emitter: &mut Emitter, array_reg: &str) {
+pub(super) fn emit_stamp_indexed_array_mixed_x86_64(emitter: &mut Emitter, array_reg: &str) {
     emitter.instruction(&format!("mov r10, QWORD PTR [{} - 8]", array_reg));    // load indexed-array packed kind word
     emitter.instruction(&format!(
         "mov r8, 0x{:x}",

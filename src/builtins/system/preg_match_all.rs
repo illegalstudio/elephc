@@ -8,7 +8,8 @@
 //! Key details:
 //! - The third param `matches` is by-reference (`ref matches: Mixed = DefaultSpec::EmptyArray`).
 //! - Optional `$flags` accepts `PREG_PATTERN_ORDER`, `PREG_SET_ORDER`,
-//!   `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL`.
+//!   `PREG_OFFSET_CAPTURE`, and `PREG_UNMATCHED_AS_NULL`; optional `$offset` starts
+//!   the search at a byte offset.
 //! - `lazy_check: true` suppresses the registry's default pre-inference loop so the hook
 //!   can infer pattern, subject, and flags while skipping write-only `$matches`.
 
@@ -27,9 +28,9 @@ builtin! {
     ),
 }
 
-/// Validates optional `$matches` / `$flags` and returns the match-count type.
+/// Validates optional `$matches` / `$flags` / `$offset` and returns the match-count type.
 ///
-/// Infers the pattern, subject, and flags arguments. `$matches` is write-only and
+/// Infers the pattern, subject, flags, and offset arguments. `$matches` is write-only and
 /// is not inferred here. Shared by-reference validation rejects non-lvalues;
 /// unsupported non-local destinations receive an explicit diagnostic instead of count-only execution.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
@@ -42,8 +43,8 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 "preg_match_all(): non-local $matches destinations are not supported"));
         }
     }
-    if cx.args.len() >= 4 {
-        cx.checker.infer_type(&cx.args[3], cx.env)?;
+    for index in 3..cx.args.len().min(5) {
+        cx.checker.infer_type(&cx.args[index], cx.env)?;
     }
     Ok(PhpType::Mixed)
 }

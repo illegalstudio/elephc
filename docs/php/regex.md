@@ -90,8 +90,8 @@ for a complete project.
 
 | Function | Signature | Description |
 |---|---|---|
-| `preg_match()` | `preg_match($pattern, $subject, &$matches = null): int\|false` | Test regex match (`1` or `0`). Returns `false` for an invalid pattern or the removed `/e` modifier, and then leaves a supplied `$matches` variable unchanged. A completed search writes the full match and capture groups |
-| `preg_match_all()` | `preg_match_all($pattern, $subject, &$matches = [], $flags = 0): int\|false` | PHP returns the match count, or `false` for an invalid pattern or the removed `/e` modifier. elephc's type checker currently types the result as `mixed`. Optional `$matches` receives numbered groups |
+| `preg_match()` | `preg_match($pattern, $subject, &$matches = null, $flags = 0, $offset = 0): int\|false` | Test regex match (`1` or `0`). Returns `false` for an invalid pattern or the removed `/e` modifier, and then leaves a supplied `$matches` variable unchanged. A completed search writes the full match and capture groups |
+| `preg_match_all()` | `preg_match_all($pattern, $subject, &$matches = [], $flags = 0, $offset = 0): int\|false` | PHP returns the match count, or `false` for an invalid pattern or the removed `/e` modifier. elephc's type checker currently types the result as `mixed`. Optional `$matches` receives numbered groups |
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string\|array\|null` | PHP returns the replaced value, or `null` on failure. elephc's type checker currently types the result as `mixed`. `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): mixed` | Replace all regex matches with the callback return value; callback receives `array<string>` matches. The static return is `mixed`, so a `string` function may return the call. An invalid pattern, including an unknown modifier or a missing delimiter, returns `null` |
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array\|false` | PHP returns the pieces, or `false` for an invalid pattern or the removed `/e` modifier. The checker types this result as `array\|false`. Supports no-empty, delimiter-capture, offset-capture, and positive limits |
@@ -126,6 +126,19 @@ are omitted. A search that does not match replaces `$matches` with an empty
 array. An invalid pattern, or a pattern that uses the removed `/e` modifier,
 returns `false` and does not replace `$matches`.
 
+`preg_match()` also accepts `$flags` and `$offset`. `PREG_OFFSET_CAPTURE` makes
+each entry a `[value, byte_offset]` pair, and `PREG_UNMATCHED_AS_NULL` reports
+unmatched groups as `null` and keeps trailing ones. An order flag
+(`PREG_PATTERN_ORDER`, `PREG_SET_ORDER`, or any other bit in the low byte) throws
+PHP's `ValueError`; other unknown bits are ignored, as in PHP. A call that passes
+`$flags` or `$offset` stores `$matches` as `array<mixed>` instead of
+`array<string>`.
+
+`$offset` (for both `preg_match()` and `preg_match_all()`) starts the search at
+that byte offset while anchors, `\G`, and lookbehind still see the whole
+subject. A negative offset counts back from the end and stops at the start. An
+offset past the end returns `false` and sets `$matches` to `[]`, like PHP.
+
 `preg_match_all()` supports the same by-reference `$matches` parameter and the
 PHP flags Termwind uses for width and trim styling. PHP's return type is
 `int|false`. elephc's type checker currently types the call as `mixed`, so a
@@ -137,6 +150,9 @@ function declared to return `int` can still return `preg_match_all(...)`.
 | `PREG_SET_ORDER` | `$matches[match][group]` |
 | `PREG_OFFSET_CAPTURE` | Each cell is `[value, offset]` |
 | `PREG_UNMATCHED_AS_NULL` | Unmatched groups are `null` (offset `-1` with offset capture) |
+
+Like PHP, each `PREG_SET_ORDER` row ends at its highest matched group unless
+`PREG_UNMATCHED_AS_NULL` is set.
 
 A successful compile with zero matches still materializes one empty row per
 compiled numbered group under `PREG_PATTERN_ORDER`. Named capture keys are not
@@ -191,6 +207,10 @@ requirement only when a final native link is performed.
 - Only the pattern modifiers listed above are mapped to PCRE2 flags today.
 - Pattern and subject strings cross the current shim as NUL-terminated strings,
   preserving the existing embedded-NUL limitation.
+- Match-time PCRE2 errors end the search as if no further match existed. With
+  the `u` modifier, an invalid UTF-8 subject or an `$offset` inside a multibyte
+  character makes `preg_match()` / `preg_match_all()` return `0` (or the matches
+  found so far) where PHP returns `false`; `preg_last_error()` is not available.
 
 <!-- elephc:generated:symbols:begin -->
 
@@ -200,8 +220,8 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
-| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null): int|false` | `int|false` | ✓ | ✓ |
-| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null, int $flags = 0, int $offset = 0): int|false` | `int|false` | ✓ | ✓ |
+| [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0, int $offset = 0): int|false` | `int|false` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
