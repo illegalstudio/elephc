@@ -69,6 +69,36 @@ pub(crate) fn successors(term: &Terminator) -> Vec<BlockId> {
     }
 }
 
+/// Whether the terminator graph can hold a cycle, hence a natural loop.
+///
+/// Any cycle has an edge to a block whose id is not greater than its source's, whatever the
+/// numbering, so a function without such an edge is loop-free and the dominance and loop
+/// analyses have nothing to find. Most functions of a program are loop-free; `branch-simplify`
+/// and LICM computed both analyses for each of them on every fixed-point round (about 2 800
+/// samples of a sampled one-core Symfony demo build).
+pub(super) fn may_have_cycle(func: &Function) -> bool {
+    func.blocks.iter().any(|block| {
+        let back = |target: &BlockId| target.as_raw() <= block.id.as_raw();
+        match &block.terminator {
+            Some(Terminator::Br { target, .. }) => back(target),
+            Some(Terminator::CondBr { then_target, else_target, .. }) => {
+                back(then_target) || back(else_target)
+            }
+            Some(Terminator::Switch { cases, default, .. }) => {
+                back(default) || cases.iter().any(|case| back(&case.target))
+            }
+            Some(Terminator::GeneratorSuspend { resume, .. }) => back(resume),
+            Some(
+                Terminator::Return { .. }
+                | Terminator::Throw { .. }
+                | Terminator::Fatal { .. }
+                | Terminator::Unreachable,
+            )
+            | None => false,
+        }
+    })
+}
+
 /// Builds the predecessor list for every block: `preds[b]` holds each block
 /// whose terminator branches to `b`, in block-index order.
 ///

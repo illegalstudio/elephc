@@ -65,7 +65,7 @@ impl IrPass for Licm {
     /// true on any change. The literal pool is unused: the pass only relocates
     /// existing instructions.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
-        if has_exception_handlers(function) {
+        if has_exception_handlers(function) || !super::cfg::may_have_cycle(function) {
             return false;
         }
         let dominance = compute_dominance(function);

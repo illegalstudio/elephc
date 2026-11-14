@@ -21,7 +21,7 @@ pub(super) fn has_suspension(function: &Function) -> bool {
 
 /// Merges one sweep of straight-line loop blocks, retaining headers and stable IDs.
 pub(super) fn merge_loop_blocks(function: &mut Function) -> bool {
-    if has_suspension(function) { return false; }
+    if has_suspension(function) || !super::cfg::may_have_cycle(function) { return false; }
     let dominance = super::dominance::compute_dominance(function);
     let loops = super::loops::compute_loops(function, &dominance);
     let mut preds = predecessors(function);

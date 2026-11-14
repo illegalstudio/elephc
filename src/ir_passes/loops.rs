@@ -127,6 +127,8 @@ impl LoopInfo {
 /// Back edges are CFG edges whose target dominates their source; loops sharing a
 /// header are merged. Returns an empty [`LoopInfo`] for loop-free functions.
 pub fn compute_loops(func: &Function, dominance: &DominanceInfo) -> LoopInfo {
+    #[cfg(test)]
+    LOOP_ANALYSES.with(|count| count.set(count.get() + 1));
     let preds = predecessors(func);
 
     // Group back-edge sources by the header they target. A back edge is an edge
@@ -287,4 +289,10 @@ fn innermost_map(func: &Function, loops: &[NaturalLoop]) -> Vec<Option<usize>> {
         }
     }
     innermost
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Natural-loop analyses computed on this test thread.
+    pub(crate) static LOOP_ANALYSES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

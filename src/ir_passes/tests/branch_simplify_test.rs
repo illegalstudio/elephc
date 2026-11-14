@@ -370,3 +370,43 @@ fn fixed_point_converges_and_stays_valid() {
     );
     assert!(validate_function(&function).is_ok());
 }
+
+/// Loop analyses `branch-simplify` computed while simplifying `function` once.
+fn loop_analyses_of_one_run(function: &mut Function) -> u64 {
+    let before = crate::ir_passes::loops::LOOP_ANALYSES.with(|count| count.get());
+    run_once(function);
+    crate::ir_passes::loops::LOOP_ANALYSES.with(|count| count.get()) - before
+}
+
+/// A loop-free function has no natural loop to merge blocks in, and an edge-order check proves
+/// it without the dominance and loop analyses `branch-simplify` used to compute for every
+/// function on every round. A function with a back edge still gets them.
+#[test]
+fn loop_free_functions_skip_the_loop_analyses() {
+    let mut straight = Function::new("straight".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut builder = Builder::new(&mut straight);
+        let entry = builder.create_named_block("entry", vec![]);
+        let exit = builder.create_named_block("exit", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Br { target: exit, args: Vec::new() });
+        builder.position_at_end(exit);
+        let value = builder.emit_const_i64(1);
+        builder.terminate(Terminator::Return { value: Some(value) });
+    }
+    assert_eq!(loop_analyses_of_one_run(&mut straight), 0, "a loop-free function was analysed");
+
+    let mut looping = Function::new("looping".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut builder = Builder::new(&mut looping);
+        let entry = builder.create_named_block("entry", vec![]);
+        let header = builder.create_named_block("header", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Br { target: header, args: Vec::new() });
+        builder.position_at_end(header);
+        builder.terminate(Terminator::Br { target: header, args: Vec::new() });
+    }
+    assert!(loop_analyses_of_one_run(&mut looping) > 0, "a loop went unanalysed");
+}
