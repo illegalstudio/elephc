@@ -285,6 +285,44 @@ fn callable_array_scopes_share_the_public_static_tables() {
     assert!(small_scans <= 1 && large_scans <= 1, "non-public statics rescanned: {small_scans}, {large_scans}");
 }
 
+/// `count` classes under an interface pair, each with properties typed by its own class, an
+/// interface its parent implements through an interface parent, and that parent; a dynamic
+/// property write reaches every one of those typed slots with a runtime-shaped value.
+fn many_object_typed_slots(count: usize) -> String {
+    let mut source = String::from(
+        "<?php\ninterface Shape {}\ninterface Round extends Shape {}\nclass Base implements Round {}\n",
+    );
+    for index in 0..count {
+        source.push_str(&format!(
+            "class K{index} extends Base {{ public ?K{index} $p = null; public ?Shape $s = null; public ?Base $b = null; }}\n"
+        ));
+    }
+    source.push_str(
+        "function w(object $o, string $n, mixed $v): void { $o->$n = $v; }\nw(new K0(), $argv[1] ?? 'p', null);\necho \"ok\\n\";\n",
+    );
+    source
+}
+
+/// Builds of the is-a index while generating code for `source`.
+fn is_a_index_builds(source: &str) -> usize {
+    let module = lower_source(source);
+    crate::codegen::IS_A_INDEX_BUILDS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    crate::codegen::IS_A_INDEX_BUILDS.with(|count| count.get())
+}
+
+/// The classes satisfying a declared object type come from one index of the program, built
+/// once, where each declared list asked every class of the program again. Under `cfg(test)`
+/// every answer is also checked against that old scan, so the fixture's class, interface and
+/// interface-parent targets each prove the index answers alike.
+#[test]
+fn object_typed_slots_share_one_is_a_index() {
+    let small = is_a_index_builds(&many_object_typed_slots(3));
+    let large = is_a_index_builds(&many_object_typed_slots(12));
+    assert_eq!(small, 1, "the fixture no longer reaches the object-typed guard");
+    assert_eq!(large, 1, "the is-a index was rebuilt: {large} builds");
+}
+
 /// A build that collects every invalid body validates each body once: when none fails, only
 /// the module-level references are left to check, where each body used to be validated again.
 #[test]

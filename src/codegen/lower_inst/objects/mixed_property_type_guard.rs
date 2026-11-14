@@ -979,26 +979,104 @@ fn accepts_closure(class_names: &[String]) -> bool {
 
 /// Collects the runtime class ids in this module that satisfy any of the declared classes.
 fn compatible_class_ids(ctx: &FunctionContext<'_>, class_names: &[String]) -> Vec<u64> {
-    // Every class of the program is tested against the declared list, and a guard asks again at
-    // each arm of each dynamic property write: remembered per list (see `type_is_a_memo`).
+    // A guard asks at each arm of each dynamic property write: remembered per list. The answer
+    // comes from the is-a index, built once; testing every class of the program against each
+    // declared list was 1 200 samples of a sampled one-core Symfony demo console build.
     ctx.shared
         .compatible_class_ids_memoized(class_names, || {
-            let mut ids = ctx
-                .module
-                .class_infos
-                .iter()
-                .filter(|(name, _)| {
-                    class_names
-                        .iter()
-                        .any(|declared| object_type_is_a(ctx, name, declared))
-                })
-                .map(|(_, class_info)| class_info.class_id)
-                .collect::<Vec<_>>();
-            ids.sort_unstable();
-            ids.dedup();
+            let ids = compatible_class_ids_from_index(ctx, class_names);
+            if cfg!(test) || std::env::var_os("ELEPHC_VERIFY_IS_A_INDEX").is_some() {
+                let scanned = compatible_class_ids_by_scan(ctx, class_names);
+                assert_eq!(ids, scanned, "is-a index disagrees with the scan for {class_names:?}");
+            }
             ids
         })
         .to_vec()
+}
+
+/// The ids of the classes satisfying any of `class_names`, read from the is-a index.
+fn compatible_class_ids_from_index(ctx: &FunctionContext<'_>, class_names: &[String]) -> Vec<u64> {
+    // An empty declared name is satisfied by every class (`object_type_is_a`'s first rule).
+    if class_names.iter().any(|declared| declared.trim_start_matches('\\').is_empty()) {
+        let mut ids = ctx.module.class_infos.values().map(|info| info.class_id).collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        return ids;
+    }
+    let index = ctx.shared.is_a_index(|| build_is_a_index(ctx));
+    let mut ids = class_names
+        .iter()
+        .filter_map(|declared| index.get(&is_a_key(declared)))
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// The is-a index's spelling of a class or interface name: what `same_php_type_name` compares.
+fn is_a_key(name: &str) -> String {
+    name.trim_start_matches('\\').to_ascii_lowercase()
+}
+
+/// Every name each module class satisfies under `object_type_is_a`, inverted: name -> class ids.
+///
+/// A class satisfies its own name; a CLASS target it extends along its parent chain (the chain
+/// names a missing parent too, then stops); an INTERFACE target that some class of its chain
+/// with metadata implements, directly or through interface parents. A target is an interface
+/// exactly when the module holds metadata for it, which is how `object_type_is_a` picks between
+/// the two walks, so each branch records only the targets it can answer for.
+fn build_is_a_index(ctx: &FunctionContext<'_>) -> crate::fast_hash::FastMap<String, Vec<u64>> {
+    #[cfg(test)]
+    IS_A_INDEX_BUILDS.with(|count| count.set(count.get() + 1));
+    let is_interface = |name: &str| super::property_compatibility::interface_info_by_name(ctx, name).is_some();
+    let mut index: crate::fast_hash::FastMap<String, Vec<u64>> = Default::default();
+    for (class_name, class_info) in &ctx.module.class_infos {
+        let id = class_info.class_id;
+        let mut satisfied: crate::fast_hash::FastSet<String> = Default::default();
+        satisfied.insert(is_a_key(class_name));
+        let mut interfaces: Vec<String> = Vec::new();
+        let mut current = Some(class_name.clone());
+        while let Some(name) = current {
+            if !is_interface(&name) {
+                satisfied.insert(is_a_key(&name));
+            }
+            let info = super::property_compatibility::class_info_by_name(ctx, &name);
+            if let Some(info) = info {
+                interfaces.extend(info.interfaces.iter().cloned());
+            }
+            current = info.and_then(|info| info.parent.clone());
+        }
+        let mut seen: crate::fast_hash::FastSet<String> = Default::default();
+        while let Some(interface) = interfaces.pop() {
+            if !seen.insert(is_a_key(&interface)) {
+                continue;
+            }
+            if let Some(info) = super::property_compatibility::interface_info_by_name(ctx, &interface) {
+                satisfied.insert(is_a_key(&interface));
+                interfaces.extend(info.parents.iter().cloned());
+            }
+        }
+        for name in satisfied {
+            index.entry(name).or_default().push(id);
+        }
+    }
+    index
+}
+
+/// The answer `compatible_class_ids_from_index` replaces: every class asked against the list.
+fn compatible_class_ids_by_scan(ctx: &FunctionContext<'_>, class_names: &[String]) -> Vec<u64> {
+    let mut ids = ctx
+        .module
+        .class_infos
+        .iter()
+        .filter(|(name, _)| class_names.iter().any(|declared| object_type_is_a(ctx, name, declared)))
+        .map(|(_, class_info)| class_info.class_id)
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
 }
 
 /// Collects the runtime class ids publishing a no-argument `__toString`.
@@ -1553,4 +1631,10 @@ mod tests {
             );
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Builds of the is-a index on this test thread.
+    pub(crate) static IS_A_INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

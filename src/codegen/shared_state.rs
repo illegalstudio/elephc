@@ -245,6 +245,10 @@ pub(crate) struct SharedCodegenState {
     /// Runtime class ids satisfying a declared class list, keyed by the list as spelled.
     compatible_class_ids_memo:
         std::cell::RefCell<crate::fast_hash::FastMap<Vec<String>, std::rc::Rc<[u64]>>>,
+    /// For every class or interface name (trimmed, ASCII-lowercased) the ids of the module's
+    /// classes that are one (`object_type_is_a`), built once. Each declared class list used to
+    /// ask that question of every class of the program.
+    is_a_index: std::cell::OnceCell<crate::fast_hash::FastMap<String, Vec<u64>>>,
     /// Every global needing shared reference-cell storage, collected in one walk of the module.
     ///
     /// `superglobals::uses_shared_ref_cell` answers for ONE name by walking every instruction of
@@ -591,6 +595,15 @@ impl SharedCodegenState {
         self.class_ancestors.get_or_init(|| std::sync::Arc::new(build()))
     }
 
+    /// The class ids satisfying each class or interface name, built once by `build`; see the
+    /// field.
+    pub(crate) fn is_a_index(
+        &self,
+        build: impl FnOnce() -> crate::fast_hash::FastMap<String, Vec<u64>>,
+    ) -> &crate::fast_hash::FastMap<String, Vec<u64>> {
+        self.is_a_index.get_or_init(build)
+    }
+
     /// Every module class's descendants, built once by `build`; see the field.
     pub(super) fn class_descendants(
         &self,
@@ -736,6 +749,7 @@ impl SharedCodegenState {
             type_is_a_memo: std::cell::RefCell::new(Default::default()),
             eval_sync_global_type_memo: std::cell::RefCell::new(Default::default()),
             compatible_class_ids_memo: std::cell::RefCell::new(Default::default()),
+            is_a_index: std::cell::OnceCell::new(),
             shared_ref_cell_globals: None,
             pcntl_async_signals: None,
             pcntl_signal_handlers: None,

@@ -240,6 +240,8 @@ mod mixed_property_reads;
 pub(crate) use mixed_property_reads::MIXED_READ_SEARCHES;
 #[cfg(test)]
 pub(crate) use property_resolution::CLASS_DESCENDANT_BUILDS;
+#[cfg(test)]
+pub(crate) use mixed_property_type_guard::IS_A_INDEX_BUILDS;
 mod dynamic_property_read_entry;
 mod dynamic_property_read_resolution;
 mod runtime_property_writes;
