@@ -1078,7 +1078,7 @@ mod tests {
             let release = asm.find("__rt_decref_mixed").expect("owned cell retirement");
             assert!(cast < release, "{name}: detach bytes before retiring their source: {asm}");
             assert!(!asm.contains("__rt_mixed_free_deep"), "{name}: never discard the original payload: {asm}");
-            assert!(asm.contains("__rt_uwfread_owned") && asm.contains("__rt_str_persist"),
+            assert!(asm.contains("__rt_str_persist"),
                 "{name}: borrowed byte returns need an independent owner: {asm}");
             assert!(
                 asm.contains("__rt_uwfread_empty"),

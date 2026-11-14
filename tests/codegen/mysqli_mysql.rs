@@ -97,7 +97,7 @@ echo "|", mysqli_quote_string($db, "a'b\c");
         ),
         elephc::php_version::PhpVersion::Php86,
     );
-    assert_eq!(out, r"'a'b\c'|'a'b\c'");
+    assert_eq!(out, r"'a\'b\\c'|'a\'b\\c'");
 }
 
 /// SECURITY: charset-aware escaping is correct for the WHOLE dangerous family,

@@ -250,7 +250,15 @@ pub(super) fn decl_fn_mysqli_quote_string() -> Stmt {
                 vec![],
                 None,
             ),
-            s_return(e_method_call(e_var("mysql"), "quote_string", vec![e_var("string")])),
+            s_return(e_binop(
+                e_binop(
+                    e_str("'"),
+                    BinOp::Concat,
+                    e_method_call(e_var("mysql"), "real_escape_string", vec![e_var("string")]),
+                ),
+                BinOp::Concat,
+                e_str("'"),
+            )),
         ])
         .build()
 }
