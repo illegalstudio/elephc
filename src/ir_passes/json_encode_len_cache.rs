@@ -312,6 +312,11 @@ fn only_source_load_in_loop(
 /// they keep the per-iteration encoder.
 fn source_slot_is_not_referenced(function: &Function, slot: LocalSlotId) -> bool {
     function.instructions.iter().all(|inst| {
+        if inst.op == Op::StoreRefCell {
+            // A reference cell targets its alias slot in the immediate but loads the owner
+            // slot into an operand, so checking immediates alone misses the escape.
+            return !instruction_targets_slot(inst, slot) && !loads_slot(function, inst, slot);
+        }
         !super::checked_int_sink::instruction_mentions_slot(inst, slot)
             || matches!(
                 inst.op,
@@ -321,6 +326,23 @@ fn source_slot_is_not_referenced(function: &Function, slot: LocalSlotId) -> bool
                     | Op::ZeroLocalSlot
                     | Op::UnsetLocal
             )
+    })
+}
+
+/// Returns whether the instruction's immediate names `slot`.
+fn instruction_targets_slot(inst: &Instruction, slot: LocalSlotId) -> bool {
+    matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
+}
+
+/// Returns whether one operand is a load of `slot`, as reference-cell construction emits.
+fn loads_slot(function: &Function, inst: &Instruction, slot: LocalSlotId) -> bool {
+    inst.operands.iter().any(|value| {
+        function.value(*value).is_some_and(|value| match value.def {
+            ValueDef::Instruction { inst, .. } => function.instruction(inst).is_some_and(
+                |definition| instruction_targets_slot(definition, slot),
+            ),
+            _ => false,
+        })
     })
 }
 

@@ -99,6 +99,46 @@ echo $n, "\n";
     assert!(!main.contains("exception.unguard_owned"), "{main}");
 }
 
+/// A packed `array<int>` element is a tagged scalar: an integer payload uses the
+/// allocation-free length kernel, while a missing-key null keeps the bridge's deprecation.
+#[test]
+fn test_mb_chr_len_local_sink_handles_tagged_array_elements() {
+    let source = r#"<?php
+$codepoints = [65];
+$hit = mb_chr($codepoints[$argc - 1], "UTF-8");
+$miss = mb_chr($codepoints[$argc], "UTF-8");
+echo strlen($hit), "|", strlen($miss), "\n";
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1|1\n");
+    assert!(out.stderr.contains("Deprecated: mb_chr()"), "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+    let main = emit_main_ir(source);
+    // Both observations keep the length kernel: the tagged-null fallback lives in codegen and
+    // still reproduces the bridge's deprecation at run time.
+    assert_eq!(main.matches("runtime.mb_chr_len").count(), 2, "{main}");
+}
+
+/// A dynamic encoding keeps the bridge's owned-argument exception guard.
+#[test]
+fn test_mb_chr_len_local_sink_keeps_impure_argument_guard() {
+    let source = r#"<?php
+$enc = $argc > 0 ? "UTF-16" : "UTF-8";
+$n = 0;
+for ($i = 0; $i < 8; $i++) {
+    $encoded = mb_chr($i + 65, $enc);
+    $n += strlen($encoded);
+}
+echo $n, "\n";
+"#;
+    assert_eq!(compile_and_run(source), "16\n");
+    let main = emit_main_ir(source);
+    assert!(main.contains("runtime.mb_chr_len"), "{main}");
+    assert!(main.contains("exception.guard_owned"), "{main}");
+    assert!(main.contains("exception.unguard_owned"), "{main}");
+}
+
 /// Echoing the string value keeps the boxed call because the length helper no longer returns it.
 #[test]
 fn test_mb_chr_len_local_sink_keeps_value_observation() {

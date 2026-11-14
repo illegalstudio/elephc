@@ -1544,8 +1544,7 @@ fn try_lower_chr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<bo
 
 /// Lowers `strlen(mb_chr(...))` to the UTF-8 byte length of one explicit-UTF-8 codepoint.
 pub(super) fn lower_chr_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let fast = super::prepared_args::already_prepared(ctx, inst, RuntimeBuiltinId::MbChr)?
-        && inst.operands.len() == 2
+    let fast = super::prepared_args::chr_operands_prepared(ctx, inst)?
         && super::explicit_utf8_encoding(ctx, inst.operands[1])?;
     if !fast {
         super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbChr, false)?;
@@ -1553,7 +1552,28 @@ pub(super) fn lower_chr_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         store_if_result(ctx, inst)?;
         return Ok(());
     }
+    // A tagged scalar may carry null for a missing array element. PHP deprecates that call
+    // and returns the one-byte NUL string through the bridge; only the integer payload uses
+    // the allocation-free length path.
+    let tagged = ctx.function.value(inst.operands[0]).is_some_and(|value| {
+        value.php_type.codegen_repr() == PhpType::TaggedScalar
+    });
+    let tagged_null = tagged.then(|| ctx.next_label("mb_chr_len_tagged_null"));
     load_as_int(ctx, inst.operands[0], "mb_chr codepoint")?;
+    if let Some(tagged_null) = &tagged_null {
+        let tag = crate::codegen_support::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+        let null_tag = crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL;
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction(&format!("cmp {tag}, #{null_tag}"));    // does the element carry PHP null?
+                ctx.emitter.instruction(&format!("b.eq {tagged_null}"));        // null keeps the bridge's deprecation and NUL length
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction(&format!("cmp {tag}, {null_tag}"));     // does the element carry PHP null?
+                ctx.emitter.instruction(&format!("je {tagged_null}"));          // null keeps the bridge's deprecation and NUL length
+            }
+        }
+    }
     let zero = ctx.next_label("mb_chr_len_zero");
     let one = ctx.next_label("mb_chr_len_one");
     let two = ctx.next_label("mb_chr_len_two");
@@ -1604,6 +1624,11 @@ pub(super) fn lower_chr_len(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         ctx.emitter.label(label);
         abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), length);
         abi::emit_jump(ctx.emitter, &done);
+    }
+    if let Some(tagged_null) = tagged_null {
+        ctx.emitter.label(&tagged_null);
+        super::lower_mbstring_impl(ctx, inst, RuntimeBuiltinId::MbChr, false)?;
+        emit_boxed_string_length(ctx);
     }
     ctx.emitter.label(&done);
     store_if_result(ctx, inst)?;

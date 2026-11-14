@@ -91,6 +91,20 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #8]");                                    // reload the source length for the fast-path bound
     emitter.instruction("cmp x2, #16");                                         // only short strings use the direct copy
     emitter.instruction("b.hi __rt_json_str_size_slow");                        // longer strings keep the general encoder
+    // Classify every source byte before reserving: a byte that needs escaping must not
+    // abandon a transient heap reservation, which nothing would release.
+    emitter.instruction("ldr x1, [sp, #0]");                                    // reload the source pointer for the classification pass
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x15", "_json_plain_ascii");
+    emitter.instruction("mov x12, #0");                                         // initialize the classification index
+    emitter.label("__rt_json_str_scan_loop");
+    emitter.instruction("cmp x12, x2");                                         // has every source byte been classified?
+    emitter.instruction("b.ge __rt_json_str_scan_done");                        // yes: the reservation cannot be abandoned
+    emitter.instruction("ldrb w13, [x1, x12]");                                 // load the next source byte
+    emitter.instruction("ldrb w14, [x15, x13]");                                // classify it as verbatim or escapable
+    emitter.instruction("cbz w14, __rt_json_str_size_slow");                    // escaping needs the general encoder before reserving
+    emitter.instruction("add x12, x12, #1");                                    // advance the classification index
+    emitter.instruction("b __rt_json_str_scan_loop");                           // classify the remaining bytes
+    emitter.label("__rt_json_str_scan_done");
     emitter.instruction("add x0, x2, #2");                                      // reserve the two quotes and the copied bytes
     emitter.instruction("bl __rt_strbuf_reserve_temp");                         // scratch when it fits, a transient heap block otherwise
     emitter.instruction("str x0, [sp, #16]");                                   // save the output start across the copy

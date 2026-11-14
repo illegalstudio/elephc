@@ -230,11 +230,26 @@ sum_echo($argc + 1000);
         .next()
         .unwrap();
     // The raw-promotable-loop pass emits a guarded fast path and keeps the boxed
-    // generic loop as its deoptimization fallback. Pin the fast path here; the
-    // generic fallback is expected to retain the allocating helper.
+    // generic loop as its deoptimization fallback. The branch's accumulator work must
+    // keep the hot loop in frame cells; only the cold deopt blocks may allocate.
     assert!(
         function.contains("@block name=rawint.guard"),
         "raw-int accumulator fast path missing:\n{function}"
+    );
+    let fast_cont = function
+        .split("@block name=rawint.fast.cont")
+        .nth(1)
+        .expect("raw-int fast accumulator block")
+        .split("@block name=")
+        .next()
+        .unwrap();
+    assert!(
+        !fast_cont.contains("__rt_mixed_numeric_add"),
+        "the fast accumulator must not call the allocating numeric helper:\n{fast_cont}"
+    );
+    assert!(
+        !fast_cont.contains("__rt_mixed_from_value"),
+        "the fast accumulator must not box its scalar rhs:\n{fast_cont}"
     );
     assert_eq!(run(source, true).0, "500500|");
     fs::remove_dir_all(dir).unwrap();

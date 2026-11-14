@@ -283,9 +283,9 @@ echo strlen($converted), ":", ord($converted[0]), "\n";
     assert!(ir.contains("runtime.mb_convert_kana"), "{ir}");
 }
 
-/// Decimal entities that would trigger substitution (surrogates) keep the runtime decoder.
+/// Surrogate entities keep the runtime decoder, which owns their raw three-byte encoding.
 #[test]
-fn test_mb_constant_fold_rejects_substitute_sensitive_decode() {
+fn test_mb_constant_fold_rejects_surrogate_decode() {
     let source = r#"<?php
 $map = [128, 1114111, 0, 2097151];
 $decoded = mb_decode_numericentity("&#xD800;", $map, "UTF-8");

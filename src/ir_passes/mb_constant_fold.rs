@@ -123,11 +123,12 @@ fn underlying(function: &Function, mut value: ValueId) -> ValueId {
     value
 }
 
-/// Rejects decimal entities that would require `mb_substitute_character()` state.
+/// Rejects decimal entities outside the Unicode scalar-value range.
 ///
-/// Numeric-entity decoding substitutes a replacement character for surrogates and values
-/// above `U+10FFFF`. A subject whose `&#DECIMAL;` references are all valid scalar values
-/// cannot consult that process-global state, so folding it is exact.
+/// PHP's decoder emits a surrogate entity as its raw (invalid-UTF-8) three-byte encoding and
+/// leaves values above `U+10FFFF` as literal text, so the exact bytes depend on the bridge's
+/// decoder rather than on the scalar conversion this compile-time fold models. A subject whose
+/// `&#DECIMAL;` references are all valid scalar values has no such case.
 fn decimal_entities_are_valid_scalars(subject: &[u8]) -> bool {
     let mut index = 0;
     while index + 1 < subject.len() {

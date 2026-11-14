@@ -516,6 +516,22 @@ pub(super) fn main_argc_slot(function: &Function, slot: crate::ir::LocalSlotId) 
         return false;
     }
     !function.instructions.iter().any(|inst| {
+        if inst.op == Op::StoreRefCell {
+            let alias = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot);
+            // The owner slot reaches a reference cell through an operand load, not the immediate.
+            let owner = inst.operands.iter().any(|value| {
+                function.value(*value).is_some_and(|value| match value.def {
+                    ValueDef::Instruction { inst, .. } => function.instruction(inst).is_some_and(
+                        |definition| matches!(
+                            definition.immediate,
+                            Some(Immediate::LocalSlot(found)) if found == slot
+                        ),
+                    ),
+                    _ => false,
+                })
+            });
+            return alias || owner;
+        }
         inst.op == Op::StoreLocal
             && matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
     })

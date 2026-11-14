@@ -698,8 +698,8 @@ generic path.
 mode, canonical full-decimal map and explicit UTF-8 encoding are compile-time
 constants. The compiler-pool subject is first decoded to its real PHP bytes with
 `literal_bytes`; a subject that is not valid UTF-8 keeps the runtime bridge, and
-`mb_decode_numericentity()` additionally rejects decimal entities that would need
-`mb_substitute_character()` state (surrogates and values above `U+10FFFF`). The
+`mb_decode_numericentity()` additionally rejects surrogate entities and values above
+`U+10FFFF`, whose exact bytes the bridge decoder owns. The
 folded result is a persistent `ConstStr`, so the acquire/store/release scaffolding
 around the call stays intact. Dynamic subjects, modes, encodings, non-canonical
 maps and substitute-sensitive entities keep the bridge's exact behavior.

@@ -98,6 +98,21 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the source length for the fast-path bound
     emitter.instruction("cmp rdx, 16");                                         // only short strings use the direct copy
     emitter.instruction("ja __rt_json_str_size_slow_x");                        // longer strings keep the general encoder
+    // Classify every source byte before reserving: a byte that needs escaping must not
+    // abandon a transient heap reservation, which nothing would release.
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // reload the source pointer for the classification pass
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_json_plain_ascii");
+    emitter.instruction("xor ecx, ecx");                                        // initialize the classification index
+    emitter.label("__rt_json_str_scan_loop_x");
+    emitter.instruction("cmp rcx, rdx");                                        // has every source byte been classified?
+    emitter.instruction("jge __rt_json_str_scan_done_x");                       // yes: the reservation cannot be abandoned
+    emitter.instruction("movzx r8d, BYTE PTR [rsi + rcx]");                     // load the next source byte
+    emitter.instruction("movzx r9d, BYTE PTR [r10 + r8]");                      // classify it as verbatim or escapable
+    emitter.instruction("test r9d, r9d");                                       // does this byte need the general encoder?
+    emitter.instruction("jz __rt_json_str_size_slow_x");                        // decide before reserving so no heap block leaks
+    emitter.instruction("add rcx, 1");                                          // advance the classification index
+    emitter.instruction("jmp __rt_json_str_scan_loop_x");                       // classify the remaining bytes
+    emitter.label("__rt_json_str_scan_done_x");
     emitter.instruction("lea rax, [rdx + 2]");                                  // reserve the two quotes and the copied bytes
     emitter.instruction("call __rt_strbuf_reserve_temp");                       // scratch when it fits, a transient heap block otherwise
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the output start across the copy

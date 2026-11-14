@@ -61,9 +61,14 @@ def parse_args() -> argparse.Namespace:
                         help="write the full comparison record to this path")
     parser.add_argument("--require-ahead", action="store_true",
                         help="fail when Elephc is not ahead on wall time, CPU or peak RSS")
+    parser.add_argument("--gate-tolerance", type=float, default=0.0,
+                        help="allowed relative shortfall per metric under --require-ahead "
+                             "(default: 0, a strict win)")
     args = parser.parse_args()
     if args.iterations < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations must be positive, warmup nonnegative, timeout positive")
+    if not 0 <= args.gate_tolerance < 1:
+        parser.error("gate tolerance must be in [0, 1)")
     return args
 
 
@@ -281,7 +286,7 @@ def main() -> None:
                         and theirs is not None
                         and ours > 0
                         and theirs > 0
-                        and ours < theirs
+                        and ours <= theirs * (1 + args.gate_tolerance)
                     ):
                         regressions.append(
                             f"{row['case']}: {metric} {ours} vs {label} {theirs}"

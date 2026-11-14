@@ -46,7 +46,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #-16]!");                           // preserve the caller frame and return address
     emitter.instruction("mov x29, sp");                                         // establish a stable helper frame
     emitter.instruction("stp x19, x20, [sp, #-16]!");                           // preserve the packed source and literal divisor
-    emitter.instruction("stp x21, x22, [sp, #-16]!");                           // preserve the remaining count and payload cursor
+    emitter.instruction("str x21, [sp, #-16]!");                                // preserve the remaining count (x22 is unused)
     emitter.instruction("stp x23, x24, [sp, #-16]!");                           // preserve the integer accumulator and float-mode flag
     emitter.instruction("mov x19, x0");                                         // x19 = packed int source array
     emitter.instruction("mov x20, x1");                                         // x20 = nonzero integer divisor
@@ -121,7 +121,7 @@ fn emit_aarch64(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_map_sum_int_div_return");
     emitter.instruction("ldp x23, x24, [sp], #16");                             // restore the integer accumulator and float-mode flag
-    emitter.instruction("ldp x21, x22, [sp], #16");                             // restore the remaining count and payload cursor
+    emitter.instruction("ldr x21, [sp], #16");                                  // restore the remaining element count
     emitter.instruction("ldp x19, x20, [sp], #16");                             // restore the packed source and divisor
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the caller frame and return address
     emitter.instruction("ret");                                                 // return the owned Mixed sum

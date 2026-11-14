@@ -23,7 +23,7 @@
 use crate::names::Name;
 use crate::parser::ast::{BinOp, Expr, ExprKind, Stmt, StmtKind, TypeExpr};
 use crate::span::Span;
-use crate::types::{PhpType, TypeEnv};
+use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 /// One pure map assignment found in a straight-line block.
 struct Candidate {
@@ -38,7 +38,13 @@ pub(crate) fn fuse_map_reads(
     body: &mut Vec<Stmt>,
     env: &TypeEnv,
     by_ref_params: &std::collections::HashSet<String>,
+    functions: &std::collections::HashMap<String, FunctionSig>,
 ) {
+    // A user function may not redeclare `array_map()` (the checker rejects it), but the
+    // fusion sites stay fail-closed on their own rather than relying on that check.
+    if functions.contains_key("array_map") {
+        return;
+    }
     let aliased = aliased_locals(body, by_ref_params);
     let mut fresh_foreach = 0usize;
     let initialized = by_ref_params.clone();
