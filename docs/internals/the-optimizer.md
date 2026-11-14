@@ -709,6 +709,22 @@ non-power-of-two masks, observed or mutated arrays, runtime-built arrays,
 explicit-base `intval()` and non-dominating construction keep the checked read and
 runtime string conversion.
 
+`src/ir_passes/json_encode_len_cache.rs` caches the length of a loop-invariant
+`strlen(json_encode($rows))` observation. The loop must execute at least once,
+the source must be a stable packed array of associative rows with exactly one
+load, and no other call may run inside the loop (a call outside could change the
+process-wide JSON error state between iterations). A preheader block calls
+`json_rows_scalar_guard`, which walks every row and every row value: direct scalar
+tags and boxed `Mixed` cells whose tag is scalar or null pass; objects, resources,
+nested containers and unknown tags return the `-1` sentinel. The scalar path
+encodes once through `JsonEncodeStr` and caches the resulting length, while the
+sentinel path keeps the per-iteration encoder, preserving `JsonSerializable` side
+effects and the exact JSON error state. The body's `str_len` becomes
+`JsonEncodeLenCached`, returning the probe or running the raw encoder on the
+sentinel path. Mutated or aliased rows, dynamic flags/depth, another JSON call in
+the loop, a non-positive trip count and non-associative sources keep the generic
+encoder.
+
 `src/ir_lower/stmt/stored_numeric_map.rs` marks a stored
 `$mapped = array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
 $v * $v + C | $v * F | $v * F + G | $v + F | $v - F | $v / F, $ints)` when every

@@ -217,6 +217,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     system::emit_json_encode_array_int(emitter);
     system::emit_json_encode_array_str(emitter);
     system::emit_json_encode_assoc(emitter);
+    system::emit_json_rows_scalar_guard(emitter);
     system::emit_json_decode(emitter);
     system::emit_json_decode_mixed(emitter);
     system::emit_json_last_error_msg(emitter);

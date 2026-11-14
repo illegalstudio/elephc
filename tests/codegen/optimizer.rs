@@ -41,6 +41,8 @@ mod str_split_count_sink;
 mod json_decode_count_sink;
 #[path = "optimizer/json_decode_count_hoist.rs"]
 mod json_decode_count_hoist;
+#[path = "optimizer/json_encode_len_cache.rs"]
+mod json_encode_len_cache;
 #[path = "optimizer/array_sum_int_sink.rs"]
 mod array_sum_int_sink;
 #[path = "optimizer/array_map_sum_add_int_sink.rs"]

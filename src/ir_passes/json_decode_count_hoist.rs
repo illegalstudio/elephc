@@ -272,7 +272,7 @@ fn first_effect_is_call(function: &Function, body: BlockId, call: InstId) -> boo
 }
 
 /// Rejects a loop whose source local is written, unset or released.
-fn slot_written_in_loop(function: &Function, loop_ref: &NaturalLoop, slot: LocalSlotId) -> bool {
+pub(super) fn slot_written_in_loop(function: &Function, loop_ref: &NaturalLoop, slot: LocalSlotId) -> bool {
     for &block in &loop_ref.blocks {
         let Some(block) = function.block(block) else {
             return true;
@@ -294,7 +294,7 @@ fn slot_written_in_loop(function: &Function, loop_ref: &NaturalLoop, slot: Local
 }
 
 /// Returns true when the loop's `counter < bound` condition holds on entry.
-fn bound_is_positive(
+pub(super) fn bound_is_positive(
     function: &Function,
     bound: ValueId,
     loop_ref: &NaturalLoop,
@@ -337,14 +337,14 @@ fn bound_is_positive(
 }
 
 /// Returns the block defining `value`, when instruction-defined.
-fn def_block(function: &Function, value: ValueId) -> Option<BlockId> {
+pub(super) fn def_block(function: &Function, value: ValueId) -> Option<BlockId> {
     match function.value(value)?.def {
         ValueDef::Instruction { block, .. } | ValueDef::BlockParam { block, .. } => Some(block),
     }
 }
 
 /// Reads one integer constant value, if the value is defined by `const_i64`.
-fn constant_i64(function: &Function, value: ValueId) -> Option<i64> {
+pub(super) fn constant_i64(function: &Function, value: ValueId) -> Option<i64> {
     let inst = defining_instruction(function, value)?;
     if inst.op != Op::ConstI64 {
         return None;

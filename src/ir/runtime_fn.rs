@@ -971,6 +971,14 @@ pub enum RuntimeFnId {
     JsonEncode,
     /// Raw `json_encode()` string observed only by `strlen()` after a string cast.
     JsonEncodeStr,
+    /// Depth-two scalar preflight for the loop-invariant JSON length cache.
+    ///
+    /// Returns 1 when the source is a packed array of associative rows whose values are all
+    /// scalar or null, and 0 when an object, resource, container or unknown tag is present.
+    JsonRowsScalarGuard,
+    /// Cached JSON length dispatch: returns the preheader probe length, or runs the raw
+    /// encoder per iteration when the probe sentinel says the rows are not scalar-only.
+    JsonEncodeLenCached,
     JsonLastError,
     JsonLastErrorMsg,
     JsonValidate,
@@ -1128,6 +1136,8 @@ impl RuntimeFnId {
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::SqrtSumRange => Some((4, Some(4))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
+            RuntimeFnId::JsonRowsScalarGuard => Some((1, Some(1))),
+            RuntimeFnId::JsonEncodeLenCached => Some((2, Some(2))),
             RuntimeFnId::JsonDecodeCount => Some((2, Some(2))),
             _ => None,
         }
@@ -2094,6 +2104,10 @@ impl RuntimeFnId {
             RuntimeFnId::SqrtSumRange => E::PURE,
             // The raw encoder keeps the JSON error state and encoder side effects.
             RuntimeFnId::JsonEncodeStr => RuntimeFnId::JsonEncode.effects(),
+            // The scalar preflight only walks packed arrays and hash entries.
+            RuntimeFnId::JsonRowsScalarGuard => E::from_bits_retain(E::READS_HEAP.bits()),
+            // The cached dispatch either returns the probe or runs the full raw encoder.
+            RuntimeFnId::JsonEncodeLenCached => RuntimeFnId::JsonEncodeStr.effects(),
             // The count-only fast path may fall back to the full decoder and count.
             RuntimeFnId::JsonDecodeCount => RuntimeFnId::JsonDecode.effects(),
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
@@ -2824,6 +2838,8 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMapSumProbeInt
                 | RuntimeFnId::ArrayMapSumAddIntCached
                 | RuntimeFnId::ArrayMapSumAddSafe
+                | RuntimeFnId::JsonRowsScalarGuard
+                | RuntimeFnId::JsonEncodeLenCached
                 | RuntimeFnId::AbsInt
                 // The mb_chr observation sinks return a bare integer, never string storage.
                 | RuntimeFnId::MbChrFirst
@@ -4019,6 +4035,8 @@ impl RuntimeFnId {
             RuntimeFnId::JsonDecode => "json_decode",
             RuntimeFnId::JsonEncode => "json_encode",
             RuntimeFnId::JsonEncodeStr => "json_encode_str",
+            RuntimeFnId::JsonRowsScalarGuard => "json_rows_scalar_guard",
+            RuntimeFnId::JsonEncodeLenCached => "json_encode_len_cached",
             RuntimeFnId::JsonDecodeCount => "json_decode_count",
             RuntimeFnId::JsonLastError => "json_last_error",
             RuntimeFnId::JsonLastErrorMsg => "json_last_error_msg",

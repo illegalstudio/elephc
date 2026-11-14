@@ -27,6 +27,7 @@ mod standard_trim_len_sink;
 mod string_len_sink;
 mod json_decode_count_sink;
 mod json_encode_len_sink;
+mod json_encode_len_cache;
 mod sqrt_add_int_sink;
 mod sqrt_sum_loop;
 mod json_decode_count_hoist;

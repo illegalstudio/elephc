@@ -335,6 +335,101 @@ pub(crate) fn lower_json_encode_str(
     store_if_result(ctx, inst)
 }
 
+/// Lowers the depth-two scalar preflight used by the JSON length cache.
+///
+/// The helper only walks the packed outer rows and their hash values; it returns 1 when every
+/// value is scalar or null and 0 for objects, resources, containers or unknown tags.
+pub(crate) fn lower_json_rows_scalar_guard(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "json_rows_scalar_guard", 1, 1)?;
+    let source = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(source, "x0")?;
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(source, "rdi")?;
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_json_rows_scalar_guard");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the cached JSON length dispatch selected by the EIR length-cache pass.
+///
+/// A non-negative probe is returned directly. The `-1` sentinel means the preheader guard saw
+/// a non-scalar row, so the raw encoder runs for this iteration and its exact side effects are
+/// preserved; only the encoded length is observed and the raw string is released immediately.
+pub(crate) fn lower_json_encode_len_cached(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count_between(inst, "json_encode_len_cached", 2, 2)?;
+    let source = expect_operand(inst, 0)?;
+    let probe = expect_operand(inst, 1)?;
+    let source_ty = ctx.value_php_type(source)?.codegen_repr();
+    let cached = ctx.next_label("json_len_cached");
+    let done = ctx.next_label("json_len_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x19", "x20");
+            ctx.load_value_to_reg(probe, "x19")?;
+            ctx.emitter.instruction("cmp x19, #0");                              // is the preheader probe a cached length?
+            ctx.emitter.instruction(&format!("b.ge {cached}"));                  // non-negative probes return immediately
+            emit_json_encode_raw_default(ctx, source, &source_ty)?;
+            ctx.emitter.instruction("mov x19, x2");                              // save the encoded byte length
+            ctx.emitter.instruction("mov x0, x1");                               // pass the raw string payload to release
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            ctx.emitter.instruction("mov x0, x19");                              // return the observed length
+            ctx.emitter.instruction(&format!("b {done}"));                       // skip the cached-length path
+            ctx.emitter.label(&cached);
+            ctx.emitter.instruction("mov x0, x19");                              // return the preheader length
+            ctx.emitter.label(&done);
+            abi::emit_pop_reg_pair(ctx.emitter, "x19", "x20");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "r12", "r13");
+            ctx.load_value_to_reg(probe, "r12")?;
+            ctx.emitter.instruction("test r12, r12");                            // is the preheader probe a cached length?
+            ctx.emitter.instruction(&format!("jge {cached}"));                   // non-negative probes return immediately
+            emit_json_encode_raw_default(ctx, source, &source_ty)?;
+            ctx.emitter.instruction("mov r12, rdx");                             // save the encoded byte length
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");            // rax still holds the raw string payload
+            ctx.emitter.instruction("mov rax, r12");                             // return the observed length
+            ctx.emitter.instruction(&format!("jmp {done}"));                     // skip the cached-length path
+            ctx.emitter.label(&cached);
+            ctx.emitter.instruction("mov rax, r12");                             // return the preheader length
+            ctx.emitter.label(&done);
+            abi::emit_pop_reg_pair(ctx.emitter, "r12", "r13");
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits one default-options raw JSON encode, leaving the raw string in the result registers.
+fn emit_json_encode_raw_default(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    reset_json_encode_state(ctx);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 512);
+    abi::emit_store_reg_to_symbol(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        "_json_depth_limit",
+        0,
+    );
+    abi::emit_store_zero_to_symbol(ctx.emitter, "_json_active_flags", 0);
+    load_json_encode_value(ctx, value, value_ty)?;
+    emit_json_encode_loaded_value(ctx, value_ty);
+    clear_json_diagnostic_source_refs(ctx);
+    finish_json_encode_str(ctx);
+    Ok(())
+}
+
 /// Keeps the encoder's raw string, or returns the empty string for a reported JSON error.
 ///
 /// `json_encode()` answers `false` unless `JSON_PARTIAL_OUTPUT_ON_ERROR` is active; casting that

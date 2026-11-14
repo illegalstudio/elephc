@@ -1031,6 +1031,7 @@ The five `__rt_memory_*` helpers are constant-time leaf routines that never allo
 | `__rt_array_map_sum_add` | Fused `array_sum(array_map(fn($x) => $x + C, $packedInts))`: walks the payload once, reproduces the per-element int-to-float map promotion and the running-sum promotion, and boxes one result | `x0` = array, `x1` = literal offset | `x0` = fresh Mixed cell |
 | `__rt_array_map_sum_add_int` | Raw-result mode of the fused map+sum kernel for an `(int)`-observed result: shares the vector/scalar body, skips the Mixed box, and applies PHP's warned float-to-int conversion when the map or running sum promoted | `x0` = array, `x1` = literal offset | `x0` = raw PHP int |
 | `__rt_array_map_sum_int_div` | Fused stored `array_sum(array_map(fn($x) => $x / C, $packedInts))`: walks the packed payload once, applies PHP's exact-int-or-double division, propagates `PHP_INT_MIN / -1` promotion and integer-overflow sum promotion in source order, and boxes one result | `x0` = array, `x1` = literal divisor | `x0` = fresh Mixed cell |
+| `__rt_json_rows_scalar_guard` | Depth-two preflight for the loop-invariant JSON length cache: walks the packed outer rows and their hash values, accepting scalar/null tags and boxed Mixed cells with a scalar/null tag, and rejecting objects, resources and nested containers | `x0` = packed row array | `x0` = 1 when the cached length is safe, else 0 |
 | `__rt_array_filter_count_mod` | Fused `count(array_filter($packedInts, fn($x) => $x % C === 0))`: counts divisible elements without building a hash; powers of two use a mask, other divisors use truncated remainder | `x0` = array, `x1` = literal divisor | `x0` = raw PHP int count |
 | `__rt_array_element_type_check` | Fused `is_int/is_string/is_array/is_null($packedMixed[$intIndex])`: reads the stored Mixed cell tag in place; hashes, references, nested wrappers and missing keys fall back to the generic warning/ownership path | `x0` = array, `x1` = int index, `x2` = runtime-tag mask | `x0` = raw PHP bool |
 | `__rt_array_push_int` | Append int to array (grows if needed) | `x0` = array, `x1` = value | `x0` = array |
@@ -1064,6 +1065,7 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 |---|---|---|
 | `ArrayMapSumAdd` | `array_sum(array_map(fn($x) => $x + C, $packedInts))` | `__rt_array_map_sum_add` |
 | `ArrayMapSumIntDiv` | stored `$mapped = array_map(fn($x) => $x / C, $packedInts); array_sum($mapped)` | `__rt_array_map_sum_int_div` |
+| `JsonEncodeLenCached` | loop-invariant `strlen(json_encode($rows))` behind the scalar row guard | `__rt_json_encode_array_dynamic` + `__rt_json_rows_scalar_guard` |
 | `ArrayFilterCountMod` | `count(array_filter($packedInts, fn($x) => $x % C === 0))` | `__rt_array_filter_count_mod` |
 | `ArrayElementTypeCheck` | `is_int/is_string/is_array/is_null($packedMixed[$intIndex])` | `__rt_array_element_type_check` |
 

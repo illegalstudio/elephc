@@ -36,6 +36,7 @@ use super::standard_trim_len_sink::StandardTrimLenSink;
 use super::string_len_sink::StringLenSink;
 use super::json_decode_count_sink::JsonDecodeCountSink;
 use super::json_encode_len_sink::JsonEncodeLenSink;
+use super::json_encode_len_cache::JsonEncodeLenCache;
 use super::sqrt_add_int_sink::SqrtAddIntSink;
 use super::sqrt_sum_loop::SqrtSumLoop;
 use super::json_decode_count_hoist::JsonDecodeCountHoist;
@@ -221,6 +222,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(Base64DecodeLenSink),
         Box::new(SqrtAddIntSink),
         Box::new(JsonEncodeLenSink),
+        Box::new(JsonEncodeLenCache),
         Box::new(JsonDecodeCountSink),
         Box::new(BoundedMixedCounter::new(module)),
         Box::new(LoopCounterVersioning::new(module)),
