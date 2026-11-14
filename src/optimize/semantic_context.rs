@@ -130,6 +130,13 @@ pub(super) fn checked_numeric_conversion_may_dispatch(expr: &crate::parser::ast:
     })
 }
 
+/// A checked numeric cast can fail even when its source has no observable effects.
+pub(super) fn checked_cast_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+    use crate::parser::ast::{CastType, ExprKind};
+    enabled(StrictFeature::Casts) && matches!(expr.kind,
+        ExprKind::Cast { target: CastType::Int | CastType::Float, .. })
+}
+
 /// Dynamic checked updates may diagnose values or enter arbitrary warning callbacks.
 pub(super) fn checked_update_may_dispatch(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::ExprKind;

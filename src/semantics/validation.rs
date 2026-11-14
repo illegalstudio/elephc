@@ -15,7 +15,7 @@ use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKin
 
 /// Validates syntax-dependent guarantees without pruning any branch or declaration.
 pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
-    if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
+    if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
     crate::compiler_stack::with_compiler_stack(|| {
         super::numeric_constants::validate(program, profile)?;
         let mut validator = SourceValidator { depth: 0, error: None, profile, source_modes: Vec::new() };
@@ -103,7 +103,7 @@ impl AstVisitor for SourceValidator {
             return;
         };
         let verification_flag = [StrictFeature::DynamicCode, StrictFeature::Overflow, StrictFeature::Bools,
-            StrictFeature::Arithmetic, StrictFeature::Coercions].into_iter()
+            StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts].into_iter()
             .find(|feature| self.profile.contains(*feature)).expect("source verification was requested").flag();
         if self.depth >= 64 {
             self.error = Some(CompileError::new(expr.span,

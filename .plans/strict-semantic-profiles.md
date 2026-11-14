@@ -911,6 +911,29 @@ compiler build, architecture828, assembly comments and diff hygiene pass. Public
 admission is unchanged; remaining conversion/reference/host and strict-family
 integration continues below.
 
+### Checked numeric cast contract and source preservation
+
+Step58 adds one dependency-neutral checked numeric cast contract. Explicit
+integer conversions truncate finite in-range floats and parse complete decimal
+strings exactly, including exponents and both integer endpoints. Float results
+retain IEEE infinity, NaN and signed zero. Invalid strings and integer range
+failures are value errors; unsupported scalar domains are type errors. Boolean
+and null inputs remain intentional explicit numeric conversions. PHP's six ASCII
+whitespace bytes are accepted consistently, including vertical tab.
+
+Original-source evidence now validates cast syntax before folding, through
+constants, aliases, class constants, defaults, dead branches and literal eval.
+Numeric-string evidence retains an exact integer-cast result separately from its
+floating arithmetic value. Folding consumes the shared contract, declines failed
+casts, and both AST effects and exception-flow retain their observable failure.
+Internal producer operations keep reviewed PHP behavior. Runtime execution and
+object-adapter integration remain the immediate next step; Casts admission stays
+closed until all consumers enforce the guarantee.
+
+Five new neutral/source/folding tests and five original-source/PHP-fold controls
+pass. The compiler build, architecture828 audit, assembly comment alignment,
+example PHP syntax and diff hygiene pass. Public admission remains unchanged.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -1035,4 +1058,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 54 | `82c251fd4d` | feat(strict): retain expression producer source profiles |
 | 55 | `68d8803dfb` | feat(strict): bind nonliteral declaration producers before consumption |
 | 56 | `ea9e76218c` | feat(strict): bind property default producers before initialization |
-| 57 | this commit | feat(strict): preserve global constant producer expressions |
+| 57 | `a74801937f` | feat(strict): preserve global constant producer expressions |
+| 58 | this commit | feat(strict): share checked numeric cast source contracts |

@@ -20,6 +20,20 @@ use super::scalar::{scalar_value, ScalarValue};
  /// return `None` so the cast is evaluated at runtime.
 pub(super) fn try_fold_cast(target: &CastType, expr: &Expr) -> Option<ExprKind> {
     let value = scalar_value(expr)?;
+    if super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Casts)
+        && matches!(target, CastType::Int | CastType::Float) {
+        use elephc_semantics::{numeric_cast::{checked_numeric_cast, NumericCastInput as Input, NumericCastTarget},
+            numeric_unary::NumericValue};
+        let input = match &value {
+            ScalarValue::Null => Input::Null, ScalarValue::Bool(value) => Input::Bool(*value),
+            ScalarValue::Int(value) => Input::Int(*value), ScalarValue::Float(value) => Input::Float(*value),
+            ScalarValue::String(value) => Input::String(value),
+        };
+        let target = if *target == CastType::Int { NumericCastTarget::Int } else { NumericCastTarget::Float };
+        return checked_numeric_cast(target, input).ok().map(|value| match value {
+            NumericValue::Int(value) => ExprKind::IntLiteral(value), NumericValue::Float(value) => ExprKind::FloatLiteral(value),
+        });
+    }
     match target {
         CastType::Int => try_fold_cast_int(value),
         CastType::Float => try_fold_cast_float(value),
@@ -142,4 +156,32 @@ fn cap_float_to_i64(value: f64) -> i64 {
         return i64::MIN;
     }
     value as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Folding agrees with exact checked conversion and retains executable failures and effects.
+    #[test]
+    fn strict_numeric_cast_folding_keeps_exact_strings_and_observable_failures() {
+        use crate::optimize::semantic_context::{scoped_semantic_profile, scoped_source_mode};
+        let _profile = scoped_semantic_profile(elephc_semantics::SemanticProfile::PERMISSIVE
+            .with(elephc_semantics::StrictFeature::Casts, true));
+        let expression = |kind| Expr::new(kind, crate::span::Span::dummy());
+        for text in ["9223372036854775807", "9223372036854775807.9", "92233720368547758070e-1"] {
+            assert!(matches!(try_fold_cast(&CastType::Int, &expression(ExprKind::StringLiteral(text.into()))),
+                Some(ExprKind::IntLiteral(i64::MAX))));
+        }
+        for inner in [ExprKind::StringLiteral("12tail".into()), ExprKind::FloatLiteral(f64::INFINITY),
+            ExprKind::FloatLiteral(9_223_372_036_854_775_808.0)] {
+            let inner = expression(inner);
+            assert!(try_fold_cast(&CastType::Int, &inner).is_none());
+            let cast = expression(ExprKind::Cast { target: CastType::Int, expr: Box::new(inner) });
+            assert!(crate::optimize::effects::expr_is_observable(&cast));
+        }
+        let _trusted = scoped_source_mode(crate::source::SourceMode::Internal);
+        assert!(matches!(try_fold_cast(&CastType::Int, &expression(ExprKind::StringLiteral("12tail".into()))),
+            Some(ExprKind::IntLiteral(12))));
+    }
 }

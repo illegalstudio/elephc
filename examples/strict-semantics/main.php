@@ -21,3 +21,6 @@ showDecision(1);
 if ((bool) $argc) {
     echo "Explicit conversion", PHP_EOL;
 }
+
+$attempts = (int) '3';
+echo "Attempts: ", $attempts, PHP_EOL;

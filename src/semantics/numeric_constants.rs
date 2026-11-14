@@ -21,7 +21,7 @@ use elephc_semantics::numeric::{checked_integer, IntegerOp, NumericFailure, INTE
 enum Number {
     Int(i64), Float(f64), Bool(bool), Null,
     StringInt { value: i64, fully_numeric: bool, truthy: bool },
-    StringFloat { value: f64, fully_numeric: bool, truthy: bool },
+    StringFloat { value: f64, fully_numeric: bool, truthy: bool, checked_integer: Result<i64, NumericFailure> },
     NonNumericString { truthy: bool },
     /// A known array kind whose payload is outside scalar numeric evidence.
     Array,
@@ -138,7 +138,7 @@ struct Evidence {
 
 /// Checks all syntactic branches without sharing address-based memo entries between source trees.
 pub(super) fn validate(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
-    if ![StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions].into_iter()
+    if ![StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts].into_iter()
         .any(|feature| profile.contains(feature)) { return Ok(()); }
     let mut definitions = Definitions::default();
     definitions.collect(program);
@@ -226,6 +226,10 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
         }
         ExprKind::Ternary { .. } | ExprKind::ShortTernary { .. } | ExprKind::NullCoalesce { .. } =>
             selection::evaluate_selection(expr, checked, class, definitions, evidence)?,
+        ExprKind::Cast { target, expr: inner } if checked && evidence.profile.contains(StrictFeature::Casts) => {
+            let input = evaluate(inner, checked, class, definitions, evidence)?;
+            casts::evaluate_cast(target, input).map_err(|failure| CompileError::new(expr.span, failure.message()))?
+        }
         ExprKind::UnaryPlus(inner) => match unary_operand(expr, inner, checked, class, definitions, evidence,
             elephc_semantics::numeric_domains::NumericOperator::Unary)?.map(Number::numeric) {
             value @ Some(Number::Int(_) | Number::Float(_)) => value,
@@ -294,7 +298,8 @@ fn string_number(value: &str) -> Option<Number> {
             return Some(Number::StringInt { value, fully_numeric: scan.is_fully_numeric(), truthy });
         }
     }
-    scan.text.parse().ok().map(|value| Number::StringFloat { value, fully_numeric: scan.is_fully_numeric(), truthy })
+    let checked_integer = elephc_semantics::numeric::checked_string_to_int(value);
+    scan.text.parse().ok().map(|value| Number::StringFloat { value, fully_numeric: scan.is_fully_numeric(), truthy, checked_integer })
 }
 
 /// Proves typed numeric builtin operations through the shared argument planner and runtime inventory.
@@ -504,6 +509,8 @@ mod declarations;
 mod selection;
 #[path = "numeric_constants/source_calls.rs"]
 mod source_calls;
+#[path = "numeric_constants/casts.rs"]
+mod casts;
 
 #[cfg(test)]
 #[path = "numeric_constants/tests.rs"]

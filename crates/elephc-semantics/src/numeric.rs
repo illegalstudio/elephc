@@ -79,7 +79,7 @@ pub fn checked_float_to_int(value: f64) -> Result<i64, NumericFailure> {
 
 /// Parses a complete numeric string for an explicit int cast, preserving exact integer strings.
 pub fn checked_string_to_int(value: &str) -> Result<i64, NumericFailure> {
-    let value = value.trim_matches(|ch: char| ch.is_ascii_whitespace());
+    let value = value.trim_matches(|ch: char| ch.is_ascii() && crate::numeric_string::is_php_whitespace(ch as u8));
     let (negative, value) = match value.as_bytes().first() {
         Some(b'-') => (true, &value[1..]),
         Some(b'+') => (false, &value[1..]),

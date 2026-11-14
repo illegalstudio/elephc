@@ -257,6 +257,14 @@ values. Scalar metadata resolution uses that profile before materialization.
 Resource constants keep their native representation, and compound values retain
 their consumer's existing normalization and ownership rules.
 
+Checked numeric casts have a separate shared contract in
+`elephc_semantics::numeric_cast`. Original-source validation runs before pruning
+and folding, including declaration defaults and constant aliases. Integer string
+conversion parses decimal digits and exponents exactly; it does not round through
+`f64`. Failed folds stay executable, and optimizer effects and exception flow keep
+their possible failure observable. Runtime integration is staged separately from
+the public feature admission gate.
+
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 
 None of this is affected by the permissive local retyping described in [Local retyping and strict locals mode](#local-retyping-and-strict-locals-mode) above: a **declared** type stays strict regardless of `strict_types` or `--strict-locals`.

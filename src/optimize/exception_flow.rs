@@ -936,6 +936,9 @@ impl ExceptionFlowAnalysis {
                 .combined(host_output_throws()),
             ExprKind::Cast { target, expr: inner } => {
                 let mut thrown = operand(inner);
+                if super::semantic_context::checked_cast_may_throw(expr) {
+                    thrown = thrown.combined(ThrownTypes::unknown());
+                }
                 if matches!(target, CastType::String) {
                     thrown = thrown.combined(self.string_conversion_throws(inner, class_context));
                 } else if matches!(target, CastType::Bool | CastType::Array) {
