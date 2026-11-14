@@ -178,6 +178,8 @@ fn spawn_worker(
                     std::ptr::null_mut(),
                 );
             }
+            #[cfg(target_vendor = "apple")]
+            listener::raise_worker_qos();
             let source = match ListenSource::for_worker(
                 listen,
                 master_unix,

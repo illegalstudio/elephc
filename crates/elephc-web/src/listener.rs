@@ -348,12 +348,7 @@ impl Drop for SharedTcp {
 fn accept_loop(shared: Arc<SharedTcp>) {
     // The acceptor is the latency-critical path for a new TCP connection.
     // Raise its QoS so a loaded macOS host schedules it ahead of bulk work.
-    unsafe {
-        libc::pthread_set_qos_class_self_np(
-            libc::qos_class_t::QOS_CLASS_USER_INITIATED,
-            0,
-        );
-    }
+    set_user_initiated_qos();
     let mut last_error_log: Option<Instant> = None;
     let mut last_expiry = Instant::now();
     // Reused by the ack poll and the worker-writability poll so the acceptor
@@ -564,6 +559,27 @@ fn expire_pending_locked(
     pending.retain(|_, (_, _, queued_at)| {
         now.duration_since(*queued_at) < PENDING_TIMEOUT
     });
+}
+
+/// Raises the calling thread to `QOS_CLASS_USER_INITIATED` on macOS.
+#[cfg(target_vendor = "apple")]
+pub(crate) fn set_user_initiated_qos() {
+    unsafe {
+        libc::pthread_set_qos_class_self_np(
+            libc::qos_class_t::QOS_CLASS_USER_INITIATED,
+            0,
+        );
+    }
+}
+
+/// Raises a worker's main/runtime thread to user-initiated unless
+/// `ELEPHC_WEB_WORKER_QOS=default` opts out for an A/B run.
+#[cfg(target_vendor = "apple")]
+pub(crate) fn raise_worker_qos() {
+    if std::env::var("ELEPHC_WEB_WORKER_QOS").is_ok_and(|value| value == "default") {
+        return;
+    }
+    set_user_initiated_qos();
 }
 
 /// Polls one descriptor for `events` and reports whether it is ready.
