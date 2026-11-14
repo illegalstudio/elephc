@@ -3899,11 +3899,21 @@ fn build_runtime_array_instance_method_targets(
     if reachable.is_empty() && shadowed.is_empty() && overrides.is_empty() {
         return split.public_only.clone();
     }
+    // Asked of every target of the base (23 000 on the Symfony demo) for each such scope: the
+    // pair lookup allocated both names each time. Only a target of a shadowing class can match.
+    let shadowing_classes = shadowed
+        .iter()
+        .map(|(class, _)| class.as_str())
+        .collect::<crate::fast_hash::FastSet<&str>>();
     let mut targets = Vec::new();
     for (target, public) in base.iter().zip(split.public.iter()) {
-        if !shadowed.is_empty()
-            && shadowed.contains(&(target.class_name.to_string(), target.method_key.to_string()))
-        {
+        if shadowing_classes.contains(&*target.class_name) && {
+            #[cfg(test)]
+            SHADOW_PAIR_CHECKS.with(|count| count.set(count.get() + 1));
+            shadowed.iter().any(|(class, method)| {
+                class.as_str() == &*target.class_name && method.as_str() == &*target.method_key
+            })
+        } {
             continue;
         }
         if *public || reachable.contains(&(std::sync::Arc::as_ptr(&target.sig) as usize)) {
@@ -6669,4 +6679,6 @@ std::thread_local! {
     pub(crate) static NON_PUBLIC_STATIC_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Class-scope instance lookup tables split and built (not reused) on this thread.
     pub(crate) static SCOPE_INSTANCE_TABLE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Candidate targets compared against a scope's shadowed private methods on this thread.
+    pub(crate) static SHADOW_PAIR_CHECKS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

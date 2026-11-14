@@ -285,6 +285,40 @@ fn callable_array_scopes_share_the_public_static_tables() {
     assert!(small_scans <= 1 && large_scans <= 1, "non-public statics rescanned: {small_scans}, {large_scans}");
 }
 
+/// A scope `A` whose private method its subclass `B` shadows, making a runtime callable-array
+/// call, beside `count` unrelated classes with public methods.
+fn shadowing_scope_beside(count: usize) -> String {
+    let mut source = String::from(
+        "<?php\nclass A {\n    private function m(int $x): int { return $x; }\n    public function run($o, $n): int { return call_user_func([$o, $n], 1); }\n}\nclass B extends A {}\n",
+    );
+    for index in 0..count {
+        source.push_str(&format!(
+            "class U{index} {{ public function f(int $x): int {{ return $x + {index}; }} public function g(int $x): int {{ return $x; }} }}\n"
+        ));
+    }
+    source.push_str("echo (new A())->run(new B(), $argc > 1 ? 'm' : 'run'), \"\\n\";\n");
+    source
+}
+
+/// Targets compared against the scope's shadowed private methods during code generation.
+fn shadow_pair_checks(source: &str) -> u64 {
+    let module = lower_source(source);
+    crate::codegen::SHADOW_PAIR_CHECKS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    crate::codegen::SHADOW_PAIR_CHECKS.with(|count| count.get())
+}
+
+/// A scope's private shadowing is checked only against targets of the shadowing classes: every
+/// target of the program was compared, allocating both of its names each time (1 400 samples of
+/// a sampled one-core Symfony demo console build).
+#[test]
+fn shadowed_private_methods_are_checked_against_their_classes_only() {
+    let small = shadow_pair_checks(&shadowing_scope_beside(4));
+    let large = shadow_pair_checks(&shadowing_scope_beside(32));
+    assert!(small > 0, "the fixture no longer shadows a private method");
+    assert_eq!(small, large, "shadow checks grew with unrelated classes: {small} vs {large}");
+}
+
 /// `count` classes under an interface pair, each with properties typed by its own class, an
 /// interface its parent implements through an interface parent, and that parent; a dynamic
 /// property write reaches every one of those typed slots with a runtime-shaped value.
