@@ -932,6 +932,23 @@ pub fn method_symbol(class_name: &str, method_name: &str) -> String {
     join_php_symbol("_method", &[class_name, method_name])
 }
 
+/// Returns the generated `vtable_methods` key of a slot retired by a widening override.
+///
+/// `#` cannot appear in a PHP identifier, so the key never collides with a method name, and the
+/// inherited parameter count keeps the keys of successive widenings of one method distinct.
+pub(crate) fn narrowed_vtable_slot_key(method_key: &str, inherited_param_count: usize) -> String {
+    format!("{method_key}#abi{inherited_param_count}")
+}
+
+/// Returns the EIR function name of the adapter behind one retired vtable slot.
+///
+/// `source_abi` selects the entry published in the source-visible vtable when the retired
+/// signature carries generated `func_args` slots that the physical entry receives.
+pub(crate) fn narrowed_vtable_adapter_name(owner: &str, slot_key: &str, source_abi: bool) -> String {
+    let prefix = if source_abi { "_vtnarrow_src" } else { "_vtnarrow" };
+    join_php_symbol(prefix, &[owner, slot_key])
+}
+
 /// Returns the interface method wrapper symbol for a class/interface/method triplet.
 ///
 /// Format: `_ifacewrap_<class_id>_<interface_id>_<method>`. Used by the runtime to route

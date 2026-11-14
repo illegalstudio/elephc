@@ -3,6 +3,7 @@
 //!
 //! Called from:
 //! - `crate::ir_lower::program` after class-like methods and constructor thunks.
+//! - `crate::ir_lower::function::narrowed_vtable_adapters`, for retired class-vtable slots.
 //!
 //! Key details:
 //! - Default expressions and reference arguments use ordinary method-call lowering.
@@ -38,7 +39,10 @@ pub(crate) fn lower_optional_interface_adapters(module: &mut Module) {
 }
 
 /// Lowers one interface-to-concrete call with the interface's explicit parameters.
-fn lower_interface_adapter(
+///
+/// `crate::ir_lower::function::narrowed_vtable_adapters` reuses it with a retired class-vtable
+/// slot's signature in place of the interface's.
+pub(super) fn lower_interface_adapter(
     module: &mut Module, name: &str, owner: &str, method: &str, caller: &FunctionSig,
 ) -> Function {
     let span = Span::dummy();

@@ -289,6 +289,29 @@ impl SourceVisibleShape {
             .map_or(0, |index| index + 1)
     }
 
+    /// Returns whether this shape only appends optional parameters to `inherited`.
+    ///
+    /// Neither side may be variadic: the appended positions must each carry a default so a
+    /// caller compiled against `inherited` can leave all of them out. The inherited positions
+    /// themselves are compared afterwards, by the ordinary exact checks over `truncated()`.
+    fn appends_optional_parameters(&self, inherited: &Self) -> bool {
+        self.param_count > inherited.param_count
+            && self.variadic.is_none()
+            && inherited.variadic.is_none()
+            && self.has_defaults.iter().skip(inherited.param_count).all(|default| *default)
+    }
+
+    /// Keeps only the first `count` source positions, for comparing an inherited prefix.
+    fn truncated(mut self, count: usize) -> Self {
+        self.param_count = self.param_count.min(count);
+        self.param_names.truncate(count);
+        self.param_types.truncate(count);
+        self.declared_params.truncate(count);
+        self.ref_params.truncate(count);
+        self.has_defaults.truncate(count);
+        self
+    }
+
     /// Accepts calls admitted by `required`, permitting extra optional parameters and defaults.
     fn widens_parameter_shape(&self, required: &Self) -> bool {
         (self.param_count >= required.param_count || self.variadic.is_some())
@@ -323,6 +346,42 @@ impl SourceVisibleShape {
     }
 }
 
+/// How far an implementation may widen the caller-visible parameter shape it replaces.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ParameterWidening {
+    /// The parameter shape must match exactly (static methods, combined interface parents).
+    Exact,
+    /// The inherited positions must match exactly; trailing optional parameters may follow.
+    ///
+    /// Instance overrides and interface implementations admit this because every caller
+    /// compiled against the narrower contract reaches the implementation through an EIR adapter
+    /// that supplies the omitted defaults: a retired class-vtable slot
+    /// (`ClassInfo::narrowed_vtable_slots`) or a per-class interface method-table entry.
+    TrailingOptional,
+    /// PHP's full call-shape widening, admitted only for final enums, which have no override
+    /// family whose vtable callers could disagree on the argument count.
+    CallShape,
+}
+
+/// Returns whether `child_sig` widens `parent_sig` by appending optional parameters only.
+///
+/// This is the shape `ParameterWidening::TrailingOptional` admits, and the shape for which an
+/// instance override retires the inherited vtable slot in favour of a wider one.
+pub(crate) fn appends_optional_parameters(child_sig: &FunctionSig, parent_sig: &FunctionSig) -> bool {
+    SourceVisibleShape::of(child_sig).appends_optional_parameters(&SourceVisibleShape::of(parent_sig))
+}
+
+/// Returns the parameter widening an override or implementation of `method` may apply.
+///
+/// Magic methods keep their exact shape: the runtime and PHP itself fix their arity.
+pub(crate) fn method_parameter_widening(method: &str, is_static: bool) -> ParameterWidening {
+    if is_static || method.starts_with("__") {
+        ParameterWidening::Exact
+    } else {
+        ParameterWidening::TrailingOptional
+    }
+}
+
 /// Validates that `child_sig` is compatible with `parent_sig` for override purposes.
 /// Checks parameter shape and rejects a declared type where the source parent accepts any value.
 /// Reports errors with `context` and `kind` (e.g., "overriding method") in the message.
@@ -331,7 +390,7 @@ impl SourceVisibleShape {
 /// injected contracts are synthesized after the `func_args` pass and can never carry its hidden
 /// collector or actual-count parameter, so comparing those slots against such a contract would
 /// report an ABI difference the source never declared.
-/// `allow_optional_widening` enables PHP-visible call-shape widening for final enum interfaces.
+/// `widening` selects which caller-visible parameter shapes the child may widen to.
 pub(crate) fn validate_signature_compatibility(
     span: crate::span::Span,
     owner_name: &str,
@@ -341,14 +400,27 @@ pub(crate) fn validate_signature_compatibility(
     kind: &str,
     context: &str,
     compare_generated_abi: bool,
-    allow_optional_widening: bool,
+    widening: ParameterWidening,
 ) -> Result<(), CompileError> {
+    let child = SourceVisibleShape::of(child_sig);
+    let parent = SourceVisibleShape::of(parent_sig);
+    // An appended optional tail is bridged by an EIR adapter that calls the child through its
+    // own signature, so the child's generated `func_args` slots never meet the parent's callers.
+    // The adapter can only forward what the parent's caller passed, though, and that caller
+    // fills the parent's omitted defaults itself: a counting child behind an optional inherited
+    // prefix would then see those defaults as passed arguments, so it keeps the exact rule
+    // unless the parent's ABI carries the actual argument count too.
+    let appends_optional = widening == ParameterWidening::TrailingOptional
+        && child.appends_optional_parameters(&parent)
+        && !(crate::func_args::sig_collects_surplus_args(child_sig)
+            && !crate::func_args::sig_collects_surplus_args(parent_sig)
+            && parent.has_defaults.iter().any(|default| *default));
     // The hidden variadic that collects surplus positional arguments for
     // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
     // inherited signature that does not carry it cannot dispatch to a body that does.
     // Report that directly instead of the generic parameter-count mismatch, which names a
     // parameter the source never wrote.
-    if compare_generated_abi && !allow_optional_widening
+    if compare_generated_abi && widening != ParameterWidening::CallShape && !appends_optional
         && (crate::func_args::sig_collects_surplus_args(child_sig)
             != crate::func_args::sig_collects_surplus_args(parent_sig)
             || crate::func_args::sig_has_hidden_argc_param(child_sig)
@@ -363,10 +435,7 @@ pub(crate) fn validate_signature_compatibility(
         ));
     }
 
-    let child = SourceVisibleShape::of(child_sig);
-    let parent = SourceVisibleShape::of(parent_sig);
-
-    if allow_optional_widening {
+    if widening == ParameterWidening::CallShape {
         return if child.widens_parameter_shape(&parent) { Ok(()) } else {
             Err(CompileError::new(span, &format!(
                 "Incompatible parameter shape when {context} {kind}: {owner_name}::{method_name}",
@@ -374,6 +443,7 @@ pub(crate) fn validate_signature_compatibility(
         };
     }
 
+    let child = if appends_optional { child.truncated(parent.param_count) } else { child };
     if child.param_count != parent.param_count {
         return Err(CompileError::new(
             span,
@@ -580,7 +650,7 @@ pub(crate) fn validate_override_signature(
         kind,
         "overriding",
         parent_declaration_is_source && method.span.line != 0,
-        false,
+        method_parameter_widening(&method.name, is_static),
     )?;
     // PHP exempts `__toString` from the must-repeat-the-parent-return-type rule.
     if parent_sig.declared_return && !child_sig.declared_return && method.name != "__toString" {

@@ -115,8 +115,8 @@ pub use schema::{
 };
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
-    ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, PackedClassInfo,
-    PackedFieldInfo, PropertyHookContract,
+    ExternClassInfo, ExternFieldInfo, ExternFunctionSig, InterfaceInfo, NarrowedVtableSlot,
+    PackedClassInfo, PackedFieldInfo, PropertyHookContract,
 };
 pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
 pub(crate) use defined::{

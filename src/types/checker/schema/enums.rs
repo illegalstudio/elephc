@@ -658,6 +658,7 @@ pub(crate) fn insert_enum_metadata(
             abstract_methods,
             vtable_methods: Vec::new(),
             vtable_slots: HashMap::new(),
+            narrowed_vtable_slots: HashMap::new(),
             static_method_visibilities,
             final_static_methods,
             static_method_declaring_classes,

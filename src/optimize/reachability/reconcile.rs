@@ -197,8 +197,13 @@ fn assert_inherited_vtable_slots_aligned(classes: &HashMap<String, ClassInfo>) {
         };
         for (method, parent_slot) in &parent.vtable_slots {
             if let Some(child_slot) = child.vtable_slots.get(method) {
-                debug_assert_eq!(
-                    child_slot, parent_slot,
+                // A widening override moves the method key to a new slot and keeps the
+                // parent's slot under a generated key that still names the same method.
+                let retired = child.narrowed_vtable_slots.iter().any(|(key, narrowed)| {
+                    narrowed.method == *method && child.vtable_slots.get(key) == Some(parent_slot)
+                });
+                debug_assert!(
+                    child_slot == parent_slot || retired,
                     "instance vtable slot for {class_name}::{method} diverged from {parent_name}",
                 );
             }
@@ -318,11 +323,18 @@ fn prune_class_methods(
     // `assert_inherited_vtable_slots_aligned` guards the same property across an inheritance
     // edge; variance relates two classes with no such edge, which is why it needs its own.
     let instantiated = class_key.contains('<');
+    // A retired slot left by a widening override lives exactly as long as its method's slot.
+    let narrowed = std::mem::take(&mut info.narrowed_vtable_slots);
     info.vtable_methods.retain(|key| {
+        let method = narrowed.get(key).map_or(key.as_str(), |slot| slot.method.as_str());
         instantiated
-            || keep_instance.contains(key)
-            || reachable_instance_slots.contains(key.as_str())
+            || keep_instance.contains(method)
+            || reachable_instance_slots.contains(method)
     });
+    info.narrowed_vtable_slots = narrowed
+        .into_iter()
+        .filter(|(key, _)| info.vtable_methods.contains(key))
+        .collect();
     info.vtable_slots = compact_slots(&info.vtable_methods);
     info.static_vtable_methods.retain(|key| {
         instantiated || keep_static.contains(key) || reachable_static_slots.contains(key.as_str())
