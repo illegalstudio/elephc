@@ -112,8 +112,13 @@ breakpoint on a removed line is reported as unverified, never silently accepted.
 
 ### `--debug-optimized`
 
-Deferred. It may allow optimizations with explicit "optimized out" locals, but
-it is not part of the v1 contract. Do not add a half-working flag in v1.
+Implemented after v1. It keeps the `--debug` metadata, DWARF/symbols and site
+guards but allows the AST and EIR optimizers to run. Codegen publishes a
+must-defined local-availability table per site; a slot that no longer holds the
+PHP value is reported as `<optimized out>` by the terminal client, DAP and
+expression evaluation. A breakpoint on a line removed by the optimizer is
+unverified with an explicit message. `--debug` and `--debug-optimized` are
+mutually exclusive presets.
 
 ### `--with-monitoring` composition
 

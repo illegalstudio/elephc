@@ -706,8 +706,10 @@ These are planning numbers, not commitments. Split into the beads below.
    architecture is shared but the first milestone changes.
 2. Primary IDE: VS Code/Neovim (DAP, v1) or PhpStorm (optional DBGp later)?
    PhpStorm does not speak DAP, but DBGp is not a v1 requirement.
-3. Should `--debug` always disable optimizations, or expose a separate
-   `--debug-optimized` from day one? What is the AST-optimizer contract?
+3. Resolved: `--debug` disables optimizations; `--debug-optimized` keeps the
+   metadata/guards and publishes must-defined local availability so removed
+   locals report `<optimized out>`. The AST optimizer runs normally in the
+   optimized preset.
 4. Do we extract a shared activation stack from `elephc-instr`, or justify a
    separate debugger stack with an explicit test matrix?
 5. Is `--debug` + `--with-monitoring` a supported composition from v1, or a
