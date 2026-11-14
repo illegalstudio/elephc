@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 74 (this commit), following `0146784a0b`. Issue:
+Verified through step 75 (this commit), following `180fbf3a6c`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 74.
+This progress ledger condenses verified implementation through step 75.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -880,6 +880,33 @@ EIR architecture audits, assembly comments, example syntax and diff checks pass
 with unchanged builtin inventory (828 AOT, 77 graph, 56 primitive, 695 runtime,
 679 eval).
 
+### Runtime property-name reference contexts
+
+The shared native/ordinary dynamic-name dispatcher now accepts an ordinary result
+adapter as well as its native result adapter. Checked runtime-selected reference
+arguments match the evaluated property bytes and reuse the exact-class owned Mixed
+cell binder. Literal and dynamic names share one property eligibility predicate
+and one initialized-branch merge helper. Receiver/name evaluation and their
+existing ownership scopes remain authoritative; names are not evaluated twice.
+
+The extended native regression first failed with an unchanged 10.9 property and
+FNDW from a stale pre-destructor snapshot. It now publishes 10, preserves the XML
+view, and matches PHP FND without a warning. Additional cases preserve the late
+variable receiver selected by the property-name callback (N11.9:12), private-access
+errors and allocated name cleanup. Both AST/EIR optimizer settings pass with a
+clean heap (46.36 s). The shared fixture is also covered by all five selected-
+checker target tests. All 23 settype tests, five existing XML emitter cases and
+the NoFlag XML materialization control (67.28 s) pass. Check --tests passed on an
+unchanged retry after one integration-check process failed; build and the curl
+exporter pass with -j 4. Generated builtin/site/EIR audits, assembly comments,
+example syntax and diff checks pass with unchanged inventory (828 AOT, 77 graph,
+56 primitive, 695 runtime, 679 eval).
+
+This completes the tested runtime-selected name path for declared owned Mixed
+slots. Narrower and hash-backed destinations, nested erased receivers, static
+known-callee dynamic-place staging, Internal producers and host/eval admission
+remain active work before publishing Casts. No public feature mask changes.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -972,4 +999,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 71 | `c064a2192f` | feat(strict): share scalar builtin conversion graphs |
 | 72 | `c7361405c6` | feat(strict): preserve contextual cast warning ownership |
 | 73 | `0146784a0b` | feat(strict): preserve live builtin reference places |
-| 74 | this commit | feat(strict): retain erased reference receiver bindings |
+| 74 | `180fbf3a6c` | feat(strict): retain erased reference receiver bindings |
+| 75 | this commit | feat(strict): preserve runtime property reference names |

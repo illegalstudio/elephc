@@ -99,7 +99,7 @@ fn test_strict_settype_erased_native_receiver_reference_contexts_bundle() {
     for optimize in [false, true] {
         let output = StrictFixture::new(source).capture_staged_xml(profile, optimize);
         assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
-        assert_eq!(output.stdout, "9:9.9|8:8|7.9|FD|E", "opt={optimize}");
+        assert_eq!(output.stdout, "9:9.9|8:8|7.9|FD|E|10|7.9|FND|NE|N11.9:12", "opt={optimize}");
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }

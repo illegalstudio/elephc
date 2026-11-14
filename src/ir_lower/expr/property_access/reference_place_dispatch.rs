@@ -14,12 +14,7 @@ use super::*;
 pub(super) fn named(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
     property: &str, alias: &str, expr: &Expr) -> LoweredValue {
     let mut classes = ctx.classes.iter().filter_map(|(name, info)| {
-        let index = info.visible_property_index(property)?;
-        (!info.is_internal && info.properties[index].1 == PhpType::Mixed
-            && info.property_slot_owns_reference(index)
-            && !info.readonly_properties.contains(property)
-            && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any()))
-            .then(|| name.clone())
+        eligible_property(info, property).then(|| name.clone())
     }).collect::<Vec<_>>();
     classes.sort();
     if classes.is_empty() {
@@ -55,19 +50,73 @@ pub(super) fn named(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
         bind_property_reference_cell(ctx, alias, receiver, property, expr, span);
         let value = lower_invoker_ref_arg_marker(ctx, alias, span);
         store_value_into_temp(ctx, &result, PhpType::Mixed, value, span);
-        let slots = ctx.initialized_slots_snapshot();
-        merged = Some(match merged { Some(previous) => previous.intersection(&slots).copied().collect(),
-            None => slots });
+        merge_initialized_branch(ctx, &mut merged);
         branch_to(ctx, done);
         ctx.builder.position_at_end(next); ctx.restore_initialized_slots(initial.clone());
     }
     let value = lower_property_get_without_native_dispatch(ctx, object, property, Op::PropGet, expr);
     store_value_into_temp(ctx, &result, PhpType::Mixed, value, span);
-    let slots = ctx.initialized_slots_snapshot();
-    let merged = merged.map_or_else(|| slots.clone(), |previous| previous.intersection(&slots).copied().collect());
-    branch_to(ctx, done); ctx.builder.position_at_end(done); ctx.restore_initialized_slots(merged);
+    merge_initialized_branch(ctx, &mut merged);
+    branch_to(ctx, done); ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(merged.expect("property dispatch includes its fallback"));
     let value = take_owned_temp(ctx, &result, span);
     stage_call_result(ctx, staging.as_ref(), value, span);
     if let Some(owner) = owner { retire_owned_call_operand(ctx, owner, span); }
     take_prepublished_call_result(ctx, staging, value, span)
+}
+
+/// Matches the evaluated property bytes before reusing the exact-class reference binder.
+pub(super) fn dynamic(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
+    property: LoweredValue, alias: &str, expr: &Expr) -> LoweredValue {
+    let mut properties = ctx.classes.values().flat_map(|info| info.properties.iter()
+        .filter(|(name, _)| eligible_property(info, name)).map(|(name, _)| name.clone()))
+        .collect::<Vec<_>>();
+    properties.sort(); properties.dedup();
+    if properties.is_empty() {
+        return lower_dynamic_property_fetch_without_native(ctx, object, property,
+            PhpType::Mixed, PropertyFetchMode::Read, expr);
+    }
+    let span = expr.span; let result = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let initial = ctx.initialized_slots_snapshot();
+    let done = ctx.builder.create_named_block("reference.name.done", Vec::new());
+    let mut merged = None;
+    for name in properties {
+        let data = ctx.intern_string(&name);
+        let expected = ctx.emit_value(Op::ConstStr, Vec::new(), Some(Immediate::Data(data)),
+            PhpType::Str, Op::ConstStr.default_effects(), Some(span));
+        let matched = ctx.emit_value(Op::StrictEq, vec![property.value, expected.value], None,
+            PhpType::Bool, Op::StrictEq.default_effects(), Some(span));
+        let selected = ctx.builder.create_named_block("reference.name.selected", Vec::new());
+        let next = ctx.builder.create_named_block("reference.name.next", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr { cond: matched.value, then_target: selected,
+            then_args: Vec::new(), else_target: next, else_args: Vec::new() });
+        ctx.builder.position_at_end(selected);
+        let value = named(ctx, object, &name, alias, expr);
+        store_value_into_temp(ctx, &result, PhpType::Mixed, value, span);
+        merge_initialized_branch(ctx, &mut merged); branch_to(ctx, done);
+        ctx.builder.position_at_end(next); ctx.restore_initialized_slots(initial.clone());
+    }
+    let value = lower_dynamic_property_fetch_without_native(ctx, object, property,
+        PhpType::Mixed, PropertyFetchMode::Read, expr);
+    store_value_into_temp(ctx, &result, PhpType::Mixed, value, span);
+    merge_initialized_branch(ctx, &mut merged); branch_to(ctx, done);
+    ctx.builder.position_at_end(done);
+    ctx.restore_initialized_slots(merged.expect("property-name dispatch includes its fallback"));
+    take_owned_temp(ctx, &result, span)
+}
+
+/// Shares the owned Mixed slot eligibility between literal and runtime property names.
+fn eligible_property(info: &crate::types::ClassInfo, property: &str) -> bool {
+    let Some(index) = info.visible_property_index(property) else { return false; };
+    !info.is_internal && info.properties[index].1 == PhpType::Mixed
+        && info.property_slot_owns_reference(index)
+        && !info.readonly_properties.contains(property)
+        && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+}
+
+/// Keeps only initialization facts established by every completed dispatch arm.
+fn merge_initialized_branch(ctx: &LoweringContext<'_, '_>, merged: &mut Option<HashSet<LocalSlotId>>) {
+    let slots = ctx.initialized_slots_snapshot();
+    *merged = Some(match merged.take() { Some(previous) => previous.intersection(&slots).copied().collect(),
+        None => slots });
 }
