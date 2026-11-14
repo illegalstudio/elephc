@@ -44,6 +44,24 @@ mod tests {
         assert_eq!(module.semantic_profile, profile);
     }
 
+    /// Public arithmetic checking is available on every target without enabling other numeric flags.
+    #[test]
+    fn strict_arithmetic_public_checker_targets_are_independent() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Arithmetic, true);
+        let source = "<?php function checkedDivision(int $left, int $right): float { return $left / $right; } function weakBinding(int $value): int { return $value; } echo checkedDivision(4, 2), weakBinding('3');";
+        let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = crate::codegen::platform::Target::parse(name).unwrap();
+            let checked = crate::types::check_with_target_and_options(&program, target,
+                crate::types::CheckOptions { semantic_profile: profile, ..Default::default() },
+                &crate::generics::GenericContext::default()).unwrap();
+            assert_eq!(checked.semantic_profile, profile);
+            let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            crate::ir::validate_module(&module).unwrap();
+            crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        }
+    }
+
     /// Incomplete feature integration is visible to library callers as well as the CLI.
     #[test]
     fn strict_profile_pending_features_are_not_silent_library_noops() {

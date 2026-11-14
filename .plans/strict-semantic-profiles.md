@@ -371,18 +371,18 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 75 (this commit), following `180fbf3a6c`. Issue:
+Verified through step 78 (this commit), following `fed394dc1d`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask still contains only
-Locals, Bools, DynamicCode and Opcache. Existing Locals behavior remains available
+Locals, Bools, DynamicCode, Opcache and Arithmetic. Existing Locals behavior remains available
 but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 75.
+This progress ledger condenses verified implementation through step 78.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -431,8 +431,8 @@ the linked work logs, and the current agent-facing architecture document
 - Source validation precedes folding, retains full numeric-string provenance,
   declaration/default/call evidence, named/spread planning and constant cycle
   guards. AST effects and exception-flow summaries preserve warnings, user callback
-  writes and discarded failures. Auditing typed evidence erased by the initial
-  fold remains a required completion check before feature admission.
+  writes and discarded failures. Public Arithmetic tests audit original evidence before the initial fold. The
+  remaining numeric features retain their own admission audits.
 - Unary plus is an explicit AST node, traversed by every structural visitor and
   rebuild/default/reflection/synthetic adapter. Typed EIR unary normalization uses
   independently owned boxes and preserves native object precedence. Direct scalar
@@ -956,6 +956,38 @@ EIR optimization enabled and disabled. All 29 focused settype regressions,
 check --tests, compiler build, assembly comments and diff checks pass. Casts
 admission remains staged.
 
+### Public Arithmetic admission and fused predicate ownership
+
+The Arithmetic policy now passes the real compiler admission path, not only the
+staged fixture helpers. Public source checks retain invalid original operands
+through initial folding. Library checking and emission cover all five targets;
+native CLI cases cover numeric kinds, float division, negative integer power,
+ordinary overflow promotion, weak user-parameter binding, compound stores,
+opaque eval and repeated execution of the same cached source. The REPL exercises
+the same public profile and caught-error recovery.
+
+The initial public regression produced the correct values but leaked one array
+and one Mixed float box. A minimized EIR fixture showed that the fused
+ArrayElementTypeCheck fast path loaded a local view without retiring it when a
+later opaque eval widened the frame slot. The fast path now uses shared
+pending-owner guards and receiver stabilization/release. Finalization removes
+provisional guards/releases when the view stays borrowed. Five target fixtures
+assert the retained receiver is released, and the existing fusion is preserved.
+A separate permissive native bundle covers successful reads and throwing warning
+handlers under both EIR optimizer modes. CLI docs and the strict example include
+the newly admitted arithmetic contract. Other pending features and the complete
+umbrella remain gated.
+
+Arithmetic admission verification passed: public CLI with both EIR modes and
+cached opaque eval (59.77 s), permissive predicate success/throw cleanup bundle
+(60.00 s), real cached REPL (44.66 s), walker/VM domain and ownership checks,
+independent policy resolution, public checker on all five targets, five predicate
+cleanup emitters and the existing fusion control. Check --tests, compiler and curl
+exporter builds pass. The three-flag example runs with a clean heap. Generated
+builtin/site/EIR audits, assembly comments, PHP syntax and diff hygiene pass.
+Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
+679 eval).
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1051,4 +1083,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 74 | `180fbf3a6c` | feat(strict): retain erased reference receiver bindings |
 | 75 | `1514409912` | feat(strict): preserve runtime property reference names |
 | 76 | `0c94688cfc` | feat(strict): bind known dynamic property arguments |
-| 77 | this commit | feat(strict): canonicalize dynamic mixed property references |
+| 77 | `fed394dc1d` | feat(strict): canonicalize dynamic mixed property references |
+| 78 | this commit | feat(strict): enable the arithmetic semantic profile |

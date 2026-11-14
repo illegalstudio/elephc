@@ -605,10 +605,28 @@ An explicit `--no-strict-<feature>` overrides the umbrella in either argument
 order. Repeating an explicit feature option uses the last value.
 
 Integration is in progress. This build accepts the existing strict-locals and
-strict-opcache rules plus strict-dynamic-code and strict-bools. Other registered guarantees,
+strict-opcache rules plus strict-dynamic-code, strict-bools and strict-arithmetic.
+Other registered guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
 tracks the remaining work.
+
+### Strict arithmetic
+
+`--strict-arithmetic` accepts int and float operands for numeric operators,
+requires integer operands for `%`, bitwise operators and shifts, and makes `/`
+return float even for an exact integer division. Integer power requires a
+nonnegative exponent; use a float operand for a floating result such as `2.0 ** -1`.
+The reviewed native object operator contracts remain available.
+
+Known invalid operands produce a compile diagnostic before constant folding.
+Dynamic invalid operands throw `TypeError`; negative integer exponents throw
+`ArithmeticError`. These rules also apply inside eval and the REPL, and to the
+numeric contracts of `abs`, `pow`, `intdiv`, `array_sum` and `array_product`.
+
+This option alone preserves PHP integer-to-float overflow promotion and the
+ordinary PHP binding rules for user function parameters. Each independently
+selected guarantee retains its own scope.
 
 ### Strict booleans
 

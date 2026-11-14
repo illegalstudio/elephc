@@ -729,25 +729,23 @@ pub(super) fn lower_array_element_type_check(
         return None;
     }
     let array = lower_expr(ctx, array);
-    let index = lower_expr(ctx, index);
-    let mask = ctx.emit_value(
-        Op::ConstI64,
-        Vec::new(),
-        Some(Immediate::I64(mask)),
-        PhpType::Int,
-        Op::ConstI64.default_effects(),
-        Some(expr.span),
-    );
-    Some(ctx.emit_value(
-        Op::RuntimeCall,
-        vec![array.value, index.value, mask.value],
-        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-            crate::ir::RuntimeFnId::ArrayElementTypeCheck,
-        ))),
-        PhpType::Bool,
-        crate::ir::RuntimeFnId::ArrayElementTypeCheck.intrinsic_effects(),
-        Some(expr.span),
-    ))
+    let mut pending = [array];
+    let (result, pins) = lower_with_pending_owners(ctx, &mut pending, expr.span, |ctx| {
+        let index = lower_expr(ctx, index);
+        let mask = ctx.emit_value(
+            Op::ConstI64, Vec::new(), Some(Immediate::I64(mask)), PhpType::Int,
+            Op::ConstI64.default_effects(), Some(expr.span),
+        );
+        ctx.emit_value(
+            Op::RuntimeCall, vec![array.value, index.value, mask.value],
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                crate::ir::RuntimeFnId::ArrayElementTypeCheck,
+            ))), PhpType::Bool,
+            crate::ir::RuntimeFnId::ArrayElementTypeCheck.intrinsic_effects(), Some(expr.span),
+        )
+    });
+    unpin_in_flight_owners(ctx, pins, expr.span);
+    Some(stabilize_borrowed_result_and_release_receiver(ctx, pending[0], result, expr.span))
 }
 
 /// Returns the runtime-tag mask for one fused element predicate.

@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-dynamic-code --strict-bools examples/strict-semantics/main.php
+// Compile with: elephc --strict-dynamic-code --strict-bools --strict-arithmetic examples/strict-semantics/main.php
 // Literal source is verified and compiled ahead of time.
 eval('echo "Verified at compilation", PHP_EOL;');
 
@@ -41,3 +41,14 @@ showSettings(['timeout' => $timeout]);
 
 $display = $argc > 0 ? 'strval' : 'STRVAL';
 echo "Displayed timeout: ", $display($timeout), PHP_EOL;
+
+function numericTotal(mixed $left, mixed $right): mixed {
+    return $left + $right;
+}
+
+echo "Division result: ", gettype(4 / 2), PHP_EOL;
+try {
+    numericTotal('2', 3);
+} catch (TypeError $error) {
+    echo "Arithmetic requires numeric values", PHP_EOL;
+}

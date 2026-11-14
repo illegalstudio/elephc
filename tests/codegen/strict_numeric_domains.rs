@@ -89,3 +89,58 @@ echo '|', fdiv(1.0, numericAbs(-0.0)) > 0.0 ? 'Z' : 'X';
         }
     }
 }
+
+/// The admitted CLI profile preserves numeric contracts through AOT, opaque eval and both EIR modes.
+#[test]
+fn test_strict_arithmetic_public_cli_and_native_eval_bundle() {
+    let source = r#"<?php
+function arithmeticPublicAdd(mixed $left, mixed $right): mixed { return $left + $right; }
+function arithmeticPublicDivide(mixed $left, mixed $right): mixed { return $left / $right; }
+function arithmeticPublicPower(mixed $left, mixed $right): mixed { return $left ** $right; }
+function arithmeticPublicWeak(int $value): int { return $value; }
+echo is_float(arithmeticPublicDivide(4, 2)) ? 'F' : 'X';
+try { arithmeticPublicAdd('2', 1); echo 'X'; } catch (TypeError $error) { echo 'T'; }
+try { arithmeticPublicPower(2, -1); echo 'X'; } catch (ArithmeticError $error) { echo 'P'; }
+echo is_float(arithmeticPublicAdd(PHP_INT_MAX, 1)) ? 'O' : 'X';
+echo arithmeticPublicWeak('3'), '|';
+$value = $argc; $value /= 2; echo is_float($value) ? 'F' : 'X';
+$items = [4]; $items[0] /= 2; echo is_float($items[0]) ? 'F' : 'X';
+$code = $argc > 0 ? 'echo is_float(4 / 2) ? "F" : "X"; try { $value = "2"; $value + 1; echo "X"; } catch (TypeError $error) { echo "T"; } try { 2 ** -1; echo "X"; } catch (ArithmeticError $error) { echo "P"; } echo is_float(PHP_INT_MAX + 1) ? "O" : "X"; try { abs("2"); echo "X"; } catch (TypeError $error) { echo "A"; }' : 'return 0;';
+eval($code); eval($code);
+"#;
+    for optimization in ["--ir-opt=off", "--ir-opt=on"] {
+        let output = StrictFixture::new(source).capture(&["--strict-arithmetic", optimization, "--heap-debug"]);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "FTPO3|FFFTPOAFTPOA", "{optimization}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{optimization}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}
+
+/// Initial folding cannot turn a rejected numeric source into an accepted literal.
+#[test]
+fn test_strict_arithmetic_public_source_evidence_precedes_folding() {
+    for source in ["<?php echo '2' + 1;", "<?php echo strval(2) + 1;",
+        "<?php echo floatval(4) % 2;", "<?php if (false) { echo 2 ** -1; }"] {
+        StrictFixture::new(source).assert_error(&["--strict-arithmetic"], "strict-arithmetic");
+    }
+    assert_eq!(StrictFixture::new("<?php echo is_int(4 / 2) ? 'I' : 'F';")
+        .run(&["--no-strict-arithmetic"]), "I");
+}
+
+/// Fused predicates release late-owned views for the permissive profile as well.
+#[test]
+fn test_array_element_predicate_before_eval_view_ownership_bundle() {
+    let source = r#"<?php
+$items = [2.0, 'kept']; echo is_float($items[0]) ? 'F' : 'X';
+set_error_handler(function (): bool { throw new RuntimeException('missing'); });
+try { is_float($items[99]); echo 'X'; } catch (RuntimeException $error) { echo 'C'; }
+restore_error_handler();
+$code = $argc > 0 ? 'echo "E";' : ''; eval($code);
+"#;
+    for optimization in ["--ir-opt=off", "--ir-opt=on"] {
+        let output = StrictFixture::new(source).capture(&[optimization, "--heap-debug"]);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "FCE", "{optimization}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{optimization}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}

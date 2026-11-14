@@ -19,3 +19,12 @@ fn test_repl_strict_bools_preserves_guarantees_and_recovers() {
     let errors = String::from_utf8_lossy(&output.stderr);
     assert!(errors.contains("TypeError: --strict-bools"), "{errors}");
 }
+
+/// Arithmetic applies to submitted code, survives the cached host and recovers after a caught error.
+#[test]
+fn test_repl_strict_arithmetic_public_profile_and_recovery() {
+    let fixture = Fixture::new();
+    let output = fixture.run("echo is_float(4 / 2) ? 'F' : 'X';\ntry { echo '2' + 1; } catch (TypeError $error) { echo 'T'; }\n", &["--strict-arithmetic"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "FT");
+}
