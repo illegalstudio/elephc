@@ -90,3 +90,16 @@ fn test_strict_settype_reference_places_bundle() {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// A native-capable erased receiver keeps ordinary array/property references and XML view semantics.
+#[test]
+fn test_strict_settype_erased_native_receiver_reference_contexts_bundle() {
+    let source = include_str!("../fixtures/strict/settype_erased_receivers.php");    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_xml(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "9:9.9|8:8|7.9|FD|E", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

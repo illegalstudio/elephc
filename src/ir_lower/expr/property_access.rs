@@ -12,6 +12,7 @@ use super::*;
 pub(super) mod native_xml_reads;
 mod runtime_hooks;
 mod reference_arguments;
+mod reference_place_dispatch;
 pub(crate) use reference_arguments::lower_runtime_reference_argument;
 mod write_dimensions;
 pub(crate) use write_dimensions::{lower_native_dimension_write_select, may_have_native_xml_dimensions};
@@ -407,6 +408,27 @@ pub(crate) fn lower_ref_assign_array_elem(
     let array = prepared_array.as_ref().unwrap_or(array);
     crate::ir_lower::stmt::promote_by_ref_foreach_source(ctx, array, true);
     let array_value = lower_expr(ctx, array);
+    bind_array_element_reference(ctx, target, array_value, index, source, span);
+    // A property read that is not addressable storage (a `mixed` property, so no synthetic
+    // alias was reified above) arrives as an OWNING temporary -- `PropGet` acquires -- and
+    // nothing else releases it: the binding above retains the entry's managed cell, not the
+    // container, so the container's owner was simply leaked, one boxed array per
+    // `$r = &$obj->m[k]`. Only the property reads are released here. A concrete container
+    // loaded from a Mixed-widened local also counts as an owning temporary, but that detached
+    // owner is what the backend's consuming store-back transfers, and releasing it too freed
+    // the table under the local.
+    if matches!(
+        ctx.builder.value_defining_op(array_value.value),
+        Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
+    ) && ctx.value_is_owning_temporary(array_value)
+    {
+        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
+    }
+}
+
+/// Binds an element of an already evaluated addressable receiver without replaying its effects.
+fn bind_array_element_reference(ctx: &mut LoweringContext<'_, '_>, target: &str,
+    array_value: LoweredValue, index: &Expr, source: &Expr, span: Span) {
     let container_type = ctx.builder.value_php_type(array_value.value).codegen_repr();
     let mut index_value = lower_expr(ctx, index);
     let value_type = match container_type {
@@ -430,21 +452,6 @@ pub(crate) fn lower_ref_assign_array_elem(
         Some(span),
     );
     ctx.bind_owned_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
-    // A property read that is not addressable storage (a `mixed` property, so no synthetic
-    // alias was reified above) arrives as an OWNING temporary -- `PropGet` acquires -- and
-    // nothing else releases it: the binding above retains the entry's managed cell, not the
-    // container, so the container's owner was simply leaked, one boxed array per
-    // `$r = &$obj->m[k]`. Only the property reads are released here. A concrete container
-    // loaded from a Mixed-widened local also counts as an owning temporary, but that detached
-    // owner is what the backend's consuming store-back transfers, and releasing it too freed
-    // the table under the local.
-    if matches!(
-        ctx.builder.value_defining_op(array_value.value),
-        Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
-    ) && ctx.value_is_owning_temporary(array_value)
-    {
-        crate::ir_lower::ownership::release_if_owned(ctx, array_value, Some(span));
-    }
 }
 
 /// Reifies a static property, stable declared property, or nested element as a local receiver.

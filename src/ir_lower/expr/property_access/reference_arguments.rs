@@ -29,7 +29,11 @@ pub(crate) fn lower_runtime_reference_argument(
                     let value = lower_method_call_with_receiver_direct(ctx, object, method, &[name], Op::MethodCall, arg);
                     marker(ctx, alias, value, arg.span)
                 },
-                |ctx, object| lower_property_get_without_native_dispatch(ctx, object, property, Op::PropGet, arg))
+                |ctx, object| {
+                    if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+                        reference_place_dispatch::named(ctx, object, property, alias, arg)
+                    } else { lower_property_get_without_native_dispatch(ctx, object, property, Op::PropGet, arg) }
+                })
         }
         ExprKind::DynamicPropertyAccess { object, property } => {
             let (object, name) = if matches!(object.kind, ExprKind::Variable(_)) {
@@ -49,12 +53,19 @@ pub(crate) fn lower_runtime_reference_argument(
         }
         ExprKind::ArrayAccess { array, index } => {
             let object = lower_property_write_receiver(ctx, array);
+            let original = object;
             native_xml_reads::dispatch(ctx, object, arg, PhpType::Mixed, false,
                 |ctx, object| {
                     let value = lower_native_dimension_write_select(ctx, object, index, arg);
                     marker(ctx, alias, value, arg.span)
                 },
-                |ctx, object| array_access::lower_array_access_from_lowered_receiver(ctx, object, index, arg))
+                |ctx, object| {
+                    if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+                        && matches!(array.kind, ExprKind::Variable(_)) {
+                        bind_array_element_reference(ctx, alias, original, index, arg, arg.span);
+                        lower_invoker_ref_arg_marker(ctx, alias, arg.span)
+                    } else { array_access::lower_array_access_from_lowered_receiver(ctx, object, index, arg) }
+                })
         }
         _ => lower_expr(ctx, arg),
     }

@@ -150,3 +150,17 @@ fn strict_settype_places_known_receiver_promotions() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Erased ordinary/native reference contexts use the selected profile and every target ABI.
+fn verify_strict_settype_erased_receiver_contexts(name: &str) {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strict/settype_erased_receivers.php"));
+    let (program, _) = super::strict_object_casts::prepare(source);
+    let target = Target::parse(name).unwrap();
+    let checked = crate::types::checker::check_staged_semantics(&program, target,
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+    let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+    crate::ir::validate_module(&module).unwrap();
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+}
+
+supported_target_cases!(strict_settype_erased_receiver_contexts, verify_strict_settype_erased_receiver_contexts);

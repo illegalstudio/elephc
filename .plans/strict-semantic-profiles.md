@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 73 (this commit), following `c7361405c6`. Issue:
+Verified through step 74 (this commit), following `0146784a0b`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 73.
+This progress ledger condenses verified implementation through step 74.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -851,6 +851,35 @@ Casts admission remains staged. Narrower typed destinations, erased native/ordin
 reference contexts, public callable bindings from Internal producers and remaining
 host boundaries still need their explicit audit before publication.
 
+### Erased native-capable reference receivers
+
+The native XML argument selector now preserves checked ordinary references on its
+fallback edges. Root array variables use the shared evaluated-receiver element
+binder, retaining the original local/ref-cell origin needed to republish COW
+separation. Named properties select exact runtime classes with owned Mixed cell
+metadata before binding a live cell. The typed object projection borrows from the
+enclosing receiver guard, so access failures do not strand an extra object lease.
+Receiver expressions and index effects are not replayed. Class-name and result
+owners remain rooted through the exact-class dispatch and initialized-slot merge.
+
+The original regression returned unchanged ordinary values when XML was present:
+9.9:9.9|8.9:8.9|7.9. Checked execution now yields 9:9.9|8:8|7.9, keeping the array
+peer and the independent XML view unchanged. Five new target checks validate the
+selected checker and emitters. The native fixture passes both AST/EIR optimizer
+settings with a clean heap (41.84 s), including private access errors and a fresh
+receiver whose destructor rewrites the selected property. PHP CLI and native code
+agree on FD with no warning: the factory and destructor run before conversion,
+and the referenced cell exposes the destructor's replacement value.
+
+The narrower property, dynamic-name/hash, nested erased receiver, Internal
+producer and host-boundary audits remain outstanding. This is a staged Casts
+integration step, with no public admission change. All 23 focused settype tests,
+five existing XML emitter cases, the native XML materialization/ownership control
+(66.72 s), check --tests, build and curl exporter pass. Generated docs, site and
+EIR architecture audits, assembly comments, example syntax and diff checks pass
+with unchanged builtin inventory (828 AOT, 77 graph, 56 primitive, 695 runtime,
+679 eval).
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -942,4 +971,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 70 | `222c4281fb` | feat(strict): complete settype collection conversions |
 | 71 | `c064a2192f` | feat(strict): share scalar builtin conversion graphs |
 | 72 | `c7361405c6` | feat(strict): preserve contextual cast warning ownership |
-| 73 | this commit | feat(strict): preserve live builtin reference places |
+| 73 | `0146784a0b` | feat(strict): preserve live builtin reference places |
+| 74 | this commit | feat(strict): retain erased reference receiver bindings |
