@@ -71,6 +71,7 @@ mod strict_semantics;
 mod strict_checked_casts;
 mod strict_builtin_casts;
 mod strict_settype;
+mod strict_object_casts;
 mod strict_modulo;
 mod strict_numeric_domains;
 mod strict_numeric_parameters;

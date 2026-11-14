@@ -1249,6 +1249,9 @@ impl Scanner<'_> {
             for (_, method) in operators.native_casts {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
             }
+            if let Some(method) = operators.checked_numeric_source {
+                self.usage.methods.insert((key.clone(), php_symbol_key(method), false));
+            }
             for (_, method) in operators.arithmetic {
                 self.usage.methods.insert((key.clone(), php_symbol_key(method), true));
             }

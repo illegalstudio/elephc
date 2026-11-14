@@ -6,9 +6,10 @@
 //!
 //! Key details:
 //! - Scalar parsing is pure Rust, so no native value failure crosses an interpreter frame.
-//! - Reviewed object adapters retain their native contract and transfer one result owner.
+//! - Reviewed object projections expose original text before PHP's numeric adapters can narrow it.
 
 use super::*;
+use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 use elephc_semantics::{numeric_cast::{checked_numeric_cast, NumericCastFailure,
     NumericCastInput, NumericCastTarget}, numeric_unary::NumericValue};
 
@@ -18,18 +19,50 @@ pub(super) fn numeric(target: &EvalCastType, value: RuntimeCellHandle,
     let target = match target { EvalCastType::Int => NumericCastTarget::Int,
         EvalCastType::Float => NumericCastTarget::Float, _ => return Err(EvalStatus::UnsupportedConstruct) };
     if values.type_tag(value)? == EVAL_TAG_OBJECT {
-        let cast = if target == NumericCastTarget::Int { elephc_builtin_contract::ObjectCast::Int }
-            else { elephc_builtin_contract::ObjectCast::Float };
-        let result = runtime_ops::object_operators::numeric_cast(values, value, cast);
-        if let Some(result) = native_results::finish(result, context, values)? {
-            return adapter_result(target, result, context, values);
-        }
-        let adapter = if target == NumericCastTarget::Int { "__elephc_to_int" } else { "__elephc_to_float" };
-        let result = eval_object_scalar_adapter(value, adapter, context, values);
-        if let Some(result) = native_results::finish(result, context, values)? {
-            return adapter_result(target, result, context, values);
-        }
+        let cast = if target == NumericCastTarget::Int { elephc_builtin_contract::ObjectCast::Int } else { elephc_builtin_contract::ObjectCast::Float };
+        let projection = runtime_ops::object_operators::checked_numeric_projection(values, value, cast)?;
+        let Some(projection) = projection else { return throw_failure(NumericCastFailure::UnsupportedKind, context, values); };
+        let projected = values.operator_method_call(value, projection.source_method, vec![]);
+        let projected = native_results::finish(projected, context, values)?;
+        let owner = RuntimeOwnerSlot::new(projected);
+        return with_runtime_owners(&owner, || {
+            let result = match values.type_tag(projected) {
+                Ok(EVAL_TAG_STRING) => scalar(target, projected.borrowed(), context, values).and_then(|proof| {
+                    let Some(method) = projection.result_method else { return Ok(proof); };
+                    let proof = RuntimeOwnerSlot::new(proof);
+                    with_runtime_owners(&proof, || {
+                        let result = float_adapter(value, method, context, values);
+                        finish_synthesized_method_arguments(result, [proof.take()], context, values)
+                    })
+                }),
+                Ok(_) => throw_failure(NumericCastFailure::UnsupportedKind, context, values),
+                Err(status) => Err(status),
+            };
+            finish_synthesized_method_arguments(result, [owner.take()], context, values)
+        });
     }
+    scalar(target, value, context, values)
+}
+
+/// Preserves a reviewed floating adapter's result only after original-domain proof succeeds.
+fn float_adapter(value: RuntimeCellHandle, method: &str, context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
+    let result = values.operator_method_call(value, method, vec![]);
+    let result = native_results::finish(result, context, values)?;
+    let owner = RuntimeOwnerSlot::new(result);
+    with_runtime_owners(&owner, || {
+        let invalid = match values.type_tag(result) {
+            Ok(EVAL_TAG_FLOAT) => return Ok(owner.take()),
+            Ok(_) => throw_failure(NumericCastFailure::UnsupportedKind, context, values),
+            Err(status) => Err(status),
+        };
+        finish_synthesized_method_arguments(invalid, [owner.take()], context, values)
+    })
+}
+
+/// Converts an original scalar or reviewed numeric projection before publishing a typed result.
+fn scalar(target: NumericCastTarget, value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
     let tag = values.type_tag(value)?;
     let result = if tag == EVAL_TAG_STRING {
         let bytes = values.string_bytes(value)?;
@@ -51,18 +84,6 @@ pub(super) fn numeric(target: &EvalCastType, value: RuntimeCellHandle,
         Ok(NumericValue::Float(value)) => values.float(value),
         Err(failure) => throw_failure(failure, context, values),
     }
-}
-
-/// Requires the reviewed adapter's promised exact result kind and retires a rejected owner.
-fn adapter_result(target: NumericCastTarget, result: RuntimeCellHandle,
-    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
-    let expected = if target == NumericCastTarget::Int { EVAL_TAG_INT } else { EVAL_TAG_FLOAT };
-    let checked = match values.type_tag(result) {
-        Ok(tag) if tag == expected => return Ok(result),
-        Ok(_) => throw_failure(NumericCastFailure::UnsupportedKind, context, values),
-        Err(status) => Err(status),
-    };
-    finish_synthesized_method_arguments(checked, [result], context, values)
 }
 
 /// Publishes a PHP Throwable using the same failure category and message as native lowering.

@@ -45,6 +45,7 @@ mod strict_numeric_domains;
 mod strict_integer_power;
 mod strict_unary_domains;
 mod strict_unary_ieee;
+mod strict_object_casts;
 mod testing;
 mod testing_command;
 mod testing_generic_functions;

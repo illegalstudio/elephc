@@ -1063,6 +1063,41 @@ checking/build and the complete generated-builtin documentation workflow pass,
 with assembly comment and diff hygiene checks. Public admission remains gated;
 original native object and host conversion contracts are next.
 
+### Original native object cast proofs
+
+Step64 adds a shared CheckedNumericProjection contract. Final internal source
+adapters expose original GMP decimal digits and SimpleXML text before a PHP
+numeric adapter can narrow them. The compiler and both eval engines validate
+that source with the existing checked scalar kernel. Original receivers,
+projected strings, proof values and adapter results retain their native root
+slots through every failure. Unreviewed narrowed host results cannot substitute
+for original-value proof.
+
+GMP's explicit floating adapter retains its native rounding after source-domain
+validation. Its get_d operation truncates toward zero, as the GNU MP manual
+specifies; the old bridge comment claiming nearest rounding was corrected.
+SimpleXML numeric casts bypass a public __toString override through the final
+source adapter. Ordinary typed-object intval/floatval calls now share syntax
+adapters as well, closing the previously unsupported SimpleXML typed builtin path.
+AST usage and reachability both retain the new source methods before EIR selects
+them.
+
+Six compiler tests cover all five targets, both profiles, floating proof order
+and pruning. Two walker/VM tests cover source values, unsupported projections and
+complete owner retirement. Two native package bundles pass with real managed GMP
+and XML, both optimizer settings and both profiles, including exact endpoints,
+ranges, first-class calls, temporary failures, alias writeback, custom string
+hooks, GMP floating rounding and clean heaps. Existing builtin/settype/scalar-cast
+and GMP reflection controls pass. Compiler/test-target builds and the complete
+builtin-docs regeneration/audits pass, with assembly comments and diff hygiene.
+
+The permissive erased SimpleXML floatval fallback has an existing PHP mismatch:
+it observes a public string override. The no-flag control intentionally preserves
+that behavior, while the checked profile uses original native text. Journal task
+693969cd tracks the separate baseline fix. Public admission remains unchanged.
+Registered gmp_intval and settype target-domain/host paths still need their own
+checked public-boundary audit before Casts admission.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -1089,10 +1124,11 @@ compiler build, architecture gate, assembly comment checks and diff hygiene.
 2. Integrate shared conversion plans for implicit assignments, parameters, returns,
    callbacks, descriptors, reflection and eval re-entry. Complete checked explicit
    casts with range/domain errors, exact strings and native object cast contracts.
-   Before Casts admission, validate original GMP magnitudes before its existing
-   `__elephc_to_int` adapter reaches `elephc_gmp_intval` / `__gmpz_get_si`.
-   An already narrowed adapter result cannot prove the original range. Apply the
-   same original-value audit to SimpleXML numeric-string adapters and host callbacks.
+   Original GMP and SimpleXML cast projections are now checked. Before Casts
+   admission, separately audit registered gmp_intval (including original float
+   arguments before weak parameter narrowing), settype target domains and host
+   callbacks, including broad object/interface cast consumers. Internal
+   implementation helpers must not bypass public contracts.
 3. Finish stable Locals bindings across promotion, parameters, captures, globals,
    by-reference writes, foreach aliases, loop joins, unset/rebind and eval scopes.
    Locals alone must not silently enable Overflow or widen an inferred int binding.
@@ -1197,4 +1233,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 60 | `72136d03e2` | feat(strict): enforce checked numeric casts in eval |
 | 61 | `31ffb78d5b` | feat(strict): share exact checked integer radix kernels |
 | 62 | `7977298569` | feat(strict): share checked builtin numeric cast contracts |
-| 63 | this commit | feat(strict): check settype before reference writeback |
+| 63 | `98ae35e13c` | feat(strict): check settype before reference writeback |
+| 64 | this commit | feat(strict): validate original native object cast values |

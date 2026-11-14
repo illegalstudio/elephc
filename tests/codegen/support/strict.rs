@@ -16,6 +16,8 @@ use std::process::Output;
 struct StagedRuntimeOptions {
     eval_bridge: bool,
     bcmath: bool,
+    gmp: bool,
+    xml: bool,
     source_mode: Option<elephc::source::SourceMode>,
 }
 
@@ -91,6 +93,20 @@ impl StrictFixture {
         self.capture_staged_runtime(profile, optimize, StagedRuntimeOptions { bcmath: true, ..Default::default() })
     }
 
+    /// Exercises original GMP cast values through the real prelude and managed native library.
+    pub(crate) fn capture_staged_gmp(
+        &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
+    ) -> ProgramOutput {
+        self.capture_staged_runtime(profile, optimize, StagedRuntimeOptions { gmp: true, ..Default::default() })
+    }
+
+    /// Exercises native XML cast strings through the real prelude and managed parser bridge.
+    pub(crate) fn capture_staged_xml(
+        &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
+    ) -> ProgramOutput {
+        self.capture_staged_runtime(profile, optimize, StagedRuntimeOptions { xml: true, ..Default::default() })
+    }
+
     /// Checks trusted implementation operators with native class dispatch in a strict module.
     pub(crate) fn capture_staged_internal_bcmath(
         &self, profile: elephc_semantics::SemanticProfile, optimize: bool,
@@ -110,10 +126,19 @@ impl StrictFixture {
             else { source.strip_prefix("<?php").unwrap_or(&source) };
         let tokens = elephc::lexer::tokenize_with_semantics(&source, source_mode, 0, profile).unwrap();
         let mut program = elephc::parser::parse_with_mode(&tokens, source_mode).unwrap();
-        if options.bcmath {
+        if options.bcmath || options.gmp || options.xml {
             let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
             program = elephc::core_prelude::inject_if_used(program, &mut inventory);
-            program = elephc::bcmath_prelude::inject_if_used(program, false, &mut inventory);
+            if options.bcmath { program = elephc::bcmath_prelude::inject_if_used(program, false, &mut inventory); }
+            if options.gmp { program = elephc::gmp_prelude::inject_if_used(program, false, &mut inventory); }
+            if options.xml {
+                program = elephc::xml_prelude::inject_if_used(program, false, &mut inventory);
+                program = elephc::dom_html_prelude::inject_if_used(program, false, &mut inventory);
+            }
+            if options.gmp || options.xml {
+                program = elephc::object_cast_prelude::inject_if_used(program, &mut inventory).unwrap();
+                program = elephc::func_args::desugar(program).unwrap();
+            }
             program = elephc::name_resolver::resolve(program).unwrap();
         }
         let mut checked = elephc::types::check_with_target(&program, target()).unwrap();

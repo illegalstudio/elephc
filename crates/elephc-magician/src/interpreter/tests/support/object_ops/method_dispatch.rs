@@ -64,6 +64,18 @@ impl FakeOps {
                 self.null()
             }
             (FakeValue::Object(_), "answer") if args.is_empty() => self.int(42),
+            (FakeValue::Object(properties), "__elephc_numeric_source") if args.is_empty() => {
+                let source = Self::object_property(&properties, "__elephc_num")
+                    .ok_or(EvalStatus::UnsupportedConstruct)?;
+                self.retain(source)
+            }
+            (FakeValue::Object(properties), "__elephc_to_float") if args.is_empty() => {
+                let source = Self::object_property(&properties, "__elephc_num")
+                    .ok_or(EvalStatus::UnsupportedConstruct)?;
+                let bytes = self.string_bytes(source)?;
+                let text = std::str::from_utf8(&bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
+                self.float(text.parse().map_err(|_| EvalStatus::RuntimeFatal)?)
+            }
             (FakeValue::Object(properties), "__tostring") if args.is_empty() => {
                 let class_name = self.object_classes.get(&(object.as_ptr() as usize)).cloned();
                 self.reflection_type_to_string(class_name.as_deref(), &properties)

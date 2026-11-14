@@ -85,6 +85,15 @@ pub struct ClassCasts {
     pub to_bool: Option<&'static str>,
 }
 
+/// Original text proof and an optional reviewed class-specific result adapter.
+#[derive(Clone, Copy, Debug)]
+pub struct CheckedNumericProjection {
+    /// Final adapter exposing the original value as complete numeric text.
+    pub source_method: &'static str,
+    /// Optional floating adapter whose native rounding follows successful domain validation.
+    pub result_method: Option<&'static str>,
+}
+
 /// Methods implementing an internal class's native operators, casts and clone protocol.
 #[derive(Clone, Copy, Debug)]
 pub struct ClassOperators {
@@ -98,6 +107,8 @@ pub struct ClassOperators {
     pub json: Option<&'static str>,
     /// Native projection adapters selected independently of scalar coercion.
     pub native_casts: &'static [(ObjectCast, &'static str)],
+    /// Final adapter exposing original numeric text before PHP's scalar adapters can narrow it.
+    pub checked_numeric_source: Option<&'static str>,
     /// Public compiler adapters taking left and right operands in PHP evaluation order.
     pub arithmetic: &'static [(ObjectArithmetic, &'static str)],
     /// Whether arithmetic produces another class instance or a PHP integer/float.
@@ -126,6 +137,13 @@ pub struct ClassOperators {
 }
 
 impl ClassOperators {
+    /// Checks original text while retaining an explicit class float adapter's rounding contract.
+    pub fn checked_numeric_projection(&self, cast: ObjectCast) -> Option<CheckedNumericProjection> {
+        if !matches!(cast, ObjectCast::Int | ObjectCast::Float) { return None; }
+        Some(CheckedNumericProjection { source_method: self.checked_numeric_source?,
+            result_method: if cast == ObjectCast::Float { self.casts.and_then(|casts| casts.to_float) } else { None } })
+    }
+
     /// Resolves a native dimension operation without selecting a userland protocol method.
     pub fn dimension_method(&self, operation: ObjectDimension) -> Option<&'static str> {
         self.dimensions.iter().find_map(|(op, method)| (*op == operation).then_some(*method))
@@ -163,6 +181,7 @@ pub const BCMATH_NUMBER_OPERATORS: ClassOperators = ClassOperators {
     native_clone: None,
     json: None,
     native_casts: &[],
+    checked_numeric_source: None,
     arithmetic: &[
         (ObjectArithmetic::Add, "__elephc_add"),
         (ObjectArithmetic::Sub, "__elephc_sub"),
@@ -197,6 +216,7 @@ pub const GMP_OPERATORS: ClassOperators = ClassOperators {
     native_clone: None,
     json: None,
     native_casts: &[],
+    checked_numeric_source: Some("__elephc_numeric_source"),
     arithmetic_result: ObjectArithmeticResult::Object,
     operand_dispatch: ObjectOperandDispatch::Handler,
     bit_not: None,
@@ -245,6 +265,7 @@ pub static SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
     native_clone: Some("__elephc_clone_initialize"),
     json: Some("__elephc_json"),
     native_casts: &[(ObjectCast::Int, "__elephc_int"), (ObjectCast::Float, "__elephc_float"), (ObjectCast::Array, "__elephc_array")],
+    checked_numeric_source: Some("__elephc_numeric_source"),
     arithmetic: &[(ObjectArithmetic::Add, "__elephc_add"),
         (ObjectArithmetic::Sub, "__elephc_sub"), (ObjectArithmetic::Mul, "__elephc_mul"),
         (ObjectArithmetic::Div, "__elephc_div"), (ObjectArithmetic::Mod, "__elephc_mod"),
@@ -272,6 +293,7 @@ mod tests {
             native_clone: None,
             json: None,
             native_casts: &[],
+            checked_numeric_source: None,
             arithmetic: &[(ObjectArithmetic::Add, "synthetic_sum")],
             arithmetic_result: ObjectArithmeticResult::Object,
             operand_dispatch: ObjectOperandDispatch::Handler,

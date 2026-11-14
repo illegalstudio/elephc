@@ -777,3 +777,4 @@ mod strict_checked_casts;
 mod strict_checked_radix;
 mod strict_builtin_casts;
 mod strict_settype;
+mod strict_object_casts;

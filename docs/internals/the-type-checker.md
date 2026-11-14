@@ -264,14 +264,20 @@ conversion parses decimal digits and exponents exactly; it does not round throug
 `f64`. Failed folds stay executable, and optimizer effects and exception flow keep
 their possible failure observable. EIR uses `RuntimeCallTarget::CheckedNumericCast`
 with an exact scalar result and a required Casts capability. Original operands stay
-rooted across catchable TypeError/ValueError paths. Reviewed native object adapters
-run before the scalar helper. A bounded decimal digit parser preserves exact
+rooted across catchable TypeError/ValueError paths. Reviewed native objects expose
+original numeric text through `ClassOperators::checked_numeric_source`, a final
+internal adapter independent of public `__toString` overrides. The same checked
+scalar helper validates that text before a legacy numeric adapter can narrow it.
+Explicit class float adapters retain their rounding contract after that proof.
+A bounded decimal digit parser preserves exact
 integer strings at runtime, and native float-to-int checks precede truncation.
 The eval walker and VM use the same neutral cast kernel through their shared
 expression evaluator. Scalar failures become ordinary interpreted Throwables;
-reviewed native adapters transfer pending native failures through
+reviewed native projections transfer pending native failures through
 `native_results::finish`. That helper also serves checked arithmetic and unary
-operations. Adapter result kinds and ownership remain exact. Public feature
+operations. Projection result kinds and ownership remain exact. Unreviewed host
+adapters cannot substitute an already narrowed result for original-value proof.
+Public feature
 admission stays gated while remaining consumers are integrated.
 
 `CheckedRadixInt` carries an exact string/base runtime boundary. The neutral

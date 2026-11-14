@@ -64,19 +64,9 @@ fn lower(
         return ctx.emit_numeric_cast(elephc_semantics::numeric_cast::NumericCastTarget::Int,
             value, call.operands.get(1).copied(), call.source_mode, call.span);
     }
-    if matches!(
-        ctx.value_php_type(value).codegen_repr(),
-        PhpType::Object(name) if name.eq_ignore_ascii_case("GMP")
-    ) {
-        let method = ctx.intern_string("__elephc_to_int");
-        return Ok(ctx.emit_value(
-            Op::MethodCall,
-            vec![value],
-            Some(Immediate::Data(method)),
-            call.result_type.clone(),
-            Op::MethodCall.default_effects(),
-            Some(call.span),
-        ));
+    if matches!(ctx.value_php_type(value).codegen_repr(), PhpType::Object(_)) {
+        return ctx.emit_numeric_cast(elephc_semantics::numeric_cast::NumericCastTarget::Int,
+            value, None, call.source_mode, call.span);
     }
     let value_type = ctx.value_php_type(value);
     if matches!(value_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_))

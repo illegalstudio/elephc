@@ -64,7 +64,7 @@ pub use core_constants::{core_environment_constant, EXECUTABLE_PATH_DEFAULT_KIND
 pub use core_attributes::{core_attribute_flags, CORE_ATTRIBUTE_CONSTANTS, CORE_ATTRIBUTE_IS_REPEATABLE, CORE_ATTRIBUTE_TARGET_ALL};
 pub use module::PhpModule;
 pub use object_operators::{
-    ClassCasts, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectBitwise,
+    CheckedNumericProjection, ClassCasts, ClassOperators, ObjectArithmetic, ObjectArithmeticResult, ObjectBitwise,
     ObjectCast, ObjectDimension, ObjectOperandDispatch, ObjectOrdering, ObjectProperty, ObjectPropertyUpdate,
     ObjectShift, BCMATH_NUMBER_OPERATORS, GMP_CASTS, GMP_OPERATORS,
 };

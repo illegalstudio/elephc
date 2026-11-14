@@ -50,19 +50,9 @@ fn lower(
         return ctx.emit_numeric_cast(elephc_semantics::numeric_cast::NumericCastTarget::Float,
             value, None, call.source_mode, call.span);
     }
-    if matches!(
-        ctx.value_php_type(value).codegen_repr(),
-        PhpType::Object(name) if name.eq_ignore_ascii_case("GMP")
-    ) {
-        let method = ctx.intern_string("__elephc_to_float");
-        return Ok(ctx.emit_value(
-            Op::MethodCall,
-            vec![value],
-            Some(Immediate::Data(method)),
-            call.result_type.clone(),
-            Op::MethodCall.default_effects(),
-            Some(call.span),
-        ));
+    if matches!(ctx.value_php_type(value).codegen_repr(), PhpType::Object(_)) {
+        return ctx.emit_numeric_cast(elephc_semantics::numeric_cast::NumericCastTarget::Float,
+            value, None, call.source_mode, call.span);
     }
     if matches!(
         ctx.value_php_type(value).codegen_repr(),

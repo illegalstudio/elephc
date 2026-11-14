@@ -207,6 +207,15 @@ pub(super) fn truthy(
     truthy.and_then(|truthy| released.map(|()| Some(truthy)))
 }
 
+/// Selects original numeric text only for a reviewed internal-class projection.
+pub(in crate::interpreter) fn checked_numeric_projection(
+    values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,
+    cast: elephc_builtin_contract::ObjectCast,
+) -> Result<Option<elephc_builtin_contract::CheckedNumericProjection>, EvalStatus> {
+    Ok(operator_class(values, value)?.and_then(|class| class.operators)
+        .and_then(|operators| operators.checked_numeric_projection(cast)))
+}
+
 /// Applies an internal numeric conversion through the same instance adapter as AOT.
 pub(in crate::interpreter) fn numeric_cast(
     values: &mut (impl RuntimeValueOps + ?Sized), value: RuntimeCellHandle,

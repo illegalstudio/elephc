@@ -434,6 +434,24 @@ fn emit_cast_method(
     value: LoweredValue,
     expr: &Expr,
 ) -> LoweredValue {
+    if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+        let native_cast = match cast {
+            crate::types::object_operators::ObjectCast::Int => elephc_builtin_contract::ObjectCast::Int,
+            crate::types::object_operators::ObjectCast::Float => elephc_builtin_contract::ObjectCast::Float,
+            _ => unreachable!("explicit cast only selects int/float"),
+        };
+        if let Some(projection) = class.operators.and_then(|operators| operators.checked_numeric_projection(native_cast)) {
+            let pins = pin_in_flight_owners(ctx, &[value.value], expr.span);
+            let text = emit_guarded_adapter(ctx, value, class.name, projection.source_method, PhpType::Str, Some(expr.span));
+            let target = if cast == crate::types::object_operators::ObjectCast::Int { CastType::Int } else { CastType::Float };
+            let result = super::checked_cast::lower(ctx, &target, text, expr);
+            release_binary_operand_temporary(ctx, text, expr.span);
+            let result = projection.result_method.map_or(result, |method|
+                emit_guarded_adapter(ctx, value, class.name, method, PhpType::Float, Some(expr.span)));
+            unpin_in_flight_owners(ctx, pins, expr.span);
+            return result;
+        }
+    }
     let method = crate::types::object_operators::cast_method(class, cast)
         .expect("cast adapter was selected by cast_method");
     let result_type = match cast {

@@ -784,6 +784,15 @@ fn decl_class_simplexmlelement() -> Stmt {
                 ]),
         )
         .method(
+            method("__elephc_numeric_source")
+                .final_()
+                .returns(TypeExpr::Str)
+                .body(vec![
+                    s_assign("handle", e_this_prop("__elephc_handle")),
+                    s_return(e_call("elephc_xml_sx_string", vec![e_var("handle"), e_int(0)])),
+                ]),
+        )
+        .method(
             method("__elephc_int")
                 .final_()
                 .returns(TypeExpr::Int)
