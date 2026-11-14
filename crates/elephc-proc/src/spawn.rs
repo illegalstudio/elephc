@@ -245,7 +245,9 @@ impl Builder {
             .map(|descriptor| descriptor.index)
             .filter(|index| *index >= 0)
             .max()
-            .map_or(3, |max| (max + 1).max(3));
+            // Saturate: a PHP_INT_MAX key must not overflow here (a panic in this
+            // `extern "C"` path aborts); the oversized floor then fails dup() as a warning.
+            .map_or(3, |max| max.saturating_add(1).max(3));
         let floor = c_int::try_from(floor).unwrap_or(c_int::MAX);
         // Every child end must sit above the target numbers before the dup2 actions run:
         // otherwise an earlier dup2 can overwrite a later one's source and the child would
