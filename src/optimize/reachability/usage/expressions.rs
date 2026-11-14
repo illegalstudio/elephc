@@ -299,11 +299,6 @@ impl Scanner<'_> {
         for helper in crate::builtins::gmp::prelude_helpers_for(&key) {
             self.record_callable(helper);
         }
-        // So do the proc_open() family's: each public builtin calls its `__elephc_proc_*`
-        // twin, and `proc_open()` also collects the pipes array through a second helper.
-        for helper in crate::builtins::proc::prelude_helpers_for(&key) {
-            self.record_callable(helper);
-        }
         let normalized = self.normalized_function_arguments(&key, args);
         let first = normalized.first().map(unwrap_named_arg);
         match key.as_str() {
@@ -1238,7 +1233,16 @@ impl Scanner<'_> {
     /// Records a free-function/extern callable key.
     pub(super) fn record_callable(&mut self, name: &str) -> String {
         let key = php_symbol_key(name.trim_start_matches('\\'));
-        self.usage.functions.insert(key.clone()); self.usage.externs.insert(key.clone()); key
+        self.usage.functions.insert(key.clone()); self.usage.externs.insert(key.clone());
+        // The proc_open() family's lowerings call their `__elephc_proc_*` prelude twins (and
+        // `proc_open()` a second pipes helper) directly. Root them here rather than at direct
+        // call sites, so `call_user_func('proc_nice', 0)` and other callable references to a
+        // proc builtin keep the helpers alive too.
+        for helper in crate::builtins::proc::prelude_helpers_for(&key) {
+            self.usage.functions.insert(helper.to_string());
+            self.usage.externs.insert(helper.to_string());
+        }
+        key
     }
 
     /// Records a class key and applies conservative Reflection hazards.

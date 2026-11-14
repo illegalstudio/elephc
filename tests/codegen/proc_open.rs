@@ -223,6 +223,18 @@ fn test_proc_nice_zero_succeeds() {
     assert_eq!(out, "bool(true)\n");
 }
 
+/// A proc builtin reached only through a string callable keeps its prelude helper.
+#[test]
+fn test_proc_nice_through_call_user_func_keeps_helper() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(call_user_func('proc_nice', 0));
+var_dump(call_user_func_array('proc_nice', [0]));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\n");
+}
+
 /// The standard streams are accepted as descriptors, from a variable and from a literal list.
 #[test]
 fn test_proc_open_inherits_standard_streams() {
