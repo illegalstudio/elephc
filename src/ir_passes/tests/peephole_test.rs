@@ -18,7 +18,7 @@ use crate::ir::{
     LocalKind, Op, Ownership, Terminator, ValueId,
 };
 use crate::ir_passes::driver::IrPass;
-use crate::ir_passes::peephole::Peephole;
+use crate::ir_passes::peephole::{OwnerTransfer, Peephole};
 use crate::types::PhpType;
 
 /// Runs the peephole pass once over `function` with a throwaway literal pool.
@@ -253,6 +253,96 @@ fn single_use_acquire_release_pair_cancels() {
     assert_eq!(function.instructions[2].op, Op::Nop, "the release is neutralized");
     assert_eq!(return_value(&function), Some(ValueId::from_raw(0)), "still returns x");
     assert!(validate_function(&function).is_ok());
+}
+
+/// Builds `t = array_new; a = Acquire(t); Release(t); return a` with `t` typed `ty`.
+fn owner_transfer_function(ir_type: IrType, php_type: PhpType, op: Op) -> Function {
+    let mut function = Function::new("transfer".to_string(), ir_type, php_type.clone());
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let immediate = (op == Op::ArrayNew).then_some(Immediate::Capacity(0));
+        let fresh = builder
+            .emit(op, Vec::new(), immediate, ir_type, php_type.clone(), Ownership::Owned)
+            .expect("fresh value");
+        let acquired = builder
+            .emit(Op::Acquire, vec![fresh], None, ir_type, php_type, Ownership::Owned)
+            .expect("acquire result");
+        builder.emit(Op::Release, vec![fresh], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        builder.terminate(Terminator::Return { value: Some(acquired) });
+    }
+    function
+}
+
+/// `a = Acquire(t); Release(t)` on an owned container temporary used by nothing else is a
+/// transfer: the increment and decrement cancel and `a` is `t`. Lowering writes this shape for
+/// every constructed container or cloned argument handed to a slot.
+#[test]
+fn owned_container_acquire_then_source_release_is_a_transfer() {
+    let mut function = owner_transfer_function(
+        IrType::Heap(IrHeapKind::Array),
+        PhpType::Array(Box::new(PhpType::Int)),
+        Op::ArrayNew,
+    );
+    assert!(OwnerTransfer.run(&mut function, &mut DataPool::default()), "the transfer must be recognized");
+    assert_eq!(function.instructions[1].op, Op::Nop, "the acquire is neutralized");
+    assert_eq!(function.instructions[2].op, Op::Nop, "the source release is neutralized");
+    assert_eq!(return_value(&function), Some(ValueId::from_raw(0)), "returns the temporary itself");
+    assert!(validate_function(&function).is_ok());
+}
+
+/// A write to the source between the acquire and its release sees two references and separates
+/// the copy: transferring would let it mutate the acquired value too, so the pair stays.
+#[test]
+fn source_written_between_acquire_and_release_is_not_a_transfer() {
+    let array_ty = PhpType::Array(Box::new(PhpType::Int));
+    let mut function =
+        Function::new("written_transfer".to_string(), IrType::Heap(IrHeapKind::Array), array_ty.clone());
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let fresh = builder
+            .emit(Op::ArrayNew, Vec::new(), Some(Immediate::Capacity(0)), IrType::Heap(IrHeapKind::Array), array_ty.clone(), Ownership::Owned)
+            .expect("fresh array");
+        let acquired = builder
+            .emit(Op::Acquire, vec![fresh], None, IrType::Heap(IrHeapKind::Array), array_ty, Ownership::Owned)
+            .expect("acquire result");
+        let one = builder.emit_const_i64(1);
+        builder.emit(Op::ArrayPush, vec![fresh, one], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        builder.emit(Op::Release, vec![fresh], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        builder.terminate(Terminator::Return { value: Some(acquired) });
+    }
+    assert!(!OwnerTransfer.run(&mut function, &mut DataPool::default()), "a written source is not transferred");
+    assert_eq!(function.instructions[1].op, Op::Acquire, "the acquire is preserved");
+}
+
+/// A string's acquire may copy a scratch buffer into the heap, so the acquired string is not
+/// the source and the pair stays.
+#[test]
+fn string_acquire_then_source_release_is_not_a_transfer() {
+    let mut function = Function::new("str_transfer".to_string(), IrType::Str, PhpType::Str);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let x = builder.emit_const_str(DataId::from_raw(0));
+        let fresh = builder
+            .emit(Op::StrConcat, vec![x, x], None, IrType::Str, PhpType::Str, Ownership::Owned)
+            .expect("owned string");
+        let acquired = builder
+            .emit(Op::Acquire, vec![fresh], None, IrType::Str, PhpType::Str, Ownership::Owned)
+            .expect("acquire result");
+        builder.emit(Op::Release, vec![fresh], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+        builder.terminate(Terminator::Return { value: Some(acquired) });
+    }
+    OwnerTransfer.run(&mut function, &mut DataPool::default());
+    assert_eq!(function.instructions[2].op, Op::Acquire, "the string acquire is preserved");
+    assert_eq!(function.instructions[3].op, Op::Release, "the source release is preserved");
 }
 
 /// An acquired value used elsewhere (here, also returned) is not cancelled: the

@@ -184,6 +184,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(BranchSimplify),
         Box::new(ConcatResetElim),
         Box::new(FreshMixedTransfer),
+        Box::new(super::peephole::OwnerTransfer),
     ]
 }
 

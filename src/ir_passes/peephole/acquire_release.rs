@@ -21,7 +21,8 @@
 
 use crate::fast_hash::FastMap as HashMap;
 
-use crate::ir::{Function, InstId, Op, ValueId};
+use crate::ir::{Function, InstId, Op, Ownership, ValueId};
+use crate::types::PhpType;
 
 use super::super::rewrite::count_value_uses;
 use super::Rewrites;
@@ -58,6 +59,98 @@ pub(super) fn collect(function: &Function, rewrites: &mut Rewrites) {
         rewrites.nops.push(InstId::from_raw(index as u32));
         rewrites.nops.push(release_index);
     }
+}
+
+/// Collects owner transfers: `b = acquire a` followed, later in the same block, by
+/// `release a`, where `a` is an owned temporary that nothing reads after the acquire but that
+/// release (it may be filled before: `array_push a …`). The increment and the decrement cancel,
+/// and `b` is `a` itself; both instructions are neutralized and `b`'s uses read `a`. Lowering
+/// writes this shape wherever a fresh value is handed to a slot (a constructed container, a
+/// cloned argument), and every one cost an incref and a decref call.
+///
+/// A use between the two would see one reference instead of two (a write there would no
+/// longer separate), and a use in another block or a terminator cannot be ordered, so either
+/// keeps the pair. Only containers, `Mixed` cells and objects qualify, whose acquire is a pure
+/// reference increment: a string's acquire may copy a scratch buffer into the heap, and a
+/// narrowed scalar's boxes it, so for those `b` is not `a`.
+pub(super) fn collect_transfers(function: &Function, rewrites: &mut Rewrites) {
+    let uses = count_value_uses(function);
+    let mut taken: crate::fast_hash::FastSet<InstId> = rewrites.nops.iter().copied().collect();
+    for block in &function.blocks {
+        // Source value -> (position, id) of its first release in this block.
+        let mut release_at: HashMap<ValueId, (usize, InstId)> = HashMap::default();
+        // Value -> positions of the instructions of this block reading it, one per operand.
+        let mut used_at: HashMap<ValueId, Vec<usize>> = HashMap::default();
+        for (position, &inst_id) in block.instructions.iter().enumerate() {
+            let Some(inst) = function.instruction(inst_id) else { continue };
+            for &operand in &inst.operands {
+                used_at.entry(operand).or_default().push(position);
+            }
+            if inst.op == Op::Release {
+                if let Some(&released) = inst.operands.first() {
+                    release_at.entry(released).or_insert((position, inst_id));
+                }
+            }
+        }
+        for (position, &inst_id) in block.instructions.iter().enumerate() {
+            let Some(inst) = function.instruction(inst_id) else { continue };
+            if inst.op != Op::Acquire || inst.immediate.is_some() || taken.contains(&inst_id) {
+                continue;
+            }
+            let (Some(acquired), Some(&source)) = (inst.result, inst.operands.first()) else {
+                continue;
+            };
+            if rewrites.rauw.contains_key(&acquired) {
+                continue;
+            }
+            let Some(&(release_position, release_id)) = release_at.get(&source) else { continue };
+            if release_position <= position || taken.contains(&release_id) {
+                continue;
+            }
+            // Every use of the source is in this block, and none after the acquire but the
+            // release: the earlier ones (filling it) plus the acquire and the release are all.
+            let positions = used_at.get(&source).map(Vec::as_slice).unwrap_or(&[]);
+            let earlier = positions.iter().filter(|&&at| at < position).count();
+            let after = positions.iter().filter(|&&at| at > position).collect::<Vec<_>>();
+            if after.as_slice() != [&release_position]
+                || earlier + 2 != uses.get(&source).copied().unwrap_or(0)
+            {
+                continue;
+            }
+            let (Some(source_value), Some(acquired_value)) =
+                (function.value(source), function.value(acquired))
+            else {
+                continue;
+            };
+            if source_value.ownership != Ownership::Owned
+                || source_value.ir_type != acquired_value.ir_type
+                || !acquire_is_a_reference_increment(&source_value.php_type)
+            {
+                continue;
+            }
+            #[cfg(test)]
+            OWNER_TRANSFERS.with(|count| count.set(count.get() + 1));
+            rewrites.rauw.insert(acquired, source);
+            rewrites.nops.push(inst_id);
+            rewrites.nops.push(release_id);
+            taken.insert(inst_id);
+            taken.insert(release_id);
+        }
+    }
+}
+
+/// Whether the codegen of an `Acquire` of this type is a plain reference increment.
+fn acquire_is_a_reference_increment(php_type: &PhpType) -> bool {
+    matches!(
+        php_type.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed | PhpType::Object(_)
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Owner transfers the peephole recognized on this thread.
+    pub(crate) static OWNER_TRANSFERS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Maps each value released by a `Release` instruction to that instruction's id.

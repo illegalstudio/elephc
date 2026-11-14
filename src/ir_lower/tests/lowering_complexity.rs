@@ -828,6 +828,19 @@ fn constant_strings_do_not_call_the_noop_literal_hook() {
     assert!(!asm.contains("bl __rt_mbstring_ini_literal"), "a constant string calls the no-op literal hook");
 }
 
+/// The optimizer turns an owned container handed to a slot (`acquire` of the fresh value, then
+/// its release) into a transfer: lowering writes that shape for every constructed container.
+#[test]
+fn optimized_container_handoffs_become_owner_transfers() {
+    let source = "<?php\nfunction build(int $n): array {\n    $items = [$n, $n + 1];\n    $pairs = ['a' => $items, 'b' => [$n]];\n    return $pairs;\n}\necho count(build($argc)), \"\\n\";\n";
+    let mut module = lower_source(source);
+    crate::ir_passes::OWNER_TRANSFERS.with(|count| count.set(0));
+    crate::ir_passes::optimize_module(&mut module);
+    let transfers = crate::ir_passes::OWNER_TRANSFERS.with(|count| count.get());
+    assert!(transfers > 0, "no container handoff became an owner transfer");
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+}
+
 /// Unwind-visible owner registrations in function `name` of the lowered `source`.
 fn owner_pushes_in(source: &str, name: &str) -> usize {
     let module = lower_source(source);

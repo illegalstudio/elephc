@@ -21,6 +21,8 @@ use super::driver::IrPass;
 use super::rewrite::{neutralize_to_nop, replace_all_uses, resolve_chains};
 
 mod acquire_release;
+#[cfg(test)]
+pub(crate) use acquire_release::OWNER_TRANSFERS;
 mod box_unbox;
 mod forward_ops;
 mod load_store;
@@ -45,6 +47,35 @@ impl IrPass for Peephole {
         acquire_release::collect(function, &mut rewrites);
         load_store::collect(function, &mut rewrites);
         str_concat::collect(function, data, &mut rewrites);
+        if rewrites.is_empty() {
+            return false;
+        }
+        apply(function, data, &rewrites);
+        true
+    }
+}
+
+/// Owner-transfer finalization: `b = acquire a` with the owned temporary `a` released later in
+/// the same block and used by nothing else becomes `b = a` (see
+/// `acquire_release::collect_transfers`). It runs once after the fixed point: the buffer passes
+/// inside it match the acquire shape, and rewriting it earlier kept them from resolving.
+pub struct OwnerTransfer;
+
+impl IrPass for OwnerTransfer {
+    /// Returns the stable pass name used in driver diagnostics.
+    fn name(&self) -> &'static str {
+        "owner-transfer"
+    }
+
+    /// Keeps the rewrite out of the fixed point the buffer passes run in.
+    fn run_after_fixed_point(&self) -> bool {
+        true
+    }
+
+    /// Commits every owner transfer of the function at once.
+    fn run(&self, function: &mut Function, data: &mut DataPool) -> bool {
+        let mut rewrites = Rewrites::default();
+        acquire_release::collect_transfers(function, &mut rewrites);
         if rewrites.is_empty() {
             return false;
         }

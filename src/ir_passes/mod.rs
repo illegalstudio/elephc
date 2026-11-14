@@ -53,6 +53,8 @@ mod loops;
 mod mem2reg;
 pub(crate) mod numeric_domain;
 mod peephole;
+#[cfg(test)]
+pub(crate) use peephole::OWNER_TRANSFERS;
 mod regalloc;
 pub(crate) mod rematerialize;
 mod rewrite;
