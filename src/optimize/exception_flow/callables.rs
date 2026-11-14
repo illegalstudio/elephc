@@ -139,7 +139,8 @@ pub(super) fn collect_object_reference_entry_checks(
 /// A class-typed parameter runs the union guard at the call boundary whether it is by-value
 /// or by-reference, and a literal `false` parameter always checks its argument. A
 /// by-reference `array` / `?array` / `array|Class` parameter checks a boxed (`mixed`) argument
-/// at the boundary too, raising `TypeError` before the callee runs. Checker metadata narrows
+/// at the boundary too, raising `TypeError` before the callee runs, and so does a by-value
+/// `object`, `?object` or class union receiving a `mixed` argument. Checker metadata narrows
 /// this down; without it the declaration is the conservative source.
 fn params_have_object_reference(
     params: &[(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)],
@@ -171,7 +172,7 @@ fn type_hint_is_class(hint: &TypeExpr) -> bool {
                 .trim_start_matches('\\')
                 .to_ascii_lowercase()
                 .as_str(),
-            "mixed" | "callable" | "closure" | "array" | "object" | "iterable"
+            "mixed" | "callable" | "closure" | "array" | "iterable"
                 | "string" | "int" | "float" | "bool" | "null" | "true"
                 | "void" | "never"
         ),

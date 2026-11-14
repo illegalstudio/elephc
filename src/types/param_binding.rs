@@ -156,6 +156,11 @@ pub(crate) fn classify_param_binding(
     {
         return classify_numeric_binding(expected, arg);
     }
+    // A `mixed` or `object|null` argument reaches a class, interface, `object` or nullable
+    // class parameter unchanged; EIR lowering checks its class at the call site.
+    if crate::types::object_boundary::runtime_object_boundary(expected, actual).is_some() {
+        return ParamBinding::ObjectGuard;
+    }
     // A union that names the declared class plus exactly one of `false`/`null` is accepted by
     // PHP at compile time; the call throws `TypeError` at runtime when the other alternative is
     // the one supplied. EIR lowering inserts that instance guard.

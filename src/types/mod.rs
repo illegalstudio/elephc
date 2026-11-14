@@ -33,6 +33,8 @@ pub(crate) mod fibers;
 mod ffi;
 /// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
 pub(crate) mod param_binding;
+/// Runtime instance checks admitted at class-like boundaries for `mixed` sources.
+pub(crate) mod object_boundary;
 /// PHP type spelling shared by parameter and property diagnostics.
 pub(crate) mod diagnostic_names;
 /// Target-aware `ext/pcntl` integer constants shared by checker and codegen.

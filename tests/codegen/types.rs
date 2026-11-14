@@ -42,6 +42,7 @@ mod guarded_interface_receivers;
 mod guarded_interface_mutations;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
+mod mixed_object_boundaries;
 #[path = "types/declare_groups.rs"]
 mod declare_groups;
 #[path = "types/strict_types.rs"]

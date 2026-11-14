@@ -123,8 +123,12 @@ fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
     // `?array &$v`) or of a union of them checks a boxed (`mixed`) argument at the call
     // boundary and raises `TypeError` there (the EIR reference-argument guards), so it can
     // throw too.
+    //
+    // A by-value nullable class or class union (`?A`, `A|B|null`) keeps boxed storage, and a
+    // `mixed` argument bound to it runs the runtime class check before the body.
     signature.params.iter().enumerate().any(|(index, (_, ty))| {
         matches!(ty.codegen_repr(), PhpType::Object(_))
+            || crate::types::object_boundary::declared_object_boundary(ty).is_some()
             || (signature.ref_params.get(index).copied().unwrap_or(false)
                 && by_ref_param_checks_boxed_argument(signature, index, ty))
     })

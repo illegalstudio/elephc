@@ -492,13 +492,15 @@ fn check_object_property_write(
                 ),
             ));
         }
-        // A `mixed` value carries no compile-time type to compare with the declared slot, and
-        // PHP checks exactly this assignment at run time under weak-mode property typing. The
-        // codegen guard raises the catchable `TypeError` there, so rejecting the write here
-        // would forbid a program PHP accepts whenever the runtime value happens to fit.
+        // A `mixed` (or `object|null`) value carries no compile-time type to compare with the
+        // declared slot, and PHP checks exactly this assignment at run time under weak-mode
+        // property typing. The codegen guard raises the catchable `TypeError` there, so
+        // rejecting the write here would forbid a program PHP accepts whenever the runtime
+        // value happens to fit.
         // An initialized readonly slot throws before PHP considers the replacement type.
         // Its uninitialized branch still enforces that type at the runtime property store.
         let defers_to_runtime_property_typing = matches!(val_ty, PhpType::Mixed)
+            || crate::types::object_boundary::runtime_object_boundary(&expected_ty, val_ty).is_some()
             || readonly_write_guard;
         if class_info.visible_property_is_declared(property) && !defers_to_runtime_property_typing {
             checker.require_compatible_arg_type(

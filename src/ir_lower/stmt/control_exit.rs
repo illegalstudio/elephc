@@ -799,6 +799,13 @@ pub(crate) fn lower_throw_access_error_message(
     terminate_throw(ctx, value.value);
 }
 
+/// Throws an already-lowered exception object, running the finally bodies an uncaught throw
+/// applies to. Callers that rooted message operands retire them before calling this.
+pub(crate) fn throw_lowered_exception(ctx: &mut LoweringContext<'_, '_>, value: crate::ir::ValueId) {
+    if ctx.builder.insertion_block_is_terminated() { return; }
+    terminate_throw(ctx, value);
+}
+
 /// Lowers a statically-decided access violation as a named catchable exception.
 pub(crate) fn lower_throw_access_exception(
     ctx: &mut LoweringContext<'_, '_>,
