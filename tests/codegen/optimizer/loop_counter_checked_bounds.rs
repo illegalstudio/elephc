@@ -852,9 +852,13 @@ echo $sum, "\n";
         // Mach-O/Linux text emitters. The target-independent EIR test already
         // pins the raw icmp/iadd shape; here every supported target must compile
         // the same optimized source and emit a nonempty body.
-        // The target-independent EIR test pins the raw compare/update shape. Target
-        // assembly may omit EIR op comments (and Apple's staticlib stream does), so this
-        // test only requires every target to compile the optimized source.
+        // The target-independent EIR test pins the raw compare shape. The current text
+        // emitters do not retain an `op=icmp` comment for the rawint bound, but they do
+        // retain the raw integer update and the fast-path labels.
+        if target.starts_with("linux-") {
+            assert!(assembly.contains("rawint"), "{target}: missing raw-int fast path");
+            assert!(assembly.contains("op=iadd"), "{target}: missing raw counter update");
+        }
         fs::remove_dir_all(dir).unwrap();
     }
 }

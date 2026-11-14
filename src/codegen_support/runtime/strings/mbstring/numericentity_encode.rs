@@ -99,22 +99,22 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov w17, w14");                                        // decimal value to render
     emitter.instruction("mov w16, #10");                                        // decimal radix
     emitter.label("__rt_mb_encode_numericentity_utf8_digits");
-    emitter.instruction("udiv w18, w17, w16");                                  // drop the least significant digit
-    emitter.instruction("msub w19, w18, w16, w17");                             // recover the removed digit
-    emitter.instruction("add w19, w19, #48");                                   // convert the digit to ASCII
+    emitter.instruction("udiv w9, w17, w16");                                   // drop the least significant digit
+    emitter.instruction("msub w13, w9, w16, w17");                              // recover the removed digit
+    emitter.instruction("add w13, w13, #48");                                   // convert the digit to ASCII
     emitter.instruction("sub x15, x15, #1");                                    // move the digit cursor down
-    emitter.instruction("strb w19, [x15]");                                     // store the digit backwards
-    emitter.instruction("mov w17, w18");                                        // continue with the reduced value
+    emitter.instruction("strb w13, [x15]");                                     // store the digit backwards
+    emitter.instruction("mov w17, w9");                                         // continue with the reduced value
     emitter.instruction("cbnz w17, __rt_mb_encode_numericentity_utf8_digits");  // stop once every digit was produced
     emitter.label("__rt_mb_encode_numericentity_utf8_digit_copy");
     emitter.instruction("cmp x15, x12");                                        // are all digits copied?
     emitter.instruction("b.hs __rt_mb_encode_numericentity_utf8_semicolon");    // yes → terminate the reference
-    emitter.instruction("ldrb w18, [x15], #1");                                 // load the next decimal digit
-    emitter.instruction("strb w18, [x11], #1");                                 // place it in the result
+    emitter.instruction("ldrb w13, [x15], #1");                                 // load the next decimal digit
+    emitter.instruction("strb w13, [x11], #1");                                 // place it in the result
     emitter.instruction("b __rt_mb_encode_numericentity_utf8_digit_copy");      // copy the next digit
     emitter.label("__rt_mb_encode_numericentity_utf8_semicolon");
-    emitter.instruction("mov w18, #59");                                        // ASCII ';'
-    emitter.instruction("strb w18, [x11], #1");                                 // terminate the numeric reference
+    emitter.instruction("mov w13, #59");                                        // ASCII ';'
+    emitter.instruction("strb w13, [x11], #1");                                 // terminate the numeric reference
     emitter.instruction("b __rt_mb_encode_numericentity_utf8_copy");            // inspect the next source codepoint
     emitter.label("__rt_mb_encode_numericentity_utf8_ascii");
     emitter.instruction("strb w12, [x11], #1");                                 // copy the ASCII byte unchanged
@@ -246,4 +246,32 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edx, edx");                                        // no bytes for a rejected input
     emitter.instruction("leave");                                               // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the fallback sentinel
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+
+    /// Every AArch64 target avoids Apple's reserved x18 and the callee-saved x19 scratch.
+    #[test]
+    fn numericentity_utf8_avoids_reserved_and_callee_saved_registers() {
+        for target in [
+            "macos-aarch64",
+            "ios-arm64",
+            "ios-sim-arm64",
+            "linux-aarch64",
+            "linux-x86_64",
+        ] {
+            let mut emitter = Emitter::new(Target::parse(target).unwrap());
+            emit(&mut emitter);
+            let asm = emitter.output();
+            assert!(asm.contains("__rt_mb_encode_numericentity_utf8"), "{target}");
+            if target != "linux-x86_64" {
+                assert!(!asm.contains("w18"), "{target}: reserved Apple register\n{asm}");
+                assert!(!asm.contains("w19"), "{target}: callee-saved x19 scratch\n{asm}");
+                assert!(!asm.contains("x19"), "{target}: callee-saved x19 scratch\n{asm}");
+            }
+        }
+    }
 }

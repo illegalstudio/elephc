@@ -58,6 +58,8 @@ echo strlen($b);
     let main = emit_main_ir(source);
     assert_eq!(main.matches("runtime.mb_chr_len").count(), 2, "{main}");
     assert!(!main.contains("runtime.mb_chr "), "{main}");
+    assert!(!main.contains("exception.guard_owned"), "{main}");
+    assert!(!main.contains("exception.unguard_owned"), "{main}");
 }
 
 /// Multiple length observations share one retargeted call; UTF-16, invalid codepoints, and
@@ -76,6 +78,25 @@ echo strlen($c);
     let main = emit_main_ir(source);
     assert_eq!(main.matches("runtime.mb_chr_len").count(), 3, "{main}");
     assert!(!main.contains("runtime.mb_chr "), "{main}");
+}
+
+/// A loop-hoisted UTF-8 encoding drops the bridge's owned-argument exception guard.
+#[test]
+fn test_mb_chr_len_local_sink_drops_pure_argument_guard() {
+    let source = r#"<?php
+$codepoints = [0x41, 0xA9, 0x20AC, 0x1F600];
+$n = 0;
+for ($i = 0; $i < 32; $i++) {
+    $encoded = mb_chr($codepoints[$i & 3], "UTF-8");
+    $n += strlen($encoded);
+}
+echo $n, "\n";
+"#;
+    assert_eq!(compile_and_run(source), "80\n");
+    let main = emit_main_ir(source);
+    assert!(main.contains("runtime.mb_chr_len"), "{main}");
+    assert!(!main.contains("exception.guard_owned"), "{main}");
+    assert!(!main.contains("exception.unguard_owned"), "{main}");
 }
 
 /// Echoing the string value keeps the boxed call because the length helper no longer returns it.

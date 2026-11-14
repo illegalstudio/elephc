@@ -158,6 +158,20 @@ def php_jit_problem(php: str, isolated: bool = False, timeout: float = 30) -> st
     return f"OPcache tracing JIT inactive for {php} ({detail})"
 
 
+def frankenphp_jit_problem(frankenphp: str, ini: Path, timeout: float = 30) -> str | None:
+    """Explain why the pinned FrankenPHP JIT configuration is inactive, or return None."""
+    env = os.environ.copy()
+    env["PHPRC"] = str(ini)
+    result = subprocess.run(
+        [frankenphp, "php-cli", "-r", JIT_PROBE], cwd=REPO, env=env,
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode == 0 and result.stdout == "on" and not result.stderr:
+        return None
+    detail = " ".join((result.stdout + result.stderr).split()) or f"exit {result.returncode}"
+    return f"FrankenPHP tracing JIT inactive ({detail})"
+
+
 def require_baselines(cases: dict[str, list[dict]]) -> None:
     """Reject missing comparison tools before CI builds or records partial results."""
     kinds = {kind for fixtures in cases.values() for case in fixtures

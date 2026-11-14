@@ -133,12 +133,23 @@ def main() -> None:
         ini_dir = Path(temporary)
         nojit = ini_dir / "frankenphp.ini"
         jit = ini_dir / "frankenphp-jit.ini"
-        nojit.write_text("opcache.enable_cli=0\nopcache.jit=0\n")
+        nojit.write_text(
+            "opcache.enable=0\nopcache.enable_cli=0\nopcache.jit=0\n"
+            "opcache.file_update_protection=0\n"
+        )
         jit.write_text(
+            "opcache.enable=1\n"
             "opcache.enable_cli=1\n"
             "opcache.jit_buffer_size=64M\n"
             "opcache.jit=tracing\n"
+            "opcache.file_update_protection=0\n"
         )
+        problem = common.php_jit_problem(php) if (php := shutil.which("php")) else "PHP interpreter (php)"
+        if problem:
+            raise SystemExit(problem)
+        problem = common.frankenphp_jit_problem(frankenphp, jit)
+        if problem:
+            raise SystemExit(problem)
         os.environ["FRANKENPHP_BIN"] = frankenphp
         os.environ["FRANKENPHP_PHPRC"] = str(nojit)
         os.environ["FRANKENPHP_JIT_PHPRC"] = str(jit)

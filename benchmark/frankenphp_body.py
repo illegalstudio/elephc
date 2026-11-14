@@ -169,10 +169,20 @@ def main() -> None:
         ini_dir = Path(temporary)
         nojit_ini = ini_dir / "frankenphp.ini"
         jit_ini = ini_dir / "frankenphp-jit.ini"
-        nojit_ini.write_text("opcache.enable_cli=0\nopcache.jit=0\n")
-        jit_ini.write_text(
-            "opcache.enable_cli=1\nopcache.jit_buffer_size=64M\nopcache.jit=tracing\n"
+        nojit_ini.write_text(
+            "opcache.enable=0\nopcache.enable_cli=0\nopcache.jit=0\n"
+            "opcache.file_update_protection=0\n"
         )
+        jit_ini.write_text(
+            "opcache.enable=1\nopcache.enable_cli=1\nopcache.jit_buffer_size=64M\n"
+            "opcache.jit=tracing\nopcache.file_update_protection=0\n"
+        )
+        problem = common.php_jit_problem(php)
+        if problem:
+            raise SystemExit(problem)
+        problem = common.frankenphp_jit_problem(frankenphp, jit_ini)
+        if problem:
+            raise SystemExit(problem)
         rows = []
         for case in selected:
             expected = (case["directory"] / "expected.txt").read_text()
@@ -188,10 +198,9 @@ def main() -> None:
                 common.run_process([str(compiler), "timed.php"], run_dir, args.timeout)
                 commands["elephc"] = [str(run_dir / "timed")]
                 commands["php"] = [php, "-d", "opcache.enable_cli=0",
-                                   "-d", "opcache.jit=0", "timed.php"]
-                commands["php-jit"] = [php, "-d", "opcache.enable_cli=1",
-                                       "-d", "opcache.jit_buffer_size=64M",
-                                       "-d", "opcache.jit=tracing", "timed.php"]
+                                   "-d", "opcache.jit=0",
+                                   "-d", "opcache.file_update_protection=0", "timed.php"]
+                commands["php-jit"] = common.php_command(php, "timed.php")
                 commands["frankenphp"] = [frankenphp, "php-cli", "timed.php"]
                 commands["frankenphp-jit"] = [frankenphp, "php-cli", "timed.php"]
                 envs = {label: None for label in LABELS}

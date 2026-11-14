@@ -868,3 +868,16 @@ echo bin2hex(mb_decode_numericentity("&#233;", [128, 1114111, 0, 4294967295], "U
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A PHP string boxed as Mixed indexes one character, including negative offsets.
+#[test]
+fn test_boxed_string_offset_reads_return_the_character() {
+    let out = compile_and_run(r#"<?php
+$json = json_encode("A");
+$chr = mb_chr(65, "UTF-8");
+$euro = mb_chr(0x20AC, "UTF-8");
+echo ord($json[0]), "|", ord($chr[0]), "|", strlen($chr), "|", bin2hex($chr), "|";
+echo bin2hex($euro[0]), "|", bin2hex($euro[-1]), "\n";
+"#);
+    assert_eq!(out, "34|65|1|41|e2|ac\n");
+}

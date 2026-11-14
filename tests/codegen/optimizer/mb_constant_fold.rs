@@ -262,3 +262,38 @@ echo strlen($encoded), ":", ord($encoded[0]), "\n";
     assert!(optimized.contains("runtime.mb_convert_kana"), "{optimized}");
     assert!(optimized.contains("runtime.mb_encode_numericentity"), "{optimized}");
 }
+
+/// A marker-encoded high byte is invalid UTF-8 as a PHP subject, so the runtime bridge owns
+/// its substitution behavior and the fold stays disabled.
+#[test]
+fn test_mb_constant_fold_rejects_escaped_byte_subject() {
+    let source = r#"<?php
+$map = [128, 1114111, 0, 2097151];
+$text = "caf\xFF";
+$encoded = mb_encode_numericentity($text, $map, "UTF-8");
+echo strlen($encoded), ":", ord($encoded[0]), "|";
+$converted = mb_convert_kana("caf\xFF", "a", "UTF-8");
+echo strlen($converted), ":", ord($converted[0]), "\n";
+"#;
+    let optimized = run_with_ir_opt(source, "--ir-opt=on");
+    let unoptimized = run_with_ir_opt(source, "--ir-opt=off");
+    assert_eq!(optimized, unoptimized);
+    let ir = emit_ir(source, true);
+    assert!(ir.contains("runtime.mb_encode_numericentity"), "{ir}");
+    assert!(ir.contains("runtime.mb_convert_kana"), "{ir}");
+}
+
+/// Decimal entities that would trigger substitution (surrogates) keep the runtime decoder.
+#[test]
+fn test_mb_constant_fold_rejects_substitute_sensitive_decode() {
+    let source = r#"<?php
+$map = [128, 1114111, 0, 2097151];
+$decoded = mb_decode_numericentity("&#xD800;", $map, "UTF-8");
+echo strlen($decoded), ":", ord($decoded[0]), "\n";
+"#;
+    let optimized = run_with_ir_opt(source, "--ir-opt=on");
+    let unoptimized = run_with_ir_opt(source, "--ir-opt=off");
+    assert_eq!(optimized, unoptimized);
+    let ir = emit_ir(source, true);
+    assert!(ir.contains("runtime.mb_decode_numericentity"), "{ir}");
+}

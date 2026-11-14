@@ -55,6 +55,7 @@ pub(super) fn aliased_locals(
     body: &[Stmt],
     by_ref_params: &std::collections::HashSet<String>,
 ) -> std::collections::HashSet<String> {
+    /// Adds every local bound through a reference, global or static alias in `stmts`.
     fn collect(stmts: &[Stmt], aliased: &mut std::collections::HashSet<String>) {
         for stmt in stmts {
             match &stmt.kind {

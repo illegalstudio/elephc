@@ -512,16 +512,7 @@ pub(super) fn main_argc_slot(function: &Function, slot: crate::ir::LocalSlotId) 
         .locals
         .get(slot.as_raw() as usize)
         .and_then(|local| local.name.as_deref());
-    let param_name = function
-        .params
-        .get(slot.as_raw() as usize)
-        .map(|param| param.name.as_str());
-    if !matches!(
-        (local_name, param_name),
-        (Some("argc"), _) | (_, Some("argc"))
-            | (Some(crate::func_args::HIDDEN_ARGC_PARAM), _)
-            | (_, Some(crate::func_args::HIDDEN_ARGC_PARAM))
-    ) {
+    if local_name != Some("argc") {
         return false;
     }
     !function.instructions.iter().any(|inst| {

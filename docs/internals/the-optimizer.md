@@ -693,6 +693,17 @@ promotion. Any observed map, dynamic divisor, parameter source, reassigned map
 local, zero divisor or intervening source write keeps the materialized map and its
 generic path.
 
+`src/ir_passes/mb_constant_fold.rs` folds `mb_convert_kana()`,
+`mb_encode_numericentity()` and `mb_decode_numericentity()` when the subject,
+mode, canonical full-decimal map and explicit UTF-8 encoding are compile-time
+constants. The compiler-pool subject is first decoded to its real PHP bytes with
+`literal_bytes`; a subject that is not valid UTF-8 keeps the runtime bridge, and
+`mb_decode_numericentity()` additionally rejects decimal entities that would need
+`mb_substitute_character()` state (surrogates and values above `U+10FFFF`). The
+folded result is a persistent `ConstStr`, so the acquire/store/release scaffolding
+around the call stays intact. Dynamic subjects, modes, encodings, non-canonical
+maps and substitute-sensitive entities keep the bridge's exact behavior.
+
 `src/ir_passes/const_string_array_intval_fold.rs` folds an integer cast of a
 masked read over an immutable literal string array, `(int) $texts[$i & M]`. The
 array must be a PHP local built from `array_new` plus single-use `ConstStr`

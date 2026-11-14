@@ -1635,7 +1635,7 @@ pub(super) fn integer_op(op: MixedNumericOp) -> Op {
         MixedNumericOp::Add => Op::IAdd,
         MixedNumericOp::Sub => Op::ISub,
         MixedNumericOp::Mul => Op::IMul,
-        MixedNumericOp::Div => Op::IDiv,
+        MixedNumericOp::Div => unreachable!("checked integer division is never promoted to a raw wrapping op"),
         MixedNumericOp::Pow => Op::IPow,
     }
 }
@@ -1646,7 +1646,7 @@ fn float_op(op: MixedNumericOp) -> Op {
         MixedNumericOp::Add => Op::FAdd,
         MixedNumericOp::Sub => Op::FSub,
         MixedNumericOp::Mul => Op::FMul,
-        MixedNumericOp::Div => Op::FDiv,
+        MixedNumericOp::Div => unreachable!("checked integer division is never promoted to a raw float op"),
         MixedNumericOp::Pow => Op::FPow,
     }
 }

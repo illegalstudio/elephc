@@ -13,6 +13,7 @@
 //!   scaffolding around the call keeps working without per-iteration allocation.
 //! - The fold is target-independent and never crosses a user function or mutable state.
 
+use elephc_builtin_contract::string_literal::literal_bytes;
 use elephc_mbstring::encoding::{Encoding, Substitute};
 use elephc_mbstring::text::{self, KanaMode};
 
@@ -122,6 +123,41 @@ fn underlying(function: &Function, mut value: ValueId) -> ValueId {
     value
 }
 
+/// Rejects decimal entities that would require `mb_substitute_character()` state.
+///
+/// Numeric-entity decoding substitutes a replacement character for surrogates and values
+/// above `U+10FFFF`. A subject whose `&#DECIMAL;` references are all valid scalar values
+/// cannot consult that process-global state, so folding it is exact.
+fn decimal_entities_are_valid_scalars(subject: &[u8]) -> bool {
+    let mut index = 0;
+    while index + 1 < subject.len() {
+        if subject[index] != b'&' || subject[index + 1] != b'#' {
+            index += 1;
+            continue;
+        }
+        let mut cursor = index + 2;
+        let mut value: u32 = 0;
+        let mut digits = 0;
+        while cursor < subject.len() && subject[cursor].is_ascii_digit() {
+            let digit = u32::from(subject[cursor] - b'0');
+            let Some(next) = value.checked_mul(10).and_then(|value| value.checked_add(digit)) else {
+                return false;
+            };
+            value = next;
+            digits += 1;
+            cursor += 1;
+        }
+        if digits == 0 || cursor >= subject.len() || subject[cursor] != b';' {
+            return false;
+        }
+        if value > 0x10FFFF || (0xD800..=0xDFFF).contains(&value) {
+            return false;
+        }
+        index = cursor + 1;
+    }
+    true
+}
+
 /// Folds one mbstring producer when every argument is a compile-time constant.
 fn fold(function: &mut Function, data: &mut DataPool, call_id: InstId) -> bool {
     let Some(call) = function.instruction(call_id) else {
@@ -142,10 +178,18 @@ fn fold(function: &mut Function, data: &mut DataPool, call_id: InstId) -> bool {
     let Some(subject) = const_text(function, data, call.operands[0]) else {
         return false;
     };
+    let subject = literal_bytes(&subject);
+    // The compiler pool stores byte escapes as private-use marker chars. The bridge sees the
+    // real PHP bytes; a marker-encoded subject is always valid UTF-8 in the pool but may be
+    // invalid as PHP bytes, where PHP substitution would be process-global state. Only a
+    // genuinely valid UTF-8 subject can prove that no substitution is needed.
+    if std::str::from_utf8(&subject).is_err() {
+        return false;
+    }
     let Some(encoding_name) = const_text(function, data, call.operands[2]) else {
         return false;
     };
-    let Some(encoding) = Encoding::lookup_c_string(encoding_name.as_bytes()) else {
+    let Some(encoding) = Encoding::lookup_c_string(&literal_bytes(&encoding_name)) else {
         return false;
     };
     // A valid UTF-8 subject cannot trigger the process-global replacement character
@@ -162,14 +206,14 @@ fn fold(function: &mut Function, data: &mut DataPool, call_id: InstId) -> bool {
             let Ok(mode) = KanaMode::parse(mode.as_bytes()) else {
                 return false;
             };
-            text::convert_kana(subject.as_bytes(), mode, encoding, Substitute::default())
+            text::convert_kana(&subject, mode, encoding, Substitute::default())
         }
         RuntimeFnId::MbEncodeNumericentity => {
             if !full_decimal_map(function, underlying(function, call.operands[1])) {
                 return false;
             }
             let Ok(output) = text::encode_numericentity(
-                subject.as_bytes(),
+                &subject,
                 &FULL_DECIMAL_MAP,
                 encoding,
                 Substitute::default(),
@@ -183,8 +227,11 @@ fn fold(function: &mut Function, data: &mut DataPool, call_id: InstId) -> bool {
             if !full_decimal_map(function, underlying(function, call.operands[1])) {
                 return false;
             }
+            if !decimal_entities_are_valid_scalars(&subject) {
+                return false;
+            }
             let Ok(output) = text::decode_numericentity(
-                subject.as_bytes(),
+                &subject,
                 &FULL_DECIMAL_MAP,
                 encoding,
                 Substitute::default(),

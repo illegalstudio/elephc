@@ -165,7 +165,7 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | EchoValue | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | Warn
             // Stores copy the value into other storage; they never alias the source slot.
             | StoreLocal | StoreGlobal | StoreStaticLocal | StoreStaticProperty | InitStaticLocal
-            | StoreRefCell | ExternGlobalStore
+            | ExternGlobalStore
             // Value-level ownership/refcount bookkeeping.
             | Acquire | Release | Move | Borrow | EnsureOwned
             // Buffer element access reads its handle and index operands by value; the stored

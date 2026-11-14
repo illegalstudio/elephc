@@ -168,6 +168,9 @@ fn specialize(
         (false, false) => return false,
     };
     let observation_effects = observation_effects(function, data, result, sink);
+    let guarded_encoding = function
+        .instruction(candidate)
+        .and_then(|inst| inst.operands.get(1).copied());
 
     let Some(call) = function.instruction_mut(candidate) else {
         return false;
@@ -273,6 +276,11 @@ fn specialize(
         }
     }
 
+    if observation_effects.is_pure() {
+        if let Some(encoding) = guarded_encoding {
+            neutral.extend(guard_scaffold(function, encoding));
+        }
+    }
     neutral.extend(cleanup);
     neutral.push(store);
     for id in neutral {
@@ -284,6 +292,48 @@ fn specialize(
         }
     }
     true
+}
+
+/// Returns the exception guard/unguard pair protecting one owned encoding argument.
+///
+/// Lowering wraps a potentially throwing bridge call with these instructions. The fused UTF-8
+/// observation is pure, so the guard only adds a global exception-state write per iteration.
+/// A guard result with any observer besides its unguard keeps the scaffold.
+fn guard_scaffold(function: &Function, encoding: ValueId) -> Vec<InstId> {
+    let uses = function.value_use_counts();
+    for (raw, inst) in function.instructions.iter().enumerate() {
+        if inst.op != Op::RuntimeCall
+            || inst.operands.first() != Some(&encoding)
+            || !matches!(
+                inst.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ExceptionGuardOwned))
+            )
+        {
+            continue;
+        }
+        let Some(guard_result) = inst.result else {
+            return Vec::new();
+        };
+        if uses.get(&guard_result).copied().unwrap_or(0) != 1 {
+            return Vec::new();
+        }
+        let guard = InstId::from_raw(raw as u32);
+        for (raw, unguard) in function.instructions.iter().enumerate() {
+            if unguard.op == Op::RuntimeCall
+                && unguard.operands.as_slice() == [guard_result]
+                && matches!(
+                    unguard.immediate,
+                    Some(Immediate::RuntimeCall(
+                        RuntimeCallTarget::ExceptionUnguardOwned
+                    ))
+                )
+            {
+                return vec![guard, InstId::from_raw(raw as u32)];
+            }
+        }
+        return Vec::new();
+    }
+    Vec::new()
 }
 
 /// Returns the precise effects of the fused observation when its arguments prove the fast path.
