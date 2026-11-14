@@ -381,6 +381,21 @@ pub(super) fn materialize_called_class_id(
                 0,
             );
         }
+        CalledClassIdArg::Object(value) => {
+            let source_ty = ctx.load_value_to_reg(*value, abi::int_result_reg(ctx.emitter))?;
+            if !matches!(source_ty.codegen_repr(), PhpType::Object(_)) {
+                return Err(CodegenIrError::invalid_module(format!(
+                    "object receiver has PHP type {:?} for forwarded called-class id",
+                    source_ty
+                )));
+            }
+            abi::emit_load_from_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                abi::int_result_reg(ctx.emitter),
+                0,
+            );
+        }
     }
     Ok(())
 }

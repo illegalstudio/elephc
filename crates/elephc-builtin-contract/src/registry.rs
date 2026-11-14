@@ -39,6 +39,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
                     + crate::catalog_gmp::CONTRACTS.len()
                     + crate::catalog_mbstring::CONTRACTS.len()
                     + crate::catalog_pcntl::CONTRACTS.len()
+                    + crate::catalog_tidy::CONTRACTS.len()
                     + crate::catalog_xml::CONTRACTS.len()
                     + crate::catalog_surfaces::SURFACE_CONTRACTS.len()
                     + curl_capacity,
@@ -47,6 +48,7 @@ pub fn contracts() -> &'static [BuiltinContract] {
             contracts.extend_from_slice(crate::catalog_gmp::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_mbstring::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_pcntl::CONTRACTS);
+            contracts.extend_from_slice(crate::catalog_tidy::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_xml::CONTRACTS);
             contracts.extend_from_slice(crate::catalog_surfaces::SURFACE_CONTRACTS);
             #[cfg(feature = "curl")]
@@ -173,7 +175,8 @@ mod tests {
         // per-class `ReflectionClass` builder for `getDeclaringClass()`.
         // +1: `__elephc_eval_reflection_class_build`, its eval twin for the class names
         // eval-built member reflectors store.
-        assert_eq!(contracts().len(), 1278 + curl_surface);
+        // +24: the `tidy_*` procedures of the tidy prelude.
+        assert_eq!(contracts().len(), 1302 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

@@ -4415,6 +4415,42 @@
     },
     {
       "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "tidy",
+      "name": "tidy",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "prelude",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "kind": "class",
+      "module": "tidy",
+      "name": "tidyNode",
+      "php_manual": null,
+      "since": null
+    },
+    {
+      "aot": {
         "kind": "checker-injected",
         "supported": true
       },
@@ -26837,6 +26873,2904 @@
       "route": "predefined",
       "since": null,
       "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_ASP",
+      "route": "predefined",
+      "since": null,
+      "value": 10
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_CDATA",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_COMMENT",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_DOCTYPE",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_END",
+      "route": "predefined",
+      "since": null,
+      "value": 6
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_JSTE",
+      "route": "predefined",
+      "since": null,
+      "value": 11
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_PHP",
+      "route": "predefined",
+      "since": null,
+      "value": 12
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_PROCINS",
+      "route": "predefined",
+      "since": null,
+      "value": 3
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_ROOT",
+      "route": "predefined",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_SECTION",
+      "route": "predefined",
+      "since": null,
+      "value": 9
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_START",
+      "route": "predefined",
+      "since": null,
+      "value": 5
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_STARTEND",
+      "route": "predefined",
+      "since": null,
+      "value": 7
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_TEXT",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_NODETYPE_XMLDECL",
+      "route": "predefined",
+      "since": null,
+      "value": 13
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_A",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_ABBR",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_ACRONYM",
+      "route": "predefined",
+      "since": null,
+      "value": 3
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_ADDRESS",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_ALIGN",
+      "route": "predefined",
+      "since": null,
+      "value": 5
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_APPLET",
+      "route": "predefined",
+      "since": null,
+      "value": 6
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_AREA",
+      "route": "predefined",
+      "since": null,
+      "value": 7
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_ARTICLE",
+      "route": "predefined",
+      "since": null,
+      "value": 123
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_ASIDE",
+      "route": "predefined",
+      "since": null,
+      "value": 124
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_AUDIO",
+      "route": "predefined",
+      "since": null,
+      "value": 125
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_B",
+      "route": "predefined",
+      "since": null,
+      "value": 8
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BASE",
+      "route": "predefined",
+      "since": null,
+      "value": 9
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BASEFONT",
+      "route": "predefined",
+      "since": null,
+      "value": 10
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BDI",
+      "route": "predefined",
+      "since": null,
+      "value": 126
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BDO",
+      "route": "predefined",
+      "since": null,
+      "value": 11
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BGSOUND",
+      "route": "predefined",
+      "since": null,
+      "value": 12
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BIG",
+      "route": "predefined",
+      "since": null,
+      "value": 13
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BLINK",
+      "route": "predefined",
+      "since": null,
+      "value": 14
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BLOCKQUOTE",
+      "route": "predefined",
+      "since": null,
+      "value": 15
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BODY",
+      "route": "predefined",
+      "since": null,
+      "value": 16
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BR",
+      "route": "predefined",
+      "since": null,
+      "value": 17
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_BUTTON",
+      "route": "predefined",
+      "since": null,
+      "value": 18
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_CANVAS",
+      "route": "predefined",
+      "since": null,
+      "value": 127
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_CAPTION",
+      "route": "predefined",
+      "since": null,
+      "value": 19
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_CENTER",
+      "route": "predefined",
+      "since": null,
+      "value": 20
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_CITE",
+      "route": "predefined",
+      "since": null,
+      "value": 21
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_CODE",
+      "route": "predefined",
+      "since": null,
+      "value": 22
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_COL",
+      "route": "predefined",
+      "since": null,
+      "value": 23
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_COLGROUP",
+      "route": "predefined",
+      "since": null,
+      "value": 24
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_COMMAND",
+      "route": "predefined",
+      "since": null,
+      "value": 128
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_COMMENT",
+      "route": "predefined",
+      "since": null,
+      "value": 25
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DATALIST",
+      "route": "predefined",
+      "since": null,
+      "value": 130
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DD",
+      "route": "predefined",
+      "since": null,
+      "value": 26
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DEL",
+      "route": "predefined",
+      "since": null,
+      "value": 27
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DETAILS",
+      "route": "predefined",
+      "since": null,
+      "value": 131
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DFN",
+      "route": "predefined",
+      "since": null,
+      "value": 28
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DIALOG",
+      "route": "predefined",
+      "since": null,
+      "value": 132
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DIR",
+      "route": "predefined",
+      "since": null,
+      "value": 29
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DIV",
+      "route": "predefined",
+      "since": null,
+      "value": 30
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DL",
+      "route": "predefined",
+      "since": null,
+      "value": 31
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_DT",
+      "route": "predefined",
+      "since": null,
+      "value": 32
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_EM",
+      "route": "predefined",
+      "since": null,
+      "value": 33
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_EMBED",
+      "route": "predefined",
+      "since": null,
+      "value": 34
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_FIELDSET",
+      "route": "predefined",
+      "since": null,
+      "value": 35
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_FIGCAPTION",
+      "route": "predefined",
+      "since": null,
+      "value": 133
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_FIGURE",
+      "route": "predefined",
+      "since": null,
+      "value": 134
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_FONT",
+      "route": "predefined",
+      "since": null,
+      "value": 36
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_FOOTER",
+      "route": "predefined",
+      "since": null,
+      "value": 135
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_FORM",
+      "route": "predefined",
+      "since": null,
+      "value": 37
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_FRAME",
+      "route": "predefined",
+      "since": null,
+      "value": 38
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_FRAMESET",
+      "route": "predefined",
+      "since": null,
+      "value": 39
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_H1",
+      "route": "predefined",
+      "since": null,
+      "value": 40
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_H2",
+      "route": "predefined",
+      "since": null,
+      "value": 41
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_H3",
+      "route": "predefined",
+      "since": null,
+      "value": 42
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_H4",
+      "route": "predefined",
+      "since": null,
+      "value": 43
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_H5",
+      "route": "predefined",
+      "since": null,
+      "value": 44
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_H6",
+      "route": "predefined",
+      "since": null,
+      "value": 45
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_HEAD",
+      "route": "predefined",
+      "since": null,
+      "value": 46
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_HEADER",
+      "route": "predefined",
+      "since": null,
+      "value": 136
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_HGROUP",
+      "route": "predefined",
+      "since": null,
+      "value": 137
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_HR",
+      "route": "predefined",
+      "since": null,
+      "value": 47
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_HTML",
+      "route": "predefined",
+      "since": null,
+      "value": 48
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_I",
+      "route": "predefined",
+      "since": null,
+      "value": 49
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_IFRAME",
+      "route": "predefined",
+      "since": null,
+      "value": 50
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_ILAYER",
+      "route": "predefined",
+      "since": null,
+      "value": 51
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_IMG",
+      "route": "predefined",
+      "since": null,
+      "value": 52
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_INPUT",
+      "route": "predefined",
+      "since": null,
+      "value": 53
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_INS",
+      "route": "predefined",
+      "since": null,
+      "value": 54
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_ISINDEX",
+      "route": "predefined",
+      "since": null,
+      "value": 55
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_KBD",
+      "route": "predefined",
+      "since": null,
+      "value": 56
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_KEYGEN",
+      "route": "predefined",
+      "since": null,
+      "value": 57
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_LABEL",
+      "route": "predefined",
+      "since": null,
+      "value": 58
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_LAYER",
+      "route": "predefined",
+      "since": null,
+      "value": 59
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_LEGEND",
+      "route": "predefined",
+      "since": null,
+      "value": 60
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_LI",
+      "route": "predefined",
+      "since": null,
+      "value": 61
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_LINK",
+      "route": "predefined",
+      "since": null,
+      "value": 62
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_LISTING",
+      "route": "predefined",
+      "since": null,
+      "value": 63
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_MAIN",
+      "route": "predefined",
+      "since": null,
+      "value": 138
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_MAP",
+      "route": "predefined",
+      "since": null,
+      "value": 64
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_MARK",
+      "route": "predefined",
+      "since": null,
+      "value": 139
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_MARQUEE",
+      "route": "predefined",
+      "since": null,
+      "value": 66
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_MENU",
+      "route": "predefined",
+      "since": null,
+      "value": 67
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_MENUITEM",
+      "route": "predefined",
+      "since": null,
+      "value": 140
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_META",
+      "route": "predefined",
+      "since": null,
+      "value": 68
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_METER",
+      "route": "predefined",
+      "since": null,
+      "value": 141
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_MULTICOL",
+      "route": "predefined",
+      "since": null,
+      "value": 69
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_NAV",
+      "route": "predefined",
+      "since": null,
+      "value": 142
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_NOBR",
+      "route": "predefined",
+      "since": null,
+      "value": 70
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_NOEMBED",
+      "route": "predefined",
+      "since": null,
+      "value": 71
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_NOFRAMES",
+      "route": "predefined",
+      "since": null,
+      "value": 72
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_NOLAYER",
+      "route": "predefined",
+      "since": null,
+      "value": 73
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_NOSAVE",
+      "route": "predefined",
+      "since": null,
+      "value": 74
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_NOSCRIPT",
+      "route": "predefined",
+      "since": null,
+      "value": 75
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_OBJECT",
+      "route": "predefined",
+      "since": null,
+      "value": 76
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_OL",
+      "route": "predefined",
+      "since": null,
+      "value": 77
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_OPTGROUP",
+      "route": "predefined",
+      "since": null,
+      "value": 78
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_OPTION",
+      "route": "predefined",
+      "since": null,
+      "value": 79
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_OUTPUT",
+      "route": "predefined",
+      "since": null,
+      "value": 143
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_P",
+      "route": "predefined",
+      "since": null,
+      "value": 80
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_PARAM",
+      "route": "predefined",
+      "since": null,
+      "value": 81
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_PLAINTEXT",
+      "route": "predefined",
+      "since": null,
+      "value": 83
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_PRE",
+      "route": "predefined",
+      "since": null,
+      "value": 84
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_PROGRESS",
+      "route": "predefined",
+      "since": null,
+      "value": 144
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_Q",
+      "route": "predefined",
+      "since": null,
+      "value": 85
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_RB",
+      "route": "predefined",
+      "since": null,
+      "value": 86
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_RBC",
+      "route": "predefined",
+      "since": null,
+      "value": 87
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_RP",
+      "route": "predefined",
+      "since": null,
+      "value": 88
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_RT",
+      "route": "predefined",
+      "since": null,
+      "value": 89
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_RTC",
+      "route": "predefined",
+      "since": null,
+      "value": 90
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_RUBY",
+      "route": "predefined",
+      "since": null,
+      "value": 91
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_S",
+      "route": "predefined",
+      "since": null,
+      "value": 92
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SAMP",
+      "route": "predefined",
+      "since": null,
+      "value": 93
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SCRIPT",
+      "route": "predefined",
+      "since": null,
+      "value": 94
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SECTION",
+      "route": "predefined",
+      "since": null,
+      "value": 145
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SELECT",
+      "route": "predefined",
+      "since": null,
+      "value": 95
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SERVER",
+      "route": "predefined",
+      "since": null,
+      "value": 96
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SERVLET",
+      "route": "predefined",
+      "since": null,
+      "value": 97
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SMALL",
+      "route": "predefined",
+      "since": null,
+      "value": 98
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SOURCE",
+      "route": "predefined",
+      "since": null,
+      "value": 146
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SPACER",
+      "route": "predefined",
+      "since": null,
+      "value": 99
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SPAN",
+      "route": "predefined",
+      "since": null,
+      "value": 100
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_STRIKE",
+      "route": "predefined",
+      "since": null,
+      "value": 101
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_STRONG",
+      "route": "predefined",
+      "since": null,
+      "value": 102
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_STYLE",
+      "route": "predefined",
+      "since": null,
+      "value": 103
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SUB",
+      "route": "predefined",
+      "since": null,
+      "value": 104
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SUMMARY",
+      "route": "predefined",
+      "since": null,
+      "value": 147
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_SUP",
+      "route": "predefined",
+      "since": null,
+      "value": 105
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TABLE",
+      "route": "predefined",
+      "since": null,
+      "value": 107
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TBODY",
+      "route": "predefined",
+      "since": null,
+      "value": 108
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TD",
+      "route": "predefined",
+      "since": null,
+      "value": 109
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TEMPLATE",
+      "route": "predefined",
+      "since": null,
+      "value": 148
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TEXTAREA",
+      "route": "predefined",
+      "since": null,
+      "value": 110
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TFOOT",
+      "route": "predefined",
+      "since": null,
+      "value": 111
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TH",
+      "route": "predefined",
+      "since": null,
+      "value": 112
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_THEAD",
+      "route": "predefined",
+      "since": null,
+      "value": 113
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TIME",
+      "route": "predefined",
+      "since": null,
+      "value": 149
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TITLE",
+      "route": "predefined",
+      "since": null,
+      "value": 114
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TR",
+      "route": "predefined",
+      "since": null,
+      "value": 115
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TRACK",
+      "route": "predefined",
+      "since": null,
+      "value": 150
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_TT",
+      "route": "predefined",
+      "since": null,
+      "value": 116
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_U",
+      "route": "predefined",
+      "since": null,
+      "value": 117
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_UL",
+      "route": "predefined",
+      "since": null,
+      "value": 118
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_UNKNOWN",
+      "route": "predefined",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_VAR",
+      "route": "predefined",
+      "since": null,
+      "value": 119
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_VIDEO",
+      "route": "predefined",
+      "since": null,
+      "value": 151
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_WBR",
+      "route": "predefined",
+      "since": null,
+      "value": 120
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "tidy",
+      "name": "TIDY_TAG_XMP",
+      "route": "predefined",
+      "since": null,
+      "value": 121
     },
     {
       "aot": {

@@ -40,6 +40,7 @@ mod string;
 mod symbols;
 mod time;
 mod types;
+mod tidy;
 mod xml;
 mod tokenizer;
 
@@ -65,6 +66,7 @@ pub(super) use scalars::*;
 pub(super) use string::*;
 pub(super) use symbols::*;
 pub(super) use time::*;
+pub(super) use tidy::*;
 pub(super) use xml::*;
 pub(super) use tokenizer::*;
 pub(super) use types::*;

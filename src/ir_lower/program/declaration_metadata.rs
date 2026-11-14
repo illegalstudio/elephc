@@ -402,6 +402,9 @@ pub(super) fn collect_program_declared_names<T>(
                 let Some(name) = pick(stmt) else {
                     continue;
                 };
+                if is_internal_synthetic_class_name(name) {
+                    continue;
+                }
                 let key = crate::names::php_symbol_key(name);
                 let is_known = known.contains_key(name)
                     || known.keys().any(|candidate| {

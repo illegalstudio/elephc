@@ -55,6 +55,8 @@ pub enum Area {
     /// `ext/xml` and `ext/xmlwriter` surfaces declared by the xml prelude (plus the one
     /// registry builtin `xml_parse_into_struct`).
     Xml,
+    /// `ext/tidy` surface declared by the tidy prelude over the `elephc_tidy` bridge.
+    Tidy,
     /// The `ext/random` surface declared by the random prelude: its procedural functions,
     /// `Random\*` classes, `MT_RAND_*` constants, and internal helpers.
     Random,

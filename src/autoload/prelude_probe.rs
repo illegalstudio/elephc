@@ -44,6 +44,7 @@ const PROBED_GROUPS: &[(&str, fn(&[Stmt]) -> bool)] = &[
     ("tokenizer", crate::tokenizer_prelude::program_uses_surface),
     ("curl", crate::curl_prelude::program_uses_surface),
     ("xml", crate::xml_prelude::program_uses_surface),
+    ("tidy", crate::tidy_prelude::program_uses_surface),
     ("fileinfo", crate::fileinfo_prelude::program_uses_surface),
     ("var_export", crate::var_export_prelude::program_uses_surface),
     ("web_environment", crate::web_prelude::program_observes_environment),

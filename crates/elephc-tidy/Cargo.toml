@@ -1,0 +1,21 @@
+[package]
+name = "elephc-tidy"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "libtidy-backed bridge staticlib implementing PHP's ext/tidy document and node API for the elephc PHP-to-native compiler"
+publish = false
+
+# Built as a C-callable staticlib (linked into compiled PHP programs whose prelude
+# declares the `extern "elephc_tidy"` block, together with the managed `libtidy`
+# native package's `libtidy.a`) and an rlib (so the handle registry and ABI are
+# unit-testable via `cargo test -p elephc-tidy`).
+#
+# Like elephc-xml, this bridge DECLARES libtidy's `extern "C"` symbols without
+# linking them: `cargo build -p elephc-tidy` only produces the staticlib/rlib
+# archives, which never invoke the system linker. See `build.rs` for how
+# `cargo test -p elephc-tidy` opts into a real link.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]

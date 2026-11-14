@@ -17,6 +17,40 @@ pub(super) fn lower_new_object(
     expr: &Expr,
 ) -> LoweredValue {
     let object_type = PhpType::Object(class_name.as_str().to_string());
+    if let Some(info) = ctx.throw_access_sites.get(&expr.span) {
+        if let crate::types::ThrowAccessKind::PrivateConstructor {
+            visibility,
+            class_name: declaring_class,
+        } = &info.kind
+        {
+            // The throw-site map is keyed by span. `lower_throw_access_error_expr_as`
+            // builds a synthetic `new Error(...)` at that same span, which would find
+            // this entry and recurse forever. Only the class whose constructor owner is
+            // the recorded declaring class is the real construction; `Error` is not.
+            let owner = crate::types::constructor_owner(
+                ctx.classes,
+                class_name.as_str().trim_start_matches('\\'),
+            )
+            .map(|(owner, _)| owner);
+            if owner == Some(declaring_class.as_str()) {
+                let scope = ctx
+                    .current_class
+                    .as_deref()
+                    .map(|class| format!("from scope {class}"))
+                    .unwrap_or_else(|| "from global scope".to_string());
+                let message = format!(
+                    "Call to {} {}::__construct() {scope}",
+                    visibility, declaring_class
+                );
+                return crate::ir_lower::stmt::lower_throw_access_error_expr_as(
+                    ctx,
+                    &message,
+                    expr.span,
+                    object_type,
+                );
+            }
+        }
+    }
     if let Some(error) = crate::ir_lower::property_default_errors::for_class_as(
         ctx,
         class_name.as_str(),

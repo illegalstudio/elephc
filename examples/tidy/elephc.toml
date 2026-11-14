@@ -1,0 +1,5 @@
+[native]
+schema = 1
+
+[native.dependencies]
+libtidy = "5.8.0"

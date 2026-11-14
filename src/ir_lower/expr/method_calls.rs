@@ -9,6 +9,33 @@
 
 use super::*;
 
+/// Returns the catchable `Error` message recorded for a private/protected method call at
+/// `expr` that PHP only rejects at runtime, or `None` when the call is accessible.
+pub(super) fn recorded_method_access_message(
+    ctx: &LoweringContext<'_, '_>,
+    expr: &Expr,
+    op: Op,
+) -> Option<String> {
+    if !matches!(op, Op::MethodCall | Op::NullsafeMethodCall) {
+        return None;
+    }
+    ctx.throw_access_sites.get(&expr.span).and_then(|info| {
+        if let ThrowAccessKind::PrivateMethod {
+            visibility,
+            class_name,
+            method,
+        } = &info.kind
+        {
+            Some(format!(
+                "Call to {} method {}::{}() from global scope",
+                visibility, class_name, method
+            ))
+        } else {
+            None
+        }
+    })
+}
+
 /// Lowers an object method call.
 pub(super) fn lower_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -21,27 +48,25 @@ pub(super) fn lower_method_call(
     // A statically-decided private/protected method access from an inaccessible
     // scope raises a catchable `Error` in PHP rather than a compile-time error,
     // but the receiver expression must still be evaluated first.
-    let throw_access_message = if op == Op::MethodCall {
-        ctx.throw_access_sites.get(&expr.span).and_then(|info| {
-            if let ThrowAccessKind::PrivateMethod {
-                visibility,
-                class_name,
-                method: m,
-            } = &info.kind
-            {
-                Some(format!(
-                    "Call to {} method {}::{}() from global scope",
-                    visibility, class_name, m
-                ))
-            } else {
-                None
-            }
-        })
-    } else {
-        None
-    };
+    let throw_access_message = recorded_method_access_message(ctx, expr, op);
     let object_expr = object;
     let mut object = lower_member_receiver(ctx, object_expr, expr);
+    // PHP checks method visibility before it decides whether the call is instance or
+    // static, so a recorded private/protected access must throw before the static-only
+    // reroute below can run the method.
+    if let Some(message) = throw_access_message {
+        release_owning_receiver_temporary(ctx, object, expr.span);
+        return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
+    }
+    // PHP permits `$object->staticMethod()` and resolves the static method from the
+    // object's class. The checker accepts that shape alongside the instance table; here
+    // the receiver is evaluated for its side effects, then the call is emitted through the
+    // static-method path so codegen never passes the object as `$this`.
+    if op == Op::MethodCall {
+        if let Some(result) = try_static_only_method_through_receiver(ctx, object, method, args, expr) {
+            return result;
+        }
+    }
     if op == Op::MethodCall && args.is_empty()
         && ctx.classes.values().any(|class| class.deferred_property_default_error.is_some())
         && matches!(php_symbol_key(method).as_str(),
@@ -63,10 +88,6 @@ pub(super) fn lower_method_call(
             crate::ir_lower::property_default_errors::for_dynamic_class(ctx, name, expr.span);
             if owns_receiver { ctx.unguard_call_argument(object.value, expr.span); }
         }
-    }
-    if let Some(message) = throw_access_message {
-        release_owning_receiver_temporary(ctx, object, expr.span);
-        return crate::ir_lower::stmt::lower_throw_access_error_expr(ctx, &message, expr.span);
     }
     if op == Op::MethodCall && value_is_definitely_null(ctx, object.value) {
         let null_value = lower_null(ctx, expr);
@@ -314,6 +335,39 @@ fn method_receiver_single_class(ty: &PhpType) -> Option<&str> {
         }
         _ => None,
     }
+}
+
+/// Returns the receiver's class when `method` exists only in its static method table.
+///
+/// The checker accepts `$object->staticMethod()` because PHP resolves it statically; this
+/// predicate is the lowering-side half of that rule. A class that declares an instance
+/// method of the same name keeps ordinary instance dispatch.
+pub(super) fn static_only_method_class(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> Option<String> {
+    let class_name = match ctx.builder.value_php_type(object).codegen_repr() {
+        PhpType::Object(class_name) => class_name.trim_start_matches('\\').to_string(),
+        _ => return None,
+    };
+    let key = php_symbol_key(method);
+    let class_info = ctx.classes.get(class_name.as_str())?;
+    if class_info.methods.contains_key(&key) {
+        return None;
+    }
+    class_info.static_methods.contains_key(&key).then_some(class_name)
+}
+
+/// Builds the static receiver naming `class_name` for a static call via an instance.
+pub(super) fn static_receiver_for_class_name(class_name: &str) -> crate::parser::ast::StaticReceiver {
+    use crate::parser::ast::StaticReceiver;
+    let parts = class_name
+        .trim_start_matches('\\')
+        .split('\\')
+        .map(str::to_string)
+        .collect();
+    StaticReceiver::Named(crate::names::Name::qualified(parts))
 }
 
 /// Returns the signature to use for method-call argument normalization.

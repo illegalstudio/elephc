@@ -48,7 +48,7 @@ pub(super) fn dynamic_new_candidates(
             continue;
         }
         if let Some(candidate) =
-            dynamic_new_candidate(ctx, class_name, class_info, Some(arg_count), inst)?
+            dynamic_new_candidate(ctx, class_name, class_info, Some(arg_count), inst, false)?
         {
             candidates.push(candidate);
         }
@@ -85,6 +85,7 @@ pub(super) fn dynamic_new_candidate(
     class_info: &ClassInfo,
     arg_count: Option<usize>,
     inst: &Instruction,
+    allow_non_public_constructor: bool,
 ) -> Result<Option<DynamicNewCandidate>> {
     if let Some(arg_count) = arg_count {
         if let Some(candidate) =
@@ -94,6 +95,16 @@ pub(super) fn dynamic_new_candidate(
         }
     }
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
+        return Ok(None);
+    }
+    if !allow_non_public_constructor
+        && super::dynamic_mixed_candidates::constructor_visibility_refusal(
+            ctx,
+            class_name,
+            class_info,
+        )
+        .is_some()
+    {
         return Ok(None);
     }
     let constructor_key = php_symbol_key("__construct");

@@ -893,6 +893,31 @@ pub fn s_nested_array_assign(target: Expr, value: Expr) -> Stmt {
     Stmt::new(StmtKind::NestedArrayAssign { target, value }, Span::dummy())
 }
 
+/// `self::$prop[<index>] = <value>;` in statement position.
+pub fn s_self_static_prop_array_assign(property: &str, index: Expr, value: Expr) -> Stmt {
+    Stmt::new(
+        StmtKind::StaticPropertyArrayAssign {
+            receiver: StaticReceiver::Self_,
+            property: property.to_string(),
+            index,
+            value,
+        },
+        Span::dummy(),
+    )
+}
+
+/// `self::$prop[] = <value>;` in statement position.
+pub fn s_self_static_prop_array_push(property: &str, value: Expr) -> Stmt {
+    Stmt::new(
+        StmtKind::StaticPropertyArrayPush {
+            receiver: StaticReceiver::Self_,
+            property: property.to_string(),
+            value,
+        },
+        Span::dummy(),
+    )
+}
+
 /// `Class::$prop[] = <value>;` in statement position.
 pub fn s_static_prop_array_push(class_name: &str, property: &str, value: Expr) -> Stmt {
     Stmt::new(

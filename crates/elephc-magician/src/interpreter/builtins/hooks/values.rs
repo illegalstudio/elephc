@@ -192,6 +192,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Xml,
     /// Forwards fileinfo to the compiled host prelude.
     Fileinfo,
+    /// Forwards the tidy surface to the compiled host prelude.
+    Tidy,
     /// Dispatches `number_format(...)`.
     NumberFormat,
     /// Dispatches the bridge-backed OpenSSL cipher builtins.
@@ -548,6 +550,7 @@ impl EvalValuesHook {
             Self::Pcntl => eval_pcntl_values_result(name, evaluated_args, context, values),
             Self::Fileinfo => eval_fileinfo_values_result(name, evaluated_args, context, values),
             Self::Xml => eval_xml_values_result(name, evaluated_args, context, values),
+            Self::Tidy => eval_tidy_values_result(name, evaluated_args, context, values),
             Self::NumberFormat => {
                 eval_number_format_declared_values_result(evaluated_args, values)
             }

@@ -51,7 +51,7 @@ pub(super) fn lower_reflection_class_new_instance(
     let object = ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
-        None,
+        Some(Immediate::ReflectionConstruction),
         result_type,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),

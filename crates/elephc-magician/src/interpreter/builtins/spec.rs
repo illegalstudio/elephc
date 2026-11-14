@@ -58,6 +58,8 @@ pub(in crate::interpreter) enum EvalArea {
     Symbols,
     /// Date, time, and sleep builtins.
     Time,
+    /// `ext/tidy` builtins, forwarded to the compiled tidy prelude.
+    Tidy,
     /// Scalar conversion and type-related builtins.
     Types,
     /// `ext/xml` and `ext/xmlwriter` builtins, forwarded to the compiled xml prelude.
@@ -86,6 +88,7 @@ impl EvalArea {
             EvalArea::Time => "time",
             EvalArea::Types => "types",
             EvalArea::Xml => "xml",
+            EvalArea::Tidy => "tidy",
         }
     }
 }

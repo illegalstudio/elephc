@@ -11,6 +11,7 @@ pub(super) mod util;
 pub mod curl;
 pub mod gmp;
 pub mod libssh2;
+pub mod libtidy;
 pub mod libxml2;
 pub mod libmagic;
 pub mod nghttp2;

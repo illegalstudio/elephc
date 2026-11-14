@@ -110,8 +110,39 @@ pub fn set_ini_overrides(overrides: Vec<(String, String)>) {
     INI_OVERRIDES.with(|entries| *entries.borrow_mut() = overrides);
 }
 
+/// Interprets a PHP INI boolean value with `zend_ini_parse_bool`'s spellings and fallback.
+///
+/// Both the compiler pipeline and the codegen test harness read `--ini` overrides through this
+/// function, so a fixture cannot silently exercise a different `tidy.clean_output` value than
+/// the CLI would.
+pub fn ini_bool(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    match lower.as_str() {
+        "true" | "yes" | "on" => true,
+        "false" | "no" | "off" | "none" => false,
+        _ => {
+            // php-src falls back to `strtol(value, NULL, 10) != 0`: leading
+            // whitespace and a sign are accepted, and parsing stops at the
+            // first non-digit. An overflowing quantity is still nonzero.
+            let trimmed = lower.trim_start();
+            let bytes = trimmed.as_bytes();
+            let mut index = usize::from(matches!(bytes.first(), Some(b'+' | b'-')));
+            let digit_start = index;
+            while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+                index += 1;
+            }
+            if index == digit_start {
+                return false;
+            }
+            trimmed[..index]
+                .parse::<i128>()
+                .map_or(true, |quantity| quantity != 0)
+        }
+    }
+}
+
 /// Returns this compilation's `--ini` directive overrides (empty unless
 /// [`set_ini_overrides`] ran for it, which is the no-override default).
-pub(crate) fn ini_overrides() -> Vec<(String, String)> {
+pub fn ini_overrides() -> Vec<(String, String)> {
     INI_OVERRIDES.with(|entries| entries.borrow().clone())
 }

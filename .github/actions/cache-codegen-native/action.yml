@@ -15,6 +15,13 @@ runs:
           ~/.cache/elephc/native/artifacts/libmagic
           ~/.cache/elephc/native/sources
         key: libxml2-native-${{ inputs.target }}-${{ hashFiles('examples/xml/elephc.lock', 'examples/fileinfo/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libmagic.rs', 'src/native_deps/recipes/libxml2.rs', 'src/native_deps/recipes/libxml2_shim.c', 'src/native_deps/recipes/libxml2_simplexml.c', 'src/native_deps/recipes/libxml2_simplexml_tree.c', 'src/native_deps/recipes/libxml2_simplexml_dom.c', 'src/native_deps/recipes/util.rs') }}
+    - name: Cache managed native libtidy
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cache/elephc/native/artifacts/libtidy
+          ~/.cache/elephc/native/sources
+        key: libtidy-native-${{ inputs.target }}-${{ hashFiles('examples/tidy/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/libtidy.rs', 'src/native_deps/recipes/mod.rs', 'src/native_deps/recipe.rs', 'src/native_deps/recipes/util.rs') }}
     - name: Cache managed native gmp
       uses: actions/cache@v6
       with:

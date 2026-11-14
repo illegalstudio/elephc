@@ -82,6 +82,9 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
         _ if eval_xml_builtin_name(name) => {
             Some(eval_xml_evaluated_call(name, evaluated_args, context, values)?)
         }
+        _ if eval_tidy_builtin_name(name) => {
+            Some(eval_tidy_evaluated_call(name, evaluated_args, context, values)?)
+        }
         _ => return Ok(None),
     };
     Ok(result)

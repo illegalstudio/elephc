@@ -176,6 +176,82 @@ impl Checker {
         }
     }
 
+    /// Returns the strict-call validation signature for Tidy's deliberately widened adapters.
+    ///
+    /// The injected prelude declares `$config` and `$encoding` as `mixed` so its runtime
+    /// adapters can reproduce internal Tidy's weak scalar coercion and TypeError ordering.
+    /// Under `declare(strict_types=1)` PHP's internal parameter parser still rejects scalars
+    /// against `array|string|null` and `?string`; restore those contract types for the
+    /// checker's strict validation only, leaving weak-mode runtime behavior untouched.
+    pub(crate) fn tidy_strict_adapter_signature(
+        &self,
+        function: Option<&str>,
+        owner: Option<&str>,
+        callee_desc: Option<&str>,
+        sig: &FunctionSig,
+    ) -> Option<FunctionSig> {
+        if !self.strict_types {
+            return None;
+        }
+        let tidy_function = function.is_some_and(|name| {
+            matches!(
+                name.trim_start_matches('\\').to_ascii_lowercase().as_str(),
+                "tidy_parse_string" | "tidy_parse_file" | "tidy_repair_string" | "tidy_repair_file"
+            )
+        });
+        let tidy_method = owner
+            .zip(callee_desc)
+            .is_some_and(|(owner, callee_desc)| self.tidy_prelude_declares_method(owner, callee_desc));
+        if !tidy_function && !tidy_method {
+            return None;
+        }
+        let mut adjusted = sig.clone();
+        let mut changed = false;
+        for (name, ty) in &mut adjusted.params {
+            if *ty != PhpType::Mixed {
+                continue;
+            }
+            if name.eq_ignore_ascii_case("config") {
+                *ty = self.normalize_union_type(vec![
+                    PhpType::php_array(),
+                    PhpType::Str,
+                    PhpType::Void,
+                ]);
+                changed = true;
+            } else if name.eq_ignore_ascii_case("encoding") {
+                *ty = self.normalize_union_type(vec![PhpType::Str, PhpType::Void]);
+                changed = true;
+            }
+        }
+        changed.then_some(adjusted)
+    }
+
+    /// Returns whether `callee_desc` names a method declared by the injected `tidy` class.
+    ///
+    /// A subclass receiver may inherit the prelude adapter or override/add its own methods.
+    /// The declaring-class table distinguishes the two: only methods whose implementation
+    /// class is `tidy` get the contract-type strict check.
+    fn tidy_prelude_declares_method(&self, owner: &str, callee_desc: &str) -> bool {
+        let Some((_, method)) = callee_desc.rsplit_once("::") else {
+            return false;
+        };
+        let method = method.trim_matches(|character: char| {
+            !character.is_ascii_alphanumeric() && character != '_'
+        });
+        if method.is_empty() {
+            return false;
+        }
+        let Some(class_info) = self.classes.get(owner.trim_start_matches('\\')) else {
+            return false;
+        };
+        let key = crate::names::php_symbol_key(method);
+        let declares = |declaring: Option<&String>| {
+            declaring.is_some_and(|declaring| declaring.trim_start_matches('\\').eq_ignore_ascii_case("tidy"))
+        };
+        declares(class_info.method_declaring_classes.get(&key))
+            || declares(class_info.static_method_declaring_classes.get(&key))
+    }
+
     /// Runs `operation` with `declare(strict_types=1)` parameter binding suspended.
     ///
     /// PHP invokes a callback handed to an internal function (`array_map`, `usort`,

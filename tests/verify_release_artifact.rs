@@ -46,7 +46,7 @@ fn scratch(label: &str) -> PathBuf {
 /// Writes a mock packaged `elephc` that implements the probe's exact calls.
 ///
 /// `--print-capabilities` reports `tls` as archive-only, plus `curl`, `gmp`,
-/// `openssl`, `mbstring`, `xml`, and `future` with `native:` package fields.
+/// `openssl`, `mbstring`, `xml`, `tidy`, and `future` with `native:` package fields.
 /// `regex` (with `native:pcre2`) and `mysqli` have no archives. Managed bridge
 /// calls fail until native add creates their markers. A `broken` capability, when advertised,
 /// always fails with a truncated-archive error so a real link failure still
@@ -74,6 +74,7 @@ case "${{1:-}}" in
     echo -e 'bridge\topenssl\tlibelephc_openssl.a\tnative:openssl-crypto'
     echo -e 'bridge\tmbstring\tlibelephc_mbstring.a\tnative:pcre2\tnative:oniguruma'
     echo -e 'bridge\txml\tlibelephc_xml.a\tnative:libxml2'
+    echo -e 'bridge\ttidy\tlibelephc_tidy.a\tnative:libtidy'
     echo -e 'bridge\tfuture\tlibelephc_future.a\tnative:libfuture'
     {broken_line}    echo -e 'capability\tregex\tnative:pcre2'
     echo -e 'capability\tmysqli'
@@ -129,6 +130,16 @@ case "${{1:-}}" in
     printf '#!/bin/sh\necho ok\n' > probe
     chmod +x probe
     ;;
+  --with-tidy)
+    if [ ! -f "$state_dir/added-libtidy" ]; then
+      echo "native project error: tidy support requires managed native package libtidy" >&2
+      echo "project: not found (searched from )" >&2
+      echo "recovery: cd -- '' && elephc native add libtidy" >&2
+      exit 1
+    fi
+    printf '#!/bin/sh\necho ok\n' > probe
+    chmod +x probe
+    ;;
   --with-broken)
     echo "ld: archive is truncated" >&2
     exit 1
@@ -174,6 +185,7 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
     fs::write(pack.join("libelephc_mbstring.a"), b"mbstring-archive\n").expect("write mbstring archive");
     fs::write(pack.join("libelephc_xml.a"), b"xml-archive\n").expect("write xml archive");
     fs::write(pack.join("libelephc_openssl.a"), b"openssl-archive\n").expect("write openssl archive");
+    fs::write(pack.join("libelephc_tidy.a"), b"tidy-archive\n").expect("write tidy archive");
     fs::write(pack.join("libelephc_future.a"), b"future-archive\n").expect("write future archive");
     if advertise_broken {
         fs::write(pack.join("libelephc_broken.a"), b"broken-archive\n")
@@ -192,6 +204,7 @@ fn pack_tarball(staging: &Path, tarball: &Path, advertise_broken: bool) {
             "libelephc_mbstring.a",
             "libelephc_xml.a",
             "libelephc_openssl.a",
+            "libelephc_tidy.a",
             "libelephc_future.a",
         ])
         .args(if advertise_broken {
@@ -284,6 +297,18 @@ fn packed_managed_bridges_are_ok_after_native_add() {
     assert!(
         log.contains("mock: native add libxml2"),
         "the packaged binary must have seen native add libxml2; log:\n{log}"
+    );
+    assert!(
+        log.contains("ok    bridge tidy (libelephc_tidy.a)"),
+        "tidy must be reported ok after native add libtidy then one --with-tidy; log:\n{log}"
+    );
+    assert!(
+        log.contains("adding managed native package libtidy before --with-tidy"),
+        "tidy must native-add libtidy first, before the compile; log:\n{log}"
+    );
+    assert!(
+        log.contains("mock: native add libtidy"),
+        "the packaged binary must have seen native add libtidy; log:\n{log}"
     );
     assert!(
         log.contains("ok    bridge tls (libelephc_tls.a)"),

@@ -254,6 +254,7 @@ jobs:
             libelephc_pcntl.a \
             libelephc_xml.a \
             libelephc_fileinfo.a \
+            libelephc_tidy.a \
             libelephc_tokenizer.a \
             libelephc_magician.a \
             libelephc_reference.a \
@@ -457,6 +458,7 @@ jobs:
               lib.install "libelephc_pcntl.a"
               lib.install "libelephc_xml.a"
               lib.install "libelephc_fileinfo.a"
+              lib.install "libelephc_tidy.a"
               lib.install "libelephc_tokenizer.a"
               lib.install "libelephc_magician.a"
               lib.install "libelephc_reference.a"
