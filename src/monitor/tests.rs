@@ -2245,3 +2245,34 @@ fn calls_mode_is_parsed_and_guarded() {
         "--calls and --stitch are different modes"
     );
 }
+
+/// `--debug-ui` parses with an optional serve address and refuses capture/export
+/// modes that would compete with the browser debugger.
+#[test]
+fn debug_ui_parses_and_guards_profile_modes() {
+    let default = parse_monitor_args(&["app.php".to_string(), "--debug-ui".to_string()])
+        .expect("--debug-ui parses");
+    assert!(default.debug_ui);
+    let served = parse_monitor_args(&[
+        "app.php".to_string(),
+        "--debug-ui".to_string(),
+        "--serve".to_string(),
+        "127.0.0.1:9000".to_string(),
+    ])
+    .expect("--debug-ui --serve parses");
+    assert_eq!(served.serve.as_deref(), Some("127.0.0.1:9000"));
+    for extra in [
+        vec!["--live"],
+        vec!["--calls"],
+        vec!["--html", "profile.html"],
+        vec!["--out", "profile.json"],
+        vec!["--cachegrind", "profile.cachegrind"],
+    ] {
+        let mut argv = vec!["app.php".to_string(), "--debug-ui".to_string()];
+        argv.extend(extra.iter().map(|value| value.to_string()));
+        assert!(
+            parse_monitor_args(&argv).is_err(),
+            "--debug-ui must refuse {extra:?}"
+        );
+    }
+}

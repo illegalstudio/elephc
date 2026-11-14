@@ -27,6 +27,7 @@ use std::process;
 
 mod command;
 pub(crate) use command::*;
+mod debug_ui;
 mod calls;
 pub(crate) use calls::*;
 mod call_html;
@@ -133,6 +134,9 @@ pub(crate) fn unhonoured_service_flags(cmd: &MonitorCommand) -> Option<String> {
 
 /// Runs the full capture-and-render pipeline; returns the process exit code.
 pub(crate) fn run(cmd: MonitorCommand) -> i32 {
+    if cmd.debug_ui {
+        return debug_ui::run(&cmd);
+    }
     if !cmd.stitch.is_empty() {
         // Offline: read service logs and correlate their slices. Captures
         // nothing itself, so it runs before every capture path.

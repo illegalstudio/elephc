@@ -72,6 +72,8 @@ pub(crate) struct MonitorCommand {
     pub calls_out: Option<String>,
     /// Xdebug-compatible cachegrind export path for an exact capture.
     pub cachegrind_out: Option<String>,
+    /// Serve the interactive browser debugger for a launched debug build.
+    pub debug_ui: bool,
     /// Explicit performance-budget file; without it, the nearest `.elephc`
     /// above the profiled source is picked up automatically.
     pub assert_file: Option<String>,
@@ -81,6 +83,7 @@ pub(crate) struct MonitorCommand {
 pub(crate) const MONITOR_USAGE: &str = "Usage: elephc monitor <program|source.php> [--live] [--duration <seconds>] [--out <file.speedscope.json>]
        elephc monitor <program|source.php> [--pprof <file.pb.gz>] [--dot <file.dot>] [--html <file.html>]
                       [--cachegrind <file.cachegrind>]
+       elephc monitor <program|source.php> --debug-ui [--serve <host:port>]
        elephc monitor <program|source.php> [--trace <f.json>] [--assert <spec>]... [--assert-file <file>]
        elephc monitor <program|source.php> --live --html <file.html> [--serve <host:port>]
        elephc monitor <program|source.php> [--baseline <prior.json>] [--fail-on-regression <points>]
@@ -158,6 +161,12 @@ capture: function self time, call counts and per-edge inclusive time in
 nanoseconds, readable by KCachegrind, QCachegrind and Webgrind. It needs the
 instrumented exact capture, so it is refused with --calls, --live, --attach and
 service targets; a sampled view has no call counts to export.
+
+--debug-ui compiles a source with --debug (or launches a debug binary) and
+serves a self-contained browser debugger at --serve (default 127.0.0.1:0):
+breakpoints, stack frames, locals, continue/step and console output. It is a
+debugger surface, not a profile export; combine it with the profiling paths only
+by running them separately.
 
 --pprof writes the capture as a gzip pprof profile. --dot writes a Graphviz call
 graph (`dot -Tsvg`); --html writes a self-contained, interactive call graph (one
@@ -243,6 +252,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
     let mut calls_mode = CallCaptureMode::Full;
     let mut calls_out = None;
     let mut cachegrind_out = None;
+    let mut debug_ui = false;
     let mut assert_file = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -299,6 +309,9 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
             }
             "--baseline" => {
                 baseline = Some(it.next().ok_or("--baseline needs a file path")?.clone());
+            }
+            "--debug-ui" => {
+                debug_ui = true;
             }
             "--cachegrind" => {
                 cachegrind_out = Some(
@@ -383,7 +396,46 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         (Some(target), None) => target.clone(),
         (None, Some(_)) => String::new(),
     };
-    if serve.is_some() && (!live || html_out.is_none()) {
+    if debug_ui {
+        if target.is_empty()
+            || remote_target(&target).is_some()
+            || is_socket_path(&target)
+        {
+            return Err("--debug-ui needs a local source or debug binary".to_string());
+        }
+        if live || calls || attach_pid.is_some() || !stitch.is_empty() || exact {
+            return Err(
+                "--debug-ui cannot be combined with --live, --calls, --attach, --exact or --stitch"
+                    .to_string(),
+            );
+        }
+        let unsupported: Vec<&str> = [
+            ("--out", out.is_some()),
+            ("--pprof", pprof_out.is_some()),
+            ("--dot", dot_out.is_some()),
+            ("--html", html_out.is_some()),
+            ("--cachegrind", cachegrind_out.is_some()),
+            ("--trace", trace.is_some()),
+            ("--assert", !asserts.is_empty()),
+            ("--assert-file", assert_file.is_some()),
+            ("--baseline", baseline.is_some()),
+            ("--fail-on-regression", fail_on_regression.is_some()),
+            ("--save", save.is_some()),
+            ("--prometheus", prom_out.is_some()),
+            ("--otlp", otlp.is_some()),
+        ]
+        .iter()
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| *name)
+        .collect();
+        if !unsupported.is_empty() {
+            return Err(format!(
+                "--debug-ui cannot be combined with {}: the browser debugger owns the run",
+                unsupported.join(", ")
+            ));
+        }
+    }
+    if serve.is_some() && !debug_ui && (!live || html_out.is_none()) {
         return Err("--serve requires --live and --html (it serves the live graph)".to_string());
     }
     if calls && !stitch.is_empty() {
@@ -461,6 +513,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         calls_mode,
         calls_out,
         cachegrind_out,
+        debug_ui,
         assert_file,
     })
 }

@@ -206,6 +206,176 @@ fn test_cli_gc_stats_prints_each_productive_run() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `monitor --debug-ui` serves a page and bridges DAP over HTTP.
+#[test]
+fn test_cli_monitor_debug_ui_serves_dap_bridge() {
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    fn http(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
+        let mut stream = TcpStream::connect(addr).expect("connect debug UI");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(35)))
+            .expect("debug UI read timeout");
+        let body = body.unwrap_or("");
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .expect("write debug UI request");
+        stream.flush().expect("flush debug UI request");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read debug UI response");
+        response
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body.to_string())
+            .unwrap_or_default()
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_monitor_debug_ui");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfunction add(int $a, int $b): int {\n    $sum = $a + $b;\n    return $sum;\n}\necho add(2, 3), \"\\n\";\n",
+    )
+    .expect("write monitor debug UI fixture");
+    let mut child = elephc_cli_command(&dir)
+        .args(["monitor", "main.php", "--debug-ui", "--serve", "127.0.0.1:0"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn monitor debug UI");
+    let stderr = child.stderr.take().expect("debug UI stderr");
+    let mut reader = BufReader::new(stderr);
+    let mut address = String::new();
+    for _ in 0..400 {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        if let Some(start) = line.find("http://") {
+            let rest = &line[start + "http://".len()..];
+            let end = rest.find('/').unwrap_or(rest.len());
+            address = rest[..end].to_string();
+            break;
+        }
+    }
+    let mut guard = DebuggeeGuard { child };
+    assert!(!address.is_empty(), "debug UI did not print its URL");
+    let page = http(&address, "GET", "/", None);
+    assert!(page.contains("<title>elephc monitor · debugger</title>"), "{page}");
+    assert!(page.contains("/dap/events"), "{page}");
+
+    let mut since = 0u64;
+    let mut seq = 0i64;
+    let poll = |since: &mut u64| -> Vec<serde_json::Value> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let body = http(
+                &address,
+                "GET",
+                &format!("/dap/events?since={since}"),
+                None,
+            );
+            let data: serde_json::Value = serde_json::from_str(&body).expect("event JSON");
+            *since = data["next"].as_u64().unwrap_or(*since);
+            let events = data["events"].as_array().cloned().unwrap_or_default();
+            if !events.is_empty() || Instant::now() >= deadline {
+                return events;
+            }
+        }
+    };
+    let mut send = |command: &str, arguments: serde_json::Value| {
+        seq += 1;
+        let body = serde_json::json!({
+            "seq": seq,
+            "type": "request",
+            "command": command,
+            "arguments": arguments,
+        })
+        .to_string();
+        let response = http(&address, "POST", "/dap/request", Some(&body));
+        assert!(response.contains("accepted"), "{response}");
+    };
+
+    send(
+        "initialize",
+        serde_json::json!({"clientID":"monitor-ui","adapterID":"elephc","linesStartAt1":true,"columnsStartAt1":true}),
+    );
+    let mut initialized = false;
+    for _ in 0..100 {
+        if poll(&mut since)
+            .iter()
+            .any(|message| message["event"] == "initialized")
+        {
+            initialized = true;
+            break;
+        }
+    }
+    assert!(initialized, "initialized event missing");
+    send(
+        "launch",
+        serde_json::json!({"program":"main.php","stopOnEntry":true}),
+    );
+    send("loadedSources", serde_json::json!({}));
+    send("configurationDone", serde_json::json!({}));
+    let mut stopped = None;
+    for _ in 0..100 {
+        for message in poll(&mut since) {
+            if message["event"] == "stopped" {
+                stopped = Some(message);
+            }
+        }
+        if stopped.is_some() {
+            break;
+        }
+    }
+    let stopped = stopped.expect("entry stop");
+    assert_eq!(stopped["body"]["reason"], "entry", "{stopped}");
+    send("stackTrace", serde_json::json!({"threadId":1}));
+    let mut stack = None;
+    for _ in 0..100 {
+        for message in poll(&mut since) {
+            if message["command"] == "stackTrace" {
+                stack = Some(message);
+            }
+        }
+        if stack.is_some() {
+            break;
+        }
+    }
+    let stack = stack.expect("stackTrace response");
+    assert!(
+        stack["body"]["stackFrames"]
+            .as_array()
+            .is_some_and(|frames| !frames.is_empty()),
+        "{stack}"
+    );
+    send("continue", serde_json::json!({"threadId":1}));
+    let mut output = String::new();
+    let mut terminated = false;
+    for _ in 0..200 {
+        for message in poll(&mut since) {
+            if message["event"] == "output" {
+                output.push_str(message["body"]["output"].as_str().unwrap_or(""));
+            }
+            if message["event"] == "terminated" {
+                terminated = true;
+            }
+        }
+        if terminated {
+            break;
+        }
+    }
+    assert!(terminated, "DAP bridge did not terminate: {output:?}");
+    assert_eq!(output.trim(), "5", "{output:?}");
+    let status = guard.child.wait().expect("wait for debug UI child");
+    assert!(status.success(), "debug UI child failed");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// End-to-end `elephc monitor`: compiles a busy fixture, activates exact
 /// instrumentation through the control channel, and writes a two-view
 /// Speedscope document whose frames are PHP names — not EIR block labels or

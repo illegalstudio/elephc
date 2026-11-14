@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>elephc monitor · debugger</title>
+<style>
+:root{--bg:#10141c;--panel:#171d28;--line:#2a3342;--text:#d7deea;--muted:#8492a6;--accent:#6ee7ff;--stop:#ffbd6b;--ok:#7ee787;--bad:#ff7b72}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+header{display:flex;align-items:center;gap:12px;padding:9px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+header h1{font-size:14px;margin:0;color:var(--accent);font-weight:600}
+header .status{margin-left:auto;color:var(--muted)}
+header .status.stopped{color:var(--stop)}
+main{display:grid;grid-template-columns:220px minmax(0,1fr) 330px;grid-template-rows:minmax(0,1fr) 190px;height:calc(100vh - 42px)}
+#files{border-right:1px solid var(--line);overflow:auto;padding:7px 0;background:var(--panel)}
+#files button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);padding:5px 12px;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#files button:hover,#files button.active{background:#223047;color:var(--accent)}
+#code{overflow:auto;padding:10px 0;background:#0d1118}
+.code-line{display:flex;min-height:20px;white-space:pre}
+.code-line .num{width:58px;flex:none;text-align:right;padding-right:12px;color:var(--muted);cursor:pointer;user-select:none}
+.code-line .num:hover{color:var(--accent)}
+.code-line.breakpoint .num{color:var(--bad);font-weight:700}
+.code-line.current{background:#27364c}
+.code-line .src{padding-right:14px}
+#side{border-left:1px solid var(--line);background:var(--panel);overflow:auto;padding:10px}
+#side h2{font-size:12px;color:var(--muted);margin:12px 0 5px;text-transform:uppercase;letter-spacing:.08em}
+#controls{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+#controls button{background:#223047;color:var(--text);border:1px solid var(--line);border-radius:4px;padding:4px 8px;cursor:pointer;font:inherit}
+#controls button:hover{border-color:var(--accent);color:var(--accent)}
+#controls button:disabled{opacity:.35;cursor:default}
+.frame,.var{padding:2px 5px;border-radius:3px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frame:hover,.var:hover{background:#223047}
+.frame.active{background:#2b4262;color:var(--accent)}
+.var .value{color:var(--ok);margin-left:6px}
+.var .children{margin-left:14px;border-left:1px solid var(--line);padding-left:6px}
+#console{grid-column:1 / -1;border-top:1px solid var(--line);background:#0b0f16;padding:8px 12px;overflow:auto;white-space:pre-wrap}
+#console .err{color:var(--bad)}
+#console .meta{color:var(--muted)}
+@media(max-width:900px){main{grid-template-columns:150px minmax(0,1fr) 260px}}
+</style>
+</head>
+<body>
+<header><h1>elephc monitor · debugger</h1><span class="status" id="status">connecting…</span></header>
+<main>
+  <nav id="files"></nav>
+  <section id="code"><div id="code-body"></div></section>
+  <aside id="side">
+    <div id="controls">
+      <button id="continue">continue</button><button id="pause">pause</button>
+      <button id="next">next</button><button id="stepIn">step in</button><button id="stepOut">step out</button>
+    </div>
+    <h2>Stack</h2><div id="stack"></div>
+    <h2>Variables</h2><div id="variables"></div>
+  </aside>
+  <section id="console"></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (text) => String(text).replace(/[&<>"]/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch]));
+const state = {seq:0, since:0, sources:[], current:null, content:"", breakpoints:new Map(), stopped:false, frame:null};
+
+function status(text, stopped=false){ const el=$("status"); el.textContent=text; el.className="status"+(stopped?" stopped":""); }
+function log(text, cls=""){ const el=$("console"); const line=document.createElement("div"); line.className=cls; line.textContent=text; el.appendChild(line); el.scrollTop=el.scrollHeight; }
+
+async function send(command, args){
+  state.seq += 1;
+  const message = {seq: state.seq, type:"request", command};
+  if (args !== undefined) message.arguments = args;
+  const r = await fetch("/dap/request", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(message)});
+  if (!r.ok) log("request failed: "+command, "err");
+  return state.seq;
+}
+function request(command, args){ send(command,args).catch((e)=>log(String(e),"err")); }
+
+async function poll(){
+  while(true){
+    try{
+      const r = await fetch("/dap/events?since="+state.since);
+      const data = await r.json();
+      state.since = data.next;
+      for (const message of data.events) handle(message);
+      if (data.closed){ status("debuggee exited"); return; }
+    }catch(e){ log("event stream failed: "+e,"err"); await new Promise((r)=>setTimeout(r,1000)); }
+  }
+}
+
+function handle(message){
+  if (message.type === "event") return handleEvent(message);
+  if (message.type === "response") return handleResponse(message);
+}
+function handleEvent(event){
+  const body = event.body || {};
+  switch(event.event){
+    case "initialized":
+      request("configurationDone", {});
+      break;
+    case "stopped":
+      state.stopped = true; status("stopped · "+(body.reason||"breakpoint"), true);
+      setControls(true);
+      request("stackTrace", {threadId: body.threadId});
+      break;
+    case "continued":
+      state.stopped = false; status("running"); setControls(false); break;
+    case "output": {
+      const text = body.output || "";
+      log(text, body.category === "stderr" ? "err" : "");
+      break;
+    }
+    case "exited":
+      status("exited ("+(body.exitCode ?? 0)+")"); break;
+    case "terminated":
+      status("terminated"); setControls(false); break;
+  }
+}
+function handleResponse(response){
+  if (!response.success){ log("DAP error: "+(response.message||response.command), "err"); return; }
+  const command = response.command, body = response.body || {};
+  switch(command){
+    case "initialize":
+      request("loadedSources", {});
+      request("launch", {program:"", stopOnEntry:true});
+      break;
+    case "loadedSources":
+      state.sources = (body.sources||[]).filter((source)=>source.path);
+      renderFiles();
+      if (state.sources.length) selectSource(state.sources[0]);
+      break;
+    case "source":
+      state.content = body.content || "";
+      renderCode();
+      break;
+    case "setBreakpoints": {
+      const path = state.current && state.current.path;
+      if (path && state.breakpoints.has(path) && body.breakpoints){
+        const verified = body.breakpoints.map((bp)=>bp.verified !== false);
+        state.breakpoints.set(path, new Set([...state.breakpoints.get(path)].filter((_line, index)=>verified[index] !== false)));
+        renderCode();
+      }
+      break;
+    }
+    case "stackTrace":
+      renderStack(body.stackFrames||[]);
+      break;
+    case "scopes": {
+      const scope = (body.scopes||[]).find((scope)=>scope.variablesReference);
+      if (scope) request("variables", {variablesReference: scope.variablesReference});
+      break;
+    }
+    case "variables":
+      renderVariables(body.variables||[]);
+      break;
+  }
+}
+
+function renderFiles(){
+  const nav = $("files"); nav.innerHTML = "";
+  for (const source of state.sources){
+    const button = document.createElement("button");
+    button.textContent = source.name || source.path;
+    button.title = source.path;
+    button.onclick = ()=>selectSource(source);
+    if (state.current && state.current.path === source.path) button.className = "active";
+    nav.appendChild(button);
+  }
+  if (!state.sources.length) nav.textContent = "no loaded sources";
+}
+function selectSource(source){
+  state.current = source;
+  state.content = "";
+  renderFiles(); renderCode();
+  request("source", {source:{path:source.path, sourceReference:source.sourceReference}, sourceReference:source.sourceReference||0});
+}
+function renderCode(){
+  const lines = state.content ? state.content.split("\n") : [];
+  const body = $("code-body"); body.innerHTML = "";
+  if (!lines.length){ body.innerHTML = '<div class="code-line"><span class="src">loading source…</span></div>'; return; }
+  const path = state.current && state.current.path;
+  const marked = (path && state.breakpoints.get(path)) || new Set();
+  lines.forEach((text, index)=>{
+    const line = index + 1;
+    const row = document.createElement("div"); row.className = "code-line";
+    if (marked.has(line)) row.classList.add("breakpoint");
+    if (state.frame && state.frame.line === line && state.frame.source && state.frame.source.path === path) row.classList.add("current");
+    const num = document.createElement("span"); num.className = "num"; num.textContent = line;
+    num.onclick = ()=>toggleBreakpoint(line);
+    const src = document.createElement("span"); src.className = "src"; src.textContent = text;
+    row.appendChild(num); row.appendChild(src); body.appendChild(row);
+  });
+}
+function toggleBreakpoint(line){
+  if (!state.current) return;
+  const path = state.current.path;
+  const set = state.breakpoints.get(path) || new Set();
+  if (set.has(line)) set.delete(line); else set.add(line);
+  state.breakpoints.set(path, set);
+  renderCode();
+  request("setBreakpoints", {source:{path}, breakpoints:[...set].sort((a,b)=>a-b).map((line)=>({line}))});
+}
+function renderStack(frames){
+  const stack = $("stack"); stack.innerHTML = "";
+  if (!frames.length){ stack.textContent = "no frames"; return; }
+  state.frame = frames[0];
+  frames.forEach((frame, index)=>{
+    const row = document.createElement("div"); row.className = "frame" + (index===0?" active":"");
+    row.textContent = (frame.name||"<unknown>") + (frame.source ? " · "+(frame.source.name||frame.source.path)+":"+frame.line : "");
+    row.onclick = ()=>{
+      state.frame = frame;
+      [...stack.children].forEach((child)=>child.classList.remove("active")); row.classList.add("active");
+      if (frame.source && frame.source.path !== (state.current&&state.current.path)) loadFrameSource(frame.source);
+      renderCode();
+      request("scopes", {frameId: frame.id});
+    };
+    stack.appendChild(row);
+  });
+  const top = frames[0];
+  if (top.source && top.source.path !== (state.current&&state.current.path)) loadFrameSource(top.source);
+  request("scopes", {frameId: top.id});
+}
+function loadFrameSource(source){
+  const known = state.sources.find((candidate)=>candidate.path === source.path);
+  if (known){ selectSource(known); return; }
+  state.current = {path:source.path, name:source.name, sourceReference:source.sourceReference||0};
+  state.content = "";
+  request("source", {source:{path:source.path, sourceReference:source.sourceReference||0}, sourceReference:source.sourceReference||0});
+}
+function renderVariables(variables){
+  const panel = $("variables"); panel.innerHTML = "";
+  if (!variables.length){ panel.textContent = "no locals"; return; }
+  for (const variable of variables){
+    const row = document.createElement("div"); row.className = "var";
+    const name = document.createElement("span"); name.textContent = (variable.name||"")+" = ";
+    const value = document.createElement("span"); value.className = "value"; value.textContent = variable.value||"";
+    row.appendChild(name); row.appendChild(value);
+    if (variable.variablesReference){
+      const children = document.createElement("div"); children.className = "children"; children.style.display = "none";
+      row.onclick = async ()=>{
+        if (children.style.display === "none"){
+          children.style.display = "block";
+          request("variables", {variablesReference: variable.variablesReference});
+        } else children.style.display = "none";
+      };
+      row.appendChild(children); panel.appendChild(row);
+    } else panel.appendChild(row);
+  }
+}
+function setControls(enabled){ for (const id of ["continue","next","stepIn","stepOut"]) $(id).disabled = !enabled; }
+$("continue").onclick = ()=>{ setControls(false); request("continue", {threadId:1}); };
+$("pause").onclick = ()=>request("pause", {threadId:1});
+$("next").onclick = ()=>{ setControls(false); request("next", {threadId:1}); };
+$("stepIn").onclick = ()=>{ setControls(false); request("stepIn", {threadId:1}); };
+$("stepOut").onclick = ()=>{ setControls(false); request("stepOut", {threadId:1}); };
+setControls(false);
+poll();
+request("initialize", {clientID:"elephc-monitor-web", adapterID:"elephc", linesStartAt1:true, columnsStartAt1:true});
+</script>
+</body>
+</html>
