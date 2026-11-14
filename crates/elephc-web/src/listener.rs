@@ -1703,7 +1703,7 @@ mod tests {
     #[test]
     fn recv_fd_rejects_a_truncated_payload() {
         let (sender, receiver) = UnixDatagram::pair().unwrap();
-        let mut pipe_fds = test_pipe();
+        let pipe_fds = test_pipe();
         let mut payload = [0u8; 16];
         let mut iov = libc::iovec {
             iov_base: payload.as_mut_ptr().cast(),
@@ -1803,7 +1803,7 @@ mod tests {
     #[cfg(target_vendor = "apple")]
     #[test]
     fn synthetic_overlong_cmsg_is_rejected() {
-        let mut pipe = test_pipe();
+        let pipe = test_pipe();
         let mut control = ControlBuffer([0u8; 64]);
         let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
         message.msg_control = control.0.as_mut_ptr().cast();
@@ -1845,7 +1845,7 @@ mod tests {
     #[cfg(target_vendor = "apple")]
     #[test]
     fn synthetic_rights_cmsg_returns_its_descriptor() {
-        let mut pipe = test_pipe();
+        let pipe = test_pipe();
         let mut control = ControlBuffer([0u8; 64]);
         let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<RawFd>() as u32) } as usize;
         let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
@@ -1873,9 +1873,9 @@ mod tests {
     #[cfg(target_vendor = "apple")]
     #[test]
     fn multiple_cmsgs_close_every_descriptor() {
-        let mut first = test_pipe();
-        let mut second = test_pipe();
-        let mut unrelated = test_pipe();
+        let first = test_pipe();
+        let second = test_pipe();
+        let unrelated = test_pipe();
         let mut control = ControlBuffer([0u8; 64]);
         let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
         message.msg_control = control.0.as_mut_ptr().cast();
@@ -1918,8 +1918,8 @@ mod tests {
     #[cfg(target_vendor = "apple")]
     #[test]
     fn overlong_cmsg_closes_only_the_valid_descriptor() {
-        let mut pipe = test_pipe();
-        let mut unrelated = test_pipe();
+        let pipe = test_pipe();
+        let unrelated = test_pipe();
         let mut control = ControlBuffer([0u8; 64]);
         let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
         message.msg_control = control.0.as_mut_ptr().cast();
@@ -1958,7 +1958,7 @@ mod tests {
     #[test]
     fn recv_fd_closes_fds_on_zero_length_datagram() {
         let (sender, receiver) = UnixDatagram::pair().unwrap();
-        let mut pipe_fds = test_pipe();
+        let pipe_fds = test_pipe();
         let mut iov = libc::iovec {
             iov_base: std::ptr::null_mut(),
             iov_len: 0,
@@ -2036,7 +2036,7 @@ mod tests {
             return;
         }
         let (sender, receiver) = UnixDatagram::pair().unwrap();
-        let mut pipe_fds = test_pipe();
+        let pipe_fds = test_pipe();
         let mut payload = [0u8; 16];
         let mut iov = libc::iovec {
             iov_base: payload.as_mut_ptr().cast(),
@@ -2115,8 +2115,8 @@ mod tests {
             tail: ControlBuffer,
         }
 
-        let mut pipe = test_pipe();
-        let mut unrelated = test_pipe();
+        let pipe = test_pipe();
+        let unrelated = test_pipe();
         let mut guarded = GuardedControl {
             control: ControlBuffer([0u8; 64]),
             tail: ControlBuffer([0u8; 64]),
@@ -2175,8 +2175,8 @@ mod tests {
     #[test]
     fn recv_fd_closes_extra_descriptors_on_success() {
         let (sender, receiver) = UnixDatagram::pair().unwrap();
-        let mut first = test_pipe();
-        let mut second = test_pipe();
+        let first = test_pipe();
+        let second = test_pipe();
         let fds = [first[1], second[1]];
         let mut payload = [0u8; 8];
         let mut iov = libc::iovec {
