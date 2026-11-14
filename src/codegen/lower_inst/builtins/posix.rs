@@ -34,6 +34,7 @@ pub(super) fn lower_kill(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     let done = ctx.next_label("posix_kill_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- deliver the signal and branch to the ValueError on a pid outside pid_t --
             ctx.emitter.instruction("mov x1, x0");                              // C arg1 = signal number to deliver
             abi::emit_pop_reg(ctx.emitter, "x0");                              // C arg0 = target process or group id
             ctx.emitter.bl_c("elephc_posix_kill");
@@ -41,6 +42,7 @@ pub(super) fn lower_kill(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             ctx.emitter.instruction(&format!("b.lt {invalid}"));                // raise PHP's ValueError instead of returning
         }
         Arch::X86_64 => {
+            // -- deliver the signal and branch to the ValueError on a pid outside pid_t --
             ctx.emitter.instruction("mov rsi, rax");                            // C arg1 = signal number to deliver
             abi::emit_pop_reg(ctx.emitter, "rdi");                             // C arg0 = target process or group id
             ctx.emitter.bl_c("elephc_posix_kill");
@@ -70,11 +72,13 @@ pub(super) fn lower_isatty(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     let done = ctx.next_label("posix_isatty_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- probe the descriptor and skip the range warning on a boolean status --
             ctx.emitter.bl_c("elephc_posix_isatty");
             ctx.emitter.instruction("cmp x0, #0");                              // a negative status flags an out-of-range descriptor
             ctx.emitter.instruction(&format!("b.ge {done}"));                   // terminal and non-terminal results are already booleans
         }
         Arch::X86_64 => {
+            // -- probe the descriptor and skip the range warning on a boolean status --
             ctx.emitter.instruction("mov rdi, rax");                            // C arg0 = descriptor to probe
             ctx.emitter.bl_c("elephc_posix_isatty");
             ctx.emitter.instruction("cmp rax, 0");                              // a negative status flags an out-of-range descriptor
@@ -100,11 +104,13 @@ fn emit_boxed_descriptor(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- unwrap a boxed stream resource to its native descriptor --
             ctx.emitter.instruction(&format!("cmp x0, #{MIXED_TAG_RESOURCE}")); // does the boxed operand hold a stream resource?
             ctx.emitter.instruction(&format!("b.ne {scalar}"));                 // integers and other scalars use weak int conversion
             ctx.emitter.instruction("mov x0, x1");                              // the resource payload is its native descriptor
         }
         Arch::X86_64 => {
+            // -- unwrap a boxed stream resource to its native descriptor --
             ctx.emitter.instruction(&format!("cmp rax, {MIXED_TAG_RESOURCE}")); // does the boxed operand hold a stream resource?
             ctx.emitter.instruction(&format!("jne {scalar}"));                  // integers and other scalars use weak int conversion
             ctx.emitter.instruction("mov rax, rdi");                            // the resource payload is its native descriptor
@@ -126,10 +132,12 @@ fn emit_reject_closed_stream(ctx: &mut FunctionContext<'_>) {
     let open = ctx.next_label("posix_isatty_stream_open");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- let open streams through; closed ones fall into the TypeError --
             ctx.emitter.instruction("cmp x0, #0");                              // a negative payload is fclose()'s release sentinel
             ctx.emitter.instruction(&format!("b.ge {open}"));                   // open streams keep their native descriptor
         }
         Arch::X86_64 => {
+            // -- let open streams through; closed ones fall into the TypeError --
             ctx.emitter.instruction("cmp rax, 0");                              // a negative payload is fclose()'s release sentinel
             ctx.emitter.instruction(&format!("jge {open}"));                    // open streams keep their native descriptor
         }
