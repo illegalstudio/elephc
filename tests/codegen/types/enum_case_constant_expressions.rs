@@ -71,3 +71,22 @@ echo Label::from('late-big')->name, "\n";
     );
     assert_eq!(out, "Ok=100;Shifted=16;Sum=110;Tagged=2-tag;Late=late-big;shifted|Late\n");
 }
+
+/// An int-and-string concatenation nested under a comparison and a ternary is joined before the
+/// surrounding operators fold, so the case gets the ternary's branch exactly as php computes it.
+#[test]
+fn test_enum_case_values_fold_int_concatenation_inside_comparison_and_ternary() {
+    let out = compile_and_run(
+        r#"<?php
+class C { const ONE = 1; }
+enum E: string
+{
+    case A = ('n' . C::ONE) === 'n1' ? 'yes' : 'no';
+    case B = (C::ONE . C::ONE . 'x') . '-' . (C::ONE + 1);
+}
+foreach (E::cases() as $c) { echo $c->name, '=', $c->value, ';'; }
+echo "\n";
+"#,
+    );
+    assert_eq!(out, "A=yes;B=11x-2;\n");
+}
