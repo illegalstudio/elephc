@@ -161,12 +161,16 @@ continues.
 - **Configuration notices use `E_USER_NOTICE`.** A malformed `tidy.default_config`
   file prints PHP's `Notice:` text, but a custom error handler sees `E_USER_NOTICE`
   instead of the engine's `E_NOTICE` level.
-- **Old nodes after reparsing.** libtidy releases the previous tree when
-  `parseString()`/`parseFile()` parses again. elephc invalidates the old `tidyNode`
-  handles before that release, including when the new parse fails, so their methods
-  return `null`, empty values, or `false` instead of reading freed memory. PHP 8.5.10
-  leaves those wrappers dangling; later 8.5 builds add a parse-generation check and
-  throw an `Error` instead. The node's already cached readonly properties remain
+- **Old nodes after reparsing or `cleanRepair()`.** libtidy releases the previous tree
+  when `parseString()`/`parseFile()` parses again, and its cleaner can prune nodes during
+  `cleanRepair()`. elephc invalidates every `tidyNode` handle for the document before
+  either call, including when the new parse or the clean step fails, so their methods
+  return `null`, empty values, or `false` instead of reading freed memory. For
+  `cleanRepair()` this is deliberately broader than PHP 8.2–8.5: nodes that libtidy keeps
+  (for example a non-empty `body`) also become stale, so `hasChildren()` and the other
+  accessors answer as absent handles even though PHP would still see the kept tree.
+  PHP 8.5.10 leaves reparse wrappers dangling; later 8.5 builds add a parse-generation
+  check and throw an `Error` instead. Already cached readonly node properties remain
   readable.
 - **Opaque dynamic `eval()` source.** Literal `eval()` strings are scanned for the
   tidy surface and link the prelude, so `tidy_*`, `tidy`/`tidyNode`, and
