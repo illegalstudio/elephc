@@ -612,7 +612,7 @@ pub(super) fn decl_class_tidynode() -> Stmt {
             method("hasChildren")
                 .returns(TypeExpr::Bool)
                 .body(vec![
-                    s_return(e_binop(e_this_prop("child"), BinOp::StrictNotEq, e_null())),
+                    s_return(e_binop(e_call("elephc_tidy_node_has_children", vec![e_this_prop("__elephc_handle")]), BinOp::StrictNotEq, e_int(0))),
                 ]),
         )
         .method(

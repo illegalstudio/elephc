@@ -978,7 +978,7 @@ final class tidyNode
 
     public function hasChildren(): bool
     {
-        return $this->child !== null;
+        return elephc_tidy_node_has_children($this->__elephc_handle) !== 0;
     }
 
     public function hasSiblings(): bool

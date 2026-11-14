@@ -74,6 +74,27 @@ mod native_tests {
         assert_eq!(crate::document::elephc_tidy_release(doc), 1);
     }
 
+    /// Clean repair frees pruned nodes, so wrappers from the previous tree must become
+    /// absent handles rather than dereferencing the released `TidyNode*`.
+    #[test]
+    fn clean_repair_invalidates_previous_nodes() {
+        let doc = crate::document::elephc_tidy_create();
+        assert!(doc > 0);
+        let source = b"<html><body><p>x</p></body></html>";
+        assert_eq!(
+            unsafe { crate::document::elephc_tidy_parse(doc, source.as_ptr(), source.len() as i64) },
+            1
+        );
+        let body = crate::node::elephc_tidy_body(doc);
+        assert!(body > 0);
+        let child = crate::node::elephc_tidy_node_child(body, 0);
+        assert!(child > 0);
+        assert_eq!(crate::document::elephc_tidy_clean_repair(doc), 1);
+        assert_eq!(crate::node::elephc_tidy_node_has_children(body), 0);
+        assert_eq!(crate::node::elephc_tidy_node_is_text(child), 0);
+        assert_eq!(crate::document::elephc_tidy_release(doc), 1);
+    }
+
     /// Configuration enumeration includes `tidy-mark` and reports its forced
     /// false value.
     #[test]

@@ -548,3 +548,34 @@ echo $message, "\n";
         "Call to private tidyNode::__construct() from scope EvalTidyNodeFactory\n"
     );
 }
+
+/// `cleanRepair()` prunes nodes through libtidy's cleaner, so every wrapper minted
+/// against the pre-clean tree must be invalidated before the call. The invalidated
+/// handles then answer through the existing absent-handle fallbacks instead of
+/// dereferencing a freed `TidyNode*`, and `hasChildren()` uses the live bridge
+/// predicate rather than the constructor's snapshot.
+#[test]
+fn test_tidy_clean_repair_invalidates_held_nodes() {
+    if skip_without_tidy_native("test_tidy_clean_repair_invalidates_held_nodes") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$tidy = new tidy();
+$tidy->parseString('<html><body><p>x</p></body></html>');
+$body = $tidy->body();
+$child = $body->child[0];
+$cleaned = $tidy->cleanRepair();
+var_dump($cleaned);
+var_dump($body->hasChildren());
+var_dump($child->isText());
+var_dump($child->hasChildren());
+var_dump($child->getParent());
+var_dump((string) $child);
+"#,
+    );
+    assert_eq!(
+        out.trim_end(),
+        "bool(true)\nbool(false)\nbool(false)\nbool(false)\nNULL\nstring(0) \"\""
+    );
+}

@@ -131,10 +131,22 @@ pub unsafe extern "C" fn elephc_tidy_parse(
 }
 
 /// C ABI: runs cleanup and repair; returns 1 on success.
+///
+/// libtidy's cleaner frees pruned nodes, so wrappers minted against the previous tree
+/// must be invalidated before the call exactly like a parse. Keep one extra document
+/// reference across the invalidation so `doc` cannot be released before the call.
 #[no_mangle]
 pub extern "C" fn elephc_tidy_clean_repair(handle: i64) -> i64 {
     guarded(0, || {
-        with_doc(handle, 0, |_, doc| flag(unsafe { tidyCleanAndRepair(doc) } >= 0))
+        with_doc_handle(handle, 0, |registry, doc_handle, doc| {
+            if let Some(entry) = registry.docs.get_mut(&doc_handle) {
+                entry.refs += 1;
+            }
+            drop_nodes_for_document(registry, doc_handle);
+            let status = unsafe { tidyCleanAndRepair(doc) };
+            release_doc_locked(registry, doc_handle);
+            flag(status >= 0)
+        })
     })
 }
 
