@@ -907,6 +907,38 @@ slots. Narrower and hash-backed destinations, nested erased receivers, static
 known-callee dynamic-place staging, Internal producers and host/eval admission
 remain active work before publishing Casts. No public feature mask changes.
 
+### Known builtin runtime-name reference arguments
+
+Known direct and first-class prepared builtins now route runtime-named property
+arguments through the shared descriptor binder. Route selection consumes the
+shared call plan's source arguments; positional passthrough plans intentionally
+have no source_values. The binder remains authoritative for each selected passing
+mode and named argument. Explicit call_user_func value semantics retain their
+existing descriptor path.
+
+Ordinary dynamic references no longer require native XML declarations. A shared
+argument helper preserves receiver/name ordering and selects the available native
+or ordinary protocol. Concrete object pointers use borrowed typed projections;
+boxed receivers use borrowed MixedUnbox projections. Temporary receiver and name
+owners retire after the destination cell has been leased, before the builtin runs.
+
+The shared fixture covers direct and first-class calls, positional and reversed
+named arguments, call_user_func and call_user_func_array value controls, and
+conversion failures that retain the original property. Both AST/EIR optimizer
+settings are heap-clean. Five selected-checker target fixtures validate the same
+source without XML capability. The first regression failed with a missing writable
+binding at the direct call, before the routing correction.
+
+All 28 focused settype tests, five existing XML emitter cases, three strict native
+bundles and the permissive XML materialization control (71.23 s) pass. Compiler,
+test checking and curl exporter builds pass with -j 4. Generated builtin/site/EIR
+audits, assembly comments, PHP fixture/example syntax and diff hygiene pass with
+unchanged builtin inventory.
+
+Casts remains staged. Narrower/hash-backed destinations, unpromoted runtime-name
+slots, nested erased receivers, Internal producers and host admission still need
+their remaining audits. The public integrated feature mask is unchanged.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1000,4 +1032,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 72 | `c7361405c6` | feat(strict): preserve contextual cast warning ownership |
 | 73 | `0146784a0b` | feat(strict): preserve live builtin reference places |
 | 74 | `180fbf3a6c` | feat(strict): retain erased reference receiver bindings |
-| 75 | this commit | feat(strict): preserve runtime property reference names |
+| 75 | `1514409912` | feat(strict): preserve runtime property reference names |
+| 76 | this commit | feat(strict): bind known dynamic property arguments |

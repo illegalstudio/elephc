@@ -1,8 +1,8 @@
 //! Purpose:
-//! Retains live Mixed property references behind an erased ordinary-object receiver.
+//! Retains live Mixed property references behind ordinary-object receivers.
 //!
 //! Called from:
-//! - Checked runtime-selected reference arguments after native XML dispatch.
+//! - Checked known or runtime-selected reference arguments, including native XML fallbacks.
 //!
 //! Key details:
 //! - Exact runtime classes select their authoritative property layout and owned cell metadata.
@@ -43,8 +43,13 @@ pub(super) fn named(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
             then_args: Vec::new(), else_target: next, else_args: Vec::new() });
         ctx.builder.position_at_end(selected);
         let ty = PhpType::Object(class);
-        let receiver = ctx.emit_value(Op::MixedUnbox, vec![object.value], None, ty.clone(),
-            Op::mixed_unbox_effects(&ty), Some(span));
+        let receiver = if matches!(ctx.builder.value_php_type(object.value).codegen_repr(), PhpType::Object(_)) {
+            ctx.emit_value(Op::Borrow, vec![object.value], None, ty,
+                Op::Borrow.default_effects(), Some(span))
+        } else {
+            ctx.emit_value(Op::MixedUnbox, vec![object.value], None, ty.clone(),
+                Op::mixed_unbox_effects(&ty), Some(span))
+        };
         // The enclosing dispatch owns the object until its property cell has been leased.
         ctx.builder.set_value_ownership(receiver.value, Ownership::Borrowed);
         bind_property_reference_cell(ctx, alias, receiver, property, expr, span);
@@ -119,4 +124,17 @@ fn merge_initialized_branch(ctx: &LoweringContext<'_, '_>, merged: &mut Option<H
     let slots = ctx.initialized_slots_snapshot();
     *merged = Some(match merged.take() { Some(previous) => previous.intersection(&slots).copied().collect(),
         None => slots });
+}
+
+/// Retires a temporary ordinary receiver after leasing its cell, before the selected call begins.
+pub(super) fn dynamic_argument(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
+    property: LoweredValue, alias: &str, expr: &Expr) -> LoweredValue {
+    let staging = prepublish_call_result(ctx, &PhpType::Mixed, expr.span);
+    let (object, object_owner) = root_owned_call_operand(ctx, object, expr.span);
+    let (property, property_owner) = root_owned_call_operand(ctx, property, expr.span);
+    let value = dynamic(ctx, object, property, alias, expr);
+    stage_call_result(ctx, staging.as_ref(), value, expr.span);
+    if let Some(owner) = property_owner { retire_owned_call_operand(ctx, owner, expr.span); }
+    if let Some(owner) = object_owner { retire_owned_call_operand(ctx, owner, expr.span); }
+    take_prepublished_call_result(ctx, staging, value, expr.span)
 }

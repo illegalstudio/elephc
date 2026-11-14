@@ -138,6 +138,9 @@ pub(super) fn lower_static_callable_call(
             let sig = crate::types::builtin_call_sig_with_semantics(
                 &function_name, ctx.semantic_profile, crate::source::SourceMode::Php,
             );
+            if let Some(call) = super::prepared_builtin_refs::lower_dynamic_place_call(
+                ctx, &function_name, sig.as_ref(), callback_args, expr, crate::source::SourceMode::Php,
+            ) { return Some(call); }
             if let Some(call) = lower_packed_builtin_call(
                 ctx, &function_name, sig.as_ref(), callback_args, expr, crate::source::SourceMode::Php,
             ) {

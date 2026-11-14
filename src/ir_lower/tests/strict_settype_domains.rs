@@ -164,3 +164,17 @@ fn verify_strict_settype_erased_receiver_contexts(name: &str) {
 }
 
 supported_target_cases!(strict_settype_erased_receiver_contexts, verify_strict_settype_erased_receiver_contexts);
+
+/// Known builtin references retain runtime names with selected checker metadata and no XML prelude.
+fn verify_strict_settype_known_dynamic_places(name: &str) {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strict/settype_known_dynamic_places.php"));
+    let program = prepared(source); let target = Target::parse(name).unwrap();
+    let checked = crate::types::checker::check_staged_semantics(&program, target,
+        SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+    let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+    crate::ir::validate_module(&module).unwrap();
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    assert!(!checked.classes.contains_key("SimpleXMLElement"), "ordinary references must not require native XML");
+}
+
+supported_target_cases!(strict_settype_known_dynamic_places, verify_strict_settype_known_dynamic_places);

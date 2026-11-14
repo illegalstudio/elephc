@@ -167,6 +167,9 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
         }
     }
     if !is_extern && !is_user_function {
+        if let Some(call) = super::prepared_builtin_refs::lower_dynamic_place_call(
+            ctx, canonical, sig.as_ref(), args, expr, ctx.builtin_source_mode(),
+        ) { return call; }
         if let Some(call) = lower_packed_builtin_call(ctx, canonical, sig.as_ref(), args, expr, ctx.builtin_source_mode()) {
             return call;
         }

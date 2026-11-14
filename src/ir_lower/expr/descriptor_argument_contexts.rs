@@ -53,7 +53,8 @@ pub(super) fn prepare(
         register_owned_call_operand(ctx, slot, arg.span);
         callback.argument_aliases.push((alias.clone(), arg.span));
         let ordinary = crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
-            && super::prepared_builtin_refs::mixed_place(ctx, arg)
+            && (super::prepared_builtin_refs::mixed_place(ctx, arg)
+                || super::prepared_builtin_refs::dynamic_place(arg))
             && !may_be_native_selection_reference_argument(ctx, arg);
         ReferenceArgument { by_reference, alias, ordinary }
     })).collect()
@@ -72,7 +73,9 @@ pub(super) fn lower(
     ctx.builder.terminate(Terminator::CondBr { cond: selection.by_reference.value,
         then_target: reference, then_args: Vec::new(), else_target: read, else_args: Vec::new() });
     ctx.builder.position_at_end(reference);
-    let value = if selection.ordinary {
+    let value = if selection.ordinary && super::prepared_builtin_refs::dynamic_place(arg) {
+        property_access::lower_dynamic_reference_argument(ctx, arg, &selection.alias)
+    } else if selection.ordinary {
         crate::ir_lower::stmt::lower_ref_assign(ctx, &selection.alias, arg, arg.span);
         lower_invoker_ref_arg_marker(ctx, &selection.alias, arg.span)
     } else { property_access::lower_runtime_reference_argument(ctx, arg, &selection.alias) };
@@ -95,5 +98,6 @@ pub(super) fn lower(
 fn needs_context(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     may_be_native_selection_reference_argument(ctx, arg)
         || (crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
-            && super::prepared_builtin_refs::mixed_place(ctx, arg))
+            && (super::prepared_builtin_refs::mixed_place(ctx, arg)
+                || super::prepared_builtin_refs::dynamic_place(arg)))
 }

@@ -1,17 +1,17 @@
 //! Purpose:
-//! Selects writable XML arguments without changing ordinary arguments behind erased receivers.
+//! Selects writable native or ordinary property arguments from evaluated receivers.
 //!
 //! Called from:
 //! - Runtime-selected callable argument lowering after its passing-mode probe.
 //!
 //! Key details:
 //! - Receiver and name effects run once at their PHP source position.
-//! - Only the native receiver arm publishes an independent reference marker.
-//! - Ordinary receiver arms retain the existing read and binder behavior.
+//! - Reviewed ordinary Mixed cells and native selections publish independent reference markers.
+//! - Other layouts retain their existing read and binder behavior.
 
 use super::*;
 
-/// Produces a native reference marker or an ordinary argument value after inspecting the receiver.
+/// Selects the available writable protocol after inspecting the runtime receiver.
 pub(crate) fn lower_runtime_reference_argument(
     ctx: &mut LoweringContext<'_, '_>, arg: &Expr, alias: &str,
 ) -> LoweredValue {
@@ -35,22 +35,7 @@ pub(crate) fn lower_runtime_reference_argument(
                     } else { lower_property_get_without_native_dispatch(ctx, object, property, Op::PropGet, arg) }
                 })
         }
-        ExprKind::DynamicPropertyAccess { object, property } => {
-            let (object, name) = if matches!(object.kind, ExprKind::Variable(_)) {
-                let name = lower_name(ctx, property);
-                (lower_property_write_receiver(ctx, object), name)
-            } else {
-                let object = lower_property_write_receiver(ctx, object);
-                let (object, owner) = root_method_receiver(ctx, object, arg.span);
-                let name = lower_name(ctx, property);
-                let object = if let Some(owner) = owner {
-                    let ty = ctx.builder.value_php_type(object.value);
-                    take_published_container(ctx, owner, ty, arg.span)
-                } else { object };
-                (object, name)
-            };
-            native_xml_reads::dynamic_reference_argument(ctx, object, name, alias, arg)
-        }
+        ExprKind::DynamicPropertyAccess { .. } => lower_dynamic_reference_argument(ctx, arg, alias),
         ExprKind::ArrayAccess { array, index } => {
             let object = lower_property_write_receiver(ctx, array);
             let original = object;
@@ -81,4 +66,28 @@ fn lower_name(ctx: &mut LoweringContext<'_, '_>, property: &Expr) -> LoweredValu
 pub(super) fn marker(ctx: &mut LoweringContext<'_, '_>, alias: &str, value: LoweredValue, span: Span) -> LoweredValue {
     store_value_into_temp(ctx, alias, PhpType::Mixed, value, span);
     lower_invoker_ref_variadic_arg_marker(ctx, alias, span)
+}
+
+/// Evaluates a dynamic property's receiver and name once, then chooses its available reference protocol.
+pub(crate) fn lower_dynamic_reference_argument(ctx: &mut LoweringContext<'_, '_>,
+    arg: &Expr, alias: &str) -> LoweredValue {
+    let ExprKind::DynamicPropertyAccess { object, property } = &arg.kind else {
+        unreachable!("dynamic reference argument requires a runtime property name");
+    };
+    let (object, name) = if matches!(object.kind, ExprKind::Variable(_)) {
+        let name = lower_name(ctx, property);
+        (lower_property_write_receiver(ctx, object), name)
+    } else {
+        let object = lower_property_write_receiver(ctx, object);
+        let (object, owner) = root_method_receiver(ctx, object, arg.span);
+        let name = lower_name(ctx, property);
+        let object = if let Some(owner) = owner {
+            let ty = ctx.builder.value_php_type(object.value);
+            take_published_container(ctx, owner, ty, arg.span)
+        } else { object };
+        (object, name)
+    };
+    if may_be_native_selection_reference_argument(ctx, arg) {
+        native_xml_reads::dynamic_reference_argument(ctx, object, name, alias, arg)
+    } else { reference_place_dispatch::dynamic_argument(ctx, object, name, alias, arg) }
 }

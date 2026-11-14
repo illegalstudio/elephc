@@ -103,3 +103,17 @@ fn test_strict_settype_erased_native_receiver_reference_contexts_bundle() {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Known builtin targets retain dynamic property destinations without requiring XML capability.
+#[test]
+fn test_strict_settype_known_dynamic_property_places_bundle() {
+    let source = include_str!("../fixtures/strict/settype_known_dynamic_places.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "13|14|15|16|17.9|17.9|junk|junk", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
