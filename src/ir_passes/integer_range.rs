@@ -501,9 +501,9 @@ fn runtime_string_metric_range(id: RuntimeFnId) -> Option<IntRange> {
     }
 }
 
-/// Computes one instruction's integer interval from the current operand facts.
 /// Returns whether `slot` is the runtime-seeded `$argc` of the main function and is never
-/// assigned by user code. The process argument count is a non-negative C `int`.
+/// assigned by user code or rebound through a reference cell. The process argument count is a
+/// non-negative C `int`.
 pub(super) fn main_argc_slot(function: &Function, slot: crate::ir::LocalSlotId) -> bool {
     if !function.flags.is_main {
         return false;
@@ -537,6 +537,7 @@ pub(super) fn main_argc_slot(function: &Function, slot: crate::ir::LocalSlotId) 
     })
 }
 
+/// Computes one instruction's integer interval from the current operand facts.
 fn instruction_range(
     function: &Function,
     inst: &crate::ir::Instruction,

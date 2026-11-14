@@ -754,6 +754,11 @@ fn packed_source_is_plain(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
             .any(|param| param.name.as_str() == name.as_str())
 }
 
+/// Lowers one stored `array_map()` candidate into its fused kernel.
+///
+/// The callback must be a capture-free single-parameter closure whose body parses into one of
+/// the `StoredNumericMapShape` kernels, and the source must be a plain packed `array<int>`.
+/// Returns `None` for any unsupported shape so the generic map call remains authoritative.
 pub(super) fn lower_stored_numeric_map(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,

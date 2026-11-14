@@ -41,6 +41,7 @@ use crate::types::{PhpType, ThrowAccessKind};
 
 pub(crate) mod map_read_fusion;
 mod map_foreach_fusion;
+mod captured_refs;
 pub(crate) mod stored_numeric_map;
 mod statement_basics;
 mod local_assignments;

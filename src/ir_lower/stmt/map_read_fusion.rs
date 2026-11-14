@@ -42,7 +42,9 @@ pub(crate) fn fuse_map_reads(
 ) {
     // A user function may not redeclare `array_map()` (the checker rejects it), but the
     // fusion sites stay fail-closed on their own rather than relying on that check.
-    if functions.contains_key("array_map") {
+    if functions.contains_key("array_map")
+        || super::captured_refs::body_has_reference_capture(body)
+    {
         return;
     }
     let aliased = aliased_locals(body, by_ref_params);

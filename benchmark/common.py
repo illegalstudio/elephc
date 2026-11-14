@@ -87,18 +87,22 @@ def run_process_measured(command: list[str], cwd: Path, timeout: float = 120,
     ]
     for reader in readers:
         reader.start()
-    deadline = time.monotonic() + timeout
-    timed_out = False
-    while True:
-        pid, status, usage = os.wait4(process.pid, os.WNOHANG)
-        if pid == process.pid:
-            break
-        if time.monotonic() >= deadline:
-            timed_out = True
-            process.kill()
-            pid, status, usage = os.wait4(process.pid, 0)
-            break
-        time.sleep(0.005)
+    reaped: list[tuple[int, int, resource.struct_rusage]] = []
+
+    def reap() -> None:
+        try:
+            reaped.append(os.wait4(process.pid, 0))
+        except ChildProcessError:
+            pass
+
+    reaper = threading.Thread(target=reap, daemon=True)
+    reaper.start()
+    reaper.join(timeout)
+    timed_out = reaper.is_alive()
+    if timed_out:
+        process.kill()
+        reaper.join()
+    _pid, status, usage = reaped[0]
     for reader in readers:
         reader.join(timeout=5)
     process.returncode = os.waitstatus_to_exitcode(status)

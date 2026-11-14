@@ -308,13 +308,17 @@ fn parse_float_affine(
 }
 
 /// Returns the floating-point scale in `$v * F` or `F * $v`.
+///
+/// An integer scale is deliberately rejected: `$v * 3` multiplies as an exact integer (and
+/// promotes only on overflow), while the float-affine kernel converts `$v` to a double first.
+/// Keeping the generic map preserves PHP's result for values above 2^53.
 fn float_scale_expr(expr: &Expr, param: &str) -> Option<f64> {
     let ExprKind::BinaryOp { left, op: BinOp::Mul, right } = &expr.kind else {
         return None;
     };
     match (&left.kind, &right.kind) {
-        (ExprKind::Variable(name), _) if name == param => literal_f64_any(right),
-        (_, ExprKind::Variable(name)) if name == param => literal_f64_any(left),
+        (ExprKind::Variable(name), _) if name == param => literal_f64(right),
+        (_, ExprKind::Variable(name)) if name == param => literal_f64(left),
         _ => None,
     }
 }
@@ -456,7 +460,11 @@ fn parse_single(
     }
 }
 
-/// Parses `$v * A + B`, `$v * A - B`, `B + $v * A`, and `B - $v * A`.
+/// Parses `$v * A + B`, `$v * A - B`, and `B + $v * A`.
+///
+/// `B - $v * A` is deliberately rejected: rewriting it as `$v * -A + B` overflows at
+/// `$v * -A` where PHP overflows at the subtraction (for example `-1 - PHP_INT_MIN` is an
+/// exact `PHP_INT_MAX`). The reversed form keeps the generic map.
 fn parse_affine(
     left: &Expr,
     op: &BinOp,
@@ -477,12 +485,6 @@ fn parse_affine(
                 return Some(StoredNumericMapShape::Affine {
                     scale,
                     offset: offset.checked_neg()?,
-                });
-            }
-            if let (Some(offset), Some(scale)) = (literal_i64(left), scale_literal(right, param)) {
-                return Some(StoredNumericMapShape::Affine {
-                    scale: scale.checked_neg()?,
-                    offset,
                 });
             }
         }

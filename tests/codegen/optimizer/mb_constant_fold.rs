@@ -297,3 +297,19 @@ echo strlen($decoded), ":", ord($decoded[0]), "\n";
     let ir = emit_ir(source, true);
     assert!(ir.contains("runtime.mb_decode_numericentity"), "{ir}");
 }
+
+/// A folded character in the pool's marker range is re-escaped so codegen emits its UTF-8
+/// bytes instead of reading U+E000 as a NUL byte.
+#[test]
+fn test_mb_constant_fold_preserves_marker_range_output() {
+    let source = r#"<?php
+$map = [128, 1114111, 0, 2097151];
+$text = mb_decode_numericentity("&#57344;&#57345;", $map, "UTF-8");
+echo strlen($text), ":", bin2hex($text), "\n";
+"#;
+    let expected = "6:ee8080ee8081\n";
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=on"), expected);
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), expected);
+    let optimized = emit_ir(source, true);
+    assert!(!optimized.contains("runtime.mb_decode_numericentity"), "{optimized}");
+}

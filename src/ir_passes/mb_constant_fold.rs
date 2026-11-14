@@ -13,7 +13,7 @@
 //!   scaffolding around the call keeps working without per-iteration allocation.
 //! - The fold is target-independent and never crosses a user function or mutable state.
 
-use elephc_builtin_contract::string_literal::literal_bytes;
+use elephc_builtin_contract::string_literal::{literal_bytes, push_literal_char};
 use elephc_mbstring::encoding::{Encoding, Substitute};
 use elephc_mbstring::text::{self, KanaMode};
 
@@ -246,10 +246,17 @@ fn fold(function: &mut Function, data: &mut DataPool, call_id: InstId) -> bool {
     let Ok(output) = String::from_utf8(output) else {
         return false;
     };
+    // The compiler pool stores byte escapes (and any literal character in U+E000..U+E0FF) as
+    // private-use marker chars. Re-escape folded output so `literal_bytes` reconstructs the
+    // exact PHP bytes instead of reading U+E000 as byte 0.
+    let mut literal = String::with_capacity(output.len());
+    for ch in output.chars() {
+        push_literal_char(ch, &mut literal);
+    }
     let Some(result) = call.result else {
         return false;
     };
-    let data_id = data.intern_string(&output);
+    let data_id = data.intern_string(&literal);
     let Some(call) = function.instruction_mut(call_id) else {
         return false;
     };

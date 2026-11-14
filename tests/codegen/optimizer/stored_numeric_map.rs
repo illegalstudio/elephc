@@ -260,8 +260,10 @@ echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implod
         "4,7,10,13,16|2,5,8,11,14|4,7,10,13,16|8,6,4,2,0"
     );
     let main = emit_main_ir(source, true);
-    assert_eq!(main.matches("runtime.array_map_affine").count(), 4, "{main}");
-    assert!(!main.contains("runtime.array_map "), "{main}");
+    // `10 - $v * 2` keeps the generic map: rewriting it as `$v * -2 + 10` would move the
+    // multiply's overflow point, so only the three multiply-then-offset forms fuse.
+    assert_eq!(main.matches("runtime.array_map_affine").count(), 3, "{main}");
+    assert_eq!(main.matches("runtime.array_map ").count(), 1, "{main}");
 }
 
 /// Multiplication and addition promote independently, preserving PHP's per-element types.
@@ -701,7 +703,7 @@ $a = array_map(fn($v) => $v * 1.5 + 2.5, $values);
 $b = array_map(fn($v) => 2.5 + $v * 1.5, $values);
 $c = array_map(fn($v) => $v * 1.5 - 2.5, $values);
 $d = array_map(fn($v) => 2.5 - $v * 1.5, $values);
-$e = array_map(fn($v) => $v * 2 + 1.5, $values);
+$e = array_map(fn($v) => $v * 2.0 + 1.5, $values);
 $f = array_map(fn($v) => $v * 1.5 + 1, $values);
 echo implode(",", $a), "|", implode(",", $b), "|", implode(",", $c), "|", implode(",", $d), "|", implode(",", $e), "|", implode(",", $f), "\n";
 echo array_sum($a), "|", json_encode($a), "|";
@@ -1599,4 +1601,45 @@ function mixedDiv(int $seed): int {
         let assembly = emit_target_assembly(source, target);
         assert!(assembly.contains("__rt_mixed_numeric_div"), "{target}");
     }
+}
+
+/// An integer multiplier keeps PHP's exact-int multiply before the float offset, so it stays
+/// on the generic map instead of rounding the source first.
+#[test]
+fn test_stored_numeric_map_float_affine_integer_scale_stays_generic() {
+    let source = r#"<?php
+$values = [9007199254740993];
+$mapped = array_map(fn($v) => $v * 3 + 0.0, $values);
+echo gettype($mapped[0]), ":", $mapped[0], "
+";
+"#;
+    assert_eq!(compile_and_run(source), "double:2.7021597764223E+16
+");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "double:2.7021597764223E+16
+");
+    let main = emit_main_ir(source, true);
+    assert!(
+        !main.contains("runtime.array_map_float_affine"),
+        "integer scale must keep the generic map:\n{main}"
+    );
+}
+
+/// `B - $v * A` keeps its subtraction order, so `-1 - PHP_INT_MIN` stays an integer.
+#[test]
+fn test_stored_numeric_map_reversed_subtraction_stays_generic() {
+    let source = r#"<?php
+$values = [PHP_INT_MIN];
+$mapped = array_map(fn($v) => -1 - $v * 1, $values);
+echo gettype($mapped[0]), ":", $mapped[0], "
+";
+"#;
+    assert_eq!(compile_and_run(source), "integer:9223372036854775807
+");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "integer:9223372036854775807
+");
+    let main = emit_main_ir(source, true);
+    assert!(
+        !main.contains("runtime.array_map_affine"),
+        "reversed subtraction must keep the generic map:\n{main}"
+    );
 }

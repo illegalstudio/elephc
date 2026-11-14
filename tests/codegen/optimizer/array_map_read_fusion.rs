@@ -471,3 +471,20 @@ echo $sum;
         out.stderr
     );
 }
+
+/// An earlier closure that captures the source by reference keeps the materialized map: the
+/// deferred read must not observe the mutation.
+#[test]
+fn test_map_read_reference_captured_source_keeps_saved_map() {
+    let source = r#"<?php
+$values = [1, 2];
+$mutate = function () use (&$values) { $values[1] = 100; };
+$mapped = array_map(fn($v) => $v * 2, $values);
+$mutate();
+echo $mapped[1], "|", $values[1], "\n";
+"#;
+    assert_eq!(compile_and_run(source), "4|100\n");
+    assert_eq!(run_with_ir_opt(source, "--ir-opt=off"), "4|100\n");
+    let main = main_ir(source);
+    assert!(!main.contains("array_isset"), "the map read was deferred:\n{main}");
+}
