@@ -45,6 +45,7 @@ mod json_decode_count_hoist;
 mod array_sum_int_sink;
 #[path = "optimizer/array_map_sum_add_int_sink.rs"]
 mod array_map_sum_add_int_sink;
+mod array_map_sum_div_fusion;
 mod array_map_read_fusion;
 mod mb_chr_len_local_sink;
 mod mb_constant_fold;

@@ -83,6 +83,9 @@ pub(super) fn lower(
         RuntimeFnId::ArrayMapIntDiv => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_int_div(ctx, inst)
         }),
+        RuntimeFnId::ArrayMapSumIntDiv => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_int_div(ctx, inst)
+        }),
         RuntimeFnId::ArrayMapSumAdd => Some({
             crate::codegen::lower_inst::builtins::arrays::lower_array_map_sum_add(ctx, inst)
         }),

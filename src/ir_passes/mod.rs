@@ -19,6 +19,7 @@ mod array_get_bounds;
 mod abs_int_sink;
 mod array_filter_count_hoist;
 mod array_map_sum_cache;
+mod array_map_sum_div_fusion;
 mod array_sum_int_bounds;
 mod array_sum_int_direct;
 mod array_sum_int_sink;

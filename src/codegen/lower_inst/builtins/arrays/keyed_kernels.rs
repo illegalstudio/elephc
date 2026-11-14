@@ -189,6 +189,14 @@ pub(crate) fn lower_array_map_int_div(
     store_if_result(ctx, inst)
 }
 
+/// Lowers the fused stored `$x / C` map+sum kernel over a packed int array.
+pub(crate) fn lower_array_map_sum_int_div(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_two_operand_kernel(ctx, inst, "__rt_array_map_sum_int_div")
+}
+
 /// Lowers `array_map_sum_add(array, offset)` into the fused runtime kernel.
 pub(crate) fn lower_array_map_sum_add(
     ctx: &mut FunctionContext<'_>,

@@ -154,6 +154,11 @@ pub enum RuntimeFnId {
     /// Exact divisions keep a raw `array<int>`; the first non-exact element rebuilds a boxed
     /// Mixed array with PHP's per-element int/float result.
     ArrayMapIntDiv,
+    /// Fused `array_sum(array_map(fn($x) => $x / $literal, $packedInts))` scalar kernel.
+    ///
+    /// Walks the packed source once, applies PHP's exact-int-or-double division rule and
+    /// boxes the left-to-right sum (int until the first promotion) as one Mixed cell.
+    ArrayMapSumIntDiv,
     /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
     ArrayMapSumAdd,
     /// Raw-int observation of the fused map+sum kernel; avoids boxing the result.
@@ -1055,7 +1060,7 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
-            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod | RuntimeFnId::ArrayMapSumIntDiv => Some((2, Some(2))),
             RuntimeFnId::ArrayMapNumeric | RuntimeFnId::ArrayMapAffine => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSquare => Some((1, Some(1))),
             RuntimeFnId::ArrayMapSquareAffine => Some((2, Some(2))),
@@ -1986,8 +1991,8 @@ impl RuntimeFnId {
             | RuntimeFnId::ArrayMapIntDiv => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
-            // The fused map+sum kernel walks a packed payload and boxes one result cell.
-            RuntimeFnId::ArrayMapSumAdd => {
+            // The fused map+sum kernels walk a packed payload and box one result cell.
+            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumIntDiv => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             // The raw map+sum entry returns a scalar; a promoted sum applies PHP's warned
@@ -3003,6 +3008,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMapFloatAffine
                 | RuntimeFnId::ArrayMapFloatDiv
                 | RuntimeFnId::ArrayMapIntDiv
+                | RuntimeFnId::ArrayMapSumIntDiv
                 | RuntimeFnId::ArrayMapSumAdd
                 | RuntimeFnId::ArrayMerge
                 | RuntimeFnId::ArrayPad
@@ -3354,6 +3360,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMapFloatAffine => "array_map_float_affine",
             RuntimeFnId::ArrayMapFloatDiv => "array_map_float_div",
             RuntimeFnId::ArrayMapIntDiv => "array_map_int_div",
+            RuntimeFnId::ArrayMapSumIntDiv => "array_map_sum_int_div",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMapSumAddInt => "array_map_sum_add_int",
             RuntimeFnId::ArrayMapSumProbeInt => "array_map_sum_probe_int",
@@ -4086,6 +4093,7 @@ fn set_callable_param_type(
 mod tests {
     use super::RuntimeFnId;
     use crate::builtins::semantics::BuiltinResultOwnership;
+    use crate::ir::{Effects, RuntimeCallSignature};
     use crate::types::PhpType;
 
     /// The declared-array union is boxed, but `array_values()` always returns dense Mixed slots.
@@ -4098,6 +4106,23 @@ mod tests {
             ),
             PhpType::Array(Box::new(PhpType::Mixed)),
         );
+    }
+
+    /// Pins the fused map+sum kernel's arity, name, effects and fresh boxed result.
+    #[test]
+    fn array_map_sum_int_div_is_a_two_operand_fresh_boxed_kernel() {
+        let target = RuntimeFnId::ArrayMapSumIntDiv;
+        assert_eq!(target.as_eir(), "array_map_sum_int_div");
+        assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
+        assert!(target.intrinsic_effects().contains(Effects::READS_HEAP | Effects::ALLOC_HEAP));
+        assert!(!target.intrinsic_effects().contains(Effects::OUTPUT));
+        assert!(matches!(
+            target.descriptor().logical_signature,
+            Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 2,
+                max_operands: Some(2)
+            })
+        ));
     }
 
     /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
@@ -4114,6 +4139,7 @@ mod tests {
             RuntimeFnId::Fwrite,
             RuntimeFnId::StreamFilterAppend,
             RuntimeFnId::StreamFilterPrepend,
+            RuntimeFnId::ArrayMapSumIntDiv,
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }

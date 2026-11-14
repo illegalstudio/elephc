@@ -677,6 +677,22 @@ result, and the cast/release scaffolding is retired. The raw kernel shares the
 existing vector/scalar body but skips the Mixed box; a promoted map or running sum
 terminates in PHP's warned float-to-int conversion.
 
+`src/ir_passes/array_map_sum_div_fusion.rs` fuses the stored
+`$mapped = array_map(fn($v) => $v / C, $ints)` assignment when `$mapped` is read by
+exactly one `array_sum()` and nowhere else. The mapped local must have one store
+(leaving `ArrayMapIntDiv`), one load and only slot-release cleanup; the source must
+be a non-escaping packed `array<int>` local whose loaded value reaches no other
+address-taking consumer; the divisor must be a nonzero literal; every scaffold
+instruction must be in the call block in source order; and no source write may sit
+between the map and the sum. The reducer call is retargeted to
+`ArrayMapSumIntDiv` with the original source and divisor, the map call and its
+acquire/store/load/temporary-owner scaffold are neutralized, and the result stays
+one owned Mixed cell. The shared kernel preserves exact-int-or-double division,
+`PHP_INT_MIN / -1` promotion, left-to-right sum order and integer-overflow
+promotion. Any observed map, dynamic divisor, parameter source, reassigned map
+local, zero divisor or intervening source write keeps the materialized map and its
+generic path.
+
 `src/ir_lower/stmt/stored_numeric_map.rs` marks a stored
 `$mapped = array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
 $v * $v + C | $v * F | $v * F + G | $v + F | $v - F | $v / F, $ints)` when every

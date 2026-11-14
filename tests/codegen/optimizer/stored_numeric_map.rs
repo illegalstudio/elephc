@@ -1555,7 +1555,9 @@ fn test_stored_numeric_map_int_div_emits_all_supported_targets() {
 function intDivMap(int $seed): int {
     $values = range(2, 20, 2);
     $mapped = array_map(fn($v) => $v / 2, $values);
-    return (int)array_sum($mapped) + $seed;
+    // The extra count() observer keeps the materialized map kernel under test;
+    // a sum-only read now fuses into `ArrayMapSumIntDiv`.
+    return count($mapped) + (int)array_sum($mapped) + $seed;
 }
 "#;
     for target in [
