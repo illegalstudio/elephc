@@ -102,6 +102,17 @@ slow-timeout = { period = "60s", terminate-after = 6 }
 filter = 'binary(codegen_tests) and test(/::test_[a-z0-9_]*_bundle$/)'
 slow-timeout = { period = "60s", terminate-after = 6 }
 
+# This dynamic-eval cast probe lowers the whole builtin catalog through the opaque eval
+# host; it measured 57s locally and exceeded the shared macOS shard's 300s deadline.
+# Give it a bounded ten-period budget so a slow runner cannot turn a pass into a timeout.
+[[profile.default.overrides]]
+filter = 'binary(nan_bool_coercion_tests) and test(=nan_string_dynamic_eval_cast_warns_once)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
+[[profile.ci.overrides]]
+filter = 'binary(nan_bool_coercion_tests) and test(=nan_string_dynamic_eval_cast_warns_once)'
+slow-timeout = { period = "60s", terminate-after = 10 }
+
 # These BCMath probes compile dynamic-eval hosts and exceeded 60s under local load.
 # Keep their assertions and use the same bounded budget as REPL eval hosts.
 [[profile.default.overrides]]
