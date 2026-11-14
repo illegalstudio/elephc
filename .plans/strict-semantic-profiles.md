@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 45 (this commit), following `efcfed164c`. Issue:
+Verified through step 46 (this commit), following `83b2501b36`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -612,6 +612,30 @@ Compiler build, architecture gate, assembly comments and diff hygiene pass.
 References, alias-origin contracts, defaults, properties, eval locals and the
 remaining strict families still require completion. Public admission is unchanged.
 
+### Verified proven scalar declaration defaults
+
+Step46 adds one shared AstVisitor::declared_value observation for parameter,
+property and typed-constant values. A focused schema adapter validates proven
+scalar kinds after class-like constants are available, using each physical
+statement's SourceMode and lexical class instead of the schema pass's Internal
+policy or a future caller. Existing default resolution is extracted into a
+reusable original-kind query. Raw defaults first use the existing lexical
+normalizer so unbound object factories retain deferred Error behavior. The kind
+query does not duplicate existing deprecation warnings. Unresolved/deferred
+values retain their established validation path.
+
+An unused float parameter with integer default compiled on step45; the new
+regression rejects it independently of invocation. Three tests pass across
+fourteen declaration forms/constants, PHP/LFC, strict_types=0, permissive/Internal
+controls, overlapping trusted/user sources, traits and lazy scope errors. Valid
+defaults emit on all five targets. Native direct/FCC/closure/arrow/method/property
+values retain actual F64 payloads and nullable defaults, while explicit arguments
+bypass unbound defaults and omission still throws Error, with clean heaps and
+both AST/EIR modes. Three adjacent store controls pass. Dynamic or conditional
+default plans, trait receiver resolution, property/reference/alias/eval/host
+contracts and all remaining strict families stay active. Public admission is
+unchanged. Compiler build, architecture gate, assembly comments and diff hygiene pass.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -724,4 +748,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 42 | `4fcbe3e803` | feat(strict): preserve inferred scalar return alternatives |
 | 43 | `6d06bfe2db` | feat(strict): carry checked conditional closure result contracts |
 | 44 | `efcfed164c` | feat(strict): enforce declared scalar initializer contracts |
-| 45 | this commit | feat(strict): retain declared contracts across local stores |
+| 45 | `83b2501b36` | feat(strict): retain declared contracts across local stores |
+| 46 | this commit | feat(strict): validate original scalar declaration defaults |

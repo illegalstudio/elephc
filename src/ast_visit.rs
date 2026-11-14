@@ -25,6 +25,8 @@ pub trait AstVisitor {
     fn statement_end(&mut self, _stmt: &Stmt) {}
     /// Observes one type annotation with its enclosing source span.
     fn annotation(&mut self, _annotation: &TypeExpr, _span: Span) {}
+    /// Observes a parameter, property or constant value with its written declaration type.
+    fn declared_value(&mut self, _annotation: &TypeExpr, _value: &Expr) {}
     /// Observes a free-function declaration or call target.
     fn function_name(&mut self, _span: Span, _name: &Name) {}
     /// Observes syntax extending PHP, without deciding whether to reject it.

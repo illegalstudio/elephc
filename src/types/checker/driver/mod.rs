@@ -441,6 +441,7 @@ pub(super) fn check_types_impl(
         &flattened_enums,
         program,
     ));
+    errors.extend(super::schema::validate_noncoercive_defaults(&mut checker, program));
     // All class/interface/enum metadata now exists, so deferred symbolic
     // attribute-argument references can be checked for resolvability. Drop any
     // the EIR backend cannot lower (e.g. built-in `Attribute::TARGET_CLASS`) so

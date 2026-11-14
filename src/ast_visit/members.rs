@@ -23,6 +23,9 @@ pub(super) fn walk_class_members(
             walk_type(type_expr, property.span, visitor);
         }
         if let Some(default) = &property.default {
+            if let Some(annotation) = &property.type_expr {
+                visitor.declared_value(annotation, default);
+            }
             walk_expr(default, visitor);
         }
     }
@@ -51,6 +54,7 @@ pub(super) fn walk_class_members(
         walk_attribute_groups(&constant.attributes, visitor);
         if let Some(type_expr) = &constant.type_expr {
             walk_type(type_expr, constant.span, visitor);
+            visitor.declared_value(type_expr, &constant.value);
         }
         walk_expr(&constant.value, visitor);
         let _ = span;
@@ -68,6 +72,9 @@ pub(super) fn walk_params(
             walk_type(type_expr, span, visitor);
         }
         if let Some(default) = default {
+            if let Some(annotation) = type_ann {
+                visitor.declared_value(annotation, default);
+            }
             walk_expr(default, visitor);
         }
     }

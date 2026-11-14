@@ -510,13 +510,23 @@ impl Checker {
         span: crate::span::Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        if let Some(default_ty) = self.resolved_declaration_default_type(default_expr)? {
+            self.require_compatible_arg_type(expected_ty, &default_ty, span, context)?;
+        }
+        Ok(())
+    }
+
+    /// Resolves a default's original kind while retaining deferred declaration failures.
+    pub(crate) fn resolved_declaration_default_type(
+        &mut self, default_expr: Option<&Expr>,
+    ) -> Result<Option<PhpType>, CompileError> {
         let Some(default_expr) = default_expr else {
-            return Ok(());
+            return Ok(None);
         };
         // PHP permits even a scalar-typed parameter to use an unbound object factory.
         // An explicit argument bypasses it; omission raises the scope Error before type binding.
         if crate::types::deferred_defaults::deferred_error_message(default_expr).is_some() {
-            return Ok(());
+            return Ok(None);
         }
         let default_ty = match &default_expr.kind {
             ExprKind::ScopedConstantAccess { receiver, name } => {
@@ -532,7 +542,7 @@ impl Checker {
             }
             _ => self.declaration_default_type(default_expr),
         };
-        self.require_compatible_arg_type(expected_ty, &default_ty, span, context)
+        Ok(Some(default_ty))
     }
 
     /// Validates a declaration default while class-like schema metadata is still being built.
