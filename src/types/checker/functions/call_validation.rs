@@ -729,8 +729,9 @@ impl Checker {
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
         let coercive = self.class_is_user_declared(owner_class);
+        let tidy_sig = self.tidy_strict_adapter_signature(None, Some(owner_class), sig);
         let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
-        let sig = internal_sig.as_ref().unwrap_or(sig);
+        let sig = tidy_sig.as_ref().or(internal_sig.as_ref()).unwrap_or(sig);
         self.check_known_callable_call_with_options(
             sig,
             args,
@@ -756,8 +757,9 @@ impl Checker {
         owner_class: &str,
     ) -> Result<PhpType, CompileError> {
         let coercive = self.class_is_user_declared(owner_class);
+        let tidy_sig = self.tidy_strict_adapter_signature(None, Some(owner_class), sig);
         let internal_sig = self.internal_operand_binding_signature(owner_class, sig);
-        let sig = internal_sig.as_ref().unwrap_or(sig);
+        let sig = tidy_sig.as_ref().or(internal_sig.as_ref()).unwrap_or(sig);
         self.check_known_callable_call_with_options(
             sig,
             args,

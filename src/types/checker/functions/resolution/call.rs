@@ -178,15 +178,17 @@ impl Checker {
             }
             let mut effective_sig =
                 Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
+            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, &effective_sig);
+            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
             let plan = self.plan_named_call_args(
-                &effective_sig,
+                validation_sig,
                 args,
                 span,
                 &format!("Function '{}'", name),
                 caller_env,
             )?;
             self.validate_callable_spread_elements(
-                &effective_sig,
+                validation_sig,
                 args,
                 &plan,
                 caller_env,
@@ -226,10 +228,12 @@ impl Checker {
                 effective_sig =
                     Self::callable_sig_for_declared_params(&sig, &sig.declared_params);
             }
+            let tidy_validation = self.tidy_strict_adapter_signature(Some(name), None, &effective_sig);
+            let validation_sig = tidy_validation.as_ref().unwrap_or(&effective_sig);
             return self.check_normalized_resolved_function_call(
                 name,
                 &sig,
-                &effective_sig,
+                validation_sig,
                 &normalized_args,
                 &defaults,
                 &descriptor_projections,

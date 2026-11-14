@@ -153,10 +153,10 @@ continues.
   `$config` and `$encoding` as `mixed` so their public adapters can reproduce internal
   Tidy's weak scalar coercion and exact `TypeError` ordering. Reflection therefore reports
   `mixed` where php-src reports `array|string|null` and `?string`; ordinary calls and the
-  documented signatures are unchanged. Because the adapter receives a `mixed` value,
-  `declare(strict_types=1)` also keeps its weak scalar coercion for these two arguments:
-  pass strings, arrays, or `null` explicitly when strict rejection matters. php-src would
-  throw the call-site `TypeError` instead.
+  documented signatures are unchanged. The checker restores the contract types for
+  `declare(strict_types=1)` call-site validation, so strict scalar arguments are rejected
+  at compile time; weak-mode calls keep the adapter's runtime coercion and `TypeError`
+  ordering.
 - **`ob_tidyhandler` is callable.** PHP registers it only as an output-handler alias;
   elephc also declares it as a prelude function so `ob_start('ob_tidyhandler')` can
   resolve it. Calling it directly, and `function_exists('ob_tidyhandler')` returning

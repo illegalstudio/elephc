@@ -663,3 +663,59 @@ echo $tidy->body()->child[0]->child[0]->value, "\n";
     );
     assert_eq!(out, "new\n");
 }
+
+/// `declare(strict_types=1)` rejects scalar `$encoding`/`$config` arguments against the
+/// documented contract, while the weak-mode adapter keeps its runtime coercion.
+#[test]
+fn test_tidy_strict_rejects_scalar_config_and_encoding() {
+    for (source, expected) in [
+        (
+            "<?php declare(strict_types=1); tidy_parse_string('<p>x</p>', null, 123);",
+            "tidy_parse_string",
+        ),
+        (
+            "<?php declare(strict_types=1); tidy_parse_string('<p>x</p>', 123);",
+            "$config",
+        ),
+        (
+            "<?php declare(strict_types=1); (new tidy())->parseString('<p>x</p>', null, true);",
+            "parseString",
+        ),
+        (
+            "<?php declare(strict_types=1); (new tidy())->parseString('<p>x</p>', false);",
+            "$config",
+        ),
+        (
+            "<?php declare(strict_types=1); new tidy(null, false);",
+            "$config",
+        ),
+        (
+            "<?php declare(strict_types=1); new tidy(null, null, true);",
+            "$encoding",
+        ),
+    ] {
+        let error = compile_expect_type_error(source);
+        assert!(
+            error.contains(expected),
+            "strict Tidy diagnostic should name `{expected}`:\n{error}"
+        );
+    }
+}
+
+/// Strict call-site validation accepts the contract's array/string/null argument types.
+#[test]
+fn test_tidy_strict_accepts_contract_arguments() {
+    if skip_without_tidy_native("test_tidy_strict_accepts_contract_arguments") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+$t = tidy_parse_string('<p>x</p>', ['show-body-only' => false], 'utf8');
+echo get_class($t), "\n";
+$u = new tidy();
+var_dump($u->parseString('<b>y</b>', ['show-body-only' => false], null));
+"#,
+    );
+    assert_eq!(out, "tidy\nbool(true)\n");
+}
