@@ -1589,7 +1589,7 @@ eval('
 class NativeEvalChild extends NativeEvalBase {
     public static function value(): string { return "child"; }
 }
-echo NativeEvalBase::run(new NativeEvalBase), "\n";
+echo NativeEvalChild::run(new NativeEvalBase), "\n";
 echo NativeEvalChild::value(), "\n";
 ');
 "#,

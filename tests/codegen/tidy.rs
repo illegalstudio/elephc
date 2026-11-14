@@ -629,11 +629,19 @@ try {
 } catch (TypeError $error) {
     echo $error->getMessage(), "\n";
 }
+$handle = fopen('php://memory', 'r');
+try {
+    tidy_parse_string('<p>x</p>', $handle);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+fclose($handle);
 "#,
     );
     assert_eq!(
         out,
-        "tidy_parse_string(): Argument #2 ($config) must be of type array|string|null, stdClass given\n"
+        "tidy_parse_string(): Argument #2 ($config) must be of type array|string|null, stdClass given\n\
+         tidy_parse_string(): Argument #2 ($config) must be of type array|string|null, resource given\n"
     );
 }
 
