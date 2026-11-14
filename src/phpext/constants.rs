@@ -244,7 +244,7 @@ fn resolve(mut expr: Expr, constants: &HashMap<String, (ExprKind, PhpType)>,
                     })
                 });
                 if let Some((value, ty)) = value {
-                    let mut resolved = resolve(Expr { kind: value.clone(), span: expr.span }, constants, active, depth + 1)?;
+                    let mut resolved = resolve(expr.with_kind(value.clone()), constants, active, depth + 1)?;
                     if ty.coerces_integer_to_float() {
                         super::constant_values::from_expression(&resolved, 0)?;
                         resolved = crate::types::constant_binding::bind_literal(resolved, ty);

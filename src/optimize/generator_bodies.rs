@@ -29,6 +29,7 @@ where
             kind: StmtKind::ExprStmt(Expr {
                 kind: ExprKind::Yield { key: None, value: None },
                 span: yield_span,
+                source_profile: crate::source::SourceProfile { mode: source_mode, strict_types },
             }),
             span: yield_span,
             source_mode,
@@ -37,7 +38,8 @@ where
         };
         rewritten.push(Stmt {
             kind: StmtKind::If {
-                condition: Expr { kind: ExprKind::BoolLiteral(false), span: Span::synthetic() },
+                condition: Expr { kind: ExprKind::BoolLiteral(false), span: Span::synthetic(),
+                    source_profile: crate::source::SourceProfile { mode: source_mode, strict_types } },
                 then_body: vec![yield_stmt],
                 elseif_clauses: Vec::new(),
                 else_body: None,

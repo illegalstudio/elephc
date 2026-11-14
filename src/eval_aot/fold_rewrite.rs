@@ -107,6 +107,7 @@ pub(super) fn fold_static_builtin_calls_in_expr(expr: Expr, php_only: bool) -> E
     let fold_static_builtin_calls_in_expr =
         |expr| fold_static_builtin_calls_in_expr(expr, php_only);
     let span = expr.span;
+    let source_profile = expr.source_profile;
     let kind = match expr.kind {
         ExprKind::UnaryPlus(inner) => {
             ExprKind::UnaryPlus(Box::new(fold_static_builtin_calls_in_expr(*inner)))
@@ -211,7 +212,7 @@ pub(super) fn fold_static_builtin_calls_in_expr(expr: Expr, php_only: bool) -> E
         }
         other => other,
     };
-    Expr { kind, span }
+    Expr { kind, span, source_profile }
 }
 
 /// Folds `call_user_func*()` when the callback is a pure foldable builtin.

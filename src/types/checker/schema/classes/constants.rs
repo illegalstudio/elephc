@@ -540,7 +540,7 @@ fn rewrite_expr(
         | ExprKind::This
         | ExprKind::MagicConstant(_) => expr.kind.clone(),
     };
-    Ok(Expr::new(kind, expr.span))
+    Ok(expr.with_kind(kind))
 }
 
 /// Applies `rewrite_expr` over a list of expressions, returning the transformed list.

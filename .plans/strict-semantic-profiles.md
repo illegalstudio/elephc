@@ -813,6 +813,24 @@ checks. This closes original argument proof for known source signatures, while
 nonliteral producer binding, dynamic/host/reference boundaries and the remaining
 strict families stay staged. Public admission is unchanged.
 
+### Verified expression producer profiles
+
+Step54 gives every AST expression an immutable physical SourceProfile alongside
+its span. Parsing captures source mode and strict_types; cloning and reconstruction
+retain the profile through conditional/include/name resolution, magic constants,
+constant folding/propagation, control-flow pruning and lexical default binding.
+Expr::with_kind shares reconstruction for borrowed nodes. Synthetic generator
+anchors carry their enclosing body's policy. Source equality continues to compare
+syntax, independently of physical provenance.
+
+Two new tests cover all three source modes and both strict_types states through
+frontend snapshots, then signature/schema metadata. A mixed-source trait test
+verifies an imported trusted default retains its declaration profile in a user
+class. Six trusted-default/constant planner, all-target emitter and native
+optimizer controls pass. Test-target type checking, compiler build, architecture
+inventory, assembly comments and diff hygiene also pass. This records producer
+origins for the next binding integration without changing public admission.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -933,4 +951,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 50 | `87252a0179` | feat(strict): guard public descriptor scalar arguments through eir |
 | 51 | `ec3e9e0feb` | feat(strict): preserve exact scalar and nominal union contracts |
 | 52 | `39f10226af` | feat(strict): enforce structural union and callable value contracts |
-| 53 | this commit | feat(strict): validate original source call arguments |
+| 53 | `6cfe328f09` | feat(strict): validate original source call arguments |
+| 54 | this commit | feat(strict): retain expression producer source profiles |

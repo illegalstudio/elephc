@@ -237,5 +237,5 @@ fn substitute(expr: &Expr, name: &str, with: &Expr) -> Option<Expr> {
         }
         _ => return None,
     };
-    Some(Expr::new(kind, expr.span))
+    Some(expr.with_kind(kind))
 }

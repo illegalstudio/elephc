@@ -20,6 +20,8 @@ use super::{BinOp, Stmt, StmtKind, TypeExpr};
 pub struct Expr {
     pub kind: ExprKind,
     pub span: Span,
+    /// Physical producer policy, retained when a default or constant moves into another scope.
+    pub source_profile: crate::source::SourceProfile,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -516,7 +518,15 @@ impl Expr {
     /// Constructs an expression with the given kind and span.
     /// Typically used by parsers; test code may also use this directly.
     pub fn new(kind: ExprKind, span: Span) -> Self {
-        Self { kind, span }
+        Self { kind, span, source_profile: crate::source::SourceProfile {
+            mode: crate::source::current_parse_mode(),
+            strict_types: crate::source::current_strict_types(),
+        } }
+    }
+
+    /// Rebuilds a producer expression without replacing its physical policy with the current scope.
+    pub fn with_kind(&self, kind: ExprKind) -> Self {
+        Self { kind, span: self.span, source_profile: self.source_profile }
     }
 
     /// Constructs a string literal expression with the given value.

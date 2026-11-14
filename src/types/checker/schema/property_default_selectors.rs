@@ -93,7 +93,7 @@ fn bind_constants(
                     || matches!(constant.value, elephc_builtin_contract::ConstValue::StreamResource(_))
                 { return None; }
                 crate::types::predefined_constants::literal_of(constant.value)
-                    .map(|kind| Expr::new(kind, expr.span))
+                    .map(|kind| expr.with_kind(kind))
             }).map(|value| (owner.to_string(), value)),
         ExprKind::ScopedConstantAccess { receiver, name } => {
             let class = match receiver.written_class_receiver() {

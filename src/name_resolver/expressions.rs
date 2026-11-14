@@ -64,7 +64,7 @@ fn is_mt_rand_php(name: &crate::names::Name) -> bool {
 /// expression's span, and both branches keep the constant's value so the read still yields
 /// `1` whichever way a user error handler answers.
 fn mt_rand_php_read(span: Span) -> ExprKind {
-    let at = |kind| Expr { kind, span };
+    let at = |kind| Expr::new(kind, span);
     ExprKind::Ternary {
         condition: Box::new(at(ExprKind::FunctionCall {
             name: resolved_name("trigger_error".to_string()),
@@ -599,7 +599,7 @@ pub(super) fn resolve_expr(
         },
         _ => expr.kind.clone(),
     };
-    Expr::new(kind, expr.span)
+    expr.with_kind(kind)
 }
 
 /// Resolves the target of an instanceof expression.

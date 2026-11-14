@@ -238,6 +238,10 @@ pub fn finalize_physical_program_with_semantics(
 }
 
 #[cfg(test)]
+#[path = "source/expression_origins.rs"]
+mod expression_origins;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

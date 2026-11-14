@@ -23,6 +23,7 @@ use super::{walk_static_receiver, Pass};
 /// child expressions recursively processed. Other leaf variants are returned unchanged.
 pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
     let span = expr.span;
+    let source_profile = expr.source_profile;
     let kind = match expr.kind {
         ExprKind::MagicConstant(mc) => pass.transform_magic(span, mc),
 
@@ -337,7 +338,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
         },
         ExprKind::YieldFrom(inner) => ExprKind::YieldFrom(Box::new(walk_expr(*inner, pass))),
     };
-    Expr { kind, span: pass.transform_expr_span(span) }
+    Expr { kind, span: pass.transform_expr_span(span), source_profile }
 }
 
 /// Transforms a `CallableTarget` by recursively walking any boxed expression inside it.

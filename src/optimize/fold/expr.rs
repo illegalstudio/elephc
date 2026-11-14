@@ -106,6 +106,7 @@ pub(in crate::optimize) fn fold_enum_case(case: EnumCaseDecl) -> EnumCaseDecl {
 /// unambiguous PHP equivalent.
 pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
     let span = expr.span;
+    let source_profile = expr.source_profile;
     let kind = match expr.kind {
         // `IncludeValue` is a transient parser node fully expanded by the resolver;
         // it can never reach this pass.
@@ -240,7 +241,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
                 return fold_expr(rebound);
             }
             if let Some(folded) = try_fold_scalar_builtin(&name, &args) {
-                return fold_expr(Expr::new(folded, span));
+                return fold_expr(Expr { kind: folded, span, source_profile });
             }
             if name
                 .as_canonical()
@@ -530,7 +531,7 @@ pub(in crate::optimize) fn fold_expr(expr: Expr) -> Expr {
             unreachable!("MagicConstant must be lowered before optimizer passes")
         }
     };
-    Expr { kind, span }
+    Expr { kind, span, source_profile }
 }
 
 /// Folds the target of an instanceof expression, recursing into the expression form.

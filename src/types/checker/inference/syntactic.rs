@@ -732,9 +732,11 @@ mod tests {
                 args: vec![Expr {
                     kind: ExprKind::StringLiteral("return 1;".to_string()),
                     span: Span::dummy(),
+                    source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
                 }],
             },
             span: Span::dummy(),
+            source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
         };
 
         assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Mixed);
@@ -979,17 +981,20 @@ mod tests {
                 default: Box::new(Expr {
                     kind: ExprKind::Throw(Box::new(Expr::string_lit("none"))),
                     span: Span::dummy(),
+                    source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
                 }),
             },
             span: Span::dummy(),
+            source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
         };
         assert_eq!(infer_expr_type_syntactic(&expr), PhpType::Int);
         let nulled = Expr {
             kind: ExprKind::NullCoalesce {
                 value: Box::new(Expr::int_lit(1)),
-                default: Box::new(Expr { kind: ExprKind::Null, span: Span::dummy() }),
+                default: Box::new(Expr::new(ExprKind::Null, Span::dummy())),
             },
             span: Span::dummy(),
+            source_profile: crate::source::SourceProfile::new(crate::source::SourceMode::Internal),
         };
         assert_eq!(
             infer_expr_type_syntactic(&nulled),

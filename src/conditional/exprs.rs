@@ -28,6 +28,7 @@ use super::stmts::apply_stmts;
 /// - Output: New `Expr` with conditionals applied, span preserved.
 pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
     let span = expr.span;
+    let source_profile = expr.source_profile;
     let kind = match expr.kind {
         ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp {
             left: Box::new(rewrite_expr(*left, defines)),
@@ -269,5 +270,5 @@ pub(super) fn rewrite_expr(expr: Expr, defines: &HashSet<String>) -> Expr {
         },
         other => other,
     };
-    Expr::new(kind, span)
+    Expr { kind, span, source_profile }
 }

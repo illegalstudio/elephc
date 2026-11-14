@@ -71,6 +71,7 @@ pub(super) fn promote_pdo_binding_ref_argument(
     let Some(Expr {
         kind: ExprKind::Variable(name),
         span,
+        ..
     }) = argument
     else {
         return;
