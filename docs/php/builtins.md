@@ -937,7 +937,7 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`inet_ntop()`](./builtins/string/inet_ntop.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`inet_pton()`](./builtins/string/inet_pton.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`ip2long()`](./builtins/string/ip2long.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
-| [`join()`](./builtins/string/join.md) | `(mixed $separator, mixed $array = null): string` | `string` | ✓ | - |
+| [`join()`](./builtins/string/join.md) | `(mixed $separator, mixed $array = null): string` | `string` | ✓ | ✓ |
 | [`lcfirst()`](./builtins/string/lcfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`long2ip()`](./builtins/string/long2ip.md) | `(int $ip): string` | `string` | ✓ | ✓ |
 | [`ltrim()`](./builtins/string/ltrim.md) | `(string $string, string $characters = " \n\r\t\x0B\x0C\x00"): string` | `string` | ✓ | ✓ |

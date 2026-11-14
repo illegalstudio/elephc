@@ -322,7 +322,6 @@ const EVAL_IMPLEMENTATION_PENDING: &[&str] = &[
     "dechex",
     "decoct",
     "hexdec",
-    "join",
     "octdec",
     "substr_count",
     "zval_free",
@@ -378,7 +377,7 @@ mod tests {
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        assert_eq!(eval_registry, 758 + curl_surface);
+        assert_eq!(eval_registry, 759 + curl_surface);
         // Compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -402,9 +401,9 @@ mod tests {
         // `__elephc_eval_reflection_class_build`, which only compiled/eval
         // reflector getters call, and the internal capture-event helper.
         assert_eq!(eval_internal, 139);
-        // 30 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
+        // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 386);
+        assert_eq!(eval_pending, 385);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -472,10 +471,10 @@ mod tests {
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters, plus the GMP and SimpleXML forwarding homes.
-        assert_eq!(interpreter_adapter, 663 + curl_surface);
+        assert_eq!(interpreter_adapter, 664 + curl_surface);
         // Internal compiler surfaces and pending eval bindings remain unavailable, including
         // the internal capture-event helper and the four debug source helpers.
-        assert_eq!(unsupported, 525);
+        assert_eq!(unsupported, 524);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

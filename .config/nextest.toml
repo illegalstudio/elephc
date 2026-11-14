@@ -374,12 +374,13 @@ slow-timeout = { period = "60s", terminate-after = 10 }
 # containerized runners are involved. The budget is larger than the 180s default because
 # the cost here is dominated by linking a large archive rather than by compilation, which
 # is exactly what a loaded runner stretches most.
+# The NaN string-cast eval fixture also compiles and links one host per PHP profile.
 [[profile.default.overrides]]
-filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
+filter = '(binary(php_profile_independence_tests) and test(/^eval_/)) or (binary(nan_bool_coercion_tests) and test(=nan_string_dynamic_eval_cast_warns_once))'
 slow-timeout = { period = "300s", terminate-after = 1 }
 
 [[profile.ci.overrides]]
-filter = 'binary(php_profile_independence_tests) and test(/^eval_/)'
+filter = '(binary(php_profile_independence_tests) and test(/^eval_/)) or (binary(nan_bool_coercion_tests) and test(=nan_string_dynamic_eval_cast_warns_once))'
 slow-timeout = { period = "300s", terminate-after = 1 }
 # The prebuilt bridge guard rejects accidental driver-feature substitutions.
 [[profile.ci.archive.include]]

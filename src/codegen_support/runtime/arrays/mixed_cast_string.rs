@@ -127,6 +127,7 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_string_from_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the FP register file
+    super::emit_nan_string_coercion_probe(emitter, "__rt_mixed_cast_string_float_no_nan");
     emitter.instruction("bl __rt_ftoa");                                        // convert the float payload to decimal text
     emitter.instruction("b __rt_mixed_cast_string_borrowed");                   // publish borrowed ownership for concat scratch
 
@@ -246,6 +247,7 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_string_from_float");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the FP register file
+    super::emit_nan_string_coercion_probe(emitter, "__rt_mixed_cast_string_float_no_nan_linux_x86_64");
     emitter.instruction("call __rt_ftoa");                                      // convert the float payload to decimal text
     emitter.instruction("jmp __rt_mixed_cast_string_borrowed");                 // publish borrowed ownership for concat scratch
 
