@@ -72,6 +72,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument("--json", type=Path)
+    parser.add_argument("--require-ahead", action="store_true",
+                        help="fail when Elephc is not ahead on body time, CPU or peak RSS")
     args = parser.parse_args()
     if args.iterations < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations must be positive, warmup nonnegative, timeout positive")
@@ -275,6 +277,32 @@ def main() -> None:
     print("Instrumentation is inserted directly into the fixture; PHP parses the file "
           "before the timed region, so parse time is excluded for every runtime. "
           "CPU is child user+sys and RSS is the child's peak resident set.")
+
+    if args.require_ahead:
+        regressions = []
+        for row in rows:
+            variants = row["variants"]
+            elephc = variants["elephc"]
+            for label in ("frankenphp", "frankenphp-jit"):
+                other = variants[label]
+                for metric, key in (
+                    ("body", "body_ms"),
+                    ("cpu", "cpu_ms"),
+                    ("rss", "rss_kb"),
+                ):
+                    ours = elephc[key]
+                    theirs = other[key]
+                    if not (ours > 0 and theirs > 0 and ours < theirs):
+                        regressions.append(
+                            f"{row['case']}: {metric} {ours:.3f} vs {label} {theirs:.3f}"
+                        )
+        if regressions:
+            print("Efficiency gate failed:")
+            for line in regressions:
+                print(f"- {line}")
+            raise SystemExit(1)
+        print(f"Efficiency gate: Elephc ahead on {len(rows)}/{len(rows)} cases "
+              "for body time, CPU and peak RSS")
 
     if args.json:
         record = {

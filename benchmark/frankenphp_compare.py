@@ -59,6 +59,8 @@ def parse_args() -> argparse.Namespace:
                         metavar="CASE", help="native case to skip (repeatable)")
     parser.add_argument("--json", type=Path,
                         help="write the full comparison record to this path")
+    parser.add_argument("--require-ahead", action="store_true",
+                        help="fail when Elephc is not ahead on wall time, CPU or peak RSS")
     args = parser.parse_args()
     if args.iterations < 1 or args.warmup < 0 or args.timeout <= 0:
         parser.error("iterations must be positive, warmup nonnegative, timeout positive")
@@ -248,6 +250,38 @@ def main() -> None:
         print(f"Geometric mean RAM efficiency vs FrankenPHP: **{rss_fp_geomean:.2f}x**")
     if rss_jit_geomean is not None:
         print(f"Geometric mean RAM efficiency vs FrankenPHP+JIT: **{rss_jit_geomean:.2f}x**")
+
+    if args.require_ahead:
+        regressions = []
+        for row in rows:
+            variants = row["variants"]
+            elephc = variants.get("elephc", {})
+            for label in ("frankenphp", "frankenphp-jit"):
+                other = variants.get(label, {})
+                for metric, key in (
+                    ("wall", "median_ms"),
+                    ("cpu", "median_cpu_ms"),
+                    ("rss", "peak_rss_kb"),
+                ):
+                    ours = elephc.get(key)
+                    theirs = other.get(key)
+                    if not (
+                        ours is not None
+                        and theirs is not None
+                        and ours > 0
+                        and theirs > 0
+                        and ours < theirs
+                    ):
+                        regressions.append(
+                            f"{row['case']}: {metric} {ours} vs {label} {theirs}"
+                        )
+        if regressions:
+            print("Efficiency gate failed:")
+            for line in regressions:
+                print(f"- {line}")
+            raise SystemExit(1)
+        print(f"Efficiency gate: Elephc ahead on {len(rows)}/{len(rows)} cases "
+              "for wall time, CPU and peak RSS")
 
     record = {
         "generated_at": datetime.now(timezone.utc).isoformat(),

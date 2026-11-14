@@ -113,7 +113,9 @@ python3 benchmark/frankenphp_body.py \
 
 Both tools also report each child's user+system CPU time and peak resident set
 size from `wait4` rusage, with efficiency ratios against FrankenPHP and
-FrankenPHP+JIT. The JSON records keep every raw sample under
+FrankenPHP+JIT. Pass `--require-ahead` to make every selected case a gate:
+the command exits non-zero unless Elephc beats both FrankenPHP variants on time,
+CPU and peak RSS. The JSON records keep every raw sample under
 `cpu_samples_ms`/`rss_samples_kb`, so a higher ratio always means Elephc used less
 CPU or less peak RAM for the same fixture.
 
