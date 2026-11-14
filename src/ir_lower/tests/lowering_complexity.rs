@@ -816,6 +816,38 @@ fn mixed_reads_of_one_name_search_the_program_once() {
     assert_eq!(small, large, "arm searches grew with the sites: {small} vs {large}");
 }
 
+/// `count` unrelated classes, two classes declaring `run`, and calls of `run` and `size` through
+/// a receiver of no known class.
+fn many_classes_one_dynamic_method(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..count {
+        source.push_str(&format!("class U{index} {{ public function u{index}(): int {{ return {index}; }} }}\n"));
+    }
+    source.push_str("class A { public function run(): int { return 1; } public function size(): int { return 2; } }\n");
+    source.push_str("class B { public function run(): int { return 3; } public function size(): int { return 4; } }\n");
+    source.push_str("function call($o) { return $o->run() + $o->size(); }\n");
+    source.push_str("echo call($argc > 1 ? new A() : new B()), \"\\n\";\n");
+    source
+}
+
+/// Classes the whole-table method scans visited while lowering `source`.
+fn method_scan_classes(source: &str) -> usize {
+    crate::ir_lower::expr::METHOD_SCAN_CLASSES.with(|count| count.set(0));
+    let _module = lower_source(source);
+    crate::ir_lower::expr::METHOD_SCAN_CLASSES.with(|count| count.get())
+}
+
+/// A call through a receiver of no known class folds the signatures and return summaries of the
+/// classes declaring the method, found through a method index: the scans visited every class of
+/// the program per method name.
+#[test]
+fn dynamic_method_scans_visit_only_the_declaring_classes() {
+    let small = method_scan_classes(&many_classes_one_dynamic_method(10));
+    let large = method_scan_classes(&many_classes_one_dynamic_method(200));
+    assert!(small > 0, "the fixture no longer reaches the whole-table method scans");
+    assert_eq!(small, large, "method scans grew with the class count: {small} for 10, {large} for 200");
+}
+
 /// A constant string emits no call to the literal identity hook, which records nothing: with
 /// mbstring linked, every constant string of a program paid a `bl` to a `ret`.
 #[test]

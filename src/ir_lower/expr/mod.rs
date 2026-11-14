@@ -270,6 +270,8 @@ pub(crate) use override_arity::reset_method_declarer_index;
 #[cfg(test)]
 pub(crate) use method_metadata::memoized_signature_stats;
 #[cfg(test)]
+pub(crate) use method_metadata::METHOD_SCAN_CLASSES;
+#[cfg(test)]
 pub(crate) use override_arity::WIDER_OVERRIDE_CANDIDATES;
 use method_metadata::*;
 pub(in crate::ir_lower) use method_metadata::method_signature;

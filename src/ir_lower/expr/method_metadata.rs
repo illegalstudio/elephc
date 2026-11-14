@@ -220,11 +220,72 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
+/// Method key -> every class whose `methods` or `method_impl_classes` names it, tagged with the
+/// class table it was built from (address and size).
+type MethodClassIndex = (usize, usize, std::rc::Rc<crate::fast_hash::FastMap<String, Vec<String>>>);
+
+thread_local! {
+    /// [`classes_with_method`]'s index, built once per class table.
+    static METHOD_CLASS_INDEX: std::cell::RefCell<Option<MethodClassIndex>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The classes a whole-table scan for `method_key` must visit: those whose metadata names the
+/// method, which are the only ones [`class_method_signature`] answers for, unless the lexical
+/// scope declares a PRIVATE method of that name — then a descendant of the scope that lacks the
+/// method resolves to the scope's (`lexical_private_method_scope`), and every class is visited.
+///
+/// The folds over the result are order-independent (an equality check, and
+/// `ReturnArgAlias::merge`, which is commutative and associative), so visiting the indexed
+/// classes alone gives the full scan's answer. The scans walked every class of the program per
+/// method name: ~3,100 samples of a sampled one-core Symfony demo console build.
+fn classes_with_method<'a>(ctx: &'a LoweringContext<'_, '_>, method_key: &str) -> Vec<&'a String> {
+    let private_in_scope = ctx.current_class.as_deref().is_some_and(|scope| {
+        ctx.classes
+            .get(scope.trim_start_matches('\\'))
+            .and_then(|info| info.method_visibilities.get(method_key))
+            == Some(&crate::parser::ast::Visibility::Private)
+    });
+    let visited: Vec<&'a String> = if private_in_scope {
+        ctx.classes.keys().collect()
+    } else {
+        let identity = (ctx.classes as *const _ as usize, ctx.classes.len());
+        let index = METHOD_CLASS_INDEX.with(|cell| {
+            let mut cell = cell.borrow_mut();
+            if cell.as_ref().is_none_or(|(address, len, _)| (*address, *len) != identity) {
+                let mut index: crate::fast_hash::FastMap<String, Vec<String>> = Default::default();
+                for (class_name, info) in ctx.classes {
+                    let keys = info.methods.keys().chain(info.method_impl_classes.keys());
+                    for key in keys.collect::<crate::fast_hash::FastSet<_>>() {
+                        index.entry(key.clone()).or_default().push(class_name.clone());
+                    }
+                }
+                *cell = Some((identity.0, identity.1, std::rc::Rc::new(index)));
+            }
+            cell.as_ref().map(|(_, _, index)| index.clone()).expect("built above")
+        });
+        index
+            .get(method_key)
+            .map(|names| names.iter().filter_map(|name| ctx.classes.get_key_value(name).map(|(key, _)| key)).collect())
+            .unwrap_or_default()
+    };
+    #[cfg(test)]
+    METHOD_SCAN_CLASSES.with(|count| count.set(count.get() + visited.len()));
+    visited
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Classes the whole-table method scans visited, for the regression test.
+    pub(crate) static METHOD_SCAN_CLASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Forgets both memos; each program lowering starts afresh (a later program's class table could
 /// reuse an address and a size).
 pub(crate) fn reset_method_signature_memos() {
     NARROWED_SIGNATURES.with(|cell| *cell.borrow_mut() = None);
     COMMON_SIGNATURES.with(|cell| *cell.borrow_mut() = None);
+    METHOD_CLASS_INDEX.with(|cell| *cell.borrow_mut() = None);
     super::array_access_types::reset_class_table_facts();
 }
 
@@ -433,7 +494,7 @@ fn declaring_classes_return_arg_alias(ctx: &LoweringContext<'_, '_>, method_key:
         return cached;
     }
     let mut summary: Option<ReturnArgAlias> = None;
-    for candidate in ctx.classes.keys() {
+    for candidate in classes_with_method(ctx, method_key) {
         let Some(alias) = class_method_return_arg_alias(ctx, candidate, method_key) else {
             continue;
         };
@@ -707,7 +768,7 @@ fn scan_common_dynamic_method_signature(
     // Comparing borrowed signatures and cloning only the winner: the previous form cloned a
     // whole `FunctionSig` for every class in the module on every call, to throw all but one away.
     let mut common: Option<&FunctionSig> = None;
-    for class_name in ctx.classes.keys() {
+    for class_name in classes_with_method(ctx, method_key) {
         let Some(signature) = class_method_signature(ctx, class_name, method_key) else {
             continue;
         };
