@@ -93,3 +93,41 @@ function late(): string { return 'late'; }
         String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "late|included\n");
 }
+
+/// Two class files loaded in the same autoload round: the entry program declares a global
+/// `helper()`, `B.php` declares `App\helper()`, and `A::go()` calls `helper()` unqualified after
+/// `B` is loaded, so PHP binds it to `App\helper`, not to the global the entry program declares.
+#[test]
+fn test_autoloaded_class_prefers_namespaced_function_from_sibling_class_file() {
+    let project = AutoloadFilesProject(make_cli_test_dir("elephc_autoload_sibling_ns_function"));
+    let dir = &project.0;
+    fs::create_dir(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#).unwrap();
+    fs::write(dir.join("src/A.php"), r#"<?php
+namespace App;
+final class A {
+    public static function go(): string { return helper(); }
+}
+"#).unwrap();
+    fs::write(dir.join("src/B.php"), r#"<?php
+namespace App;
+function helper(): string { return "app"; }
+final class B {
+    public static function load(): string { return "b"; }
+}
+"#).unwrap();
+    fs::write(dir.join("main.php"), r#"<?php
+function helper(): string { return "global"; }
+echo App\B::load(), "|", App\A::go(), "|", helper(), "\n";
+"#).unwrap();
+    let compiled = elephc_cli_command(dir)
+        .args(["--target", target().as_str(), "main.php"])
+        .output()
+        .expect("run compiler");
+    assert!(compiled.status.success(), "sibling namespaced function compilation failed: {}",
+        String::from_utf8_lossy(&compiled.stderr));
+    let output = run_binary_with_args(&dir.join("main"), dir, &[]);
+    assert!(output.status.success(), "sibling namespaced function execution failed: {}",
+        String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "b|app|global\n");
+}
