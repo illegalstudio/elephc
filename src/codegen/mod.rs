@@ -474,6 +474,7 @@ fn finalize_user_asm(
     if shared.callable_argument_normalizer || eval_callable_support.argument_normalizer_needed {
         lower_inst::emit_callable_argument_normalizer(module, &mut emitter, &mut data, &mut shared)?;
     }
+    runtime_callable_invoker::emit_scalar_parameter_guards(module, &mut emitter, &mut data, &mut shared)?;
     // The eval status dispatch is the same at every call site, so it is one
     // module-level helper too. Emitted OUTSIDE the bridge gate: a literal-eval
     // program uses the eval SCOPE accessors without linking the bridge, and

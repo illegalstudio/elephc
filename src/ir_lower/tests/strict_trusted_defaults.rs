@@ -32,6 +32,7 @@ $reflection = new ReflectionFunction('internalDefault');
 echo is_float($reflection->getParameters()[0]->getDefaultValue()) ? 'R|' : 'X|';
 echo internalDefault(...defaultArguments($argc < 0)), '|';
 try { internalDefault(suppliedDefault(1)); } catch (TypeError $error) { echo 'D'; }
+try { $call(suppliedDefault(1)); } catch (TypeError $error) { echo 'C'; }
 try { internalDefault(...defaultArguments($argc > 0)); } catch (TypeError $error) { echo 'S'; }
 "#;
 
@@ -102,7 +103,7 @@ fn strict_trusted_defaults_native_callables_named_spreads_and_owners() {
         let output = super::native_module::run(&module);
         let stdout = String::from_utf8_lossy(&output.stdout); let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(output.status.success(), "opt={optimize}: {stdout} {stderr}");
-        assert_eq!(stdout, "1|1|1|1|1|1|named:1|R|1|DS", "opt={optimize}");
+        assert_eq!(stdout, "1|1|1|1|1|1|named:1|R|1|DCS", "opt={optimize}");
         assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {stderr}");
     }
 }

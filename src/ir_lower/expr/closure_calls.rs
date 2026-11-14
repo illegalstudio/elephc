@@ -48,9 +48,12 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
     let callable = ctx.load_local(var, Some(expr.span));
     let result_type = result_type
         .or_else(|| {
-            descriptor_signature
-                .as_ref()
-                .map(|sig| descriptor_invoker_result_type(Some(sig)))
+            // An inferred parameter signature can come from another caller's callback.
+            // Preserve the descriptor's boxed result under exact value semantics.
+            (!ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions))
+                .then(|| descriptor_signature.as_ref()
+                    .map(|sig| descriptor_invoker_result_type(Some(sig))))
+                .flatten()
         })
         .unwrap_or_else(|| dynamic_callable_result_type(ctx, callable.value, expr));
     if tracked_instance_descriptor_spread {

@@ -809,6 +809,7 @@ fn emit_eval_runtime_callable_invoker_inline(
         sig,
     );
     let invoker = RuntimeCallableInvoker {
+        semantic_profile: module.semantic_profile,
         label: PENDING_INVOKER_LABEL,
         sig,
         captures,

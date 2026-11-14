@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 49 (this commit), following `6258e85218`. Issue:
+Verified through step 50 (this commit), following `beac107cab`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -710,6 +710,29 @@ assembly comments and diff checks. An explicit Mixed int through an escaped nati
 descriptor remains accepted by the legacy invoker and is the immediate next
 integration target; no feature admission changes in this step.
 
+### Verified public descriptor scalar argument guards
+
+Step50 carries the immutable module profile into native/eval descriptor invoker
+factories. Original scalar arguments are guarded before conversion at regular and
+variadic materialization points. The guards are ordinary AST-to-EIR functions,
+deduplicated per scalar contract in module data registration and emitted after
+descriptor discovery. Guard inputs and temporary boxes retain normal EIR/native
+ownership. Defaults remain a distinct producer path. Public callable contracts
+also apply when the selected implementation uses physical Internal syntax.
+
+Coercions descriptor calls preserve a callable parameter's actual boxed result;
+an inferred parameter signature can originate in a different caller and cannot
+justify a destructive scalar conversion. The expanded probe returned zero for
+string callbacks through a Float hint before this change. Three new regressions
+cover valid helper EIR, all five emitters, dynamic callbacks with indexed/named/
+unpacked/variadic arguments, exact false/null unions, later source effects before
+parameter errors, native payloads and clean heaps through both full optimizers.
+The earlier escaped-descriptor negative case now also passes. Default, callable
+normalizer, nullable-owner and shared-owner visitor controls, compiler build,
+architecture gate, assembly comments and diff checks pass. No ABI or public
+admission changes. Reference aliases, nominal unions and special adapters still
+need their planned integration.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -826,4 +849,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 46 | `de9ba02ca7` | feat(strict): validate original scalar declaration defaults |
 | 47 | `9c9cbe461a` | feat(strict): preserve declaration kinds and union failures |
 | 48 | `6258e85218` | feat(strict): materialize declared scalar constant literals |
-| 49 | this commit | feat(strict): bind omitted parameter defaults before invocation |
+| 49 | `beac107cab` | feat(strict): bind omitted parameter defaults before invocation |
+| 50 | this commit | feat(strict): guard public descriptor scalar arguments through eir |

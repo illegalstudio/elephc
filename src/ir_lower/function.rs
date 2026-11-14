@@ -30,6 +30,8 @@ use crate::types::{
     PackedClassInfo, PhpType, ReturnArgAlias, TypeEnv,
 };
 
+mod parameter_guards;
+pub(crate) use parameter_guards::lower_callable_parameter_guard;
 mod builtin_wrappers;
 pub(in crate::ir_lower) use builtin_wrappers::lower_operator_callable_body;
 mod closure_defaults;

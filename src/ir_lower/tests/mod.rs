@@ -761,3 +761,5 @@ mod strict_default_evidence;
 mod strict_trusted_constants;
 
 mod strict_trusted_defaults;
+
+mod strict_descriptor_parameters;

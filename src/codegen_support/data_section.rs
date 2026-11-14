@@ -109,6 +109,7 @@ pub struct DataSection {
     static_local_dedup: HashMap<String, usize>,
     extern_callback_slots: Vec<String>,
     invoker_owner_visitors: HashMap<usize, String>,
+    scalar_argument_guards: Vec<PhpType>,
 }
 
 impl DataSection {
@@ -129,7 +130,23 @@ impl DataSection {
             static_local_dedup: HashMap::new(),
             extern_callback_slots: Vec::new(),
             invoker_owner_visitors: HashMap::new(),
+            scalar_argument_guards: Vec::new(),
         }
+    }
+
+    /// Shares one EIR parameter predicate per exact scalar contract in this emitted module.
+    pub(crate) fn scalar_argument_guard(&mut self, expected: &PhpType) -> String {
+        let index = self.scalar_argument_guards.iter().position(|ty| ty == expected).unwrap_or_else(|| {
+            self.scalar_argument_guards.push(expected.clone());
+            self.scalar_argument_guards.len() - 1
+        });
+        format!("__eir_scalar_argument_guard_{index}")
+    }
+
+    /// Takes queued contracts after descriptor discovery, retaining stable registered labels.
+    pub(crate) fn requested_scalar_argument_guards(&self) -> Vec<(String, PhpType)> {
+        self.scalar_argument_guards.iter().enumerate()
+            .map(|(index, ty)| (format!("__eir_scalar_argument_guard_{index}"), ty.clone())).collect()
     }
 
     /// Shares one physical-slot visitor among invokers with the same argument count.

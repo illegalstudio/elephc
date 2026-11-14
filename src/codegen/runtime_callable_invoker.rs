@@ -35,6 +35,8 @@ mod argument_owners;
 mod defaults;
 mod mbstring;
 mod owned_value_args;
+mod scalar_parameter_guards;
+pub(super) use scalar_parameter_guards::emit_requested as emit_scalar_parameter_guards;
 mod public_args;
 mod reference_args;
 pub(super) mod reference_return;
@@ -118,6 +120,7 @@ fn emit_invoker_callee_saved_restores(emitter: &mut Emitter) {
 
 /// Runtime invoker metadata emitted beside callable descriptors.
 pub(super) struct RuntimeCallableInvoker<'a> {
+    pub(super) semantic_profile: elephc_semantics::SemanticProfile,
     pub(super) label: &'a str,
     pub(super) sig: &'a FunctionSig,
     pub(super) captures: &'a [(String, PhpType, bool)],
@@ -152,6 +155,9 @@ struct InvokerEmitContext {
     defaults: InvokerDefaults,
     /// The declared literal parameter currently being decoded, before ABI coercion.
     literal_parameter: Option<(usize, String)>,
+    semantic_profile: elephc_semantics::SemanticProfile,
+    scalar_parameter: Option<PhpType>,
+    materializing_default: bool,
 }
 
 impl InvokerEmitContext {
@@ -174,6 +180,9 @@ impl InvokerEmitContext {
             mbstring_operation: None,
             mbstring_variable_ref_warnings: false,
             literal_parameter: None,
+            semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
+            scalar_parameter: None,
+            materializing_default: false,
         }
     }
 
@@ -182,8 +191,15 @@ impl InvokerEmitContext {
         self.defaults.get(index).cloned().flatten()
     }
 
-    /// Selects a declared false/null contract without narrowing inferred parameter defaults.
-    fn select_literal_parameter(&mut self, sig: &FunctionSig, index: usize) {
+    /// Selects original scalar and literal contracts without narrowing inferred parameter types.
+    fn select_parameter_contract(&mut self, sig: &FunctionSig, index: usize) {
+        self.scalar_parameter = sig.params.get(index)
+            .filter(|_| sig.declared_params.get(index).copied().unwrap_or(false))
+            .map(|(_, ty)| {
+                if sig.variadic.as_ref().is_some_and(|name| name == &sig.params[index].0) {
+                    match ty { PhpType::Array(element) => *element.clone(), _ => ty.clone() }
+                } else { ty.clone() }
+            });
         self.literal_parameter = sig.params.get(index)
             .filter(|(_, ty)| sig.declared_params.get(index).copied().unwrap_or(false)
                 && matches!(ty, PhpType::False | PhpType::Void))
@@ -269,6 +285,7 @@ fn emit_runtime_callable_invoker_impl(
         invoker.defaults.to_vec(),
         emitter.target,
     );
+    ctx.semantic_profile = invoker.semantic_profile;
     ctx.mbstring_operation = invoker.mbstring_operation;
     ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
 
@@ -673,7 +690,7 @@ fn emit_loaded_indexed_array_callback_call(
     let mut arg_types = Vec::new();
     // -- marshal each visible regular from the indexed container --
     for index in 0..shape.visible_regular {
-        ctx.select_literal_parameter(sig, index);
+        ctx.select_parameter_contract(sig, index);
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let is_ref = sig.ref_params.get(index).copied().unwrap_or(false);
@@ -718,6 +735,7 @@ fn emit_loaded_indexed_array_callback_call(
     }
 
     ctx.literal_parameter = None;
+    ctx.scalar_parameter = None;
 
     if shape.hidden_argc {
         // The invoker synthesizes argc from the container length; it never consumes a user slot.
@@ -726,6 +744,7 @@ fn emit_loaded_indexed_array_callback_call(
     }
 
     if sig.variadic.is_some() {
+        ctx.select_parameter_contract(sig, sig.params.len() - 1);
         let variadic_elem_ty = invoker_variadic_elem_ty(sig, &elem_ty);
         let source_base = shape.visible_regular;
         let prefix = shape.collector_prefix();
@@ -795,6 +814,7 @@ fn emit_loaded_indexed_array_callback_call(
         emit_scale_index_to_offset(emitter, offset_reg, index_reg, elem_size);
         emit_add_reg(emitter, data_reg, offset_reg);
         load_array_element_to_result(emitter, &elem_ty, data_reg, 0);
+        scalar_parameter_guards::check(emitter, ctx, data, &elem_ty);
         let (stored_ty, boxed_to_mixed) =
             coerce_current_value_to_target(emitter, ctx, data, &elem_ty, Some(&variadic_elem_ty));
         if !boxed_to_mixed {
@@ -876,7 +896,7 @@ fn emit_loaded_assoc_array_callback_call(
 
     // -- marshal each visible regular via hash lookup --
     for index in 0..shape.visible_regular {
-        ctx.select_literal_parameter(sig, index);
+        ctx.select_parameter_contract(sig, index);
         let has_default = sig.defaults.get(index).and_then(Option::as_ref).is_some();
         let target_ty = callback_arg_target_ty(sig, index, has_default, &elem_ty);
         let param_name = sig.params.get(index).map(|(name, _)| name.as_str());
@@ -933,12 +953,14 @@ fn emit_loaded_assoc_array_callback_call(
     }
 
     ctx.literal_parameter = None;
+    ctx.scalar_parameter = None;
     if shape.hidden_argc {
         public_args::push_arg_count_from_reg(emitter, count_reg);
         arg_types.push(PhpType::Int);
     }
 
     if sig.variadic.is_some() {
+        ctx.select_parameter_contract(sig, sig.params.len() - 1);
         let variadic_ty = emit_loaded_assoc_variadic_array_arg(
             hash_reg,
             &elem_ty,
@@ -2686,13 +2708,16 @@ fn push_default_value_arg(
     ctx: &mut InvokerEmitContext,
     data: &mut DataSection,
 ) -> PhpType {
+    let previous_default = std::mem::replace(&mut ctx.materializing_default, true);
     let owned_runtime_string = matches!(ctx.resolved_default(index),
         Some(InvokerDefaultValue::Scalar { kind: crate::codegen::const_default_values::CONST_DEFAULT_EXECUTABLE_PATH, .. }));
     let source_ty = emit_default_to_result(index, target_ty, emitter, ctx, data);
     if source_ty.codegen_repr() == PhpType::Mixed {
         // Native EIR helpers return one owned box. Reuse the same transfer path
         // as owned hash cells when a typed slot borrows the unboxed payload.
-        return push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data);
+        let pushed = push_materialized_mixed_hash_value_arg(target_ty, true, emitter, ctx, data);
+        ctx.materializing_default = previous_default;
+        return pushed;
     }
     let pushed_ty = if (source_ty.is_refcounted() || owned_runtime_string)
         && target_ty.is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
@@ -2707,6 +2732,7 @@ fn push_default_value_arg(
         owned_value_args::coerce(emitter, ctx, data, &source_ty, target_ty).0
     };
     abi::emit_push_result_value(emitter, &pushed_ty);
+    ctx.materializing_default = previous_default;
     pushed_ty
 }
 
@@ -3366,6 +3392,21 @@ fn emit_loaded_assoc_variadic_entries(
 
     // -- insert the surviving entry into the variadic hash --
     emitter.label(&insert_label);
+    if ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+        && ctx.scalar_parameter.as_ref().is_some_and(|ty| crate::semantics::conversions::scalar_contract(ty).is_some())
+    {
+        let (low, high, tag) = raw_hash_value_regs(emitter);
+        abi::emit_load_temporary_stack_slot(emitter, low, VALUE_LO_OFF);
+        abi::emit_load_temporary_stack_slot(emitter, high, VALUE_HI_OFF);
+        abi::emit_load_temporary_stack_slot(emitter, tag, VALUE_TAG_OFF);
+        box_raw_hash_value_to_mixed_result(emitter);
+        ctx.argument_owners.record_coercion_source(emitter);
+        abi::emit_push_reg(emitter, abi::int_result_reg(emitter));
+        scalar_parameter_guards::check(emitter, ctx, data, &PhpType::Mixed);
+        ctx.argument_owners.clear_coercion_source(emitter);
+        abi::emit_pop_reg(emitter, abi::int_result_reg(emitter));
+        abi::emit_call_label(emitter, "__rt_decref_mixed");
+    }
     emit_insert_assoc_variadic_entry(
         SCRATCH_BYTES,
         KEY_PTR_OFF,
@@ -3710,6 +3751,7 @@ mod tests {
             let mut data = DataSection::new();
             for label in ["first_owner_invoker", "second_owner_invoker"] {
                 let invoker = RuntimeCallableInvoker {
+                    semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
                     label, sig: &signature, captures: &[], mbstring_operation: None,
                     mbstring_variable_ref_warnings: false, owns_string_return: false,
                     php_return_status: false, defaults: &defaults,
@@ -3860,6 +3902,7 @@ mod tests {
             is_generator: false,
         };
         let invoker = RuntimeCallableInvoker {
+            semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
             label: "owned_invoker",
             sig: &sig,
             captures: &[],
@@ -4217,6 +4260,7 @@ mod tests {
         // Resolve through the shared folder so the emitted body sees exactly what codegen ships.
         let defaults = resolve_invoker_defaults(&crate::ir::Module::new(target), None, sig);
         let invoker = RuntimeCallableInvoker {
+            semantic_profile: elephc_semantics::SemanticProfile::PERMISSIVE,
             label,
             sig,
             captures: &[],
