@@ -98,20 +98,36 @@ static FORK_GATE: ForkGate = ForkGate(std::cell::UnsafeCell::new(
 /// Whether the process-wide atfork handlers are already installed.
 #[cfg(target_vendor = "apple")]
 static FORK_GATE_INSTALLED: AtomicBool = AtomicBool::new(false);
+/// Serializes the one-time atfork registration.
+#[cfg(target_vendor = "apple")]
+static FORK_GATE_INSTALL: Mutex<()> = Mutex::new(());
 
 /// Installs the atfork handlers that make descriptor-map mutation fork-safe.
 #[cfg(target_vendor = "apple")]
 pub(crate) fn install_fork_gate() {
-    if FORK_GATE_INSTALLED.swap(true, Ordering::SeqCst) {
+    if FORK_GATE_INSTALLED.load(Ordering::Acquire) {
         return;
     }
-    unsafe {
+    let _guard = FORK_GATE_INSTALL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if FORK_GATE_INSTALLED.load(Ordering::Acquire) {
+        return;
+    }
+    let result = unsafe {
         libc::pthread_atfork(
             Some(fork_gate_prepare),
             Some(fork_gate_release),
             Some(fork_gate_release),
-        );
+        )
+    };
+    if result != 0 {
+        // Forking without the gate can inherit a locked pending map. A
+        // supervisor restart is safer than continuing ungated.
+        eprintln!("elephc-web: pthread_atfork failed: {}", io::Error::last_os_error());
+        std::process::exit(1);
     }
+    FORK_GATE_INSTALLED.store(true, Ordering::Release);
 }
 
 /// Returns the address of the process-wide fork gate mutex.
@@ -710,7 +726,10 @@ unsafe fn close_received_fds(
                         .add(index * std::mem::size_of::<RawFd>())
                         .cast::<RawFd>(),
                 );
-                if Some(fd) != keep && fd >= 0 {
+                // Descriptor 0 is never passed by the master; a zero slot is
+                // padding, not a received descriptor. Do not close the
+                // worker's stdin on a malformed control message.
+                if fd > 0 && Some(fd) != keep {
                     libc::close(fd);
                 }
             }
@@ -776,11 +795,28 @@ fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
             "truncated descriptor datagram",
         ));
     }
-    let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
-    if header.is_null()
-        || unsafe { (*header).cmsg_level } != libc::SOL_SOCKET
-        || unsafe { (*header).cmsg_type } != libc::SCM_RIGHTS
-    {
+    let control_len = (message.msg_controllen as usize).min(control.0.len());
+    let mut bounded = message;
+    bounded.msg_controllen = control_len as _;
+    let header = unsafe { libc::CMSG_FIRSTHDR(&bounded) };
+    let control_start = message.msg_control as usize;
+    let control_end = control_start.saturating_add(control_len);
+    let valid_header = !header.is_null()
+        && unsafe { (*header).cmsg_level } == libc::SOL_SOCKET
+        && unsafe { (*header).cmsg_type } == libc::SCM_RIGHTS
+        && (header as usize).saturating_add(std::mem::size_of::<libc::cmsghdr>())
+            <= control_end;
+    let fd_size = std::mem::size_of::<RawFd>();
+    let data_start = if valid_header {
+        unsafe { libc::CMSG_DATA(header) as usize }
+    } else {
+        0
+    };
+    let min_fd_len = unsafe { libc::CMSG_LEN(fd_size as u32) } as usize;
+    let has_fd = valid_header
+        && unsafe { (*header).cmsg_len as usize } >= min_fd_len
+        && data_start.saturating_add(fd_size) <= control_end;
+    if !has_fd {
         unsafe { close_received_fds(&message, control.0.len(), None) };
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -1649,6 +1685,125 @@ mod tests {
         unsafe { libc::close(pipe_fds[0]) };
     }
 
+    /// Rights cmsg with no fd payload is rejected without handing out fd 0.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn recv_fd_rejects_a_short_rights_cmsg() {
+        let (sender, receiver) = UnixDatagram::pair().unwrap();
+        let mut payload = [0u8; 8];
+        let mut iov = libc::iovec {
+            iov_base: payload.as_mut_ptr().cast(),
+            iov_len: payload.len(),
+        };
+        let mut control = ControlBuffer([0u8; 64]);
+        let space = unsafe { libc::CMSG_SPACE(0) } as usize;
+        let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+        message.msg_iov = &mut iov;
+        message.msg_iovlen = 1;
+        message.msg_control = control.0.as_mut_ptr().cast();
+        message.msg_controllen = space as _;
+        let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+        assert!(!header.is_null());
+        unsafe {
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = libc::CMSG_LEN(0) as _;
+        }
+        assert_eq!(
+            unsafe { libc::sendmsg(sender.as_raw_fd(), &message, 0) },
+            8
+        );
+        let error = recv_fd(&receiver).expect_err("a rights cmsg without an fd");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    }
+
+    /// Multiple SCM_RIGHTS cmsgs are all walked and closed.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn multiple_cmsgs_close_every_descriptor() {
+        let mut first = [0; 2];
+        let mut second = [0; 2];
+        let mut unrelated = [0; 2];
+        assert_eq!(unsafe { libc::pipe(first.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { libc::pipe(second.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { libc::pipe(unrelated.as_mut_ptr()) }, 0);
+        let mut control = ControlBuffer([0u8; 64]);
+        let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+        message.msg_control = control.0.as_mut_ptr().cast();
+        message.msg_controllen = 64;
+        let first_header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+        assert!(!first_header.is_null());
+        unsafe {
+            (*first_header).cmsg_level = libc::SOL_SOCKET;
+            (*first_header).cmsg_type = libc::SCM_RIGHTS;
+            (*first_header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+            std::ptr::write_unaligned(libc::CMSG_DATA(first_header).cast::<RawFd>(), first[1]);
+        }
+        let second_header = unsafe { libc::CMSG_NXTHDR(&message, first_header) };
+        assert!(!second_header.is_null());
+        unsafe {
+            (*second_header).cmsg_level = libc::SOL_SOCKET;
+            (*second_header).cmsg_type = libc::SCM_RIGHTS;
+            (*second_header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
+            std::ptr::write_unaligned(libc::CMSG_DATA(second_header).cast::<RawFd>(), second[1]);
+        }
+        unsafe { close_received_fds(&message, control.0.len(), None) };
+        for fd in [first[0], second[0]] {
+            assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFL, libc::O_NONBLOCK) }, 0);
+            let mut byte = [0u8; 1];
+            assert_eq!(
+                unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) },
+                0,
+                "a descriptor from a multi-cmsg buffer was not closed"
+            );
+            unsafe { libc::close(fd) };
+        }
+        assert!(unsafe { libc::fcntl(unrelated[1], libc::F_GETFD) } >= 0);
+        unsafe {
+            libc::close(unrelated[0]);
+            libc::close(unrelated[1]);
+        }
+    }
+
+    /// A cmsg_len larger than the delivered buffer closes only the valid fd.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn overlong_cmsg_closes_only_the_valid_descriptor() {
+        let mut pipe = [0; 2];
+        let mut unrelated = [0; 2];
+        assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+        assert_eq!(unsafe { libc::pipe(unrelated.as_mut_ptr()) }, 0);
+        let mut control = ControlBuffer([0u8; 64]);
+        let mut message: libc::msghdr = unsafe { std::mem::zeroed() };
+        message.msg_control = control.0.as_mut_ptr().cast();
+        message.msg_controllen = 64;
+        let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
+        assert!(!header.is_null());
+        unsafe {
+            (*header).cmsg_level = libc::SOL_SOCKET;
+            (*header).cmsg_type = libc::SCM_RIGHTS;
+            (*header).cmsg_len = 80;
+            std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), pipe[1]);
+            close_received_fds(&message, control.0.len(), None);
+        }
+        assert_eq!(
+            unsafe { libc::fcntl(pipe[0], libc::F_SETFL, libc::O_NONBLOCK) },
+            0
+        );
+        let mut byte = [0u8; 1];
+        assert_eq!(
+            unsafe { libc::read(pipe[0], byte.as_mut_ptr().cast(), 1) },
+            0,
+            "the valid descriptor in an overlong cmsg was not closed"
+        );
+        assert!(unsafe { libc::fcntl(unrelated[1], libc::F_GETFD) } >= 0);
+        unsafe {
+            libc::close(pipe[0]);
+            libc::close(unrelated[0]);
+            libc::close(unrelated[1]);
+        }
+    }
+
     /// A zero-length datagram can still install a descriptor; close it too.
     #[cfg(target_vendor = "apple")]
     #[test]
@@ -1706,7 +1861,6 @@ mod tests {
             let _guard = lock_fork_gate();
             let _ = released.send(());
         });
-        std::thread::sleep(Duration::from_millis(20));
         let error = io::Error::from_raw_os_error(libc::EMFILE);
         let mut last_error_log = None;
         backoff_after_accept_error(gate, &error, &mut last_error_log, || {
