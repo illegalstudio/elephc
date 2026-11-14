@@ -42,6 +42,8 @@ fn ordinary_compound(
         lower_property_array_assign_value(ctx, object, property, index, value, span, diagnosed);
         return;
     };
+    // The update reads the element first; PHP rejects a null receiver before that read.
+    runtime_receivers::reject_null_receiver(ctx, object, property, span);
     runtime_receivers::guard_readwrite(ctx, object, property, span);
     let ty = ctx.builder.value_php_type(object.value);
     let borrowed = ctx.emit_value(Op::Borrow, vec![object.value], None, ty,

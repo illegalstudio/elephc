@@ -10,6 +10,8 @@
 //!   register choices behind ABI helpers where shared helpers exist.
 //! - Only exact integer constants may use the borrowed stack-cell RHS path.
 //! - Checked result cells use frame storage only after a complete nonescaping lifetime proof.
+//! - `IOverflows` is a boolean when emitted alone. Next to its wrapping arithmetic and a
+//!   `cond_br`, both are skipped and the branch consumes the overflow flags directly.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -26,6 +28,7 @@ use crate::codegen::{CodegenIrError, Result};
 #[path = "arithmetic/borrowed_integer_rhs_tests.rs"]
 mod borrowed_integer_rhs_tests;
 
+pub(super) mod min_max;
 pub(super) mod stack_cell;
 
 /// Lowers a two-operand integer arithmetic or bitwise instruction.
@@ -79,6 +82,194 @@ pub(super) fn lower_int_binop(
         store_if_result(ctx, inst)?;
     }
     Ok(())
+}
+
+/// How a fused overflow branch reads the flags of the arithmetic just emitted.
+#[derive(Clone, Copy)]
+pub(in crate::codegen) enum OverflowBranch {
+    /// ARM `VS` or x86 `OF`, set by signed add, subtract, and x86 `imul`.
+    Signed,
+    /// ARM signed high-half compare is not equal when the product does not fit.
+    NotEqual,
+}
+
+/// Lowers `IOverflows` to a boolean when the branch could not absorb it.
+///
+/// The wrapping arithmetic, if any, has already stored its result. This recomputes the
+/// same operation only to read the signed overflow condition.
+pub(super) fn lower_ioverflows(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let op = overflow_op(inst)?;
+    let lhs = expect_operand(inst, 0)?;
+    let rhs = expect_operand(inst, 1)?;
+    let left = abi::int_result_reg(ctx.emitter);
+    let right = abi::secondary_scratch_reg(ctx.emitter);
+    let tmp = abi::tertiary_scratch_reg(ctx.emitter);
+    load_integer_operand(ctx, lhs, left, inst)?;
+    load_integer_operand(ctx, rhs, right, inst)?;
+    ctx.emitter.comment("-- recompute signed overflow as a boolean --");
+    match (ctx.emitter.target.arch, op) {
+        (Arch::AArch64, MixedNumericOp::Add) => {
+            ctx.emitter.instruction(&format!("adds {tmp}, {left}, {right}"));   // set VS from the signed sum without keeping the bits
+            ctx.emitter.instruction(&format!("cset {left}, vs"));               // 1 when the signed sum does not fit in an integer
+        }
+        (Arch::AArch64, MixedNumericOp::Sub) => {
+            ctx.emitter.instruction(&format!("subs {tmp}, {left}, {right}"));   // set VS from the signed difference without keeping the bits
+            ctx.emitter.instruction(&format!("cset {left}, vs"));               // 1 when the signed difference does not fit in an integer
+        }
+        (Arch::AArch64, MixedNumericOp::Mul) => {
+            let high = abi::symbol_scratch_reg(ctx.emitter);
+            ctx.emitter.instruction(&format!("smulh {high}, {left}, {right}")); // recover the high half of the signed product
+            ctx.emitter.instruction(&format!("mul {tmp}, {left}, {right}"));    // recover the low half of the signed product
+            ctx.emitter.instruction(&format!("cmp {high}, {tmp}, asr #63"));    // a fitting product has only sign extension in its high half
+            ctx.emitter.instruction(&format!("cset {left}, ne"));               // 1 when the signed product does not fit in an integer
+        }
+        (Arch::X86_64, MixedNumericOp::Add) => {
+            ctx.emitter.instruction(&format!("mov {tmp}, {left}"));             // keep the left integer while the flag-setting add runs
+            ctx.emitter.instruction(&format!("add {tmp}, {right}"));            // set OF from the signed sum
+            ctx.emitter.instruction("seto al");                                 // capture signed overflow in the result's low byte
+            ctx.emitter.instruction("movzx eax, al");                           // widen the overflow boolean to the result register
+        }
+        (Arch::X86_64, MixedNumericOp::Sub) => {
+            ctx.emitter.instruction(&format!("mov {tmp}, {left}"));             // keep the left integer while the flag-setting subtract runs
+            ctx.emitter.instruction(&format!("sub {tmp}, {right}"));            // set OF from the signed difference
+            ctx.emitter.instruction("seto al");                                 // capture signed overflow in the result's low byte
+            ctx.emitter.instruction("movzx eax, al");                           // widen the overflow boolean to the result register
+        }
+        (Arch::X86_64, MixedNumericOp::Mul) => {
+            ctx.emitter.instruction(&format!("mov {tmp}, {left}"));             // keep the left integer while the flag-setting multiply runs
+            ctx.emitter.instruction(&format!("imul {tmp}, {right}"));           // set OF when the signed product does not fit
+            ctx.emitter.instruction("seto al");                                 // capture signed overflow in the result's low byte
+            ctx.emitter.instruction("movzx eax, al");                           // widen the overflow boolean to the result register
+        }
+        _ => {
+            return Err(CodegenIrError::unsupported(
+                "ioverflows accepts add, subtract and multiply only",
+            ));
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits the wrapping arithmetic into its allocated register and reports which flags mean overflow.
+///
+/// The following branch must be the next flag-reading instruction. Moves used to place the
+/// result preserve the overflow flags on both supported targets.
+pub(in crate::codegen) fn emit_fused_overflow(
+    ctx: &mut FunctionContext<'_>,
+    arith: crate::ir::InstId,
+) -> Result<OverflowBranch> {
+    let inst = ctx
+        .function
+        .instruction(arith)
+        .cloned()
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", arith.as_raw()))?;
+    let result = inst.result.ok_or_else(|| {
+        CodegenIrError::invalid_module("fused overflow arithmetic has no result")
+    })?;
+    // A spilled result is stored with a flag-preserving move after the arithmetic, so the
+    // following branch still sees the overflow flags. A register home is written directly.
+    let home = ctx.allocation.register_of(result);
+    let destination = home.unwrap_or_else(|| abi::int_result_reg(ctx.emitter));
+    let op = match inst.op {
+        Op::IAdd => MixedNumericOp::Add,
+        Op::ISub => MixedNumericOp::Sub,
+        Op::IMul => MixedNumericOp::Mul,
+        _ => {
+            return Err(CodegenIrError::invalid_module(
+                "fused overflow arithmetic must be add, subtract or multiply",
+            ));
+        }
+    };
+    let lhs = expect_operand(&inst, 0)?;
+    let rhs = expect_operand(&inst, 1)?;
+    ctx.emitter.comment("-- signed arithmetic with an adjacent overflow branch --");
+    let kind = match ctx.emitter.target.arch {
+        Arch::AArch64 => emit_fused_overflow_arm(ctx, &inst, op, lhs, rhs, destination)?,
+        Arch::X86_64 => emit_fused_overflow_x86(ctx, &inst, op, lhs, rhs, destination)?,
+    };
+    if home.is_none() {
+        store_if_result(ctx, &inst)?;
+    }
+    Ok(kind)
+}
+
+/// Emits a three-operand ARM arithmetic operation directly into `home`.
+fn emit_fused_overflow_arm(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    op: MixedNumericOp,
+    lhs: ValueId,
+    rhs: ValueId,
+    home: &str,
+) -> Result<OverflowBranch> {
+    let lhs_reg = integer_operand_register(ctx, lhs, abi::int_result_reg(ctx.emitter), inst)?;
+    let rhs_reg = integer_operand_register(ctx, rhs, abi::secondary_scratch_reg(ctx.emitter), inst)?;
+    match op {
+        MixedNumericOp::Add => {
+            ctx.emitter.instruction(&format!("adds {home}, {lhs_reg}, {rhs_reg}")); // signed sum in its register, VS set on overflow
+            Ok(OverflowBranch::Signed)
+        }
+        MixedNumericOp::Sub => {
+            ctx.emitter.instruction(&format!("subs {home}, {lhs_reg}, {rhs_reg}")); // signed difference in its register, VS set on overflow
+            Ok(OverflowBranch::Signed)
+        }
+        MixedNumericOp::Mul => {
+            let high = abi::symbol_scratch_reg(ctx.emitter);
+            ctx.emitter.instruction(&format!("smulh {high}, {lhs_reg}, {rhs_reg}")); // high half while both factors are still intact
+            ctx.emitter.instruction(&format!("mul {home}, {lhs_reg}, {rhs_reg}")); // low half of the signed product in its register
+            ctx.emitter.instruction(&format!("cmp {high}, {home}, asr #63"));   // a fitting product has only sign extension above
+            Ok(OverflowBranch::NotEqual)
+        }
+        _ => Err(CodegenIrError::unsupported(
+            "fused overflow accepts add, subtract and multiply only",
+        )),
+    }
+}
+
+/// Emits a two-operand x86 arithmetic operation into `home`, preserving overflow flags.
+fn emit_fused_overflow_x86(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    op: MixedNumericOp,
+    lhs: ValueId,
+    rhs: ValueId,
+    home: &str,
+) -> Result<OverflowBranch> {
+    let rhs_reg = integer_operand_register(ctx, rhs, abi::secondary_scratch_reg(ctx.emitter), inst)?;
+    let mnemonic = match op {
+        MixedNumericOp::Add => "add",
+        MixedNumericOp::Sub => "sub",
+        MixedNumericOp::Mul => "imul",
+        _ => {
+            return Err(CodegenIrError::unsupported(
+                "fused overflow accepts add, subtract and multiply only",
+            ));
+        }
+    };
+    if home != rhs_reg {
+        if ctx.allocation.register_of(lhs) != Some(home) {
+            load_integer_operand(ctx, lhs, home, inst)?;
+        }
+        ctx.emitter.instruction(&format!("{mnemonic} {home}, {rhs_reg}"));      // update the allocated register and set OF on signed overflow
+    } else {
+        let tmp = abi::int_result_reg(ctx.emitter);
+        load_integer_operand(ctx, lhs, tmp, inst)?;
+        ctx.emitter.instruction(&format!("{mnemonic} {tmp}, {rhs_reg}"));       // compute into a temporary so the right operand stays intact
+        ctx.emitter.instruction(&format!("mov {home}, {tmp}"));                 // publish the result without clearing the overflow flag
+    }
+    Ok(OverflowBranch::Signed)
+}
+
+/// Returns the add, subtract, or multiply operation selected by an `IOverflows` immediate.
+fn overflow_op(inst: &Instruction) -> Result<MixedNumericOp> {
+    match inst.immediate {
+        Some(Immediate::MixedNumericOp(op @ (MixedNumericOp::Add | MixedNumericOp::Sub | MixedNumericOp::Mul))) => {
+            Ok(op)
+        }
+        _ => Err(CodegenIrError::invalid_module(
+            "ioverflows requires an add, subtract or multiply immediate",
+        )),
+    }
 }
 
 /// Returns a register holding an integer operand that the consuming instruction only reads.

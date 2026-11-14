@@ -63,7 +63,11 @@ runs:
       run: |
         environment=()
         if [[ "$EXPORT_BRIDGE_ENV" == true ]]; then environment+=(--github-env "$GITHUB_ENV"); fi
-        python3 -B scripts/ci/build_artifacts.py restore "${environment[@]}" \
+        python=(python3 -B)
+        if [[ -n ${ELEPHC_CI_EXEC_IMAGE:-} ]]; then
+          python=(python3 "$RUNNER_TEMP/elephc-image-shell.py" command python3 -B)
+        fi
+        "${python[@]}" scripts/ci/build_artifacts.py restore "${environment[@]}" \
           --artifact "$RUNNER_TEMP/build-$ARTIFACT_TARGET-$ARTIFACT_PROFILE-$ARTIFACT_KIND-$ARTIFACT_VARIANT" \
           --sha "$ARTIFACT_SHA" --target "$ARTIFACT_TARGET" \
           --profile "$ARTIFACT_PROFILE" --features "$ARTIFACT_FEATURES" --kind "$ARTIFACT_KIND" \

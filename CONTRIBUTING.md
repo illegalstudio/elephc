@@ -240,12 +240,82 @@ configuration and checksums, then execute the archived tests. They cannot quietl
 invoke Cargo to rebuild missing outputs. A `Build` aggregate fails if any selected
 producer fails or is cancelled; `Build & Test` requires that aggregate.
 
+The shared downloader uses `actions/download-artifact@v8.0.2` with digest
+mismatches treated as errors. Each of its three attempts has a five-minute process
+deadline, including streamed ZIP extraction. Progress logs every 15 seconds show
+received and expected body bytes, buffered bytes and time since the last body chunk.
+`download-and-zip-extraction` means those operations overlap;
+`zip-extraction-or-finalization` means the HTTP body has finished. The observer
+does not consume the response or print signed URLs. These three local attempts run
+on the same runner.
+
+The 21 sharded host test jobs use `ci-test-shard.yml`, which runs the same
+`test-shard-attempt` action on the original runner and, when needed, one fresh
+runner. Recovery requires all three downloads to have positively classified
+transport failures. Authentication errors, missing artifacts, completed-body
+digest errors, archive validation errors and test failures are not eligible.
+The source SHA, producer run and attempt, partition, worker limits and Linux image
+digest stay fixed. Setup and tests are shared by both executions.
+
+A recoverable download returns `retryable-transfer` without running tests. The
+shard verdict accepts only `passed` from the original execution, or `passed` from
+its one recovery after that transfer-only result. Unknown, cancelled, skipped and
+exhausted recovery states fail. `Build & Test` waits for this verdict under its
+existing required-check name. The workflow remains active until recovery and the
+verdict finish, so the existing retention policy preserves its inputs. Other
+artifact consumers retain the downloader's normal failure behavior.
+
+Artifact API calls made through `fetch` participate in the same transport-failure
+classification as the archive transfer. Explicit transient HTTP responses and
+network errors may permit recovery; authentication errors, missing artifacts,
+completed archive bodies and integrity failures remain fatal.
+
+JUnit reports and failing fixture assembly are diagnostic uploads. An upload
+failure remains visible in the step log but does not override a successful test
+execution or mask a failed one. The consumer compilation audit and the required
+compiler, bridge and test-archive payloads remain mandatory.
+
+Linux producers and test consumers use the preinstalled environments described
+in [Linux CI environments](.github/docker/README.md). The committed
+`scripts/ci/images.json` catalog selects immutable role digests. Compiler and
+bridge producers and ordinary shards share the `ci` image, including `gdb` and
+libclang. Specialized roles provide PHP release/debug SDKs and Valgrind,
+reference PHP and PHPUnit, or database clients. These jobs do not reinstall
+their system packages. Managed-native smoke uses an image without system PCRE2
+development files, and release probes retain the Ubuntu 22.04 baseline.
+
+VM consumer jobs execute their test scripts in the pinned role image while
+Actions and database services remain on the VM. The wrapper preserves localhost,
+absolute workspace and temporary paths, and the runner account. Artifact source,
+checksum and execution ABI validation and the consumer Cargo build guard still
+apply. macOS jobs retain their native toolchain and PHP setup.
+
+Image builds and scripts that still need Ubuntu package provisioning use
+`scripts/ci/apt_install.sh`. It requires `apt-get --error-on=any update` to finish before
+installing packages, so DNS errors cannot leave a successful update with missing
+indexes. A recognized transport failure permits one retry using kernel.org's
+Ubuntu mirror for amd64 or dotsrc's Ubuntu Ports mirror for arm64. The whole
+operation has a five-minute budget, including bounded individual APT commands.
+Signature, checksum, permission and missing-package failures remain fatal.
+
+The retry uses private source-file copies, preserving suites, components,
+architectures, signing keys and third-party repositories such as Microsoft's PDO
+driver feed. Original source files are unchanged and temporary copies are removed.
+HTTPS is used when the host has a CA bundle; minimal image bootstrap can use HTTP
+with APT archive authentication still mandatory. Changes to the shared installer
+also rebuild the CI images. A missing dependency in a pinned test environment
+fails the job instead of silently installing packages there.
+The strict update option is documented in the
+[Ubuntu APT manual](https://manpages.ubuntu.com/manpages/noble/en/man8/apt-get.8.html).
+
 Separate producers retain configurations that are not interchangeable: PDO driver
 features, curl-enabled tools and contract tests, release-mode frame tests, iOS device
 and Simulator bridges, and the main-only release benchmark. A partial matrix rerun
-resolves each variant's original producing attempt. Linux container jobs use one
-immutable image digest selected at the start of the run; manifests also record the
-native compiler, Rust compiler, glibc and Apple SDK identities.
+resolves each variant's original producing attempt. Linux producers and ordinary
+shards use one immutable core image digest selected at the start of the run.
+Specialized consumer images retain their separate execution identity and undergo
+the actual ABI check; manifests also record the native compiler, Rust compiler,
+glibc and Apple SDK identities.
 
 The required ruleset check names remain `Build & Test`,
 `PDO core live suites (PostgreSQL 16 + MySQL 8.4)` and
@@ -980,9 +1050,11 @@ is planned; `elephc native add curl` in the user project), then:
    `$ELEPHC native add <package>` for every reported `native:` field in the
    empty probe WORKDIR **before** `--with-<name>`. Never fail-then-retry by
    grepping the compiler recovery text. Never skip the compile probe.
-4. The nightly and release `verify-artifact` jobs cache `~/.cache/elephc/native`
-   keyed on the catalog and every recipe; give the job a long enough timeout
-   for a cold source build of the C library.
+4. The nightly and release `verify-artifact` jobs cache
+   `${{ runner.temp }}/verify-native` and export the same location as
+   `ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/verify-native`, so the VM and execution
+   container share it. The key includes the target, catalog and every recipe;
+   give the job a long enough timeout for a cold source build of the C library.
 
 System libraries — phar's zlib/bz2, `libdl`, Apple frameworks — are not
 managed native packages. They do not go through `elephc native add` and are

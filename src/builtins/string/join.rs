@@ -6,9 +6,8 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `join` shares `implode`'s typed runtime target (`RuntimeFnId::Implode`), so the
-//!   registry's alias arity gate requires the two declarations to agree on their
-//!   enforced bounds: one required parameter, at most two.
+//! - `join` retains its own typed target so PHP diagnostics name the called alias.
+//!   Its argument roles and renderer are shared with `implode`.
 //! - Reference PHP declares `join(string|array $separator, ?array $array = null)`, which
 //!   is what makes BOTH accepted call forms work: `join($separator, $array)` and the
 //!   single-argument `join($array)` that joins with an empty separator. `separator` is
@@ -21,5 +20,5 @@
 
 builtin! {
     contract: "join",
-    semantics: super::implode::implode_semantics(),
+    semantics: super::implode::join_semantics(crate::ir::RuntimeFnId::Join),
 }

@@ -49,8 +49,15 @@ pub(crate) fn implode_effects(
 
 /// Builds the shared `implode`/`join` descriptor with the call-dependent throw summary.
 pub(crate) const fn implode_semantics() -> crate::builtins::semantics::BuiltinSemantics {
+    join_semantics(crate::ir::RuntimeFnId::Implode)
+}
+
+/// Shares lowering semantics while retaining the PHP alias used in diagnostics.
+pub(crate) const fn join_semantics(target: crate::ir::RuntimeFnId) -> crate::builtins::semantics::BuiltinSemantics {
     let mut semantics =
-        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Implode);
+        crate::builtins::semantics::runtime_fn_semantics(target);
     semantics.effects = crate::builtins::semantics::BuiltinEffects::Shared(implode_effects);
+    // Omitted `$array` selects the one-argument overload, including after named planning.
+    semantics.argument_lowering = crate::builtins::semantics::BuiltinArgumentLowering::PreserveUncoerced;
     semantics
 }

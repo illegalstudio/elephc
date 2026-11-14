@@ -923,8 +923,12 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::Variable(name) => format!("e_var({})", lit(name)),
         ExprKind::ConstRef(name) => format!("e_const({})", lit(&name.as_canonical())),
         ExprKind::PostIncrement(name) => format!("e_post_inc({})", lit(name)),
+        ExprKind::PreIncrement(name) => format!("e_pre_inc({})", lit(name)),
+        ExprKind::PostDecrement(name) => format!("e_post_dec({})", lit(name)),
+        ExprKind::PreDecrement(name) => format!("e_pre_dec({})", lit(name)),
         ExprKind::Negate(inner) => format!("e_neg({})", expr(inner, depth)),
         ExprKind::Not(inner) => format!("e_not({})", expr(inner, depth)),
+        ExprKind::ErrorSuppress(inner) => format!("e_error_suppress({})", expr(inner, depth)),
         ExprKind::Cast { target, expr: inner } => format!(
             "e_cast(CastType::{}, {})",
             cast_type(target),
@@ -1095,6 +1099,11 @@ fn expr(value: &Expr, depth: usize) -> String {
         ExprKind::ClosureCall { var, args } => format!(
             "e_closure_call({}, {})",
             lit(var),
+            expr_vec(args, depth)
+        ),
+        ExprKind::ExprCall { callee, args } => format!(
+            "e_expr_call({}, {})",
+            expr(callee, depth),
             expr_vec(args, depth)
         ),
         ExprKind::Closure {
@@ -1473,6 +1482,19 @@ class Demo implements Iterator {
 function demo_make(int $h) {
     return new Demo($h);
 }
+function demo_invoke(string $value): int {
+    return ("strlen")($value);
+}
+function demo_adjust(): int {
+    $_j = 1;
+    $_j--;
+    ++$_j;
+    --$_j;
+    return $_j;
+}
+function demo_suppress(string $path): string {
+    return @file_get_contents($path);
+}
 function demo_match($value) {
     return match ($value) { 1, 2 => "one", default => match ($value) {} };
 }
@@ -1499,6 +1521,11 @@ function demo_match($value) {
             "t_nullable(TypeExpr::Str)",
             ".param_untyped_default(\"flag\"",
             "e_new(\"Demo\"",
+            "e_expr_call(e_str(\"strlen\"), vec![e_var(\"value\")])",
+            "e_post_dec(\"_j\")",
+            "e_pre_inc(\"_j\")",
+            "e_pre_dec(\"_j\")",
+            "e_error_suppress(e_call(\"file_get_contents\", vec![e_var(\"path\")]))",
         ] {
             assert!(
                 rendered.contains(needle),

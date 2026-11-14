@@ -178,6 +178,9 @@ pub(super) fn emit_loaded_value_to_stdout(ctx: &mut FunctionContext<'_>, ty: &Ph
         | PhpType::Iterable
         | PhpType::Resource(_)
         | PhpType::Pointer(_) => {
+            if matches!(ty, PhpType::Float) {
+                super::predicates::emit_nan_string_coercion_probe(ctx);
+            }
             abi::emit_write_stdout(ctx.emitter, ty);
             Ok(())
         }

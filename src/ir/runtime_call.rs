@@ -172,6 +172,8 @@ pub enum RuntimeCallTarget {
     StringOffsetSet,
     /// A typed PCNTL process-control operation with target-aware availability.
     Pcntl(crate::ir::PcntlRuntime),
+    /// PHP's direct positional `implode($array)` fast path binds its sole operand as the array.
+    PositionalImplode,
     /// A stable runtime function whose target-aware implementation is backend-owned.
     Function(crate::ir::RuntimeFnId),
     /// A source-sensitive runtime function with visibility and parameter-coercion profiles.
@@ -323,6 +325,9 @@ impl RuntimeCallTarget {
                 result: IrType::Str,
             }),
             RuntimeCallTarget::Pcntl(target) => Some(target.signature()),
+            RuntimeCallTarget::PositionalImplode => Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 1, max_operands: Some(1),
+            }),
             RuntimeCallTarget::Function(target) => {
                 target.descriptor().logical_signature
             }
@@ -401,6 +406,7 @@ impl RuntimeCallTarget {
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::StringOffsetSet => "string.offset_set",
             RuntimeCallTarget::Pcntl(target) => target.as_eir(),
+            RuntimeCallTarget::PositionalImplode => "implode.positional",
             RuntimeCallTarget::Function(target) => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),
         }

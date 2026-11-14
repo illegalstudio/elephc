@@ -331,3 +331,9 @@ mod static_object_exports;
 mod gmp_exception_operands;
 
 mod eval_reference_escape;
+mod leaf_unset_collection;
+mod foreach_hash_objects;
+mod property_element_writes;
+mod null_receiver_property_writes;
+mod nullable_identity_guards;
+mod safe_point_budget;

@@ -147,6 +147,9 @@ pub(super) fn lower_method_call(
         ctx.builder.value_php_type(object.value).codegen_repr(),
         PhpType::Callable
     ) {
+        if php_symbol_key(method) == "__invoke" {
+            return lower_expr_call_from_value(ctx, object, args, expr);
+        }
         if let Some(result) =
             lower_closure_bind_method(ctx, object_expr, &object, method, args, expr)
         {
@@ -156,20 +159,13 @@ pub(super) fn lower_method_call(
     if let Some(call) = enum_interface_calls::lower_enum_interface_call(ctx, object, method, args, op, expr) {
         return call;
     }
-    if method_call_argument_signature(ctx, object_expr, object.value, method).is_none() {
-        if let Some(call) = source_variadic_calls::lower(ctx, object, method, args, op, expr) {
-            return call;
-        }
+    if let Some(call) = selected_native_methods::lower(ctx, object, method, args, op, expr) {
+        return call;
     }
-    let magic_args;
-    let (dispatch_method, args) = if let Some(args) =
-        magic_call_dispatch_args(ctx, object.value, method, args, object_expr.span)
-    {
-        magic_args = args;
-        ("__call", magic_args.as_slice())
-    } else {
-        (method, args)
-    };
+    if let Some(call) = magic_method_calls::lower(ctx, object, method, args, op, expr) {
+        return call;
+    }
+    let dispatch_method = method;
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
     promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
@@ -281,29 +277,6 @@ pub(super) fn emit_native_factory_method_lookup(
     let data = ctx.intern_string(method);
     ctx.emit_void(Op::MethodLookup, vec![object.value], Some(Immediate::Data(data)),
         Op::MethodLookup.default_effects(), Some(span));
-}
-
-/// Builds synthetic `__call` arguments when a class lacks the requested method.
-pub(super) fn magic_call_dispatch_args(
-    ctx: &LoweringContext<'_, '_>,
-    object: crate::ir::ValueId,
-    method: &str,
-    args: &[Expr],
-    span: Span,
-) -> Option<Vec<Expr>> {
-    if method_signature(ctx, object, method).is_some() {
-        return None;
-    }
-    let object_ty = ctx.builder.value_php_type(object);
-    let Some((class_name, _)) = singular_object_class(&object_ty) else {
-        return None;
-    };
-    let normalized = class_name.trim_start_matches('\\');
-    class_method_signature(ctx, normalized, &php_symbol_key("__call"))?;
-    Some(vec![
-        Expr::new(ExprKind::StringLiteral(method.to_string()), span),
-        Expr::new(ExprKind::ArrayLiteral(args.to_vec()), span),
-    ])
 }
 
 /// Returns whether a receiver type carries PHP's `false` failure sentinel.

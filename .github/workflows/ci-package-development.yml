@@ -22,6 +22,7 @@ on:
 permissions:
   contents: read
   actions: read
+  packages: read
 
 jobs:
   package:
@@ -40,12 +41,13 @@ jobs:
         env:
           SOURCE_SHA: ${{ inputs.source-sha }}
         run: python3 -B scripts/ci/reconcile_development.py validate "$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+      - name: Select preinstalled link environment
+        uses: ./.github/actions/use-ci-image
+        with:
+          role: smoke
       - uses: actions/checkout@v7
         with:
           ref: ${{ steps.source.outputs.sha }}
-      - name: Install native link prerequisites
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y binutils build-essential libbz2-dev zlib1g-dev
       - name: Restore verified compiler
         uses: ./.github/actions/restore-build-artifact
         with:
@@ -67,7 +69,7 @@ jobs:
           GITHUB_SHA: ${{ inputs.source-sha }}
           TARGET: ${{ inputs.target }}
         run: |
-          python3 -B scripts/ci/development_artifact.py --target "$TARGET" --sha "$GITHUB_SHA" \
+          python3 "$RUNNER_TEMP/elephc-image-shell.py" command python3 -B scripts/ci/development_artifact.py --target "$TARGET" --sha "$GITHUB_SHA" \
             --compiler-manifest "$RUNNER_TEMP/build-$TARGET-debug-compiler-default/manifest.json" \
             --bridge-manifest "$RUNNER_TEMP/build-$TARGET-debug-bridges-default/manifest.json"
       - name: Retain development download

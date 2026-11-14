@@ -301,13 +301,9 @@ jobs:
 
       - name: Ensure GMP configure dependency
         if: inputs.scope == 'tests'
-        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
-        # installation; the guard makes the step a no-op on macOS and warm images.
+        # GMP requires m4, preinstalled in the Linux image and macOS toolchain.
         run: |
-          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
-          fi
+          command -v m4
 
       - name: Materialize managed native gmp
         if: inputs.scope == 'tests'
@@ -485,10 +481,6 @@ jobs:
       - name: Ensure Python for Oniguruma bundle preparation
         shell: bash
         run: |
-          if ! command -v python3 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
-          fi
           python3 --version
 
       - name: Publish the shared compiler
@@ -594,13 +586,9 @@ jobs:
 
       - name: Ensure GMP configure dependency
         if: inputs.scope == 'tests'
-        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
-        # installation; the guard makes the step a no-op on macOS and warm images.
+        # GMP requires m4, preinstalled in the Linux image and macOS toolchain.
         run: |
-          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
-          fi
+          command -v m4
 
       - name: Materialize managed native gmp
         if: inputs.scope == 'tests'
@@ -773,10 +761,6 @@ jobs:
       - name: Ensure Python for Oniguruma bundle preparation
         shell: bash
         run: |
-          if ! command -v python3 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3
-          fi
           python3 --version
 
       - name: Publish the shared compiler
@@ -882,13 +866,9 @@ jobs:
 
       - name: Ensure GMP configure dependency
         if: inputs.scope == 'tests'
-        # GMP's configure needs a usable m4. The prebuilt CI image may predate this
-        # installation; the guard makes the step a no-op on macOS and warm images.
+        # GMP requires m4, preinstalled in the Linux image and macOS toolchain.
         run: |
-          if command -v apt-get >/dev/null 2>&1 && ! command -v m4 >/dev/null 2>&1; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends m4
-          fi
+          command -v m4
 
       - name: Materialize managed native gmp
         if: inputs.scope == 'tests'

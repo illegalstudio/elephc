@@ -10,11 +10,13 @@
 use super::*;
 
 /// Keeps the recurrence boxed while an explicit integer cast observes each numeric epoch.
+///
+/// The cast inside the loop keeps the loop passes from moving `$value` into a raw integer.
 const COUNTER_CAST: &str = r#"<?php
 #[Export]
 function frameCounterCast(int $n, int $step): int {
     $value = 3;
-    for ($i = 0; $i < $n; $i++) { $value += $step; }
+    for ($i = 0; $i < $n; $i++) { $value += $step; if ((int)$value === PHP_INT_MIN) { break; } }
     return (int)$value;
 }
 #[Export]

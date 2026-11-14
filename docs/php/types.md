@@ -17,7 +17,7 @@ sidebar:
 | `float`          | Yes              | 64-bit double-precision. Literals: `3.14`, `.5`, `1.5e3`, `1.0e-5`, `1_000.5`, `1e1_0`. Constants: `INF`, `NAN`.       |
 | `array`          | Yes              | Indexed (`[1, 2, 3]`) and associative (`["key" => "value"]`). Heterogeneous indexed and associative payloads widen to boxed `mixed`. Arrays use copy-on-write semantics. |
 | `array<T>`       | Yes (extension)  | Pins the element type so it keeps register-width storage instead of widening to boxed `mixed`. An elephc extension rejected by `--strict-php`; see [Generics](../beyond-php/generics.md). |
-| `array<K, V>`    | Yes (extension)  | The associative form: hash storage with both halves typed. `K` must be `int`, `string`, or `mixed`. Not interchangeable with `array<T>`, which is a packed element vector. Also rejected by `--strict-php`. |
+| `array<K, V>`    | Yes (extension)  | The associative form: hash storage with both halves typed. `K` must be `int`, `string`, or `mixed`. Not interchangeable with `array<T>`, which is a packed element vector: a list assigned or passed to an `array<K, V>` slot is converted (see [Lists passed to `array<K, V>` parameters](./functions.md#lists-passed-to-arrayk-v-parameters)), while a keyed array is never accepted as an `array<T>`. Also rejected by `--strict-php`. |
 | `Box<T>`         | Yes (extension)  | A generic class or interface named with type arguments. Instantiated into one ordinary class per distinct argument list, so `Box<int>` holds a machine integer where `Box<string>` holds a string. An elephc extension rejected by `--strict-php`; see [Generics](../beyond-php/generics.md). |
 | `mixed`          | Yes              | Supported in type hints and typed locals. Runtime values are boxed with a per-value tag, including heterogeneous array payloads and union storage. |
 | `iterable`       | Yes              | PHP pseudo-type for `array \| Traversable`. Supports indexed arrays, associative arrays, `Iterator`, and `IteratorAggregate`; runtime operations (`foreach`, `echo`, `gettype()`, `var_dump()`, `===`, casts, `is_iterable()`) dispatch on heap-kind, value-type, or interface metadata as needed. |
@@ -600,6 +600,10 @@ The compiler also emits non-fatal warnings (unused variables, unreachable code).
 ### Runtime diagnostics
 
 Runtime warnings flow through a suppressible diagnostics channel. The `@` operator hides those warnings for its operand only, while fatal runtime errors and compile-time diagnostics remain visible. Current suppressible warnings include `fopen()` / `file_get_contents()` open failures and duplicate `define()` calls.
+
+The PHP 8.5 profile also warns `unexpected NAN value was coerced to string` when a NaN float becomes a string, including casts, `echo`, concatenation, interpolation, string parameters, and `implode()` elements. PHP 8.2 through 8.4 profiles perform the same conversions silently. `var_dump()`, `var_export()`, and `print_r()` display NaN without this coercion warning.
+
+Discarding a string cast's result still emits the warning and runs any registered error handler. Exceptions thrown by that handler remain catchable.
 
 ## Literal property types
 

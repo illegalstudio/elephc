@@ -476,6 +476,71 @@ impl CheckedNumericChainImmediate {
     }
 }
 
+/// Direction and tie policy of one `Op::MixedMinMax` selection over its operands.
+///
+/// php-src selects in one of two modes. While every argument so far is an `int` or a `float`
+/// (and no integer that a double cannot represent has met a float) it compares numbers
+/// directly; the first other argument switches the rest of the call to the generic
+/// `zend_compare`, which reports every unordered (`NAN`) comparison as "greater".
+///
+/// The pair rules are the two-argument forms, `a >= b ? a : b` for `max()` and
+/// `a < b ? a : b` for `min()`: a two-argument `min()` returns its right operand on a tie,
+/// and an unordered numeric pair returns the right operand. The fold rules cover three or
+/// more arguments in one instruction: a later argument replaces the running result only on
+/// a strict win, and an unordered numeric comparison keeps the earlier argument. In generic
+/// mode an unordered comparison instead keeps the left operand of a two-argument `max()`
+/// and replaces the running result of a longer `max()`; `min()` is the same in both modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(i64)]
+pub enum MinMaxRule {
+    /// Two-argument `max()`: the left operand wins when `left >= right`.
+    MaxPair = 0,
+    /// `max()` of three or more operands: a later operand wins only when it is greater.
+    MaxFold = 1,
+    /// Two-argument `min()`: the left operand wins only when `left < right`.
+    MinPair = 2,
+    /// `min()` of three or more operands: a later operand wins only when it is smaller.
+    MinFold = 3,
+}
+
+impl MinMaxRule {
+    /// Decodes the `I64` immediate of an `Op::MixedMinMax` instruction.
+    pub const fn from_immediate(value: i64) -> Option<Self> {
+        match value {
+            0 => Some(Self::MaxPair),
+            1 => Some(Self::MaxFold),
+            2 => Some(Self::MinPair),
+            3 => Some(Self::MinFold),
+            _ => None,
+        }
+    }
+
+    /// Returns the `I64` immediate that encodes this rule.
+    pub const fn immediate(self) -> i64 {
+        self as i64
+    }
+
+    /// Returns true for the two-argument rules, false for the three-or-more-argument rules.
+    pub const fn is_pair(self) -> bool {
+        matches!(self, Self::MaxPair | Self::MinPair)
+    }
+
+    /// Returns true when an instruction with this rule may carry `operands` operands.
+    pub const fn accepts_operand_count(self, operands: usize) -> bool {
+        if self.is_pair() { operands == 2 } else { operands >= 3 }
+    }
+
+    /// Returns the rule of a `min()`/`max()` call with `operands` arguments.
+    pub const fn for_call(want_max: bool, operands: usize) -> Self {
+        match (want_max, operands == 2) {
+            (true, true) => Self::MaxPair,
+            (true, false) => Self::MaxFold,
+            (false, true) => Self::MinPair,
+            (false, false) => Self::MinFold,
+        }
+    }
+}
+
 /// Runtime arithmetic operation carried by `Op::MixedNumericBinop`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MixedNumericOp {
@@ -922,6 +987,12 @@ pub enum Op {
     IAdd,
     ISub,
     IMul,
+    /// Reports whether signed add, subtract, or multiply of two `I64` integers overflows.
+    ///
+    /// The immediate is `MixedNumericOp::Add`, `Sub`, or `Mul`. The boolean result is `1`
+    /// when the mathematical result does not fit in a signed 64-bit integer. The wrapping
+    /// result, when needed, is a separate `IAdd`, `ISub`, or `IMul` of the same operands.
+    IOverflows,
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
@@ -956,6 +1027,15 @@ pub enum Op {
     FPow,
     FNeg,
     MixedNumericBinop,
+    /// Selects the PHP `min()`/`max()` of its operands and returns the winner as an owned
+    /// Mixed value.
+    ///
+    /// Operands are raw `int`/`float` scalars or boxed Mixed cells, which are only read. The
+    /// `I64` immediate is a [`MinMaxRule`] discriminant fixing the direction and the tie/NaN
+    /// policy. The result never shares a cell with an operand: it is a copy of the winner in
+    /// an owned heap cell or, for a number that is only read, in a frame cell. A retained
+    /// operand cell would change when the operand's variable is written through a reference.
+    MixedMinMax,
     StrIncDec,
     ICmp,
     FCmp,
@@ -1376,6 +1456,7 @@ impl Op {
             | IAdd
             | ISub
             | IMul
+            | IOverflows
             | ICheckedAddToInt
             | ICheckedSubToInt
             | ICheckedMulToInt
@@ -1469,8 +1550,10 @@ impl Op {
             | TryPushHandler
             | TryPopHandler => E::WRITES_GLOBAL,
             IncludeOnceGuard => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            IToStr | FToStr | ResourceToStr | StrConcat | StrInterpolate
-            | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
+            IToStr | ResourceToStr | StrConcat | StrInterpolate
+            | VarDump | PrintR => E::ALLOC_CONCAT,
+            // NaN diagnostics and Mixed conversion callbacks may enter PHP handlers.
+            FToStr | MixedCastString => E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_THROW,
             StrCharAt => E::ALLOC_CONCAT | E::MAY_WARN,
             StrAppend => E::READS_LOCAL | E::WRITES_LOCAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_FATAL,
@@ -1646,6 +1729,10 @@ impl Op {
             // concat scratch while building the carried result, and always allocates the
             // boxed Mixed cell the new value is returned in.
             StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
+            // Reads the operand cells, compares non-numeric ones through `__rt_php_compare`
+            // (which saves and restores the concat cursor around any number-to-string leg)
+            // and boxes a copy of the winner, retaining a string, array or object payload.
+            MixedMinMax => E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_DEOPT,
             IterCurrentValueRef | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
@@ -1826,6 +1913,7 @@ impl Op {
             IAdd => "iadd",
             ISub => "isub",
             IMul => "imul",
+            IOverflows => "ioverflows",
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",
@@ -1852,6 +1940,7 @@ impl Op {
             FPow => "fpow",
             FNeg => "fneg",
             MixedNumericBinop => "mixed_numeric_binop",
+            MixedMinMax => "mixed_min_max",
             StrIncDec => "str_inc_dec",
             ICmp => "icmp",
             FCmp => "fcmp",

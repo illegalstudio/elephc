@@ -415,6 +415,10 @@ pub(super) fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, ex
             }
         }
         ExprKind::ErrorSuppress(inner) => materialized_expr_type_for_merge(ctx, inner),
+        // `clone $block` has the same value type as `$block`. The syntactic fallback
+        // answers `int`, which stamps a literal `array<int>` and then calls a method on
+        // the nullable read of that slot.
+        ExprKind::Clone(inner) => materialized_expr_type_for_merge(ctx, inner),
         ExprKind::BinaryOp { left, op, right } if mixed_numeric_op(op).is_some() => {
             let left_ty = materialized_expr_type_for_merge(ctx, left).codegen_repr();
             let right_ty = materialized_expr_type_for_merge(ctx, right).codegen_repr();

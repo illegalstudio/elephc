@@ -39,6 +39,7 @@ pub(super) fn preserving_instructions(function: &Function) -> HashSet<InstId> {
             | Op::MixedBox | Op::MixedClone | Op::Acquire | Op::EnsureOwned
             | Op::Release | Op::ReleaseUnlessAliases => numeric.prove(&inst.operands),
             Op::MixedNumericBinop if numeric_domain::mixed(inst) => numeric.prove(&inst.operands),
+            Op::MixedMinMax if numeric_domain::min_max(inst) => numeric.prove(&inst.operands),
             Op::StrIncDec if numeric_domain::increment(inst) => numeric.prove(&inst.operands),
             Op::PhpRelCmp if numeric_domain::comparison(inst) => numeric.prove(&inst.operands),
             Op::Cast if warning_free_numeric_cast(function, inst) => numeric.prove(&inst.operands),

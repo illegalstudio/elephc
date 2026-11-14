@@ -5,6 +5,52 @@ Releases are listed newest first.
 
 ## [Unreleased]
 
+## [0.27.8] - 2026-11-13
+
+- Added SimpleXML in compiled and `eval()` code, including live document views, XPath, namespaces, subclass hooks and DOM interoperability through the managed libxml2 package.
+- Added the complete selected-profile mysqli function, class, method and constant surface, including TLS, reference-bound statements, streamed results, asynchronous queries and client statistics.
+- Added the OpenSSL 3.6.4 default-provider symmetric-cipher catalog, including authenticated encryption, through the managed `openssl-crypto` package.
+- Added HAVAL, Tiger, Snefru, GOST, MurmurHash3 and xxHash variants to the hashing bridge.
+- Added a guarded bytecode execution path for eligible runtime `eval()` fragments, with cached executable bodies and an explicit call stack.
+- Added managed native-package requirements to `--print-capabilities`, allowing packaged bridge probes to prepare their dependencies automatically.
+- Added complete development downloads for the latest main commit, including the compiler, bridge archives, checksums and provenance.
+- Improved integer accumulators and nested loop counters by keeping eligible values and seeds out of heap boxes while preserving overflow-to-float behavior.
+- Reduced allocations in checked arithmetic stored into integer properties, passed to float parameters, or used in numeric identity and null comparisons.
+- Improved typed-array fills, reductions and callbacks, plus string, multibyte, encoding, JSON, hashing and scalar builtin hot paths.
+- Improved element writes through typed and inferred array properties by mutating their separated container in place while preserving copy-on-write and destructor visibility.
+- Reduced object-hash iteration allocations and automatic cycle-collection work after leaf unsets, with collection budgets proportional to heap size.
+- Reduced compilation cost for opaque eval programs and deeply nested array literals by sharing operator dispatch and callable metadata.
+- Changed benchmark PHP baselines to require OPcache and tracing JIT, reporting unavailable JIT configurations explicitly.
+- Reduced allocations in eligible variadic `min()` and `max()` results, including numeric winners from runtime-typed arguments.
+- Reduced integer `foreach` key allocations by reusing exclusively owned cells while preserving copied keys.
+- Improved loops using local packed element views by hoisting buffer descriptors and forwarding record addresses.
+- Fixed variadic `min()` and `max()` preserving the winning argument's value and type, including mixed operands, ties, NaN and signed zero; heterogeneous argument lists now infer `mixed`.
+- Fixed loose comparisons and `switch` dispatch for booleans, iterable arrays, objects and NaN/null, preserving warning-handler mutations, exceptions and callable identity.
+- Fixed scalar `??` and `?:` results with null defaults losing nullability, including typed-array misses, literals and property writes.
+- Fixed local values being read through stale storage types after divergent branches, switches, loop breaks and continues.
+- Fixed sparse integer and static string-key array writes losing keys or filling gaps with zeroes, while retaining packed storage for proven dense writes.
+- Fixed typed array builders, subclass elements and hash-foreach appends losing their declared layout, and converted list arguments to declared `array<K, V>` parameter storage.
+- Fixed typed local and array-element writeback through broader by-reference parameters, preserving value validation, argument order and cleanup.
+- Fixed enum-case property defaults and their Reflection values, including scoped aliases, constant expressions and lazy branches.
+- Fixed valid function-body errors being discarded during checker recovery, including functions reached through callbacks and first-class callables.
+- Fixed lazily initialized nullable object locals remaining nullable after their initialization guard.
+- Fixed loop counters reseeded from non-null packed fields being rejected after intervening control flow.
+- Fixed dynamic method results, `__call` forwarding and catchable errors on non-object receivers, including user methods named like Fiber state predicates.
+- Fixed complete, fresh declaring-class reflectors across compiled and eval code, enum reflector identity, typed member collections and public mirror reference storage.
+- Fixed leaks in throwing property setters, generated array keys, coalesced writes and scalar branch merges.
+- Fixed literal scalar `settype()` calls on mixed locals losing mutations or retaining replaced values across loops and shared storage.
+- Fixed native mbstring and iconv shortcuts bypassing argument checks, callbacks, live encoding settings, regex limits or observable state updates.
+- Fixed `trim()`, `ltrim()` and `rtrim()` character-range expansion and invalid-range warnings in compiled and eval code.
+- Fixed PHP regex delimiters beyond slash and braced `${n}` replacement backreferences.
+- Fixed Linux x86_64 interface dispatch corrupting fifth and sixth argument words, including string arguments.
+- Fixed x86_64 web workers losing host registers across handler calls, and enabled per-request `--heap-debug` reports under `--web`.
+- Fixed nested array-property appends emitting a missing-key warning for silently created buckets while preserving warnings from key expressions.
+- Fixed autoload-only Random, BCMath, GMP and timezone-list usage missing its prelude, including namespaced global function fallback.
+- Fixed recursive iterator traversal, Countable return validation, object projections in recursive array merges and SimpleXML stream-wrapper failures.
+- Fixed property-backed reference views and ownership becoming stale across compiled and runtime eval boundaries.
+- Fixed managed native downloads failing on transient GitHub release errors by retrying the exact verified release asset through the public API.
+- Security: updated bundled SQLite to 3.54.1, addressing the crafted database/WAL information disclosure described by CVE-2026-119375.
+
 ## [0.27.7] - 2026-11-03
 
 - Added `--emit phpext` to export functions, final classes and selected constants as real PHP 8.5 NTS/ZTS extensions on Linux x86_64/ARM64 and macOS ARM64.
@@ -944,7 +990,8 @@ Releases are listed newest first.
 ## [0.1.0] - 2026-03-22
 - Initial compiler: echo, variables, integers, arithmetic and string concatenation, comparison operators, control flow (`if`/`while`/`for`/`break`/`continue`), functions, logical/assignment/increment operators.
 
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.7...HEAD
+[Unreleased]: https://github.com/illegalstudio/elephc/compare/v0.27.8...HEAD
+[0.27.8]: https://github.com/illegalstudio/elephc/compare/v0.27.7...v0.27.8
 [0.27.7]: https://github.com/illegalstudio/elephc/compare/v0.27.6...v0.27.7
 [0.27.6]: https://github.com/illegalstudio/elephc/compare/v0.27.5...v0.27.6
 [0.27.5]: https://github.com/illegalstudio/elephc/compare/v0.27.4...v0.27.5

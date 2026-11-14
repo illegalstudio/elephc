@@ -12,6 +12,10 @@
 
 mod array_literals;
 mod array_references;
+mod bytecode;
+mod bytecode_calls;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod bytecode_signals;
 mod builtins_arrays_core;
 mod builtins_arrays_iterators;
 mod builtins_arrays_sets;

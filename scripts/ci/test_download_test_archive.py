@@ -135,21 +135,25 @@ class DownloadDeadline(unittest.TestCase):
             "puts JSON.generate(YAML.load_file(ARGV.fetch(0)))", str(ACTION_SPEC),
         ], text=True))
         cls.downloads = [step for step in spec["runs"]["steps"]
-                         if step.get("uses") == "actions/download-artifact@v4"]
+                         if step.get("uses", "").startswith("actions/download-artifact@")]
 
     def node_options(self):
         """Require the same workspace-relative preload on all three attempts."""
         expected = "--require ./.github/actions/download-test-archive/deadline.cjs"
         self.assertEqual([step["id"] for step in self.downloads], ["first", "second", "third"])
         for step in self.downloads:
+            self.assertEqual(step["uses"], "actions/download-artifact@v8.0.2")
+            self.assertEqual(step["with"].get("digest-mismatch"), "error")
             self.assertEqual(step.get("env", {}).get("NODE_OPTIONS"), expected)
         return expected
 
     def test_success_exits_without_waiting_for_the_deadline(self):
         """A completed action can exit naturally despite the five-minute timer."""
+        # The outer watchdog includes Node startup under shared-runner contention;
+        # the production deadline remains 300 seconds and is accelerated below.
         env = {**os.environ, "NODE_OPTIONS": self.node_options()}
         result = subprocess.run(["node", "-e", "console.log('download complete')"],
-                                cwd=REPO, env=env, capture_output=True, text=True, timeout=3)
+                                cwd=REPO, env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "download complete")
 
@@ -175,7 +179,7 @@ global.setTimeout = (callback, delay) => {
             env = {**os.environ, "NODE_OPTIONS": f'--require "{clock}" {options} --require "{startup}"'}
             result = subprocess.run([
                 "node", "-e", "",
-            ], cwd=REPO, env=env, capture_output=True, text=True, timeout=3)
+            ], cwd=REPO, env=env, capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 124, result.stderr)
         self.assertIn(".", result.stdout)
         self.assertIn("Artifact download exceeded 5 minutes", result.stderr)

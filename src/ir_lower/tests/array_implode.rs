@@ -33,7 +33,7 @@ echo (new OwnedJoinMethod())->join("left", "right");
     for function in module.functions.iter().chain(module.class_methods.iter()) {
         for instruction in &function.instructions {
             if !matches!(instruction.immediate,
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Implode))))
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::Implode, .. })))
             {
                 continue;
             }
@@ -64,7 +64,7 @@ echo joinBoxedArray(["object" => new JoinedObjectValue()]);
         let joins = module.functions.iter().flat_map(|function| &function.instructions)
             .filter(|instruction| instruction.op == Op::RuntimeCall && matches!(
                 instruction.immediate,
-                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(RuntimeFnId::Implode)))
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target: RuntimeFnId::Implode | RuntimeFnId::Join, .. }))
             )).collect::<Vec<_>>();
         assert_eq!(joins.len(), 2, "{name}");
         assert!(joins.iter().all(|instruction| instruction.result_ownership == Ownership::Owned), "{name}");
@@ -79,5 +79,30 @@ echo joinBoxedArray(["object" => new JoinedObjectValue()]);
             "ldr x0, [sp, #64]"
         };
         assert!(assembly.contains(saved_array), "{name}: normalized owner offset");
+    }
+}
+
+/// Boxed `join()` operands name `join()` in the fallback diagnostic, never the `implode()` alias.
+#[test]
+fn boxed_join_fallback_diagnostic_names_called_function_on_all_targets() {
+    let source = r#"<?php
+function joinOneBoxed(mixed $items): string { return join($items); }
+function joinTwoBoxed(mixed $items): string { return join(",", $items); }
+echo joinOneBoxed(["a", "b"]), joinTwoBoxed(["c", "d"]);
+"#;
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let module = super::lower_source_at_for_target(
+            source, Path::new("main.php"), Path::new("."), Target::parse(name).unwrap(),
+        );
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert!(
+            assembly.contains("join(): Argument #2 ($array) must be of type array\""),
+            "{name}: missing join() fallback diagnostic"
+        );
+        assert!(
+            !assembly.contains("implode(): Argument #2 ($array) must be of type array\""),
+            "{name}: join() fallback reported as implode()"
+        );
     }
 }

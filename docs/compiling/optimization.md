@@ -87,7 +87,7 @@ immediately during development. In release builds those checks are compiled out.
 
 ### Identity arithmetic folding
 
-The first registered pass folds algebraic identities on integer and float
+This pass folds algebraic identities on integer and float
 arithmetic and bitwise operations:
 
 | Pattern | Result |
@@ -117,7 +117,7 @@ register allocation, which helps broadly.
 
 ### Peephole patterns
 
-The second registered pass applies local rewrites that clean up the shape of
+This pass applies local rewrites that clean up the shape of
 lowered EIR. Each is refcount-balanced and produces output identical to PHP:
 
 | Pattern | Rewrite |
@@ -140,7 +140,7 @@ the `load_local` becomes a `nop`.
 
 ### Scalar local promotion
 
-The third registered pass (`mem2reg`) replaces loads and stores of eligible
+This pass (`mem2reg`) replaces loads and stores of eligible
 `int`, `bool`, and `float` PHP locals with SSA values. Block parameters carry
 values across branch joins and loop back edges, so register allocation can keep
 loop counters and accumulators in registers.
@@ -153,7 +153,7 @@ handlers, or dynamic eval are skipped. See
 
 ### Immutable local loads
 
-The fourth registered pass marks `load_local` instructions that read a
+This pass marks `load_local` instructions that read a
 proven-immutable concrete integer slot as pure, so later passes (CSE, LICM) may
 deduplicate or move them. A slot qualifies when it is a read-only incoming
 parameter (such as `main`'s `$argc`) or has a single entry-block store that
@@ -161,7 +161,7 @@ dominates every load. The pass changes only effect metadata, never values.
 
 ### Checked-integer sinking
 
-The fifth registered pass specializes a boxed checked-arithmetic operation
+This pass specializes a boxed checked-arithmetic operation
 (`ICheckedAdd`/`ICheckedSub`/`ICheckedMul`) to its `IChecked*ToInt` form when
 every use of its result observes only the integer payload, removing the
 transient boxed `Mixed` allocation without changing overflow semantics.
@@ -180,7 +180,7 @@ non-strict `<=` keeps the PHP comparison, because PHP's `$i <= -2^63` holds for 
 
 ### Bounded mixed counters
 
-The sixth registered pass replaces a boxed function-local counter with a scalar
+This pass replaces a boxed function-local counter with a scalar
 integer only when every update is proven to fit in the signed 64-bit range. It
 first rewrites a private trial, requires complete SSA promotion, and commits the
 change only after integer range analysis removes every new overflow check.
@@ -209,7 +209,7 @@ optional EIR passes. See `examples/reused-loop-counters/main.php`.
 
 ### Guarded loop counters
 
-The seventh registered pass adds an integer copy of a canonical loop when a
+This pass adds an integer copy of a canonical loop when a
 static proof alone cannot cover an inclusive or Mixed bound. Entry checks require
 integer seeds and invariant integer bounds. Ascending `<=` bounds must be below
 `PHP_INT_MAX`; descending `>=` bounds must be above `PHP_INT_MIN`. Float bounds
@@ -226,7 +226,7 @@ copies per function.
 
 ### Canonical loop optimization
 
-The eighth registered pass replaces self-carried scalar loop parameters with their
+This pass replaces self-carried scalar loop parameters with their
 preheader values, exposing invariant bounds. It also shares equivalent integer
 induction variables: every back edge must use the same constant step and the
 initial values must agree. Checked recurrences must have identical overflow modes,
@@ -242,7 +242,7 @@ generators are conservatively excluded. See `examples/loop-optimization/main.php
 
 ### Integer range and induction-variable analysis
 
-The ninth registered pass propagates signed 64-bit integer intervals through
+This pass propagates signed 64-bit integer intervals through
 constants, branch comparisons, block parameters, and arithmetic. A PHP comparison
 of an integer with a checked `X - c` or `X + c` bound also bounds the integer by
 one step on the edge where the bound's one-sided overflow cannot be the reason the
@@ -260,7 +260,7 @@ registered pass. See [The Optimizer](../internals/the-optimizer.md).
 
 ### Checked numeric-chain fusion
 
-The tenth registered pass fuses a left-associated chain of boxed checked
+This pass fuses a left-associated chain of boxed checked
 addition, subtraction, or multiplication when its only observable result is an
 integer cast. The chain must stay within one basic block, and every boxed
 intermediate may be used only by the next arithmetic operation plus removable
@@ -278,9 +278,29 @@ reach a shared read prevent the rewrite. For
 continue through `+ 1` before converting to an integer. Generic loop copies can
 keep their boxed storage while the fast copy eliminates its unobserved store.
 
+### Overflow-promotable loops and lazy accumulators
+
+`RawPromotableLoop` specializes an innermost straight-line numeric loop after
+counter versioning. Integer seeds enter a raw integer copy. When an update
+overflows, that local continues as a raw float for the rest of the loop and is
+boxed at exit. Noninteger seeds keep the original mixed loop. Calls, extra
+stores, unsupported observations and more than four updated locals prevent
+this specialization.
+
+After the ordinary passes converge, `LazyBoxedAccumulator` handles eligible
+accumulators in more general loops, including branches, calls, array reads and
+nested loops. A raw integer companion carries modeled updates and comparisons;
+other reads synchronize it into the mixed slot first. Overflow and noninteger
+operands use the original mixed operations. Functions with literal eval scope
+access remain conservative. Scalar cleanup runs again on changed functions.
+Both optimizations preserve PHP overflow promotion and respect the codegen
+proofs for frame-local numeric cells. See
+[Raw promotable loops](../internals/the-ir.md#raw-promotable-loops) and
+[Lazy boxed accumulators](../internals/the-ir.md#lazy-boxed-accumulators).
+
 ### Constant folding
 
-The eleventh registered pass folds operations whose operands are all compile-time
+This pass folds operations whose operands are all compile-time
 constants into a single constant, in place. It covers integer arithmetic
 (`iadd`, `isub`, `imul`), bitwise ops, in-range shifts, unary `ineg`/`ibit_not`,
 float `fadd`/`fsub`/`fmul`/`fneg`, signed integer comparisons (`icmp`), and the
@@ -304,7 +324,7 @@ the three `imul`s eliminated.
 
 ### Common subexpression elimination
 
-The twelfth registered pass removes a pure computation when an identical one is
+This pass removes a pure computation when an identical one is
 already available on every path to it, redirecting its uses to the earlier
 value. It does both per-block and cross-block elimination in one dominator-tree
 value-numbering traversal: a scoped table maps each pure instruction's
@@ -330,7 +350,7 @@ dead operands that dead-instruction elimination then removes.
 
 ### Loop-invariant code motion
 
-The thirteenth registered pass moves a pure computation whose operands do not change
+This pass moves a pure computation whose operands do not change
 across a loop out of the loop body and into the loop's preheader, so it runs once
 instead of every iteration. It builds the loop forest on the dominator tree, then
 for each loop grows an invariant set to a fixed point: an instruction is invariant
@@ -363,7 +383,7 @@ integer range analysis removes their checks.
 
 ### Dead instruction elimination
 
-The fourteenth registered pass computes CFG liveness and neutralizes unused
+This pass computes CFG liveness and neutralizes unused
 result-producing instructions whose effect metadata says they are pure. This
 cleans up dead values exposed by earlier EIR rewrites. For example, identity
 folding can turn `$argc + 0` into `$argc`; dead-instruction elimination then
@@ -384,7 +404,7 @@ elephc --emit-ir --no-ir-opt app.php
 
 ### Dead store elimination
 
-The fifteenth registered pass removes `store_local` writes whose value is never read
+This pass removes `store_local` writes whose value is never read
 before the slot is overwritten or the function exits. It computes backward,
 CFG-aware liveness over local slots (a `load_local` makes a slot live, a
 `store_local` kills it) so a dead store is dropped even when the overwrite is in a
@@ -400,7 +420,7 @@ left untouched to keep reference counting and aliasing semantics intact.
 
 ### Branch simplification
 
-The sixteenth registered pass simplifies the control-flow graph:
+This pass simplifies the control-flow graph:
 
 - **Constant-condition folding** — a `cond_br` whose condition is a constant
   (`const_bool`, non-zero `const_i64`, or `const_null`) becomes an unconditional
@@ -423,7 +443,7 @@ are reachable through implicit edges that the terminator graph does not show.
 
 ### Concat scratch-state optimization
 
-The seventeenth registered pass (`src/ir_passes/concat_reset.rs`) removes or
+This pass (`src/ir_passes/concat_reset.rs`) removes or
 coalesces statement-boundary `concat_reset` operations when dataflow proves no
 scratch string can be live or consumed between resets. A forward analysis drops
 a reset that already finds `_concat_off` at the frame's `concat_base_offset`.

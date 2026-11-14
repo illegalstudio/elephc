@@ -302,6 +302,8 @@ pub(super) fn lower_static_method_descriptor_call(
     let (descriptor, descriptor_owner) = root_owned_call_operand(ctx, descriptor, expr.span);
     let mut operands = vec![descriptor.value];
     operands.extend(lower_args_with_signature(ctx, wrapper_sig.as_ref(), args));
+    let conversion_roots =
+        root_unpublished_argument_conversions(ctx, &mut operands[1..], expr.span);
     let result = emit_descriptor_invoker_value(
         ctx,
         Op::ExprCall,
@@ -311,6 +313,9 @@ pub(super) fn lower_static_method_descriptor_call(
         expr.span,
     );
     stage_call_result(ctx, result_staging.as_ref(), result, expr.span);
+    for slot in conversion_roots.into_iter().rev() {
+        retire_owned_call_operand(ctx, slot, expr.span);
+    }
     if let Some(slot) = descriptor_owner {
         retire_owned_call_operand(ctx, slot, expr.span);
     }

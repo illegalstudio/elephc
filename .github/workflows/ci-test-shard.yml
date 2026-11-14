@@ -1,0 +1,126 @@
+name: Test shard with bounded runner recovery
+on:
+  workflow_call:
+    inputs:
+      target:
+        type: string
+        required: true
+      family:
+        type: string
+        required: true
+      shard:
+        type: number
+        required: true
+      shards:
+        type: number
+        required: true
+      source-sha:
+        type: string
+        required: true
+      artifact-run:
+        type: string
+        required: true
+      artifact-attempt:
+        type: string
+        required: true
+      ci-image:
+        type: string
+        required: true
+      job-timeout:
+        type: number
+        required: true
+      job-key:
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+  packages: read
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: '1.98'
+  RUST_MIN_STACK: '33554432'
+jobs:
+  primary:
+    name: primary runner
+    runs-on: ${{ inputs.target == 'macos-aarch64' && 'macos-15' || (inputs.target == 'linux-aarch64' && 'ubuntu-24.04-arm'
+      || 'ubuntu-24.04') }}
+    timeout-minutes: ${{ inputs.job-timeout }}
+    outputs:
+      status: ${{ steps.attempt.outputs.status }}
+    env:
+      ELEPHC_CI_IMAGE: ${{ startsWith(inputs.target, 'linux-') && inputs.ci-image || '' }}
+    container:
+      # The runner treats an empty image as no job container on macOS.
+      image: ${{ startsWith(inputs.target, 'linux-') && inputs.ci-image || '' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source-sha }}
+      - id: attempt
+        uses: ./.github/actions/test-shard-attempt
+        with:
+          target: ${{ inputs.target }}
+          family: ${{ inputs.family }}
+          shard: ${{ inputs.shard }}
+          shards: ${{ inputs.shards }}
+          source-sha: ${{ inputs.source-sha }}
+          artifact-run: ${{ inputs.artifact-run }}
+          artifact-attempt: ${{ inputs.artifact-attempt }}
+          job-key: ${{ inputs.job-key }}
+          execution: primary
+  recovery:
+    name: recovery runner
+    needs: primary
+    if: '!cancelled() && needs.primary.result == ''success'' && needs.primary.outputs.status == ''retryable-transfer'''
+    runs-on: ${{ inputs.target == 'macos-aarch64' && 'macos-15' || (inputs.target == 'linux-aarch64' && 'ubuntu-24.04-arm'
+      || 'ubuntu-24.04') }}
+    timeout-minutes: ${{ inputs.job-timeout }}
+    outputs:
+      status: ${{ steps.attempt.outputs.status }}
+    env:
+      ELEPHC_CI_IMAGE: ${{ startsWith(inputs.target, 'linux-') && inputs.ci-image || '' }}
+    container:
+      # Preserve the exact Linux image digest, including on the recovery runner.
+      image: ${{ startsWith(inputs.target, 'linux-') && inputs.ci-image || '' }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source-sha }}
+      - id: attempt
+        uses: ./.github/actions/test-shard-attempt
+        with:
+          target: ${{ inputs.target }}
+          family: ${{ inputs.family }}
+          shard: ${{ inputs.shard }}
+          shards: ${{ inputs.shards }}
+          source-sha: ${{ inputs.source-sha }}
+          artifact-run: ${{ inputs.artifact-run }}
+          artifact-attempt: ${{ inputs.artifact-attempt }}
+          job-key: ${{ inputs.job-key }}
+          execution: recovery
+  verdict:
+    name: Shard verdict
+    needs:
+      - primary
+      - recovery
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require a successful test execution
+        env:
+          ATTEMPTS: ${{ toJSON(needs) }}
+        run: |
+          jq -e '
+            .primary.result == "success" and
+            ((.primary.outputs.status == "passed" and .recovery.result == "skipped") or
+             (.primary.outputs.status == "retryable-transfer" and
+              .recovery.result == "success" and .recovery.outputs.status == "passed"))
+          ' <<< "$ATTEMPTS"

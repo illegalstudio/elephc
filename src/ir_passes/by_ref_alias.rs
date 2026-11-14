@@ -137,11 +137,14 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
     matches!(
         op,
         // Integer/float arithmetic and bitwise operators.
-        IAdd | ISub | IMul | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
+        IAdd | ISub | IMul | IOverflows | ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedAddToInt
             | ICheckedSubToInt | ICheckedMulToInt | ICheckedNumericChainToInt | ICheckedPow
             | IDiv | ISDiv | ISMod
             | IPow | INeg | IBitAnd | IBitOr | IBitXor
             | IBitNot | IShl | IShrA | FAdd | FSub | FMul | FDiv | FPow | FNeg | MixedNumericBinop
+            // A min/max selection reads its operands' cells by value and returns a copy of the
+            // winner; it never takes a source slot's address.
+            | MixedMinMax
             // Comparisons.
             | ICmp | FCmp | StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | LooseEq
             | LooseNotEq | PhpRelCmp | Spaceship
@@ -152,6 +155,9 @@ pub(super) fn op_is_value_only_consumer(op: Op) -> bool {
             | ResourceToStr | Cast | MixedBox | MixedUnbox | MixedCastBool | MixedCastInt
             | MixedCastFloat | MixedCastString | ReturnBoundaryMixedToInt
             | PropertyBoundaryCheckedToInt
+            // A Mixed clone loads its operand and copies the dereferenced value into a new cell
+            // (or retains a shared resource cell); it never takes the source slot's address.
+            | MixedClone
             // String value operations.
             | StrConcat | StrAppend | StrLen | StrPersist | StrCharAt | StrInterpolate | StrIncDec
             // Output operations consume their operand by value.
@@ -187,6 +193,10 @@ pub(crate) fn runtime_call_observes_scalar_by_value(inst: &crate::ir::Instructio
             | crate::ir::RuntimeFnId::BufferPtr
             | crate::ir::RuntimeFnId::Intdiv
             | crate::ir::RuntimeFnId::Abs
+            // The scalar forms compare register values and the single-array form reduces a
+            // borrowed container into fresh storage; neither retains an operand.
+            | crate::ir::RuntimeFnId::Min
+            | crate::ir::RuntimeFnId::Max
             | crate::ir::RuntimeFnId::Sqrt
             | crate::ir::RuntimeFnId::Round
             | crate::ir::RuntimeFnId::Sprintf

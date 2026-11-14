@@ -38,6 +38,7 @@ macro_rules! supported_target_cases {
 }
 
 mod aggregate_operand_owners;
+mod boxed_operators;
 mod loose_comparison_batch;
 mod argument_evaluation_owners;
 mod computed_property_update_owners;
@@ -56,6 +57,7 @@ mod native_reference_validators;
 mod native_reference_store_modes;
 mod native_reference_parameter_leases;
 mod source_variadic_calls;
+mod method_call_review;
 mod erased_xml_presence;
 mod ordinary_prefix_storage;
 mod scalar_parameter_owners;
@@ -71,6 +73,8 @@ mod string_offset_lifetime;
 mod string_offset_writes;
 mod arrays;
 mod unset_collection;
+mod typed_element_refs;
+mod list_hash_param_binding;
 mod array_edge_guards;
 mod sparse_key_writes;
 mod assoc_push;

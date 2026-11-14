@@ -35,6 +35,7 @@ pub(crate) use function::{lower_array_merge_callable, lower_boxed_usort_callable
 mod ownership;
 mod object_boundaries;
 mod program;
+mod boxed_operators;
 mod reference_property_validators;
 pub use reference_property_validators::enable_native_reference_validation;
 mod property_initializers;

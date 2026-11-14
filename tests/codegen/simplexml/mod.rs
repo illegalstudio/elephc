@@ -10,6 +10,7 @@
 use crate::support::*;
 
 mod review_regressions;
+mod boxed_operators;
 mod review_programs;
 mod review_writes;
 mod review_type_boundaries;

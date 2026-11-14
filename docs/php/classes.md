@@ -821,6 +821,13 @@ Traits may declare abstract hooked property contracts. A concrete class using th
 ## Property access
 `->` for properties and methods.
 
+Writing through a receiver that is `null` at run time throws a catchable `Error`, as in PHP,
+including a receiver whose static type is a class, such as a missing element of an
+`array<Node>`: `$nodes[5]->count = 2` reports `Attempt to assign property "count" on null`,
+and an element write or append (`$nodes[5]->items[] = 1`) reports `Attempt to modify property
+"items" on null`. Reading the missing element still emits PHP's `Undefined array key` warning
+first, where PHP fetches it for write silently.
+
 ### Dynamic property access
 
 The property name can be computed at runtime with the `$obj->{$expr}` syntax,
@@ -998,6 +1005,12 @@ echo sqlSortKeyword(SortDirection::Descending); // DESC
 - `__invoke(...$args)` — calling an object directly, including `$this(...)` from inside its own class. The class that contains `$this(...)` must declare or inherit `__invoke`: an abstract parent that relies on a subclass's `__invoke` is refused at compile time, where PHP resolves it at run time
 - `__call($name, $args)` — intercepting missing instance methods
 - `__callStatic($name, $args)` — intercepting missing static methods
+
+Instance `__call` dispatch also works through `mixed` and bare `object` receivers.
+The hook receives the method name as written and an argument array that preserves
+named keys, including keys supplied through argument unpacking. Exceptions thrown
+by the hook remain catchable, and temporary argument containers are released on
+both normal return and exception unwinding.
 
 ## Property interception (`__get`, `__set`, `__isset`, `__unset`)
 
@@ -1372,7 +1385,7 @@ foreach (class_get_attributes('Greeter') as $attr) {
 
 User subclasses of the supported Reflection owner classes use ordinary object allocation, so their property defaults, reference cells, dynamic properties, and constructors remain active. A custom constructor must call `parent::__construct()` as its first action and pass the built-in constructor's leading parameters unchanged and in order. Elephc rejects other constructor shapes because it cannot prove that the metadata populated before the user constructor matches the arguments eventually forwarded to PHP's Reflection owner.
 
-The public `name` and `class` metadata properties are populated in both AOT and eval-created Reflection objects. As in PHP, assigning directly to one raises `ReflectionException`; compound writes and `unset()` retain their distinct behavior and are not treated as language-level `readonly` operations. Reference binding to native Reflection properties inside eval is not yet supported.
+The public `name` and `class` metadata properties are populated in both AOT and eval-created Reflection objects. As in PHP, assigning directly to one raises `ReflectionException`; compound writes and `unset()` retain their distinct behavior and are not treated as language-level `readonly` operations. Compiled code can bind references to the public metadata mirrors of eval-created reflectors; these object-owned cells preserve the private reflection metadata. Binding a reference to a native Reflection property from inside eval remains unsupported.
 
 Reflection is also available for class members:
 

@@ -306,6 +306,7 @@ jobs:
     name: Verify ${{ matrix.target }} tarball
     permissions:
       contents: read
+      packages: read
     if: github.event.ref_type == 'tag' && startsWith(github.event.ref, 'v')
     runs-on: ${{ matrix.runner }}
     needs:
@@ -328,36 +329,32 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-22.04-arm
     steps:
+      # Resolve the execution environment from trusted current main before
+      # checking out the exact release source, which may predate this tooling.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          sparse-checkout: |
+            scripts/ci
+            .github/actions/use-ci-image
+      - name: Select preinstalled release probe environment
+        uses: ./.github/actions/use-ci-image
+        with:
+          role: smoke22
       - uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.sha }}
 
-      # The probe links real programs, which the build jobs never do on these
-      # runners; macOS runners carry the Xcode command line tools already.
-      # `build-essential` is also what `elephc native add curl` needs to
-      # compile the managed libcurl chain (perl is on the image; openssl's
-      # Configure invokes it). libbz2/zlib are the runtime's own stream-layer
-      # libraries (`-lz -lbz2`, src/codegen_support/runtime_features.rs), not
-      # catalog packages: the `--with-xml probe.php` link needs them on Linux
-      # because every program linking the xml bridge carries them, even a
-      # parser-only one — the bridge's prelude calls `fopen()`, which enables
-      # the runtime's phar stream feature. Same package set as
-      # managed-native-smoke.
-      - name: Install a linking toolchain
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils build-essential file libbz2-dev zlib1g-dev
-
       # The probe adds every managed native package the packaged binary names in
       # `--print-capabilities` before force-enabling its packed bridge in an empty
-      # WORKDIR. The cache uses native add's default root
-      # (`~/.cache/elephc/native`), keyed on the catalog and every recipe, so warm
+      # WORKDIR. The shared cache is keyed on the catalog and recipes so warm
       # runners skip the from-source native rebuilds.
+      - name: Configure the shared native probe cache
+        run: echo "ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/verify-native" >> "$GITHUB_ENV"
       - name: Cache managed native dependencies
         uses: actions/cache@v6
         with:
-          path: ~/.cache/elephc/native
+          path: ${{ runner.temp }}/verify-native
           key: verify-native-${{ matrix.target }}-${{ hashFiles('examples/curl-get/elephc.lock', 'examples/xml/elephc.lock', 'src/native_deps/catalog.rs', 'src/native_deps/recipes/**') }}
 
       - name: Download the built tarball
@@ -367,7 +364,7 @@ jobs:
           path: dist
 
       - name: Verify the tarball is complete
-        run: ./scripts/verify-release-artifact.sh "dist/elephc-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+        run: python3 "$RUNNER_TEMP/elephc-image-shell.py" command ./scripts/verify-release-artifact.sh "dist/elephc-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
 
   release:
     name: Publish release

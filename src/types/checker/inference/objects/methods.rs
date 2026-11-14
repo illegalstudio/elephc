@@ -120,9 +120,9 @@ impl Checker {
                     }
                     return Ok(PhpType::Callable);
                 }
-                "call" => {
-                    // `call` INVOKES the receiver closure with `$args[1..]`, and the receiver's
-                    // signature is not resolvable here — the arguments are conservatively
+                "call" | "__invoke" => {
+                    // `call` and `__invoke` invoke the receiver closure, whose
+                    // signature is not resolvable here, so the arguments are conservatively
                     // reference-aliased. (`bindTo` above only rebinds `$this`; it invokes
                     // nothing, so its arguments are ordinary by-value reads.)
                     self.record_unresolved_callee_argument_aliases(args);
@@ -181,9 +181,13 @@ impl Checker {
     /// when no class declares the method at all.
     fn mixed_receiver_method_return_type(&self, method: &str, arg_count: usize) -> Option<PhpType> {
         let method_key = php_symbol_key(method);
+        if method_key == "__invoke" { return Some(PhpType::Mixed); }
         let mut arity_matched: Vec<PhpType> = Vec::new();
         let mut any_matched: Vec<PhpType> = Vec::new();
         for class_info in self.classes.values() {
+            if !class_info.methods.contains_key(&method_key) && class_info.methods.contains_key("__call") {
+                return Some(PhpType::Mixed);
+            }
             let Some(sig) = class_info.methods.get(&method_key) else {
                 continue;
             };

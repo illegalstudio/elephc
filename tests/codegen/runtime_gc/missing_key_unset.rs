@@ -58,7 +58,8 @@ gc_collect_cycles();
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
-/// Null-valued entries count as removals, and mixed unset lists keep their root-drop safe point.
+/// Removing a null-valued entry strands nothing and skips collection, boxed or raw, while a
+/// mixed unset list keeps its root-drop safe point.
 #[test]
 fn test_gc_missing_key_unset_preserves_real_removal_boundaries() {
     let out = compile_unset_gc_fixture(
@@ -84,7 +85,7 @@ echo gc_status()["runs"] - $before;
 "#,
     );
     assert!(out.success, "{}", out.stderr);
-    assert_eq!(out.stdout, "1:1|1:1|1");
+    assert_eq!(out.stdout, "0:1|0:1|1");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 

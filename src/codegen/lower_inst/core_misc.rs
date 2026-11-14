@@ -42,9 +42,9 @@ pub(super) fn lower_closure_capture(_ctx: &mut FunctionContext<'_>, _inst: &Inst
     Ok(())
 }
 
-/// Lowers an explicit cycle-collection safe point.
+/// Lowers an automatic cycle-collection safe point through the heap-proportional scan budget.
 pub(super) fn lower_gc_collect(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles");
+    abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_budgeted");
     Ok(())
 }
 

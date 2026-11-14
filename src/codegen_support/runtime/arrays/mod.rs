@@ -14,6 +14,8 @@
 mod incref_register_tests;
 #[cfg(test)]
 mod gc_incoming_cache_tests;
+#[cfg(test)]
+mod overwrite_order_tests;
 
 mod array_chunk;
 mod array_chunk_refcounted;
@@ -140,6 +142,7 @@ mod gc_collect_cycles;
 mod gc_host_roots;
 mod gc_collect_cycles_x86_64;
 mod gc_control;
+mod gc_collect_budget;
 mod memory;
 mod gc_destructors;
 mod gc_weak_observers;
@@ -216,6 +219,8 @@ mod mixed_abs;
 mod mixed_bit_not;
 mod mixed_cast_array;
 mod mixed_clone;
+mod mixed_min_max;
+mod mixed_reuse_int_cell;
 mod mixed_reference;
 mod mixed_cast_bool;
 mod mixed_cast_float;
@@ -560,7 +565,8 @@ pub use foreach_non_iterable_warning::{
 /// Emit the PHP `foreach()` non-iterable-argument warning helper.
 pub use nan_bool_coercion_warning::{
     emit_nan_bool_coercion_probe, emit_nan_bool_coercion_probe_leaf,
-    emit_nan_bool_coercion_warning, nan_bool_coercion_warning_enabled,
+    emit_nan_bool_coercion_warning, emit_nan_string_coercion_probe,
+    nan_bool_coercion_warning_enabled,
     NAN_BOOL_COERCION_MESSAGES,
 };
 /// Emit the PHP 8.5 NAN-to-bool coercion warning helper and its inline call-site probe.
@@ -578,6 +584,10 @@ pub(crate) use mixed_bit_not::{emit_mixed_bit_not, BIT_NOT_PREFIX, BIT_NOT_TYPE_
 pub use mixed_cast_array::emit_mixed_cast_array;
 /// Emit a resource-aware owned Mixed value read.
 pub use mixed_clone::emit_mixed_clone;
+/// Emit the two-operand `min()` / `max()` selection over Mixed-shaped cells.
+pub use mixed_min_max::emit_mixed_min_max;
+/// Emit the in-place integer boxing helper for a uniquely owned Mixed local cell.
+pub use mixed_reuse_int_cell::emit_mixed_reuse_int_cell;
 pub use mixed_reference::emit_mixed_reference;
 /// Emit Mixed from value conversion helper.
 pub use mixed_from_value::{emit_mixed_from_owned_string, emit_mixed_from_value};
