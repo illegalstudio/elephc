@@ -72,6 +72,7 @@ pub(crate) mod pcntl_signal_values;
 pub(crate) mod pcntl_signals;
 pub(crate) mod pcntl_handlers;
 pub(crate) mod pointers;
+pub(crate) mod posix;
 pub(crate) mod regex;
 pub(crate) mod round_mode;
 pub(crate) mod serialize;

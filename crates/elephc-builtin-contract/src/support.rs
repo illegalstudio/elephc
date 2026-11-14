@@ -377,7 +377,8 @@ mod tests {
         // raw-memory builtins and `buffer_ptr`, bound in eval through their own registry homes.
         // The tokenizer location helper also uses the shared runtime registry.
         // Five native heap metric bindings share the boxed runtime dispatcher.
-        assert_eq!(eval_registry, 759 + curl_surface);
+        // Seven ext/posix bindings run through the PCNTL interpreter adapter.
+        assert_eq!(eval_registry, 766 + curl_surface);
         // Compiler-internal registry helpers plus the 17 `_`-prefixed helper functions the
         // image prelude declares for its own use, plus the ELEVEN
         // `__elephc_opcache_rt_*` runtime script-cache helpers this branch adds.
@@ -412,8 +413,9 @@ mod tests {
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries, and the
-        // compiled and eval `ReflectionClass` builder calls two more.
-        assert_eq!(aot_registry, 828);
+        // compiled and eval `ReflectionClass` builder calls two more. The seven ext/posix
+        // bridge builtins are ordinary PCNTL registry operations.
+        assert_eq!(aot_registry, 835);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 450 + curl_surface);
@@ -467,8 +469,9 @@ mod tests {
         // Heap usage queries keep a TypeError adapter for non-scalar flags.
         assert_eq!(hybrid_adapter, 4);
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
-        // interpreter adapters, plus the GMP and SimpleXML forwarding homes.
-        assert_eq!(interpreter_adapter, 664 + curl_surface);
+        // interpreter adapters, plus the GMP and SimpleXML forwarding homes, and the seven
+        // ext/posix bridge builtins served by the PCNTL adapter.
+        assert_eq!(interpreter_adapter, 671 + curl_surface);
         // Internal compiler surfaces and pending eval bindings remain unavailable.
         assert_eq!(unsupported, 519);
         assert_eq!(

@@ -83,8 +83,37 @@ return `false`, and remain available through `pcntl_get_last_error()` /
 `posix_setpgid($process_id, $process_group_id)` moves a process into a process
 group and returns a boolean result. `posix_setsid()` creates a new session for
 the calling process and returns its session identifier, or `-1` after an OS
-failure. Both operations preserve the native errno for
-`pcntl_get_last_error()`.
+failure. Both operations record the native errno for `posix_get_last_error()`.
+
+## POSIX signals, terminals, and errors
+
+The ext/posix helpers below are served by the same bridge, on the same targets:
+
+- `posix_kill(int $process_id, int $signal): bool` sends a signal through
+  `kill(2)`. Signal `0` probes whether a process exists. A process id outside the
+  C `pid_t` range raises PHP 8.5's `ValueError`; the signal is truncated to a C
+  `int`, as PHP does.
+- `posix_isatty(int|resource $file_descriptor): bool` reports whether a
+  descriptor or a stream resource is a terminal. A descriptor outside
+  `0..2147483647` emits PHP's warning and returns `false`; a closed stream throws
+  PHP's `TypeError`.
+- `posix_geteuid(): int` and `posix_getpgrp(): int` return the effective user
+  id and the process group id of the calling process.
+- `posix_get_last_error(): int` (alias `posix_errno()`) returns the errno of the
+  most recent failing `posix_*` call, and `posix_strerror(int $error_code):
+  string` returns its system message.
+
+As in PHP, ext/posix keeps its own last error: a failing `posix_*` call never
+changes `pcntl_get_last_error()`, a failing `pcntl_*` call never changes
+`posix_get_last_error()`, and a later successful call clears neither.
+
+```php
+<?php
+echo posix_isatty(STDOUT) ? "terminal\n" : "redirected\n";
+if (!posix_kill(2147483647, 0)) {
+    echo posix_strerror(posix_get_last_error()), "\n"; // No such process
+}
+```
 
 Elephc also provides `pcntl_daemon(bool $no_chdir = false, bool $no_close =
 false): bool` as a convenience wrapper over the host's `daemon(3)`. This is an
@@ -281,7 +310,14 @@ Classes: `Pcntl\QosClass`.
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
+| [`posix_errno()`](./builtins/misc/posix_errno.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_get_last_error()`](./builtins/misc/posix_get_last_error.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_geteuid()`](./builtins/misc/posix_geteuid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_getpgrp()`](./builtins/misc/posix_getpgrp.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_isatty()`](./builtins/misc/posix_isatty.md) | `(mixed $file_descriptor): bool` | `bool` | ✓ | ✓ |
+| [`posix_kill()`](./builtins/misc/posix_kill.md) | `(int $process_id, int $signal): bool` | `bool` | ✓ | ✓ |
 | [`posix_setpgid()`](./builtins/misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./builtins/misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_strerror()`](./builtins/misc/posix_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 
 <!-- elephc:generated:symbols:end -->

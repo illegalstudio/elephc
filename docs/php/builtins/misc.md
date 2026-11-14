@@ -92,8 +92,15 @@ sidebar:
 | [`php_sapi_name()`](./misc/php_sapi_name.md) | `(): string` | `string` | ✓ | - |
 | [`php_uname()`](./misc/php_uname.md) | `(string $mode = 'a'): string` | `string` | ✓ | ✓ |
 | [`phpversion()`](./misc/phpversion.md) | `(?string $extension = null): string|false` | `string|false` | ✓ | ✓ |
+| [`posix_errno()`](./misc/posix_errno.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_get_last_error()`](./misc/posix_get_last_error.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_geteuid()`](./misc/posix_geteuid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_getpgrp()`](./misc/posix_getpgrp.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_isatty()`](./misc/posix_isatty.md) | `(mixed $file_descriptor): bool` | `bool` | ✓ | ✓ |
+| [`posix_kill()`](./misc/posix_kill.md) | `(int $process_id, int $signal): bool` | `bool` | ✓ | ✓ |
 | [`posix_setpgid()`](./misc/posix_setpgid.md) | `(int $process_id, int $process_group_id): bool` | `bool` | ✓ | ✓ |
 | [`posix_setsid()`](./misc/posix_setsid.md) | `(): int` | `int` | ✓ | ✓ |
+| [`posix_strerror()`](./misc/posix_strerror.md) | `(int $error_code): string` | `string` | ✓ | ✓ |
 | [`print_r()`](./misc/print_r.md) | `(mixed $value, bool $return = false): mixed` | `mixed` | ✓ | ✓ |
 | [`restore_error_handler()`](./misc/restore_error_handler.md) | `(): bool` | `bool` | ✓ | ✓ |
 | [`restore_exception_handler()`](./misc/restore_exception_handler.md) | `(): bool` | `bool` | ✓ | ✓ |

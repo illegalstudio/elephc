@@ -237,7 +237,7 @@ fn eval_validate_priority_mode(
 }
 
 /// Copies libc's borrowed `strerror` bytes into a PHP string cell.
-fn eval_pcntl_strerror(
+pub(super) fn eval_pcntl_strerror(
     args: &[Option<EvaluatedCallArg>],
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {

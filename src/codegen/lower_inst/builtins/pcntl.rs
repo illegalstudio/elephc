@@ -58,6 +58,21 @@ pub(crate) fn lower(
         ),
         PcntlRuntime::GetPriority => lower_getpriority(ctx, inst),
         PcntlRuntime::GetQosClass => lower_getqos_class(ctx, inst),
+        PcntlRuntime::PosixGetEuid => {
+            lower_zero_arg_int_bridge(ctx, inst, "posix_geteuid", "elephc_posix_geteuid")
+        }
+        PcntlRuntime::PosixGetLastError => lower_zero_arg_int_bridge(
+            ctx,
+            inst,
+            "posix_get_last_error",
+            "elephc_posix_get_last_error",
+        ),
+        PcntlRuntime::PosixGetPgrp => {
+            lower_zero_arg_int_bridge(ctx, inst, "posix_getpgrp", "elephc_posix_getpgrp")
+        }
+        PcntlRuntime::PosixIsatty => super::posix::lower_isatty(ctx, inst),
+        PcntlRuntime::PosixKill => super::posix::lower_kill(ctx, inst),
+        PcntlRuntime::PosixStrError => lower_strerror(ctx, inst, "posix_strerror"),
         PcntlRuntime::SetCpuAffinity => lower_setcpuaffinity(ctx, inst),
         PcntlRuntime::SetNs => lower_setns(ctx, inst),
         PcntlRuntime::SetProcessGroup => lower_set_process_group(ctx, inst),
@@ -74,7 +89,7 @@ pub(crate) fn lower(
         PcntlRuntime::SignalMask => super::pcntl_signals::lower_sigprocmask(ctx, inst),
         PcntlRuntime::SignalTimedWait => super::pcntl_signals::lower_signal_wait(ctx, inst, true),
         PcntlRuntime::SignalWaitInfo => super::pcntl_signals::lower_signal_wait(ctx, inst, false),
-        PcntlRuntime::StrError => lower_strerror(ctx, inst),
+        PcntlRuntime::StrError => lower_strerror(ctx, inst, "pcntl_strerror"),
         PcntlRuntime::Unshare => lower_unshare(ctx, inst),
         PcntlRuntime::Wait => lower_wait(ctx, inst, false),
         PcntlRuntime::WaitId => lower_waitid(ctx, inst),
@@ -1312,13 +1327,13 @@ fn emit_validate_priority_mode(ctx: &mut FunctionContext<'_>, name: &str, argume
     ctx.emitter.label(&valid);
 }
 
-/// Lowers `pcntl_strerror()` and persists libc's borrowed message as an owned PHP string.
-fn lower_strerror(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "pcntl_strerror", 1)?;
+/// Lowers `pcntl_strerror()` / `posix_strerror()` and persists libc's borrowed message as an owned PHP string.
+fn lower_strerror(ctx: &mut FunctionContext<'_>, inst: &Instruction, name: &str) -> Result<()> {
+    ensure_arg_count(inst, name, 1)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #16");                         // reserve aligned output storage for the message length
-            load_as_int(ctx, expect_operand(inst, 0)?, "pcntl_strerror error_code")?;
+            load_as_int(ctx, expect_operand(inst, 0)?, name)?;
             ctx.emitter.instruction("mov x1, sp");                              // C arg1 writes the borrowed message length
             ctx.emitter.bl_c("elephc_pcntl_strerror");
             ctx.emitter.instruction("mov x1, x0");                              // place the borrowed pointer in PHP string result register x1
@@ -1327,7 +1342,7 @@ fn lower_strerror(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<(
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("sub rsp, 16");                             // reserve aligned output storage for the message length
-            load_as_int(ctx, expect_operand(inst, 0)?, "pcntl_strerror error_code")?;
+            load_as_int(ctx, expect_operand(inst, 0)?, name)?;
             ctx.emitter.instruction("mov edi, eax");                            // C arg0 = errno value
             ctx.emitter.instruction("mov rsi, rsp");                            // C arg1 writes the borrowed message length
             ctx.emitter.bl_c("elephc_pcntl_strerror");

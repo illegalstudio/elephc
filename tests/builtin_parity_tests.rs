@@ -368,6 +368,8 @@ fn target_public_name_sets_filter_platform_specific_pcntl_builtins() {
         assert!(!ios_names.contains("pcntl_daemon"));
         assert!(!ios_names.contains("posix_setpgid"));
         assert!(!ios_names.contains("posix_setsid"));
+        assert!(!ios_names.contains("posix_kill"));
+        assert!(!ios_names.contains("posix_isatty"));
         assert!(!ios_names.contains("pcntl_getcpu"));
         assert!(!ios_names.contains("pcntl_getqos_class"));
     }

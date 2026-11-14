@@ -981,6 +981,8 @@ fn test_host_process_builtins_are_refused_for_ios_targets() {
         ("pcntl_daemon", r#"<?php pcntl_daemon(true, true);"#),
         ("posix_setpgid", r#"<?php posix_setpgid(0, 0);"#),
         ("posix_setsid", r#"<?php posix_setsid();"#),
+        ("posix_kill", r#"<?php posix_kill(1, 0);"#),
+        ("posix_isatty", r#"<?php posix_isatty(0);"#),
     ] {
         fs::write(dir.join("spawn.php"), source).unwrap();
 
