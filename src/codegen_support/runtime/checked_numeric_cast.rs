@@ -12,11 +12,13 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 use elephc_semantics::{numeric_cast::{NumericCastFailure, NumericCastTarget}, SemanticProfile, StrictFeature};
 
 mod decimal_int;
+mod radix_int;
 #[cfg(test)]
 mod tests;
 
 const RANGE: &str = "__rt_checked_cast_range_fail";
 const STRING: &str = "__rt_checked_cast_string_fail";
+const BASE: &str = "__rt_checked_cast_base_fail";
 const TYPE: &str = "__rt_checked_cast_type_fail";
 
 /// Selects an explicit checked conversion without inferring behavior from global runtime state.
@@ -27,7 +29,7 @@ pub(crate) fn symbol(target: NumericCastTarget) -> &'static str {
 /// Supplies shared failure text only to runtimes carrying the checked-cast capability.
 pub(in crate::codegen_support::runtime) fn data(profile: SemanticProfile) -> String {
     if !profile.contains(StrictFeature::Casts) { return String::new(); }
-    [NumericCastFailure::Range, NumericCastFailure::InvalidString, NumericCastFailure::UnsupportedKind]
+    [NumericCastFailure::Range, NumericCastFailure::InvalidString, NumericCastFailure::InvalidBase, NumericCastFailure::UnsupportedKind]
         .into_iter().map(|failure| format!("\n.data\n{}:\n.ascii {:?}\n", message_label(failure), failure.message())).collect()
 }
 
@@ -37,8 +39,9 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     entry(emitter, NumericCastTarget::Int);
     entry(emitter, NumericCastTarget::Float);
     decimal_int::emit(emitter);
+    radix_int::emit(emitter);
     for (label, failure) in [(RANGE, NumericCastFailure::Range), (STRING, NumericCastFailure::InvalidString),
-        (TYPE, NumericCastFailure::UnsupportedKind)] {
+        (BASE, NumericCastFailure::InvalidBase), (TYPE, NumericCastFailure::UnsupportedKind)] {
         emitter.label_global(label);
         let class = if failure == NumericCastFailure::UnsupportedKind { "_spl_type_error_class_id" }
             else { "_spl_value_error_class_id" };
@@ -59,6 +62,7 @@ fn message_label(failure: NumericCastFailure) -> &'static str {
     match failure {
         NumericCastFailure::Range => "_checked_cast_range_message",
         NumericCastFailure::InvalidString => "_checked_cast_string_message",
+        NumericCastFailure::InvalidBase => "_checked_cast_base_message",
         NumericCastFailure::UnsupportedKind => "_checked_cast_type_message",
     }
 }

@@ -152,6 +152,8 @@ pub enum RuntimeCallTarget {
     MixedBitNot,
     /// Borrows one original PHP value and performs a checked explicit scalar conversion.
     CheckedNumericCast(elephc_semantics::numeric_cast::NumericCastTarget),
+    /// Parses one complete PHP string with an explicitly requested integer radix.
+    CheckedRadixInt,
     /// Normalizes one borrowed scalar and computes an exact, independently owned unary number.
     NumericUnary {
         /// Source operator retained without synthetic binary arithmetic.
@@ -321,6 +323,9 @@ impl RuntimeCallTarget {
                     elephc_semantics::numeric_cast::NumericCastTarget::Float => IrType::F64,
                 },
             }),
+            RuntimeCallTarget::CheckedRadixInt => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Str, IrType::I64], result: IrType::I64,
+            }),
             RuntimeCallTarget::ExceptionGuardOwned => Some(RuntimeCallSignature::Polymorphic {
                 min_operands: 2,
                 max_operands: Some(2),
@@ -427,6 +432,7 @@ impl RuntimeCallTarget {
                 elephc_semantics::numeric_cast::NumericCastTarget::Int => "cast.checked_int",
                 elephc_semantics::numeric_cast::NumericCastTarget::Float => "cast.checked_float",
             },
+            RuntimeCallTarget::CheckedRadixInt => "cast.checked_radix_int",
             RuntimeCallTarget::NumericUnary { operator, .. } => match operator {
                 elephc_semantics::numeric_unary::NumericUnaryOp::Plus => "numeric.unary_plus",
                 elephc_semantics::numeric_unary::NumericUnaryOp::Negate => "numeric.unary_negate",

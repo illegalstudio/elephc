@@ -23,7 +23,7 @@ pub enum NumericCastInput<'a> {
 
 /// A cast's invalid value domain or unsupported original PHP kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NumericCastFailure { Range, InvalidString, UnsupportedKind }
+pub enum NumericCastFailure { Range, InvalidString, InvalidBase, UnsupportedKind }
 
 impl NumericCastFailure {
     /// Supplies identical diagnostics for compile-time and runtime checked casts.
@@ -31,6 +31,7 @@ impl NumericCastFailure {
         match self {
             Self::Range => "--strict-casts: integer conversion requires a finite value in range",
             Self::InvalidString => "--strict-casts: numeric conversion requires a complete numeric string",
+            Self::InvalidBase => "--strict-casts: integer base must be 0 or between 2 and 36",
             Self::UnsupportedKind => "--strict-casts: numeric conversion requires a scalar or an explicit object cast contract",
         }
     }

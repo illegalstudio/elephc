@@ -120,7 +120,8 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
         validate_function(function)?;
         for (index, inst) in function.instructions.iter().enumerate() {
             let mut required = inst.arithmetic_policy().requirements().bits();
-            if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::CheckedNumericCast(_)))) {
+            if matches!(inst.immediate, Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::CheckedNumericCast(_)
+                | crate::ir::RuntimeCallTarget::CheckedRadixInt))) {
                 required |= elephc_semantics::StrictFeature::Casts.bit();
             }
             if required & !module.semantic_profile.bits() != 0 {
@@ -1496,6 +1497,10 @@ fn validate_typed_runtime_call(
         if !inst.effects.contains(Effects::MAY_THROW) || inst.result_php_type != expected {
             return Err(ValidationError::UnexpectedImmediate(inst_id));
         }
+    }
+    if target == crate::ir::RuntimeCallTarget::CheckedRadixInt
+        && (!inst.effects.contains(Effects::MAY_THROW) || inst.result_php_type != PhpType::Int) {
+        return Err(ValidationError::UnexpectedImmediate(inst_id));
     }
     if let crate::ir::RuntimeCallTarget::NumericFunction { target, policy } = target {
         if !matches!(target, crate::ir::RuntimeFnId::Abs | crate::ir::RuntimeFnId::ArraySum | crate::ir::RuntimeFnId::ArrayProduct)

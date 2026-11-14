@@ -985,6 +985,32 @@ control uses an ordinary nonnumeric string whose PHP result is unambiguous.
 Builtin conversion, object/host parity and remaining strict families continue;
 public admission remains unchanged.
 
+### Checked radix conversion kernel
+
+Step61 shares exact integer radix conversion in the neutral semantic crate and
+an explicitly typed string/base EIR runtime target. Base ten retains checked
+decimal fractional/exponent truncation. Other bases accept complete digit runs,
+reviewed binary/hex prefixes and automatic octal/decimal selection. Invalid bases,
+malformed strings and signed range errors have distinct shared failure messages.
+A complete grammar pass precedes native arithmetic so malformed oversized strings
+retain the same failure priority as eval's neutral kernel.
+
+The native bridge materializes the target's PHP string result registers into C
+pointer/length arguments before loading the radix. The x86_64 result pair differs
+from incoming string arguments, and the both-optimizer regression catches reliance
+on accidentally preserved argument registers. A normal PHP harness retains call,
+catch and owner behavior while only its parser body is EIR-built; its checked
+source stub advertises the same throwing effect as the kernel.
+
+Four new tests cover the neutral rules, all five EIR targets/capability checks,
+and 144 native input/base combinations plus a fresh owned-string failure with
+both optimizer settings and clean heaps. Existing real assembly checks cover the
+new helper across five targets, PIC and dead-strip combinations. Scalar native and
+five eval cast controls, test-target checking, compiler build, architecture828,
+assembly comments and diff hygiene pass. Builtin entry-point integration follows;
+no builtin home or binding changes in this kernel commit and public admission
+remains unchanged.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -1011,6 +1037,10 @@ compiler build, architecture gate, assembly comment checks and diff hygiene.
 2. Integrate shared conversion plans for implicit assignments, parameters, returns,
    callbacks, descriptors, reflection and eval re-entry. Complete checked explicit
    casts with range/domain errors, exact strings and native object cast contracts.
+   Before Casts admission, validate original GMP magnitudes before its existing
+   `__elephc_to_int` adapter reaches `elephc_gmp_intval` / `__gmpz_get_si`.
+   An already narrowed adapter result cannot prove the original range. Apply the
+   same original-value audit to SimpleXML numeric-string adapters and host callbacks.
 3. Finish stable Locals bindings across promotion, parameters, captures, globals,
    by-reference writes, foreach aliases, loop joins, unset/rebind and eval scopes.
    Locals alone must not silently enable Overflow or widen an inferred int binding.
@@ -1112,4 +1142,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 57 | `a74801937f` | feat(strict): preserve global constant producer expressions |
 | 58 | `58ea161e3b` | feat(strict): share checked numeric cast source contracts |
 | 59 | `ae8b7a0f8c` | feat(strict): lower checked native scalar casts |
-| 60 | this commit | feat(strict): enforce checked numeric casts in eval |
+| 60 | `72136d03e2` | feat(strict): enforce checked numeric casts in eval |
+| 61 | this commit | feat(strict): share exact checked integer radix kernels |

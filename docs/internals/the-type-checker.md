@@ -274,6 +274,14 @@ reviewed native adapters transfer pending native failures through
 operations. Adapter result kinds and ownership remain exact. Public feature
 admission stays gated while remaining consumers are integrated.
 
+`CheckedRadixInt` carries an exact string/base runtime boundary. The neutral
+`integer_cast_base` kernel and native two-pass parser validate complete digits
+before range arithmetic. Base ten shares the exact decimal cast contract, while
+other radices keep their selected integer grammar and reviewed prefix rules.
+PHP string result registers are explicitly materialized into the C argument ABI;
+those register pairs differ on x86_64.
+
+
 `Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
 
 None of this is affected by the permissive local retyping described in [Local retyping and strict locals mode](#local-retyping-and-strict-locals-mode) above: a **declared** type stays strict regardless of `strict_types` or `--strict-locals`.

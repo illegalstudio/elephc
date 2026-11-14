@@ -131,6 +131,17 @@ pub(super) fn lower(
             abi::emit_call_label(ctx.emitter, crate::codegen_support::runtime::checked_numeric_cast::symbol(target));
             store_if_result(ctx, inst)
         }
+        RuntimeCallTarget::CheckedRadixInt => {
+            ctx.load_value_to_result(expect_operand(inst, 1)?)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            ctx.load_value_to_result(expect_operand(inst, 0)?)?;
+            let (pointer, length) = abi::string_result_regs(ctx.emitter);
+            abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), pointer);
+            abi::emit_reg_move(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), length);
+            abi::emit_pop_reg(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2));
+            abi::emit_call_label(ctx.emitter, "__rt_checked_radix_to_int");
+            store_if_result(ctx, inst)
+        }
         RuntimeCallTarget::StringOffsetSet => lower_string_offset_set(ctx, inst),
         RuntimeCallTarget::Pcntl(target) => {
             crate::codegen::lower_inst::builtins::pcntl::lower(ctx, inst, target)

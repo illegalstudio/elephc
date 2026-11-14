@@ -774,3 +774,4 @@ mod strict_property_producers;
 
 mod strict_global_producers;
 mod strict_checked_casts;
+mod strict_checked_radix;
