@@ -350,7 +350,7 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
         &mut prelude_inventory,
     );
     let resolved = elephc::xml_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
-    let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::core_prelude::inject_if_used(resolved, false, false, &mut prelude_inventory);
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::tokenizer_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::testing_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
@@ -798,7 +798,7 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let (resolved, included_files) =
         elephc::resolver::resolve_collecting_includes(ast, &dir).expect("resolve failed");
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::default();
-    let resolved = elephc::core_prelude::inject_if_used(resolved, &mut prelude_inventory);
+    let resolved = elephc::core_prelude::inject_if_used(resolved, false, false, &mut prelude_inventory);
     let resolved = elephc::fileinfo_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
