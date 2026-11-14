@@ -52,7 +52,7 @@ The `getLocation()`, `getTransitions()`, and `listAbbreviations()` tables are ba
 
 ## DateTime and DateTimeImmutable
 
-Both implement `DateTimeInterface`. `DateTime` mutates the object in place and returns `$this`; `DateTimeImmutable` leaves the receiver untouched and returns a **new** instance from every modifier — so its methods can be chained safely.
+Both implement `DateTimeInterface`. `DateTime` mutates the object in place and returns `$this`; `DateTimeImmutable` leaves the receiver untouched and returns a **new** instance from every modifier — so its methods can be chained safely. That new instance is a `clone` of the receiver, so a subclass gets its own class back (with its properties, and its `__clone()` hook run) exactly as in PHP; the `static` return types below bind to the receiver's class.
 
 | Method | Description |
 |---|---|

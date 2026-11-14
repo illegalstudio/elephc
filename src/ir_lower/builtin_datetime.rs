@@ -409,6 +409,16 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
                             let normalized = class_name.trim_start_matches('\\');
                             if is_builtin_datetime_class(normalized) {
                                 methods.push((normalized.to_string(), php_method_key(method_name)));
+                            } else if let Some(target) =
+                                lexical_static_call_class(module, function, normalized)
+                            {
+                                // `parent::modify()` in a user subclass reaches the synthetic
+                                // body, which nothing else may reference.
+                                let method_key = php_method_key(method_name);
+                                let impl_class = method_impl_class(module, &target, &method_key);
+                                if is_builtin_datetime_class(&impl_class) {
+                                    methods.push((impl_class, method_key));
+                                }
                             }
                         }
                     }
@@ -418,6 +428,18 @@ fn referenced_builtin_datetime_methods(module: &Module) -> Vec<(String, String)>
         }
     }
     methods
+}
+
+/// Resolves the class a `parent::` / `self::` / `static::` call names from inside `function`,
+/// when that class is (or descends from) a synthetic date/time class.
+fn lexical_static_call_class(module: &Module, function: &Function, receiver: &str) -> Option<String> {
+    let lexical = function.lexical_class.as_deref()?;
+    let target = match crate::names::php_symbol_key(receiver).as_str() {
+        "parent" => class_info_by_php_name(module, lexical)?.parent.clone()?,
+        "self" | "static" => lexical.to_string(),
+        _ => return None,
+    };
+    class_is_or_descends_from_builtin_datetime(module, &target).then_some(target)
 }
 
 /// Enqueues a date/time class constructor plus every method its interfaces expose.

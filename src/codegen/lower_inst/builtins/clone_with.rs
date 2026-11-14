@@ -21,6 +21,9 @@
 //!   cannot: it reads the trailing hidden ABI operand and compares it against the statically
 //!   computed set of scopes the hook is visible from, so one escaped `clone(...)` reports
 //!   `global scope` and `scope X` at the two places it is invoked from.
+//! - A clone emitted inside a compiler-injected `DateTime`/`DateTimeImmutable` method skips the
+//!   hook visibility check: it models php-src's internal `date_clone_immutable()` copy, whose
+//!   `zend_objects_clone_members()` calls a private or protected `__clone()` unchecked.
 //! - An object Magician declared inside `eval()` has no generated class layout at all, so EVERY
 //!   object operand is offered to the installed eval clone callback FIRST. A statically typed
 //!   operand is offered too: a parameter annotated with an emitted base class can still hold an
@@ -1000,6 +1003,9 @@ fn emit_branch_if_tag_is_object(ctx: &mut FunctionContext<'_>, tag_reg: &str, la
 
 /// Returns whether the active lexical class may invoke this runtime class's clone hook.
 fn clone_hook_is_visible(ctx: &FunctionContext<'_>, candidate: &CloneHookCandidate) -> bool {
+    if lexical_class_is_internal_date(ctx) {
+        return true;
+    }
     let declaring = candidate.declaring_class.as_str();
     match candidate.visibility {
         Visibility::Public => true,
@@ -1010,6 +1016,17 @@ fn clone_hook_is_visible(ctx: &FunctionContext<'_>, candidate: &CloneHookCandida
                 || class_is_subclass_of(ctx, declaring, current)
         }),
     }
+}
+
+/// Returns whether the clone is emitted by a compiler-injected `DateTime`/`DateTimeImmutable`
+/// method body. Those clones stand for php-src's internal `date_clone_immutable()` copy, which
+/// runs the receiver's `__clone()` hook without the access check of a `clone` expression, so a
+/// subclass with a private or protected hook still gets its modified copy back.
+fn lexical_class_is_internal_date(ctx: &FunctionContext<'_>) -> bool {
+    ctx.lexical_class().is_some_and(|class| {
+        (class == "DateTime" || class == "DateTimeImmutable")
+            && ctx.module.class_infos.get(class).is_some_and(|info| info.is_internal)
+    })
 }
 
 /// Walks the emitted parent chain for protected hook access checks.

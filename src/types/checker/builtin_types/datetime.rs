@@ -41,6 +41,7 @@ mod parse_misc;
 mod procedural_methods;
 mod setter_helpers;
 mod setters;
+mod static_returns;
 mod strftime;
 mod strptime;
 mod sun_sources;
@@ -75,6 +76,8 @@ use setter_helpers::*;
 #[allow(unused_imports)]
 use setters::*;
 #[allow(unused_imports)]
+use static_returns::*;
+#[allow(unused_imports)]
 use strftime::*;
 #[allow(unused_imports)]
 use strptime::*;
@@ -85,6 +88,7 @@ use timezone::*;
 
 pub(crate) use gate::program_may_reference_datetime;
 pub(crate) use injection::inject_builtin_datetime;
+pub(crate) use static_returns::is_tentative_late_static_return;
 
 #[cfg(test)]
 mod bodies_oracle {
