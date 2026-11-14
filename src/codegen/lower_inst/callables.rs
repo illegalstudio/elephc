@@ -31,7 +31,7 @@ use crate::types::{FunctionSig, PhpType};
 use super::super::context::FunctionContext;
 use super::super::shared_state::{
     CallableResolverMiss, CallableResolverSpec, CaseTableForm, DynamicPropHelperKind,
-    RuntimeInstanceMethodDescriptorTemplate,
+    RuntimeInstanceMethodDescriptorTemplate, ScopeInstanceTables,
 };
 use super::{
     class_method_already_emitted, class_method_body_exists, direct_call_stack_pad_bytes,
@@ -1523,39 +1523,83 @@ fn emit_runtime_instance_lookup_table(
     method_len_offset: usize,
     miss_label: &str,
 ) -> Result<()> {
+    // A class scope's list is searched through the same tables at every site of the scope: the
+    // first site builds them, the others emit the searches only (same labels, same order).
+    let identity = ctx.shared.instance_targets_identity(targets);
+    if let Some(tables) = identity.and_then(|identity| ctx.shared.scope_instance_tables(identity)) {
+        match tables {
+            ScopeInstanceTables::Single(table) => emit_instance_table_lookup_call(
+                ctx,
+                table,
+                receiver_payload_offset,
+                method_ptr_offset,
+                method_len_offset,
+                miss_label,
+            ),
+            ScopeInstanceTables::Split { scoped, public } => {
+                let found_label = ctx.next_label("callable_array_instance_scope_hit");
+                emit_instance_table_lookup_call(
+                    ctx,
+                    scoped,
+                    receiver_payload_offset,
+                    method_ptr_offset,
+                    method_len_offset,
+                    miss_label,
+                );
+                emit_branch_if_lookup_hit(ctx, &found_label);
+                emit_instance_table_lookup_call(
+                    ctx,
+                    public,
+                    receiver_payload_offset,
+                    method_ptr_offset,
+                    method_len_offset,
+                    miss_label,
+                );
+                ctx.emitter.label(&found_label);
+            }
+        }
+        return Ok(());
+    }
+    #[cfg(test)]
+    SCOPE_INSTANCE_TABLE_BUILDS.with(|count| count.set(count.get() + 1));
     let (public, scoped): (Vec<_>, Vec<_>) = targets
         .iter()
         .partition(|target| runtime_instance_target_is_public(ctx, target));
-    if public.is_empty() || scoped.is_empty() {
+    let tables = if public.is_empty() || scoped.is_empty() {
         let all = targets.iter().collect::<Vec<_>>();
-        return emit_runtime_instance_lookup_table_part(
+        ScopeInstanceTables::Single(emit_runtime_instance_lookup_table_part(
             ctx,
             &all,
             receiver_payload_offset,
             method_ptr_offset,
             method_len_offset,
             miss_label,
-        );
+        )?)
+    } else {
+        let found_label = ctx.next_label("callable_array_instance_scope_hit");
+        let scoped = emit_runtime_instance_lookup_table_part(
+            ctx,
+            &scoped,
+            receiver_payload_offset,
+            method_ptr_offset,
+            method_len_offset,
+            miss_label,
+        )?;
+        emit_branch_if_lookup_hit(ctx, &found_label);
+        let public = emit_runtime_instance_lookup_table_part(
+            ctx,
+            &public,
+            receiver_payload_offset,
+            method_ptr_offset,
+            method_len_offset,
+            miss_label,
+        )?;
+        ctx.emitter.label(&found_label);
+        ScopeInstanceTables::Split { scoped, public }
+    };
+    if let Some(identity) = identity {
+        ctx.shared.cache_scope_instance_tables(identity, tables);
     }
-    let found_label = ctx.next_label("callable_array_instance_scope_hit");
-    emit_runtime_instance_lookup_table_part(
-        ctx,
-        &scoped,
-        receiver_payload_offset,
-        method_ptr_offset,
-        method_len_offset,
-        miss_label,
-    )?;
-    emit_branch_if_lookup_hit(ctx, &found_label);
-    emit_runtime_instance_lookup_table_part(
-        ctx,
-        &public,
-        receiver_payload_offset,
-        method_ptr_offset,
-        method_len_offset,
-        miss_label,
-    )?;
-    ctx.emitter.label(&found_label);
     Ok(())
 }
 
@@ -1950,18 +1994,18 @@ fn emit_runtime_instance_lookup_table_part(
     method_ptr_offset: usize,
     method_len_offset: usize,
     miss_label: &str,
-) -> Result<()> {
+) -> Result<StringLookupTable> {
     let key = base_table_key(ctx, targets);
     if let Some(table) = key.as_deref().and_then(|key| ctx.shared.instance_lookup_table(key)) {
         emit_instance_table_lookup_call(
             ctx,
-            table,
+            table.clone(),
             receiver_payload_offset,
             method_ptr_offset,
             method_len_offset,
             miss_label,
         );
-        return Ok(());
+        return Ok(table);
     }
     let mut cases = Vec::with_capacity(targets.len());
     for target in targets {
@@ -1986,13 +2030,13 @@ fn emit_runtime_instance_lookup_table_part(
     }
     emit_instance_table_lookup_call(
         ctx,
-        table,
+        table.clone(),
         receiver_payload_offset,
         method_ptr_offset,
         method_len_offset,
         miss_label,
     );
-    Ok(())
+    Ok(table)
 }
 
 /// Names a target list by the addresses of its signatures when every one of them is a base
@@ -6623,4 +6667,6 @@ std::thread_local! {
     pub(crate) static STRING_TABLE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// Scans of the module for its non-public static methods on this thread.
     pub(crate) static NON_PUBLIC_STATIC_SCANS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Class-scope instance lookup tables split and built (not reused) on this thread.
+    pub(crate) static SCOPE_INSTANCE_TABLE_BUILDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

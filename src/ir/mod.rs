@@ -63,7 +63,9 @@ pub use runtime_call::{
     ArrayKeySort, RuntimeArgumentLayout, RuntimeCallSignature, RuntimeCallTarget, UnaryStringRuntime,
 };
 pub use types::{IrHeapKind, IrType};
-pub use validator::{validate_function, validate_module, ValidationError};
+pub use validator::{validate_function, validate_module, validate_module_references, ValidationError};
+#[cfg(test)]
+pub(crate) use validator::VALIDATED_FUNCTIONS;
 pub use function_variants::{
     collect_dispatch_groups, parse_variant_label, resolve_variant_callee,
     resolve_variant_callee_name, FunctionVariantLabel,

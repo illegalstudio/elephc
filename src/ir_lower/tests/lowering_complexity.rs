@@ -285,6 +285,62 @@ fn callable_array_scopes_share_the_public_static_tables() {
     assert!(small_scans <= 1 && large_scans <= 1, "non-public statics rescanned: {small_scans}, {large_scans}");
 }
 
+/// A build that collects every invalid body validates each body once: when none fails, only
+/// the module-level references are left to check, where each body used to be validated again.
+#[test]
+fn a_collecting_validation_checks_each_body_once() {
+    let module = lower_source(&many_padded_constructors(6));
+    let bodies = (module.functions.len()
+        + module.class_methods.len()
+        + module.closures.len()
+        + module.fiber_wrappers.len()
+        + module.callback_wrappers.len()
+        + module.extern_callback_trampolines.len()
+        + module.runtime_callable_invokers.len()) as u64;
+    crate::ir::VALIDATED_FUNCTIONS.with(|count| count.set(0));
+    crate::ir_lower::program::validate_finished_module(module, true).expect("a valid module");
+    let validated = crate::ir::VALIDATED_FUNCTIONS.with(|count| count.get());
+    assert!(bodies > 0, "the fixture lowered no body");
+    assert_eq!(validated, bodies, "{validated} validations for {bodies} bodies");
+}
+
+/// `count` class scopes, each with a runtime callable-array call, over a `Wide` class with more
+/// public instance methods than an inline search takes, so every scope searches a table.
+fn many_instance_table_scopes(count: usize) -> String {
+    let mut source = String::from("<?php\nclass Wide {\n");
+    for index in 0..12 {
+        source.push_str(&format!("    public function m{index}(int $x): int {{ return $x + {index}; }}\n"));
+    }
+    source.push_str("}\n");
+    let mut calls = String::new();
+    for index in 0..count {
+        source.push_str(&format!(
+            "class C{index} {{ public function run($o, $m): int {{ return call_user_func([$o, $m], {index}); }} }}\n"
+        ));
+        calls.push_str(&format!("$n += (new C{index}())->run(new Wide(), $argc > 1 ? 'm1' : 'm0');\n"));
+    }
+    format!("{source}$n = 0;\n{calls}echo $n, \"\\n\";\n")
+}
+
+/// Class-scope instance lookup tables split and built while generating code for `source`.
+fn scope_instance_table_builds(source: &str) -> u64 {
+    let module = lower_source(source);
+    crate::codegen::SCOPE_INSTANCE_TABLE_BUILDS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    crate::codegen::SCOPE_INSTANCE_TABLE_BUILDS.with(|count| count.get())
+}
+
+/// Class scopes that see the same candidate list share its instance lookup tables: each scope's
+/// search body split the list by visibility and keyed it by every signature address (23 000 on
+/// the Symfony demo) before finding the table the first scope had built.
+#[test]
+fn callable_array_scopes_share_the_instance_lookup_tables() {
+    let small = scope_instance_table_builds(&many_instance_table_scopes(4));
+    let large = scope_instance_table_builds(&many_instance_table_scopes(32));
+    assert!(small > 0, "the fixture no longer reaches the instance lookup tables");
+    assert_eq!(small, large, "instance tables grew with the scopes: {small} vs {large}");
+}
+
 /// `count` classes reaching a protected method, each with two open Mixed callable sites (one
 /// shared mixed-callable body per class scope), plus user functions enough for the string
 /// lookup table every such body holds.

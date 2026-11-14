@@ -252,7 +252,20 @@ fn lower_on_compiler_stack(
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
-    if COLLECT_INVALID_BODIES.load(std::sync::atomic::Ordering::Relaxed) {
+    validate_finished_module(
+        module,
+        COLLECT_INVALID_BODIES.load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// Validates the finished module: every failing body when `collect` (a build that can hand
+/// class files to the runtime), else the first.
+///
+/// A collecting pass that finds no failing body has validated every body already, so only the
+/// module-level references are left to check: validating each body a second time was about 3 s
+/// of the Symfony demo's single-core lowering.
+pub(super) fn validate_finished_module(module: Module, collect: bool) -> Result<Module, LoweringError> {
+    if collect {
         let failures = invalid_bodies(&module);
         if let Some((_, first)) = failures.first() {
             let first = first.clone();
@@ -265,6 +278,8 @@ fn lower_on_compiler_stack(
                 module: Box::new(module),
             });
         }
+        crate::ir::validate_module_references(&module)?;
+        return Ok(module);
     }
     validate_lowered_module(&module)?;
     Ok(module)

@@ -120,20 +120,44 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
         .chain(module.runtime_callable_invokers.iter())
     {
         validate_function(function)?;
-        for inst in &function.instructions {
-            if let Some(Immediate::Source(id)) = &inst.immediate {
-                if module.source_catalog().and_then(|catalog| catalog.get(*id)).is_none() {
-                    return Err(ValidationError::UnknownSource(*id));
-                }
+        validate_function_references(module, function)?;
+    }
+    Ok(())
+}
+
+/// Validates what every body of `module` names in the module (source ids, declaration names),
+/// for a caller that already ran [`validate_function`] on each body.
+pub fn validate_module_references(module: &Module) -> Result<(), ValidationError> {
+    for function in module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+    {
+        validate_function_references(module, function)?;
+    }
+    Ok(())
+}
+
+/// Validates the module-level references of one body's instructions.
+fn validate_function_references(module: &Module, function: &Function) -> Result<(), ValidationError> {
+    for inst in &function.instructions {
+        if let Some(Immediate::Source(id)) = &inst.immediate {
+            if module.source_catalog().and_then(|catalog| catalog.get(*id)).is_none() {
+                return Err(ValidationError::UnknownSource(*id));
             }
-            if let Some(Immediate::ClassLikeActivation(activation)) = &inst.immediate {
-                let (source, name) = (&activation.source, &activation.name);
-                if module.source_catalog().and_then(|catalog| catalog.get(*source)).is_none() {
-                    return Err(ValidationError::UnknownSource(*source));
-                }
-                if module.data.strings.get(name.as_raw() as usize).is_none_or(|name| name.is_empty()) {
-                    return Err(ValidationError::InvalidDeclarationName(*name));
-                }
+        }
+        if let Some(Immediate::ClassLikeActivation(activation)) = &inst.immediate {
+            let (source, name) = (&activation.source, &activation.name);
+            if module.source_catalog().and_then(|catalog| catalog.get(*source)).is_none() {
+                return Err(ValidationError::UnknownSource(*source));
+            }
+            if module.data.strings.get(name.as_raw() as usize).is_none_or(|name| name.is_empty()) {
+                return Err(ValidationError::InvalidDeclarationName(*name));
             }
         }
     }
@@ -142,6 +166,8 @@ pub fn validate_module(module: &Module) -> Result<(), ValidationError> {
 
 /// Validates one function and all of its function-local tables.
 pub fn validate_function(function: &Function) -> Result<(), ValidationError> {
+    #[cfg(test)]
+    VALIDATED_FUNCTIONS.with(|count| count.set(count.get() + 1));
     validate_function_shape(function)?;
     validate_value_table(function)?;
     validate_instruction_placement(function)?;
@@ -2736,4 +2762,10 @@ mod iter_start_metadata_tests {
             Err(ValidationError::MissingImmediate { .. })
         ));
     }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    /// Bodies `validate_function` checked on this test thread.
+    pub(crate) static VALIDATED_FUNCTIONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }

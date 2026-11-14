@@ -46,6 +46,19 @@ pub(super) enum CaseTableForm {
     StringName,
 }
 
+/// The lookup tables a class scope's callable-array instance candidates resolve through; see
+/// `SharedCodegenState::scope_instance_tables`.
+#[derive(Clone)]
+pub(super) enum ScopeInstanceTables {
+    /// One table: the list is all public, or holds no public method.
+    Single(crate::codegen_support::callable_lookup::StringLookupTable),
+    /// The scope's non-public methods, searched first, then the public ones.
+    Split {
+        scoped: crate::codegen_support::callable_lookup::StringLookupTable,
+        public: crate::codegen_support::callable_lookup::StringLookupTable,
+    },
+}
+
 /// Cached static-method callable cases for one candidate-name set.
 type StaticCasesEntry = (Option<Vec<String>>, std::sync::Arc<Vec<RuntimeStaticMethodCallableCase>>);
 
@@ -119,6 +132,12 @@ pub(crate) struct SharedCodegenState {
     /// public tables and rebuilt them: 788 bodies on the Symfony demo console.
     case_lookup_tables:
         std::cell::RefCell<crate::fast_hash::FastMap<(usize, CaseTableForm), crate::codegen_support::callable_lookup::StringLookupTable>>,
+    /// The finished instance lookup tables of one class scope's callable-array candidates, keyed
+    /// by the identity of that scope's list in `instance_method_targets_by_scope`. Each scope's
+    /// search body split the list by visibility and keyed its public half by every one of its
+    /// signature addresses (23 000 on the Symfony demo) before finding the table it built the first
+    /// time: about 2 400 samples of a sampled one-core demo console build.
+    scope_instance_tables: std::cell::RefCell<crate::fast_hash::FastMap<usize, ScopeInstanceTables>>,
     /// Keys of the keyed helpers this state already emitted. Two cache entries can need one
     /// helper (an instance-method entry wrapper serves every receiver class of its implementing
     /// class), and a second copy in the same text is a duplicate definition: only the parallel
@@ -685,6 +704,7 @@ impl SharedCodegenState {
             base_target_signatures: std::cell::OnceCell::new(),
             instance_lookup_tables: Default::default(),
             case_lookup_tables: Default::default(),
+            scope_instance_tables: Default::default(),
             emitted_instance_methods: EmittedMethods::default(),
             emitted_static_methods: EmittedMethods::default(),
             emitted_keyed_helpers: HashSet::default(),
@@ -1189,6 +1209,7 @@ impl SharedCodegenState {
         // Symfony `--web` build without preload failed to link on three such labels.
         self.instance_lookup_tables.borrow_mut().clear();
         self.case_lookup_tables.borrow_mut().clear();
+        self.scope_instance_tables.borrow_mut().clear();
         self.inaccessible_method_table = None;
     }
 
@@ -1373,6 +1394,35 @@ impl SharedCodegenState {
         let preset = self.preset.as_ref().map(|preset| preset.string_cases.as_slice()).unwrap_or(&[]);
         (preset.iter().any(same) || self.runtime_string_descriptor_cases.iter().any(same))
             .then_some(cases.as_ptr() as usize)
+    }
+
+    /// The identity of `targets` when it is a class scope's candidate list this state holds (see
+    /// `instance_method_targets_by_scope`): the state keeps that list alive, so its address names
+    /// it and no other list for as long as the state lives.
+    pub(super) fn instance_targets_identity(
+        &self,
+        targets: &[super::lower_inst::callables::RuntimeArrayInstanceMethodTarget],
+    ) -> Option<usize> {
+        if targets.is_empty() {
+            return None;
+        }
+        self.instance_method_targets_by_scope
+            .borrow()
+            .values()
+            .any(|list| list.as_ptr() == targets.as_ptr() && list.len() == targets.len())
+            .then_some(targets.as_ptr() as usize)
+    }
+
+    /// The finished tables of the scope candidate list `identity` names.
+    pub(super) fn scope_instance_tables(&self, identity: usize) -> Option<ScopeInstanceTables> {
+        self.touch_cache_keyed();
+        self.scope_instance_tables.borrow().get(&identity).cloned()
+    }
+
+    /// Records the finished tables of a scope candidate list; see `scope_instance_tables`.
+    pub(super) fn cache_scope_instance_tables(&self, identity: usize, tables: ScopeInstanceTables) {
+        self.touch_cache_keyed();
+        self.scope_instance_tables.borrow_mut().insert(identity, tables);
     }
 
     /// A finished lookup table built in `form` from the cached case list `identity` names.
