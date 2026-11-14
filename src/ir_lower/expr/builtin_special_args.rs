@@ -177,11 +177,12 @@ pub(super) fn static_settype_target_type(arg: &Expr) -> Option<PhpType> {
     let ExprKind::StringLiteral(name) = &arg.kind else {
         return None;
     };
-    match php_symbol_key(name).as_str() {
-        "int" | "integer" => Some(PhpType::Int),
-        "float" | "double" => Some(PhpType::Float),
-        "string" => Some(PhpType::Str),
-        "bool" | "boolean" => Some(PhpType::Bool),
+    use elephc_semantics::settype_target::SettypeTarget;
+    match SettypeTarget::parse(name).ok()? {
+        SettypeTarget::Int => Some(PhpType::Int),
+        SettypeTarget::Float => Some(PhpType::Float),
+        SettypeTarget::String => Some(PhpType::Str),
+        SettypeTarget::Bool => Some(PhpType::Bool),
         _ => None,
     }
 }

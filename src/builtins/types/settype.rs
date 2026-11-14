@@ -35,6 +35,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         ));
     }
     if let crate::parser::ast::ExprKind::StringLiteral(name) = &cx.args[1].kind {
+        if crate::semantics::conversions::checked_casts(cx.checker.semantic_profile, cx.source_mode) {
+            elephc_semantics::settype_target::SettypeTarget::parse(name)
+                .map_err(|failure| CompileError::new(cx.span, failure.message()))?;
+        }
         if let Some(target) = elephc_semantics::numeric_cast::NumericCastTarget::from_type_name(name) {
             let target = match target {
                 elephc_semantics::numeric_cast::NumericCastTarget::Int => crate::parser::ast::CastType::Int,

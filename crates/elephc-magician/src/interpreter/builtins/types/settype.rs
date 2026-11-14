@@ -89,7 +89,11 @@ pub(in crate::interpreter) fn eval_settype_cast_value(
     let type_name = values.string_bytes(type_name)?;
     let type_name = String::from_utf8_lossy(&type_name).to_ascii_lowercase();
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts) {
-        if let Some(target) = elephc_semantics::numeric_cast::NumericCastTarget::from_type_name(&type_name) {
+        let target = match elephc_semantics::settype_target::SettypeTarget::parse(&type_name) {
+            Ok(target) => target,
+            Err(failure) => return eval_throw_builtin_exception("ValueError", failure.message(), context, values),
+        };
+        if let Some(target) = target.numeric_target() {
             let target = match target {
                 elephc_semantics::numeric_cast::NumericCastTarget::Int => EvalCastType::Int,
                 elephc_semantics::numeric_cast::NumericCastTarget::Float => EvalCastType::Float,

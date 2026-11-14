@@ -166,11 +166,12 @@ pub(super) fn lower_unset_builtin(
 
 /// Returns the concrete PHP type requested by a supported `settype()` type name.
 fn settype_target_type(name: &str) -> Option<PhpType> {
-    match php_symbol_key(name).as_str() {
-        "int" | "integer" => Some(PhpType::Int),
-        "float" | "double" => Some(PhpType::Float),
-        "string" => Some(PhpType::Str),
-        "bool" | "boolean" => Some(PhpType::Bool),
+    use elephc_semantics::settype_target::SettypeTarget;
+    match SettypeTarget::parse(name).ok()? {
+        SettypeTarget::Int => Some(PhpType::Int),
+        SettypeTarget::Float => Some(PhpType::Float),
+        SettypeTarget::String => Some(PhpType::Str),
+        SettypeTarget::Bool => Some(PhpType::Bool),
         _ => None,
     }
 }

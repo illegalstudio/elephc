@@ -50,6 +50,24 @@ pub(super) fn gmp_builtin(expr: &crate::parser::ast::Expr, name: &str,
         .map(|value| value.map(Number::Int)).map_err(|failure| crate::errors::CompileError::new(expr.span, failure.message()))
 }
 
+/// Validates original settype targets and numeric values before folding can erase their call.
+pub(super) fn settype_builtin(expr: &crate::parser::ast::Expr, name: &str,
+    args: &[crate::parser::ast::Expr], class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
+    -> Result<(), crate::errors::CompileError> {
+    let Some(normalized) = planned_builtin_arguments(name, args, expr.span) else { return Ok(()); };
+    let [value, target] = normalized.as_slice() else { return Ok(()); };
+    let mut call = Evidence { profile: evidence.profile, active: evidence.active.clone(), strict_types: evidence.strict_types, ..Default::default() };
+    let Some(target) = evaluate(target, true, class, definitions, &mut call)? else { return Ok(()); };
+    let NumericCastInput::String(target) = scalar_input(target, &call) else { return Ok(()); };
+    let target = elephc_semantics::settype_target::SettypeTarget::parse(target)
+        .map_err(|failure| crate::errors::CompileError::new(expr.span, failure.message()))?;
+    let Some(target) = target.numeric_target() else { return Ok(()); };
+    let Some(value) = evaluate(value, true, class, definitions, &mut call)? else { return Ok(()); };
+    checked_numeric_cast(target, scalar_input(value, &call))
+        .map_err(|failure| crate::errors::CompileError::new(expr.span, failure.message()))?;
+    Ok(())
+}
+
 /// Proves registered numeric cast builtins through the same planner used by ordinary call binding.
 pub(super) fn builtin(expr: &crate::parser::ast::Expr, name: &str, target: NumericCastTarget,
     args: &[crate::parser::ast::Expr], class: Option<&str>, definitions: &Definitions, evidence: &Evidence)
@@ -70,6 +88,37 @@ pub(super) fn builtin(expr: &crate::parser::ast::Expr, name: &str, target: Numer
 #[cfg(test)]
 mod tests {
     use super::super::*;
+
+    /// Invalid settype targets remain errors through aliases, argument planning and removed branches.
+    #[test]
+    fn strict_settype_source_targets_precede_folding() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+        for source in ["<?php if (false) { settype($value, 'unset'); }",
+            "<?php const T = 'resource'; settype(type: T, var: $value);",
+            "<?php const T = 'wrong'; settype(...['type' => T, 'var' => $value]);",
+            "<?php function f($value = settype($other, 'int ')) {}",
+            "<?php eval('settype($value, \"unset\");');"] {
+            let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+            let error = crate::semantics::validate_source(&program, profile).unwrap_err();
+            assert!(error.message.contains("--strict-casts"), "{source} {error:?}");
+            assert!(crate::semantics::validate_source(&program, SemanticProfile::PERMISSIVE).is_ok());
+        }
+    }
+
+    /// Scalar alias proofs do not misclassify valid nonnumeric, unknown or trusted targets.
+    #[test]
+    fn strict_settype_source_targets_preserve_valid_and_internal_controls() {
+        let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+        for source in ["<?php settype($value, 'INTEGER'); settype($value, 'BOOLEAN');",
+            "<?php settype($value, 'array'); settype($value, 'object'); settype($value, 'null');",
+            "<?php settype($value, $target);"] {
+            let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+            assert!(crate::semantics::validate_source(&program, profile).is_ok(), "{source}");
+        }
+        let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(
+            "<?php settype($value, 'unset');").unwrap(), SourceMode::Internal).unwrap();
+        assert!(crate::semantics::validate_source(&program, profile).is_ok());
+    }
 
     /// GMP metadata proves original decimal magnitudes and weak floats in all source-bearing contexts.
     #[test]

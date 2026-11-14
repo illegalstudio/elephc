@@ -14,6 +14,7 @@ pub mod array_keys;
 pub mod numeric;
 pub mod numeric_cast;
 pub mod gmp_integer_cast;
+pub mod settype_target;
 pub mod integer_cast_base;
 pub mod numeric_domains;
 pub mod numeric_unary;

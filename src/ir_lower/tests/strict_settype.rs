@@ -24,6 +24,22 @@ $plain = $argc > 0 ? 'junk' : '42';
 try { settype($plain, 'float'); echo 'X'; } catch (ValueError $e) { echo $plain, '|'; }
 "#;
 
+/// Every frontend rejects an invalid checked target while retaining permissive and Internal controls.
+#[test]
+fn strict_settype_target_diagnostics_on_all_frontends() {
+    let source = "<?php mixed $value = 'kept'; settype($value, 'resource');";
+    let program = crate::parser::parse(&crate::lexer::tokenize(source).unwrap()).unwrap();
+    let trusted = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), crate::source::SourceMode::Internal).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let error = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap_err();
+        assert!(error.message.contains("--strict-casts") && error.message.contains("resource"), "{name} {error:?}");
+        assert!(crate::types::checker::check_staged_semantics(&program, target, SemanticProfile::PERMISSIVE).is_ok());
+        assert!(crate::types::checker::check_staged_semantics(&trusted, target, profile).is_ok());
+    }
+}
+
 /// Known unsupported source kinds fail at the same checker boundary as explicit cast syntax.
 #[test]
 fn strict_settype_frontend_original_domains_and_internal_controls() {

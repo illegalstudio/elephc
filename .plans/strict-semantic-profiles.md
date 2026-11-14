@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 67 (this commit), following `6c74bdaaed`. Issue:
+Verified through step 68 (this commit), following `2802808721`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 67.
+This progress ledger condenses verified implementation through step 68.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -664,6 +664,28 @@ compiler/check-tests/exporter builds, complete builtin-docs regeneration/audits,
 assembly comments and diff hygiene. The generated registry records the dedicated
 GMP cast proof contract. No runtime or public admission policy changes.
 
+### Shared settype target validation
+
+Step68 adds SettypeTarget and SettypeTargetFailure to the neutral crate. Complete
+case-insensitive target names and aliases have one owner, distinguishing invalid
+names from forbidden resource conversion and from valid nonnumeric targets.
+NumericCastTarget::from_type_name, checker, EIR static lowering, legacy backend
+classification and eval consume that catalog. Checked invalid runtime names raise
+ValueError before writeback; source proofs identify the typed Settype runtime
+inventory and use CallArgPlan before folding, including aliases, named/static
+spread calls, defaults and literal eval. Permissive and Internal controls remain.
+Valid array/object/null targets are classified but their backend conversions and
+dynamic target parity remain outstanding; public Casts admission is unchanged.
+The current native settype regressions exercise direct/by-reference calls. Add
+explicit AOT first-class/indirect call evidence before claiming those paths from
+the broader eval coverage. Seven new neutral, source, frontend and eval tests
+pass, along with the focused numeric-cast and settype controls, including all
+supported EIR targets and native conversion/owner tests with both optimizers.
+Compiler/check-tests/exporter builds, complete builtin-docs regeneration/audits,
+assembly comments and diff hygiene pass; generated metadata is unchanged. Journal
+task 67c8492a tracks the separate permissive invalid-target mismatch, with the
+existing valid-null and property-reference tasks retained.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -749,4 +771,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 64 | `188304e3f4` | feat(strict): validate original native object cast values |
 | 65 | `309bdac54b` | feat(strict): check broad native object cast domains |
 | 66 | `6c74bdaaed` | feat(strict): check public gmp integer projections |
-| 67 | this commit | feat(strict): prove original gmp integer cast sources |
+| 67 | `2802808721` | feat(strict): prove original gmp integer cast sources |
+| 68 | this commit | feat(strict): share settype target validation |

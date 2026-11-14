@@ -324,6 +324,12 @@ fn builtin_number(
     }
     let BuiltinRuntimeFunctions::One(operation) = def.spec.semantics.runtime_functions else { return Ok(None); };
     use crate::ir::RuntimeFnId;
+    if operation == RuntimeFnId::Settype {
+        if checked && evidence.profile.contains(StrictFeature::Casts) {
+            casts::settype_builtin(expr, def.name, args, class, definitions, evidence)?;
+        }
+        return Ok(None);
+    }
     if !matches!(operation, RuntimeFnId::Abs | RuntimeFnId::Pow | RuntimeFnId::Intdiv
         | RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) { return Ok(None); }
     let Some(normalized) = planned_builtin_arguments(def.name, args, expr.span) else { return Ok(None); };

@@ -18,6 +18,43 @@ fn clean(scope: &mut ElephcEvalScope, values: &mut FakeOps) {
     for (id, owners) in &values.cell_owners { assert_eq!(*owners, 0, "{:?}", values.values[id]); }
 }
 
+/// Invalid runtime targets fail before alias or container mutation and retire all call owners.
+#[test]
+fn strict_settype_eval_invalid_targets_preserve_receivers_and_owners() {
+    for call in ["settype($saved, $target);", "settype(type: $target, var: $saved);",
+        "$cast = settype(...); $cast($saved, $target);",
+        "$cast = 'settype'; $cast($saved, $target);",
+        "call_user_func_array('settype', [&$saved, $target]);",
+        "settype($items['k' . ''], $target);"] {
+        for target in ["unset", "resource", "int ", "int\0x"] {
+            let mut context = ElephcEvalContext::new();
+            context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+            let mut scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+            let target_cell = values.alloc(FakeValue::String(target.into()));
+            scope.set("target", target_cell, ScopeCellOwnership::Owned);
+            let source = format!("$saved = 'kept'; $alias =& $saved; $items = ['k' => 'kept']; {call}");
+            assert!(matches!(staged_numeric_execution(&source, false, &mut context, &mut scope, &mut values),
+                Err(EvalStatus::UncaughtThrowable)), "{call} {target:?}");
+            assert_eq!(values.get(scope.visible_cell("saved").unwrap()), FakeValue::String("kept".into()));
+            assert_eq!(values.get(scope.visible_cell("alias").unwrap()), FakeValue::String("kept".into()));
+            let error = context.take_pending_throw().unwrap(); assert!(values.object_is_a(error, "ValueError", false).unwrap());
+            values.release(error).unwrap(); clean(&mut scope, &mut values);
+        }
+    }
+}
+
+/// Checked target errors are opt-in and the existing permissive false result remains observable.
+#[test]
+fn strict_settype_eval_invalid_target_permissive_control() {
+    let mut context = ElephcEvalContext::new(); let mut values = FakeOps::default(); let mut scope = ElephcEvalScope::new();
+    let Ok(EvalControl::Return(result)) = staged_numeric_execution(
+        "$value = 'kept'; return settype($value, 'unset');", false, &mut context, &mut scope, &mut values)
+        else { panic!("permissive settype target control"); };
+    assert_eq!(values.get(result), FakeValue::Bool(false));
+    assert_eq!(values.get(scope.visible_cell("value").unwrap()), FakeValue::String("kept".into()));
+    values.release(result).unwrap(); clean(&mut scope, &mut values);
+}
+
 /// Direct, named, dynamic and callable failures preserve the source value and its aliases.
 #[test]
 fn strict_settype_eval_failed_conversions_preserve_reference_values() {

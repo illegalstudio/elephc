@@ -18,9 +18,7 @@ pub enum NumericCastTarget { Int, Float }
 impl NumericCastTarget {
     /// Resolves numeric settype names without changing the policy of other explicit targets.
     pub fn from_type_name(name: &str) -> Option<Self> {
-        if name.eq_ignore_ascii_case("int") || name.eq_ignore_ascii_case("integer") { Some(Self::Int) }
-        else if name.eq_ignore_ascii_case("float") || name.eq_ignore_ascii_case("double") { Some(Self::Float) }
-        else { None }
+        crate::settype_target::SettypeTarget::parse(name).ok()?.numeric_target()
     }
 }
 

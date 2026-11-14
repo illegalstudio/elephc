@@ -280,6 +280,11 @@ Original-source GMP proof recognizes exact canonical decimal magnitudes and weak
 scalar conversion. Native radix and whitespace spellings defer to the compiled
 helper, keeping GMP grammar distinct from `intval`; strict PHP domain failures
 retain priority over floating range proof.
+The neutral `SettypeTarget` classifier owns complete names and aliases across
+checking, lowering and eval. Checked invalid targets (including resource requests)
+fail before writeback, and original-source validation retains those errors across
+folding. Classifying valid array/object/null targets does not yet implement their
+remaining `settype` backend conversions.
 A bounded decimal digit parser preserves exact
 integer strings at runtime, and native float-to-int checks precede truncation.
 The eval walker and VM use the same neutral cast kernel through their shared
