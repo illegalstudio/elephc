@@ -24,6 +24,7 @@
 //!   command's, and a signal death becomes `128 + signal` with one diagnostic line.
 
 mod args;
+mod coverage;
 mod files;
 
 use std::collections::hash_map::DefaultHasher;
@@ -91,6 +92,12 @@ fn run_inner(command: TestCommand) -> Result<i32, String> {
 
     let mut args = vec!["elephc".to_string(), logical_entry];
     args.extend(command.compile_args.iter().cloned());
+    if command.coverage && !command.compile_args.iter().any(|arg| arg == "--debug") {
+        // Coverage is produced by the debug site guards. Add the preset before
+        // parsing so the pipeline emits the embedded metadata and skips the AST
+        // passes that erase source-mapped statements.
+        args.push("--debug".to_string());
+    }
     let mut config = crate::cli::parse_compile_args(&args);
     crate::apply_project_ini(&mut config);
     crate::emit_ini_override_warnings(&config);
@@ -102,21 +109,89 @@ fn run_inner(command: TestCommand) -> Result<i32, String> {
             .map(str::to_owned)
             .unwrap_or_else(|| path.to_string())
     });
+    let coverage = command.coverage;
+    let coverage_format = command.coverage_format.unwrap_or_else(|| {
+        command
+            .coverage_out
+            .as_deref()
+            .map(coverage::CoverageFormat::from_path)
+            .unwrap_or(coverage::CoverageFormat::Text)
+    });
+    let coverage_out = command.coverage_out.clone();
     let options = crate::testing_prelude::discover::DriverOptions {
         filter: command.filter.clone(),
-        isolate: command.isolate,
+        // Site counters live in the process that executes the guards, so a suite
+        // forked per test would lose every child's hits before the parent dump.
+        isolate: command.isolate && !coverage,
         timeout: command.timeout,
         junit,
     };
+    if coverage {
+        eprintln!("elephc test: coverage runs the suite in one process");
+    }
     // A compile error ends the process inside the pipeline with the compiler's own
     // diagnostics and exit code; only a successful build returns here.
     crate::pipeline::compile_test(config, &entry_source, &output_stem, &options);
 
     let binary = build_dir.join(OUTPUT_STEM);
-    let status = Command::new(&binary).status();
+    let status = if coverage {
+        run_with_coverage(
+            &binary,
+            &output_stem,
+            coverage_format,
+            coverage_out.as_deref(),
+            &coverage::CoverageFilters::new(
+                command.coverage_include.clone(),
+                command.coverage_exclude.clone(),
+            ),
+        )
+    } else {
+        Command::new(&binary)
+            .status()
+            .map_err(|error| format!("cannot run '{}': {error}", binary.display()))
+    };
     let _ = std::fs::remove_dir_all(&build_dir);
-    let status = status.map_err(|error| format!("cannot run '{}': {error}", binary.display()))?;
-    Ok(exit_code(status))
+    Ok(exit_code(status?))
+}
+
+/// Runs one coverage-enabled suite, parses its site dump, and renders coverage.
+///
+/// A `--coverage-out` path writes the requested format there and still prints the
+/// text summary on stdout, so a CI log stays readable while the machine-readable
+/// report lands where the caller asked.
+fn run_with_coverage(
+    binary: &Path,
+    output_stem: &str,
+    format: coverage::CoverageFormat,
+    out: Option<&str>,
+    filters: &coverage::CoverageFilters,
+) -> Result<std::process::ExitStatus, String> {
+    let output = Command::new(binary)
+        .env("ELEPHC_DEBUG_SITES", "1")
+        .output()
+        .map_err(|error| format!("cannot run '{}': {error}", binary.display()))?;
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    let (counts, passthrough) = coverage::parse_site_counts(&String::from_utf8_lossy(&output.stderr));
+    for line in passthrough {
+        eprintln!("{line}");
+    }
+    let metadata_path = Path::new(output_stem).with_extension("edbg.json");
+    let metadata = std::fs::read_to_string(&metadata_path)
+        .map_err(|error| format!("coverage metadata '{}' is missing: {error}", metadata_path.display()))?;
+    let metadata: serde_json::Value = serde_json::from_str(&metadata)
+        .map_err(|error| format!("coverage metadata '{}' is invalid: {error}", metadata_path.display()))?;
+    let report = coverage::collect(&metadata, &counts, filters)?;
+    match out {
+        Some(path) => {
+            let contents = coverage::render(&report, format);
+            std::fs::write(path, contents)
+                .map_err(|error| format!("cannot write coverage report '{path}': {error}"))?;
+            print!("{}", coverage::render(&report, coverage::CoverageFormat::Text));
+            eprintln!("elephc test: coverage report written to {path}");
+        }
+        None => print!("{}", coverage::render(&report, format)),
+    }
+    Ok(output.status)
 }
 
 /// Maps the suite's exit status to this command's: the code as is, or `128 + signal` with

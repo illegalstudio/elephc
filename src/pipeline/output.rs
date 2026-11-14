@@ -18,6 +18,7 @@ pub(super) struct OutputPaths {
     pub(super) obj: PathBuf,
     pub(super) bin: PathBuf,
     pub(super) source_map: PathBuf,
+    pub(super) debug_metadata: PathBuf,
     pub(super) header: Option<PathBuf>,
 }
 
@@ -64,6 +65,7 @@ pub(super) fn output_paths(filename: &str, target: Target, emit: Emit) -> Output
         obj: parent.join(format!("{}.o", stem)),
         bin: parent.join(bin_name),
         source_map: parent.join(format!("{}.map", stem)),
+        debug_metadata: parent.join(format!("{}.edbg.json", stem)),
         header: (emit.is_library() && emit != Emit::Phpext).then(|| parent.join(format!("lib{}.h", stem))),
     }
 }

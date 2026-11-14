@@ -498,6 +498,52 @@ pub(crate) fn emit_runtime_data_fixed(
     // whatever threw. Null in a binary without the capability, where the helper
     // pays one load and a branch on a path taken only by throws.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_throw_fn"), 8, target));
+    // elephc_debug_exception_fn: filled with the debugger exception hook when a
+    // --debug program starts a DAP session; the throw helper calls it before
+    // choosing a handler, passing whether the exception is caught and the
+    // Throwable pointer. Null in a normal binary, so the helper pays one load
+    // and a branch only on a throw.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_debug_exception_fn"),
+        8,
+        target,
+    ));
+    // elephc_debug_flush_fn: filled with the debugger output flush hook when a
+    // --debug program starts a DAP session; the uncaught report calls it after
+    // flushing PHP output buffers, so captured stdout/stderr reaches the IDE and
+    // the report itself goes to the restored descriptor. Null in a normal binary.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_debug_flush_fn"),
+        8,
+        target,
+    ));
+    // elephc_debug_web_request_fn / end_fn: installed once by the --debug --web
+    // master boot, before the prefork. Each worker calls the route hook before a
+    // request handler and the teardown after it; null in a non-debug web binary,
+    // so the worker pays one load and a branch per request.
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_debug_web_request_fn"),
+        8,
+        target,
+    ));
+    out.push_str(&comm_directive(
+        &target.extern_symbol("elephc_debug_web_request_end_fn"),
+        8,
+        target,
+    ));
+    // elephc_debug_coroutine_*_fn: filled by the debugger boot to keep the
+    // activation stack fiber/generator-aware. The fiber runtime calls them
+    // around __rt_fiber_switch: enter restores the coroutine's saved frames and
+    // records the consumer depth, suspend saves the frames above that depth, and
+    // finished drops the coroutine's entry. Null in a normal binary, so the
+    // switch paths pay one load and a not-taken branch.
+    for slot in [
+        "elephc_debug_coroutine_enter_fn",
+        "elephc_debug_coroutine_suspend_fn",
+        "elephc_debug_coroutine_finished_fn",
+    ] {
+        out.push_str(&comm_directive(&target.extern_symbol(slot), 8, target));
+    }
     // elephc_instr_unpark_fn: filled with elephc_instr_unpark under monitoring.
     // The suspend helper calls it on the three paths that leave without returning
     // to the suspension site — `Fiber::suspend()` outside a fiber, a live
@@ -688,6 +734,15 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(&comm_directive("_gc_safe_point_credit", 8, target));
     out.push_str(&comm_directive("_gc_safe_point_live_limit", 8, target));
     out.push_str(&comm_directive("_gc_collected", 8, target));
+    // Last productive collector pass, published for the `--gc-stats` summary.
+    out.push_str(&comm_directive("_gc_run_explicit", 8, target));
+    out.push_str(&comm_directive("_gc_last_pass_memory_before", 8, target));
+    out.push_str(&comm_directive("_gc_last_pass_duration_ns", 8, target));
+    out.push_str(&comm_directive("_gc_last_run_memory_before", 8, target));
+    out.push_str(&comm_directive("_gc_last_run_memory_after", 8, target));
+    out.push_str(&comm_directive("_gc_last_run_duration_ns", 8, target));
+    out.push_str(&comm_directive("_gc_last_run_collected", 8, target));
+    out.push_str(&comm_directive("_gc_last_run_explicit", 8, target));
     out.push_str(&comm_directive("_gc_application_started", 8, target));
     out.push_str(&comm_directive("_gc_collector_started", 8, target));
     out.push_str(&comm_directive("_gc_free_started", 8, target));
@@ -2157,7 +2212,13 @@ mod tests {
                         continue;
                     }
                     if let Some((name, _)) = rest.split_once(':') {
-                        found.push(format!("elephc_{}", name.trim()));
+                        let name = format!("elephc_{}", name.trim());
+                        // The debug metadata labels are emitted as `.quad` payloads, not
+                        // bridge-resolved `.comm` function-pointer slots.
+                        if name == "elephc_debug_metadata" || name == "elephc_debug_metadata_len" {
+                            continue;
+                        }
+                        found.push(name);
                     }
                 }
             }

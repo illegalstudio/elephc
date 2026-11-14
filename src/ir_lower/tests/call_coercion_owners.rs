@@ -526,6 +526,7 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
             false,
             false,
             false,
+            false,
             crate::codegen::Emit::Executable,
             &std::collections::HashMap::new(),
             true,

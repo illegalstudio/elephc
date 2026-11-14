@@ -61,6 +61,10 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame pointer for the x86_64 collector locals
     emitter.instruction("sub rsp, 64");                                         // reserve aligned collector locals, including the result counter
     emitter.instruction("call __rt_gc_collector_begin");                        // start timing this complete collector pass
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_live");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // snapshot live heap bytes before this pass
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_last_pass_memory_before");
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the pre-collection memory sample
 
     // -- refresh heap bounds after destructor callbacks have mutated the graph --
     emitter.label("__rt_gc_collect_cycles_recount");
@@ -505,6 +509,24 @@ pub(super) fn emit_gc_collect_cycles_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add QWORD PTR [r8], 1");                               // include this productive pass in the run counter
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collected");
     emitter.instruction("add QWORD PTR [r8], rax");                             // include this pass in the cumulative collected-node count
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_last_run_collected");
+    emitter.instruction("mov QWORD PTR [r8], rax");                             // publish the nodes reclaimed by this productive run
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_last_pass_memory_before");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // reload the pre-collection memory sample
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_last_run_memory_before");
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish it as the last run's memory-before value
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_last_pass_duration_ns");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // reload this pass's measured duration
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_last_run_duration_ns");
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish it as the last run's duration
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_live");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // read live heap bytes after reclamation
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_last_run_memory_after");
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the post-collection memory sample
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_run_explicit");
+    emitter.instruction("mov r9, QWORD PTR [r8]");                              // read whether PHP called the collector explicitly
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_last_run_explicit");
+    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the trigger kind for the report
     emitter.label("__rt_gc_collect_cycles_stats_done");
     super::gc_host_roots::finish(emitter);
     crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_gc_collecting");

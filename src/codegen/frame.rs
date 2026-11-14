@@ -835,6 +835,9 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         abi::emit_call_label(ctx.emitter, &symbol);
     }
     emit_main_static_property_cleanup(ctx, hosting_tables);
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_exit_call(ctx);
+    }
     // Last owner teardown: a destructor above, or an engine object a hosting table released, may
     // still reach C code that calls a callback.
     if module_binds_extern_callbacks(ctx.module) {
@@ -872,6 +875,13 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
         ctx.emitter
             .comment("heap-debug: print allocator summary and leak report to stderr");
         abi::emit_call_label(ctx.emitter, "__rt_heap_debug_report");
+    }
+    if ctx.shared.debug_build {
+        // Shutdown callbacks above may have produced output or PHP calls. Flush
+        // it before closing the DAP output pump, then export calls and coverage
+        // exactly once after every shutdown path has finished.
+        abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+        super::debug_sites::emit_dump_call(ctx);
     }
     abi::emit_exit(ctx.emitter, 0);
     ctx.epilogue_emitted = true;
@@ -1242,6 +1252,13 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     // opened. Dumping from the epilogue as well wrote a profile for every request
     // including the ones that never started a slice, which is how an unprofiled
     // service filled its log.
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_exit_call(ctx);
+        // Shutdown work above may have written output or made PHP calls. Flush
+        // before closing the DAP pump, then export once for this request.
+        abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
+        super::debug_sites::emit_dump_call(ctx);
+    }
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
@@ -1279,6 +1296,13 @@ pub(super) fn emit_web_entry_stub(
     // main stack, so the floor measured here stays valid in every child. Measuring before the
     // bridge call also keeps the clobbered argument registers away from `elephc_web_run`.
     stack_guard::emit_stack_limit_init_call(ctx.emitter);
+    // A --debug web build boots once in the MASTER, before elephc_web_run forks.
+    // Workers then inherit the metadata and the route hook; a per-request boot in
+    // the handler prologue is a no-op. Booting in a worker instead would give
+    // every sibling the same inherited DAP fd and none of them a route election.
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_boot_call(ctx, true);
+    }
     // Install the probe here — in the MASTER, before elephc_web_run forks — so the SIGPROF
     // sampler and the shared-memory ring are inherited by every worker. Placed in the handler
     // prologue instead, it would re-init per request in each worker and never share.
@@ -2160,7 +2184,7 @@ fn return_preserves_result_owner(result_ty: &PhpType, return_ty: &PhpType) -> bo
 }
 
 /// Preserves the current typed return value on the temporary stack.
-fn push_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+pub(super) fn push_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {
             abi::emit_push_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
@@ -2183,7 +2207,7 @@ fn push_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
 }
 
 /// Restores a typed return value preserved by `push_return_value`.
-fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
+pub(super) fn pop_return_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) {
     match ty.codegen_repr() {
         PhpType::Float => {
             abi::emit_pop_float_reg(ctx.emitter, abi::float_result_reg(ctx.emitter));
@@ -2714,10 +2738,12 @@ fn emit_counters_dump(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Emits the `--gc-stats` allocation summary to stderr.
+/// Emits the `--gc-stats` allocation and cycle-collector summary to stderr.
 ///
 /// Called from both the exit-based main epilogue and, under `--web`, the
-/// per-request handler epilogue — a server never reaches the former.
+/// per-request handler epilogue — a server never reaches the former. The
+/// allocation line keeps its standalone format for existing parsers; collector
+/// statistics go on their own line.
 fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
     ctx.emitter
         .comment("gc-stats: print allocation statistics to stderr");
@@ -2734,6 +2760,67 @@ fn emit_gc_stats(ctx: &mut FunctionContext<'_>) {
     emit_write_current_string_stderr(ctx.emitter);
     let (newline_label, _) = ctx.data.add_string(b"\n");
     emit_write_literal_stderr(ctx.emitter, &newline_label, 1);
+    emit_gc_collector_stats(ctx);
+}
+
+/// Emits the `--gc-stats` cycle-collector counters and last productive run.
+///
+/// Kept on its own line so the existing `GC: allocs=<n> frees=<n>` contract
+/// stays parseable by tools that split the allocation counters.
+fn emit_gc_collector_stats(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter
+        .comment("gc-stats: print cycle-collector statistics to stderr");
+    let (label, len) = ctx.data.add_string(b"GC collector:");
+    emit_write_literal_stderr(ctx.emitter, &label, len);
+    for (label, symbol) in [
+        (" runs=", "_gc_runs"),
+        (" collected=", "_gc_collected"),
+        (" live=", "_gc_live"),
+        (" peak=", "_gc_peak"),
+        (" last_collected=", "_gc_last_run_collected"),
+        (" last_duration_ns=", "_gc_last_run_duration_ns"),
+        (" last_before=", "_gc_last_run_memory_before"),
+        (" last_after=", "_gc_last_run_memory_after"),
+    ] {
+        let (field, field_len) = ctx.data.add_string(label.as_bytes());
+        emit_write_literal_stderr(ctx.emitter, &field, field_len);
+        let result = abi::int_result_reg(ctx.emitter);
+        abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
+        abi::emit_call_label(ctx.emitter, "__rt_itoa");
+        emit_write_current_string_stderr(ctx.emitter);
+    }
+    let (field, field_len) = ctx.data.add_string(b" last_trigger=");
+    emit_write_literal_stderr(ctx.emitter, &field, field_len);
+    let trigger = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, trigger, "_gc_last_run_explicit", 0);
+    let automatic = ctx.next_label("gc_stats_automatic");
+    let trigger_done = ctx.next_label("gc_stats_trigger_done");
+    match ctx.emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {trigger}, {automatic}"));            // zero means an automatic safe-point collection
+            let (explicit, explicit_len) = ctx.data.add_string(b"explicit");
+            emit_write_literal_stderr(ctx.emitter, &explicit, explicit_len);
+            ctx.emitter
+                .instruction(&format!("b {trigger_done}"));                     // skip the automatic spelling
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {trigger}, {trigger}"));             // check whether PHP called gc_collect_cycles()
+            ctx.emitter
+                .instruction(&format!("jz {automatic}"));                       // zero means an automatic safe-point collection
+            let (explicit, explicit_len) = ctx.data.add_string(b"explicit");
+            emit_write_literal_stderr(ctx.emitter, &explicit, explicit_len);
+            ctx.emitter
+                .instruction(&format!("jmp {trigger_done}"));                   // skip the automatic spelling
+        }
+    }
+    ctx.emitter.label(&automatic);
+    let (automatic_text, automatic_len) = ctx.data.add_string(b"automatic");
+    emit_write_literal_stderr(ctx.emitter, &automatic_text, automatic_len);
+    ctx.emitter.label(&trigger_done);
+    let (newline, newline_len) = ctx.data.add_string(b"\n");
+    emit_write_literal_stderr(ctx.emitter, &newline, newline_len);
 }
 
 /// Emits a path-specific epilogue for one user-function return terminator.
@@ -2756,6 +2843,9 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
         .expect("codegen bug: user function has no epilogue label");
     ctx.emitter.label(&label);
     emit_function_local_epilogue_cleanup(ctx, None, None);
+    if ctx.shared.debug_build {
+        super::debug_sites::emit_exit_call(ctx);
+    }
     emit_exception_activation_pop(ctx);
     emit_callee_saved_restores(ctx);
     super::return_ownership::emit_status(ctx.emitter, true);

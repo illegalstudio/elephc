@@ -27,6 +27,10 @@ use std::process;
 
 mod command;
 pub(crate) use command::*;
+mod calls;
+pub(crate) use calls::*;
+mod call_html;
+mod capture_events;
 // Reading an image from the outside, for the one path that has no channel in.
 // Parsing only, so it is exercised by ordinary tests on any host — which is what
 // makes code whose real use is on another platform reviewable at all.
@@ -98,6 +102,7 @@ pub(crate) fn unhonoured_service_flags(cmd: &MonitorCommand) -> Option<String> {
         ("--fail-on-regression", cmd.fail_on_regression.is_some()),
         ("--save", cmd.save.is_some()),
         ("--trace", cmd.trace.is_some()),
+        ("--cachegrind", cmd.cachegrind_out.is_some()),
         ("--prometheus", cmd.prom_out.is_some()),
         ("--otlp", cmd.otlp.is_some()),
         // `--out`, `--pprof`, `--dot` and `--html` are all written by the
@@ -114,6 +119,7 @@ pub(crate) fn unhonoured_service_flags(cmd: &MonitorCommand) -> Option<String> {
         // endpoint. Accepting them ran a one-shot read and called it success.
         ("--live", cmd.live),
         ("--serve", cmd.serve.is_some()),
+        ("--calls", cmd.calls),
     ]
     .iter()
     .filter(|(_, given)| *given)
@@ -182,6 +188,9 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     // their own path: live ASKS the child it launched over a socketpair, and
     // attach reads a process it never launched, and neither is what
     // `run_instrument` does.
+    if cmd.calls {
+        return run_calls(&cmd);
+    }
     if !cmd.live && cmd.attach_pid.is_none() {
         let is_source = cmd.target.ends_with(".php");
         if is_source || carries_monitoring(std::path::Path::new(&cmd.target)) {
@@ -207,6 +216,13 @@ pub(crate) fn run(cmd: MonitorCommand) -> i32 {
     // shortcut here, it is the whole job. macOS has `/usr/bin/sample` for that;
     // on Linux this tool does it itself, with `ptrace`.
     if let Some(pid) = cmd.attach_pid {
+        if cmd.cachegrind_out.is_some() {
+            eprintln!(
+                "elephc monitor: --cachegrind needs an instrumented exact capture; an attached \
+                 process carries no call counts"
+            );
+            return 2;
+        }
         let mut image = match attach_image(pid) {
             Ok(image) => image,
             Err(reason) => {

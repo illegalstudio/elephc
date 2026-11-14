@@ -195,6 +195,108 @@ Control characters XML forbids and bytes that are not valid UTF-8 are replaced w
 so a binary failure message cannot corrupt the report. A report that cannot be written (a
 missing directory, no permission) is reported on stderr and makes the run exit `1`.
 
+### Line coverage
+
+`elephc test --coverage` compiles the suite with `--debug`, arms the per-source-line
+guard the debugger uses, and prints covered/total lines per source plus the uncovered
+line numbers:
+
+```text
+Coverage: 4/5 lines (80.0%)
+Branches: 2/4 (50.0%)
+/path/tests/SampleTest.php: 4/5 (80.0%)
+  uncovered: 7
+  branches: 2/4 (50.0%)
+```
+
+`--coverage-format FMT` selects the stdout format: `text` (default), `lcov`,
+`cobertura` or `html`. `--coverage-out FILE` writes the report to `FILE`; the
+format is inferred from the extension (`.lcov`/`.info` → LCOV, `.xml` →
+Cobertura, `.html`/`.htm` → HTML, anything else → text) unless
+`--coverage-format` overrides it. The text summary still prints on stdout when
+writing a file, so a CI log remains readable.
+
+```bash
+elephc test --coverage --coverage-format lcov > coverage.lcov
+elephc test --coverage --coverage-out coverage.xml
+elephc test --coverage --coverage-out coverage.html
+```
+
+LCOV output uses one `SF:` record per source with `DA:<line>,<hits>`, `LF`, `LH`
+and `end_of_record`. Cobertura output writes one `<class>` per source file with
+`<line number="..." hits="..."/>` entries, overall `line-rate`/`lines-covered`,
+and a shared `<source>` root. Hits are summed across the sites on a line, so split
+functions do not under-report.
+
+### Branch coverage
+
+The compiler records a branch point for every source-level decision in an `if`,
+`elseif`, `while`, `do-while`, `for` header or ternary, plus every `switch`:
+
+- a simple condition gets two edges (taken / not taken);
+- each leaf of a logical `&&`/`||`/`!` tree gets its own two-edge branch point, so
+  `if ($a > 0 && $b > 0)` reports both operands rather than one opaque line;
+- a `switch` gets one edge per `case` label plus one default edge. Both the static
+  integer jump-table dispatch and the source-ordered string/mixed dispatch use the
+  same edge model; a case whose comparison is short-circuited by an earlier match
+  is reported as unreached.
+
+Text reports add `Branches: covered/total`, LCOV emits
+`BRDA:<line>,<branch>,<edge>,<taken>` plus `BRF`/`BRH`, Cobertura marks the line
+with `branch="true" condition-coverage="…"` and one `<condition>` per branch, and
+the HTML report renders each file's source lines with covered/uncovered rows and
+branch edge badges (`T`/`E` for a conditional, `E0`…`En` for a switch). A branch
+point whose guards never execute reports every edge as `-` in LCOV.
+
+### Path coverage
+
+On top of branch edges, the compiler enumerates every **full short-circuit
+prefix combination** reachable through a logical condition, plus every dispatch
+route through a `switch`:
+
+- `a && b` has three routes: `a` false; `a` true and `b` true; `a` true and `b`
+  false. `a || b` has the symmetric three.
+- `(a || b) && (c || d)` has seven routes: the left operand can terminate false at
+  `b`, or pass through `a` true or `b` true and then evaluate the right operand to
+  `c` true, `d` true or `d` false. Prefixes are kept distinct even when they end on
+  the same leaf edge.
+- `!` keeps the operand's routes and inverts their overall truth.
+- a `switch` has one route per `case` label plus the default route.
+
+Each logical condition gets a hidden 64-bit state word with two bits per leaf
+(evaluated + truth). A switch path group reuses its branch-edge counters; logical
+path groups own one dedicated counter per prefix route. The state mask selects the
+route at the terminal block, so two prefixes ending on the same leaf edge are still
+counted separately. A plan is bounded at 128 route combinations; a group that hits
+that cap is marked `truncated` rather than silently under-reporting. A condition
+with more than 31 leaves exceeds the 2-bits-per-leaf state word and is omitted from
+path coverage (branch coverage still applies).
+
+Text adds `Paths: covered/total` and per-source `paths: covered/total` with an
+`uncovered paths:` line; a capped group also reports `truncated paths:`. LCOV emits
+the elephc extension records `PATH:<line>,<index>,<hits>`, `PTF:<total>` and
+`PTH:<covered>` after the branch records. Cobertura adds `path-rate`,
+`paths-covered`/`paths-valid`, `path-coverage="…"` on the line and
+`<condition type="path">` entries. The HTML report adds a per-file **Path coverage**
+table with one row per logical/switch group and hit/miss badges for every route.
+
+This is full reachable prefix/path coverage for the supported short-circuit
+lowering, not a formal MC/DC claim: a route counts when its complete leaf-outcome
+prefix executed, and switch fallthrough body statements are still attributed at
+line level only.
+
+Coverage forces the suite into one process: the site counters live in the process
+that executes the guards, so a per-test fork would lose each child's hits. A native
+fatal therefore ends the coverage run, just as `--no-isolation` does. Only compiled
+functions contribute sites; the runner still compiles every discovered test class
+even when `--filter` selects a subset of methods, so filtered-out test classes can
+appear as uncovered. Coverage measures compiled code, not the runtime filter. The
+granularity is source lines, branch edges and full logical/switch prefix paths. The
+HTML report is self-contained (inline CSS, no external assets)
+and reads the source files from their recorded paths; a missing source still gets
+the coverage rows, with a warning and no source text. This is elephc-native
+coverage, not the xdebug code-coverage API.
+
 ### Driving a suite by hand
 
 The driver `elephc test` synthesizes is ordinary PHP, and a suite can be an ordinary

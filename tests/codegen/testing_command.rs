@@ -736,3 +736,503 @@ final class CleanupTest extends TestCase {
     assert_eq!(code, 1);
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// `--coverage-format html` prints a self-contained line/branch report and
+/// `--coverage-out coverage.html` writes it while keeping the text summary.
+#[test]
+fn test_cli_test_coverage_writes_html() {
+    let dir = make_cli_test_dir("elephc_cli_test_coverage_html");
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(
+        dir.join("tests/BranchTest.php"),
+        "<?php\nuse Elephc\\Testing\\TestCase;\nfinal class BranchTest extends TestCase {\n    public function testBranches(): void {\n        $value = strlen(\"abc\");\n        if ($value > 0) {\n            $positive = 1;\n        } else {\n            $negative = 1;\n        }\n        if ($value < 0) {\n            $never = 1;\n        }\n        $this->assertTrue(true);\n    }\n}\n",
+    )
+    .expect("write HTML coverage fixture");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &["--filter", "testBranches", "--coverage-format", "html"],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("<!doctype html>"), "{stdout}");
+    assert!(
+        stdout.contains("<title>elephc coverage report</title>"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("BranchTest.php"), "{stdout}");
+    assert!(stdout.contains("if ($value &gt; 0)"), "{stdout}");
+    assert!(stdout.contains("class=\"edge hit\""), "{stdout}");
+    assert!(stdout.contains("class=\"edge miss\""), "{stdout}");
+    assert!(!stdout.contains("Coverage:"), "{stdout}");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testBranches",
+            "--coverage-out",
+            "coverage.html",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("Coverage:"), "{stdout}");
+    assert!(stdout.contains("Branches:"), "{stdout}");
+    assert!(
+        stderr.contains("coverage report written to"),
+        "{stderr}"
+    );
+    let html = fs::read_to_string(dir.join("coverage.html")).expect("coverage.html");
+    assert!(html.starts_with("<!doctype html>"), "{html}");
+    assert!(html.contains("class=\"covered\""), "{html}");
+    assert!(html.contains("class=\"uncovered\""), "{html}");
+    assert!(html.contains("if ($value &gt; 0)"), "{html}");
+    assert!(html.contains("T 1"), "{html}");
+    assert!(html.contains("E 0"), "{html}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--coverage-filter` and `--coverage-exclude` select whole sources, imply
+/// `--coverage`, and keep omitted files and their branches out of the report.
+#[test]
+fn test_cli_test_coverage_filters_select_sources() {
+    let dir = make_cli_test_dir("elephc_cli_test_coverage_filters");
+    write_project(&dir);
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "CounterTest",
+            "--coverage-format",
+            "lcov",
+            "--coverage-filter",
+            "src",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let records: Vec<&str> = stdout.split("end_of_record").collect();
+    assert!(
+        records.iter().any(|record| record.contains("Counter.php")),
+        "included source missing: {stdout}"
+    );
+    assert!(
+        !records.iter().any(|record| record.contains("CounterTest.php")),
+        "excluded test source present: {stdout}"
+    );
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "CounterTest",
+            "--coverage-format",
+            "lcov",
+            "--coverage-exclude",
+            "src",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let records: Vec<&str> = stdout.split("end_of_record").collect();
+    assert!(
+        records.iter().any(|record| record.contains("CounterTest.php")),
+        "non-excluded test source missing: {stdout}"
+    );
+    assert!(
+        !records.iter().any(|record| record.contains("Counter.php")),
+        "excluded src source present: {stdout}"
+    );
+
+    // A filter alone enables coverage; without that, the flag would parse and
+    // then be ignored by the ordinary test run.
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &["--filter", "CounterTest", "--coverage-filter", "src"],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("Coverage:"), "{stdout}");
+    assert!(stdout.contains("Counter.php"), "{stdout}");
+    assert!(!stdout.contains("CounterTest.php"), "{stdout}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--coverage` records both edges of source-level conditionals and emits
+/// LCOV `BRDA`/`BRF`/`BRH` plus Cobertura `branch`/`conditions` records.
+#[test]
+fn test_cli_test_branch_coverage_lcov_and_cobertura() {
+    let dir = make_cli_test_dir("elephc_cli_test_branch_coverage");
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(
+        dir.join("tests/BranchTest.php"),
+        "<?php\nuse Elephc\\Testing\\TestCase;\nfinal class BranchTest extends TestCase {\n    public function testBranches(): void {\n        $value = strlen(\"abc\");\n        if ($value > 0) {\n            $positive = 1;\n        } else {\n            $negative = 1;\n        }\n        if ($value < 0) {\n            $never = 1;\n        }\n        $this->assertTrue(true);\n    }\n}\n",
+    )
+    .expect("write branch coverage fixture");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testBranches",
+            "--coverage-format",
+            "lcov",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let record = stdout
+        .split("end_of_record")
+        .find(|record| record.contains("BranchTest.php"))
+        .unwrap_or_else(|| panic!("BranchTest LCOV record missing: {stdout}"));
+    assert!(record.contains("BRDA:6,0,0,1"), "{record}");
+    assert!(record.contains("BRDA:6,0,1,0"), "{record}");
+    assert!(record.contains("BRDA:11,0,0,0"), "{record}");
+    assert!(record.contains("BRDA:11,0,1,1"), "{record}");
+    assert!(record.contains("BRF:4"), "{record}");
+    assert!(record.contains("BRH:2"), "{record}");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testBranches",
+            "--coverage-out",
+            "coverage.xml",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("Branches: 2/4 (50.0%)"), "{stdout}");
+    let xml = fs::read_to_string(dir.join("coverage.xml")).expect("coverage.xml");
+    let start = xml
+        .find("<class name=\"BranchTest\"")
+        .unwrap_or_else(|| panic!("BranchTest class missing: {xml}"));
+    let end = xml[start..]
+        .find("</class>")
+        .map(|offset| start + offset)
+        .expect("BranchTest class end");
+    let class = &xml[start..end];
+    assert!(class.contains("branch-rate=\"0.5000\""), "{class}");
+    assert!(class.contains("condition-coverage=\"50% (1/2)\""), "{class}");
+    assert!(
+        class.contains("<condition number=\"0\" type=\"jump\" coverage=\"50%\"/>"),
+        "{class}"
+    );
+    assert!(
+        xml.contains("branches-covered=\"2\" branches-valid=\"4\""),
+        "{xml}"
+    );
+    assert!(
+        !xml.contains("<condition number=\"1\""),
+        "each if has one branch: {xml}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--coverage` attributes `&&`/`||`/`!` leaves and switch cases as branch
+/// edges, and both LCOV and Cobertura report the same multi-edge counts.
+#[test]
+fn test_cli_test_logical_and_switch_branch_coverage() {
+    let dir = make_cli_test_dir("elephc_cli_test_logical_switch_branch");
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(
+        dir.join("tests/BranchTest.php"),
+        "<?php\nuse Elephc\\Testing\\TestCase;\nfinal class BranchTest extends TestCase {\n    public function testBranches(): void {\n        $value = strlen(\"abc\");\n        $zero = strlen(\"\");\n        if ($value > 0 && $zero > 0) {\n            $never = 1;\n        }\n        if ($value > 0 || $zero > 0) {\n            $either = 1;\n        }\n        if (!$zero) {\n            $notZero = 1;\n        }\n        switch ($value) {\n            case 1:\n                $one = 1;\n                break;\n            case 3:\n                $three = 1;\n                break;\n            default:\n                $other = 1;\n        }\n        $this->assertTrue(true);\n    }\n}\n",
+    )
+    .expect("write logical/switch branch fixture");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testBranches",
+            "--coverage-format",
+            "lcov",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let record = stdout
+        .split("end_of_record")
+        .find(|record| record.contains("BranchTest.php"))
+        .unwrap_or_else(|| panic!("BranchTest LCOV record missing: {stdout}"));
+    // First `&&`: both leaves evaluated (left true, right false).
+    assert!(record.contains("BRDA:7,0,0,1"), "{record}");
+    assert!(record.contains("BRDA:7,0,1,0"), "{record}");
+    assert!(record.contains("BRDA:7,1,0,0"), "{record}");
+    assert!(record.contains("BRDA:7,1,1,1"), "{record}");
+    // First `||` short-circuits: the right leaf is never evaluated.
+    assert!(record.contains("BRDA:10,0,0,1"), "{record}");
+    assert!(record.contains("BRDA:10,0,1,0"), "{record}");
+    assert!(record.contains("BRDA:10,1,0,-"), "{record}");
+    assert!(record.contains("BRDA:10,1,1,-"), "{record}");
+    // `!$zero` is a single leaf; the false edge takes the outer then arm.
+    assert!(record.contains("BRDA:13,0,0,0"), "{record}");
+    assert!(record.contains("BRDA:13,0,1,1"), "{record}");
+    // `switch`: one edge per case label plus default; case 3 matched.
+    assert!(record.contains("BRDA:16,0,0,0"), "{record}");
+    assert!(record.contains("BRDA:16,0,1,1"), "{record}");
+    assert!(record.contains("BRDA:16,0,2,0"), "{record}");
+    assert!(record.contains("BRF:13"), "{record}");
+    assert!(record.contains("BRH:5"), "{record}");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testBranches",
+            "--coverage-out",
+            "coverage.xml",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("Branches: 5/13 (38.5%)"), "{stdout}");
+    let xml = fs::read_to_string(dir.join("coverage.xml")).expect("coverage.xml");
+    let start = xml
+        .find("<class name=\"BranchTest\"")
+        .unwrap_or_else(|| panic!("BranchTest class missing: {xml}"));
+    let end = xml[start..]
+        .find("</class>")
+        .map(|offset| start + offset)
+        .expect("BranchTest class end");
+    let class = &xml[start..end];
+    assert!(class.contains("branch-rate=\"0.3846\""), "{class}");
+    assert!(
+        class.contains("line number=\"7\" hits=\"1\" branch=\"true\" condition-coverage=\"50% (2/4)\""),
+        "{class}"
+    );
+    assert!(
+        class.contains("line number=\"10\" hits=\"1\" branch=\"true\" condition-coverage=\"25% (1/4)\""),
+        "{class}"
+    );
+    assert!(
+        class.contains("line number=\"13\" hits=\"1\" branch=\"true\" condition-coverage=\"50% (1/2)\""),
+        "{class}"
+    );
+    assert!(
+        class.contains("line number=\"16\" hits=\"1\" branch=\"true\" condition-coverage=\"33% (1/3)\""),
+        "{class}"
+    );
+    assert!(
+        class.contains("<condition number=\"1\" type=\"jump\" coverage=\"0%\"/>"),
+        "{class}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--coverage` records every full logical prefix combination and every switch
+/// dispatch route, then renders the path metric in text, LCOV, Cobertura and HTML.
+#[test]
+fn test_cli_test_condition_and_path_coverage() {
+    let dir = make_cli_test_dir("elephc_cli_test_path_coverage");
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(
+        dir.join("tests/NestedTest.php"),
+        "<?php\nuse Elephc\\Testing\\TestCase;\nfinal class NestedTest extends TestCase {\n    public function testNested(): void {\n        $t = strlen(\"t\") > 0;\n        $f = strlen(\"\") > 0;\n        $this->check($t, $f, $t, $f);\n        $this->check($f, $t, $t, $f);\n        $value = strlen(\"a\");\n        switch ($value) {\n            case 2:\n                $two = 1;\n                break;\n            case 3:\n                $three = 1;\n                break;\n            default:\n                $other = 1;\n        }\n        $this->assertTrue(true);\n    }\n    private function check(bool $a, bool $b, bool $c, bool $d): void {\n        if (($a || $b) && ($c || $d)) {\n            $hit = 1;\n        }\n    }\n}\n",
+    )
+    .expect("write nested path coverage fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--debug", "tests/NestedTest.php"])
+        .output()
+        .expect("compile nested path coverage fixture");
+    assert!(
+        compile.status.success(),
+        "path coverage compilation failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("tests/NestedTest.edbg.json")).expect("path metadata"),
+    )
+    .expect("valid path metadata");
+    let groups = metadata["paths"].as_array().expect("paths table");
+    assert_eq!(groups.len(), 2, "{metadata}");
+    let logical = groups
+        .iter()
+        .find(|group| group["kind"] == "logical")
+        .unwrap_or_else(|| panic!("missing logical path group: {metadata}"));
+    assert_eq!(logical["line"], 23, "{metadata}");
+    assert_eq!(logical["truncated"], false, "{metadata}");
+    let logical_labels: Vec<&str> = logical["paths"]
+        .as_array()
+        .expect("logical paths")
+        .iter()
+        .filter_map(|path| path["label"].as_str())
+        .collect();
+    assert_eq!(logical_labels.len(), 7, "{metadata}");
+    assert!(
+        logical_labels.iter().any(|label| label.starts_with("#0=T,#2=T@")),
+        "{metadata}"
+    );
+    assert!(
+        logical_labels.iter().any(|label| label.starts_with("#0=T,#2=F,#3=T@")),
+        "{metadata}"
+    );
+    assert!(
+        logical_labels.iter().any(|label| label.starts_with("#0=F,#1=F@")),
+        "{metadata}"
+    );
+    let switch_group = groups
+        .iter()
+        .find(|group| group["kind"] == "switch")
+        .unwrap_or_else(|| panic!("missing switch path group: {metadata}"));
+    assert_eq!(switch_group["line"], 10, "{metadata}");
+    let switch_labels: Vec<&str> = switch_group["paths"]
+        .as_array()
+        .expect("switch paths")
+        .iter()
+        .filter_map(|path| path["label"].as_str())
+        .collect();
+    assert_eq!(switch_labels, ["case0", "case1", "default"], "{metadata}");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testNested",
+            "--coverage-format",
+            "lcov",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let record = stdout
+        .split("end_of_record")
+        .find(|record| record.contains("NestedTest.php"))
+        .unwrap_or_else(|| panic!("NestedTest LCOV record missing: {stdout}"));
+    assert!(record.contains("BRF:11"), "{record}");
+    assert!(record.contains("BRH:5"), "{record}");
+    assert!(record.contains("PATH:10,0,0\n"), "{record}");
+    assert!(record.contains("PATH:10,1,0\n"), "{record}");
+    assert!(record.contains("PATH:10,2,1\n"), "{record}");
+    assert!(record.contains("PATH:23,3,1\n"), "{record}");
+    assert!(record.contains("PATH:23,4,0\n"), "{record}");
+    assert!(record.contains("PATH:23,5,0\n"), "{record}");
+    assert!(record.contains("PATH:23,6,1\n"), "{record}");
+    assert!(record.contains("PATH:23,7,0\n"), "{record}");
+    assert!(record.contains("PATH:23,8,0\n"), "{record}");
+    assert!(record.contains("PATH:23,9,0\n"), "{record}");
+    assert!(record.contains("PTF:10"), "{record}");
+    assert!(record.contains("PTH:3"), "{record}");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testNested",
+            "--coverage-out",
+            "coverage.xml",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("Paths: 3/10 (30.0%)"), "{stdout}");
+    assert!(stdout.contains("uncovered paths:"), "{stdout}");
+    assert!(stdout.contains("#0=T,#2=F,#3=T"), "{stdout}");
+    let xml = fs::read_to_string(dir.join("coverage.xml")).expect("coverage.xml");
+    assert!(xml.contains("paths-covered=\"3\" paths-valid=\"10\""), "{xml}");
+    assert!(xml.contains("path-rate=\"0.3000\""), "{xml}");
+    assert!(
+        xml.contains("line number=\"23\" hits=\"2\" branch=\"true\" condition-coverage=\"50% (4/8)\" path-coverage=\"28% (2/7)\""),
+        "{xml}"
+    );
+    assert!(
+        xml.contains("line number=\"10\" hits=\"1\" branch=\"true\" condition-coverage=\"33% (1/3)\" path-coverage=\"33% (1/3)\""),
+        "{xml}"
+    );
+    assert!(xml.contains("type=\"path\""), "{xml}");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testNested",
+            "--coverage-out",
+            "coverage.html",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let html = fs::read_to_string(dir.join("coverage.html")).expect("coverage.html");
+    assert!(
+        html.contains("Path coverage: <strong>3/10 (30.0%)</strong>"),
+        "{html}"
+    );
+    assert!(html.contains("paths 3/10"), "{html}");
+    assert!(html.contains("<h3>Path coverage</h3>"), "{html}");
+    assert!(html.contains("class=\"path hit\""), "{html}");
+    assert!(html.contains("class=\"path miss\""), "{html}");
+    assert!(html.contains("#0=T,#2=F,#3=T"), "{html}");
+    assert!(html.contains("default"), "{html}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--coverage-format lcov` prints LCOV records and `--coverage-out coverage.xml`
+/// writes Cobertura XML while keeping the text summary on stdout.
+#[test]
+fn test_cli_test_coverage_writes_lcov_and_cobertura() {
+    let dir = make_cli_test_dir("elephc_cli_test_coverage_formats");
+    write_project(&dir);
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testStartsAtZero",
+            "--coverage-format",
+            "lcov",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("SF:"), "{stdout}");
+    assert!(stdout.contains("DA:"), "{stdout}");
+    assert!(stdout.contains("end_of_record"), "{stdout}");
+    assert!(stdout.contains("tests/CounterTest.php"), "{stdout}");
+    assert!(!stdout.contains("Coverage:"), "{stdout}");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &[
+            "--filter",
+            "testStartsAtZero",
+            "--coverage-out",
+            "coverage.xml",
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("Coverage:"), "{stdout}");
+    assert!(
+        stderr.contains("coverage report written to"),
+        "{stderr}"
+    );
+    let xml = fs::read_to_string(dir.join("coverage.xml")).expect("coverage.xml");
+    assert!(xml.starts_with("<?xml version=\"1.0\" ?>"), "{xml}");
+    assert!(xml.contains("<coverage line-rate="), "{xml}");
+    assert!(xml.contains("<line number="), "{xml}");
+    assert!(xml.contains("filename=\"tests/CounterTest.php\""), "{xml}");
+    assert!(!stdout.contains("<coverage"), "{stdout}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--coverage` compiles the suite with the debug site guards, runs it in one
+/// process, filters the profiler lines out of stderr, and reports line coverage
+/// for the executed test file.
+#[test]
+fn test_cli_test_coverage_reports_executed_lines() {
+    let dir = make_cli_test_dir("elephc_cli_test_coverage");
+    write_project(&dir);
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &["--filter", "testStartsAtZero", "--coverage"],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    assert!(stdout.contains("OK (1 test, 1 assertion)"), "{stdout}");
+    assert!(stdout.contains("Coverage:"), "{stdout}");
+    assert!(
+        stdout.contains("tests/CounterTest.php"),
+        "test source missing from coverage report: {stdout}"
+    );
+    assert!(
+        !stderr.contains("elephc-debug-site:"),
+        "profiler site lines leaked into stderr: {stderr}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}

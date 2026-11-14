@@ -17,6 +17,7 @@ pub mod spec;
 pub mod registry;
 pub mod docs;
 mod convert;
+mod debug;
 mod requirements;
 mod array;
 mod callables;

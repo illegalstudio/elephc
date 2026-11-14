@@ -595,6 +595,11 @@ PRELUDE_SOURCES: dict[str, tuple[str | tuple[str, ...], str, str]] = {
         "random",
         "crates/elephc-builtin-contract/src/catalog_data.rs",
     ),
+    "debug": (
+        "debug_prelude.rs",
+        "debug",
+        "crates/elephc-builtin-contract/src/catalog_data.rs",
+    ),
     "opcache": (
         "opcache_prelude/build.rs",
         "OPcache",

@@ -159,6 +159,12 @@ pub(super) fn emit_start_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fiber_start_state_ok");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_fiber_current", 0);          // r10 = whoever is running right now
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", FIBER_CALLER_OFFSET)); // fiber->caller = current execution context
+    super::common::emit_debug_coroutine_hook(
+        emitter,
+        "elephc_debug_coroutine_enter_fn",
+        "__rt_fiber_start_debug_coro_skip_x",
+        "r12",
+    );
     emitter.instruction("mov rdi, r12");                                        // pass fiber* as the switch target
     emitter.instruction("call __rt_fiber_switch");                              // cooperative context switch into the fiber
     emit_check_escape_x86_64(emitter, "start");
@@ -205,6 +211,12 @@ pub(super) fn emit_resume_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r13", FIBER_TRANSFER_VALUE_OFFSET)); // fiber->transfer_value.lo = resume value
     abi::emit_load_symbol_to_reg(emitter, "r10", "_fiber_current", 0);          // r10 = current execution context to remember as caller
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r10", FIBER_CALLER_OFFSET)); // fiber->caller = current execution context
+    super::common::emit_debug_coroutine_hook(
+        emitter,
+        "elephc_debug_coroutine_enter_fn",
+        "__rt_fiber_resume_debug_coro_skip_x",
+        "r12",
+    );
     emitter.instruction("mov rdi, r12");                                        // pass fiber* as the switch target
     emitter.instruction("call __rt_fiber_switch");                              // cooperative context switch into the fiber
     emit_check_escape_x86_64(emitter, "resume");
@@ -265,6 +277,12 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fiber_suspend_unserialize_ok_x");
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r13", FIBER_TRANSFER_VALUE_OFFSET)); // fiber->transfer_value.lo = yielded value
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_SUSPENDED)); // fiber->state = Suspended
+    super::common::emit_debug_coroutine_hook(
+        emitter,
+        "elephc_debug_coroutine_suspend_fn",
+        "__rt_fiber_suspend_debug_coro_skip_x",
+        "r12",
+    );
     emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", FIBER_CALLER_OFFSET)); // rdi = fiber->caller
     emitter.instruction("call __rt_fiber_switch");                              // hand control back to the caller's resume site
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_RUNNING)); // fiber->state = Running
