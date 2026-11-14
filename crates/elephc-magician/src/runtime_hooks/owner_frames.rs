@@ -71,6 +71,12 @@ impl RuntimeOwnerSlot {
     /// Moves one cleanup obligation, preserving borrowed provenance when no lease exists.
     pub(crate) fn new(value: RuntimeCellHandle) -> Self { Self(Cell::new(value)) }
 
+    /// Publishes a newly acquired lease into an empty, already registered root slot.
+    pub(crate) fn initialize(&self, value: RuntimeCellHandle) {
+        assert!(self.0.get().is_null(), "initializing an occupied runtime owner slot");
+        self.0.set(value);
+    }
+
     /// Lends the cell to a native consumer without transferring its owning lease.
     pub(crate) fn borrowed(&self) -> RuntimeCellHandle { self.0.get().borrowed() }
 
@@ -240,6 +246,12 @@ mod tests {
             outer.visit_owned_slot(|slot| assert_eq!(slot as usize, addresses[0]));
             assert_eq!(outer.take(), cell);
             outer.visit_owned_slot(|_| panic!("cleanup must observe an empty owner slot"));
+            outer.initialize(cell);
+            outer.visit_owned_slot(|slot| {
+                assert_eq!(slot as usize, addresses[0], "incremental construction keeps the published slot address");
+                assert_eq!(unsafe { *slot }, cell.as_ptr());
+            });
+            assert_eq!(outer.take(), cell);
         });
     }
 }

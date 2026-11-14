@@ -126,7 +126,7 @@ impl StrictFixture {
             else { source.strip_prefix("<?php").unwrap_or(&source) };
         let tokens = elephc::lexer::tokenize_with_semantics(&source, source_mode, 0, profile).unwrap();
         let mut program = elephc::parser::parse_with_mode(&tokens, source_mode).unwrap();
-        if options.bcmath || options.gmp || options.xml {
+        if options.bcmath || options.gmp || options.xml || options.eval_bridge {
             let mut inventory = elephc::optimize::reachability::PreludeInventory::new();
             program = elephc::core_prelude::inject_if_used(program, &mut inventory);
             if options.bcmath { program = elephc::bcmath_prelude::inject_if_used(program, false, &mut inventory); }
@@ -135,7 +135,7 @@ impl StrictFixture {
                 program = elephc::xml_prelude::inject_if_used(program, false, &mut inventory);
                 program = elephc::dom_html_prelude::inject_if_used(program, false, &mut inventory);
             }
-            if options.gmp || options.xml {
+            if options.gmp || options.xml || options.eval_bridge {
                 program = elephc::object_cast_prelude::inject_if_used(program, &mut inventory).unwrap();
                 program = elephc::func_args::desugar(program).unwrap();
             }

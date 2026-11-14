@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 71 (this commit), following `222c4281fb`. Issue:
+Verified through step 72 (this commit), following `c064a2192f`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 71.
+This progress ledger condenses verified implementation through step 72.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -791,6 +791,34 @@ PHP-compatible example compiles and runs with Bools/DynamicCode. Task temporary
 directories are removed. No admission change is made before all Casts and
 remaining feature contracts are complete.
 
+### Contextual string warnings and diagnostic owners
+
+Checked eval string conversions now dispatch array-to-string warnings through the
+shared contextual PHP dispatcher before publishing their result. Syntax, strval
+and settype agree on the warning, source-kind snapshot and handler ordering.
+A handler may replace the original binding without changing the conversion result;
+a throw prevents settype writeback. Protected native cast failures are adopted by
+the common cast adapter before returning to either interpreter consumer.
+
+The warning dispatcher has a focused core/error_dispatch.rs home. Four empty
+RuntimeOwnerSlot fields are registered before constructing callback arguments and
+filled incrementally. Callable invocation borrows those arguments, so the dispatcher
+releases each independent lease after native failure handoff. Suspended handler
+cells and returned values remain rooted through restoration and cleanup. This
+closes the leaked callback argument owners exposed by the new conversion tests.
+
+Four string-conversion regressions pass, including warning masks, suppressing and
+throwing handlers, callback mutation and walker/VM conversions. The owner-slot
+visitor test and all 17 directly affected core introspection tests pass. A real
+opaque-eval handler/throw regression passes with both optimizer settings and a
+clean native heap (57.72 s). It uses the admitted Bools profile: Casts remains
+blocked at public eval entry until its whole contract is complete. Staged eval
+fixtures now inject the ordinary implicit object-cast dependencies required by
+the full builtin catalog. Assembly-comment checks, example syntax and diff hygiene
+pass. Check --tests, compiler build and the curl exporter pass; regenerated
+builtin docs and all architecture/site audits report no errors (828 AOT, 77 graph,
+56 primitive, 695 runtime, 679 eval). Public feature admission remains unchanged.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -880,4 +908,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 68 | `95f5d407ec` | feat(strict): share settype target validation |
 | 69 | `05cef3fb07` | feat(strict): prepare checked settype callable conversions |
 | 70 | `222c4281fb` | feat(strict): complete settype collection conversions |
-| 71 | this commit | feat(strict): share scalar builtin conversion graphs |
+| 71 | `c064a2192f` | feat(strict): share scalar builtin conversion graphs |
+| 72 | this commit | feat(strict): preserve contextual cast warning ownership |

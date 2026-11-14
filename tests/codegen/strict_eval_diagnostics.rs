@@ -50,3 +50,29 @@ restore_error_handler();
     assert_eq!(output.stdout, "caught");
     assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }
+
+/// Real eval retires callback arguments after handled diagnostics and protected handler throws.
+#[test]
+fn test_strict_eval_diagnostics_handler_argument_owners_bundle() {
+    let source = r#"<?php
+$source = $argc > 0 ? '
+set_error_handler(function (int $level, string $message): bool { echo $level, "W"; return true; });
+trigger_error("first", E_USER_WARNING); echo "|";
+trigger_error("second", E_USER_WARNING); echo "|";
+restore_error_handler();
+set_error_handler(function (): bool { throw new ValueError("stop"); });
+$value = "kept";
+try { $value = trigger_error("third", E_USER_WARNING); echo "X"; } catch (ValueError $error) { echo "V", $value; }
+restore_error_handler();
+' : '';
+eval($source);
+"#;
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Bools, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "512W|512W|Vkept", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

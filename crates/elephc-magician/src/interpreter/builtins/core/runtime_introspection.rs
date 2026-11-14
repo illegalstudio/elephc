@@ -14,12 +14,7 @@ use super::super::collection_builder::EvalArrayBuilder;
 use super::object_inventory::eval_get_mangled_object_vars;
 use crate::context::{EvalErrorHandlerState, EvalNativeUserConstant};
 
-pub(in crate::interpreter) const E_WARNING: i64 = 2;
-const E_USER_ERROR: i64 = 256;
-const E_USER_WARNING: i64 = 512;
-const E_USER_NOTICE: i64 = 1_024;
-pub(in crate::interpreter) const E_DEPRECATED: i64 = 8_192;
-const E_USER_DEPRECATED: i64 = 16_384;
+use super::error_dispatch::{E_USER_ERROR, E_USER_WARNING, E_USER_NOTICE, E_USER_DEPRECATED};
 const INVALID_RESOURCE_TYPE_MESSAGE: &str =
     "get_resources(): Argument #1 ($type) must be a valid resource type";
 use elephc_builtin_contract::{
@@ -310,98 +305,6 @@ fn eval_trigger_error(
         return Err(EvalStatus::UserFatal);
     }
     values.bool_value(true)
-}
-
-/// Dispatches one PHP diagnostic through the active handler and reporting mask.
-pub(in crate::interpreter) fn eval_dispatch_php_error(
-    message: &str,
-    level: i64,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    let handled = dispatch_user_error_handler(message, level, context, values)?;
-    let reporting_mask = match values.runtime_error_reporting(None) {
-        Ok(mask) => mask,
-        Err(EvalStatus::UnsupportedConstruct) => context.error_reporting_mask(),
-        Err(status) => return Err(status),
-    };
-    if !handled && reporting_mask & level != 0 {
-        values.warning_unhandled(&format_user_error(message, level, context))?;
-    }
-    Ok(handled)
-}
-
-/// Formats PHP's default user diagnostic with its category and source location.
-fn format_user_error(message: &str, level: i64, context: &ElephcEvalContext) -> String {
-    let category = match level {
-        E_USER_ERROR => "Fatal error",
-        E_WARNING | E_USER_WARNING => "Warning",
-        E_DEPRECATED | E_USER_DEPRECATED => "Deprecated",
-        _ => "Notice",
-    };
-    let (file, _, line, _) = context.call_site();
-    format!("{category}: {message} in {file} on line {line}\n")
-}
-
-/// Invokes the active handler and returns whether it suppressed the default diagnostic.
-fn dispatch_user_error_handler(
-    message: &str,
-    level: i64,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    let (file, _, line, _) = context.call_site();
-    let callback_args = vec![
-        values.int(level)?,
-        values.string(message)?,
-        values.string(&file)?,
-        values.int(line)?,
-    ];
-    match values.runtime_error_handler_dispatch(level, &callback_args) {
-        Ok(result) => {
-            for argument in callback_args {
-                values.release(argument)?;
-            }
-            let Some(result) = result else {
-                return Ok(false);
-            };
-            let falls_through =
-                values.type_tag(result)? == EVAL_TAG_BOOL && !values.truthy(result)?;
-            values.release(result)?;
-            return Ok(!falls_through);
-        }
-        Err(EvalStatus::UnsupportedConstruct) => {}
-        Err(status) => {
-            for argument in callback_args {
-                values.release(argument)?;
-            }
-            return Err(status);
-        }
-    }
-    let Some(handler) = context.error_handler_state() else {
-        for argument in callback_args {
-            values.release(argument)?;
-        }
-        return Ok(false);
-    };
-    if handler.levels & level == 0 {
-        for argument in callback_args {
-            values.release(argument)?;
-        }
-        return Ok(false);
-    }
-    let callback = eval_callable(handler.callback, context, values)?;
-    let suspended = context.suspend_error_handler().expect("active handler was just checked");
-    let result = callback.with_values(context, values, |callback, context, values| {
-        eval_evaluated_callable_with_values(callback, callback_args, context, values)
-    });
-    if let Some(discarded) = context.resume_error_handler(suspended) {
-        values.release(discarded.callback)?;
-    }
-    let result = result?;
-    let falls_through = values.type_tag(result)? == EVAL_TAG_BOOL && !values.truthy(result)?;
-    values.release(result)?;
-    Ok(!falls_through)
 }
 
 /// Returns eval-visible user constants, optionally nested under PHP's `user` category.

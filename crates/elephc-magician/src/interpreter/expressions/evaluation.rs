@@ -169,7 +169,7 @@ pub(in crate::interpreter) fn eval_cast_value(
         && matches!(target, EvalCastType::Int | EvalCastType::Float) {
         return super::super::checked_cast::numeric(target, value, context, values);
     }
-    match target {
+    let result = (|| match target {
         EvalCastType::Array => {
             if let Some(result) = super::super::runtime_ops::object_operators::numeric_cast(values, value, elephc_builtin_contract::ObjectCast::Array)? { return Ok(result); }
             values.cast_array(value)
@@ -189,19 +189,22 @@ pub(in crate::interpreter) fn eval_cast_value(
             }
         }
         EvalCastType::String => {
+            if context.semantic_profile().contains(elephc_semantics::StrictFeature::Casts)
+                && values.is_array_like(value)? {
+                eval_dispatch_php_error("Array to string conversion", E_WARNING, context, values)?;
+                return values.string("Array");
+            }
             let converted = eval_string_context_value(value, context, values)?;
             let result = values.cast_string(converted);
             if converted != value {
                 finish_synthesized_method_arguments(result, [converted], context, values)
             } else { result }
         }
-        EvalCastType::Bool => {
-            let result = (|| match eval_object_scalar_adapter(value, "__elephc_to_bool", context, values)? {
-                Some(value) => Ok(value), None => values.cast_bool(value),
-            })();
-            native_results::finish(result, context, values)
+        EvalCastType::Bool => match eval_object_scalar_adapter(value, "__elephc_to_bool", context, values)? {
+            Some(value) => Ok(value), None => values.cast_bool(value),
         },
-    }
+    })();
+    native_results::finish(result, context, values)
 }
 
 /// Constructs an object after the target class name and constructor arguments have been evaluated.
