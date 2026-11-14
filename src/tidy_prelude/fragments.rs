@@ -164,23 +164,38 @@ function __elephc_tidy_numeric_prefix(string $text): int|float|false
 /**
  * Applies PHP's weak coercion for the `array|string|null $config` parameter.
  */
-function __elephc_tidy_config_argument(mixed $config): array|string|null
+function __elephc_tidy_config_argument(mixed $config, string $label): array|string|null
 {
     if ($config === null || is_array($config) || is_string($config)) {
         return $config;
     }
-    return (string) $config;
+    if (is_int($config) || is_float($config) || is_bool($config)) {
+        return (string) $config;
+    }
+    if (is_object($config) && is_callable([$config, '__toString'])) {
+        return (string) $config;
+    }
+    throw new TypeError($label . ': Argument #2 ($config) must be of type array|string|null, ' . __elephc_tidy_type_name($config) . ' given');
 }
 
 /**
  * Applies PHP's weak coercion for the `?string $encoding` parameter.
  */
-function __elephc_tidy_encoding_argument(mixed $encoding): ?string
+function __elephc_tidy_encoding_argument(mixed $encoding, string $label): ?string
 {
     if ($encoding === null) {
         return null;
     }
-    return (string) $encoding;
+    if (is_string($encoding)) {
+        return $encoding;
+    }
+    if (is_int($encoding) || is_float($encoding) || is_bool($encoding)) {
+        return (string) $encoding;
+    }
+    if (is_object($encoding) && is_callable([$encoding, '__toString'])) {
+        return (string) $encoding;
+    }
+    throw new TypeError($label . ': Argument #3 ($encoding) must be of type ?string, ' . __elephc_tidy_type_name($encoding) . ' given');
 }
 
 /**
@@ -329,7 +344,7 @@ function __elephc_tidy_new_doc(string $label): int
  */
 function __elephc_tidy_apply_config(int $doc, mixed $config, string $label, bool $throw): bool
 {
-    $config = __elephc_tidy_config_argument($config);
+    $config = __elephc_tidy_config_argument($config, $label);
     if (is_array($config)) {
         if ($config === []) {
             throw new TypeError($label . ': Argument #2 ($config) must be of type array with keys as string');
@@ -408,7 +423,7 @@ function __elephc_tidy_set_encoding(
     bool $skip_empty = false
 ): bool
 {
-    $encoding = __elephc_tidy_encoding_argument($encoding);
+    $encoding = __elephc_tidy_encoding_argument($encoding, $label);
     if ($encoding === null || ($skip_empty && $encoding === '')) {
         return true;
     }
@@ -442,7 +457,7 @@ function __elephc_tidy_parse_buffer(int $doc, string $data, string $label, bool 
  */
 function __elephc_tidy_parse_into(int $doc, string $data, mixed $encoding, string $label, bool $throw): bool
 {
-    $encoding = __elephc_tidy_encoding_argument($encoding);
+    $encoding = __elephc_tidy_encoding_argument($encoding, $label);
     if (!__elephc_tidy_set_encoding($doc, $encoding, $label, $throw)) {
         return false;
     }
@@ -611,6 +626,14 @@ class tidy
         if (self::$__elephc_minting) {
             self::$__elephc_handles[spl_object_id($this)] = self::$__elephc_minted_handle;
             return;
+        }
+        $_id = spl_object_id($this);
+        if (isset(self::$__elephc_handles[$_id])) {
+            $_existing = self::$__elephc_handles[$_id];
+            if ($_existing !== 0) {
+                elephc_tidy_release($_existing);
+                unset(self::$__elephc_handles[$_id]);
+            }
         }
         $_handle = elephc_tidy_create();
         if ($_handle === 0) {

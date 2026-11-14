@@ -132,6 +132,7 @@ pub(super) fn decl_fn_elephc_tidy_numeric_prefix() -> Stmt {
 pub(super) fn decl_fn_elephc_tidy_config_argument() -> Stmt {
     function("__elephc_tidy_config_argument")
         .param("config", t_mixed())
+        .param("label", TypeExpr::Str)
         .returns(t_union(vec![t_array(), TypeExpr::Str, TypeExpr::Void]))
         .body(vec![
             s_if(
@@ -142,7 +143,23 @@ pub(super) fn decl_fn_elephc_tidy_config_argument() -> Stmt {
                 vec![],
                 None,
             ),
-            s_return(e_cast(CastType::String, e_var("config"))),
+            s_if(
+                e_binop(e_binop(e_call("is_int", vec![e_var("config")]), BinOp::Or, e_call("is_float", vec![e_var("config")])), BinOp::Or, e_call("is_bool", vec![e_var("config")])),
+                vec![
+                    s_return(e_cast(CastType::String, e_var("config"))),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_call("is_object", vec![e_var("config")]), BinOp::And, e_call("is_callable", vec![e_array(vec![e_var("config"), e_str("__toString")])])),
+                vec![
+                    s_return(e_cast(CastType::String, e_var("config"))),
+                ],
+                vec![],
+                None,
+            ),
+            s_throw(e_new("TypeError", vec![e_binop(e_binop(e_binop(e_var("label"), BinOp::Concat, e_str(": Argument #2 ($config) must be of type array|string|null, ")), BinOp::Concat, e_call("__elephc_tidy_type_name", vec![e_var("config")])), BinOp::Concat, e_str(" given"))])),
         ])
         .build()
 }
@@ -151,6 +168,7 @@ pub(super) fn decl_fn_elephc_tidy_config_argument() -> Stmt {
 pub(super) fn decl_fn_elephc_tidy_encoding_argument() -> Stmt {
     function("__elephc_tidy_encoding_argument")
         .param("encoding", t_mixed())
+        .param("label", TypeExpr::Str)
         .returns(t_nullable(TypeExpr::Str))
         .body(vec![
             s_if(
@@ -161,7 +179,31 @@ pub(super) fn decl_fn_elephc_tidy_encoding_argument() -> Stmt {
                 vec![],
                 None,
             ),
-            s_return(e_cast(CastType::String, e_var("encoding"))),
+            s_if(
+                e_call("is_string", vec![e_var("encoding")]),
+                vec![
+                    s_return(e_var("encoding")),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_binop(e_call("is_int", vec![e_var("encoding")]), BinOp::Or, e_call("is_float", vec![e_var("encoding")])), BinOp::Or, e_call("is_bool", vec![e_var("encoding")])),
+                vec![
+                    s_return(e_cast(CastType::String, e_var("encoding"))),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_call("is_object", vec![e_var("encoding")]), BinOp::And, e_call("is_callable", vec![e_array(vec![e_var("encoding"), e_str("__toString")])])),
+                vec![
+                    s_return(e_cast(CastType::String, e_var("encoding"))),
+                ],
+                vec![],
+                None,
+            ),
+            s_throw(e_new("TypeError", vec![e_binop(e_binop(e_binop(e_var("label"), BinOp::Concat, e_str(": Argument #3 ($encoding) must be of type ?string, ")), BinOp::Concat, e_call("__elephc_tidy_type_name", vec![e_var("encoding")])), BinOp::Concat, e_str(" given"))])),
         ])
         .build()
 }
@@ -411,7 +453,7 @@ pub(super) fn decl_fn_elephc_tidy_apply_config() -> Stmt {
         .param("throw", TypeExpr::Bool)
         .returns(TypeExpr::Bool)
         .body(vec![
-            s_assign("config", e_call("__elephc_tidy_config_argument", vec![e_var("config")])),
+            s_assign("config", e_call("__elephc_tidy_config_argument", vec![e_var("config"), e_var("label")])),
             s_if(
                 e_call("is_array", vec![e_var("config")]),
                 vec![
@@ -567,7 +609,7 @@ pub(super) fn decl_fn_elephc_tidy_set_encoding() -> Stmt {
         .param_default("skip_empty", TypeExpr::Bool, e_bool(false))
         .returns(TypeExpr::Bool)
         .body(vec![
-            s_assign("encoding", e_call("__elephc_tidy_encoding_argument", vec![e_var("encoding")])),
+            s_assign("encoding", e_call("__elephc_tidy_encoding_argument", vec![e_var("encoding"), e_var("label")])),
             s_if(
                 e_binop(e_binop(e_var("encoding"), BinOp::StrictEq, e_null()), BinOp::Or, e_binop(e_var("skip_empty"), BinOp::And, e_binop(e_var("encoding"), BinOp::StrictEq, e_str("")))),
                 vec![
@@ -639,7 +681,7 @@ pub(super) fn decl_fn_elephc_tidy_parse_into() -> Stmt {
         .param("throw", TypeExpr::Bool)
         .returns(TypeExpr::Bool)
         .body(vec![
-            s_assign("encoding", e_call("__elephc_tidy_encoding_argument", vec![e_var("encoding")])),
+            s_assign("encoding", e_call("__elephc_tidy_encoding_argument", vec![e_var("encoding"), e_var("label")])),
             s_if(
                 e_not(e_call("__elephc_tidy_set_encoding", vec![e_var("doc"), e_var("encoding"), e_var("label"), e_var("throw")])),
                 vec![

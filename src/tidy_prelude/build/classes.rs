@@ -37,6 +37,24 @@ pub(super) fn decl_class_tidy() -> Stmt {
                         vec![],
                         None,
                     ),
+                    s_assign("_id", e_call("spl_object_id", vec![e_this()])),
+                    s_if(
+                        e_call("isset", vec![e_index(e_self_static_prop("__elephc_handles"), e_var("_id"))]),
+                        vec![
+                            s_assign("_existing", e_index(e_self_static_prop("__elephc_handles"), e_var("_id"))),
+                            s_if(
+                                e_binop(e_var("_existing"), BinOp::StrictNotEq, e_int(0)),
+                                vec![
+                                    s_expr(e_call("elephc_tidy_release", vec![e_var("_existing")])),
+                                    s_expr(e_call("unset", vec![e_index(e_self_static_prop("__elephc_handles"), e_var("_id"))])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_assign("_handle", e_call("elephc_tidy_create", vec![])),
                     s_if(
                         e_binop(e_var("_handle"), BinOp::StrictEq, e_int(0)),

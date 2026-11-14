@@ -579,3 +579,79 @@ var_dump((string) $child);
         "bool(true)\nbool(false)\nbool(false)\nbool(false)\nNULL\nstring(0) \"\""
     );
 }
+
+/// The literal-eval scanner matches PHP keywords case-insensitively, so an eval fragment
+/// whose only tidy reference is `NEW TIDY()` still links the prelude and runs.
+#[test]
+fn test_tidy_literal_eval_uppercase_new_keyword() {
+    if skip_without_tidy_native("test_tidy_literal_eval_uppercase_new_keyword") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+eval('$t = NEW TIDY(); $t->parseString("<b>x</b>"); echo get_class($t), ":", $t->body()->name;');
+"#,
+    );
+    assert_eq!(out, "tidy:body");
+}
+
+/// A non-string `$encoding` throws PHP's argument `TypeError` instead of being cast.
+#[test]
+fn test_tidy_invalid_encoding_argument_throws_type_error() {
+    if skip_without_tidy_native("test_tidy_invalid_encoding_argument_throws_type_error") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+try {
+    tidy_parse_string('<p>x</p>', null, []);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "tidy_parse_string(): Argument #3 ($encoding) must be of type ?string, array given\n"
+    );
+}
+
+/// A non-array/string/null `$config` throws PHP's argument `TypeError` instead of being cast.
+#[test]
+fn test_tidy_invalid_config_argument_throws_type_error() {
+    if skip_without_tidy_native("test_tidy_invalid_config_argument_throws_type_error") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+try {
+    tidy_parse_string('<p>x</p>', new stdClass);
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "tidy_parse_string(): Argument #2 ($config) must be of type array|string|null, stdClass given\n"
+    );
+}
+
+/// Re-calling `tidy::__construct()` releases the previous bridge document before replacing
+/// the handle, and the reinitialized object parses normally.
+#[test]
+fn test_tidy_constructor_can_be_called_again() {
+    if skip_without_tidy_native("test_tidy_constructor_can_be_called_again") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+$tidy = new tidy();
+$tidy->parseString('<b>old</b>');
+$tidy->__construct();
+$tidy->parseString('<b>new</b>');
+echo $tidy->body()->child[0]->child[0]->value, "\n";
+"#,
+    );
+    assert_eq!(out, "new\n");
+}

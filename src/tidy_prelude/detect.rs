@@ -151,9 +151,10 @@ fn eval_class_token_is_a_class_position(source: &str, start: usize, end: usize) 
     let previous = before
         .rsplit(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
         .next()
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_ascii_lowercase();
     matches!(
-        previous,
+        previous.as_str(),
         "new"
             | "instanceof"
             | "extends"
@@ -835,6 +836,12 @@ mod tests {
         )));
         assert!(program_uses_tidy(&parse(
             r#"<?php eval('$t = new tidy();');"#
+        )));
+        assert!(program_uses_tidy(&parse(
+            r#"<?php eval('$t = NEW tidy();');"#
+        )));
+        assert!(program_uses_tidy(&parse(
+            r#"<?php eval('$t = NeW TIDY();');"#
         )));
         assert!(!program_uses_tidy(&parse(
             r#"<?php eval('$value = tidy_helper(1);');"#
