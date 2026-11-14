@@ -42,6 +42,16 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_array_sum_probe_small(emitter);
     arrays::emit_array_sum_int(emitter);
     arrays::emit_keyed_kernels(emitter);
+arrays::emit_array_map_numeric(emitter);
+arrays::emit_array_map_affine(emitter);
+arrays::emit_array_map_float_scale(emitter);
+arrays::emit_array_map_float_div(emitter);
+arrays::emit_array_map_int_div(emitter);
+arrays::emit_array_map_sum_int_div(emitter);
+arrays::emit_array_map_float_affine(emitter);
+arrays::emit_array_map_square(emitter);
+arrays::emit_array_map_square_affine(emitter);
+arrays::emit_array_product_int(emitter);
     arrays::emit_array_type_check(emitter);
     arrays::emit_array_push_int(emitter);
     arrays::emit_array_push_refcounted(emitter);
@@ -235,6 +245,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_free_deep(emitter, features);
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_numeric_binops(emitter);
+arrays::emit_mixed_numeric_div(emitter);
     arrays::emit_int_checked_binops(emitter);
     arrays::emit_int_pow_checked(emitter);
     arrays::emit_mixed_numeric_pow(emitter);

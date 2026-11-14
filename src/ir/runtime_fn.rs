@@ -114,6 +114,51 @@ pub enum RuntimeFnId {
     /// Boxes the last value of an array in insertion order for `array_last()`.
     ArrayLast,
     ArrayMap,
+    /// Stored `array_map(fn($x) => $x + C | $x - C | $x * C, $packedInts)` kernel.
+    ///
+    /// The result is a raw `array<int>` while the literal operation cannot overflow; a
+    /// per-element promotion falls back to an ordinary boxed Mixed array.
+    ArrayMapNumeric,
+    /// Stored `array_map(fn($x) => $x * A + B, $packedInts)` affine kernel.
+    ///
+    /// Multiplication and addition are checked in source order; any promoted element rebuilds
+    /// the whole result as a boxed Mixed array with PHP's exact per-element int/float types.
+    ArrayMapAffine,
+    /// Stored `array_map(fn($x) => $x * $x, $packedInts)` square kernel.
+    ///
+    /// The product is checked once; any promoted element rebuilds the whole result as a boxed
+    /// Mixed array with PHP's exact per-element int/float types.
+    ArrayMapSquare,
+    /// Stored `array_map(fn($x) => $x * $x + C, $packedInts)` square-then-offset kernel.
+    ///
+    /// The product and the offset addition are checked in source order; any promoted element
+    /// rebuilds the whole result as a boxed Mixed array with PHP's exact per-element types.
+    ArrayMapSquareAffine,
+    /// Stored `array_map(fn($x) => $x * F, $packedInts)` raw float-scale kernel.
+    ///
+    /// Every element is converted to double and multiplied by the literal scale, producing a
+    /// raw `array<float>` with value_type 2 and no per-element boxed Mixed cells.
+    ArrayMapFloatScale,
+    /// Stored `array_map(fn($x) => $x * F + G, $packedInts)` raw float-affine kernel.
+    ///
+    /// Multiplication and addition happen entirely in double precision, producing a raw
+    /// `array<float>` with value_type 2.
+    ArrayMapFloatAffine,
+    /// Stored `array_map(fn($x) => $x / F, $packedInts)` raw float-division kernel.
+    ///
+    /// Every element is converted to double and divided by the nonzero literal divisor,
+    /// producing a raw `array<float>` with value_type 2.
+    ArrayMapFloatDiv,
+    /// Stored `array_map(fn($x) => $x / C, $packedInts)` integer-division kernel.
+    ///
+    /// Exact divisions keep a raw `array<int>`; the first non-exact element rebuilds a boxed
+    /// Mixed array with PHP's per-element int/float result.
+    ArrayMapIntDiv,
+    /// Fused `array_sum(array_map(fn($x) => $x / $literal, $packedInts))` scalar kernel.
+    ///
+    /// Walks the packed source once, applies PHP's exact-int-or-double division rule and
+    /// boxes the left-to-right sum (int until the first promotion) as one Mixed cell.
+    ArrayMapSumIntDiv,
     /// Fused `array_sum(array_map(fn($x) => $x + $literal, $packedInts))` scalar kernel.
     ArrayMapSumAdd,
     /// Raw-int observation of the fused map+sum kernel; avoids boxing the result.
@@ -139,6 +184,26 @@ pub enum RuntimeFnId {
     ArrayPush,
     ArrayRand,
     ArrayReduce,
+    /// Raw seeded sum for `array_reduce($ints, fn($c, $v) => $c + $v, C)`.
+    ///
+    /// The accumulator stays a raw int until the first overflow, then continues as a double;
+    /// only the final int-or-float result is boxed.
+    ArrayReduceSumSeed,
+    /// Raw float-seeded sum for `array_reduce($ints, fn($c, $v) => $c + $v, F)`.
+    ///
+    /// The raw IEEE-754 seed starts the accumulator in double mode, so every element is added
+    /// as a double and only the final float result is boxed.
+    ArrayReduceSumFloatSeed,
+    /// Raw seeded product for `array_reduce($ints, fn($c, $v) => $c * $v, C)`.
+    ///
+    /// The accumulator stays a raw int until the first overflow, then continues as a double;
+    /// only the final int-or-float result is boxed.
+    ArrayReduceProductSeed,
+    /// Raw float-seeded product for `array_reduce($ints, fn($c, $v) => $c * $v, F)`.
+    ///
+    /// The raw IEEE-754 seed starts the accumulator in double mode, so every element is
+    /// multiplied as a double and only the final float result is boxed.
+    ArrayReduceProductFloatSeed,
     ArrayReplace,
     ArrayReplaceRecursive,
     ArrayReverse,
@@ -730,6 +795,11 @@ pub enum RuntimeFnId {
     MbChr,
     /// Allocation-free `strlen(mb_chr(...))` observed only through the string length.
     MbChrLen,
+    /// Allocation-free `ord(mb_chr(...)[0])` observed only through the first UTF-8 byte.
+    MbChrFirst,
+    /// Allocation-free `strlen(mb_chr(...))` plus `ord(mb_chr(...)[0])` shape returning
+    /// `(byte_length << 8) | first_byte`, so both observations share one encoding pass.
+    MbChrPacked,
     MbStrpos,
     MbStripos,
     MbStrrpos,
@@ -901,6 +971,14 @@ pub enum RuntimeFnId {
     JsonEncode,
     /// Raw `json_encode()` string observed only by `strlen()` after a string cast.
     JsonEncodeStr,
+    /// Depth-two scalar preflight for the loop-invariant JSON length cache.
+    ///
+    /// Returns 1 when the source is a packed array of associative rows whose values are all
+    /// scalar or null, and 0 when an object, resource, container or unknown tag is present.
+    JsonRowsScalarGuard,
+    /// Cached JSON length dispatch: returns the preheader probe length, or runs the raw
+    /// encoder per iteration when the probe sentinel says the rows are not scalar-only.
+    JsonEncodeLenCached,
     JsonLastError,
     JsonLastErrorMsg,
     JsonValidate,
@@ -990,11 +1068,22 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
             RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
-            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumAddInt | RuntimeFnId::ArrayMapSumProbeInt | RuntimeFnId::ArrayFilterCountMod | RuntimeFnId::ArrayMapSumIntDiv => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapNumeric | RuntimeFnId::ArrayMapAffine => Some((3, Some(3))),
+            RuntimeFnId::ArrayMapSquare => Some((1, Some(1))),
+            RuntimeFnId::ArrayMapSquareAffine => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapFloatScale
+            | RuntimeFnId::ArrayMapFloatDiv
+            | RuntimeFnId::ArrayMapIntDiv => Some((2, Some(2))),
+            RuntimeFnId::ArrayMapFloatAffine => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddIntCached => Some((3, Some(3))),
             RuntimeFnId::ArrayMapSumAddSafe => Some((2, Some(2))),
             RuntimeFnId::ArrayElementTypeCheck => Some((3, Some(3))),
             RuntimeFnId::ArraySumInt => Some((1, Some(1))),
+            RuntimeFnId::ArrayReduceSumSeed
+            | RuntimeFnId::ArrayReduceSumFloatSeed
+            | RuntimeFnId::ArrayReduceProductSeed
+            | RuntimeFnId::ArrayReduceProductFloatSeed => Some((2, Some(2))),
             RuntimeFnId::ArraySumProbeSmall => Some((1, Some(1))),
             RuntimeFnId::ArraySumIntCached => Some((2, Some(2))),
             RuntimeFnId::AbsInt => Some((1, Some(1))),
@@ -1018,7 +1107,9 @@ impl RuntimeFnId {
             | RuntimeFnId::MbSubstituteCharacterInt => Some((1, Some(1))),
             RuntimeFnId::MbSplitCount => Some((2, Some(2))),
             RuntimeFnId::MbEregReplaceLen => Some((3, Some(3))),
-            RuntimeFnId::MbChrLen => Some((2, Some(2))),
+            RuntimeFnId::MbChrLen | RuntimeFnId::MbChrFirst | RuntimeFnId::MbChrPacked => {
+                Some((2, Some(2)))
+            }
             RuntimeFnId::MbStrimwidthLen => Some((5, Some(5))),
             RuntimeFnId::MbConvertEncodingLen => Some((3, Some(3))),
             RuntimeFnId::MbEncodeNumericentityLen
@@ -1045,6 +1136,8 @@ impl RuntimeFnId {
             RuntimeFnId::SqrtAddInt => Some((2, Some(2))),
             RuntimeFnId::SqrtSumRange => Some((4, Some(4))),
             RuntimeFnId::JsonEncodeStr => Some((1, Some(3))),
+            RuntimeFnId::JsonRowsScalarGuard => Some((1, Some(1))),
+            RuntimeFnId::JsonEncodeLenCached => Some((2, Some(2))),
             RuntimeFnId::JsonDecodeCount => Some((2, Some(2))),
             _ => None,
         }
@@ -1897,8 +1990,19 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMap => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
-            // The fused map+sum kernel walks a packed payload and boxes one result cell.
-            RuntimeFnId::ArrayMapSumAdd => {
+            // The stored numeric maps read the packed source and allocate the destination array.
+            RuntimeFnId::ArrayMapNumeric
+            | RuntimeFnId::ArrayMapAffine
+            | RuntimeFnId::ArrayMapSquare
+            | RuntimeFnId::ArrayMapSquareAffine
+            | RuntimeFnId::ArrayMapFloatScale
+            | RuntimeFnId::ArrayMapFloatAffine
+            | RuntimeFnId::ArrayMapFloatDiv
+            | RuntimeFnId::ArrayMapIntDiv => {
+                E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
+            }
+            // The fused map+sum kernels walk a packed payload and box one result cell.
+            RuntimeFnId::ArrayMapSumAdd | RuntimeFnId::ArrayMapSumIntDiv => {
                 E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
             }
             // The raw map+sum entry returns a scalar; a promoted sum applies PHP's warned
@@ -1920,6 +2024,12 @@ impl RuntimeFnId {
             ),
             // The unboxed sum reads a packed int payload and returns a raw integer; an
             // overflow-promoted sum applies PHP's warned float-to-int cast warning.
+            RuntimeFnId::ArrayReduceSumSeed
+            | RuntimeFnId::ArrayReduceSumFloatSeed
+            | RuntimeFnId::ArrayReduceProductSeed
+            | RuntimeFnId::ArrayReduceProductFloatSeed => {
+                E::from_bits_retain(E::READS_HEAP.bits() | E::ALLOC_HEAP.bits())
+            }
             RuntimeFnId::ArraySumInt => E::from_bits_retain(
                 E::READS_HEAP.bits() | E::MAY_WARN.bits(),
             ),
@@ -1951,7 +2061,9 @@ impl RuntimeFnId {
             RuntimeFnId::MbSubstituteCharacterInt => RuntimeFnId::MbSubstituteCharacter.effects(),
             RuntimeFnId::MbSplitCount => RuntimeFnId::MbSplit.effects(),
             RuntimeFnId::MbEregReplaceLen => RuntimeFnId::MbEregReplace.effects(),
-            RuntimeFnId::MbChrLen => RuntimeFnId::MbChr.effects(),
+            RuntimeFnId::MbChrLen | RuntimeFnId::MbChrFirst | RuntimeFnId::MbChrPacked => {
+                RuntimeFnId::MbChr.effects()
+            }
             RuntimeFnId::MbStrimwidthLen => RuntimeFnId::MbStrimwidth.effects(),
             RuntimeFnId::MbConvertEncodingLen => RuntimeFnId::MbConvertEncoding.effects(),
             RuntimeFnId::MbEncodeNumericentityLen => RuntimeFnId::MbEncodeNumericentity.effects(),
@@ -1992,6 +2104,10 @@ impl RuntimeFnId {
             RuntimeFnId::SqrtSumRange => E::PURE,
             // The raw encoder keeps the JSON error state and encoder side effects.
             RuntimeFnId::JsonEncodeStr => RuntimeFnId::JsonEncode.effects(),
+            // The scalar preflight only walks packed arrays and hash entries.
+            RuntimeFnId::JsonRowsScalarGuard => E::from_bits_retain(E::READS_HEAP.bits()),
+            // The cached dispatch either returns the probe or runs the full raw encoder.
+            RuntimeFnId::JsonEncodeLenCached => RuntimeFnId::JsonEncodeStr.effects(),
             // The count-only fast path may fall back to the full decoder and count.
             RuntimeFnId::JsonDecodeCount => RuntimeFnId::JsonDecode.effects(),
             // Carry, predicate-result and snapshot cleanup can invoke destructors independently
@@ -2722,7 +2838,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMapSumProbeInt
                 | RuntimeFnId::ArrayMapSumAddIntCached
                 | RuntimeFnId::ArrayMapSumAddSafe
+                | RuntimeFnId::JsonRowsScalarGuard
+                | RuntimeFnId::JsonEncodeLenCached
                 | RuntimeFnId::AbsInt
+                // The mb_chr observation sinks return a bare integer, never string storage.
+                | RuntimeFnId::MbChrFirst
+                | RuntimeFnId::MbChrPacked
                 | RuntimeFnId::Base64EncodedLen
                 | RuntimeFnId::StrposInt
                 | RuntimeFnId::StriposInt
@@ -2893,6 +3014,17 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
                 | RuntimeFnId::ArrayMap
+                // Every stored numeric/float map allocates a new destination container and
+                // never returns storage from its source operand.
+                | RuntimeFnId::ArrayMapNumeric
+                | RuntimeFnId::ArrayMapAffine
+                | RuntimeFnId::ArrayMapSquare
+                | RuntimeFnId::ArrayMapSquareAffine
+                | RuntimeFnId::ArrayMapFloatScale
+                | RuntimeFnId::ArrayMapFloatAffine
+                | RuntimeFnId::ArrayMapFloatDiv
+                | RuntimeFnId::ArrayMapIntDiv
+                | RuntimeFnId::ArrayMapSumIntDiv
                 | RuntimeFnId::ArrayMapSumAdd
                 | RuntimeFnId::ArrayMerge
                 | RuntimeFnId::ArrayPad
@@ -2920,6 +3052,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayShift
                 | RuntimeFnId::ArraySlice
                 | RuntimeFnId::ArraySum
+                // The seeded reduces box their raw int/float accumulator into a fresh cell;
+                // they never hand back storage from the source array.
+                | RuntimeFnId::ArrayReduceSumSeed
+                | RuntimeFnId::ArrayReduceSumFloatSeed
+                | RuntimeFnId::ArrayReduceProductSeed
+                | RuntimeFnId::ArrayReduceProductFloatSeed
                 // Comparator set operations always allocate a fresh hash-backed result and
                 // retain each selected value independently of both borrowed source operands.
                 | RuntimeFnId::ArrayUdiff
@@ -3230,6 +3368,15 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeys => "array_keys",
             RuntimeFnId::ArrayLast => "array_last",
             RuntimeFnId::ArrayMap => "array_map",
+            RuntimeFnId::ArrayMapNumeric => "array_map_numeric",
+            RuntimeFnId::ArrayMapAffine => "array_map_affine",
+            RuntimeFnId::ArrayMapSquare => "array_map_square",
+            RuntimeFnId::ArrayMapSquareAffine => "array_map_square_affine",
+            RuntimeFnId::ArrayMapFloatScale => "array_map_float_scale",
+            RuntimeFnId::ArrayMapFloatAffine => "array_map_float_affine",
+            RuntimeFnId::ArrayMapFloatDiv => "array_map_float_div",
+            RuntimeFnId::ArrayMapIntDiv => "array_map_int_div",
+            RuntimeFnId::ArrayMapSumIntDiv => "array_map_sum_int_div",
             RuntimeFnId::ArrayMapSumAdd => "array_map_sum_add",
             RuntimeFnId::ArrayMapSumAddInt => "array_map_sum_add_int",
             RuntimeFnId::ArrayMapSumProbeInt => "array_map_sum_probe_int",
@@ -3249,6 +3396,10 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayPush => "array_push",
             RuntimeFnId::ArrayRand => "array_rand",
             RuntimeFnId::ArrayReduce => "array_reduce",
+            RuntimeFnId::ArrayReduceSumSeed => "array_reduce_sum_seed",
+            RuntimeFnId::ArrayReduceSumFloatSeed => "array_reduce_sum_float_seed",
+            RuntimeFnId::ArrayReduceProductSeed => "array_reduce_product_seed",
+            RuntimeFnId::ArrayReduceProductFloatSeed => "array_reduce_product_float_seed",
             RuntimeFnId::ArrayReplace => "array_replace",
             RuntimeFnId::ArrayReplaceRecursive => "array_replace_recursive",
             RuntimeFnId::ArrayReverse => "array_reverse",
@@ -3745,6 +3896,8 @@ impl RuntimeFnId {
             RuntimeFnId::MbOrdInt => "mb_ord_int",
             RuntimeFnId::MbChr => "mb_chr",
             RuntimeFnId::MbChrLen => "mb_chr_len",
+            RuntimeFnId::MbChrFirst => "mb_chr_first",
+            RuntimeFnId::MbChrPacked => "mb_chr_packed",
             RuntimeFnId::MbStrpos => "mb_strpos",
             RuntimeFnId::MbStripos => "mb_stripos",
             RuntimeFnId::MbStrrpos => "mb_strrpos",
@@ -3882,6 +4035,8 @@ impl RuntimeFnId {
             RuntimeFnId::JsonDecode => "json_decode",
             RuntimeFnId::JsonEncode => "json_encode",
             RuntimeFnId::JsonEncodeStr => "json_encode_str",
+            RuntimeFnId::JsonRowsScalarGuard => "json_rows_scalar_guard",
+            RuntimeFnId::JsonEncodeLenCached => "json_encode_len_cached",
             RuntimeFnId::JsonDecodeCount => "json_decode_count",
             RuntimeFnId::JsonLastError => "json_last_error",
             RuntimeFnId::JsonLastErrorMsg => "json_last_error_msg",
@@ -3956,6 +4111,7 @@ fn set_callable_param_type(
 mod tests {
     use super::RuntimeFnId;
     use crate::builtins::semantics::BuiltinResultOwnership;
+    use crate::ir::{Effects, RuntimeCallSignature};
     use crate::types::PhpType;
 
     /// The declared-array union is boxed, but `array_values()` always returns dense Mixed slots.
@@ -3968,6 +4124,23 @@ mod tests {
             ),
             PhpType::Array(Box::new(PhpType::Mixed)),
         );
+    }
+
+    /// Pins the fused map+sum kernel's arity, name, effects and fresh boxed result.
+    #[test]
+    fn array_map_sum_int_div_is_a_two_operand_fresh_boxed_kernel() {
+        let target = RuntimeFnId::ArrayMapSumIntDiv;
+        assert_eq!(target.as_eir(), "array_map_sum_int_div");
+        assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
+        assert!(target.intrinsic_effects().contains(Effects::READS_HEAP | Effects::ALLOC_HEAP));
+        assert!(!target.intrinsic_effects().contains(Effects::OUTPUT));
+        assert!(matches!(
+            target.descriptor().logical_signature,
+            Some(RuntimeCallSignature::Polymorphic {
+                min_operands: 2,
+                max_operands: Some(2)
+            })
+        ));
     }
 
     /// Pins the contracts used by argument cleanup and synthetic callable wrappers.
@@ -3984,6 +4157,7 @@ mod tests {
             RuntimeFnId::Fwrite,
             RuntimeFnId::StreamFilterAppend,
             RuntimeFnId::StreamFilterPrepend,
+            RuntimeFnId::ArrayMapSumIntDiv,
         ] {
             assert_eq!(target.result_ownership(), BuiltinResultOwnership::Fresh);
         }

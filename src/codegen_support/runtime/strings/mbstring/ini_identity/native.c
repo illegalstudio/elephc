@@ -34,6 +34,7 @@ HIDDEN unsigned char bin_marks[16384 / 16 + 2] __asm__("_heap_bin_marks");
 HIDDEN uint32_t object_handles[1024] __asm__("_obj_handle_index");
 HIDDEN void *array_reference_retire __asm__("_elephc_eval_array_reference_retire_fn");
 HIDDEN uint64_t active __asm__("_mbstring_ini_native_active");
+HIDDEN uint64_t request_generation __asm__("_mbstring_request_generation") = 1;
 HIDDEN _Alignas(16) unsigned char snapshots[2][672] __asm__("_ini_register_snapshots");
 HIDDEN const char double_free[] __asm__("_heap_dbg_double_free_msg") = "unexpected double free";
 extern void mb_test_registers(void *, uint64_t, uint64_t);

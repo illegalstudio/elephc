@@ -36,6 +36,7 @@ use super::standard_trim_len_sink::StandardTrimLenSink;
 use super::string_len_sink::StringLenSink;
 use super::json_decode_count_sink::JsonDecodeCountSink;
 use super::json_encode_len_sink::JsonEncodeLenSink;
+use super::json_encode_len_cache::JsonEncodeLenCache;
 use super::sqrt_add_int_sink::SqrtAddIntSink;
 use super::sqrt_sum_loop::SqrtSumLoop;
 use super::json_decode_count_hoist::JsonDecodeCountHoist;
@@ -55,8 +56,11 @@ use super::hash_algos_count_hoist::HashAlgosCountHoist;
 use super::hash_const_sink::HashConstSink;
 use super::iconv_mime_literal_sink::IconvMimeLiteralSink;
 use super::iconv_position_const_sink::IconvPositionConstSink;
+use super::mb_constant_fold::MbConstantFold;
+use super::const_string_observations::ConstStringObservations;
 use super::mb_parse_str_literal_sink::MbParseStrLiteralSink;
 use super::mb_strlen_const_local_sink::MbStrlenConstLocalSink;
+use super::mb_chr_len_local_sink::MbChrLenLocalSink;
 use super::openssl_cbc_len_sink::OpensslCbcLenSink;
 use super::openssl_cipher_iv_length_const_sink::OpensslCipherIvLengthConstSink;
 use super::mb_strstr_len_const_sink::MbStrstrLenConstSink;
@@ -66,6 +70,7 @@ use super::token_get_all_count_hoist::TokenGetAllCountHoist;
 use super::array_map_sum_add_int_sink::ArrayMapSumAddIntSink;
 use super::array_filter_count_hoist::ArrayFilterCountHoist;
 use super::array_map_sum_cache::ArrayMapSumCache;
+use super::array_map_sum_div_fusion::ArrayMapSumDivFusion;
 use super::array_sum_int_bounds::ArraySumIntBounds;
 use super::array_sum_int_direct::ArraySumIntDirect;
 use super::array_sum_int_sink::ArraySumIntSink;
@@ -79,6 +84,7 @@ use super::checked_int_sink::CheckedIntSink;
 use super::checked_numeric_chain::CheckedNumericChain;
 use super::concat_reset::{ConcatResetElim, ConcatResetHoist};
 use super::const_fold::ConstFold;
+use super::const_string_array_intval_fold::ConstStringArrayIntvalFold;
 use super::count_hoist::CountHoist;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
@@ -185,6 +191,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(ArraySumIntBounds),
         Box::new(ArrayFilterCountHoist),
         Box::new(ArrayMapSumCache),
+        Box::new(ArrayMapSumDivFusion),
         Box::new(AbsIntSink),
         Box::new(StringLenSink),
         Box::new(StandardTrimLenSink),
@@ -202,8 +209,11 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(HashConstSink),
         Box::new(IconvMimeLiteralSink),
         Box::new(IconvPositionConstSink),
+        Box::new(MbConstantFold),
+        Box::new(ConstStringObservations),
         Box::new(MbParseStrLiteralSink),
         Box::new(MbStrlenConstLocalSink),
+        Box::new(MbChrLenLocalSink),
         Box::new(OpensslCbcLenSink),
         Box::new(OpensslCipherIvLengthConstSink),
         Box::new(MbNumericentityLenSink),
@@ -214,6 +224,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(Base64DecodeLenSink),
         Box::new(SqrtAddIntSink),
         Box::new(JsonEncodeLenSink),
+        Box::new(JsonEncodeLenCache),
         Box::new(JsonDecodeCountSink),
         Box::new(BoundedMixedCounter::new(module)),
         Box::new(LoopCounterVersioning::new(module)),
@@ -228,6 +239,7 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(ArrayFillLoop),
         Box::new(CheckedNumericChain),
         Box::new(ConstFold),
+        Box::new(ConstStringArrayIntvalFold),
         Box::new(Cse),
         Box::new(Licm),
         Box::new(DeadInst),

@@ -61,6 +61,8 @@ pub(super) fn is_whitelisted_target(target: RuntimeFnId) -> bool {
             | RuntimeFnId::MbStrrichrLen
             | RuntimeFnId::MbStrimwidthLen
             | RuntimeFnId::MbChrLen
+            | RuntimeFnId::MbChrFirst
+            | RuntimeFnId::MbChrPacked
             | RuntimeFnId::MbConvertEncodingLen
             | RuntimeFnId::MbSplitCount
             | RuntimeFnId::MbEregReplaceLen
@@ -71,6 +73,7 @@ pub(super) fn is_whitelisted_target(target: RuntimeFnId) -> bool {
             | RuntimeFnId::MbConvertKana
             | RuntimeFnId::MbEncodeNumericentityLen
             | RuntimeFnId::MbDecodeNumericentityLen
+            | RuntimeFnId::SubstrCount
     )
 }
 
@@ -95,7 +98,9 @@ pub(super) fn is_hoistable_mbstring_call(
     {
         return false;
     }
-    if !loop_writes_no_mbstring_state(function, inst_id, loop_ref) {
+    if target != RuntimeFnId::SubstrCount
+        && !loop_writes_no_mbstring_state(function, inst_id, loop_ref)
+    {
         return false;
     }
     let string_arg = |index: usize| string_arg(function, inst, index);
@@ -147,6 +152,9 @@ pub(super) fn is_hoistable_mbstring_call(
         | RuntimeFnId::MbCheckEncoding => {
             inst.operands.len() == 2 && string_arg(0) && encoding_arg(1)
         }
+        RuntimeFnId::SubstrCount => {
+            inst.operands.len() == 2 && string_arg(0) && nonempty_literal(1)
+        }
         RuntimeFnId::MbSubstrCount => {
             inst.operands.len() == 3
                 && string_arg(0)
@@ -189,7 +197,7 @@ pub(super) fn is_hoistable_mbstring_call(
                 })
                 && encoding_arg(4)
         }
-        RuntimeFnId::MbChrLen => {
+        RuntimeFnId::MbChrLen | RuntimeFnId::MbChrFirst | RuntimeFnId::MbChrPacked => {
             inst.operands.len() == 2
                 && inst.operands.first().is_some_and(|&value| {
                     function.value(value).is_some_and(|value| {
@@ -368,7 +376,7 @@ fn int_array_arg(function: &Function, inst: &Instruction, index: usize) -> bool 
 /// The proof follows the load/store wrapper chain, requires exactly four packed
 /// pushes with those constants, and rejects any other use of the array value so
 /// a later mutation cannot invalidate the map.
-fn full_decimal_map(function: &Function, map: ValueId) -> bool {
+pub(super) fn full_decimal_map(function: &Function, map: ValueId) -> bool {
     let mut value = map;
     let array = loop {
         let Some(inst) = defining_instruction(function, value) else {

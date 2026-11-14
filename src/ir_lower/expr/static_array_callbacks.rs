@@ -311,17 +311,56 @@ pub(super) fn instance_callable_signature(target: &StaticCallableBinding) -> Opt
     }
 }
 
-/// Lowers `array_reduce($ints, fn($carry, $item) => $carry + $item, 0)` to the typed int sum.
+/// Lowers `array_reduce($ints, fn($carry, $item) => $carry + $item, C)` to a raw sum.
 ///
-/// The closure is an untyped pure addition of its two parameters and the initial value is the
-/// additive identity, so PHP's left-to-right reduction and `array_sum()` perform the same
-/// integer additions with the same overflow-to-float promotion. A declared return type, a
-/// capture, a different initial value, or any other body keeps the generic reduce path.
+/// The closure is an untyped pure addition of its two parameters. With initial zero, PHP's
+/// left-to-right reduction and `array_sum()` perform the same integer additions with the same
+/// overflow-to-float promotion. A raw int initial (literal or a local proven `int`) uses
+/// `ArrayReduceSumSeed`; a raw float initial (literal or a local proven `float`) uses
+/// `ArrayReduceSumFloatSeed`, whose accumulator starts in double mode. Either way the carry
+/// never boxes a Mixed cell per element. A declared return type, a capture, an initial whose
+/// raw type is not proven before lowering, or any other body keeps the generic reduce path.
 pub(super) fn lower_reduce_sum(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     args: &[Expr],
     expr: &Expr,
+) -> Option<LoweredValue> {
+    lower_reduce_seeded(ctx, name, args, expr, ReduceOp::Add)
+}
+
+/// Lowers `array_reduce($ints, fn($carry, $item) => $carry * $item, C)` to a raw product.
+///
+/// The closure is an untyped pure multiplication of its two parameters. A raw int initial
+/// (literal or a local proven `int`) uses `ArrayReduceProductSeed`, whose checked integer
+/// multiplication promotes to double at the first overflow; a raw float initial (literal or a
+/// local proven `float`) uses `ArrayReduceProductFloatSeed`, which multiplies every element in
+/// double mode. Either way the carry never boxes a Mixed cell per element. A declared return
+/// type, a capture, an initial whose raw type is not proven before lowering, or any other
+/// body keeps the generic reduce path.
+pub(super) fn lower_reduce_product(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    lower_reduce_seeded(ctx, name, args, expr, ReduceOp::Mul)
+}
+
+/// Which pure reduction body the shared shape proof accepts.
+#[derive(Clone, Copy)]
+enum ReduceOp {
+    Add,
+    Mul,
+}
+
+/// Shared shape proof and lowering for `array_reduce($ints, fn($a, $b) => $a OP $b, C)`.
+fn lower_reduce_seeded(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+    reduce_op: ReduceOp,
 ) -> Option<LoweredValue> {
     if php_symbol_key(name.trim_start_matches('\\')) != "array_reduce" || args.len() != 3 {
         return None;
@@ -340,9 +379,7 @@ pub(super) fn lower_reduce_sum(
     {
         return None;
     }
-    if !matches!(args[2].kind, ExprKind::IntLiteral(0)) {
-        return None;
-    }
+    let seed = reduce_seed(ctx, &args[2])?;
     let ExprKind::Closure {
         params,
         variadic: None,
@@ -367,9 +404,15 @@ pub(super) fn lower_reduce_sum(
     let [Stmt { kind: StmtKind::Return(Some(body)), .. }] = body.as_slice() else {
         return None;
     };
-    let ExprKind::BinaryOp { left, op: BinOp::Add, right } = &body.kind else {
+    let ExprKind::BinaryOp { left, op, right } = &body.kind else {
         return None;
     };
+    if !matches!(
+        (reduce_op, op),
+        (ReduceOp::Add, BinOp::Add) | (ReduceOp::Mul, BinOp::Mul)
+    ) {
+        return None;
+    }
     let is_param = |expr: &Expr, index: usize| {
         matches!(&expr.kind, ExprKind::Variable(name) if name == &params[index].0)
     };
@@ -379,16 +422,152 @@ pub(super) fn lower_reduce_sum(
         return None;
     }
     let source = lower_expr(ctx, &args[0]);
+    let (target, seed) = match (reduce_op, seed) {
+        (ReduceOp::Add, ReduceSeed::IntLiteral(0)) => {
+            return Some(ctx.emit_value(
+                Op::RuntimeCall,
+                vec![source.value],
+                Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                    crate::ir::RuntimeFnId::ArraySum,
+                ))),
+                PhpType::Mixed,
+                crate::ir::RuntimeFnId::ArraySum.intrinsic_effects(),
+                Some(expr.span),
+            ));
+        }
+        (ReduceOp::Add, ReduceSeed::IntLiteral(value)) => (
+            crate::ir::RuntimeFnId::ArrayReduceSumSeed,
+            ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(value)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            )
+            .value,
+        ),
+        (ReduceOp::Add, ReduceSeed::IntValue) => (
+            crate::ir::RuntimeFnId::ArrayReduceSumSeed,
+            lower_expr(ctx, &args[2]).value,
+        ),
+        (ReduceOp::Add, ReduceSeed::FloatLiteral(value)) => (
+            crate::ir::RuntimeFnId::ArrayReduceSumFloatSeed,
+            ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(value)),
+                PhpType::Float,
+                Op::ConstF64.default_effects(),
+                Some(expr.span),
+            )
+            .value,
+        ),
+        (ReduceOp::Add, ReduceSeed::FloatValue) => (
+            crate::ir::RuntimeFnId::ArrayReduceSumFloatSeed,
+            lower_expr(ctx, &args[2]).value,
+        ),
+        (ReduceOp::Mul, ReduceSeed::IntLiteral(value)) => (
+            crate::ir::RuntimeFnId::ArrayReduceProductSeed,
+            ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(value)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            )
+            .value,
+        ),
+        (ReduceOp::Mul, ReduceSeed::IntValue) => (
+            crate::ir::RuntimeFnId::ArrayReduceProductSeed,
+            lower_expr(ctx, &args[2]).value,
+        ),
+        (ReduceOp::Mul, ReduceSeed::FloatLiteral(value)) => (
+            crate::ir::RuntimeFnId::ArrayReduceProductFloatSeed,
+            ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(value)),
+                PhpType::Float,
+                Op::ConstF64.default_effects(),
+                Some(expr.span),
+            )
+            .value,
+        ),
+        (ReduceOp::Mul, ReduceSeed::FloatValue) => (
+            crate::ir::RuntimeFnId::ArrayReduceProductFloatSeed,
+            lower_expr(ctx, &args[2]).value,
+        ),
+    };
     Some(ctx.emit_value(
         Op::RuntimeCall,
-        vec![source.value],
+        vec![source.value, seed],
         Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
-            crate::ir::RuntimeFnId::ArraySum,
+            target,
         ))),
         PhpType::Mixed,
-        crate::ir::RuntimeFnId::ArraySum.intrinsic_effects(),
+        target.intrinsic_effects(),
         Some(expr.span),
     ))
+}
+
+/// The statically proven accumulator shape of an `array_reduce()` initial value.
+enum ReduceSeed {
+    /// A literal integer: zero may use `array_sum()`, other values seed the raw reducer.
+    IntLiteral(i64),
+    /// A local lowered as a raw PHP int.
+    IntValue,
+    /// A literal float.
+    FloatLiteral(f64),
+    /// A local lowered as a raw PHP float.
+    FloatValue,
+}
+
+/// Classifies the initial value before lowering so an unsupported shape can fall back
+/// without lowering (and evaluating) it twice.
+fn reduce_seed(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> Option<ReduceSeed> {
+    if let Some(value) = integer_literal(expr) {
+        return Some(ReduceSeed::IntLiteral(value));
+    }
+    if let Some(value) = float_literal(expr) {
+        return Some(ReduceSeed::FloatLiteral(value));
+    }
+    let ExprKind::Variable(name) = &expr.kind else {
+        return None;
+    };
+    if ctx.is_ref_bound_local(name) || ctx.is_borrowed_element_ref_local(name) {
+        return None;
+    }
+    match ctx.local_type(name).codegen_repr() {
+        PhpType::Int => Some(ReduceSeed::IntValue),
+        PhpType::Float => Some(ReduceSeed::FloatValue),
+        _ => None,
+    }
+}
+
+/// Returns a floating-point literal, including a parser-level unary negation.
+fn float_literal(expr: &Expr) -> Option<f64> {
+    match &expr.kind {
+        ExprKind::FloatLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::FloatLiteral(value) => Some(-value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Returns an integer literal, including a parser-level unary negation.
+fn integer_literal(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::IntLiteral(value) => Some(*value),
+        ExprKind::Negate(inner) => match &inner.kind {
+            ExprKind::IntLiteral(value) => value.checked_neg(),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Lowers `count(explode($separator, $subject))` to `substr_count($subject, $separator) + 1`.
@@ -479,6 +658,326 @@ pub(super) fn lower_count_explode(
     ))
 }
 
+/// Lowers a stored `array_map(fn($v) => $v + C | $v - C | $v * C, $ints)` into one kernel.
+///
+/// The callback is a total single-operation arithmetic tree over a packed-int source, so it has
+/// no observable effects. The runtime kernel builds a raw `array<int>` while no element
+/// overflows, then rebuilds an ordinary boxed Mixed array so PHP's per-element int/float result
+/// is preserved. The static result type stays `array<mixed>`, which is exactly what the checker
+/// promises; narrowed runtime storage is handled by the generic Mixed readers.
+/// Conservative proof that a stored-map source lowers to a packed `array<int>`.
+///
+/// Variables use the lowering context's flow-sensitive type. Array literals, `range()` with
+/// integer-literal arguments, key-renumbering `array_slice()` over another proven source,
+/// `array_values()`, default `array_reverse()`, `array_fill(0, $n, <int literal>)`, and
+/// two-operand `array_merge()` are proven structurally. The marker accepts the same shapes;
+/// when this proof fails before
+/// any emission, the dispatcher falls back to the ordinary `array_map()` lowering.
+fn lowering_packed_int_source(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => {
+            !ctx.is_ref_bound_local(name)
+                && !ctx.is_borrowed_element_ref_local(name)
+                && ctx.local_type(name).codegen_repr()
+                    == PhpType::Array(Box::new(PhpType::Int))
+        }
+        ExprKind::ArrayLiteral(_) => {
+            crate::ir_lower::stmt::stored_numeric_map::is_int_literal_array(expr)
+        }
+        ExprKind::FunctionCall { name, args } => {
+            let key = php_symbol_key(name.as_str().trim_start_matches('\\'));
+            if ctx.functions.contains_key(key.as_str())
+                || args.iter().any(|arg| {
+                    matches!(arg.kind, ExprKind::Spread(_) | ExprKind::NamedArg { .. })
+                })
+            {
+                return false;
+            }
+            match key.as_str() {
+                "range" => {
+                    (2..=3).contains(&args.len())
+                        && args.iter().all(|arg| integer_literal(arg).is_some())
+                }
+                "array_slice" => {
+                    let preserve_keys = args
+                        .get(3)
+                        .is_some_and(|arg| matches!(arg.kind, ExprKind::BoolLiteral(true)));
+                    (2..=4).contains(&args.len())
+                        && crate::ir_lower::stmt::stored_numeric_map::slice_preserves_packed_layout(
+                            args.get(1),
+                            args.get(3),
+                        )
+                        && (!preserve_keys || packed_source_is_plain(ctx, &args[0]))
+                        && lowering_packed_int_source(ctx, &args[0])
+                }
+                "array_values" => args.len() == 1 && lowering_packed_int_source(ctx, &args[0]),
+                "array_reverse" => {
+                    (1..=2).contains(&args.len())
+                        && crate::ir_lower::stmt::stored_numeric_map::reverse_preserves_packed_layout(
+                            args.get(1),
+                        )
+                        && lowering_packed_int_source(ctx, &args[0])
+                }
+                "array_fill" => {
+                    args.len() == 3
+                        && matches!(args[0].kind, ExprKind::IntLiteral(0))
+                        && integer_literal(&args[2]).is_some()
+                }
+                "array_merge" => {
+                    args.len() == 2
+                        && lowering_packed_int_source(ctx, &args[0])
+                        && lowering_packed_int_source(ctx, &args[1])
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Returns whether a variable source is a plain local whose EIR value is not boxed or aliased.
+///
+/// A parameter, global, `static` local or reference alias can load through boxed storage even when
+/// its checked type is a concrete indexed array. The key-preserving slice of such a binding lowers
+/// to a hash, so the stored-map proof must fail before any emission rather than assume packed slots.
+fn packed_source_is_plain(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
+    let ExprKind::Variable(name) = &expr.kind else {
+        return true;
+    };
+    !ctx.is_ref_bound_local(name)
+        && !ctx.local_uses_global_storage(name)
+        && !ctx
+            .builder
+            .function()
+            .params
+            .iter()
+            .any(|param| param.name.as_str() == name.as_str())
+}
+
+/// Lowers one stored `array_map()` candidate into its fused kernel.
+///
+/// The callback must be a capture-free single-parameter closure whose body parses into one of
+/// the `StoredNumericMapShape` kernels, and the source must be a plain packed `array<int>`.
+/// Returns `None` for any unsupported shape so the generic map call remains authoritative.
+pub(super) fn lower_stored_numeric_map(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if name != crate::ir_lower::stmt::stored_numeric_map::STORED_NUMERIC_MAP
+        || args.len() != 2
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let source_is_variable = matches!(args[1].kind, ExprKind::Variable(_));
+    if !lowering_packed_int_source(ctx, &args[1]) {
+        return None;
+    }
+    let (param, body) = scalar_single_param_closure(&args[0], false)?;
+    let shape =
+        crate::ir_lower::stmt::stored_numeric_map::parse_stored_numeric_map(body, param)?;
+    let source = lower_expr(ctx, &args[1]);
+    debug_assert!(
+        ctx.builder.value_php_type(source.value).codegen_repr()
+            == PhpType::Array(Box::new(PhpType::Int)),
+        "a proven packed-int source must lower to array<int>"
+    );
+    let result = match shape {
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Single {
+            constant,
+            op,
+        } => {
+            let op_code = match op {
+                crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapOp::Add => 0i64,
+                crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapOp::Sub => 1i64,
+                crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapOp::Mul => 2i64,
+            };
+            let constant = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(constant)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            let op_code = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(op_code)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            emit_stored_map_call(
+                ctx,
+                vec![source.value, constant.value, op_code.value],
+                crate::ir::RuntimeFnId::ArrayMapNumeric,
+                expr.span,
+            )
+        }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Square => {
+            emit_stored_map_call(
+                ctx,
+                vec![source.value],
+                crate::ir::RuntimeFnId::ArrayMapSquare,
+                expr.span,
+            )
+        }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::FloatAffine {
+            scale,
+            offset,
+        } => {
+            let scale = ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(scale)),
+                PhpType::Float,
+                Op::ConstF64.default_effects(),
+                Some(expr.span),
+            );
+            let offset = ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(offset)),
+                PhpType::Float,
+                Op::ConstF64.default_effects(),
+                Some(expr.span),
+            );
+            emit_stored_map_call(
+                ctx,
+                vec![source.value, scale.value, offset.value],
+                crate::ir::RuntimeFnId::ArrayMapFloatAffine,
+                expr.span,
+            )
+        }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::IntDiv {
+            divisor,
+        } => {
+            let divisor = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(divisor)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            emit_stored_map_call(
+                ctx,
+                vec![source.value, divisor.value],
+                crate::ir::RuntimeFnId::ArrayMapIntDiv,
+                expr.span,
+            )
+        }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::FloatDiv {
+            divisor,
+        } => {
+            let divisor = ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(divisor)),
+                PhpType::Float,
+                Op::ConstF64.default_effects(),
+                Some(expr.span),
+            );
+            emit_stored_map_call(
+                ctx,
+                vec![source.value, divisor.value],
+                crate::ir::RuntimeFnId::ArrayMapFloatDiv,
+                expr.span,
+            )
+        }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::FloatScale {
+            scale,
+        } => {
+            let scale = ctx.emit_value(
+                Op::ConstF64,
+                Vec::new(),
+                Some(Immediate::F64(scale)),
+                PhpType::Float,
+                Op::ConstF64.default_effects(),
+                Some(expr.span),
+            );
+            emit_stored_map_call(
+                ctx,
+                vec![source.value, scale.value],
+                crate::ir::RuntimeFnId::ArrayMapFloatScale,
+                expr.span,
+            )
+        }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::SquareAffine {
+            offset,
+        } => {
+            let offset = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(offset)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            emit_stored_map_call(
+                ctx,
+                vec![source.value, offset.value],
+                crate::ir::RuntimeFnId::ArrayMapSquareAffine,
+                expr.span,
+            )
+        }
+        crate::ir_lower::stmt::stored_numeric_map::StoredNumericMapShape::Affine {
+            scale,
+            offset,
+        } => {
+            let scale = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(scale)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            let offset = ctx.emit_value(
+                Op::ConstI64,
+                Vec::new(),
+                Some(Immediate::I64(offset)),
+                PhpType::Int,
+                Op::ConstI64.default_effects(),
+                Some(expr.span),
+            );
+            emit_stored_map_call(
+                ctx,
+                vec![source.value, scale.value, offset.value],
+                crate::ir::RuntimeFnId::ArrayMapAffine,
+                expr.span,
+            )
+        }
+    };
+    if !source_is_variable {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(expr.span));
+    }
+    Some(result)
+}
+
+/// Emits one stored map runtime call and returns its `array<mixed>` value.
+fn emit_stored_map_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    operands: Vec<crate::ir::ValueId>,
+    target: crate::ir::RuntimeFnId,
+    span: Span,
+) -> LoweredValue {
+    ctx.emit_value(
+        Op::RuntimeCall,
+        operands,
+        Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+            target,
+        ))),
+        PhpType::Array(Box::new(PhpType::Mixed)),
+        target.intrinsic_effects(),
+        Some(span),
+    )
+}
+
 /// Lowers `array_sum(array_map(fn($x) => $x + $c, $ints))` into one packed-int kernel.
 ///
 /// The closure has no captures, no declared return type, and a single untyped parameter, so
@@ -549,6 +1048,74 @@ pub(super) fn lower_map_sum_add(
         crate::ir::RuntimeFnId::ArrayMapSumAdd.intrinsic_effects(),
         Some(expr.span),
     ))
+}
+
+/// Lowers `count(array_map(fn($x) => <pure arithmetic>, $ints))` to the source length.
+///
+/// The single-array form preserves keys and emits exactly one result per source element,
+/// so a capture-free closure whose body is pure arithmetic cannot change the count. Its
+/// calls have no observable effects, which lets the map array disappear entirely. Capturing,
+/// typed, division-based, or otherwise effectful callbacks keep the generic map.
+pub(super) fn lower_count_map(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "count" || args.len() != 1 {
+        return None;
+    }
+    let ExprKind::FunctionCall {
+        name: map_name,
+        args: map_args,
+    } = &args[0].kind
+    else {
+        return None;
+    };
+    if php_symbol_key(map_name.as_str().trim_start_matches('\\')) != "array_map"
+        || ctx.functions.contains_key(map_name.as_str().trim_start_matches('\\'))
+        || map_args.len() != 2
+        || crate::types::call_args::has_named_args(map_args)
+        || map_args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::Variable(source_name) = &map_args[1].kind else {
+        return None;
+    };
+    if ctx.local_type(source_name).codegen_repr()
+        != PhpType::Array(Box::new(PhpType::Int))
+    {
+        return None;
+    }
+    let (param, body) = scalar_single_param_closure(&map_args[0], false)?;
+    if !count_pure_arithmetic(body, param) {
+        return None;
+    }
+    let source = lower_expr(ctx, &map_args[1]);
+    Some(ctx.emit_value(
+        Op::ArrayLen,
+        vec![source.value],
+        None,
+        PhpType::Int,
+        Op::ArrayLen.default_effects(),
+        Some(expr.span),
+    ))
+}
+
+/// Returns true for a pure arithmetic tree over the parameter and scalar literals.
+fn count_pure_arithmetic(expr: &Expr, param: &str) -> bool {
+    match &expr.kind {
+        ExprKind::Variable(name) => name == param,
+        ExprKind::IntLiteral(_) | ExprKind::FloatLiteral(_) => true,
+        ExprKind::Negate(inner) => count_pure_arithmetic(inner, param),
+        ExprKind::BinaryOp { left, op, right } => {
+            matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+                && count_pure_arithmetic(left, param)
+                && count_pure_arithmetic(right, param)
+        }
+        _ => false,
+    }
 }
 
 /// Lowers `count(array_filter($ints, fn($x) => $x % $c === 0))` into one counting kernel.

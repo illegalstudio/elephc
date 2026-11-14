@@ -55,7 +55,9 @@ pub(super) fn numeric_binary_result_type(
         return PhpType::Float;
     }
     if matches!(op, BinOp::Div) && (lhs != IrType::I64 || rhs != IrType::I64) {
-        return PhpType::Float;
+        // Mixed/string operands go through the boxed division helper, which preserves
+        // PHP's run-time int/float result. A float operand returned Float above.
+        return PhpType::Mixed;
     }
     if lhs == IrType::I64 && rhs == IrType::I64 {
         if fallback == &PhpType::Mixed
@@ -65,7 +67,9 @@ pub(super) fn numeric_binary_result_type(
             return PhpType::Mixed;
         }
         if matches!(op, BinOp::Div) {
-            return PhpType::Float;
+            // PHP keeps an int for an exact integer division and promotes to double
+            // otherwise, so the value needs the boxed Mixed representation.
+            return PhpType::Mixed;
         }
         return PhpType::Int;
     }
@@ -298,6 +302,7 @@ fn lower_numeric_binary_values(
                 BinOp::Add => Op::ICheckedAdd,
                 BinOp::Sub => Op::ICheckedSub,
                 BinOp::Mul => Op::ICheckedMul,
+                BinOp::Div => Op::ICheckedDiv,
                 _ => unreachable!("only overflow-capable integer arithmetic is boxed"),
             };
             return ctx.emit_value(
@@ -529,6 +534,7 @@ pub(super) fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         BinOp::Add => Some(MixedNumericOp::Add),
         BinOp::Sub => Some(MixedNumericOp::Sub),
         BinOp::Mul => Some(MixedNumericOp::Mul),
+        BinOp::Div => Some(MixedNumericOp::Div),
         BinOp::Pow => Some(MixedNumericOp::Pow),
         _ => None,
     }

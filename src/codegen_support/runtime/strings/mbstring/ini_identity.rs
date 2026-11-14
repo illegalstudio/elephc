@@ -29,17 +29,22 @@ fn aarch64(emitter: &mut Emitter, operation: &str) {
     emitter.label_global(&label);
     if dormant_gate(operation) {
         emitter.instruction("stp x9, x30, [sp, #-16]!");                        // preserve the gate scratch register and leaf return address
+        if operation == "reset" {
+            abi::emit_load_symbol_to_reg(emitter, "x9", "_mbstring_request_generation", 0);
+            emitter.instruction("add x9, x9, #1");                              // invalidate every literal registration stamp from the previous request
+            abi::emit_store_reg_to_symbol(emitter, "x9", "_mbstring_request_generation", 0);
+        }
         abi::emit_load_symbol_to_reg(emitter, "x9", "_mbstring_ini_native_active", 0);
         emitter.instruction(&format!("cbz x9, {label}_inactive"));              // skip bridge access until native INI metadata exists
         emitter.instruction("ldp x9, x30, [sp], #16");                          // restore the original register values before the complete save
     }
     emitter.instruction("sub sp, sp, #768");                                    // reserve aligned storage for every general and vector register
     for register in (0..30).step_by(2) {
-        emitter.instruction(&format!("stp x{register}, x{}, [sp, #{}]", register + 1, register * 8));// preserve the native caller's integer register pair
+        emitter.instruction(&format!("stp x{register}, x{}, [sp, #{}]", register + 1, register * 8)); // preserve the native caller's integer register pair
     }
     emitter.instruction("stp x30, xzr, [sp, #240]");                            // preserve linkage and the integer-save padding
     for register in (0..32).step_by(2) {
-        emitter.instruction(&format!("stp q{register}, q{}, [sp, #{}]", register + 1, 256 + register * 16));// preserve the full vector register pair across Rust
+        emitter.instruction(&format!("stp q{register}, q{}, [sp, #{}]", register + 1, 256 + register * 16)); // preserve the full vector register pair across Rust
     }
     if matches!(operation, "bind" | "copy" | "fresh" | "persist") {
         let pointer = if operation == "fresh" { "x1" } else { "x0" };
@@ -60,10 +65,10 @@ fn aarch64(emitter: &mut Emitter, operation: &str) {
     if !dormant_gate(operation) { abi::emit_store_imm_to_symbol(emitter, "_mbstring_ini_native_active", 0, 1); }
     if operation == "reset" { abi::emit_store_zero_to_symbol(emitter, "_mbstring_ini_native_active", 0); }
     for register in (0..32).step_by(2) {
-        emitter.instruction(&format!("ldp q{register}, q{}, [sp, #{}]", register + 1, 256 + register * 16));// restore native floating-point and vector values
+        emitter.instruction(&format!("ldp q{register}, q{}, [sp, #{}]", register + 1, 256 + register * 16)); // restore native floating-point and vector values
     }
     for register in (0..30).step_by(2) {
-        emitter.instruction(&format!("ldp x{register}, x{}, [sp, #{}]", register + 1, register * 8));// restore the native caller's original integer pair
+        emitter.instruction(&format!("ldp x{register}, x{}, [sp, #{}]", register + 1, register * 8)); // restore the native caller's original integer pair
     }
     emitter.instruction("ldr x30, [sp, #240]");                                 // recover the leaf caller's original return address
     emitter.instruction("add sp, sp, #768");                                    // release the complete aligned register-save frame
@@ -81,6 +86,11 @@ fn x86_64(emitter: &mut Emitter, operation: &str) {
     emitter.label_global(&label);
     if dormant_gate(operation) {
         emitter.instruction("push r11");                                        // preserve the sole dormant-gate scratch register
+        if operation == "reset" {
+            abi::emit_load_symbol_to_reg(emitter, "r11", "_mbstring_request_generation", 0);
+            emitter.instruction("add r11, 1");                                  // invalidate every literal registration stamp from the previous request
+            abi::emit_store_reg_to_symbol(emitter, "r11", "_mbstring_request_generation", 0);
+        }
         abi::emit_load_symbol_to_reg(emitter, "r11", "_mbstring_ini_native_active", 0);
         emitter.instruction("test r11, r11");                                   // test whether this request owns native INI metadata
         emitter.instruction("pop r11");                                         // restore the caller's scratch value without changing the gate flags
@@ -89,11 +99,11 @@ fn x86_64(emitter: &mut Emitter, operation: &str) {
     emitter.instruction("push rbp");                                            // preserve frame linkage independently of the incoming stack phase
     emitter.instruction("mov rbp, rsp");                                        // retain the exact stack position for lossless teardown
     let registers = ["rax", "rbx", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
-    for register in registers { emitter.instruction(&format!("push {register}")); }// preserve every non-frame general register across Rust callbacks
+    for register in registers { emitter.instruction(&format!("push {register}")); } // preserve every non-frame general register across Rust callbacks
     emitter.instruction("sub rsp, 256");                                        // reserve sixteen full XMM register slots before alignment
     emitter.instruction("and rsp, -16");                                        // repair either allocator leaf stack phase for a SysV C call
     for register in 0..16 {
-        emitter.instruction(&format!("movdqu XMMWORD PTR [rsp + {}], xmm{register}", register * 16));// preserve each complete vector value before calling Rust
+        emitter.instruction(&format!("movdqu XMMWORD PTR [rsp + {}], xmm{register}", register * 16)); // preserve each complete vector value before calling Rust
     }
     if matches!(operation, "bind" | "copy" | "fresh" | "persist") {
         emitter.instruction(&format!("or QWORD PTR [rax - 8], 0x{:x}", crate::codegen_support::sentinels::MBSTRING_IDENTITY_TRACKED)); // mark this allocation as carrying mbstring identity metadata
@@ -116,10 +126,10 @@ fn x86_64(emitter: &mut Emitter, operation: &str) {
     if !dormant_gate(operation) { abi::emit_store_imm_to_symbol(emitter, "_mbstring_ini_native_active", 0, 1); }
     if operation == "reset" { abi::emit_store_zero_to_symbol(emitter, "_mbstring_ini_native_active", 0); }
     for register in 0..16 {
-        emitter.instruction(&format!("movdqu xmm{register}, XMMWORD PTR [rsp + {}]", register * 16));// restore floating-point and vector temporaries exactly
+        emitter.instruction(&format!("movdqu xmm{register}, XMMWORD PTR [rsp + {}]", register * 16)); // restore floating-point and vector temporaries exactly
     }
     emitter.instruction("lea rsp, [rbp - 112]");                                // recover the integer-save frame without assuming incoming alignment
-    for register in registers.into_iter().rev() { emitter.instruction(&format!("pop {register}")); }// restore every saved integer register in reverse order
+    for register in registers.into_iter().rev() { emitter.instruction(&format!("pop {register}")); } // restore every saved integer register in reverse order
     emitter.instruction("pop rbp");                                             // restore original linkage and the caller's exact stack pointer
     if dormant_gate(operation) { emitter.label(&format!("{label}_inactive")); }
     emitter.instruction("ret");                                                 // preserve the complete native value convention on every exit

@@ -41,10 +41,21 @@ mod str_split_count_sink;
 mod json_decode_count_sink;
 #[path = "optimizer/json_decode_count_hoist.rs"]
 mod json_decode_count_hoist;
+#[path = "optimizer/json_encode_len_cache.rs"]
+mod json_encode_len_cache;
 #[path = "optimizer/array_sum_int_sink.rs"]
 mod array_sum_int_sink;
 #[path = "optimizer/array_map_sum_add_int_sink.rs"]
 mod array_map_sum_add_int_sink;
+mod array_map_sum_div_fusion;
+mod array_map_read_fusion;
+mod mb_chr_len_local_sink;
+mod mb_constant_fold;
+mod const_string_observations;
+mod stored_numeric_map;
+mod reduce_product_seed;
+mod reduce_sum_seed;
+mod array_map_count_fusion;
 #[path = "optimizer/array_filter_count_hoist.rs"]
 mod array_filter_count_hoist;
 #[path = "optimizer/array_read_match.rs"]
@@ -74,6 +85,7 @@ mod call_result_alias;
 mod numeric_closure_calls;
 #[path = "optimizer/constant_folding.rs"]
 mod constant_folding;
+mod const_string_array_intval_fold;
 #[path = "optimizer/constant_propagation.rs"]
 mod constant_propagation;
 #[path = "optimizer/control_flow_normalization.rs"]

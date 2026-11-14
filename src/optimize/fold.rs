@@ -9,7 +9,7 @@
 //! - Only fold results that are unambiguous PHP equivalents; division by zero and effectful expressions must remain runtime behavior.
 
 mod array_key;
-mod casts;
+pub(crate) mod casts;
 mod compare;
 pub(crate) mod expr;
 mod inline_closure;

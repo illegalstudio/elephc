@@ -351,6 +351,14 @@ Both answers are what php-src produces; they differ because the string path runs
 the *capping* helper, not the wrapping one — using the sibling turned `(int)"1e19"` into the
 negative wrapped value.
 
+`__rt_str_to_int` first scans a plain decimal run in place: optional ASCII whitespace and
+sign, then digits, saturating at `PHP_INT_MAX`/`PHP_INT_MIN`. A digit run followed by `.`,
+`e`, or `E` bails to the general libc-backed parser so the float-form cap still applies;
+any other terminator returns the accumulated integer exactly as PHP stops at the first
+non-digit. `__rt_str_to_int_base` forwards base 10 to that helper because
+`intval("1e3", 10)` is PHP's numeric-string 1000, while every other base keeps digit-only
+`strtol` rules (`intval("1e3", 16)` is 0x1e3).
+
 The hardware conversion instructions disagree on non-finite input, and that disagreement is
 the reason these are shared helpers at all: AArch64's `fcvtzs` saturates by definition, while
 x86_64's `cvttsd2si` answers with the "integer indefinite" pattern `0x8000000000000000`. A bare
@@ -424,7 +432,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_php_num_scan` | Clip a C string to PHP's leading numeric run (`_is_numeric_string_ex` grammar) in place and report whether the whole string was numeric. Runs between `__rt_cstr` and libc so `strtod`/`strtoll` never see hexadecimal, `INF`/`NAN` or underscore forms PHP does not accept | `x0` = C string | `x0` = run pointer, `x1` = fully-numeric flag |
 | `__rt_str_to_number` | Parse a PHP numeric string for loose comparison, `is_numeric()`, and numeric-string casts (via `__rt_php_num_scan`) | `x1`/`x2` | numeric payload + success flag |
 | `__rt_str_looks_like_int_for_coercion` | Validate PHP coercive int-parameter numeric strings while rejecting libc-only `strtod` forms such as `0x`, `INF`, and `NAN` | `x1`/`x2` | `x0` (0 or 1) |
-| `__rt_str_to_int` | Parse a PHP numeric-string prefix with integer/float forms and truncate toward zero like PHP `(int)` casts | `x1`/`x2` | `x0` (integer) |
+| `__rt_str_to_int` | Parse a PHP numeric-string prefix with integer/float forms and truncate toward zero like PHP `(int)` casts. A plain saturating decimal run is parsed in place; a following `.`/`e`/`E` bails to the libc float-form parser | `x1`/`x2` | `x0` (integer) |
 | `__rt_str_loose_eq` | Compare two strings using PHP loose-comparison numeric-string rules before falling back to bytes | two strings | `x0` (0 or 1) |
 | `__rt_strtolower` | Lowercase conversion | `x1`/`x2` | `x1`/`x2` |
 | `__rt_strtoupper` | Uppercase conversion | `x1`/`x2` | `x1`/`x2` |
@@ -435,6 +443,9 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_strrev` | Reverse string (byte-wise) | `x1`/`x2` | `x1`/`x2` |
 | `__rt_grapheme_strrev` | Reverse a UTF-8 string by grapheme cluster for PHP 8.6 `grapheme_strrev()`; returns false on malformed UTF-8 | `x1`/`x2` | `x1`/`x2` |
 | `__rt_mbstring_native` | Shared invocation adapter that propagates failures through ordinary exception unwinding | C ABI operation ID, extended descriptor-pointer array, count, caller strictness, optional eval context | Primary value, status, byte length, result kind |
+| `__rt_mb_chr_utf8` | Encodes one non-surrogate U+0000..U+10FFFF codepoint into a 1-4 byte owned UTF-8 string; a null pointer reports PHP `false` | `x0`/`rax` = codepoint | AArch64 `x1`/`x2`; x86_64 `rax`/`rdx` |
+| `__rt_mb_encode_numericentity_utf8` | Encodes every non-ASCII UTF-8 scalar as `&#DECIMAL;` for the full-range identity map; null reports invalid UTF-8 for the bridge | source string | owned entity string, or null |
+| `__rt_mb_decode_numericentity_utf8` | Decodes well-formed decimal `&#N;` references in U+0080..U+10FFFF without surrogates; plain ampersands copy one byte; null reports a rejected shape for the bridge | source string | owned decoded string, or null |
 | `__rt_mbstring_status` | Same owned results and errors, with pending exceptions returned to eval without unwinding | C ABI operation ID, argument pointer, count | AArch64 `x0`/`x1`/`x2`/`x3`; x86_64 `rax`/`rdx`/`rcx`/`r8` |
 | `__rt_mbstring_string_array` | Validates packed binary strings and transfers copied elements into an owned indexed array of Mixed cells | C ABI packed pointer, byte length, element count | Owned array pointer, or zero for invalid framing |
 | `__rt_mbstring_array_next` | Borrows one ordered native array entry and normalizes concrete value tags without allocation or mutation | C ABI context, array descriptor, cursor, key output, value output | Entry, end, or failure status |
@@ -475,7 +486,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_hex2bin` | Hex → binary | `x1`/`x2` | `x1`/`x2` |
 | `__rt_md5` | MD5 hash | `x1`/`x2` | `x1`/`x2` |
 | `__rt_sha1` | SHA1 hash | `x1`/`x2` | `x1`/`x2` |
-| `__rt_sprintf` | Format string, including deferred static/Mixed coercion and eval-aware object stringification. An unadorned `%d` formats decimal digits directly with `__rt_itoa_into` after proving no flag, width, or precision needs libc field rules | format + tagged args on stack + optional eval context | `x1`/`x2` |
+| `__rt_sprintf` | Format string, including deferred static/Mixed coercion and eval-aware object stringification. An unadorned `%d` formats decimal digits directly with `__rt_itoa_into` after proving no flag, width, or precision needs libc field rules. With no sign/left/alternate flag and precision at most nine, `%f`/`%F` takes an exact fixed-point path: when `value * 10^precision` is exactly an integer below `2^52`, that integer is PHP's correctly rounded body and is formatted with `__rt_itoa_into`; fractional, oversized, NaN, and infinity values keep `snprintf` | format + tagged args on stack + optional eval context | `x1`/`x2` |
 | `__rt_sprintf_pack_mixed` | Pack a boxed scalar or preserve a boxed non-scalar for deferred formatting | boxed `Mixed` in `x0` | record payload/tag in `x0`/`x1` |
 | `__rt_sprintf_mixed_to_int` | Apply PHP numeric formatting rules and warnings to a boxed or raw-tagged array, object, callable, iterable, or resource | record tag/payload + conversion kind + optional eval context in `x0`-`x3` | `x0` |
 | `__rt_sprintf_mixed_to_string` | Render a boxed or raw-tagged array/resource, dispatch native/eval `__toString()`, or throw a catchable `Error` for a non-stringable value | record tag/payload + optional eval context in `x0`/`x1`/`x2` | owner + `x1`/`x2` |
@@ -582,7 +593,9 @@ bridge, so PHP's Unicode and substitution behavior remains authoritative. Catalo
 count and `mb_get_info("internal_encoding")` queries use dedicated allocation-free
 C ABI entry points. The bridge identity header bit marks strings that actually
 acquired INI metadata, letting `__rt_heap_free` skip the metadata callback for the
-ordinary strings that never did.
+ordinary strings that never did. Each deduplicated string literal also owns a
+one-byte registration flag in the program data: `__rt_mbstring_ini_literal` runs on
+the literal's first use and later uses skip its full register save and bridge call.
 
 The Rust encoding catalog is one immutable static slice. Codec selection and
 encoding lookup share its metadata and embedded byte tables, rather than
@@ -816,7 +829,15 @@ implementation ledger.
 `mb_encode_numericentity` and `mb_decode_numericentity` share the same protected
 array reader for conversion maps. Encoding resolution occurs before map-length
 validation, and only complete groups of four elements are accepted. Map keys are
-ignored. Integer conversion uses PHP arithmetic rules independently of caller
+ignored. The explicit-UTF-8 full decimal map `[0x80, 0x10FFFF, 0, 0x1FFFFF]`
+takes native helpers that pre-scan through the allocation-free length sink before
+building one owned result; any other map, encoding, malformed reference, or
+plain entity shape keeps the shared bridge. Decimal references are bounded to
+ten digits, matching php-src's entity scanner. `mb_convert_kana("a")` maps the
+ASCII and U+FF01..U+FF5D table subset to one byte, while `mb_chr` encodes one
+scalar directly; both allocate one owned string and keep the bridge for other
+encodings or unmapped table entries. Integer conversion uses PHP arithmetic
+rules independently of caller
 strictness: numeric prefixes may warn, finite float overflow wraps, and numeric
 string overflow saturates. Ordered warnings are delivered before the next
 referenced map element is read. The chosen encoding remains fixed across these
@@ -999,13 +1020,18 @@ The five `__rt_memory_*` helpers are constant-time leaf routines that never allo
 | `__rt_array_union` | Build PHP indexed-array union: left numeric keys win, only missing right suffix keys are appended | `x0` = left array, `x1` = right array | `x0` = result array |
 | `__rt_array_hash_union` | Build PHP indexed+associative union by converting left indexes to integer hash keys before appending missing right entries | `x0` = left array, `x1` = right hash | `x0` = result hash |
 | `__rt_array_sum_int` | Sum a dense int array range with PHP int-to-float promotion; a positive-int NEON/SSE2 path runs when every element fits in 32 unsigned bits and the total is provably below `2^63`, otherwise the scalar promotion sequence runs from element 0 | `x0` = array, `x1` = start, `x2` = end, `x3` = seed Mixed cell | `x0` = fresh Mixed cell |
-| `__rt_array_sum_int_i64` | Same reduction with a raw int seed; used by `array_sum()` | `x0` = array, `x1` = start, `x2` = end, `x3` = raw seed | `x0` = fresh Mixed cell |
+| `__rt_array_sum_int_i64` | Same reduction with a raw int seed; used by `array_sum()` and the fused seeded `array_reduce($ints, fn($c, $v) => $c + $v, C)` | `x0` = array, `x1` = start, `x2` = end, `x3` = raw seed | `x0` = fresh Mixed cell |
+| `__rt_array_sum_float_i64` | Raw IEEE-754 float-seeded reduction for the fused `array_reduce($ints, fn($c, $v) => $c + $v, F)`: starts in double mode, adds every element as a double, and boxes only the final float | `x0` = array, `x1` = start, `x2` = end, `x3` = raw seed bits | `x0` = fresh Mixed cell |
+| `__rt_array_product_int_i64` | Raw int-seeded product for the fused `array_reduce($ints, fn($c, $v) => $c * $v, C)`: multiplies with PHP's checked integer semantics, promotes both operands to double at the first overflow, then continues in double mode; boxes only the final result | `x0` = array, `x1` = start, `x2` = end, `x3` = raw int seed | `x0` = fresh Mixed cell |
+| `__rt_array_product_float_i64` | Raw IEEE-754 float-seeded product for the fused `array_reduce($ints, fn($c, $v) => $c * $v, F)`: multiplies every element in double mode and boxes only the final float; an empty range keeps the seed bits, so `-0.0` stays `float(-0)` | `x0` = array, `x1` = start, `x2` = end, `x3` = raw seed bits | `x0` = fresh Mixed cell |
 | `__rt_array_sum_probe_small` | One-time proof-and-sum for an immutable packed int array; returns the exact non-negative 32-bit sum or `PHP_INT_MIN` when the guardless cache cannot be used | `x0` = array | `x0` = cached sum or sentinel |
 | `__rt_array_sum_int_value_cached` | Cached dispatch for the loop-invariant raw reducer; returns the probe sum or falls back to `__rt_array_sum_int_value` on the sentinel | `x0` = array, `x1` = probe | `x0` = raw PHP int |
 | `__rt_array_map_sum_probe_int` | One-time checked map+sum probe for the loop-invariant fused kernel; returns the exact integer result or `PHP_INT_MIN` when a map/sum step would promote | `x0` = array, `x1` = literal offset | `x0` = cached sum or sentinel |
 | `__rt_array_map_sum_add_int` | Raw-result fused map+sum kernel; a promoted map or sum applies PHP's warned float-to-int conversion | `x0` = array, `x1` = literal offset | `x0` = raw PHP int |
 | `__rt_array_map_sum_add` | Fused `array_sum(array_map(fn($x) => $x + C, $packedInts))`: walks the payload once, reproduces the per-element int-to-float map promotion and the running-sum promotion, and boxes one result | `x0` = array, `x1` = literal offset | `x0` = fresh Mixed cell |
 | `__rt_array_map_sum_add_int` | Raw-result mode of the fused map+sum kernel for an `(int)`-observed result: shares the vector/scalar body, skips the Mixed box, and applies PHP's warned float-to-int conversion when the map or running sum promoted | `x0` = array, `x1` = literal offset | `x0` = raw PHP int |
+| `__rt_array_map_sum_int_div` | Fused stored `array_sum(array_map(fn($x) => $x / C, $packedInts))`: walks the packed payload once, applies PHP's exact-int-or-double division, propagates `PHP_INT_MIN / -1` promotion and integer-overflow sum promotion in source order, and boxes one result | `x0` = array, `x1` = literal divisor | `x0` = fresh Mixed cell |
+| `__rt_json_rows_scalar_guard` | Depth-two preflight for the loop-invariant JSON length cache: walks the packed outer rows and their hash values, accepting scalar/null tags and boxed Mixed cells with a scalar/null tag, and rejecting objects, resources and nested containers | `x0` = packed row array | `x0` = 1 when the cached length is safe, else 0 |
 | `__rt_array_filter_count_mod` | Fused `count(array_filter($packedInts, fn($x) => $x % C === 0))`: counts divisible elements without building a hash; powers of two use a mask, other divisors use truncated remainder | `x0` = array, `x1` = literal divisor | `x0` = raw PHP int count |
 | `__rt_array_element_type_check` | Fused `is_int/is_string/is_array/is_null($packedMixed[$intIndex])`: reads the stored Mixed cell tag in place; hashes, references, nested wrappers and missing keys fall back to the generic warning/ownership path | `x0` = array, `x1` = int index, `x2` = runtime-tag mask | `x0` = raw PHP bool |
 | `__rt_array_push_int` | Append int to array (grows if needed) | `x0` = array, `x1` = value | `x0` = array |
@@ -1038,12 +1064,14 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | EIR target | Source shape | Runtime helper |
 |---|---|---|
 | `ArrayMapSumAdd` | `array_sum(array_map(fn($x) => $x + C, $packedInts))` | `__rt_array_map_sum_add` |
+| `ArrayMapSumIntDiv` | stored `$mapped = array_map(fn($x) => $x / C, $packedInts); array_sum($mapped)` | `__rt_array_map_sum_int_div` |
+| `JsonEncodeLenCached` | loop-invariant `strlen(json_encode($rows))` behind the scalar row guard | `__rt_json_encode_array_dynamic` + `__rt_json_rows_scalar_guard` |
 | `ArrayFilterCountMod` | `count(array_filter($packedInts, fn($x) => $x % C === 0))` | `__rt_array_filter_count_mod` |
 | `ArrayElementTypeCheck` | `is_int/is_string/is_array/is_null($packedMixed[$intIndex])` | `__rt_array_element_type_check` |
 
-The fusions are lowering-time only: they emit ordinary EIR `RuntimeCall` instructions, so the optimizer, ownership analysis, and every supported target see the same typed operation. Each matcher refuses anything outside its exact shape — a declared non-`bool` return type, captures, a non-int index, a shadowed builtin, or a non-packed receiver — and leaves the generic path in place. The fused map and filter kernels preserve PHP's left-to-right additions, int-to-float promotion, and division-by-zero behavior; the predicate kernel keeps the generic warning path for missing keys.
+The lowering-time fusions emit ordinary EIR `RuntimeCall` instructions, so the optimizer, ownership analysis, and every supported target see the same typed operation; `ArrayMapSumIntDiv` is produced by the EIR fusion pass instead, after the stored-map shape has frozen. Each matcher refuses anything outside its exact shape — a declared non-`bool` return type, captures, a non-int index, a shadowed builtin, or a non-packed receiver — and leaves the generic path in place. The fused map and filter kernels preserve PHP's left-to-right additions, int-to-float promotion, and division-by-zero behavior; the predicate kernel keeps the generic warning path for missing keys.
 
-`__rt_array_map_sum_add` takes a NEON/SSE2 path when the literal offset is non-negative and below `2^31`, the count is at most `2^30 - 1`, and every element's high dword is zero. The gate proves every mapped value and the total stay below `2^63`, so the vector adds cannot promote; any failed gate restarts the exact scalar map-then-sum sequence from element 0. `__rt_array_filter_count_mod` vectorizes the power-of-two divisibility masks (including negative divisors after sign normalization) and falls back to the scalar truncated-remainder loop for every other divisor.
+`__rt_array_map_sum_int_div` never allocates the intermediate map: it keeps an integer accumulator in source order, promotes the accumulated prefix when the first non-exact quotient (or `PHP_INT_MIN / -1`) appears, and promotes the running sum to double on the first integer-sum overflow. The divisor is a nonzero literal proven by the stored-map shape, so a zero divisor keeps the generic map and its `DivisionByZeroError`. `__rt_array_map_sum_add` takes a NEON/SSE2 path when the literal offset is non-negative and below `2^31`, the count is at most `2^30 - 1`, and every element's high dword is zero. The gate proves every mapped value and the total stay below `2^63`, so the vector adds cannot promote; any failed gate restarts the exact scalar map-then-sum sequence from element 0. `__rt_array_filter_count_mod` vectorizes the power-of-two divisibility masks (including negative divisors after sign normalization) and falls back to the scalar truncated-remainder loop for every other divisor.
 
 A callback with a declared `int` return cannot use the fused kernel blindly: an overflowing map result must raise PHP's catchable `TypeError`. Lowering therefore emits `__rt_array_map_sum_add_safe` over the packed payload first; a safe range takes the fused kernel, while an unsafe range branches to the ordinary typed `array_map()` + `array_sum()` lowering, which throws at the first overflowing element.
 
@@ -1131,6 +1159,15 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_map_str` | Apply callback to each scalar or string element and return a string array; an optional third argument carries a captured-closure environment |
 | `__rt_array_map_str_owned` | Apply a descriptor-wrapper callback that returns owned strings and transfer those strings directly into the result array |
 | `__rt_array_map_mixed` | Apply a descriptor-backed callback that returns owned boxed Mixed cells and store them directly into a newly allocated result array |
+| `__rt_array_map_numeric` | Stored `array_map(fn($v) => $v + C | $v - C | $v * C, $packedInts)`: builds a raw `array<int>` until an element overflows, then releases it and rebuilds a boxed Mixed array so each result keeps PHP's int/float type | `x0` = packed int array, `x1` = literal operand, `x2` = 0 add / 1 subtract / 2 multiply | `x0` = fresh array with value_type 0 or 7 |
+| `__rt_array_map_affine` | Stored `array_map(fn($v) => $v * A + B, $packedInts)`: checks the multiply then the add in source order; the first promoted element releases the partial raw `array<int>` and rebuilds a boxed Mixed array with PHP's exact per-element int/float result | `x0` = packed int array, `x1` = literal multiplier, `x2` = literal additive offset | `x0` = fresh array with value_type 0 or 7 |
+| `__rt_array_map_square` | Stored `array_map(fn($v) => $v * $v, $packedInts)`: checks the product; the first promoted element releases the partial raw `array<int>` and rebuilds a boxed Mixed array with PHP's exact per-element int/float result | `x0` = packed int array | `x0` = fresh array with value_type 0 or 7 |
+| `__rt_array_map_square_affine` | Stored `array_map(fn($v) => $v * $v + C, $packedInts)`: checks the square then the offset addition in source order; the first promoted element releases the partial raw `array<int>` and rebuilds a boxed Mixed array with PHP's exact per-element int/float result | `x0` = packed int array, `x1` = literal additive offset | `x0` = fresh array with value_type 0 or 7 |
+| `__rt_array_map_float_scale` | Stored `array_map(fn($v) => $v * F, $packedInts)`: converts every element to double and multiplies by the literal scale, producing a raw `array<float>` with 8-byte IEEE-754 slots and value_type 2 | `x0` = packed int array, `d0`/`xmm0` = literal scale | `x0` = fresh array with value_type 2 |
+| `__rt_array_map_float_affine` | Stored `array_map(fn($v) => $v * F + G, $packedInts)`: converts every element to double, multiplies by the literal scale, then adds the literal offset in source order, producing a raw `array<float>` with 8-byte IEEE-754 slots and value_type 2 | `x0` = packed int array, `d0`/`xmm0` = literal scale, `d1`/`xmm1` = literal offset | `x0` = fresh array with value_type 2 |
+| `__rt_array_map_float_div` | Stored `array_map(fn($v) => $v / F, $packedInts)`: converts every element to double and divides by the nonzero literal divisor, producing a raw `array<float>` with 8-byte IEEE-754 slots and value_type 2; zero divisors are rejected before lowering so the generic map keeps `DivisionByZeroError` | `x0` = packed int array, `d0`/`xmm0` = literal divisor | `x0` = fresh array with value_type 2 |
+| `__rt_array_map_int_div` | Stored `array_map(fn($v) => $v / C, $packedInts)`: keeps a raw `array<int>` while every integer division is exact and the quotient fits; the first inexact element or `PHP_INT_MIN / -1` releases it and rebuilds a boxed Mixed array with PHP's exact per-element int/float result | `x0` = packed int array, `x1`/`rsi` = nonzero integer divisor | `x0` = fresh array with value_type 0 or 7 |
+| `__rt_mixed_numeric_div` | PHP `/` over two boxed Mixed operands. Classifies int/float/numeric-string payloads and keeps an exact integer quotient as an int; inexact division and `PHP_INT_MIN / -1` promote to double. A zero divisor returns a null sentinel and the caller raises `DivisionByZeroError` after releasing its operand boxes | `x0`/`rax` = left Mixed cell, `x1`/`rdi` = right Mixed cell | `x0`/`rax` = fresh Mixed cell, or null on a zero divisor |
 | `__rt_array_predicate_boxed` | Search (`array_find`/`array_any`/`array_all`) or filter packed/hash arrays through value/key triples and PHP truthiness. Consumes a callback descriptor, borrows the source triple, and returns an owned Mixed result. Filter modes preserve keys; a null descriptor removes empty values. A retained source snapshot and resumable exception boundary protect all helper-owned values. |
 | `__rt_array_reduce` | Reduce an indexed array of 8-byte payload slots to a single value via callback; an optional fourth argument carries a captured-callback environment |
 | `__rt_array_reduce_str` | Reduce an indexed string array's 16-byte `[ptr][len]` slots into one integer accumulator, passing each element to the callback as a pointer/length pair; an optional fourth argument carries a captured-callback environment |
@@ -1370,13 +1407,18 @@ call operand owns the source cell for the duration of the helper.
 | `__rt_json_integer_tree_write` | Write a proved integer tree into the sized allocation without callbacks or further allocation |
 
 The associative-array encoder has three direct-write fast paths for the common object
-shape: a key of at most 8 plain printable ASCII bytes (no quote, backslash or slash, and no
-active JSON flag) is written as `"key"` at the cursor; a string value of at most 16 such bytes
-takes the same path; an integer value is formatted with `__rt_itoa_into` into a reserved
-21-byte window and shifted onto the cursor. These paths skip the shared itoa scratch, the
-string escaping passes and the generic append copy. Flags, escapes, non-ASCII or control
-bytes, slashes and longer strings keep the full encoder, and the per-value `strbuf_sync` is
-emitted only in the branches that actually use formatter scratch.
+shape: a key or string value of at most 16 plain printable ASCII bytes (no quote, backslash
+or slash, and no active JSON flag) is written as a quoted slice at the cursor; an integer
+value is formatted with `__rt_itoa_into` into a reserved 21-byte window and shifted onto the
+cursor. The quoted paths reserve `len + 2`, classify each source byte through the 256-byte
+`_json_plain_ascii` table, and copy accepted bytes in the same pass, so they skip both the
+separate escaping scan and the generic append copy. A byte that needs escaping abandons the
+partial write and resumes at the saved cursor through the full encoder; the cursor is
+published immediately after buffer growth so a fallback never uses a pre-growth pointer.
+Flags, non-ASCII or control bytes, slashes and longer strings keep the full encoder, and the
+per-value `strbuf_sync` is emitted only in the branches that actually use formatter scratch.
+The same table-driven single-pass copy backs the `__rt_json_encode_str` fast path used by
+object keys and direct `json_encode($string)` calls.
 
 The `json_encode` implementation uses **type-aware dispatch** — the codegen calls a different runtime routine depending on the compile-time type of the value being encoded:
 

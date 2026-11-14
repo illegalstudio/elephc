@@ -254,6 +254,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
         Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
         Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
+        Op::ICheckedDiv => arithmetic::lower_int_checked_div(ctx, &inst),
         Op::ICheckedAddToInt => checked_int_to_int::lower_checked_int_to_int(
             ctx,
             &inst,

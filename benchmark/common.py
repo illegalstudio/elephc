@@ -6,10 +6,12 @@ import hashlib
 import json
 import os
 import platform
+import resource
 import shutil
 import statistics
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,33 +43,108 @@ def command_output(command: list[str]) -> str | None:
     return lines[0] if result.returncode == 0 and lines else None
 
 
-def run_process(command: list[str], cwd: Path, timeout: float = 120) -> str:
-    """Run a command and retain its diagnostics when it fails."""
-    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+def run_process(command: list[str], cwd: Path, timeout: float = 120,
+                env: dict | None = None) -> str:
+    """Run a command with an optional environment override and retain its diagnostics."""
+    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True,
+                            timeout=timeout, env=env)
     if result.returncode:
         raise RuntimeError(f"command failed: {' '.join(command)}\n{result.stdout}\n{result.stderr}")
     return result.stdout
 
 
+def peak_rss_kb(usage: resource.struct_rusage) -> int:
+    """Normalize one child's peak resident set size to kibibytes."""
+    value = usage.ru_maxrss
+    return int(value if platform.system() != "Darwin" else value / 1024)
+
+
+def run_process_measured(command: list[str], cwd: Path, timeout: float = 120,
+                         env: dict | None = None) -> tuple[str, str, resource.struct_rusage]:
+    """Run a child, returning stdout, stderr and its exact wait4 resource usage.
+
+    `subprocess.run()` reaps the child before exposing rusage, so this helper starts the
+    process directly, drains both pipes on reader threads and waits with `os.wait4`. The
+    usage block is the measured process alone (no shell), which makes CPU and peak RSS
+    comparable across Elephc and PHP variants.
+    """
+    process = subprocess.Popen(
+        command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def drain(stream, chunks: list[str]) -> None:
+        try:
+            chunks.append(stream.read())
+        finally:
+            stream.close()
+
+    readers = [
+        threading.Thread(target=drain, args=(process.stdout, stdout_chunks), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, stderr_chunks), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    reaped: list[tuple[int, int, resource.struct_rusage]] = []
+
+    def reap() -> None:
+        try:
+            reaped.append(os.wait4(process.pid, 0))
+        except ChildProcessError:
+            pass
+
+    reaper = threading.Thread(target=reap, daemon=True)
+    reaper.start()
+    reaper.join(timeout)
+    timed_out = reaper.is_alive()
+    if timed_out:
+        process.kill()
+        reaper.join()
+    _pid, status, usage = reaped[0]
+    for reader in readers:
+        reader.join(timeout=5)
+    process.returncode = os.waitstatus_to_exitcode(status)
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
+    if timed_out:
+        raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+    if process.returncode:
+        raise RuntimeError(f"command failed: {' '.join(command)}\n{stdout}\n{stderr}")
+    return stdout, stderr, usage
+
+
 def measure(command: list[str], cwd: Path, expected: str, iterations: int,
-            warmup: int, timeout: float) -> dict:
+            warmup: int, timeout: float, env: dict | None = None) -> dict:
     """Measure execution only, checking output on both warmup and measured runs."""
     samples = []
+    cpu_samples = []
+    rss_samples = []
     for index in range(warmup + iterations):
         start = time.perf_counter()
-        output = run_process(command, cwd, timeout)
+        output, _stderr, usage = run_process_measured(command, cwd, timeout, env=env)
         elapsed = (time.perf_counter() - start) * 1000
         if output != expected:
             raise RuntimeError(f"unexpected stdout for {' '.join(command)}: "
                                f"expected {expected!r}, got {output!r}")
         if index >= warmup:
             samples.append(elapsed)
+            cpu_samples.append((usage.ru_utime + usage.ru_stime) * 1000)
+            rss_samples.append(peak_rss_kb(usage))
     return {"median_ms": statistics.median(samples), "samples_ms": samples,
+            "median_cpu_ms": statistics.median(cpu_samples),
+            "samples_cpu_ms": cpu_samples,
+            "peak_rss_kb": statistics.median(rss_samples),
+            "samples_rss_kb": rss_samples,
             "skipped": False, "detail": f"{iterations} runs"}
 
 
 def skipped(detail: str) -> dict:
-    return {"median_ms": None, "samples_ms": [], "skipped": True, "detail": detail}
+    return {"median_ms": None, "samples_ms": [],
+            "median_cpu_ms": None, "samples_cpu_ms": [],
+            "peak_rss_kb": None, "samples_rss_kb": [],
+            "skipped": True, "detail": detail}
 
 
 def php_command(php: str, *arguments: str, isolated: bool = False) -> list[str]:
@@ -85,6 +162,20 @@ def php_jit_problem(php: str, isolated: bool = False, timeout: float = 30) -> st
     return f"OPcache tracing JIT inactive for {php} ({detail})"
 
 
+def frankenphp_jit_problem(frankenphp: str, ini: Path, timeout: float = 30) -> str | None:
+    """Explain why the pinned FrankenPHP JIT configuration is inactive, or return None."""
+    env = os.environ.copy()
+    env["PHPRC"] = str(ini)
+    result = subprocess.run(
+        [frankenphp, "php-cli", "-r", JIT_PROBE], cwd=REPO, env=env,
+        capture_output=True, text=True, timeout=timeout,
+    )
+    if result.returncode == 0 and result.stdout == "on" and not result.stderr:
+        return None
+    detail = " ".join((result.stdout + result.stderr).split()) or f"exit {result.returncode}"
+    return f"FrankenPHP tracing JIT inactive ({detail})"
+
+
 def require_baselines(cases: dict[str, list[dict]]) -> None:
     """Reject missing comparison tools before CI builds or records partial results."""
     kinds = {kind for fixtures in cases.values() for case in fixtures
@@ -97,6 +188,9 @@ def require_baselines(cases: dict[str, list[dict]]) -> None:
             missing.append(problem)
     if "c" in kinds and not any(shutil.which(tool) for tool in ("cc", "clang", "gcc")):
         missing.append("C compiler (cc, clang, or gcc)")
+    if any(kind.startswith("frankenphp") for kind in kinds) and not (
+            os.environ.get("FRANKENPHP_BIN") or shutil.which("frankenphp")):
+        missing.append("FrankenPHP (frankenphp)")
     if missing:
         raise ValueError("required benchmark baseline unavailable: " + ", ".join(missing))
 
@@ -124,7 +218,7 @@ def run_case(case: dict, compiler: Path, iterations: int, warmup: int,
         cwd = Path(temporary) / directory.name
         shutil.copytree(directory, cwd)
         for label, kind, source in case["variants"]:
-            if kind == "php":
+            if kind in ("php", "php-jit"):
                 php = shutil.which("php")
                 problem = php_jit_problem(php) if php else "PHP interpreter unavailable"
                 if problem:
@@ -140,6 +234,20 @@ def run_case(case: dict, compiler: Path, iterations: int, warmup: int,
                 binary = cwd / "baseline_c"
                 run_process([cc, "-O2", source, "-o", str(binary)], cwd, timeout)
                 command = [str(binary)]
+            elif kind in ("frankenphp", "frankenphp-jit"):
+                frankenphp = os.environ.get("FRANKENPHP_BIN") or shutil.which("frankenphp")
+                if not frankenphp:
+                    results[label] = skipped("FrankenPHP unavailable")
+                    continue
+                environment = os.environ.copy()
+                ini_key = "FRANKENPHP_JIT_PHPRC" if kind == "frankenphp-jit" else "FRANKENPHP_PHPRC"
+                ini = os.environ.get(ini_key)
+                if ini:
+                    environment["PHPRC"] = ini
+                command = [frankenphp, "php-cli", source]
+                results[label] = measure(command, cwd, expected, iterations, warmup,
+                                        timeout, env=environment)
+                continue
             else:
                 run_process([str(compiler), str(cwd / source)], cwd, timeout)
                 command = [str((cwd / source).with_suffix(""))]
@@ -191,7 +299,7 @@ def effective_ms(variant: dict) -> float | None:
 
 
 def render_markdown(payload: dict) -> str:
-    """Render every suite without assuming native-only variant names."""
+    """Render every suite with wall, CPU and peak-RSS medians."""
     sections = []
     for suite, data in payload["suites"].items():
         labels = list(dict.fromkeys(label for case in data["cases"] for label in case["variants"]))
@@ -201,4 +309,32 @@ def render_markdown(payload: dict) -> str:
             values = [format_ms(case["variants"].get(label, {}).get("median_ms")) for label in labels]
             sections.append("| " + " | ".join([case["case"], *values]) + " |")
         sections.append("")
+        cpu_labels = [label for label in labels if any(
+            case["variants"].get(label, {}).get("median_cpu_ms") is not None
+            for case in data["cases"]
+        )]
+        if cpu_labels:
+            sections.extend([f"### {suite} CPU", "",
+                             "| case | " + " | ".join(f"{label} CPU ms" for label in cpu_labels) + " |",
+                             "|---|" + "---:|" * len(cpu_labels)])
+            for case in data["cases"]:
+                values = [format_ms(case["variants"].get(label, {}).get("median_cpu_ms"))
+                          for label in cpu_labels]
+                sections.append("| " + " | ".join([case["case"], *values]) + " |")
+            sections.append("")
+        rss_labels = [label for label in labels if any(
+            case["variants"].get(label, {}).get("peak_rss_kb") is not None
+            for case in data["cases"]
+        )]
+        if rss_labels:
+            sections.extend([f"### {suite} peak RSS", "",
+                             "| case | " + " | ".join(f"{label} RSS MB" for label in rss_labels) + " |",
+                             "|---|" + "---:|" * len(rss_labels)])
+            for case in data["cases"]:
+                values = []
+                for label in rss_labels:
+                    rss = case["variants"].get(label, {}).get("peak_rss_kb")
+                    values.append("n/a" if rss is None else f"{rss / 1024:.2f}")
+                sections.append("| " + " | ".join([case["case"], *values]) + " |")
+            sections.append("")
     return "\n".join(sections) + "\n"

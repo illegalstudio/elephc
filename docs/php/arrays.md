@@ -552,12 +552,19 @@ The AOT path for boxed PHP arrays, including declared `array` parameters, passes
 the callback a writable element reference and its key. Recursive walks do this
 for leaf values. Copies made before the walk keep their original values.
 
-This path requires a visible native function, closure, or method descriptor.
-Opaque eval/extern callbacks, first-class wrapper descriptors, and builtin adapters are
-rejected. The borrowed element reference must not escape the callback through a
-closure capture or a property reference: those operations throw a catchable
-`Error`. Ordinary compiler-managed references are unaffected. These restrictions
-are specific to the boxed walk path and are not a claim of full PHP parity.
+A local indexed or associative array is promoted to boxed storage automatically
+when its walk callback declares the value by reference or reads the key. This keeps
+the write-back visible in the caller, just as it is for a declared `array`
+parameter. A one-parameter by-value callback keeps the concrete eight-byte fast
+path and does not pay for boxing.
+
+This path requires a visible native function, closure, method, first-class
+callable, or callable-array descriptor. Opaque eval/extern callbacks and builtin
+adapters are rejected. The borrowed element reference must not escape the callback
+through a closure capture or a property reference: those operations throw a
+catchable `Error`. Ordinary compiler-managed references are unaffected. These
+restrictions are specific to the boxed walk path and are not a claim of full PHP
+parity.
 
 The sorting, shuffle, and array-walk functions above return `true` on successful
 completion; their results can be used as boolean expressions.

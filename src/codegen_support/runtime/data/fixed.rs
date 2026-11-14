@@ -564,6 +564,11 @@ pub(crate) fn emit_runtime_data_fixed(
     // request on demand instead of every request or none.
     out.push_str(&comm_directive(&target.extern_symbol("elephc_instr_request_fn"), 8, target));
     out.push_str(&comm_directive("_rt_diag_suppression", 8, target));
+    // Saved error_reporting() masks for nested `@` expressions. Push stores the
+    // active mask at the current depth and installs PHP's suppression mask;
+    // pop restores it so a handler invoked under `@` observes 4437 and the
+    // caller sees its original level again afterwards.
+    out.push_str(&comm_directive("_rt_diag_mask_stack", 2048, target));
     // elephc_web_capture: per-request output-capture mode flag read by
     // __rt_stdout_write. Zero (the default) routes echo output to the plain
     // write(1, …) syscall; non-zero (set only by the --web bridge) routes it to
@@ -700,6 +705,10 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _php_error_reporting\n_php_error_reporting:\n    .quad {}\n",
         php_version.error_reporting_mask()
     ));
+    // One-shot mbstring literal-registration stamps. `__rt_mbstring_ini_reset`
+    // increments this generation before each request, so literal flags left by a
+    // previous request never suppress re-registration into the fresh identity map.
+    out.push_str(".globl _mbstring_request_generation\n_mbstring_request_generation:\n    .quad 1\n");
     // PHP user-handler state. Each current callback owns one boxed Mixed cell and
     // one normalized callable descriptor. Replacements move the previous state
     // into an unbounded heap-backed linked stack so restore_*_handler() can unwind

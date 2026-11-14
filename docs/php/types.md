@@ -599,7 +599,7 @@ The compiler also emits non-fatal warnings (unused variables, unreachable code).
 
 ### Runtime diagnostics
 
-Runtime warnings flow through a suppressible diagnostics channel. The `@` operator hides those warnings for its operand only, while fatal runtime errors and compile-time diagnostics remain visible. Current suppressible warnings include `fopen()` / `file_get_contents()` open failures and duplicate `define()` calls.
+Runtime warnings flow through a suppressible diagnostics channel. The `@` operator hides those warnings for its operand only, while fatal runtime errors and compile-time diagnostics remain visible. A user error handler still runs under `@` and observes PHP 8's reduced `4437` reporting mask; the caller's previous level is restored afterwards, including across exception unwinds. Current suppressible warnings include `fopen()` / `file_get_contents()` open failures and duplicate `define()` calls.
 
 The PHP 8.5 profile also warns `unexpected NAN value was coerced to string` when a NaN float becomes a string, including casts, `echo`, concatenation, interpolation, string parameters, and `implode()` elements. PHP 8.2 through 8.4 profiles perform the same conversions silently. `var_dump()`, `var_export()`, and `print_r()` display NaN without this coercion warning.
 

@@ -5,7 +5,7 @@ The process suites use one runner and the same versioned JSON format:
 
 | Suite | Workload | Variants |
 |---|---|---|
-| `native` | Integer sum, array reads, string concatenation | elephc, PHP, equivalent C (`-O2`) |
+| `native` | Integer sum, array reads, string concatenation, substring counting | elephc, PHP, PHP+JIT, equivalent C (`-O2`) |
 | `magician` | Literal/dynamic eval, arithmetic, arrays, builtins, callables, includes | elephc native/eval, PHP native/eval |
 | `hot-path` | Equivalent position updates through different storage | elephc buffer, indexed array, associative array |
 
@@ -75,6 +75,60 @@ the mode of the latest sample.
 The hot-path variants include initialization and final checksum computation in
 their process time. They replace the former combined in-process stopwatch and
 have no historical series until the first CI run using this harness.
+
+## FrankenPHP comparison
+
+The optional comparison scripts run the same `native` fixtures against
+FrankenPHP's embedded PHP through `frankenphp php-cli`. They do not change the
+default CI variants. Download the latest security release (v1.13.5 at the time of
+writing) and verify its SHA-256 against the release asset digest:
+
+```bash
+gh release download v1.13.5 -R php/frankenphp \
+  -p frankenphp-linux-aarch64-gnu -D /tmp/frankenphp
+sha256sum /tmp/frankenphp/frankenphp-linux-aarch64-gnu
+```
+
+Compare end-to-end process wall time (startup included) with Elephc, PHP, PHP+JIT,
+FrankenPHP and FrankenPHP+JIT:
+
+```bash
+python3 benchmark/frankenphp_compare.py \
+  --compiler target/release/elephc \
+  --frankenphp /tmp/frankenphp/frankenphp-linux-aarch64-gnu \
+  --iterations 5 --warmup 2 --json /tmp/frankenphp-wall.json
+```
+
+Because FrankenPHP's CLI binary pays a large fixed startup cost, use the body
+comparison for runtime claims. It injects a top-level `hrtime(true)` start and a
+body-time marker directly into each fixture, so Elephc's stored-map lowering and
+the original `$argc` shape are preserved:
+
+```bash
+python3 benchmark/frankenphp_body.py \
+  --compiler target/release/elephc \
+  --frankenphp /tmp/frankenphp/frankenphp-linux-aarch64-gnu \
+  --iterations 5 --warmup 2 --json /tmp/frankenphp-body.json
+```
+
+The regular `benchmark/run.py` Markdown report also renders CPU and peak-RSS
+tables for every suite from the same rusage fields.
+
+Both tools also report each child's user+system CPU time and peak resident set
+size from `wait4` rusage, with efficiency ratios against FrankenPHP and
+FrankenPHP+JIT. Pass `--require-ahead` to make every selected case a gate:
+the command exits non-zero unless Elephc beats both FrankenPHP variants on time,
+CPU and peak RSS. The gate is strict by default and is meant for local
+certification runs, not CI; pass `--gate-tolerance 0.05` on a noisy machine to
+allow a five-percent shortfall per metric while still reporting the raw ratios.
+The JSON records keep every raw sample under `cpu_samples_ms`/`rss_samples_kb`,
+so a higher ratio always means Elephc used less CPU or less peak RAM for the same
+fixture.
+
+Both tools pin OPcache/JIT explicitly: the plain FrankenPHP variant uses an
+`opcache.enable_cli=0`/`opcache.jit=0` `PHPRC`, and the `-jit` variant uses the
+same tracing-JIT settings as the PHP+JIT baseline. Missing FrankenPHP is reported
+as a skipped variant, never as a zero time.
 
 ## Reports and dashboard
 

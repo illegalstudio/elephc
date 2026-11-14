@@ -37,9 +37,13 @@ def card_summary(suite: str, case: dict) -> str:
     variants = case["variants"]
     if suite == "native":
         php = effective_ms(variants['php'])
-        return " | ".join([f"elephc {format_ms(variants['elephc']['median_ms'])} ms",
-                           f"C {format_ms(variants['c']['median_ms'])} ms",
-                           "PHP absent" if php is None else f"PHP {format_ms(php)} ms",
+        parts = [f"elephc {format_ms(variants['elephc']['median_ms'])} ms",
+                 f"C {format_ms(variants['c']['median_ms'])} ms",
+                 "PHP absent" if php is None else f"PHP {format_ms(php)} ms"]
+        if 'php-jit' in variants:
+            jit = effective_ms(variants['php-jit'])
+            parts.append("PHP+JIT absent" if jit is None else f"PHP+JIT {format_ms(jit)} ms")
+        return " | ".join(parts + [
                            ratio_text(case, "elephc", "c", "elephc/C")])
     if suite == "magician":
         return " | ".join([f"eval {format_ms(variants['elephc-eval']['median_ms'])} ms",

@@ -124,10 +124,25 @@ impl Checker {
                     ));
                 }
                 self.check_arithmetic_string_operands(left, &lt, right, &rt, expr)?;
-                // Division always returns float (PHP compat: 10/3 → 3.333...); keep that
-                // policy even when an operand is a numeric string.
-                if *op == BinOp::Div || lt == PhpType::Float || rt == PhpType::Float {
+                if lt == PhpType::Float || rt == PhpType::Float {
                     Ok(PhpType::Float)
+                } else if *op == BinOp::Div {
+                    // PHP keeps an int when the division is exact and the quotient fits;
+                    // otherwise it returns a double. The untracked case therefore needs the
+                    // boxed Mixed representation, while literal divisions stay precise.
+                    if uses_mixed_numeric_dispatch(&lt)
+                        || uses_mixed_numeric_dispatch(&rt)
+                        || lt == PhpType::Str
+                        || rt == PhpType::Str
+                    {
+                        // Mixed/string operands use the boxed division helper, which
+                        // preserves PHP's run-time exact-int-or-float result.
+                        Ok(PhpType::Mixed)
+                    } else if let Some(ty) = checked_literal_int_division_type(left, right) {
+                        Ok(ty)
+                    } else {
+                        Ok(PhpType::Mixed)
+                    }
                 } else if matches!(op, BinOp::Sub | BinOp::Mul) {
                     if uses_mixed_numeric_dispatch(&lt)
                         || uses_mixed_numeric_dispatch(&rt)
@@ -1788,6 +1803,22 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
         _ => return None,
     };
     Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns PHP's exact result type for a division of two integer literals.
+///
+/// A zero divisor has no compile-time value (it raises `DivisionByZeroError` at run time),
+/// so it falls back to the generic representation.
+fn checked_literal_int_division_type(left: &Expr, right: &Expr) -> Option<PhpType> {
+    let lhs = int_literal_value(left)?;
+    let rhs = int_literal_value(right)?;
+    if rhs == 0 {
+        return None;
+    }
+    if lhs == i64::MIN && rhs == -1 {
+        return Some(PhpType::Float);
+    }
+    Some(if lhs % rhs == 0 { PhpType::Int } else { PhpType::Float })
 }
 
 /// Returns whether PHP's `int ** int` keeps an integer result for these literals.

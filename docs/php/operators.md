@@ -232,7 +232,7 @@ $value = @file_get_contents("missing.txt");
 echo "still running";
 ```
 
-The operand is evaluated normally and its value is preserved. Only suppressible runtime warnings are hidden; compile-time errors and fatal runtime errors still report normally. Nested `@` scopes are tracked with a runtime suppression depth, and exception unwinds restore the previous suppression state before entering a `catch`.
+The operand is evaluated normally and its value is preserved. Only suppressible runtime warnings are hidden; compile-time errors and fatal runtime errors still report normally. PHP 8 runs a user error handler even under `@`; while the operand runs, `error_reporting()` returns the reduced suppression mask `4437` (`E_ERROR | E_PARSE | E_CORE_ERROR | E_COMPILE_ERROR | E_USER_ERROR | E_RECOVERABLE_ERROR`). Nested `@` scopes save and restore their caller's level, and a level changed explicitly inside the operand is kept rather than overwritten. Exception unwinds restore the mask before entering a `catch`, so later warnings are not left suppressed.
 
 ## Print Expression
 

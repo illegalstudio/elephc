@@ -532,6 +532,12 @@ every addressable load/store of the candidate slot. `IntegerRange` must then
 turn every introduced checked update into a plain integer add/subtract before
 the trial replaces the original function.
 
+The executable main's `$argc` local is a non-negative C `int`; `IntegerRange`
+uses that fact to prove a `N + $argc` loop bound even though it is not a direct
+load. A `PhpRelCmp` with one mixed/tagged operand may narrow its other operand,
+so the bound becomes a raw `IAdd` and the induction counter promotes to `I64`
+with an `ICmp` loop test.
+
 The proof preserves the physical ABI of eligible by-value, nonvariadic `mixed`
 call parameters by rematerializing their integer arguments at the existing call
 boundary. It does not authorize a different closure call or change dispatch.
@@ -602,6 +608,32 @@ float-promoting chain as `$cell = $row * $columns + $column`. Casting the local
 before that suffix would change PHP's answer after overflow, so the pass fuses the
 complete expression at each cast and removes the now-unobserved boxed storage.
 
+## Reduce sum and product fusion
+
+`src/ir_lower/expr/static_array_callbacks.rs` fuses
+`array_reduce($ints, fn($carry, $item) => $carry + $item, C)` when `$ints` is a
+local `array<int>` and `C` is a raw int or float whose type is proven before
+lowering — a literal, or a local/parameter already lowered as a raw scalar. Zero
+lowers to `ArraySum`; another raw int lowers to `ArrayReduceSumSeed`, which calls
+`__rt_array_sum_int_i64`; a raw float (including a float literal) lowers to
+`ArrayReduceSumFloatSeed`, which calls `__rt_array_sum_float_i64` and starts the
+accumulator in double mode. The carry never boxes a Mixed cell per element: the
+integer path stays raw until the first overflow, then continues as a double
+exactly like PHP's left-to-right addition, and only the final result is boxed. A
+declared parameter/return type, a capture, a non-add body, an initial whose raw
+type is not proven (string/bool/null/expression/reference), or a non-variable
+source keeps the generic boxed reduce.
+
+The multiplicative body `array_reduce($ints, fn($carry, $item) => $carry * $item, C)`
+uses the same raw-scalar seed rule. A raw int initial lowers to
+`ArrayReduceProductSeed`, which calls `__rt_array_product_int_i64`: every step uses
+PHP's checked signed multiplication, and the first overflow converts both operands
+to double and continues in double mode. A raw float initial lowers to
+`ArrayReduceProductFloatSeed`, which calls `__rt_array_product_float_i64` and
+multiplies every element in double mode. An empty range boxes the seed unchanged,
+so an int seed stays `int` and `-0.0` stays `float(-0)`. Other bodies, captures,
+declared types, or an initial whose raw type is not proven keep the generic reduce.
+
 ## Loop-invariant array caches
 
 `src/ir_passes/array_sum_int_bounds.rs` proves a raw `array_sum()` receiver is a
@@ -644,6 +676,140 @@ frozen `array_sum(array_map(fn($x) => $x + C, $packedInts))` lowering. The boxed
 result, and the cast/release scaffolding is retired. The raw kernel shares the
 existing vector/scalar body but skips the Mixed box; a promoted map or running sum
 terminates in PHP's warned float-to-int conversion.
+
+`src/ir_passes/array_map_sum_div_fusion.rs` fuses the stored
+`$mapped = array_map(fn($v) => $v / C, $ints)` assignment when `$mapped` is read by
+exactly one `array_sum()` and nowhere else. The mapped local must have one store
+(leaving `ArrayMapIntDiv`), one load and only slot-release cleanup; the source must
+be a non-escaping packed `array<int>` local whose loaded value reaches no other
+address-taking consumer; the divisor must be a nonzero literal; every scaffold
+instruction must be in the call block in source order; and no source write may sit
+between the map and the sum. The reducer call is retargeted to
+`ArrayMapSumIntDiv` with the original source and divisor, the map call and its
+acquire/store/load/temporary-owner scaffold are neutralized, and the result stays
+one owned Mixed cell. The shared kernel preserves exact-int-or-double division,
+`PHP_INT_MIN / -1` promotion, left-to-right sum order and integer-overflow
+promotion. Any observed map, dynamic divisor, parameter source, reassigned map
+local, zero divisor or intervening source write keeps the materialized map and its
+generic path.
+
+`src/ir_passes/mb_constant_fold.rs` folds `mb_convert_kana()`,
+`mb_encode_numericentity()` and `mb_decode_numericentity()` when the subject,
+mode, canonical full-decimal map and explicit UTF-8 encoding are compile-time
+constants. The compiler-pool subject is first decoded to its real PHP bytes with
+`literal_bytes`; a subject that is not valid UTF-8 keeps the runtime bridge, and
+`mb_decode_numericentity()` additionally rejects surrogate entities and values above
+`U+10FFFF`, whose exact bytes the bridge decoder owns. The
+folded result is a persistent `ConstStr`, so the acquire/store/release scaffolding
+around the call stays intact. Dynamic subjects, modes, encodings, non-canonical
+maps and substitute-sensitive entities keep the bridge's exact behavior.
+
+`src/ir_passes/const_string_array_intval_fold.rs` folds an integer cast of a
+masked read over an immutable literal string array, `(int) $texts[$i & M]`. The
+array must be a PHP local built from `array_new` plus single-use `ConstStr`
+pushes, stored once and loaded only by the read; all construction instructions
+must dominate the read (or precede it in the same block), and no slot release may
+sit inside the read's loop or dominate it. The index must be a literal in
+`0..len` or `value & (len - 1)` for a power-of-two literal length. The pass
+replaces each pushed string in place with the compile-time PHP integer cast of
+that literal, retypes the slot and its ownership wrappers to `array<int>`, turns
+the checked read into `array_get_unchecked`, and removes the acquire/cast/release
+scaffolding. The shared AST cast fold supplies PHP's leading-numeric-run grammar,
+float-form truncation and out-of-range saturation. Dynamic indices, mismatched or
+non-power-of-two masks, observed or mutated arrays, runtime-built arrays,
+explicit-base `intval()` and non-dominating construction keep the checked read and
+runtime string conversion.
+
+`src/ir_passes/json_encode_len_cache.rs` caches the length of a loop-invariant
+`strlen(json_encode($rows))` observation. The loop must execute at least once,
+the source must be a stable packed array of associative rows with exactly one
+load, and no other call may run inside the loop (a call outside could change the
+process-wide JSON error state between iterations). A preheader block calls
+`json_rows_scalar_guard`, which walks every row and every row value: direct scalar
+tags and boxed `Mixed` cells whose tag is scalar or null pass; objects, resources,
+nested containers and unknown tags return the `-1` sentinel. The scalar path
+encodes once through `JsonEncodeStr` and caches the resulting length, while the
+sentinel path keeps the per-iteration encoder, preserving `JsonSerializable` side
+effects and the exact JSON error state. The body's `str_len` becomes
+`JsonEncodeLenCached`, returning the probe or running the raw encoder on the
+sentinel path. Mutated or aliased rows, dynamic flags/depth, another JSON call in
+the loop, a non-positive trip count and non-associative sources keep the generic
+encoder.
+
+`src/ir_lower/stmt/stored_numeric_map.rs` marks a stored
+`$mapped = array_map(fn($v) => $v + C | $v - C | $v * C | $v * A + B | $v * $v |
+$v * $v + C | $v * F | $v * F + G | $v + F | $v - F | $v / F, $ints)` when every
+use of `$mapped` and its value aliases is storage-neutral: indexed
+reads, value-`foreach`, read-only aliasing, or a whitelisted builtin such as
+`count`, `array_sum`, `implode`, `json_encode`, `var_dump`, `array_values`, or
+`array_keys`. The affine form also accepts `B + $v * A`, `B - $v * A`,
+`$v * A - B`, and literal negation, and is evaluated multiply-then-add; a square
+callback `$v * $v` uses its own single-product kernel, and `$v * $v + C` (including
+`C + $v * $v` and `$v * $v - C`) checks the square then the offset. A float
+literal scale `$v * F` (or `F * $v`) builds a raw `array<float>` with 8-byte
+IEEE-754 slots; every element is a double, matching PHP without boxing. The
+affine form `$v * F + G` (including `G + $v * F`, `$v * F - G`, and
+`G - $v * F`) does the multiply and add entirely in double precision. The float
+add/sub forms `$v + F` (or `F + $v`) and `$v - F` reuse that kernel with a unit
+scale, and `$v / F` uses a dedicated float-division kernel. An integer divisor
+`$v / C` uses the exact integer-division kernel: it keeps a raw `array<int>` while
+every quotient fits and the division is exact, and rebuilds a boxed Mixed array
+at the first inexact element or `PHP_INT_MIN / -1`. Zero divisors keep the generic
+map so `DivisionByZeroError` is preserved. A non-empty array literal whose items are all
+integer literals is a proven packed `array<int>` source too, and the lowered
+source temporary is released after the map call. Direct `range()` calls with
+integer-literal arguments, `array_slice()` calls that keep PHP's default key
+renumbering, `array_values()`, default `array_reverse()` (key-renumbering
+`preserve_keys: false`), `array_fill(0, $n, <int literal>)`, and two-operand
+`array_merge($left, $right)` over proven packed sources are proven recursively.
+`array_slice(..., preserve_keys: true)` is accepted when the literal offset is `0`,
+because the preserved keys are still `0..n-1`; a later offset stays generic because
+the result is a hash, and `array_reverse(..., true)` stays generic for the same
+reason. A parameter, global, `static` local or reference alias stays generic even at
+offset 0: its key-preserving slice can load a boxed hash. For a variable source, the packed
+`array<int>` proof runs in the lowering context at the actual call site, where the
+flow-sensitive local type is known; function-local assignments from `range()` or
+array literals therefore fuse like main-level ones, and a failed proof falls back
+to the ordinary `array_map()` lowering. The boxed
+`array_sum()` aggregate recognizes the raw-float value_type and reduces the slots
+with a double loop, boxing only the final float. Any
+element write, direct or through an alias, keeps the generic boxed map so
+copy-on-write and ownership stay on the established path. The marker becomes a
+synthetic call consumed by lowering, so the checker's `array<mixed>` type is
+unchanged. The runtime kernel builds a raw 8-byte `array<int>` while the literal
+operations cannot overflow; the first overflowing element makes it release that
+array and rebuild an ordinary boxed Mixed array, preserving PHP's per-element
+int/float result. Any consumer that may assume boxed Mixed slots (`array_merge`,
+`array_push`, user calls, unsupported expressions) keeps the generic map.
+
+`src/ir_lower/stmt/map_foreach_fusion.rs`, called by the same pre-lowering pass, fuses
+a value-`foreach` over the same pure map: it iterates the source with an
+unforgeable generated value local and prepends `$value = <substituted callback
+body>` to the loop body. The original loop
+variable keeps its Mixed storage, final value after exhaustion, and by-reference
+uses, so the fused loop remains a normal PHP assignment per iteration. The source
+must not be mentioned or mutated in the body, and a reference alias disqualifies it
+because PHP iterates a detached map snapshot. The callback has no side effects,
+warnings, or throws (`+`/`-`/`*` overflow promotes to float), so evaluating it at the
+top of each iteration is unobservable. The generated local is typed `int` from the
+source, and the body's checked arithmetic and accumulator stay in frame cells
+instead of allocating one heap Mixed cell per element. Array writes in the body
+must target a definitely initialized local; this keeps the fused shape from
+exposing the existing per-iteration reinitialization of `$array[] = ...` on an
+unbound name.
+
+`src/ir_lower/stmt/map_read_fusion.rs` observes a materialized `array_map()` temporary
+whose only consumers are constant-indexed reads: `$mapped = array_map(fn($v) =>
+<pure arithmetic>, $ints); echo $mapped[$k];` lowers each read to
+`isset($ints[$k]) ? <body with $v = $ints[$k]> : $ints[$k]` and removes the map.
+The same guarded substitution applies to a direct read `array_map(...)[$k]` for a
+literal or simple variable key, so the temporary is never materialized. The closure
+must be capture-free, untyped, and a pure `+`/`-`/`*` tree over its parameter and
+scalar literals; a typed return, division/modulus, a call, a capture, or a use outside
+the same straight-line block keeps the generic map. A missing key keeps the source
+read's warning and null result. `count(array_map(...))` lowers to `ArrayLen(source)`
+for the same pure closures; capturing or effectful callbacks keep the materialized map
+and its per-element calls.
 
 `src/ir_passes/abs_int_sink.rs` applies the same cast-observed rule to `abs()`.
 When the operand is a concrete int, bool, or null-capable tagged scalar and the
@@ -733,6 +899,21 @@ length-only mode of `__rt_inet_pton`: the address is still validated and IPv4/IP
 return 4/16, while an invalid address returns zero for `strlen(false)`. A value
 observation, including an `=== false` check, keeps the boxed helper.
 
+`src/ir_passes/mb_chr_len_local_sink.rs` handles the local forms
+`$x = mb_chr($codepoint, "UTF-8"); strlen($x)` and
+`$x = mb_chr($codepoint, "UTF-8"); ord($x[0])`. It traces the boxed call through
+its clone/acquire/store scaffolding to the single local slot, then proves every
+load feeds one length chain (`Cast` to `Str` then `StrLen`) or one first-byte chain
+(`$x[0]` with a constant zero index and warning flag, a `Cast` to `Str`, then
+`ord`). A length-only local retargets the call to `MbChrLen`; a first-byte-only
+local uses `MbChrFirst`; when both observations appear, one `MbChrPacked` call
+returns `(byte_length << 8) | first_byte`, and each terminal becomes a shift or a
+mask. This keeps one encoding pass and never re-evaluates the argument values that
+the original call already consumed. Multiple observations share the call, while
+UTF-16, U+0000, malformed codepoints, and the bridge fallback keep PHP's byte
+length and first-byte values. Echoing the string, an identity check, a nonzero
+offset, or any other value observer keeps the boxed `mb_chr()`.
+
 `src/ir_passes/strip_tags_len_sink.rs` folds `strlen(strip_tags(...))` into the
 count mode of `__rt_strip_tags`. The scanner still evaluates the subject and the
 allow-list exactly once, including array/Mixed coercion and strict `TypeError`s,
@@ -821,7 +1002,9 @@ user-code argument falls back to the ordinary owner ledger.
 ## Performance regression guards
 
 The optimized string paths are pinned by deterministic IR assertions rather than
-wall-clock thresholds: `tests/codegen/optimizer/strpos_int_sink.rs` checks the raw
+wall-clock thresholds: `tests/codegen/optimizer/mb_chr_len_local_sink.rs` pins the local
+`mb_chr()` length/first-byte retargets, the packed mixed observation, and their
+value-observation fallbacks; `strpos_int_sink.rs` checks the raw
 integer variants for all four searches, `strstr_len_sink.rs` checks the length helper
 and the absence of the haystack owner pin, and `string_len_sink.rs` checks the
 length-only folds for `strtr`, `chunk_split`, the case transforms and `ucwords`;
@@ -1428,7 +1611,13 @@ non-empty literal needle or `mb_ord` subject where an empty argument would
 throw, and a loop with no other global writer except the concatenation scratch
 reset. An owned `mb_substr`/`mb_strcut` result observed only by `strlen` moves
 as one group with its length observer and single release, so the loop body reads
-only the scalar length and no per-iteration allocation survives. An extra
+only the scalar length and no per-iteration allocation survives. Plain
+`substr_count()` joins the same set when both arguments are strings and the
+needle is a non-empty literal: it is byte-oriented, cannot raise, and reads no
+mbstring state, so the loop-writer restriction does not apply. Its string
+argument must consume the loaded local by value; the shared by-reference escape
+analysis records `substr_count` as such a value consumer so the local can be
+proven immutable and hoisted with the call. An extra
 observer keeps the producer and release in the loop. A numeric-entity length call
 whose map operand is the literal full decimal packed array
 `[0x80, 0x10FFFF, 0, 0x1FFFFF]` moves with the subject and map loads; the proof

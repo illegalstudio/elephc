@@ -11,7 +11,9 @@ from unittest.mock import patch
 
 from support import record
 from cases import discover
-from common import PHP_FLAGS, PHP_MODE, ROOT, SUITES, atomic_json, measure, php_command, php_jit_problem, require_baselines
+from common import (PHP_FLAGS, PHP_MODE, ROOT, SUITES, atomic_json, measure,
+                     php_command, php_jit_problem, require_baselines,
+                     run_process_measured)
 from dashboard import build_page
 from history import empty_history, merge
 from report import epoch, render_svg
@@ -21,11 +23,25 @@ class RunnerReportTests(unittest.TestCase):
     def test_all_fixture_paths_and_metadata_are_valid(self):
         suites = discover(list(SUITES), [])
         self.assertEqual(set(suites), set(SUITES))
-        self.assertEqual(len(suites["native"]), 3)
+        native = suites["native"]
+        self.assertGreaterEqual(len(native), 3)
+        self.assertEqual(len({case["name"] for case in native}), len(native))
+        self.assertIn("sum_loop", {case["name"] for case in native})
         self.assertGreater(len(suites["magician"]), 5)
         self.assertEqual(len(suites["hot-path"]), 1)
         with self.assertRaises(ValueError):
             discover(["native"], ["does-not-exist"])
+
+    def test_measured_run_reaps_a_fast_child_and_enforces_timeout(self):
+        """The measured runner must not sleep-poll and must still kill timed-out children."""
+        stdout, stderr, usage = run_process_measured(
+            [sys.executable, "-c", "print('measured')"], ROOT)
+        self.assertEqual(stdout, "measured\n")
+        self.assertEqual(stderr, "")
+        self.assertGreaterEqual(usage.ru_utime + usage.ru_stime, 0)
+        with self.assertRaises(subprocess.TimeoutExpired):
+            run_process_measured(
+                [sys.executable, "-c", "import time; time.sleep(5)"], ROOT, timeout=0.2)
 
     def test_list_does_not_build_and_case_filter_is_precise(self):
         result = subprocess.run([sys.executable, "-B", str(ROOT / "run.py"), "--list", "--case", "native/sum_loop"],

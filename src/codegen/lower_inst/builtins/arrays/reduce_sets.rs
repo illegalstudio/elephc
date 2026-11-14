@@ -171,7 +171,9 @@ pub(crate) fn lower_array_intersect_key(
 /// PHP's `bool $preserve_keys = false` renumbers the selected window from zero; a literal `true`
 /// keeps the source integer keys instead. A dense indexed array cannot hold a window that does not
 /// start at key 0, so the key-preserving form lowers to `__rt_array_slice_to_hash`, which builds an
-/// owned hash. For concrete storage the checker guarantees the flag is a literal (it decides the
+/// owned hash. The exception is a checker-proven offset-0 window: its preserved keys are still
+/// `0..n-1`, so the typed result is an indexed array and the normal packed slice renumbers to the
+/// same keys. For concrete storage the checker guarantees the flag is a literal (it decides the
 /// result's static shape), so a non-literal operand can only mean the checker and the backend
 /// disagree. A boxed source is dispatched first: its result is the boxed PHP array whatever the
 /// flag says, so it reads the flag at runtime (see `lower_mixed_array_slice`).
@@ -191,7 +193,7 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
     ) {
         return lower_hash_slice(ctx, inst, array, preserve_keys);
     }
-    if preserve_keys {
+    if preserve_keys && !matches!(inst.result_php_type.codegen_repr(), PhpType::Array(_)) {
         return lower_array_slice_preserve_keys(ctx, inst, array);
     }
     let offset = expect_operand(inst, 1)?;

@@ -4270,6 +4270,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul
+                    | Op::ICheckedDiv
                     | Op::ICheckedPow
                     | Op::MixedCastString
                     | Op::StrConcat
@@ -4503,6 +4504,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul
+                    | Op::ICheckedDiv
                     | Op::ICheckedPow
             )
         ) {
@@ -5445,6 +5447,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn guard_call_argument(&mut self, value: LoweredValue, parameter: usize, span: Span) {
         let ty = self.builder.value_php_type(value.value);
         if !Ownership::php_type_needs_lifetime_tracking(&ty) { return; }
+        // A persistent constant (directly or through an identity acquire) has no refcount
+        // header to release: its cleanup is already a no-op, so the guard is pure overhead.
+        if self.value_is_persistent_constant(value.value) { return; }
         let previous = self.argument_guard_scopes.last().expect("active call capture scope")
             .iter().filter(|(index, _)| *index < parameter).max_by_key(|(index, _)| *index)
             .map(|(_, token)| *token);
@@ -5454,6 +5459,34 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             PhpType::Int, Effects::WRITES_GLOBAL, Some(span));
         self.argument_guards.insert(value.value, token.value);
         self.argument_guard_scopes.last_mut().expect("active call capture scope").push((parameter, token.value));
+    }
+
+    /// Returns whether `value` is a persistent constant or an identity wrapper around one.
+    fn value_is_persistent_constant(&self, mut value: ValueId) -> bool {
+        for _ in 0..8 {
+            let Some(definition) = self.builder.function().value(value) else {
+                return self.builder.value_ownership(value) == Ownership::Persistent;
+            };
+            if definition.ownership == Ownership::Persistent {
+                return true;
+            }
+            let crate::ir::ValueDef::Instruction { inst, .. } = definition.def else {
+                return false;
+            };
+            let Some(inst) = self.builder.function().instruction(inst) else {
+                return false;
+            };
+            match inst.op {
+                crate::ir::Op::Acquire | crate::ir::Op::Borrow | crate::ir::Op::Move => {
+                    let Some(&source) = inst.operands.first() else {
+                        return false;
+                    };
+                    value = source;
+                }
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// Reports whether construction already registered exceptional ownership for this call operand.

@@ -271,16 +271,20 @@ chains fuse into scalar checked chains. Other closed numeric trees use the frame
 cells described below, without allocating heap cells.
 
 `src/codegen/stack_numeric.rs::plan()` runs before frame sizing and selects owned
-add/subtract/multiply results from checked integer or proven numeric Mixed
-operations, plus numeric increments or decrements, whose complete pointer lifetime
+add/subtract/multiply and division results from checked integer or proven numeric
+Mixed operations, plus numeric increments or decrements, whose complete pointer lifetime
 remains in the current activation. Numeric observations and one ordinary local
 are permitted, including a declared integer return check or a declared `int`
 property narrowing (`PropertyBoundaryCheckedToInt`), whose result copies the payload
 and preserves its TypeError guard. That narrowing is why `$this->count++` on a
 declared `int` property stores a raw word without a heap cell. A checked result may also feed another
-closed numeric add/subtract/multiply or increment; every input must be proven
-integer or float, including all local writers. A float tag remains floating point
-on subsequent operations. A same-block ordered comparison may consume the result
+closed numeric add/subtract/multiply, division or increment; every input must be
+proven integer or float, including all local writers. A float tag remains floating
+point on subsequent operations. A division cell keeps PHP's exact integer quotient
+or promotes an inexact quotient (and `PHP_INT_MIN / -1`) to double; a zero divisor
+raises `DivisionByZeroError` from the cell path itself. The boxed
+`__rt_mixed_numeric_div` helper remains the fallback when the operands or consumers
+cannot be proven numeric, such as inside a function with try handlers. A same-block ordered comparison may consume the result
 directly when both operands have proven numeric origins, as in the trial-division
 condition `$divisor * $divisor <= $candidate`. Strict identity against a proven
 numeric partner is admitted on the same terms, including reads of the owning local
@@ -336,10 +340,13 @@ counter). A guarded entry's tag test reads its seed in the same block as the
 payload copy. Nested loops with field-seeded counters therefore allocate nothing
 per loop entry.
 Private slots in the executable main frame use the same lifetime proof; globals
-retain heap storage. A string cast of the final value is an observation, not an
-escape: the formatter reads the tag and payload and numeric tags render into concat
-scratch without adopting the cell. Delayed reads, escaping consumers, aliases,
-references, `eval` and suspension fail the proof.
+retain heap storage. A string cast or a direct `echo`/`print` of the final value is
+an observation, not an escape: the formatter reads the tag and payload and numeric
+tags render into concat scratch without adopting the cell. This is why a loop
+accumulator echoed after the loop keeps its frame cell instead of falling back to
+`__rt_mixed_numeric_add` or `__rt_mixed_numeric_div`. Delayed reads, escaping
+consumers, aliases, references,
+`eval` and suspension fail the proof.
 
 Independent frame cells do not invalidate each other's borrowed reads. A same-block
 read must be consumed before its owning slot is stored or released, or before any
@@ -805,6 +812,15 @@ literal, a parameter, or the same expression folded at compile time is not. That
 asymmetry is why a missing stage looks like a defect that only happens inside a
 method (issue #502).
 
+An integer `/` follows the same rule, but keeps an integer only when the division
+is exact and the quotient fits. `ICheckedDiv` boxes the int-or-float quotient and
+raises `DivisionByZeroError` for a zero divisor; `PHP_INT_MIN / -1` takes the
+float path because its quotient is not representable. Mixed operands use
+`__rt_mixed_numeric_div`, which classifies the boxed payloads at run time and
+preserves the same exact-int-or-float result; a zero divisor returns a null
+sentinel that the caller turns into `DivisionByZeroError` after releasing its
+operand boxes.
+
 ### Callable descriptors and invokers
 
 `PhpType::Callable` stays one pointer wide, but the pointer targets a
@@ -878,7 +894,11 @@ per-request isolation.
 Some lowerings emit a wrapper or invoker in the middle of the enclosing
 function and jump over it: the `array_map()` and `preg_replace_callback()`
 descriptor callback wrappers, the direct-callback argument adapter, and the
-runtime-callable invokers. Their `label_global()` opens the wrapper's own
+runtime-callable invokers. The direct-closure `array_map()` adapter boxes the
+closure's actual EIR return value (a raw `F64`, for example) before a Mixed map
+helper reads it; the closure's declared return type alone is not enough because
+an untyped closure can narrow to a non-Mixed representation. Their
+`label_global()` opens the wrapper's own
 `.text.<symbol>` section on ELF, so the lowering captures
 `Emitter::current_text_section()` before the wrapper and calls
 `reopen_text_section()` after it. Without that, the rest of the enclosing

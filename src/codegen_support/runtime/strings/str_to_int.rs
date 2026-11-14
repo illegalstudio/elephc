@@ -40,6 +40,74 @@ pub fn emit_str_to_int(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_to_int ---");
     emitter.label_global("__rt_str_to_int");
 
+    // -- direct decimal fast path --
+    // A plain decimal run of at most 18 digits (optional ASCII whitespace and sign) always fits
+    // i64 and needs neither the C-string copy nor libc. Accumulate it in place; a 19th digit or
+    // a `.`/`e`/`E` continuation bails to the general parser, which owns saturation and PHP's
+    // float-form cap. Any other terminator returns the exact integer prefix.
+    emitter.instruction("mov x3, x1");                                          // cursor = the PHP string payload
+    emitter.instruction("mov x4, x2");                                          // remaining input bytes
+    emitter.instruction("mov x5, #0");                                          // negative flag
+    emitter.label("__rt_str_to_int_fast_space");
+    emitter.instruction("cbz x4, __rt_str_to_int_fast_zero");                   // a blank-only string parses to zero
+    emitter.instruction("ldrb w8, [x3]");                                       // load the next candidate byte
+    emitter.instruction("cmp w8, #32");                                         // is the byte a plain space?
+    emitter.instruction("b.eq __rt_str_to_int_fast_space_next");                // spaces are skipped
+    emitter.instruction("sub w9, w8, #9");                                      // rebase onto the tab..carriage-return block
+    emitter.instruction("cmp w9, #4");                                          // is the byte one of \t \n \v \f \r?
+    emitter.instruction("b.hi __rt_str_to_int_fast_sign");                      // the first non-blank byte starts the number
+    emitter.label("__rt_str_to_int_fast_space_next");
+    emitter.instruction("add x3, x3, #1");                                      // consume the blank byte
+    emitter.instruction("sub x4, x4, #1");                                      // account for the consumed byte
+    emitter.instruction("b __rt_str_to_int_fast_space");                        // keep skipping blanks
+    emitter.label("__rt_str_to_int_fast_sign");
+    emitter.instruction("cmp w8, #45");                                         // is the byte a minus sign?
+    emitter.instruction("b.ne __rt_str_to_int_fast_plus");                      // try the plus sign instead
+    emitter.instruction("mov x5, #1");                                          // remember that the result is negative
+    emitter.instruction("b __rt_str_to_int_fast_sign_taken");                   // consume the sign byte
+    emitter.label("__rt_str_to_int_fast_plus");
+    emitter.instruction("cmp w8, #43");                                         // is the byte a plus sign?
+    emitter.instruction("b.ne __rt_str_to_int_fast_digits");                    // no sign means the digits start here
+    emitter.label("__rt_str_to_int_fast_sign_taken");
+    emitter.instruction("add x3, x3, #1");                                      // consume the sign byte
+    emitter.instruction("sub x4, x4, #1");                                      // account for the consumed byte
+    emitter.instruction("cbz x4, __rt_str_to_int_fast_zero");                   // a sign with no digits parses to zero
+    emitter.label("__rt_str_to_int_fast_digits");
+    emitter.instruction("mov x6, #0");                                          // unsigned accumulator
+    emitter.instruction("mov x11, #0");                                         // significant digit count
+    emitter.label("__rt_str_to_int_fast_loop");
+    emitter.instruction("cbz x4, __rt_str_to_int_fast_finish");                 // stop at the end of the string
+    emitter.instruction("ldrb w8, [x3]");                                       // load the next input byte
+    emitter.instruction("sub w13, w8, #48");                                    // map ASCII numerals onto 0..9
+    emitter.instruction("cmp w13, #9");                                         // is this still a decimal digit?
+    emitter.instruction("b.hi __rt_str_to_int_fast_non_digit");                 // the digit run ended
+    emitter.instruction("add x11, x11, #1");                                    // count the significant digit
+    emitter.instruction("cmp x11, #18");                                        // can the accumulator still hold this digit?
+    emitter.instruction("b.hi __rt_str_to_int_fast_slow");                      // longer integer runs need saturation from the general parser
+    emitter.instruction("mov x14, #10");                                        // decimal radix
+    emitter.instruction("madd x6, x6, x14, x13");                               // acc = acc * 10 + digit
+    emitter.instruction("add x3, x3, #1");                                      // consume the digit
+    emitter.instruction("sub x4, x4, #1");                                      // account for the consumed digit
+    emitter.instruction("b __rt_str_to_int_fast_loop");                         // continue scanning digits
+    emitter.label("__rt_str_to_int_fast_non_digit");
+    emitter.instruction("cbz x11, __rt_str_to_int_fast_finish");                // no digit has been seen: the run is empty
+    emitter.instruction("cmp w8, #46");                                         // is the next byte a decimal point?
+    emitter.instruction("b.eq __rt_str_to_int_fast_slow");                      // fraction handling needs the general parser
+    emitter.instruction("cmp w8, #101");                                        // is the next byte a lowercase exponent?
+    emitter.instruction("b.eq __rt_str_to_int_fast_slow");                      // exponent handling needs the general parser
+    emitter.instruction("cmp w8, #69");                                         // is the next byte an uppercase exponent?
+    emitter.instruction("b.eq __rt_str_to_int_fast_slow");                      // exponent handling needs the general parser
+    emitter.label("__rt_str_to_int_fast_finish");
+    emitter.instruction("mov x0, x6");                                          // return the accumulated magnitude
+    emitter.instruction("cbz x5, __rt_str_to_int_fast_ret");                    // a positive run is already final
+    emitter.instruction("neg x0, x0");                                          // apply the consumed minus sign
+    emitter.label("__rt_str_to_int_fast_ret");
+    emitter.instruction("ret");                                                 // return the exact integer
+    emitter.label("__rt_str_to_int_fast_zero");
+    emitter.instruction("mov x0, #0");                                          // an empty or digit-free run parses to zero
+    emitter.instruction("ret");                                                 // return the zero result
+    emitter.label("__rt_str_to_int_fast_slow");
+
     // -- set up the helper frame (slots: end_i=[sp,#0], end_d=[sp,#8], ll_val=[sp,#16], cstr=[sp,#24]) --
     emitter.instruction("sub sp, sp, #48");                                     // allocate slots for both end pointers, the integer value, and the C-string pointer
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across the libc calls
@@ -108,6 +176,81 @@ fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_to_int ---");
     emitter.label_global("__rt_str_to_int");
+
+    // -- direct decimal fast path --
+    // A plain decimal run of at most 18 digits (optional ASCII whitespace and sign) always fits
+    // i64 and needs neither the C-string copy nor libc. Accumulate it in place; a 19th digit or
+    // a `.`/`e`/`E` continuation bails to the general parser, which owns saturation and PHP's
+    // float-form cap. Any other terminator returns the exact integer prefix.
+    emitter.instruction("mov r8, rax");                                         // cursor = the PHP string payload
+    emitter.instruction("mov r9, rdx");                                         // remaining input bytes
+    emitter.instruction("xor r10d, r10d");                                      // bit 0 = negative, bit 1 = digit seen
+    emitter.label("__rt_str_to_int_fast_space_x");
+    emitter.instruction("test r9, r9");                                         // is the string exhausted?
+    emitter.instruction("jz __rt_str_to_int_fast_zero_x");                      // a blank-only string parses to zero
+    emitter.instruction("movzx ecx, BYTE PTR [r8]");                            // load the next candidate byte
+    emitter.instruction("cmp ecx, 32");                                         // is the byte a plain space?
+    emitter.instruction("je __rt_str_to_int_fast_space_next_x");                // spaces are skipped
+    emitter.instruction("lea edi, [rcx - 9]");                                  // rebase onto the tab..carriage-return block
+    emitter.instruction("cmp edi, 4");                                          // is the byte one of \t \n \v \f \r?
+    emitter.instruction("ja __rt_str_to_int_fast_sign_x");                      // the first non-blank byte starts the number
+    emitter.label("__rt_str_to_int_fast_space_next_x");
+    emitter.instruction("add r8, 1");                                           // consume the blank byte
+    emitter.instruction("sub r9, 1");                                           // account for the consumed byte
+    emitter.instruction("jmp __rt_str_to_int_fast_space_x");                    // keep skipping blanks
+    emitter.label("__rt_str_to_int_fast_sign_x");
+    emitter.instruction("cmp ecx, 45");                                         // is the byte a minus sign?
+    emitter.instruction("jne __rt_str_to_int_fast_plus_x");                     // try the plus sign instead
+    emitter.instruction("mov r10d, 1");                                         // remember that the result is negative
+    emitter.instruction("jmp __rt_str_to_int_fast_sign_taken_x");               // consume the sign byte
+    emitter.label("__rt_str_to_int_fast_plus_x");
+    emitter.instruction("cmp ecx, 43");                                         // is the byte a plus sign?
+    emitter.instruction("jne __rt_str_to_int_fast_digits_x");                   // no sign means the digits start here
+    emitter.label("__rt_str_to_int_fast_sign_taken_x");
+    emitter.instruction("add r8, 1");                                           // consume the sign byte
+    emitter.instruction("sub r9, 1");                                           // account for the consumed byte
+    emitter.instruction("jz __rt_str_to_int_fast_zero_x");                      // a sign with no digits parses to zero
+    emitter.label("__rt_str_to_int_fast_digits_x");
+    emitter.instruction("xor r11d, r11d");                                      // unsigned accumulator
+    emitter.instruction("xor edi, edi");                                        // significant digit count
+    emitter.label("__rt_str_to_int_fast_loop_x");
+    emitter.instruction("test r9, r9");                                         // stop at the end of the string?
+    emitter.instruction("jz __rt_str_to_int_fast_finish_x");                    // every input byte has been classified
+    emitter.instruction("movzx ecx, BYTE PTR [r8]");                            // load the next input byte
+    emitter.instruction("cmp ecx, 48");                                         // is the byte below ASCII '0'?
+    emitter.instruction("jb __rt_str_to_int_fast_non_digit_x");                 // the digit run ended
+    emitter.instruction("cmp ecx, 57");                                         // is the byte above ASCII '9'?
+    emitter.instruction("ja __rt_str_to_int_fast_non_digit_x");                 // the digit run ended
+    emitter.instruction("add rdi, 1");                                          // count the significant digit
+    emitter.instruction("cmp rdi, 18");                                         // can the accumulator still hold this digit?
+    emitter.instruction("ja __rt_str_to_int_fast_slow_x");                      // longer integer runs need saturation from the general parser
+    emitter.instruction("sub ecx, 48");                                         // map the numeral onto 0..9
+    emitter.instruction("imul r11, r11, 10");                                   // shift the accumulator up one decimal position
+    emitter.instruction("add r11, rcx");                                        // append the decoded digit
+    emitter.instruction("or r10d, 2");                                          // remember that a digit was seen
+    emitter.instruction("add r8, 1");                                           // consume the digit
+    emitter.instruction("sub r9, 1");                                           // account for the consumed digit
+    emitter.instruction("jmp __rt_str_to_int_fast_loop_x");                     // continue scanning digits
+    emitter.label("__rt_str_to_int_fast_non_digit_x");
+    emitter.instruction("test r10b, 2");                                        // has any digit been seen?
+    emitter.instruction("jz __rt_str_to_int_fast_finish_x");                    // no digit: the run is empty
+    emitter.instruction("cmp ecx, 46");                                         // is the next byte a decimal point?
+    emitter.instruction("je __rt_str_to_int_fast_slow_x");                      // fraction handling needs the general parser
+    emitter.instruction("cmp ecx, 101");                                        // is the next byte a lowercase exponent?
+    emitter.instruction("je __rt_str_to_int_fast_slow_x");                      // exponent handling needs the general parser
+    emitter.instruction("cmp ecx, 69");                                         // is the next byte an uppercase exponent?
+    emitter.instruction("je __rt_str_to_int_fast_slow_x");                      // exponent handling needs the general parser
+    emitter.label("__rt_str_to_int_fast_finish_x");
+    emitter.instruction("mov rax, r11");                                        // return the accumulated magnitude
+    emitter.instruction("test r10b, 1");                                        // is the result negative?
+    emitter.instruction("jz __rt_str_to_int_fast_ret_x");                       // a positive run is already final
+    emitter.instruction("neg rax");                                             // apply the consumed minus sign
+    emitter.label("__rt_str_to_int_fast_ret_x");
+    emitter.instruction("ret");                                                 // return the exact integer
+    emitter.label("__rt_str_to_int_fast_zero_x");
+    emitter.instruction("xor eax, eax");                                        // an empty or digit-free run parses to zero
+    emitter.instruction("ret");                                                 // return the zero result
+    emitter.label("__rt_str_to_int_fast_slow_x");
 
     // -- set up the helper frame (locals: cstr=[rbp-8], ll_val=[rbp-16], end_i=[rbp-24], end_d=[rbp-32]) --
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer before calling libc parsers

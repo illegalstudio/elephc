@@ -1974,6 +1974,75 @@ echo c([1, 3])[1];
     assert_eq!(out, "1.5");
 }
 
+/// Verifies an untyped closure that infers a raw `F64` return is boxed before the Mixed map
+/// helper stores it. Regression: the direct-closure wrapper tail-called the closure and the map
+/// helper read the stale `x0` as a Mixed pointer, crashing on `array_sum()`.
+#[test]
+fn test_array_map_untyped_float_callback_boxes_raw_result() {
+    let out = compile_and_run(
+        r#"<?php
+$sum = array_sum(array_map(fn($v) => $v * 1.5, [1, 2, 3]));
+echo $sum, "\n";
+"#,
+    );
+    assert_eq!(out, "9\n");
+}
+
+/// The same untyped float callback through a materialized map and an element write must survive
+/// the generic map path, where the stored-map sink deliberately falls back.
+#[test]
+fn test_array_map_untyped_float_callback_materialized_write() {
+    let out = compile_and_run(
+        r#"<?php
+$values = [1, 2, 3];
+$mapped = array_map(fn($v) => $v * 1.5, $values);
+$mapped[0] = 9.5;
+echo $mapped[0], "|", array_sum($mapped), "\n";
+"#,
+    );
+    assert_eq!(out, "9.5|17\n");
+}
+
+/// A ternary untyped callback can return either an int or a float; the wrapper boxes whichever
+/// representation the closure actually produced.
+#[test]
+fn test_array_map_untyped_mixed_return_callback_boxes_raw_result() {
+    let out = compile_and_run(
+        r#"<?php
+$mapped = array_map(fn($v) => $v > 1 ? 1.5 : 2, [1, 2, 3]);
+echo implode(",", $mapped), "\n";
+"#,
+    );
+    assert_eq!(out, "2,1.5,1.5\n");
+}
+
+/// An untyped `$v / 2` callback must preserve PHP's per-element int/float result: exact
+/// quotients stay integers and only inexact ones become doubles.
+#[test]
+fn test_array_map_untyped_int_division_preserves_int_and_float() {
+    let out = compile_and_run(
+        r#"<?php
+$mapped = array_map(fn($v) => $v / 2, [1, 2, 3, 4]);
+foreach ($mapped as $v) { var_dump($v); }
+"#,
+    );
+    assert_eq!(out, "float(0.5)\nint(1)\nfloat(1.5)\nint(2)\n");
+}
+
+/// A Mixed divisor keeps PHP's exact per-element int/float division result through the
+/// boxed Mixed division helper.
+#[test]
+fn test_array_map_mixed_divisor_preserves_int_and_float() {
+    let out = compile_and_run(
+        r#"<?php
+$divisor = $argc + 1;
+$mapped = array_map(fn($v) => $v / $divisor, [1, 2, 3, 4]);
+foreach ($mapped as $v) { var_dump($v); }
+"#,
+    );
+    assert_eq!(out, "float(0.5)\nint(1)\nfloat(1.5)\nint(2)\n");
+}
+
 /// Verifies a callback returning an ARRAY — also outside the narrowable set — survives the return
 /// boundary and can be indexed twice.
 #[test]
@@ -2559,4 +2628,65 @@ echo count(explode(",", countExplodeSubject("a,b,c"))), "\n";
     };
     check();
     without_ir_opt(check);
+}
+
+/// Verifies local indexed arrays with reference, key, string, first-class and callable-array
+/// walk callbacks are promoted to boxed storage, so every element write is visible and the
+/// uniform invoker receives both PHP arguments.
+#[test]
+fn test_array_walk_local_reference_callbacks_promote_to_boxed_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$v) { $v *= 2; }
+class Doubler {
+    public function bump(&$v) { $v *= 2; }
+    public static function stat(&$v) { $v += 10; }
+}
+$by_ref = [1, 2, 3];
+array_walk($by_ref, function (&$v) { $v *= 2; });
+echo implode(",", $by_ref), "\n";
+$with_key = ["a" => 1, "b" => 2];
+array_walk($with_key, function (&$v, $k) { $v = $k . ":" . $v; });
+echo json_encode($with_key), "\n";
+$string_fn = [1, 2];
+array_walk($string_fn, "bump");
+echo implode(",", $string_fn), "\n";
+$first_global = [1, 2];
+array_walk($first_global, bump(...));
+echo implode(",", $first_global), "\n";
+$obj = new Doubler();
+$first_method = [1, 2];
+array_walk($first_method, $obj->bump(...));
+echo implode(",", $first_method), "\n";
+$first_static = [1, 2];
+array_walk($first_static, Doubler::stat(...));
+echo implode(",", $first_static), "\n";
+$callable_array = [1, 2];
+array_walk($callable_array, [$obj, "bump"]);
+echo implode(",", $callable_array), "\n";
+$static_array = [1, 2];
+array_walk($static_array, ["Doubler", "stat"]);
+echo implode(",", $static_array), "\n";
+$captured = [1, 2, 3];
+$count = 0;
+array_walk($captured, function (&$v) use (&$count) { $count++; $v += $count; });
+echo implode(",", $captured), "|", $count, "\n";
+$recursive = [1, [2, 3], 4];
+array_walk_recursive($recursive, function (&$v, $k) { $v = $v * 10 + $k; });
+echo json_encode($recursive), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "2,4,6\n\
+         {\"a\":\"a:1\",\"b\":\"b:2\"}\n\
+         2,4\n\
+         2,4\n\
+         2,4\n\
+         11,12\n\
+         2,4\n\
+         11,12\n\
+         2,4,6|3\n\
+         [10,[20,31],42]\n"
+    );
 }

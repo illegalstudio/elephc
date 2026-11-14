@@ -16,7 +16,7 @@
 //!   remain.
 
 use crate::ir::{
-    DataPool, Function, Immediate, InstId, IrType, Op, Ownership, RuntimeCallTarget,
+    DataPool, Function, Immediate, InstId, IrType, LocalSlotId, Op, Ownership, RuntimeCallTarget,
     RuntimeFnId, UnaryStringRuntime, ValueId,
 };
 use crate::types::PhpType;
@@ -725,8 +725,13 @@ pub(super) fn const_local_string(
         let Some(Immediate::LocalSlot(slot)) = load.immediate else {
             return None;
         };
-        let entry = function.blocks.first()?;
-        let mut stored = None;
+        // A by-reference call or reference binding can rewrite the slot without a
+        // `store_local` in this function. Folding a load from such a slot would report the
+        // pre-call constant after the callee mutated it.
+        if slot_is_mutated_by_reference(function, slot) {
+            return None;
+        }
+        let mut stores: Vec<(InstId, ValueId)> = Vec::new();
         for (raw, inst) in function.instructions.iter().enumerate() {
             let id = InstId::from_raw(raw as u32);
             let touches_slot = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot);
@@ -735,20 +740,140 @@ pub(super) fn const_local_string(
             }
             match inst.op {
                 Op::StoreLocal if inst.operands.len() == 1 => {
-                    if !entry.instructions.contains(&id) || stored.replace(inst.operands[0]).is_some() {
-                        return None;
-                    }
+                    stores.push((id, inst.operands[0]));
                 }
                 Op::LoadLocal | Op::ReleaseLocalSlot => {}
                 _ => return None,
             }
         }
-        (stored?, true)
+        if stores.is_empty() {
+            return None;
+        }
+        let dominance = super::dominance::compute_dominance(function);
+        let load_block = containing_block(function, load_id)?;
+        // The nearest dominating store is the value at the load. Every other store must
+        // dominate *that* store, so it is overwritten before the load on every path. This
+        // admits a cold fallback store followed by a constant store inside the hot loop.
+        let mut chosen = None;
+        for &(store_id, stored) in &stores {
+            let Some(store_block) = containing_block(function, store_id) else {
+                return None;
+            };
+            if !dominance.dominates(store_block, load_block) {
+                continue;
+            }
+            if chosen.replace((store_block, stored)).is_some() {
+                return None;
+            }
+        }
+        let (chosen_block, stored) = chosen?;
+        for &(store_id, _) in &stores {
+            let store_block = containing_block(function, store_id)?;
+            if store_block != chosen_block
+                && store_reaches_load(function, store_block, load_block, chosen_block)
+            {
+                return None;
+            }
+        }
+        (stored, true)
     } else {
         (value, false)
     };
     let string = const_string_value(function, data, value)?;
     Some((string, if require_load { load_id } else { InstId::from_raw(u32::MAX) }))
+}
+
+/// Returns whether `from` can reach `load` without first executing the chosen store block.
+fn store_reaches_load(
+    function: &Function,
+    from: crate::ir::BlockId,
+    load: crate::ir::BlockId,
+    chosen: crate::ir::BlockId,
+) -> bool {
+    if from == chosen {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut pending = vec![from];
+    while let Some(block_id) = pending.pop() {
+        if block_id == load {
+            return true;
+        }
+        if block_id == chosen || !seen.insert(block_id) {
+            continue;
+        }
+        let Some(block) = function.block(block_id) else {
+            continue;
+        };
+        if let Some(terminator) = &block.terminator {
+            pending.extend(super::cfg::successors(terminator));
+        }
+    }
+    false
+}
+
+/// Returns whether a reference binding or a by-reference call argument can rewrite `slot`.
+///
+/// Only the builtin contract's declared by-reference parameters count; a call that consumes a
+/// loaded value by value (for example `ltrim`) must not disqualify a constant fold. Internal
+/// runtime functions with no contract stay fail-closed.
+fn slot_is_mutated_by_reference(function: &Function, slot: LocalSlotId) -> bool {
+    for inst in &function.instructions {
+        if inst.op == Op::StoreRefCell {
+            let alias = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot);
+            let owner = inst.operands.iter().any(|value| {
+                function.value(*value).is_some_and(|value| match value.def {
+                    crate::ir::ValueDef::Instruction { inst, .. } => function.instruction(inst)
+                        .is_some_and(|definition| {
+                            matches!(definition.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
+                        }),
+                    _ => false,
+                })
+            });
+            if alias || owner {
+                return true;
+            }
+        }
+        let target = match inst.immediate {
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => Some(target),
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ProfiledFunction {
+                target,
+                arguments: crate::ir::RuntimeArgumentLayout::Values,
+                ..
+            })) => Some(target),
+            Some(Immediate::RuntimeCall(_)) => None,
+            _ => continue,
+        };
+        let ref_params = target.and_then(crate::builtins::registry::runtime_fn_ref_params);
+        for (index, operand) in inst.operands.iter().enumerate() {
+            let loads_slot = function.value(*operand).is_some_and(|value| match value.def {
+                crate::ir::ValueDef::Instruction { inst, .. } => function.instruction(inst)
+                    .is_some_and(|definition| {
+                        matches!(definition.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
+                    }),
+                _ => false,
+            });
+            if !loads_slot {
+                continue;
+            }
+            let by_ref = ref_params
+                .and_then(|params| params.get(index).copied())
+                .unwrap_or(true);
+            if by_ref {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Returns the block that owns one instruction, or `None` when it is unreachable.
+fn containing_block(function: &Function, id: InstId) -> Option<crate::ir::BlockId> {
+    function
+        .blocks
+        .iter()
+        .find(|block| block.instructions.contains(&id))
+        .map(|block| block.id)
 }
 
 /// Returns the defining instruction and identifier for one SSA value.

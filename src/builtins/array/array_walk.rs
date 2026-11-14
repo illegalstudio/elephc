@@ -32,6 +32,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     crate::types::checker::builtins::check_array_walk_callback_builtin_call(
         cx.checker,
+        &cx.args[0],
         &cx.args[1],
         &arr_ty,
         cx.span,

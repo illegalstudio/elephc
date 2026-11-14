@@ -551,7 +551,19 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Int
                 }
             }
-            BinOp::Div => PhpType::Float,
+            BinOp::Div => {
+                let lt = infer_expr_type_syntactic(left);
+                let rt = infer_expr_type_syntactic(right);
+                if lt == PhpType::Float || rt == PhpType::Float {
+                    PhpType::Float
+                } else if lt == PhpType::Mixed || rt == PhpType::Mixed {
+                    PhpType::Mixed
+                } else if let Some(ty) = checked_literal_int_division_type(left, right) {
+                    ty
+                } else {
+                    PhpType::Mixed
+                }
+            }
             BinOp::Pow => {
                 // PHP's `**` keeps an integer result when both operands are ints, the
                 // exponent is non-negative and the value fits; otherwise it is a float.
@@ -599,6 +611,19 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
         _ => return None,
     };
     Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns PHP's exact result type for a division of two integer literals.
+fn checked_literal_int_division_type(left: &Expr, right: &Expr) -> Option<PhpType> {
+    let lhs = int_literal_value(left)?;
+    let rhs = int_literal_value(right)?;
+    if rhs == 0 {
+        return None;
+    }
+    if lhs == i64::MIN && rhs == -1 {
+        return Some(PhpType::Float);
+    }
+    Some(if lhs % rhs == 0 { PhpType::Int } else { PhpType::Float })
 }
 
 /// Returns whether PHP's `int ** int` keeps an integer result for these literals.

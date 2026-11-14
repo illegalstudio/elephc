@@ -2353,8 +2353,13 @@ fn test_cli_bridge_override_miss_reports_the_override_not_the_fallbacks() {
 /// token starting past column 65535 lose its end in the map (`php_end_col: null`, #1306).
 #[test]
 fn test_cli_source_map_keeps_long_included_line_ends() {
-    // `strlen($x)` sits after column 70,000 on line 2.
-    let body = format!("<?php\n$x = '{}'; echo strlen($x), \"\\n\";\n", "a".repeat(70_000));
+    // `strlen($x)` sits after column 70,000 on line 2. The `?? $argv[0]` keeps `$x` dynamic
+    // so the observation fold does not remove the `str_len` this test indexes; the shorter
+    // literal compensates for the longer prefix.
+    let body = format!(
+        "<?php\n$x = $argv[0] ?? '{}'; echo strlen($x), \"\\n\";\n",
+        "a".repeat(69_988)
+    );
     let map_of = |label: &str, files: &[(&str, &str)]| -> Vec<serde_json::Value> {
         let dir = make_cli_test_dir(label);
         for (name, source) in files {
