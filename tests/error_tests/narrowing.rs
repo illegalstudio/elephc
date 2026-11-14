@@ -405,3 +405,14 @@ fn test_if_else_join_does_not_keep_the_last_arm_store() {
             && error.contains("got ") && error.contains('|'), "{body}: {error}");
     }
 }
+
+/// A store narrows only on a non-null proof: a missing array element reads null, which php
+/// rejects at the `string` return, so the read keeps the binding's declared union.
+#[test]
+fn test_union_store_narrowing_needs_a_non_null_proof() {
+    for body in ["$x = $a[99];", "$x = \\is_int($x) ? $a[99] : $x;"] {
+        let source = format!("<?php function f(int|string $x): string {{ $a = ['ok']; {body} return $x; }}");
+        let error = check_source(&source).expect_err(body);
+        assert!(error.contains("return type expects string, got int|string"), "{body}: {error}");
+    }
+}

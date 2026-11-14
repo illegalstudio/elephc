@@ -348,7 +348,9 @@ fn check_assign_value_type(
                 }
             }
             // A plain store proves the stored member the way a coalescing one does below.
-            super::store_narrowing::narrow_local_to_stored_value(checker, name, &ty, env);
+            super::store_narrowing::narrow_local_to_stored_value(
+                checker, name, value, &ty, stored_non_null, env,
+            );
         }
         // The assignment merge protects the slot's contract. A coalescing store also proves
         // the current value's narrower type, without changing boxed parameter storage.
