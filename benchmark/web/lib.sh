@@ -223,14 +223,18 @@ wrk_json_object() {
   printf '%s' "$json"
 }
 
+# Counts socket errors/timeouts from the last parsed wrk report.
+wrk_socket_error_count() {
+  printf '%s' "${wrk_socket_errors:-}" | tr -cs '0-9' '\n' | awk '{ sum += $1 } END { print sum + 0 }'
+}
+
 # Counts non-2xx responses and socket errors from the last parsed wrk report.
 #
 # A benchmark that silently averages failed responses is worse than no
 # benchmark: callers must treat a non-zero count as an invalid run.
 wrk_failure_count() {
-  local total=${wrk_non_2xx:-0} socket_total
-  socket_total=$(printf '%s' "${wrk_socket_errors:-}" | tr -cs '0-9' '\n' | awk '{ sum += $1 } END { print sum + 0 }')
-  printf '%s\n' "$((total + socket_total))"
+  local total=${wrk_non_2xx:-0}
+  printf '%s\n' "$((total + $(wrk_socket_error_count)))"
 }
 
 # Runs one wrk process with a watchdog and parses its report.

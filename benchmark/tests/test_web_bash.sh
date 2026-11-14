@@ -87,9 +87,11 @@ case $wrk_socket_errors in
   *"read 2"*) ;;
   *) printf 'FAIL wrk socket errors: %s\n' "$wrk_socket_errors" >&2; failures=$((failures + 1)) ;;
 esac
+assert_eq "2" "$(wrk_socket_error_count)" "wrk socket error count"
 assert_eq "5" "$(wrk_failure_count)" "wrk failure count"
 wrk_non_2xx=0
 wrk_socket_errors="connect 0, read 0, write 0, timeout 0"
+assert_eq "0" "$(wrk_socket_error_count)" "wrk clean socket error count"
 assert_eq "0" "$(wrk_failure_count)" "wrk clean failure count"
 
 if "$WEB_DIR/run.sh" --workers >/dev/null 2>&1; then
@@ -107,6 +109,50 @@ if ! "$WEB_DIR/run.sh" --help >/dev/null 2>&1; then
 fi
 if ! "$WEB_DIR/fpm_compare.sh" --help >/dev/null 2>&1; then
   printf 'FAIL fpm_compare.sh --help\n' >&2
+  failures=$((failures + 1))
+fi
+
+# A socket-error-only sample must still be saved, reported, and rejected.
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/elephc-web-bash.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/bin"
+cat >"$tmp/bin/wrk" <<'EOF'
+#!/usr/bin/env bash
+cat <<'REPORT'
+Running 1s test @ http://127.0.0.1:1/
+  2 threads and 4 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     1.00ms  500.00us   2.00ms   90.00%
+    Req/Sec     1.00k   100.00     1.20k    80.00%
+  Latency Distribution
+     50%    1.00ms
+     75%    1.20ms
+     90%    1.50ms
+     99%    2.00ms
+  1000 requests in 1.00s, 1.00MB read
+  Socket errors: connect 0, read 2, write 0, timeout 3
+  Non-2xx or 3xx responses: 0
+Requests/sec:   1000.00
+Transfer/sec:      1.00MB
+REPORT
+EOF
+chmod +x "$tmp/bin/wrk"
+PATH="$tmp/bin:$PATH" "$WEB_DIR/fpm_compare.sh" \
+  --elephc-url http://127.0.0.1:1/ \
+  --fpm-url http://127.0.0.1:2/ \
+  --skip-new-connection --repeat 1 --duration 1s \
+  --json "$tmp/report.json" --markdown "$tmp/report.md" >"$tmp/stdout" 2>&1
+socket_status=$?
+if [[ $socket_status -eq 0 ]]; then
+  printf 'FAIL fpm_compare accepted a socket-error-only run\n' >&2
+  failures=$((failures + 1))
+fi
+if ! grep -q 'Invalid run' "$tmp/report.md" 2>/dev/null; then
+  printf 'FAIL fpm_compare lost the invalid-run banner\n' >&2
+  failures=$((failures + 1))
+fi
+if ! grep -q '| HTTP keep-alive | Failures | 5 | 5 | - |' "$tmp/report.md" 2>/dev/null; then
+  printf 'FAIL fpm_compare lost the socket-error counts\n' >&2
   failures=$((failures + 1))
 fi
 

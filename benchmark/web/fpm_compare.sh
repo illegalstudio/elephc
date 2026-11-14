@@ -124,9 +124,11 @@ measure_new_connections() {
 # Runs one wrk sample and writes its JSON plus a TSV row.
 measure_wrk() {
   local url=$1 threads=$2 connections=$3 duration=$4 timeout=$5 json=$6 output
+  local socket_failures
   output="$WORK_DIR/wrk-$$.txt"
   run_wrk_one "$url" "$threads" "$connections" "$duration" "$timeout" "$output" || return 1
   wrk_json_object >"$json"
+  socket_failures=$(wrk_socket_error_count)
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$wrk_requests_per_sec" \
     "${wrk_latency_avg_ms:--}" \
@@ -134,7 +136,7 @@ measure_wrk() {
     "${wrk_latency_p99_ms:--}" \
     "${wrk_requests:-0}" \
     "${wrk_non_2xx:-0}" \
-    "0" \
+    "$socket_failures" \
     "${wrk_socket_errors:-none}" >>"${json%/*}/samples.tsv"
   rm -f "$output"
 }
