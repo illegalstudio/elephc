@@ -37,7 +37,7 @@ use std::net::SocketAddr;
 use std::net::TcpStream;
 use std::os::fd::{AsRawFd, RawFd};
 #[cfg(target_vendor = "apple")]
-use std::os::fd::{FromRawFd, IntoRawFd};
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 #[cfg(target_vendor = "apple")]
 use std::os::unix::net::UnixDatagram;
@@ -640,6 +640,12 @@ fn poll_fd(fd: RawFd, events: libc::c_short, timeout_ms: libc::c_int) -> bool {
 #[repr(C, align(8))]
 struct ControlBuffer([u8; 64]);
 
+#[cfg(target_vendor = "apple")]
+const _: () = assert!(
+    std::mem::align_of::<ControlBuffer>() >= std::mem::align_of::<libc::cmsghdr>(),
+    "ControlBuffer must be naturally aligned for cmsghdr"
+);
+
 /// Transfers one descriptor with its id over a Unix datagram channel.
 #[cfg(target_vendor = "apple")]
 fn send_fd(socket: RawFd, fd: RawFd, id: u64) -> io::Result<()> {
@@ -691,12 +697,7 @@ fn send_fd(socket: RawFd, fd: RawFd, id: u64) -> io::Result<()> {
 /// `MSG_CTRUNC`. The caller cannot use them, so close each one before returning
 /// the protocol error.
 #[cfg(target_vendor = "apple")]
-unsafe fn close_received_fds(
-    message: &libc::msghdr,
-    capacity: usize,
-    keep: Option<RawFd>,
-    fd0_was_free: bool,
-) {
+unsafe fn close_received_fds(message: &libc::msghdr, capacity: usize, keep: Option<RawFd>) {
     let control_start = message.msg_control as usize;
     let control_len = (message.msg_controllen as usize).min(capacity);
     if control_start == 0 || control_len == 0 {
@@ -732,13 +733,9 @@ unsafe fn close_received_fds(
                         .add(index * std::mem::size_of::<RawFd>())
                         .cast::<RawFd>(),
                 );
-                // SCM_RIGHTS assigns receiver-side numbers. If fd 0 was open
-                // before recvmsg, the kernel could not have installed a
-                // received descriptor there, so a zero slot is padding.
-                if fd == 0 && !fd0_was_free {
-                    continue;
-                }
-                if fd >= 0 && Some(fd) != keep {
+                // recv_fd keeps fd 0 occupied while it receives, so a zero
+                // slot is alignment padding rather than a received descriptor.
+                if fd > 0 && Some(fd) != keep {
                     libc::close(fd);
                 }
             }
@@ -810,14 +807,38 @@ fn received_rights_fd(message: &libc::msghdr, capacity: usize) -> io::Result<Raw
     Ok(fd)
 }
 
+/// Pins fd 0 when it is free so `recvmsg` never installs a descriptor there.
+///
+/// The kernel allocates the lowest free descriptor for `SCM_RIGHTS`. Holding a
+/// close-on-exec `/dev/null` at 0 makes a zero slot in the control buffer
+/// unambiguously padding. Returns `None` when fd 0 is already open or cannot
+/// be reserved; resource exhaustion that blocks the pin also blocks the
+/// descriptor allocation in `recvmsg`.
+#[cfg(target_vendor = "apple")]
+fn pin_descriptor_zero() -> Option<OwnedFd> {
+    if unsafe { libc::fcntl(0, libc::F_GETFD) } != -1 {
+        return None;
+    }
+    let pin = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if pin < 0 {
+        return None;
+    }
+    if pin == 0 {
+        Some(unsafe { OwnedFd::from_raw_fd(pin) })
+    } else {
+        // Another thread claimed fd 0 between the probe and `open`; closing
+        // the pin leaves fd 0 occupied, so it still cannot receive a fd.
+        unsafe { libc::close(pin) };
+        None
+    }
+}
+
 /// Receives one descriptor and its id from a Unix datagram channel.
 #[cfg(target_vendor = "apple")]
 fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
-    // If fd 0 is free, the kernel may install a received descriptor there;
-    // otherwise a zero slot can only be zero padding. This probe is a
-    // snapshot: stdin is normally open in a worker, so the race only exists
-    // if another thread reopens fd 0 while a malformed datagram is handled.
-    let fd0_was_free = unsafe { libc::fcntl(0, libc::F_GETFD) } == -1;
+    // Keep fd 0 occupied so a received descriptor can never use it; a zero
+    // slot in the control buffer is then always padding.
+    let _fd0_pin = pin_descriptor_zero();
     // One byte beyond the id makes an over-long datagram visible in `result`
     // even if the kernel does not report MSG_TRUNC.
     let mut payload = [0u8; 9];
@@ -832,6 +853,10 @@ fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
     message.msg_control = control.0.as_mut_ptr().cast();
     message.msg_controllen = control.0.len() as _;
     let result = loop {
+        // `recvmsg` may update these fields before an interrupt; reset them so
+        // a retry keeps the full control-buffer bound.
+        message.msg_controllen = control.0.len() as _;
+        message.msg_flags = 0;
         let result = unsafe { libc::recvmsg(socket.as_raw_fd(), &mut message, 0) };
         if result < 0
             && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR)
@@ -852,7 +877,7 @@ fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
     }
     if result == 0 {
         // A zero-length datagram can still carry SCM_RIGHTS descriptors.
-        unsafe { close_received_fds(&message, control.0.len(), None, fd0_was_free) };
+        unsafe { close_received_fds(&message, control.0.len(), None) };
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "descriptor channel closed",
@@ -864,7 +889,7 @@ fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
         // `recvmsg` installs SCM_RIGHTS descriptors before reporting a
         // truncated payload or control buffer. They are unusable here, so
         // close them instead of leaking one fd per malformed datagram.
-        unsafe { close_received_fds(&message, control.0.len(), None, fd0_was_free) };
+        unsafe { close_received_fds(&message, control.0.len(), None) };
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "truncated descriptor datagram",
@@ -873,20 +898,20 @@ fn recv_fd(socket: &UnixDatagram) -> io::Result<(RawFd, u64)> {
     let fd = match received_rights_fd(&message, control.0.len()) {
         Ok(fd) => fd,
         Err(error) => {
-            unsafe { close_received_fds(&message, control.0.len(), None, fd0_was_free) };
+            unsafe { close_received_fds(&message, control.0.len(), None) };
             return Err(error);
         }
     };
     if let Err(error) = set_close_on_exec(fd) {
         unsafe {
-            close_received_fds(&message, control.0.len(), Some(fd), fd0_was_free);
+            close_received_fds(&message, control.0.len(), Some(fd));
             libc::close(fd);
         }
         return Err(error);
     }
     // A well-formed datagram should carry exactly one descriptor. Close any
     // extra descriptors rather than leaking them.
-    unsafe { close_received_fds(&message, control.0.len(), Some(fd), fd0_was_free) };
+    unsafe { close_received_fds(&message, control.0.len(), Some(fd)) };
     Ok((
         fd,
         u64::from_ne_bytes(payload[..8].try_into().expect("8-byte id")),
@@ -1966,7 +1991,7 @@ mod tests {
             (*second_header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
             std::ptr::write_unaligned(libc::CMSG_DATA(second_header).cast::<RawFd>(), second[1]);
         }
-        unsafe { close_received_fds(&message, control.0.len(), None, false) };
+        unsafe { close_received_fds(&message, control.0.len(), None) };
         for fd in [first[0], second[0]] {
             assert_pipe_eof(fd, "a descriptor from a multi-cmsg buffer was not closed");
             unsafe { libc::close(fd) };
@@ -1990,15 +2015,21 @@ mod tests {
         message.msg_controllen = 64;
         let header = unsafe { libc::CMSG_FIRSTHDR(&message) };
         assert!(!header.is_null());
+        let fd0_open_before = unsafe { libc::fcntl(0, libc::F_GETFD) } != -1;
         unsafe {
             (*header).cmsg_level = libc::SOL_SOCKET;
             (*header).cmsg_type = libc::SCM_RIGHTS;
             (*header).cmsg_len = 80;
             std::ptr::write_unaligned(libc::CMSG_DATA(header).cast::<RawFd>(), pipe[1]);
-            // fd0_was_free=false makes the zero padding skip fd 0 while the
-            // valid first slot is still closed.
-            close_received_fds(&message, control.0.len(), None, false);
+            // The walk reads zero padding after the valid slot; it must not
+            // interpret that padding as fd 0.
+            close_received_fds(&message, control.0.len(), None);
         }
+        assert_eq!(
+            unsafe { libc::fcntl(0, libc::F_GETFD) } != -1,
+            fd0_open_before,
+            "zero padding slots must not close fd 0"
+        );
         assert_pipe_eof(pipe[0], "the valid descriptor in an overlong cmsg was not closed");
         assert!(unsafe { libc::fcntl(unrelated[1], libc::F_GETFD) } >= 0);
         unsafe {
@@ -2044,17 +2075,17 @@ mod tests {
         unsafe { libc::close(pipe_fds[0]) };
     }
 
-    /// A received descriptor installed as fd 0 is closed, not treated as padding.
+    /// A free fd 0 is pinned so the received descriptor uses another number.
     #[cfg(target_vendor = "apple")]
     #[test]
-    fn recv_fd_closes_descriptor_zero() {
+    fn recv_fd_pins_descriptor_zero() {
         if std::env::var_os("ELEPHC_FD_ZERO_CHILD").is_none() {
             use std::os::unix::process::CommandExt;
             let mut command = std::process::Command::new(std::env::current_exe().unwrap());
             command
                 .args([
                     "--exact",
-                    "listener::tests::recv_fd_closes_descriptor_zero",
+                    "listener::tests::recv_fd_pins_descriptor_zero",
                     "--nocapture",
                 ])
                 .env("ELEPHC_FD_ZERO_CHILD", "1")
@@ -2108,16 +2139,18 @@ mod tests {
             payload.len() as isize
         );
         unsafe { libc::close(pipe_fds[1]) };
-        // Make fd 0 the lowest free number; the received descriptor will be 0.
+        // Make fd 0 free; recv_fd must pin it so the received descriptor
+        // lands on another number.
         unsafe { libc::close(0) };
         let error = recv_fd(&receiver).expect_err("a long payload must be rejected");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        // The pin is dropped on return and the received descriptor was closed
+        // by the cleanup path.
         assert_eq!(unsafe { libc::fcntl(0, libc::F_GETFD) }, -1);
-        assert_eq!(
-            io::Error::last_os_error().raw_os_error(),
-            Some(libc::EBADF)
+        assert_pipe_eof(
+            pipe_fds[0],
+            "the descriptor received beside a pinned fd 0 was not closed",
         );
-        assert_pipe_eof(pipe_fds[0], "the descriptor installed as fd 0 was not closed");
         unsafe { libc::close(pipe_fds[0]) };
     }
 
@@ -2187,7 +2220,7 @@ mod tests {
             (*tail_header).cmsg_type = libc::SCM_RIGHTS;
             (*tail_header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as u32) as _;
             std::ptr::write_unaligned(libc::CMSG_DATA(tail_header).cast::<RawFd>(), unrelated[1]);
-            close_received_fds(&message, guarded.control.0.len(), None, false);
+            close_received_fds(&message, guarded.control.0.len(), None);
         }
         assert_pipe_eof(pipe[0], "the helper did not close the received write end");
         assert!(
