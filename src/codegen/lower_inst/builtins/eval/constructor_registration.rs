@@ -128,7 +128,7 @@ pub(super) fn register_eval_native_constructor(
         if register_eval_native_param_default_error(ctx, context_source,
             (&class_name_label, class_name_len), index, default.as_ref(), &default_context,
             "__elephc_eval_register_native_constructor_param_default_error") { continue; }
-        if let Some(default) = default
+        if let Some(default) = registration.signature.default_value(index)
             .as_ref()
             .and_then(|expr| eval_native_callable_default(expr, &default_context))
         {

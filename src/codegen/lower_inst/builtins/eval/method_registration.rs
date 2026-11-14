@@ -146,7 +146,7 @@ pub(super) fn register_eval_native_method(
         } else { "__elephc_eval_register_native_method_param_default_error" };
         if register_eval_native_param_default_error(ctx, context_source,
             (&method_key_label, method_key_len), index, default.as_ref(), &default_context, error_symbol) { continue; }
-        if let Some(default) = default
+        if let Some(default) = registration.signature.default_value(index)
             .as_ref()
             .and_then(|expr| eval_native_callable_default(expr, &default_context))
         {

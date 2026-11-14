@@ -219,7 +219,8 @@ pub(super) fn lower_assoc_spread_only_args(
     let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
     let mut operands = Vec::with_capacity(sig.params.len());
     for (idx, (param_name, _)) in sig.params.iter().enumerate() {
-        let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
+        let bound_default = sig.default_value(idx);
+        let default = bound_default.as_ref();
         let param_expr = assoc_spread_param_expr(&spread_expr, param_name, default, arg.span);
         operands.push(lower_arg_with_signature(ctx, sig, idx, &param_expr));
     }

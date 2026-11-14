@@ -79,7 +79,8 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     for param_idx in first_spread_param_idx..regular_param_count {
         let element_idx = param_idx - first_spread_param_idx;
-        let default = sig.defaults.get(param_idx).and_then(|default| default.as_ref());
+        let bound_default = sig.default_value(param_idx);
+        let default = bound_default.as_ref();
         let expr = if let Some(default) = default {
             if element_idx < required_len {
                 spread_element_expr_for_ir(

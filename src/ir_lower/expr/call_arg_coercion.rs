@@ -1435,10 +1435,10 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         .collect();
     if !trim_trailing_defaults {
         for idx in fixed_arg_count..regular_param_count {
-            let Some(Some(default)) = sig.defaults.get(idx) else {
+            let Some(default) = sig.default_value(idx) else {
                 break;
             };
-            operands.push(lower_arg_with_signature(ctx, sig, idx, default));
+            operands.push(lower_arg_with_signature(ctx, sig, idx, &default));
         }
     }
     if sig.variadic.is_some() {

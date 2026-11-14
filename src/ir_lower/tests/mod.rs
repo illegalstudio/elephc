@@ -759,3 +759,5 @@ mod strict_defaults;
 mod strict_default_evidence;
 
 mod strict_trusted_constants;
+
+mod strict_trusted_defaults;

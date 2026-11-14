@@ -188,9 +188,8 @@ pub(super) fn register_eval_native_function(
         }
         let Some(default) = registration
             .signature
-            .defaults
-            .get(physical_index)
-            .and_then(Option::as_ref)
+            .default_value(physical_index)
+            .as_ref()
             .and_then(|expr| eval_native_callable_default(expr, &default_context))
         else {
             continue;

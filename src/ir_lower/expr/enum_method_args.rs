@@ -95,8 +95,8 @@ pub(super) fn lower_arguments(
         if index < required {
             throw_missing(ctx, signature, class, method, index, required,
                 &argc, &named, span);
-        } else if let Some(default) = signature.defaults.get(index).and_then(Option::as_ref) {
-            store_expr_into_temp(ctx, &slot, PhpType::Mixed, default, span);
+        } else if let Some(default) = signature.default_value(index) {
+            store_expr_into_temp(ctx, &slot, PhpType::Mixed, &default, span);
             branch(ctx, ready);
         } else {
             unreachable!("every required selected enum parameter has an omission check");

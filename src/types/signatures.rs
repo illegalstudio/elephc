@@ -78,6 +78,21 @@ pub struct FunctionSig {
 }
 
 impl FunctionSig {
+    /// Binds an omitted literal to its declared kind while preserving the original source default.
+    pub(crate) fn default_value(&self, index: usize) -> Option<Expr> {
+        let value = self.defaults.get(index)?.as_ref()?.clone();
+        if !self.declared_params.get(index).copied().unwrap_or(false) {
+            return Some(value);
+        }
+        let declared = self.param_type_exprs.get(index).and_then(Option::as_ref)
+            .and_then(crate::semantics::conversions::scalar_hint)
+            .or_else(|| self.params.get(index).map(|(_, ty)| ty.clone()));
+        Some(match declared {
+            Some(ty) => super::constant_binding::bind_literal(value, &ty),
+            None => value,
+        })
+    }
+
     /// Returns whether the CALLEE's frame owns a reference to by-value parameter `index`.
     ///
     /// By-value arrays, hashes, and Mixed cells are rebound to owning shadow slots by

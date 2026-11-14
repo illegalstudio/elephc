@@ -40,7 +40,6 @@ pub(super) fn lower_boxed_spread_args(
 ) -> Option<Vec<ValueId>> {
     let hidden = crate::func_args::sig_collects_surplus_args(sig);
     if sig.variadic.is_some() && !hidden || sig.ref_params.iter().any(|by_ref| *by_ref)
-        || !hidden && !preserve_values && sig.defaults.iter().any(Option::is_some)
         || crate::func_args::sig_has_hidden_argc_param(sig)
         || !args.iter().any(|arg| match &arg.kind {
             ExprKind::Spread(source) => {
@@ -102,14 +101,14 @@ pub(super) fn lower_boxed_spread_args(
         require(ctx, valid, "ArgumentCountError", &format!("{builtin}(): Too many arguments for unpacked call"), span);
     }
     for (index, filled) in state.filled.iter().enumerate() {
-        if hidden {
-            if let Some(Some(default)) = sig.defaults.get(index) {
+        if hidden || !preserve_values {
+            if let Some(default) = sig.default_value(index) {
                 let ready = ctx.load_local(filled, Some(span));
                 let done = ctx.builder.create_named_block("spread.default.done", Vec::new());
                 let missing = ctx.builder.create_named_block("spread.default.missing", Vec::new());
                 conditional(ctx, ready.value, done, missing);
                 ctx.builder.position_at_end(missing);
-                store_expr_into_temp(ctx, &state.slots[index], PhpType::Mixed, default, span);
+                store_expr_into_temp(ctx, &state.slots[index], PhpType::Mixed, &default, span);
                 branch(ctx, done);
                 ctx.builder.position_at_end(done);
                 continue;

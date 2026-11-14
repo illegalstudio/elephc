@@ -90,9 +90,9 @@ pub(super) fn lower_arguments(
         let value = if let Some(source) = source {
             bind_argument(ctx, signature, index, &staged[source], None, class, method, span)
         } else {
-            let default = signature.defaults[index].as_ref()
+            let default = signature.default_value(index)
                 .expect("selected static call already passed the required-argument plan");
-            lower_arg_with_signature(ctx, signature, index, default)
+            lower_arg_with_signature(ctx, signature, index, &default)
         };
         values.push(value);
     }

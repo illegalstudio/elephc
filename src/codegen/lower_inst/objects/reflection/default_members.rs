@@ -241,7 +241,8 @@ pub(super) fn reflection_parameter_members_with_declaring_function(
         )
         .filter(|_| has_type);
         let default_expr = sig.defaults.get(index).and_then(Option::as_ref);
-        let default_value = default_expr
+        let bound_default = sig.default_value(index);
+        let default_value = bound_default.as_ref()
             .map(|default| {
                 reflection_parameter_default_value(ctx, current_class, current_info, default)
             })

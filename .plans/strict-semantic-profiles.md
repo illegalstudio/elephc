@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 48 (this commit), following `9c9cbe461a`. Issue:
+Verified through step 49 (this commit), following `6258e85218`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -689,6 +689,27 @@ then remaining property/reference/alias/eval/builtin/host guarantees, checked ca
 and the other strict families. Public admission remains unchanged. Compiler build,
 architecture gate, assembly comments and diff hygiene pass.
 
+### Verified omitted parameter default literals
+
+Step49 adds FunctionSig::default_value as the shared copy-binding accessor. Raw
+signature and source defaults stay intact for validation, reflection source names
+and lazy-helper identity. Named plans, positional/default/spread lowering, enum
+calls, descriptor metadata, native eval registration and reflection value queries
+consume the declared literal kind. Untyped defaults and explicit caller arguments
+retain their own kinds. The boxed spread binder now fills optional regular slots
+before the same parameter-order guard, instead of falling back to passing the
+whole array as one operand.
+
+The selected-profile probe was red on step48: named omission failed during type
+checking and a boxed optional unpack produced zero instead of its default. Three
+new checks cover source preservation, all five emitters, native direct/FCC/closure/
+arrow/method calls, reflection, named omission, empty and supplied spreads,
+failure cleanup and both full optimizer modes. Three declaration-default controls
+and one invoker hidden-collector control pass, as do compiler build, architecture,
+assembly comments and diff checks. An explicit Mixed int through an escaped native
+descriptor remains accepted by the legacy invoker and is the immediate next
+integration target; no feature admission changes in this step.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -804,4 +825,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 45 | `83b2501b36` | feat(strict): retain declared contracts across local stores |
 | 46 | `de9ba02ca7` | feat(strict): validate original scalar declaration defaults |
 | 47 | `9c9cbe461a` | feat(strict): preserve declaration kinds and union failures |
-| 48 | this commit | feat(strict): materialize declared scalar constant literals |
+| 48 | `6258e85218` | feat(strict): materialize declared scalar constant literals |
+| 49 | this commit | feat(strict): bind omitted parameter defaults before invocation |

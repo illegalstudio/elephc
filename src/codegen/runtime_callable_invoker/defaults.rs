@@ -85,7 +85,8 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
     };
     sig.defaults
         .iter()
-        .map(|default| {
+        .enumerate()
+        .map(|(index, default)| {
             let default = default.as_ref()?;
             if let Some(message) = deferred_error_message(default) {
                 return Some(InvokerDefaultValue::DeferredError(message.to_string()));
@@ -96,7 +97,8 @@ pub(in crate::codegen) fn resolve_invoker_defaults(
                     && function.lexical_class.as_deref() == current_class) {
                 return Some(InvokerDefaultValue::EirHelper(helper.name.clone()));
             }
-            let value = resolve_const_default(default, &context)?;
+            let bound_default = sig.default_value(index)?;
+            let value = resolve_const_default(&bound_default, &context)?;
             let value = normalize_invoker_default(module, value)?;
             materializable(module, &value).then_some(value)
         })
@@ -233,7 +235,8 @@ fn normalize_object_args_for_signature(
         if slot.is_some() {
             continue;
         }
-        let default = resolve_const_default(sig.defaults.get(index)?.as_ref()?, &default_context)?;
+        let bound_default = sig.default_value(index)?;
+        let default = resolve_const_default(&bound_default, &default_context)?;
         *slot = Some(normalize_invoker_default(module, default)?);
     }
 

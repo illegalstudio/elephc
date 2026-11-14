@@ -482,7 +482,7 @@ fn plan_named_call_args(
             if slot.is_some() {
                 continue;
             }
-            let default = sig.defaults.get(idx).and_then(|default| default.clone());
+            let default = sig.default_value(idx);
             *slot = Some(PlannedRegularArg::SpreadElement {
                 spread_expr: dynamic_prefix_expr.clone(),
                 spread_span: dynamic_prefix_expr.span,
@@ -509,8 +509,8 @@ fn plan_named_call_args(
     for (idx, slot) in resolved.into_iter().take(output_len).enumerate() {
         if let Some(arg) = slot {
             regular_args.push(arg);
-        } else if let Some(Some(default_expr)) = sig.defaults.get(idx) {
-            regular_args.push(PlannedRegularArg::Default(default_expr.clone()));
+        } else if let Some(default_expr) = sig.default_value(idx) {
+            regular_args.push(PlannedRegularArg::Default(default_expr));
         } else {
             return Err(CallArgPlanError::MissingRequired {
                 span: call_span,
