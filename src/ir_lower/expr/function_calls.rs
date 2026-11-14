@@ -224,9 +224,19 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
         ctx.box_mixed_parameters = previous_box_mixed;
         operands
     } else if is_extern {
-        lower_args_with_signature(ctx, sig.as_ref(), args)
+        // A nested call inside an extern argument is its own callee: it must not inherit
+        // the enclosing user call's mixed-parameter boxing decision.
+        let previous_box_mixed = ctx.box_mixed_parameters;
+        ctx.box_mixed_parameters = false;
+        let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+        ctx.box_mixed_parameters = previous_box_mixed;
+        operands
     } else {
-        lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
+        let previous_box_mixed = ctx.box_mixed_parameters;
+        ctx.box_mixed_parameters = false;
+        let operands = lower_builtin_call_args(ctx, canonical, sig.as_ref(), args);
+        ctx.box_mixed_parameters = previous_box_mixed;
+        operands
     };
     if !is_extern && !is_user_function {
         box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);

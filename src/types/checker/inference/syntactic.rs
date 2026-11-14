@@ -512,6 +512,10 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             }
         }
         ExprKind::NewObject { class_name, .. } => PhpType::Object(class_name.as_str().to_string()),
+        // `new $class` names its class at run time, so the syntactic walk can only say
+        // "some object". Falling through to the `_ => Int` default made a `cond ? new $class : null`
+        // merge a nullable-int temp and box the object pointer as an integer.
+        ExprKind::NewDynamic { .. } => PhpType::Object(String::new()),
         ExprKind::NewDynamicObject { fallback_class, .. } => {
             PhpType::Object(fallback_class.as_str().to_string())
         }

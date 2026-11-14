@@ -473,6 +473,11 @@ impl Checker {
         // the depth-0 retype arm from applying, since that arm is guarded on eligibility this name
         // does not have.
         let mut binding: Option<(PhpType, u32)> = incoming.map(|ty| (ty.clone(), 0));
+        // A conditional null/non-null pair is boxed silently (a nullable scalar is a normal
+        // value in permissive mode). Keep the FIRST such pair as a fallback mark, but keep
+        // replaying so a later int/string conflict in the same name still produces the
+        // actionable warning instead of being absorbed by the null pair.
+        let mut silent_null_mark: Option<(PhpType, &'a AssignSite)> = None;
         for site in &facts.assigns {
             // An assignment governed by a TRANSPARENT guard region is not a conflict the checker
             // will ever report, and it does not move the binding either. Flow narrowing replaced
@@ -525,7 +530,16 @@ impl Checker {
             if site.depth > binding_depth
                 && (matches!(existing, PhpType::Void) != matches!(site.ty, PhpType::Void))
             {
-                return Some((existing, site));
+                if silent_null_mark.is_none() {
+                    silent_null_mark = Some((existing.clone(), site));
+                }
+                // Continue from the non-null side: a later conflict between two concrete
+                // types is the warning the user can act on.
+                binding = Some((
+                    if matches!(existing, PhpType::Void) { site.ty.clone() } else { existing },
+                    binding_depth,
+                ));
+                continue;
             }
             if let Some(merged) = self.merged_assignment_type(&existing, &site.ty) {
                 binding = Some((merged, binding_depth));
@@ -555,7 +569,7 @@ impl Checker {
             }
             return Some((existing, site));
         }
-        None
+        silent_null_mark
     }
 
     /// Decides, for one name, which guard regions are transparent to it.
