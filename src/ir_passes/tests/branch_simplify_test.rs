@@ -397,6 +397,45 @@ fn loop_free_functions_skip_the_loop_analyses() {
     }
     assert_eq!(loop_analyses_of_one_run(&mut straight), 0, "a loop-free function was analysed");
 
+    // Lowering creates a join block before the branches that reach it: edges to a smaller id
+    // with no cycle among them.
+    let mut joined = Function::new("joined".to_string(), IrType::I64, PhpType::Int);
+    {
+        let mut builder = Builder::new(&mut joined);
+        let slot = builder.add_local(
+            Some("c".to_string()),
+            IrType::I64,
+            PhpType::Bool,
+            crate::ir::LocalKind::PhpLocal,
+        );
+        let entry = builder.create_named_block("entry", vec![]);
+        let join = builder.create_named_block("join", vec![]);
+        let left = builder.create_named_block("left", vec![]);
+        let right = builder.create_named_block("right", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        // A runtime condition and non-empty arms: neither folding nor threading removes the
+        // edges into the join, so only the cycle search can tell the graph is acyclic.
+        let cond = builder.emit_load_local(slot, IrType::I64, PhpType::Bool);
+        builder.terminate(Terminator::CondBr {
+            cond,
+            then_target: left,
+            then_args: Vec::new(),
+            else_target: right,
+            else_args: Vec::new(),
+        });
+        builder.position_at_end(left);
+        builder.emit_load_local(slot, IrType::I64, PhpType::Bool);
+        builder.terminate(Terminator::Br { target: join, args: Vec::new() });
+        builder.position_at_end(right);
+        builder.emit_load_local(slot, IrType::I64, PhpType::Bool);
+        builder.terminate(Terminator::Br { target: join, args: Vec::new() });
+        builder.position_at_end(join);
+        let value = builder.emit_const_i64(2);
+        builder.terminate(Terminator::Return { value: Some(value) });
+    }
+    assert_eq!(loop_analyses_of_one_run(&mut joined), 0, "an acyclic join was analysed");
+
     let mut looping = Function::new("looping".to_string(), IrType::I64, PhpType::Int);
     {
         let mut builder = Builder::new(&mut looping);
