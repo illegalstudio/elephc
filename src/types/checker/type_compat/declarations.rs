@@ -288,7 +288,14 @@ impl Checker {
             ExprKind::PropertyAccess { .. } | ExprKind::StaticPropertyAccess { .. }
         ) {
             let property_ty = self.infer_type(property_arg, env)?;
+            // A written array reference is a LAYOUT contract: the callee reads and writes
+            // the caller's slot in the parameter's own storage. A property list bound to a
+            // hash parameter cannot be promoted in place and must keep the layout error,
+            // even though scalar/object/mixed property write-back is supported below.
+            let array_layout_conflict = layout_contract
+                && crate::types::binds_packed_reference_argument(expected_ty, &property_ty);
             if property_ty.codegen_repr() != PhpType::Mixed
+                && !array_layout_conflict
                 && self.by_ref_property_place(property_arg, expected_ty, env)?
             {
                 return Ok(());

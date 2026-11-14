@@ -335,10 +335,6 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// never adopted means no selected lowering produced a transferable cell, which is a refused
     /// reference assignment.
     pub(crate) reference_call_context: Option<ReferenceCallContext>,
-    /// Whether the current call target is a user-defined declaration whose `mixed`
-    /// parameters are boxed Mixed cells. Builtins and language constructs consume their
-    /// operands with their own storage rules, so the call-site boxing stays off for them.
-    pub(crate) box_mixed_parameters: bool,
     /// Live owners for captures introduced by the scoped statement write planners.
     pub(super) scoped_write_scopes: Vec<super::scoped_writes::ScopedWriteScope>,
     /// Values that own a reference transferred out of an already-cleared merge temporary.
@@ -749,7 +745,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             hidden_temp_counter: 0,
             expression_depth: 0,
             reference_call_context: None,
-            box_mixed_parameters: false,
             scoped_write_scopes: Vec::new(),
             taken_owned_temp_values: HashSet::new(),
             call_argument_evaluation_scopes: Vec::new(),

@@ -214,29 +214,15 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
         // A source-declared `array` has packed-or-hash Mixed storage. Its unpack must walk
         // runtime keys and bind each boxed cell before entering the direct function ABI, just
         // like the same fixed signature reached through a builtin descriptor surface.
-        let previous_box_mixed = ctx.box_mixed_parameters;
-        ctx.box_mixed_parameters = true;
-        let operands = sig.as_ref()
+        sig.as_ref()
             .and_then(|signature| {
                 dynamic_spreads::lower_boxed_spread_args(ctx, signature, args, canonical, false)
             })
-            .unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args));
-        ctx.box_mixed_parameters = previous_box_mixed;
-        operands
+            .unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), args))
     } else if is_extern {
-        // A nested call inside an extern argument is its own callee: it must not inherit
-        // the enclosing user call's mixed-parameter boxing decision.
-        let previous_box_mixed = ctx.box_mixed_parameters;
-        ctx.box_mixed_parameters = false;
-        let operands = lower_args_with_signature(ctx, sig.as_ref(), args);
-        ctx.box_mixed_parameters = previous_box_mixed;
-        operands
+        lower_args_with_signature(ctx, sig.as_ref(), args)
     } else {
-        let previous_box_mixed = ctx.box_mixed_parameters;
-        ctx.box_mixed_parameters = false;
-        let operands = lower_builtin_call_args(ctx, canonical, sig.as_ref(), args);
-        ctx.box_mixed_parameters = previous_box_mixed;
-        operands
+        lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
     if !is_extern && !is_user_function {
         box_nullable_pointer_builtin_operands(ctx, sig.as_ref(), &mut operands, expr.span);

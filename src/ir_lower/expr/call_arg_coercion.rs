@@ -686,19 +686,6 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
             return apply_scalar_param_cast(ctx, cast, value, Some(arg.span));
         }
     }
-    // A by-value `mixed` parameter is a boxed Mixed cell in the callee ABI, so a raw scalar,
-    // array, object or pointer argument must be boxed at the call site. By-reference mixed
-    // parameters receive the caller's storage and never take this conversion.
-    if ctx.box_mixed_parameters
-        && param_ty == PhpType::Mixed
-        && !sig.ref_params.get(index).copied().unwrap_or(false)
-        && !matches!(
-            source_ty,
-            PhpType::Mixed | PhpType::Union(_) | PhpType::Void | PhpType::Never
-        )
-    {
-        return ctx.box_value_as_mixed(value, PhpType::Mixed, Some(arg.span));
-    }
     value
 }
 
@@ -759,9 +746,14 @@ pub(super) fn unbox_array_param_storage(
     value: LoweredValue,
     param_ty: PhpType,
     span: Option<crate::span::Span>,
+    normalize_indexed: bool,
 ) -> LoweredValue {
     let effects = Op::mixed_unbox_effects(&param_ty);
-    let result = ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], None, param_ty, effects, span);
+    // Only a callee that reads packed slots opts in. A property read or a bare `array`
+    // parameter keeps the hash's own keys; normalizing every `array<mixed>` unbox flattened
+    // `$this->b[$k][] = ...` into sequential keys before the append.
+    let immediate = normalize_indexed.then_some(Immediate::Bool(true));
+    let result = ctx.emit_owned_value(Op::MixedUnbox, vec![value.value], immediate, param_ty, effects, span);
     release_coerced_source_if_owned(ctx, value, span);
     result
 }
@@ -781,7 +773,7 @@ fn unbox_hash_param_storage(
     span: Option<crate::span::Span>,
 ) -> LoweredValue {
     let PhpType::AssocArray { value: entry_ty, .. } = param_ty.codegen_repr() else {
-        return unbox_array_param_storage(ctx, value, param_ty, span);
+        return unbox_array_param_storage(ctx, value, param_ty, span, false);
     };
     let list_view_ty = PhpType::Array(entry_ty);
     let effects = Op::mixed_unbox_effects(&list_view_ty);
@@ -1071,7 +1063,17 @@ pub(super) fn coerce_operands_to_params(
             let coerced = if declared_hash {
                 unbox_hash_param_storage(ctx, lowered, param_ty.clone(), None)
             } else {
-                unbox_array_param_storage(ctx, lowered, param_ty.clone(), None)
+                let normalized = !matches!(
+                    sig.param_type_exprs.get(index).and_then(Option::as_ref),
+                    Some(crate::parser::ast::TypeExpr::Named(_)),
+                );
+                unbox_array_param_storage(
+                    ctx,
+                    lowered,
+                    param_ty.clone(),
+                    None,
+                    normalized,
+                )
             };
             operands[index] =
                 root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;

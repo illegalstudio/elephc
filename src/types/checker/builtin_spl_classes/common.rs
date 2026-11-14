@@ -247,6 +247,15 @@ pub(super) fn array_type() -> TypeExpr {
     TypeExpr::Array(Box::new(mixed_type()))
 }
 
+/// The bare `array` hint: a raw container contract that preserves a hash's own keys.
+///
+/// An `array<mixed>` parameter names packed Mixed slots, and unboxing a hash into it
+/// rebuilds an indexed list. The storage-oriented SPL constructors take any PHP array,
+/// keyed or packed, so they must keep the bare hint and its runtime layout.
+pub(super) fn bare_array_type() -> TypeExpr {
+    TypeExpr::Named(crate::names::Name::unqualified("array"))
+}
+
 /// Computes the type metadata for array<string>.
 pub(super) fn string_array_type() -> TypeExpr {
     TypeExpr::Array(Box::new(TypeExpr::Str))

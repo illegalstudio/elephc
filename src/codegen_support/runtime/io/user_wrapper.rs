@@ -185,10 +185,8 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
     emitter.instruction(&format!("tbnz x13, #{}, __rt_uwfread_boxed", VTABLE_SLOT_READ)); // a `string|false` return arrives boxed instead
     emitter.instruction("blr x11");                                             // invoke stream_read on the wrapper object
-    abi::emit_branch_if_php_return_owned(emitter, "__rt_uwfread_persist");
-    emitter.instruction("b __rt_uwfread_finish");                               // share truncation and excess warning with the boxed path
-    emitter.label("__rt_uwfread_persist");
-    abi::emit_call_label(emitter, "__rt_str_persist");                          // an owned callback string must survive its cell
+    abi::emit_branch_if_php_return_owned(emitter, "__rt_uwfread_finish");
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // a borrowed callback string must survive the call
     emitter.instruction("b __rt_uwfread_finish");                               // share truncation and excess warning with the boxed path
 
     emitter.label("__rt_uwfread_boxed");
@@ -259,10 +257,8 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("bt r8, {}", VTABLE_SLOT_READ));               // does this class return a boxed `string|false`?
     emitter.instruction("jc __rt_uwfread_boxed_x86");                           // convert the boxed result instead of reading the pair
     emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
-    abi::emit_branch_if_php_return_owned(emitter, "__rt_uwfread_persist_x86");
-    emitter.instruction("jmp __rt_uwfread_finish_x86");                         // share truncation and excess warning with the boxed path
-    emitter.label("__rt_uwfread_persist_x86");
-    abi::emit_call_label(emitter, "__rt_str_persist");                          // an owned callback string must survive its cell
+    abi::emit_branch_if_php_return_owned(emitter, "__rt_uwfread_finish_x86");
+    abi::emit_call_label(emitter, "__rt_str_persist");                          // a borrowed callback string must survive the call
     emitter.instruction("jmp __rt_uwfread_finish_x86");                         // share truncation and excess warning with the boxed path
 
     emitter.label("__rt_uwfread_boxed_x86");
