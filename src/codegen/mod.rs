@@ -857,6 +857,10 @@ fn finalize_user_asm(
         additional_internal,
     );
     drop(prefix);
+    // The codegen state holds a copy of the module and every per-class cache: tearing it down at
+    // the end of a CLI build is time spent for an exit that frees it anyway.
+    crate::teardown::release(shared);
+    crate::teardown::release(data);
     let mut suffix = user_asm;
     suffix.push_str(&footer);
     Ok(GeneratedUserAsm {

@@ -51,7 +51,11 @@ fn run_inner() {
         cli::Command::Compile(mut config) => {
             apply_project_ini(&mut config);
             emit_ini_override_warnings(&config);
+            crate::teardown::process_exits_after_compile();
             pipeline::compile(config);
+            if std::env::var_os("ELEPHC_TEARDOWN_TRACE").is_some() {
+                eprintln!("[elephc-teardown] forgotten={}", crate::teardown::forgotten_count());
+            }
         }
         cli::Command::Native(command) => run_native(command),
         cli::Command::PhpExt(command) => run_php_ext(command),

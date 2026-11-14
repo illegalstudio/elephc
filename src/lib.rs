@@ -61,6 +61,7 @@ pub mod array_edge_prelude;
 pub mod array_gradual_prelude;
 pub mod array_ucompare_prelude;
 pub mod sodium_prelude;
+pub mod teardown;
 pub mod attribute_prelude;
 /// Whole-program PHP symbol usage collection for conditional prelude injection.
 pub(crate) mod append_vivify;

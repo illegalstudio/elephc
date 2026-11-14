@@ -88,6 +88,7 @@ mod casts_and_constants;
 mod include_builtin_classes;
 mod include_deferred_classes;
 mod autoload_runtime_faults;
+mod build_teardown;
 mod web_app_runtime_gaps;
 mod include_paths;
 mod include_reflection;
