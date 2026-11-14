@@ -12,6 +12,11 @@ echo 'Effective user id: ' . posix_geteuid() . "\n";
 echo 'Process group id: ' . posix_getpgrp() . "\n";
 
 $worker = pcntl_fork();
+if ($worker === -1) {
+    // posix_kill(-1, ...) would signal every process this user may signal.
+    echo "Could not fork a worker\n";
+    exit(1);
+}
 if ($worker === 0) {
     sleep(30);
     exit(0);
