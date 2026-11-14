@@ -129,6 +129,29 @@ const UNCAUGHT_FALLBACK_LEN: usize = 32;
 /// status a script sees would depend on which kind of exception went unhandled.
 pub(crate) const UNCAUGHT_EXIT_STATUS: u32 = 255;
 
+/// Calls the nullable debugger output-flush hook when a DAP session is active.
+///
+/// The hook drains captured stdout/stderr into DAP output events and restores
+/// the original descriptors. The uncaught report then reaches the process
+/// stdout (and therefore the adapter stderr in DAP launch mode) instead of the
+/// pump pipe, which would be lost when the process exits without a DAP
+/// `terminated` event.
+fn emit_debug_flush_hook(emitter: &mut Emitter) {
+    let slot = emitter.target.extern_symbol("elephc_debug_flush_fn");
+    let skip = "__rt_uncaught_no_debug_flush";
+    if emitter.target.arch == Arch::X86_64 {
+        abi::emit_load_symbol_to_reg(emitter, "rax", &slot, 0);
+        emitter.instruction("test rax, rax");                                    // is a DAP output pump installed?
+        emitter.instruction(&format!("jz {skip}"));                              // no session: the report keeps the process stdout
+        emitter.instruction("call rax");                                         // flush output events and restore the descriptors
+    } else {
+        abi::emit_load_symbol_to_reg(emitter, "x9", &slot, 0);
+        emitter.instruction(&format!("cbz x9, {skip}"));                         // no session: the report keeps the process stdout
+        emitter.instruction("blr x9");                                           // flush output events and restore the descriptors
+    }
+    emitter.label(skip);
+}
+
 /// Emits `__rt_report_uncaught_exception` and its helpers; the report never returns.
 pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -148,6 +171,7 @@ pub fn emit_report_uncaught_exception(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_print_r_mode", 0);          // an escaping exception abandons a print_r(..., true) capture: the report must reach stdout
     abi::emit_store_reg_to_symbol(emitter, "x10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
     emitter.instruction("bl __rt_ob_flush_all");                                // drain every open output buffer before the report is written
+    emit_debug_flush_hook(emitter);                                             // hand captured output to DAP before the fatal report
 
     abi::emit_load_symbol_to_reg(emitter, "x10", "_uncaught_report_mode", 0);
     abi::emit_load_symbol_to_reg(emitter, "x9", "_exc_value", 0);
@@ -522,6 +546,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_print_r_mode", 0);          // an escaping exception abandons a print_r(..., true) capture: the report must reach stdout
     abi::emit_store_reg_to_symbol(emitter, "r10", "_ob_in_handler", 0);         // and output produced inside an ob_start() handler is no longer discarded
     emitter.instruction("call __rt_ob_flush_all");                              // drain every open output buffer before the report is written
+    emit_debug_flush_hook(emitter);                                             // hand captured output to DAP before the fatal report
 
     abi::emit_load_symbol_to_reg(emitter, "r10", "_uncaught_report_mode", 0);
     abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);

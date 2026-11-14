@@ -193,6 +193,12 @@ pub(super) fn emit_start(emitter: &mut Emitter) {
     // -- record the resumer (current execution context) as the fiber's caller --
     abi::emit_load_symbol_to_reg(emitter, "x9", "_fiber_current", 0);           // x9 = whoever is running right now (NULL means main thread)
     emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_CALLER_OFFSET));   // fiber->caller = current execution context
+    super::common::emit_debug_coroutine_hook(
+        emitter,
+        "elephc_debug_coroutine_enter_fn",
+        "__rt_fiber_start_debug_coro_skip",
+        "x19",
+    );
 
     // -- switch into the fiber; control returns when it suspends or terminates --
     emitter.instruction("mov x0, x19");                                         // pass fiber* as the switch target
@@ -266,6 +272,12 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
     // -- record the resumer as the fiber's caller, then switch in --
     abi::emit_load_symbol_to_reg(emitter, "x9", "_fiber_current", 0);           // x9 = current execution context to remember as the caller
     emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_CALLER_OFFSET));   // fiber->caller = current context (so suspend knows who to yield back to)
+    super::common::emit_debug_coroutine_hook(
+        emitter,
+        "elephc_debug_coroutine_enter_fn",
+        "__rt_fiber_resume_debug_coro_skip",
+        "x19",
+    );
     emitter.instruction("mov x0, x19");                                         // pass fiber* as the switch target
     emitter.instruction("bl __rt_fiber_switch");                                // cooperative context switch into the fiber
 
@@ -346,6 +358,12 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x0, [x19, #{}]", FIBER_TRANSFER_VALUE_OFFSET)); // fiber->transfer_value.lo = the yielded value
     emitter.instruction(&format!("mov x9, #{}", FIBER_STATE_SUSPENDED));        // FIBER_STATE_SUSPENDED constant
     emitter.instruction(&format!("str x9, [x19, #{}]", FIBER_STATE_OFFSET));    // fiber->state = Suspended
+    super::common::emit_debug_coroutine_hook(
+        emitter,
+        "elephc_debug_coroutine_suspend_fn",
+        "__rt_fiber_suspend_debug_coro_skip",
+        "x19",
+    );
 
     // -- switch back to the caller; control resumes here when someone calls resume() --
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_CALLER_OFFSET));   // x0 = fiber->caller (whoever should regain control)

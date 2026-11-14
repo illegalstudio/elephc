@@ -14,6 +14,9 @@ or behavioral probes.
 | [Eval and Magician](elephc-eval-magician-plan.md) | Shared grammar corpus, dynamic-name boundaries, lexical specialization and further literal AOT families. |
 | [Mbstring qualification](mbstring-extension.md) | Exact probe-to-test mapping and remaining ownership/strictness/host qualification. All 65 baseline function bindings are shipped on both backends. |
 | [Native dependencies](native-dependencies-v1.md) | Explicit future providers, cache migration decision and recipe-revision diagnostics. Managed dependencies v1 is shipped. |
+| [Native debugger](native-debugger.md) | In progress: in-process PHP debugger, DAP/CLI, call values in monitor, traces and coverage. The spike/ADR are accepted; remaining gates are tracked by the epic. |
+| [Native debugger ADR](adr-native-debugger.md) | Accepted decisions on build modes, metadata, activation stack, agent/DAP (DBGp optional), target matrix and security. Implementation gates remain tracked. |
+| [Native debugger usage](native-debugger-usage.md) | Proposed UX source for the shipped guide at `docs/beyond-php/debugging.md` (VS Code, terminal, monitor --calls, coverage and Elephc-native helpers). |
 | [PHP extension bridge](bidirectional-php-extension-bridge.md) | Producer stack integration on open PRs and the separate consumer-hosting design. The producer is not in this release code candidate. |
 | [Native test runner](elephc-test.md) | Shipped runner and assertion contract, with the remaining runtime acceptance checklist and deferred assertion specialization. |
 | [PDO parity](pdo-full-maintained-php-parity.md) | Broader registry migration, unintended common divergences and proprietary-client/cross-target live qualification. |

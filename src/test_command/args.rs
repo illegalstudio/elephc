@@ -14,6 +14,8 @@
 //! - Everything else is forwarded verbatim to `cli::parse_compile_args`, which keeps the
 //!   ordinary compile diagnostics for a mistyped option.
 
+use super::coverage::CoverageFormat;
+
 /// One parsed `elephc test` invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestCommand {
@@ -27,6 +29,12 @@ pub(crate) struct TestCommand {
     pub(crate) timeout: u32,
     /// Path of the JUnit XML report to write, when requested.
     pub(crate) junit: Option<String>,
+    /// Compile with --debug and report line coverage from executed site guards.
+    pub(crate) coverage: bool,
+    /// Explicit `--coverage-format`; `None` infers text or the `--coverage-out` extension.
+    pub(crate) coverage_format: Option<CoverageFormat>,
+    /// Path of the coverage report to write, when requested.
+    pub(crate) coverage_out: Option<String>,
     /// Ordinary compile options forwarded to the compiler.
     pub(crate) compile_args: Vec<String>,
     /// `-h` / `--help` was given: print usage and exit.
@@ -51,6 +59,10 @@ Options:
   --timeout SECONDS       Seconds an isolated test may run before it is ended and
                           reported as an error (default 60; 0 disables)
   --junit FILE            Write a JUnit XML report to FILE
+  --coverage              Compile with --debug, run in one process, and report line coverage
+  --coverage-format FMT   Coverage report format: text (default), lcov, cobertura or html
+  --coverage-out FILE     Write the coverage report to FILE (format inferred from
+                          .lcov/.info/.xml/.html unless --coverage-format overrides it)
   -h, --help              Show this help
 
 Compile options such as --strict-php, --with-<crate>, --heap-size, --php-version,
@@ -80,6 +92,9 @@ pub(crate) fn parse_args(args: &[String]) -> Result<TestCommand, String> {
     let mut isolate = true;
     let mut timeout = DEFAULT_TIMEOUT;
     let mut junit = None;
+    let mut coverage = false;
+    let mut coverage_format = None;
+    let mut coverage_out = None;
     let mut compile_args = Vec::new();
     let mut help = false;
     let mut i = 0;
@@ -109,6 +124,33 @@ pub(crate) fn parse_args(args: &[String]) -> Result<TestCommand, String> {
             junit = Some(value.clone());
         } else if let Some(value) = arg.strip_prefix("--junit=") {
             junit = Some(value.to_string());
+        } else if arg == "--coverage" {
+            coverage = true;
+        } else if arg == "--coverage-format" {
+            let value = args.get(i + 1).ok_or("--coverage-format needs a value")?;
+            coverage_format =
+                Some(CoverageFormat::parse(value).ok_or_else(|| {
+                    format!("unknown --coverage-format '{value}' (text, lcov, cobertura, html)")
+                })?);
+            coverage = true;
+            i += 1;
+        } else if let Some(value) = arg.strip_prefix("--coverage-format=") {
+            coverage_format =
+                Some(CoverageFormat::parse(value).ok_or_else(|| {
+                    format!("unknown --coverage-format '{value}' (text, lcov, cobertura, html)")
+                })?);
+            coverage = true;
+        } else if arg == "--coverage-out" {
+            coverage_out = Some(
+                args.get(i + 1)
+                    .ok_or("--coverage-out needs a file path")?
+                    .clone(),
+            );
+            coverage = true;
+            i += 1;
+        } else if let Some(value) = arg.strip_prefix("--coverage-out=") {
+            coverage_out = Some(value.to_string());
+            coverage = true;
         } else if let Some((flag, reason)) = refused(arg) {
             return Err(format!("{flag} is not accepted by `elephc test`: {reason}"));
         } else if arg.starts_with('-') && arg.len() > 1 {
@@ -137,6 +179,9 @@ pub(crate) fn parse_args(args: &[String]) -> Result<TestCommand, String> {
         isolate,
         timeout,
         junit,
+        coverage,
+        coverage_format,
+        coverage_out,
         compile_args,
         help,
     })
@@ -206,10 +251,32 @@ mod tests {
                 isolate: true,
                 timeout: DEFAULT_TIMEOUT,
                 junit: None,
+                coverage: false,
+                coverage_format: None,
+                coverage_out: None,
                 compile_args: vec![],
                 help: false
             }
         );
+    }
+
+    /// `--coverage-format`/`--coverage-out` enable coverage and reject unknown formats.
+    #[test]
+    fn parses_coverage_formats_and_output() {
+        let command = parse_args(&args(&[
+            "--coverage-format",
+            "lcov",
+            "--coverage-out",
+            "report.xml",
+        ]))
+        .expect("coverage flags parse");
+        assert!(command.coverage);
+        assert_eq!(command.coverage_format, Some(CoverageFormat::Lcov));
+        assert_eq!(command.coverage_out.as_deref(), Some("report.xml"));
+        let html = parse_args(&args(&["--coverage-format", "html"])).expect("html format parses");
+        assert_eq!(html.coverage_format, Some(CoverageFormat::Html));
+        assert!(parse_args(&args(&["--coverage-format", "markdown"])).is_err());
+        assert!(parse_args(&args(&["--coverage-out"])).is_err());
     }
 
     /// The path, both `--filter` spellings, and compile options are separated correctly,

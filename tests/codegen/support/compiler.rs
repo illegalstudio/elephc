@@ -545,6 +545,7 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
         counters,
         elephc::codegen::Instrumentation::Off, // the exact profiler has its own tests
         false, // probe
+        false, // debug_build
         heap_debug,
         requires_elephc_tls,
         elephc::codegen::Emit::Executable,

@@ -2130,3 +2130,32 @@ elephc-instr: Other\\firstOf<int> calls=50 incl_ns=10 excl_ns=9\n");
             );
         }
     }
+
+/// `--calls` accepts the documented scalar/all spellings, refuses an unknown mode,
+/// and cannot be combined with the offline stitch mode.
+#[test]
+fn calls_mode_is_parsed_and_guarded() {
+    let bare = parse_monitor_args(&["app.php".to_string(), "--calls".to_string()])
+        .expect("bare --calls parses");
+    assert!(bare.calls, "bare --calls enables capture");
+    let scalars = parse_monitor_args(&[
+        "app.php".to_string(),
+        "--calls=scalars".to_string(),
+    ])
+    .expect("--calls=scalars parses");
+    assert!(scalars.calls, "--calls=scalars enables capture");
+    assert!(
+        parse_monitor_args(&["app.php".to_string(), "--calls=objects".to_string()]).is_err(),
+        "unknown --calls mode must be refused"
+    );
+    assert!(
+        parse_monitor_args(&[
+            "app.php".to_string(),
+            "--calls".to_string(),
+            "--stitch".to_string(),
+            "a.log".to_string(),
+        ])
+        .is_err(),
+        "--calls and --stitch are different modes"
+    );
+}

@@ -7,7 +7,7 @@ sidebar:
 
 ## Builtins
 
-Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
+Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.md) · [Class](./builtins/class.md) · [Database](./builtins/database.md) · [Date](./builtins/date.md) · [Debug](./builtins/debug.md) · [Filesystem](./builtins/filesystem.md) · [IO](./builtins/io.md) · [Image](./builtins/image.md) · [JSON](./builtins/json.md) · [Math](./builtins/math.md) · [Misc](./builtins/misc.md) · [Network](./builtins/network.md) · [Pointer](./builtins/pointer.md) · [Process](./builtins/process.md) · [Regex](./builtins/regex.md) · [SPL](./builtins/spl.md) · [Streams](./builtins/streams.md) · [String](./builtins/string.md) · [Type](./builtins/type.md) · [Web](./builtins/web.md) · [XML](./builtins/xml.md)
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
@@ -290,6 +290,10 @@ Browse by category: [Array](./builtins/array.md) · [Buffer](./builtins/buffer.m
 | [`timezone_transitions_get()`](./builtins/date/timezone_transitions_get.md) | `(mixed $object, int $timestampBegin = PHP_INT_MIN, int $timestampEnd = PHP_INT_MAX): mixed` | `mixed` | ✓ | ✓ |
 | [`timezone_version_get()`](./builtins/date/timezone_version_get.md) | `(): string` | `string` | ✓ | ✓ |
 | [`unixtojd()`](./builtins/date/unixtojd.md) | `(?int $timestamp = null): mixed` | `mixed` | ✓ | ✓ |
+| [`elephc_break()`](./builtins/debug/elephc_break.md) | `(): void` | `void` | ✓ | - |
+| [`elephc_dump()`](./builtins/debug/elephc_dump.md) | `(mixed $value, ?string $label = null, string $to = 'auto'): void` | `void` | ✓ | - |
+| [`elephc_trace_end()`](./builtins/debug/elephc_trace_end.md) | `(string $name): void` | `void` | ✓ | - |
+| [`elephc_trace_start()`](./builtins/debug/elephc_trace_start.md) | `(string $name): void` | `void` | ✓ | - |
 | [`basename()`](./builtins/filesystem/basename.md) | `(string $path, string $suffix = ''): string` | `string` | ✓ | ✓ |
 | [`chdir()`](./builtins/filesystem/chdir.md) | `(string $directory): bool` | `bool` | ✓ | ✓ |
 | [`chgrp()`](./builtins/filesystem/chgrp.md) | `(string $filename, string $group): bool` | `bool` | ✓ | ✓ |

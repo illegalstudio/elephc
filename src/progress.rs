@@ -167,6 +167,7 @@ pub(crate) fn phase_label(name: &str) -> &str {
         "codegen" => "Generating native code",
         "write-asm" => "Writing assembly",
         "source-map" => "Writing source map",
+        "debug-metadata" => "Writing debug metadata",
         "php-extension-link" => "Linking PHP extension",
         "assemble" => "Assembling object file",
         "link" => "Linking native output",

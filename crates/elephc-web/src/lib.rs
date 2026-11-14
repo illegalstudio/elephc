@@ -13,6 +13,7 @@
 //! - Every handler-owning process executes PHP serially, so request/response
 //!   data lives in process statics without cross-thread mutation.
 
+mod debug_bridge;
 mod handler_broker;
 mod handler_ipc;
 mod isolated_worker;

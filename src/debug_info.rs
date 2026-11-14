@@ -19,6 +19,9 @@
 //!   silently dropped). All of it is hand-encoded here, the same way
 //!   `-g`-enabled assemblers do it.
 //! - Markers only appear in the text section, which keeps `.loc` legal.
+//! - `@file id=<source_id> path_hex=<hex>` markers announce physical source
+//!   paths; one `.file` is emitted per path and `.loc` uses that file number.
+//!   Duplicate span identities for one path alias to the same file number.
 //! - Every value spliced into assembly text is attacker-influenced (the source
 //!   path and the working directory come from the invocation). Quoted operands
 //!   go through `escape_asm_string()`, and the one unquoted operand (a
@@ -26,6 +29,7 @@
 //!   unescaped `\` or `"` in a path would otherwise terminate the directive
 //!   string early and let the rest of the path be assembled as directives.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::codegen::platform::Platform;
@@ -51,15 +55,55 @@ pub fn inject_line_directives(asm: &str, source_path: &str, platform: Platform) 
     ));
 
     let mut subprograms: Vec<SubprogramInfo> = Vec::new();
+    // File 1 is the entry file. Included/autoloaded sources are assigned the
+    // next numbers in the order their `@file` markers appear, so `.loc` can
+    // name the physical file instead of collapsing every source into file 1.
+    let mut file_numbers: HashMap<usize, usize> = HashMap::new();
+    file_numbers.insert(0, 1);
+    let mut path_numbers: HashMap<String, usize> = HashMap::new();
+    path_numbers.insert(source_path.to_string(), 1);
+    let mut next_file_number = 2usize;
     let mut open: Option<(String, String)> = None;
     for line in asm.lines() {
         out.push_str(line);
         out.push('\n');
+        if let Some(marker) = line.split("@file ").nth(1) {
+            if let (Some(source_id), Some(path_hex)) =
+                (marker_number(marker, "id"), marker_value(marker, "path_hex"))
+            {
+                if source_id != 0 && !file_numbers.contains_key(&source_id) {
+                    if let Some(path) = decode_hex_path(path_hex) {
+                        // The same physical file can be parsed under more than one
+                        // source identity (include variants, autoload probes).
+                        // Reuse the first file number instead of emitting a duplicate
+                        // `.file` and a second DWARF file entry.
+                        if let Some(number) = path_numbers.get(&path).copied() {
+                            file_numbers.insert(source_id, number);
+                        } else {
+                            let number = next_file_number;
+                            next_file_number += 1;
+                            file_numbers.insert(source_id, number);
+                            path_numbers.insert(path.clone(), number);
+                            let _ = writeln!(
+                                out,
+                                "    .file {} \"{}\"",
+                                number,
+                                escape_asm_string(&path)
+                            );
+                        }
+                    }
+                }
+            }
+            continue;
+        }
         if let Some(marker) = line.split("@src ").nth(1) {
             if let (Some(php_line), Some(php_col)) =
                 (marker_number(marker, "line"), marker_number(marker, "col"))
             {
-                let _ = writeln!(out, "    .loc 1 {} {}", php_line, php_col);
+                let file_number = marker_number(marker, "file")
+                    .and_then(|source_id| file_numbers.get(&source_id).copied())
+                    .unwrap_or(1);
+                let _ = writeln!(out, "    .loc {} {} {}", file_number, php_line, php_col);
             }
             continue;
         }
@@ -241,6 +285,21 @@ fn is_plain_asm_symbol(symbol: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$' | b'.'))
 }
 
+/// Decodes the lowercase/uppercase hexadecimal path payload of an `@file`
+/// marker. A malformed payload is skipped, never fatal: debug-info injection
+/// must not reject assembly the plain path would accept.
+fn decode_hex_path(hex: &str) -> Option<String> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    for pair in hex.as_bytes().chunks_exact(2) {
+        let text = std::str::from_utf8(pair).ok()?;
+        bytes.push(u8::from_str_radix(text, 16).ok()?);
+    }
+    String::from_utf8(bytes).ok()
+}
+
 /// Parses a numeric `key=value` token from a marker tail, returning `None` for
 /// missing or malformed values (a malformed marker is skipped, not fatal:
 /// debug-info injection must never fail a build the plain path would accept).
@@ -301,6 +360,37 @@ _php_foo:
         assert!(!macos.contains("Lelephc_debug_line0"), "{macos}");
     }
 
+    /// Verifies an included source announced by `@file` gets its own `.file`
+    /// number and that `@src file=<id>` emits `.loc <number>`, so lldb/gdb name
+    /// `lib.php` instead of collapsing it into the entry file.
+    #[test]
+    fn included_source_gets_its_own_file_directive() {
+        let asm = "\
+    # @file id=0 path_hex=6d61696e2e706870
+    # @fn name=foo symbol=_php_foo file=0
+_php_foo:
+    # @src file=0 line=3 col=5
+    ret
+    # @endfn name=foo
+    # @file id=7 path_hex=6c69622e706870
+    # @file id=8 path_hex=6c69622e706870
+    # @fn name=bar symbol=_php_bar file=7
+_php_bar:
+    # @src file=7 line=9 col=3
+    # @src file=8 line=10 col=1
+    ret
+    # @endfn name=bar
+";
+        for platform in [Platform::Linux, Platform::MacOS] {
+            let out = inject_line_directives(asm, "main.php", platform);
+            assert!(out.contains(".file 1 \"main.php\""), "{out}");
+            assert_eq!(out.matches(".file 2 \"lib.php\"").count(), 1, "{out}");
+            assert!(out.contains(".loc 1 3 5"), "{out}");
+            assert!(out.contains(".loc 2 9 3"), "{out}");
+            assert!(out.contains(".loc 2 10 1"), "{out}");
+        }
+    }
+
     /// Verifies every `@src` marker gets a matching `.loc` on the next line,
     /// the module starts with the `.file` directive, and the compile unit is
     /// appended with one subprogram per `@fn` region.
@@ -342,7 +432,10 @@ _php_foo:
     fn skips_malformed_markers() {
         let asm = "    # @src line=x col=1\n    ret\n";
         let out = inject_line_directives(asm, "a.php", Platform::MacOS);
-        assert!(!out.contains(".loc"), "{out}");
+        assert!(
+            !out.lines().any(|line| line.trim_start().starts_with(".loc ")),
+            "{out}"
+        );
         assert!(out.contains("    ret\n"), "{out}");
     }
 

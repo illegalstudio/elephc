@@ -36,6 +36,7 @@ AREAS: list[str] = [
     "Web",
     "Image",
     "XML",
+    "Debug",
 ]
 
 
@@ -86,6 +87,8 @@ REGISTRY_AREA_DEFAULTS: Dict[str, Tuple[str, str]] = {
     "xml": ("XML", "XML"),
     # `ext/random` procedural functions declared by the random prelude.
     "random": ("Math", "Random"),
+    # Elephc-native debug helpers declared by the debug prelude.
+    "debug": ("Debug", "Debug"),
 }
 
 
