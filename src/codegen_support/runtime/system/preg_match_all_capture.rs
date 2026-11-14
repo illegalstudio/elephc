@@ -134,7 +134,7 @@ fn emit_preg_match_all_capture_arm64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_len_off));        // load the complete C-string subject length
     emitter.instruction("str x9, [x3, #8]");                                    // publish the input range end
     super::preg_match_all::emit_global_iteration_flags(emitter, match_count_off);
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested absolute offset pair
+    super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested absolute offset pair
     emitter.instruction("cbnz x0, __rt_pma_cap_done");                          // stop when the shim reports no further match
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", match_count_off));        // reload the running match count
@@ -654,7 +654,7 @@ fn emit_preg_match_all_capture_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.instruction("mov QWORD PTR [rcx + 8], r9");                         // publish the input range end
     super::preg_match_all::emit_global_iteration_flags(emitter, match_count_off);
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested absolute offset pair
+    super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested absolute offset pair
     emitter.instruction("test eax, eax");                                       // did the shim find another match?
     emitter.instruction("jnz __rt_pma_cap_done_linux_x86_64");                  // stop when the shim reports no further match
 

@@ -11,7 +11,11 @@
 //! - Subject and pattern bytes are passed through the registered provider as C strings.
 //! - Match offsets are byte offsets into the original subject, matching PHP capture arrays.
 //! - A global iterator keeps its C-string allocation alive across native continuation calls.
+//! - The eval `preg_last_error()` code lives in a thread-local slot: compiling a pattern
+//!   (the first step of every eval `preg_*` call) clears it, and a match status other
+//!   than "no match" records PHP's code for it.
 
+use std::cell::Cell;
 use std::ffi::{c_int, c_void, CStr, CString};
 use std::marker::PhantomData;
 
@@ -29,6 +33,42 @@ const ELEPHC_PCRE2_EXTENDED: c_int = 0x2000;
 const REG_UCP: c_int = 0x0400;
 const REG_UTF: c_int = 0x0040;
 const REG_NOMATCH: c_int = 17;
+const REG_ESPACE: c_int = 14;
+const REG_INVARG: c_int = 16;
+/// `PREG_INTERNAL_ERROR`, recorded for an invalid pattern or an unexpected match status.
+pub(in crate::interpreter) const EVAL_PREG_INTERNAL_ERROR: i64 = 1;
+const EVAL_PREG_BACKTRACK_LIMIT_ERROR: i64 = 2;
+const EVAL_PREG_BAD_UTF8_ERROR: i64 = 4;
+
+thread_local! {
+    /// The eval `preg_last_error()` code of the last eval regex call on this thread.
+    static EVAL_PREG_LAST_ERROR: Cell<i64> = const { Cell::new(0) };
+}
+
+/// Returns the `PREG_*_ERROR` code of the last eval regex call.
+pub(in crate::interpreter) fn eval_preg_last_error_code() -> i64 {
+    EVAL_PREG_LAST_ERROR.with(Cell::get)
+}
+
+/// Records the `PREG_*_ERROR` code for the current eval regex call.
+pub(in crate::interpreter) fn eval_preg_set_last_error(code: i64) {
+    EVAL_PREG_LAST_ERROR.with(|slot| slot.set(code));
+}
+
+/// Returns true when the current eval regex call hit a match error.
+pub(in crate::interpreter) fn eval_preg_failed() -> bool {
+    eval_preg_last_error_code() != 0
+}
+
+/// Maps a failing shim match status to PHP's error code, like the AOT `__rt_preg_exec`.
+fn eval_preg_record_exec_status(status: c_int) {
+    let code = match status {
+        REG_ESPACE => EVAL_PREG_BACKTRACK_LIMIT_ERROR,
+        REG_INVARG => EVAL_PREG_BAD_UTF8_ERROR,
+        _ => EVAL_PREG_INTERNAL_ERROR,
+    };
+    eval_preg_set_last_error(code);
+}
 
 /// Supported PHP regex modifiers after delimiter stripping.
 #[derive(Default)]
@@ -54,6 +94,7 @@ impl Regex {
         body: &[u8],
         modifiers: EvalPregModifiers,
     ) -> Result<Self, EvalStatus> {
+        eval_preg_set_last_error(0);
         let provider = regex_provider().ok_or(EvalStatus::RuntimeFatal)?;
         let pattern = CString::new(body).map_err(|_| EvalStatus::RuntimeFatal)?;
         let mut handle = std::ptr::null_mut();
@@ -143,7 +184,10 @@ impl Regex {
                 REG_STARTEND as u32 | if continuation { ELEPHC_PCRE2_GLOBAL_NEXT } else { 0 },
             )
         };
-        if status == REG_NOMATCH || status != 0 {
+        if status != 0 {
+            if status != REG_NOMATCH {
+                eval_preg_record_exec_status(status);
+            }
             return None;
         }
         Some(Captures {

@@ -149,6 +149,7 @@ pub(crate) fn phase_label(name: &str) -> &str {
         "hash-prelude" => "Configuring hash support",
         "web-prelude" => "Configuring web runtime",
         "version-prelude" => "Applying PHP version profile",
+        "pcre-prelude" => "Configuring preg_grep()",
         "name-resolve" => "Resolving names",
         "autoload-run" => "Discovering autoloaded symbols",
         "opcache-manifest-bake" => "Baking OPcache manifest",

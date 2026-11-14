@@ -223,6 +223,12 @@ pub(in crate::interpreter) enum EvalDirectHook {
     PregReplace,
     /// Dispatches `preg_replace_callback(...)`.
     PregReplaceCallback,
+    /// Dispatches `preg_grep(...)`.
+    PregGrep,
+    /// Dispatches `preg_last_error(...)`.
+    PregLastError,
+    /// Dispatches `preg_last_error_msg(...)`.
+    PregLastErrorMsg,
     /// Dispatches `preg_split(...)`.
     PregSplit,
     /// Dispatches `buffer_free(...)`.
@@ -486,6 +492,9 @@ impl EvalDirectHook {
             Self::PregReplaceCallback => {
                 eval_builtin_preg_replace_callback(args, context, scope, values)
             }
+            Self::PregGrep => eval_builtin_preg_grep(args, context, scope, values),
+            Self::PregLastError => eval_builtin_preg_last_error(args, values),
+            Self::PregLastErrorMsg => eval_builtin_preg_last_error_msg(args, values),
             Self::PregSplit => eval_builtin_preg_split(args, context, scope, values),
             Self::BufferFree => eval_builtin_buffer_free(args, context, scope, values),
             Self::BufferLen => eval_builtin_buffer_len(args, context, scope, values),

@@ -1,6 +1,6 @@
 //! Purpose:
-//! Exercises Random, BcMath, GMP, and DateTimeZone::listIdentifiers when only
-//! Composer-autoloaded classes use those surfaces.
+//! Exercises Random, BcMath, GMP, DateTimeZone::listIdentifiers, and preg_grep when
+//! only Composer-autoloaded classes use those surfaces.
 //!
 //! Called from:
 //! - The codegen integration harness on every executable supported target.
@@ -285,4 +285,47 @@ echo $big->next(), "\n";
         user_asm.contains("elephc_gmp_binary"),
         "autoloaded GMP assembly did not call the bridge"
     );
+}
+
+/// `preg_grep()` called only from an autoloaded class still gets its prelude declaration.
+#[test]
+fn test_autoload_preg_grep() {
+    let project = AutoloadPreludeProject(make_cli_test_dir("elephc_autoload_preg_grep"));
+    let dir = &project.0;
+    write_composer_class(
+        dir,
+        "Digits.php",
+        r#"<?php
+namespace App;
+class Digits {
+    public function keep(array $items): array {
+        $kept = preg_grep('/^\d+$/', $items);
+        return $kept === false ? [] : $kept;
+    }
+}
+"#,
+    );
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+echo implode(',', (new App\Digits())->keep(['1', 'x', '23'])), "\n";
+"#,
+    )
+    .unwrap();
+    let compiled = elephc_cli_command_with_managed_pcre2(dir)
+        .args(["--target", target().as_str(), "main.php"])
+        .output()
+        .expect("run autoload preg_grep compiler");
+    assert!(
+        compiled.status.success(),
+        "autoloaded preg_grep compilation failed: {}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let output = run_binary_with_args(&dir.join("main"), dir, &[]);
+    assert!(
+        output.status.success(),
+        "autoloaded preg_grep execution failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "1,23\n");
 }

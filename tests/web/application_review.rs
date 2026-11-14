@@ -408,3 +408,25 @@ Elephc\Web\Worker::register(new Application());
     server.wait().unwrap();
     assert_eq!(fs::read_to_string(fixture.0.join("lifecycle.log")).unwrap(), "blocked");
 }
+
+/// A regex error recorded by one request does not leak into the next request's `preg_last_error()`.
+#[test]
+fn web_application_review_request_begin_clears_preg_last_error() {
+    let fixture = Fixture(make_test_dir("web_application_review_preg_error"));
+    let binary = compile_web_with_regex(&fixture.0, r#"<?php
+class Application implements Elephc\Web\WorkerApplication {
+    private int $count = 0;
+    public function handle(Elephc\Web\Request $_request): void {
+        $this->count++;
+        if ($this->count === 1) { preg_match('/./u', "\xff"); }
+        echo $this->count, ':', preg_last_error();
+    }
+    public function shutdown(): void {}
+}
+Elephc\Web\Worker::register(new Application());
+"#, "app", &["--web-lifecycle=application", "--strict-php"]);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&binary, &addr, "1");
+    assert_eq!(body(&addr, "/"), "1:4");
+    assert_eq!(body(&addr, "/"), "2:0");
+}

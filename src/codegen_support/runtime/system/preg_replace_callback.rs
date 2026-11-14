@@ -21,6 +21,9 @@
 //!   decrefs the matches array, frees the subject, the current output block, a
 //!   pending callback result, the PCRE2 handle, and the offset-pair vector, then
 //!   rethrows the original exception. A retained matches array keeps its extra ref.
+//! - A match that ends at the subject terminator leaves the loop without another exec,
+//!   so that exit clears `_preg_exec_error`: an error a nested `preg_*` call recorded in
+//!   the last callback must not fail this call (it stays in `_preg_last_error`).
 //! - Growth publishes the new output base into its stack slot before returning, so
 //!   the throw path releases that block rather than a register `setjmp` restored.
 
@@ -241,7 +244,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x2, [sp, #{}]", nmatch_off));             // request one regmatch slot for every compiled capture group
     emitter.instruction(&format!("ldr x3, [sp, #{}]", regmatches_ptr_off));     // pass dynamic fixed offset-pair buffer
     emitter.instruction("mov x4, #0");                                          // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
+    super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
     emitter.instruction("cbnz x0, __rt_preg_replace_callback_tail");            // copy the remaining subject when there are no more matches
 
     // -- remember unmatched prefix length before this match --
@@ -408,6 +411,7 @@ pub(crate) fn emit_preg_replace_callback(emitter: &mut Emitter) {
     // -- free regex and return final output slice --
     emitter.label("__rt_preg_replace_callback_empty_subject");
     emitter.instruction(&format!("ldr x11, [sp, #{}]", output_write_off));      // load the initialized empty-subject output cursor
+    abi::emit_store_zero_to_symbol(emitter, "_preg_exec_error", 0);             // no outer exec ran after the last callback, so its nested errors do not fail this call
     emitter.label("__rt_preg_replace_callback_done");
     emitter.instruction(&format!("str x11, [sp, #{}]", output_write_off));      // save final output pointer
     emit_preg_replace_callback_unlink_boundary(emitter, handler_off);
@@ -649,7 +653,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov rdx, QWORD PTR [rsp + {}]", nmatch_off)); // request one regmatch slot for every compiled capture group
     emitter.instruction(&format!("mov rcx, QWORD PTR [rsp + {}]", regmatches_ptr_off)); // pass dynamic fixed offset-pair buffer
     emitter.instruction("xor r8d, r8d");                                        // use default execution flags
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute and initialize every requested offset pair
+    super::preg_error_state::emit_exec_call(emitter);                           // execute and initialize every requested offset pair
     emitter.instruction("test eax, eax");                                       // did regexec find another match?
     emitter.instruction("jnz __rt_preg_replace_callback_tail_linux_x86_64");    // copy the remaining subject once no more matches exist
 
@@ -818,6 +822,7 @@ fn emit_preg_replace_callback_linux_x86_64(emitter: &mut Emitter) {
     // -- free regex and return final output slice --
     emitter.label("__rt_preg_replace_callback_empty_subject_linux_x86_64");
     emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", output_write_off)); // load the initialized empty-subject output cursor
+    abi::emit_store_zero_to_symbol(emitter, "_preg_exec_error", 0);             // no outer exec ran after the last callback, so its nested errors do not fail this call
     emitter.label("__rt_preg_replace_callback_done_linux_x86_64");
     emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r11", output_write_off)); // save final output pointer
     emit_preg_replace_callback_unlink_boundary(emitter, handler_off);

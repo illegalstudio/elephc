@@ -69,7 +69,11 @@ fn eval_preg_replace_callback_result_from_scope(
         let subject = values.string_bytes(subject)?;
         let mut result = Vec::with_capacity(subject.len());
         let mut cursor = 0;
-        for captures in regex.captures_iter(&subject) {
+        let all_captures: Vec<_> = regex.captures_iter(&subject).collect();
+        // Every match runs before the first callback, so this is the call's own outcome; a
+        // nested `preg_*` error from a callback stays visible without failing this call.
+        let own_error = eval_preg_last_error_code();
+        for captures in all_captures {
             let Some(matched) = captures.get(0) else {
                 continue;
             };
@@ -81,6 +85,10 @@ fn eval_preg_replace_callback_result_from_scope(
             let callback_bytes = values.string_bytes(callback_result)?;
             result.extend_from_slice(&callback_bytes);
             cursor = matched.end();
+        }
+        if own_error != 0 {
+            eval_preg_set_last_error(own_error);
+            return values.null();
         }
         result.extend_from_slice(&subject[cursor..]);
         values.string_bytes_value(&result)

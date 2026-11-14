@@ -18,7 +18,7 @@ fn preg_match_all_review_runtime_context_on_all_targets() {
         let mut emitter = Emitter::new(target);
         emit_preg_match_all(&mut emitter);
         let runtime = emitter.output();
-        assert_eq!(runtime.matches("elephc_pcre2_v1_exec").count(), 2, "{name}");
+        assert_eq!(runtime.matches("__rt_preg_exec").count(), 2, "{name}");
         let (range_flag, absolute_capture) = match target.arch {
             Arch::AArch64 => ("orr x4, x4, #128", "mov x9, x15"),
             Arch::X86_64 => ("or r8d, 128", "mov r9, r11"),
@@ -134,7 +134,7 @@ pub(crate) fn emit_preg_match_all(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x9, [sp, #{}]", subject_len_off));        // load the complete C-string subject length
     emitter.instruction("str x9, [x3, #8]");                                    // publish the input range end
     emit_global_iteration_flags(emitter, match_count_off);
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
+    super::preg_error_state::emit_exec_call(emitter);                           // execute without exposing PCRE2-owned layouts
     emitter.instruction("cbnz x0, __rt_preg_match_all_done");                   // no more matches
 
     // -- found a match, increment count --
@@ -233,7 +233,7 @@ fn emit_preg_match_all_linux_x86_64(emitter: &mut Emitter) {
     );
     emitter.instruction("mov QWORD PTR [rcx + 8], r9");                         // publish the input range end
     emit_global_iteration_flags(emitter, match_count_off);
-    emitter.bl_c("elephc_pcre2_v1_exec");                                       // execute without exposing PCRE2-owned layouts
+    super::preg_error_state::emit_exec_call(emitter);                           // execute without exposing PCRE2-owned layouts
     emitter.instruction("test eax, eax");                                       // did regexec() find another match at or after the current cursor?
     emitter.instruction("jnz __rt_preg_match_all_done_linux_x86_64");           // stop counting when regexec() reports no further matches
     emitter.instruction(&format!("mov r9, QWORD PTR [rsp + {}]", match_count_off)); // reload the running non-overlapping match count before incrementing it

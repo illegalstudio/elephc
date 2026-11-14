@@ -150,6 +150,8 @@ pub mod php_uname;
 pub mod phpversion;
 pub mod posix_setpgid;
 pub mod posix_setsid;
+pub mod preg_last_error;
+pub mod preg_last_error_msg;
 pub mod preg_match;
 pub mod preg_match_all;
 pub mod preg_replace;

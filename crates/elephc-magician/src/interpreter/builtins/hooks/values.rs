@@ -226,6 +226,12 @@ pub(in crate::interpreter) enum EvalValuesHook {
     PregReplace,
     /// Dispatches `preg_replace_callback(...)`.
     PregReplaceCallback,
+    /// Dispatches `preg_grep(...)`.
+    PregGrep,
+    /// Dispatches `preg_last_error(...)`.
+    PregLastError,
+    /// Dispatches `preg_last_error_msg(...)`.
+    PregLastErrorMsg,
     /// Dispatches `preg_split(...)`.
     PregSplit,
     /// Dispatches `buffer_free(...)`.
@@ -590,6 +596,19 @@ impl EvalValuesHook {
                     context,
                     values,
                 )
+            }
+            Self::PregGrep => eval_preg_grep_values_result(evaluated_args, values),
+            Self::PregLastError => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_preg_last_error_result(values)
+            }
+            Self::PregLastErrorMsg => {
+                if !evaluated_args.is_empty() {
+                    return Err(EvalStatus::RuntimeFatal);
+                }
+                eval_preg_last_error_msg_result(values)
             }
             Self::PregSplit => eval_preg_split_values_result(evaluated_args, values),
             Self::BufferFree => eval_buffer_free_values_result(evaluated_args, values),

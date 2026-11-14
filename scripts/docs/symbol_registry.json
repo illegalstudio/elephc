@@ -23831,6 +23831,60 @@
       },
       "extension": false,
       "internal": false,
+      "module": "pcre",
+      "name": "PCRE_VERSION",
+      "route": "predefined",
+      "since": null,
+      "value": "10.47 2025-10-21"
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
+      "name": "PCRE_VERSION_MAJOR",
+      "route": "predefined",
+      "since": null,
+      "value": 10
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
+      "name": "PCRE_VERSION_MINOR",
+      "route": "predefined",
+      "since": null,
+      "value": 47
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
       "module": "core",
       "name": "PEAR_EXTENSION_DIR",
       "route": "predefined",
@@ -25114,6 +25168,132 @@
       "extension": false,
       "internal": false,
       "module": "pcre",
+      "name": "PREG_BACKTRACK_LIMIT_ERROR",
+      "route": "predefined",
+      "since": null,
+      "value": 2
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
+      "name": "PREG_BAD_UTF8_ERROR",
+      "route": "predefined",
+      "since": null,
+      "value": 4
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
+      "name": "PREG_BAD_UTF8_OFFSET_ERROR",
+      "route": "predefined",
+      "since": null,
+      "value": 5
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
+      "name": "PREG_GREP_INVERT",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
+      "name": "PREG_INTERNAL_ERROR",
+      "route": "predefined",
+      "since": null,
+      "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
+      "name": "PREG_JIT_STACKLIMIT_ERROR",
+      "route": "predefined",
+      "since": null,
+      "value": 6
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
+      "name": "PREG_NO_ERROR",
+      "route": "predefined",
+      "since": null,
+      "value": 0
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
       "name": "PREG_OFFSET_CAPTURE",
       "route": "predefined",
       "since": null,
@@ -25136,6 +25316,24 @@
       "route": "predefined",
       "since": null,
       "value": 1
+    },
+    {
+      "aot": {
+        "kind": "language-intrinsic",
+        "supported": true
+      },
+      "bundled": true,
+      "eval": {
+        "kind": "interpreter",
+        "supported": true
+      },
+      "extension": false,
+      "internal": false,
+      "module": "pcre",
+      "name": "PREG_RECURSION_LIMIT_ERROR",
+      "route": "predefined",
+      "since": null,
+      "value": 3
     },
     {
       "aot": {

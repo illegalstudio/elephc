@@ -95,6 +95,9 @@ for a complete project.
 | `preg_replace()` | `preg_replace($pattern, $replacement, $subject): string\|array\|null` | PHP returns the replaced value, or `null` on failure. elephc's type checker currently types the result as `mixed`. `$0`..`$99` and `\0`..`\99` replacement backreferences expand captured groups |
 | `preg_replace_callback()` | `preg_replace_callback($pattern, $callback, $subject): mixed` | Replace all regex matches with the callback return value; callback receives `array<string>` matches. The static return is `mixed`, so a `string` function may return the call. An invalid pattern, including an unknown modifier or a missing delimiter, returns `null` |
 | `preg_split()` | `preg_split($pattern, $subject, $limit = -1, $flags = 0): array\|false` | PHP returns the pieces, or `false` for an invalid pattern or the removed `/e` modifier. The checker types this result as `array\|false`. Supports no-empty, delimiter-capture, offset-capture, and positive limits |
+| `preg_grep()` | `preg_grep($pattern, $array, $flags = 0): array\|false` | Return the entries whose string value matches, keeping their keys; `PREG_GREP_INVERT` keeps the others. An invalid pattern returns `false` |
+| `preg_last_error()` | `preg_last_error(): int` | The `PREG_*_ERROR` code of the last `preg_*` call |
+| `preg_last_error_msg()` | `preg_last_error_msg(): string` | PHP's message for that code |
 | `mb_ereg_match()` | `mb_ereg_match($pattern, $string, $options = null): bool` | Test a bare multibyte regex at the start of the string through Oniguruma, using the current `mb_regex_encoding()` and `mb_regex_set_options()` settings. An explicit options argument overrides the current options for this call |
 
 Capture output supports ordinary locals and native references whose payload is already boxed `mixed` or has the exact capture-array layout. Native references with a frozen scalar or string payload are rejected during compilation instead of receiving an incompatible boxed pointer. Use an untyped or `mixed` reference for a destination that can change type. Captures written through an eligible native `mixed` property alias remain visible to eval references sharing that property.
@@ -183,12 +186,35 @@ runtime as the `preg_*` functions. Their supported modes and flags are
 documented in [SPL](spl.md). Using either class adds the logical `pcre2`
 requirement only when a final native link is performed.
 
+## Errors
+
+Every `preg_*` call resets the state `preg_last_error()` reports. An invalid
+pattern (or the removed `/e` modifier) sets `PREG_INTERNAL_ERROR`. A match
+error makes the call fail like PHP: `preg_match()`, `preg_match_all()` and
+`preg_split()` return `false`, `preg_replace()` and `preg_replace_callback()`
+return `null`, and `preg_grep()` returns the entries collected so far. A subject
+PCRE2 rejects as malformed UTF-8 under `/u` sets `PREG_BAD_UTF8_ERROR`; an
+exhausted PCRE2 match or heap limit sets `PREG_BACKTRACK_LIMIT_ERROR`. As in
+PHP, an error recorded by a `preg_*` call inside a `preg_replace_callback()`
+callback stays visible to `preg_last_error()` without failing the outer call.
+
+eval() keeps its own error state, like the JSON error state: `preg_last_error()`
+in eval'd code does not see an error recorded by compiled code, and compiled code
+does not see one recorded inside eval(). PHP has a single state.
+
+`PCRE_VERSION`, `PCRE_VERSION_MAJOR` and `PCRE_VERSION_MINOR` describe the
+managed PCRE2 package (10.47), not the PHP build's library.
+
 ## Current limitations
 
 - Regex runtime detection is conservative around dynamic `instanceof`: programs
   that can dynamically reference emitted SPL regex classes may link PCRE2 even
   when they do not call `preg_*` directly.
 - Only the pattern modifiers listed above are mapped to PCRE2 flags today.
+- The PCRE2 shim reports match errors as POSIX codes, so PCRE2's recursion-depth
+  limit and UTF-8 offset errors read as `PREG_BAD_UTF8_ERROR`, and running out of
+  memory reads as `PREG_BACKTRACK_LIMIT_ERROR`. PCRE2's own default match limit
+  (10,000,000) applies instead of PHP's `pcre.backtrack_limit` (1,000,000).
 - Pattern and subject strings cross the current shim as NUL-terminated strings,
   preserving the existing embedded-NUL limitation.
 
@@ -200,12 +226,15 @@ Generated from the shared symbol catalog by `scripts/docs/gen_module_sections.py
 
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
+| [`preg_grep()`](./builtins/regex/preg_grep.md) | `(string $pattern, array $array, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
+| [`preg_last_error()`](./builtins/regex/preg_last_error.md) | `(): int` | `int` | ✓ | ✓ |
+| [`preg_last_error_msg()`](./builtins/regex/preg_last_error_msg.md) | `(): string` | `string` | ✓ | ✓ |
 | [`preg_match()`](./builtins/regex/preg_match.md) | `(string $pattern, string $subject, array $matches = null): int|false` | `int|false` | ✓ | ✓ |
 | [`preg_match_all()`](./builtins/regex/preg_match_all.md) | `(string $pattern, string $subject, mixed $matches = null, int $flags = 0): int|false` | `int|false` | ✓ | ✓ |
 | [`preg_replace()`](./builtins/regex/preg_replace.md) | `(string $pattern, string $replacement, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_replace_callback()`](./builtins/regex/preg_replace_callback.md) | `(string $pattern, callable $callback, string $subject): mixed` | `mixed` | ✓ | ✓ |
 | [`preg_split()`](./builtins/regex/preg_split.md) | `(string $pattern, string $subject, int $limit = -1, int $flags = 0): array|false` | `array|false` | ✓ | ✓ |
 
-Constants: `PREG_OFFSET_CAPTURE`, `PREG_PATTERN_ORDER`, `PREG_SET_ORDER`, `PREG_SPLIT_DELIM_CAPTURE`, `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_OFFSET_CAPTURE`, `PREG_UNMATCHED_AS_NULL`.
+Constants: `PCRE_VERSION`, `PCRE_VERSION_MAJOR`, `PCRE_VERSION_MINOR`, `PREG_BACKTRACK_LIMIT_ERROR`, `PREG_BAD_UTF8_ERROR`, `PREG_BAD_UTF8_OFFSET_ERROR`, `PREG_GREP_INVERT`, `PREG_INTERNAL_ERROR`, `PREG_JIT_STACKLIMIT_ERROR`, `PREG_NO_ERROR`, `PREG_OFFSET_CAPTURE`, `PREG_PATTERN_ORDER`, `PREG_RECURSION_LIMIT_ERROR`, `PREG_SET_ORDER`, `PREG_SPLIT_DELIM_CAPTURE`, `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_OFFSET_CAPTURE`, `PREG_UNMATCHED_AS_NULL`.
 
 <!-- elephc:generated:symbols:end -->
