@@ -11,6 +11,24 @@
 use crate::{source::SourceMode, types::PhpType};
 use elephc_semantics::{SemanticProfile, conversions::{AllowedKinds, ConversionPlan, ValueKind}};
 
+/// Projects only scalar source annotations whose meaning needs no class or generic context.
+pub(crate) fn scalar_hint(hint: &crate::parser::ast::TypeExpr) -> Option<PhpType> {
+    use crate::parser::ast::TypeExpr;
+    Some(match hint {
+        TypeExpr::Int => PhpType::Int, TypeExpr::Float => PhpType::Float,
+        TypeExpr::Bool => PhpType::Bool, TypeExpr::False => PhpType::False,
+        TypeExpr::Str => PhpType::Str, TypeExpr::Void => PhpType::Void,
+        TypeExpr::Nullable(inner) => PhpType::Union(vec![scalar_hint(inner)?, PhpType::Void]),
+        TypeExpr::Union(members) => PhpType::Union(members.iter().map(scalar_hint).collect::<Option<Vec<_>>>()?),
+        TypeExpr::Named(name) => match name.as_str().to_ascii_lowercase().as_str() {
+            "int" => PhpType::Int, "float" => PhpType::Float, "bool" => PhpType::Bool,
+            "false" => PhpType::False, "string" => PhpType::Str, "null" | "void" => PhpType::Void,
+            _ => return None,
+        },
+        _ => return None,
+    })
+}
+
 /// Extracts a scalar declaration without flattening its PHP identity into physical storage.
 pub(crate) fn scalar_contract(ty: &PhpType) -> Option<AllowedKinds> {
     Some(match ty {

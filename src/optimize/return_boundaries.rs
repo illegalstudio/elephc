@@ -111,16 +111,7 @@ impl ReturnBoundaryFacts {
 
 /// Resolves only representations whose syntax is authoritative before checker specialization.
 pub(super) fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
-    match hint {
-        Some(TypeExpr::Int) => PhpType::Int,
-        Some(TypeExpr::Float) => PhpType::Float,
-        Some(TypeExpr::Bool) => PhpType::Bool,
-        Some(TypeExpr::False) => PhpType::False,
-        Some(TypeExpr::Str) => PhpType::Str,
-        Some(TypeExpr::Nullable(inner)) => PhpType::Union(vec![parameter_type(Some(inner)), PhpType::Void]),
-        Some(TypeExpr::Union(members)) => PhpType::Union(members.iter().map(|hint| parameter_type(Some(hint))).collect()),
-        _ => PhpType::Mixed,
-    }
+    hint.and_then(crate::semantics::conversions::scalar_hint).unwrap_or(PhpType::Mixed)
 }
 
 /// Installs one lexical return contract and restores the caller's context afterwards.

@@ -11,7 +11,7 @@
 use std::collections::{HashMap, HashSet};
 use crate::ast_visit::{walk_program, AstVisitor};
 use crate::errors::CompileError;
-use crate::parser::ast::{BinOp, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, Program, StaticReceiver, Stmt, StmtKind, TypeExpr};
 use crate::source::SourceMode;
 use elephc_semantics::{SemanticProfile, StrictFeature};
 use elephc_semantics::numeric::{checked_integer, IntegerOp, NumericFailure, INTEGER_OVERFLOW_MESSAGE};
@@ -20,9 +20,9 @@ use elephc_semantics::numeric::{checked_integer, IntegerOp, NumericFailure, INTE
 #[derive(Clone, Copy)]
 enum Number {
     Int(i64), Float(f64), Bool(bool), Null,
-    StringInt { value: i64, fully_numeric: bool },
-    StringFloat { value: f64, fully_numeric: bool },
-    NonNumericString,
+    StringInt { value: i64, fully_numeric: bool, truthy: bool },
+    StringFloat { value: f64, fully_numeric: bool, truthy: bool },
+    NonNumericString { truthy: bool },
     /// A known array kind whose payload is outside scalar numeric evidence.
     Array,
 }
@@ -34,7 +34,7 @@ impl Number {
         match self {
             Self::Int(_) => ValueKind::Integer, Self::Float(_) => ValueKind::Float,
             Self::Bool(_) => ValueKind::Boolean, Self::Null => ValueKind::Null,
-            Self::StringInt { .. } | Self::StringFloat { .. } | Self::NonNumericString => ValueKind::String,
+            Self::StringInt { .. } | Self::StringFloat { .. } | Self::NonNumericString { .. } => ValueKind::String,
             Self::Array => ValueKind::NonScalar,
         }
     }
@@ -52,7 +52,7 @@ impl Number {
 
     /// Builtin numeric parameters accept full numeric strings rather than arithmetic prefixes.
     fn valid_numeric_parameter(self, strict_types: bool) -> bool {
-        match self { Self::NonNumericString | Self::Array => false,
+        match self { Self::NonNumericString { .. } | Self::Array => false,
             Self::StringInt { fully_numeric, .. } | Self::StringFloat { fully_numeric, .. } => fully_numeric && !strict_types,
             Self::Bool(_) | Self::Null => !strict_types, _ => true }
     }
@@ -74,7 +74,7 @@ impl Number {
 enum ConstantKey { Global(String), Class(String, String) }
 
 /// An unconditional declaration's expression and its lexical implementation policy.
-struct Definition { value: Expr, mode: SourceMode, strict_types: bool }
+struct Definition { value: Expr, annotation: Option<TypeExpr>, mode: SourceMode, strict_types: bool }
 
 /// Owns stable expression addresses and marks duplicate declarations as ambiguous.
 #[derive(Default)]
@@ -91,12 +91,12 @@ impl Definitions {
             match &stmt.kind {
                 StmtKind::Synthetic(body) => self.collect(body),
                 StmtKind::NamespaceBlock { .. } | StmtKind::NamespaceDecl { .. } => self.unresolved_namespaces = true,
-                StmtKind::ConstDecl { name, value } => self.insert(ConstantKey::Global(name.trim_start_matches('\\').to_string()), value, stmt.source_mode, stmt.strict_types),
+                StmtKind::ConstDecl { name, value } => self.insert(ConstantKey::Global(name.trim_start_matches('\\').to_string()), value, None, stmt.source_mode, stmt.strict_types),
                 StmtKind::ClassDecl { name, constants, .. } | StmtKind::InterfaceDecl { name, constants, .. }
-                | StmtKind::EnumDecl { name, constants, .. } => {
+                | StmtKind::EnumDecl { name, constants, .. } | StmtKind::TraitDecl { name, constants, .. } => {
                     for constant in constants {
                         self.insert(ConstantKey::Class(crate::names::php_symbol_key(name.trim_start_matches('\\')), constant.name.clone()),
-                            &constant.value, stmt.source_mode, stmt.strict_types);
+                            &constant.value, constant.type_expr.as_ref(), stmt.source_mode, stmt.strict_types);
                     }
                 }
                 _ => {}
@@ -105,10 +105,10 @@ impl Definitions {
     }
 
     /// Refuses to infer a unique value when more than one declaration owns the same key.
-    fn insert(&mut self, key: ConstantKey, value: &Expr, mode: SourceMode, strict_types: bool) {
+    fn insert(&mut self, key: ConstantKey, value: &Expr, annotation: Option<&TypeExpr>, mode: SourceMode, strict_types: bool) {
         use std::collections::hash_map::Entry;
         match self.values.entry(key) {
-            Entry::Vacant(entry) => { entry.insert(Some(Definition { value: value.clone(), mode, strict_types })); }
+            Entry::Vacant(entry) => { entry.insert(Some(Definition { value: value.clone(), annotation: annotation.cloned(), mode, strict_types })); }
             Entry::Occupied(mut entry) => { entry.insert(None); }
         }
     }
@@ -159,7 +159,8 @@ impl AstVisitor for NumericValidator {
     /// Tracks nested implementation statements without exempting their user children.
     fn statement(&mut self, stmt: &Stmt) {
         let class = match &stmt.kind {
-            StmtKind::ClassDecl { name, .. } | StmtKind::InterfaceDecl { name, .. } | StmtKind::EnumDecl { name, .. } =>
+            StmtKind::ClassDecl { name, .. } | StmtKind::InterfaceDecl { name, .. } | StmtKind::EnumDecl { name, .. }
+            | StmtKind::TraitDecl { name, .. } =>
                 Some(crate::names::php_symbol_key(name.trim_start_matches('\\'))),
             _ => self.scopes.last().and_then(|(_, class, _)| class.clone()),
         };
@@ -168,6 +169,15 @@ impl AstVisitor for NumericValidator {
 
     /// Restores the lexical class after a declaration or nested statement finishes.
     fn statement_end(&mut self, _stmt: &Stmt) { self.scopes.pop(); }
+
+    /// Validates proven declaration values before folding can erase their original scalar kind.
+    fn declared_value(&mut self, annotation: &TypeExpr, value: &Expr) {
+        if self.error.is_some() { return; }
+        let (mode, class, strict_types) = self.scopes.last().expect("defaults have an enclosing statement");
+        self.evidence.strict_types = *strict_types;
+        if let Err(error) = declarations::check(annotation, value, *mode, class.as_deref(),
+            &self.definitions, &mut self.evidence) { self.error = Some(error); }
+    }
 
     /// Evaluates only proven scalar evidence, leaving unknown operands to runtime guards.
     fn expression(&mut self, expr: &Expr) {
@@ -206,6 +216,8 @@ fn evaluate(expr: &Expr, checked: bool, class: Option<&str>, definitions: &Defin
             };
             match class { Some(class) => constant(&ConstantKey::Class(class, name.clone()), definitions, evidence)?, None => None }
         }
+        ExprKind::Ternary { .. } | ExprKind::ShortTernary { .. } | ExprKind::NullCoalesce { .. } =>
+            selection::evaluate_selection(expr, checked, class, definitions, evidence)?,
         ExprKind::UnaryPlus(inner) => match unary_operand(expr, inner, checked, class, definitions, evidence,
             elephc_semantics::numeric_domains::NumericOperator::Unary)?.map(Number::numeric) {
             value @ Some(Number::Int(_) | Number::Float(_)) => value,
@@ -250,7 +262,7 @@ fn constant(key: &ConstantKey, definitions: &Definitions, evidence: &mut Evidenc
     let result = evaluate(&definition.value, definition.mode != SourceMode::Internal, class, definitions, evidence);
     evidence.strict_types = previous_strict_types;
     evidence.active.remove(key);
-    result
+    result.map(|value| declarations::apply_contract(value, definition.annotation.as_ref()))
 }
 
 /// Audits a proven unary operand before conversion while preserving declaration-cycle evidence.
@@ -267,11 +279,14 @@ fn unary_operand(expr: &Expr, inner: &Expr, checked: bool, class: Option<&str>, 
 
 /// Classifies PHP numeric strings without changing full-width integer values through float rounding.
 fn string_number(value: &str) -> Option<Number> {
-    let Some(scan) = crate::numeric_string::scan_numeric_prefix(value) else { return Some(Number::NonNumericString); };
+    let truthy = !value.is_empty() && value != "0";
+    let Some(scan) = crate::numeric_string::scan_numeric_prefix(value) else { return Some(Number::NonNumericString { truthy }); };
     if !scan.is_float {
-        if let Ok(value) = scan.text.parse::<i64>() { return Some(Number::StringInt { value, fully_numeric: scan.is_fully_numeric() }); }
+        if let Ok(value) = scan.text.parse::<i64>() {
+            return Some(Number::StringInt { value, fully_numeric: scan.is_fully_numeric(), truthy });
+        }
     }
-    scan.text.parse().ok().map(|value| Number::StringFloat { value, fully_numeric: scan.is_fully_numeric() })
+    scan.text.parse().ok().map(|value| Number::StringFloat { value, fully_numeric: scan.is_fully_numeric(), truthy })
 }
 
 /// Proves typed numeric builtin operations through the shared argument planner and runtime inventory.
@@ -335,7 +350,7 @@ fn builtin_number(
         // Mixed pow parameters follow operator conversion even with PHP strict_types enabled.
         // Public numeric profiles share source kinds and integer-power domains with the operator.
         if checked { return binary(expr, &BinOp::Pow, left, right, checked, evidence.profile, true); }
-        if matches!(left, Number::NonNumericString | Number::Array) || matches!(right, Number::NonNumericString | Number::Array) { return Ok(None); }
+        if matches!(left, Number::NonNumericString { .. } | Number::Array) || matches!(right, Number::NonNumericString { .. } | Number::Array) { return Ok(None); }
         return Ok(Some(Number::Float(left.as_float().powf(right.as_float()))));
     }
     let [argument] = normalized.as_slice() else { return Ok(None); };
@@ -442,7 +457,7 @@ fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, p
             _ => None,
         });
     }
-    if matches!(left, Number::NonNumericString | Number::Array) || matches!(right, Number::NonNumericString | Number::Array) { return Ok(None); }
+    if matches!(left, Number::NonNumericString { .. } | Number::Array) || matches!(right, Number::NonNumericString { .. } | Number::Array) { return Ok(None); }
     let (left, right) = (left.numeric(), right.numeric());
     if checked && profile.contains(StrictFeature::Arithmetic) && matches!(op, BinOp::Div) {
         let (left, right) = (left.as_float(), right.as_float());
@@ -474,6 +489,11 @@ fn binary(expr: &Expr, op: &BinOp, left: Number, right: Number, checked: bool, p
         BinOp::Div => left / right, BinOp::Pow => left.powf(right), _ => return Ok(None) };
     Ok(Some(Number::Float(value)))
 }
+
+#[path = "numeric_constants/declarations.rs"]
+mod declarations;
+#[path = "numeric_constants/selection.rs"]
+mod selection;
 
 #[cfg(test)]
 #[path = "numeric_constants/tests.rs"]

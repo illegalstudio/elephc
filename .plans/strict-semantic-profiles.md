@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 46 (this commit), following `83b2501b36`. Issue:
+Verified through step 47 (this commit), following `de9ba02ca7`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -636,6 +636,36 @@ default plans, trait receiver resolution, property/reference/alias/eval/host
 contracts and all remaining strict families stay active. Public admission is
 unchanged. Compiler build, architecture gate, assembly comments and diff hygiene pass.
 
+### Verified scalar declaration evidence and nullable union effects
+
+Step47 shares scalar_hint across source declaration evidence and optimizer return/
+store adapters, including named null and false-only union alternatives. The old
+adapter lost null's scalar identity: a pure int|false|null initializer kept its
+catch without optimization but became an uncaught TypeError after DCE. All five
+emitter checks now retain the catch and native execution stays clean in both modes.
+
+The shared source proof engine observes declared values before folding, selects
+known ternary/short-ternary/coalesce values, and retains string truth separately
+from numeric parsing (so '0' and '00' remain distinct conditions). Direct trait
+constants can supply self evidence; unresolved consumer-provided constants remain
+unknown. Typed constant evidence projects the declaration's PHP result kind,
+preventing false integer overflow for a float constant initialized from an int.
+Four new focused checks pass, covering forward constant conditions, original
+kinds, typed constant contracts, false/null contracts, all five emitters and both
+native AST/EIR modes with clean heaps. All three default controls and the exact
+numeric reduction/domain control pass. Compiler build, architecture gate,
+assembly comments and diff hygiene pass. PHP confirms typed float constants return
+float values and inherited trait defaults retain their original self constant.
+
+A further native trusted-producer probe exposed an EIR constant materialization
+gap: Internal const float VALUE=1 still arrives as an int in executable lowering.
+PHP extension emission already has a schema materializer, but its current pipeline
+invocation is extension-only. The red fixture is preserved separately in
+src/ir_lower/tests/strict_trusted_constants.rs for immediate follow-up. Public
+admission remains unchanged. Complete this shared producer boundary next, then
+remaining dynamic/default/property/reference/alias/eval/host contracts and the
+rest of the approved strict families.
+
 ### Native eval boundaries and ownership
 
 Protected checked_numeric_v1, numeric_unary_v1 and warning_v2 hooks contain native
@@ -749,4 +779,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 43 | `6d06bfe2db` | feat(strict): carry checked conditional closure result contracts |
 | 44 | `efcfed164c` | feat(strict): enforce declared scalar initializer contracts |
 | 45 | `83b2501b36` | feat(strict): retain declared contracts across local stores |
-| 46 | this commit | feat(strict): validate original scalar declaration defaults |
+| 46 | `de9ba02ca7` | feat(strict): validate original scalar declaration defaults |
+| 47 | this commit | feat(strict): preserve declaration kinds and union failures |

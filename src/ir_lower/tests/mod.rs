@@ -755,3 +755,5 @@ mod strict_typed_initializers;
 mod strict_typed_stores;
 
 mod strict_defaults;
+
+mod strict_default_evidence;
