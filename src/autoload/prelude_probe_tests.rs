@@ -220,3 +220,28 @@ fn probe_detects_web_environment_observers_in_autoloaded_classes() {
         assert_eq!(groups.contains("web_environment"), observes, "{body}");
     }
 }
+
+/// Every per-function OPcache/INI and version prelude name an autoloaded class alone calls is
+/// reported under its own name, and only that one, so pay-for-use per function survives.
+#[test]
+fn probe_detects_per_function_ini_and_opcache_calls_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let defines = std::collections::HashSet::new();
+    let probed: Vec<&str> = super::PROBED_FUNCTIONS.iter().copied().flatten().copied().collect();
+    for name in &probed {
+        fs::write(project.0.join("src/Probe.php"), format!(
+            "<?php namespace App; class Probe {{ public function read() {{ return \\{name}('x'); }} }}",
+        )).unwrap();
+        let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+        let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+        let reported: Vec<&str> = probed.iter().copied().filter(|n| groups.contains(n)).collect();
+        assert_eq!(reported, [*name], "autoloaded {name}() call was not reported alone");
+    }
+    // A callable string still names the function, exactly as the entry-program detector says.
+    fs::write(project.0.join("src/Probe.php"),
+        "<?php namespace App; class Probe { public function has() { return \\function_exists('opcache_reset'); } }",
+    ).unwrap();
+    let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+    let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+    assert!(groups.contains("opcache_reset"), "function_exists('opcache_reset') was missed");
+}

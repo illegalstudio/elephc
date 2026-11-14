@@ -118,9 +118,12 @@ Physical source (.php or .lfc)
   and anonymous-class counter. Process-global synthetic spans and include
   temporaries stay monotonic, so discarding a probe cannot recycle identities
   allocated by another compilation thread. The real pass injects the detected
-  preludes with fresh global identities. Every included and
-  autoloaded file gets its own source identity, which is how diagnostics name
-  the file they come from. Detectors recognize rewritten helper names such as
+  preludes with fresh global identities. The OPcache/INI (`ini_get`, `ini_set`,
+  `ini_get_all`, `opcache_*`) and version (`zend_version`, `php_sapi_name`,
+  `ini_restore`) preludes decide per function, so the probe reports each of
+  those names the autoloaded files reference. Every included and autoloaded
+  file gets its own source identity, which is how diagnostics name the file
+  they come from. Detectors recognize rewritten helper names such as
   `__elephc_array_rand` and `__elephc_list_identifiers`. Public prelude function
   names also participate in PHP's global namespace fallback through the shared
   builtin contract, even when an autoloaded file is resolved independently of
