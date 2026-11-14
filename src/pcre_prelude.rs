@@ -4,6 +4,8 @@
 //! Called from:
 //! - `crate::pipeline::compile()`, next to the version prelude and before name resolution,
 //!   so a namespaced caller still resolves to the injected declaration.
+//! - `crate::autoload::prelude_probe`, through `program_uses_surface`, for a call that only
+//!   an autoloaded class file makes.
 //!
 //! Key details:
 //! - Pay-for-use with a redeclaration guard, like `crate::version_prelude`: a program that
@@ -85,16 +87,26 @@ fn preg_grep_decl() -> Stmt {
         .build()
 }
 
-/// Prepends `preg_grep()` when the program references it and does not declare it.
+/// Whether `program` calls `preg_grep()`: the usage half of the test `inject_if_used` applies.
+///
+/// Also run by `crate::autoload::prelude_probe` over the autoload closure, whose files are only
+/// loaded after this prelude has been decided.
+pub(crate) fn program_uses_surface(program: &[Stmt]) -> bool {
+    crate::opcache_prelude::detect::program_references(program, "preg_grep")
+}
+
+/// Prepends `preg_grep()` when the program (or, with `autoloaded`, a file of its autoload
+/// closure) references it and the program does not declare it.
 ///
 /// Runs under `crate::compiler_stack::with_compiler_stack` like the version prelude, whose
 /// usage scan (`opcache_prelude::detect`) it shares.
 pub fn inject_if_used(
     program: Program,
+    autoloaded: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
     crate::compiler_stack::with_compiler_stack(|| {
-        if !crate::opcache_prelude::detect::program_references(&program, "preg_grep")
+        if !(autoloaded || program_uses_surface(&program))
             || crate::opcache_prelude::detect::program_declares(&program, "preg_grep")
         {
             return program;
