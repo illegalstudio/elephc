@@ -281,7 +281,7 @@ def effective_ms(variant: dict) -> float | None:
 
 
 def render_markdown(payload: dict) -> str:
-    """Render every suite without assuming native-only variant names."""
+    """Render every suite with wall, CPU and peak-RSS medians."""
     sections = []
     for suite, data in payload["suites"].items():
         labels = list(dict.fromkeys(label for case in data["cases"] for label in case["variants"]))
@@ -291,4 +291,32 @@ def render_markdown(payload: dict) -> str:
             values = [format_ms(case["variants"].get(label, {}).get("median_ms")) for label in labels]
             sections.append("| " + " | ".join([case["case"], *values]) + " |")
         sections.append("")
+        cpu_labels = [label for label in labels if any(
+            case["variants"].get(label, {}).get("median_cpu_ms") is not None
+            for case in data["cases"]
+        )]
+        if cpu_labels:
+            sections.extend([f"### {suite} CPU", "",
+                             "| case | " + " | ".join(f"{label} CPU ms" for label in cpu_labels) + " |",
+                             "|---|" + "---:|" * len(cpu_labels)])
+            for case in data["cases"]:
+                values = [format_ms(case["variants"].get(label, {}).get("median_cpu_ms"))
+                          for label in cpu_labels]
+                sections.append("| " + " | ".join([case["case"], *values]) + " |")
+            sections.append("")
+        rss_labels = [label for label in labels if any(
+            case["variants"].get(label, {}).get("peak_rss_kb") is not None
+            for case in data["cases"]
+        )]
+        if rss_labels:
+            sections.extend([f"### {suite} peak RSS", "",
+                             "| case | " + " | ".join(f"{label} RSS MB" for label in rss_labels) + " |",
+                             "|---|" + "---:|" * len(rss_labels)])
+            for case in data["cases"]:
+                values = []
+                for label in rss_labels:
+                    rss = case["variants"].get(label, {}).get("peak_rss_kb")
+                    values.append("n/a" if rss is None else f"{rss / 1024:.2f}")
+                sections.append("| " + " | ".join([case["case"], *values]) + " |")
+            sections.append("")
     return "\n".join(sections) + "\n"

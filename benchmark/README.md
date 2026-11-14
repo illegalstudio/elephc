@@ -111,6 +111,9 @@ python3 benchmark/frankenphp_body.py \
   --iterations 5 --warmup 2 --json /tmp/frankenphp-body.json
 ```
 
+The regular `benchmark/run.py` Markdown report also renders CPU and peak-RSS
+tables for every suite from the same rusage fields.
+
 Both tools also report each child's user+system CPU time and peak resident set
 size from `wait4` rusage, with efficiency ratios against FrankenPHP and
 FrankenPHP+JIT. Pass `--require-ahead` to make every selected case a gate:
