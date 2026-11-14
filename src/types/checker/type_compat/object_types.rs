@@ -221,20 +221,19 @@ impl Checker {
 
     /// Returns true if `type_name` (a class or interface) implements `Iterator` or
     /// `IteratorAggregate`, which are the interfaces that make a type usable in `foreach`.
+    /// A class the build walk has not reached yet answers from its declared ancestry, so an
+    /// `iterable` return may be narrowed to it.
     pub(crate) fn object_type_implements_iterable(&self, type_name: &str) -> bool {
         let type_name = type_name.trim_start_matches('\\');
         if canonical_builtin_iterable_interface_name(type_name).is_some() {
             return true;
         }
-        if self.classes.contains_key(type_name) {
-            return self.class_implements_interface(type_name, "Iterator")
-                || self.class_implements_interface(type_name, "IteratorAggregate");
-        }
         if self.interfaces.contains_key(type_name) {
             return self.interface_extends_interface(type_name, "Iterator")
                 || self.interface_extends_interface(type_name, "IteratorAggregate");
         }
-        false
+        self.class_implements_interface(type_name, "Iterator")
+            || self.class_implements_interface(type_name, "IteratorAggregate")
     }
 
     /// Finds the most specific common ancestor object type shared by all type names in

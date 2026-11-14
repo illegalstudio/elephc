@@ -807,3 +807,24 @@ echo (new BackedKind())->make()->value, "|", (new UnitKind())->make()->name;
     );
     assert_eq!(out, "a|A");
 }
+
+/// An `iterable` return may be narrowed to a class the name-ordered class-build walk has not
+/// reached yet: one implementing `IteratorAggregate` through a user interface, and one that is
+/// `Iterator` through its built `ArrayIterator` parent.
+#[test]
+fn test_covariant_iterable_return_to_a_class_built_later() {
+    let out = compile_and_run(
+        r#"<?php
+interface Items extends IteratorAggregate {}
+class ZItems implements Items { public function getIterator(): Iterator { return new ArrayIterator([1, 2]); } }
+class ZList extends ArrayIterator {}
+class AFactory { public function make(): iterable { return [0]; } }
+class BFactory extends AFactory { public function make(): ZItems { return new ZItems(); } }
+class CFactory extends AFactory { public function make(): ZList { return new ZList([3]); } }
+foreach ((new BFactory())->make() as $v) { echo $v; }
+echo "|";
+foreach ((new CFactory())->make() as $v) { echo $v; }
+"#,
+    );
+    assert_eq!(out, "12|3");
+}

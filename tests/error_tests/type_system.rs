@@ -992,6 +992,20 @@ class Child extends Base { public function make(): Kind { return Kind::A; } }
     );
 }
 
+/// The declared-ancestry fallback for `iterable` returns does not accept a later class that
+/// implements neither `Iterator` nor `IteratorAggregate`.
+#[test]
+fn test_error_override_iterable_return_to_unrelated_later_class() {
+    expect_error(
+        r#"<?php
+class ZPlain {}
+class AFactory { public function make(): iterable { return []; } }
+class BFactory extends AFactory { public function make(): ZPlain { return new ZPlain(); } }
+"#,
+        "Cannot override method BFactory::make with incompatible return type ZPlain (parent returns iterable)",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]
