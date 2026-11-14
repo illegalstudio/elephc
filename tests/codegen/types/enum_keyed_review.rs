@@ -272,8 +272,8 @@ fn test_enum_keyed_tenth_review_trailing_named_omission() {
 interface I { public function f(int $a, int $b): int; }
 enum E implements I { case A; public function f(int $a, int $b): int { return $a + $b; } }
 function direct(I $value): int { return $value->f(a: 1); }
-function unpack(I $value): int { return $value->f(...['a' => 1]); }
-foreach ([direct(...), unpack(...)] as $callable) {
+function spreadNamed(I $value): int { return $value->f(...['a' => 1]); }
+foreach ([direct(...), spreadNamed(...)] as $callable) {
     try { $callable(E::A); }
     catch (ArgumentCountError $error) { echo $error->getMessage(), '|'; }
 }

@@ -320,24 +320,24 @@ var_dump(bin2hex(pack('Q', 0x8000000000000002)));
     );
     assert_eq!(
         without_warning_location(&out),
-        "Warning: unpack(): Type Z: not enough input values, need 2 values but only 1 was provided\n\
+        "\nWarning: unpack(): Type Z: not enough input values, need 2 values but only 1 was provided\n\
 bool(false)\n\
-Warning: unpack(): Type C: not enough input values, need 1 values but only 0 were provided\n\
+\nWarning: unpack(): Type C: not enough input values, need 1 values but only 0 were provided\n\
 bool(false)\n\
-Warning: unpack(): Type x: not enough input values, need 1 values but only 0 were provided\n\
+\nWarning: unpack(): Type x: not enough input values, need 1 values but only 0 were provided\n\
 bool(false)\n\
-Warning: unpack(): Type H: not enough input values, need 5 values but only 3 were provided\n\
+\nWarning: unpack(): Type H: not enough input values, need 5 values but only 3 were provided\n\
 bool(false)\n\
-Warning: unpack(): Type C: integer overflow\n\
+\nWarning: unpack(): Type C: integer overflow\n\
 bool(false)\n\
 array(0) {\n}\n\
-Warning: unpack(): Type @: outside of string\n\
+\nWarning: unpack(): Type @: outside of string\n\
 array(0) {\n}\n\
-Warning: pack(): Type X: outside of string\n\
+\nWarning: pack(): Type X: outside of string\n\
 string(0) \"\"\n\
-Warning: pack(): 1 arguments unused\n\
+\nWarning: pack(): 1 arguments unused\n\
 string(4) \"0102\"\n\
-Warning: The float 9.223372036854776E+18 is not representable as an int, cast occurred\n\
+\nWarning: The float 9.223372036854776E+18 is not representable as an int, cast occurred\n\
 string(16) \"0000000000000080\"\n"
     );
 }

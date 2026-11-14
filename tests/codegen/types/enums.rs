@@ -360,11 +360,11 @@ interface I { public function f(int $x): int; }
 enum E implements I { case A; public function f(int $x = 10): int { return $x; } }
 enum F implements I { case A; public function f(int $x): int { return $x; } }
 function invoke(I $value): int { return $value->f(); }
-function unpack(I $value): int { return $value->f(...[]); }
+function spreadInvoke(I $value): int { return $value->f(...[]); }
 echo 'E', invoke(E::A), '|';
 try { echo invoke(F::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
-echo '|E', unpack(E::A), '|';
-try { echo unpack(F::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
+echo '|E', spreadInvoke(E::A), '|';
+try { echo spreadInvoke(F::A); } catch (ArgumentCountError $error) { echo $error->getMessage(); }
 echo '|', F::A->f(8);
 "#);
     assert_eq!(out, "E10|Too few arguments to function F::f(), 0 passed and exactly 1 expected|E10|Too few arguments to function F::f(), 0 passed and exactly 1 expected|8");
