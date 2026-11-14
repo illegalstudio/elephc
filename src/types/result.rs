@@ -120,6 +120,10 @@ pub struct ArrayPushPropertyPlan {
 /// class metadata, warnings, FFI data, and required libraries forward to optimizer,
 /// codegen, and linker setup.
 pub struct CheckResult {
+    /// The run-time faults `CheckOptions::tolerate_runtime_faults` let through, each typed as its
+    /// demotion (`autoload::runtime_faults`). The pipeline must demote every one of them before
+    /// this result describes the program; it checks again when one cannot be.
+    pub tolerated_runtime_faults: Vec<crate::errors::CompileError>,
     /// Every instantiation a call site asked for, as (template name, type arguments).
     ///
     /// The pipeline splices one declaration per entry into the program and re-checks, because

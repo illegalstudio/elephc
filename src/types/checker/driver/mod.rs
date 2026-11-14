@@ -105,6 +105,7 @@ pub(super) fn check_types_impl(
     let mut checker = Checker::new(target);
     checker.lint_warnings = options.lint;
     checker.strict_locals = options.strict_locals;
+    checker.tolerate_runtime_faults = options.tolerate_runtime_faults;
     // Installed BEFORE any body is walked, because `new Box(5)` is resolved while walking one.
     // Empty on every path that does not run `generics::monomorphize`, which is what makes those
     // paths behave exactly as they did before this feature.
@@ -615,6 +616,9 @@ pub(super) fn check_types_impl(
 
     checker.deduplicate_variant_signature_errors(&mut errors);
     if !errors.is_empty() {
+        // A refused program goes back to the pipeline with its tolerated faults among the errors,
+        // which is what it would have met without tolerance: `runtime_faults::demote` reads them.
+        errors.extend(std::mem::take(&mut checker.tolerated_runtime_faults));
         return Err(CompileError::from_many(errors));
     }
 

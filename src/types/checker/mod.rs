@@ -404,6 +404,21 @@ pub(crate) struct Checker {
     /// by prelude friend channels to identify compiler-owned procedural
     /// aliases, which have no class context.
     pub current_function: Option<String>,
+    /// `CheckOptions::tolerate_runtime_faults`, copied when the checker is built.
+    pub(crate) tolerate_runtime_faults: bool,
+    /// The class whose method body the method pass is walking while faults are tolerated.
+    ///
+    /// Set only around one method body, never around a nested function's resolution
+    /// (`current_function` is then set), so a tolerated fault always belongs to this class.
+    pub(crate) tolerating_runtime_faults_in: Option<String>,
+    /// The faults tolerated in the body being walked, drained by the method pass.
+    /// The spans of the faults that refused a method body during this check: only an error at
+    /// one of them is tolerated, so a fault a probe swallows keeps being refused (and swallowed).
+    pub(crate) tolerable_fault_spans: HashSet<Span>,
+    pub(crate) body_tolerated_faults: Vec<CompileError>,
+    /// The faults the last method pass tolerated, one per construct; see
+    /// `CheckResult::tolerated_runtime_faults`.
+    pub(crate) tolerated_runtime_faults: Vec<CompileError>,
     /// Whether the current method being type-checked is static.
     pub current_method_is_static: bool,
     /// Whether the function/method/closure body currently being checked returns by
@@ -1819,6 +1834,16 @@ pub struct CheckOptions {
     /// the same lesson as `required_runtime_features.eval_bridge` in echelon 44: ask the pass that
     /// owns the answer.
     pub registers_autoloader: bool,
+    /// Type a construct the checker tags with php's run-time fault (`CompileError::
+    /// runtime_fault`) inside a method body as what its demotion compiles to, and hand the fault
+    /// back in `CheckResult::tolerated_runtime_faults`, instead of refusing the body.
+    ///
+    /// `autoload::runtime_faults` rewrites such a construct into a by-name helper call (`mixed`)
+    /// or a `throw` (`never`), and the pipeline used to check the WHOLE program again to type the
+    /// rewrite: on the Symfony demo a second 21 s round for three constructs. Typed in place, the
+    /// rewrite needs no second round whenever every tolerated fault is demoted in place; the
+    /// pipeline checks again, as before, when one is not.
+    pub tolerate_runtime_faults: bool,
 }
 
 /// Returns whether a called name is PHP's `unset`, the only builtin that ends a local binding.
@@ -1947,24 +1972,31 @@ fn check_types_on_compiler_stack(
     generics: &crate::generics::GenericContext,
 ) -> Result<CheckResult, CompileError> {
     let (mut checker, global_env) = driver::check_types_impl(program, target, options, generics)?;
+    // A refusal below still hands the tolerated faults back, as `check_types_impl` does.
+    let tolerated = std::mem::take(&mut checker.tolerated_runtime_faults);
+    let refuse = |error: CompileError| {
+        let mut errors = error.flatten();
+        errors.extend(tolerated.iter().cloned());
+        CompileError::from_many(errors)
+    };
 
     // Generic class instantiation happened before this checker ran, and on purpose: its type
     // arguments are written, not inferred. What it could NOT do is decide whether `User`
     // satisfies `T : Entity` — that is a subtyping question, and the class table that answers it
     // exists only here. `check_types_impl` already answered every obligation it could before
     // the bodies; this answers the ones it deferred, against the final interface lists.
-    checker.verify_class_type_argument_bounds(&generics.class_type_argument_bounds)?;
+    checker.verify_class_type_argument_bounds(&generics.class_type_argument_bounds).map_err(refuse)?;
 
     attach_class_doc_comments(program, &mut checker.classes);
 
     propagate_abstract_return_types(&mut checker);
     apply_reference_property_promotions(&mut checker);
-    validate_reference_property_bindings(&checker)?;
+    validate_reference_property_bindings(&checker).map_err(refuse)?;
     clone_override_storage::widen_clone_override_property_storage(&mut checker);
     clone_override_storage::widen_property_unset_storage(&mut checker);
     scope_dynamic_storage::reserve_scope_dynamic_property_storage(&mut checker);
-    validate_magic_method_contracts(&checker)?;
-    core_attributes::validate(&checker)?;
+    validate_magic_method_contracts(&checker).map_err(refuse)?;
+    core_attributes::validate(&checker).map_err(refuse)?;
 
     let mut warnings = if options.lint {
         crate::types::warnings::collect_warnings(program)
@@ -2014,9 +2046,10 @@ fn check_types_on_compiler_stack(
         &checker.local_retype_sites,
         &checker.mixed_storage_store_sites,
         &checker.retired_mixed_storage_store_sites,
-    )?;
+    ).map_err(refuse)?;
 
     Ok(CheckResult {
+        tolerated_runtime_faults: tolerated,
         requested_instantiations: checker.requested_instantiations,
         generic_call_sites: checker.generic_call_sites,
         requested_class_instantiations: checker.requested_class_instantiations,

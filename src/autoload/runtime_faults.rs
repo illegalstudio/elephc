@@ -73,6 +73,8 @@ pub struct World<'a> {
 pub struct Demotion {
     /// The class file the construct is in.
     pub path: String,
+    /// The class-like the construct was refused in (`CompileError::declaration`).
+    pub declaration: String,
     /// The file the construct was written in, when a trait spliced it in from another file.
     pub source: Option<String>,
     /// Where the construct is.
@@ -81,6 +83,14 @@ pub struct Demotion {
     pub message: String,
     /// What it now does when it runs.
     pub outcome: String,
+    /// Whether the construct was replaced where it stood by a node the checker types exactly as
+    /// it typed the tolerated fault (`CheckOptions::tolerate_runtime_faults`): a by-name helper
+    /// call or an in-place `throw`. A hoisted throw or a `constant()` lookup is not, and the
+    /// program they are in is checked again.
+    pub in_place: bool,
+    /// The rewrite applied, replayed on the checker's copy of the methods
+    /// (`mirror_into_checked_methods`).
+    pub(crate) plan: Plan,
 }
 
 impl Demotion {
@@ -270,7 +280,7 @@ pub fn demote(
         };
         let outcome = rewrite(program, declaration, error.span, &plan)
             .or_else(|| rewrite_in_trait_copy(program, declaration, error.span, &plan));
-        let Some(outcome) = outcome else {
+        let Some((outcome, in_place)) = outcome else {
             continue;
         };
         let source = Span::source_paths_snapshot()
@@ -279,17 +289,21 @@ pub fn demote(
             .cloned();
         demotions.push(Demotion {
             path: path.clone(),
+            declaration: declaration.to_string(),
             source,
             span: error.span,
             message: error.message.clone(),
             outcome,
+            in_place,
+            plan,
         });
     }
     demotions
 }
 
 /// Which rewrite a fault gets.
-enum Plan {
+#[derive(Debug, Clone)]
+pub(crate) enum Plan {
     /// `$o->m(...)` through `METHOD_CALL_HELPER`.
     MethodCall { method: String },
     /// `$o->p` through `PROPERTY_READ_HELPER`.
@@ -297,6 +311,46 @@ enum Plan {
     /// `X::m(...)`, `X::$p`, `X::C`, `new X`, and a too-few-arguments `$o->m(...)`:
     /// `throw new \<error_class>(message)` in place.
     Throw { shape: StaticShape, message: String, error_class: &'static str },
+}
+
+/// The node the checker types in place of a fault it tolerates (`CheckOptions::
+/// tolerate_runtime_faults`): what `demote` compiles `expr` to when the world holds its class.
+///
+/// A `throw`'s message is left empty, since no type depends on it. `None` when no rewrite of
+/// `expr` exists (a named or spread argument), and the fault is then refused as before.
+pub(crate) fn tolerated_form(expr: &Expr, fault: &RuntimeFault) -> Option<Expr> {
+    let plan = match fault {
+        RuntimeFault::UndefinedMethod { method, .. } => Plan::MethodCall { method: method.clone() },
+        RuntimeFault::UndefinedProperty { property, .. } => {
+            Plan::PropertyRead { property: property.clone() }
+        }
+        RuntimeFault::TooFewArguments { .. } => {
+            let throwable = error_object("ArgumentCountError", "", expr.span);
+            return Some(Expr::new(ExprKind::Throw(Box::new(throwable)), expr.span));
+        }
+        // `static::C` is looked up on the called class (`constant()`, `mixed`), not thrown.
+        RuntimeFault::UndefinedClassConstant { class, constant }
+            if matches!(
+                expr.kind,
+                ExprKind::ScopedConstantAccess { receiver: StaticReceiver::Static, .. }
+            ) =>
+        {
+            Plan::Throw {
+                shape: StaticShape::Constant { class: class.clone(), constant: constant.clone() },
+                message: String::new(),
+                error_class: "Error",
+            }
+        }
+        RuntimeFault::UndefinedStaticMethod { .. }
+        | RuntimeFault::UndefinedStaticProperty { .. }
+        | RuntimeFault::UndefinedClassConstant { .. }
+        | RuntimeFault::UnknownClass { .. } => {
+            let throwable = error_object("Error", "", expr.span);
+            return Some(Expr::new(ExprKind::Throw(Box::new(throwable)), expr.span));
+        }
+    };
+    let mut form = expr.clone();
+    rewrite_expr(&mut form, &plan).map(|_| form)
 }
 
 /// Whether `PDO::C` names a constant of a PDO driver the build leaves out.
@@ -322,7 +376,8 @@ fn is_disabled_pdo_driver_constant(class: &str, constant: &str) -> bool {
 }
 
 /// The static construct a `Plan::Throw` replaces.
-enum StaticShape {
+#[derive(Debug, Clone)]
+pub(crate) enum StaticShape {
     Method { class: String, method: String },
     /// `late_bound` admits a `static::` receiver too: the class has no descendant anywhere,
     /// so the called class can only be the class itself.
@@ -601,10 +656,24 @@ impl DeclaredClassLikes {
 
 /// Applies `plan` to the node at `span` inside the class-like named `declaration`, and returns
 /// what the node now does. `None` when no node of the expected shape sits at that span.
-fn rewrite(program: &mut Program, declaration: &str, span: Span, plan: &Plan) -> Option<String> {
+fn rewrite(
+    program: &mut Program,
+    declaration: &str,
+    span: Span,
+    plan: &Plan,
+) -> Option<(String, bool)> {
     let key = php_symbol_key(declaration.trim_start_matches('\\'));
-    let methods = find_class_like_methods(program, &key)?;
+    rewrite_methods(find_class_like_methods(program, &key)?, span, plan)
+}
+
+/// [`rewrite`] on one list of method declarations: the program's own, or the checker's copy.
+fn rewrite_methods(
+    methods: &mut [crate::parser::ast::ClassMethod],
+    span: Span,
+    plan: &Plan,
+) -> Option<(String, bool)> {
     let mut outcome = None;
+    let mut in_place = false;
     for method in methods.iter_mut() {
         if outcome.is_some() {
             break;
@@ -667,11 +736,47 @@ fn rewrite(program: &mut Program, declaration: &str, span: Span, plan: &Plan) ->
                         return;
                     }
                     outcome = rewrite_expr(expr, plan);
+                    in_place = outcome.is_some() && typed_as_tolerated(expr);
                 }
             }
         });
     }
-    outcome
+    outcome.map(|outcome| (outcome, in_place))
+}
+
+/// Replays a demotion on the checker's own copy of the methods (`ClassInfo::method_decls`, which
+/// lowering reads), so a tolerated round's result describes the rewritten program without being
+/// checked again.
+///
+/// `classes` maps every checked class to its method copies: its own methods and the ones its
+/// traits splice in, never inherited ones. The demotion's plan is applied to the declaration's
+/// copy exactly as `demote` applied it to the program, hoisting included. Another class holding
+/// the span holds it through the same trait, and keeps the trait's construct as it does in the
+/// program (`rewrite_in_trait_copy` gives only the declaration its own rewritten copy). Answers
+/// `false` when the declaration's copy has no node of the plan's shape at the span, and the
+/// program is then checked again.
+pub(crate) fn mirror_into_checked_methods<'a>(
+    mut classes: impl Iterator<Item = (&'a String, &'a mut Vec<crate::parser::ast::ClassMethod>)>,
+    demotion: &Demotion,
+) -> bool {
+    let key = php_symbol_key(demotion.declaration.trim_start_matches('\\'));
+    classes
+        .find(|(name, _)| php_symbol_key(name.trim_start_matches('\\')) == key)
+        .is_some_and(|(_, methods)| {
+            rewrite_methods(methods, demotion.span, &demotion.plan).is_some()
+        })
+}
+
+/// Is `expr`, just rewritten, a node the checker types as it typed the tolerated fault?
+fn typed_as_tolerated(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::FunctionCall { name, .. } => {
+            let name = name.as_str().trim_start_matches('\\');
+            name == PROPERTY_READ_HELPER || name == METHOD_CALL_HELPER
+        }
+        ExprKind::Throw(_) => true,
+        _ => false,
+    }
 }
 
 /// Finds the method bodies of the class-like named `key`, through the file-level wrappers.
@@ -688,7 +793,7 @@ fn rewrite_in_trait_copy(
     declaration: &str,
     span: Span,
     plan: &Plan,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     let key = php_symbol_key(declaration.trim_start_matches('\\'));
     for trait_name in used_traits(program, declaration) {
         let trait_key = php_symbol_key(&trait_name);

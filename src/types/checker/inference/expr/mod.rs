@@ -35,6 +35,54 @@ impl Checker {
     /// references. The result feeds statement checking, function call
     /// validation, and optimizer-visible type metadata.
     pub fn infer_type(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
+        let result = self.infer_type_of_kind(expr, env);
+        match result {
+            Err(error)
+                if self.tolerating_runtime_faults_in.is_some()
+                    && self.current_function.is_none()
+                    && error.runtime_fault.is_some()
+                    && error.span == expr.span
+                    && self.tolerable_fault_spans.contains(&error.span)
+                    && error.related.is_empty() =>
+            {
+                self.tolerate_runtime_fault(expr, env, error)
+            }
+            result => result,
+        }
+    }
+
+    /// Records a fault `CheckOptions::tolerate_runtime_faults` lets through, and types `expr` as
+    /// the node `autoload::runtime_faults` compiles it to (`runtime_faults::tolerated_form`): a
+    /// by-name helper call for an instance member, a `throw` for the rest. That node is TYPED, not
+    /// assumed: the helper's signature is resolved by the call as the rewritten program resolves
+    /// it, and a closure among the call's arguments is checked where it now sits.
+    fn tolerate_runtime_fault(
+        &mut self,
+        expr: &Expr,
+        env: &TypeEnv,
+        error: CompileError,
+    ) -> Result<PhpType, CompileError> {
+        let Some(form) = error
+            .runtime_fault
+            .as_ref()
+            .and_then(|fault| crate::autoload::runtime_faults::tolerated_form(expr, fault))
+        else {
+            return Err(error);
+        };
+        let ty = self.infer_type(&form, env)?;
+        let declaration = self.tolerating_runtime_faults_in.clone().unwrap_or_default();
+        let error = error.within_declaration(declaration);
+        if !self
+            .body_tolerated_faults
+            .iter()
+            .any(|seen| seen.span == error.span && seen.message == error.message)
+        {
+            self.body_tolerated_faults.push(error);
+        }
+        Ok(ty)
+    }
+
+    fn infer_type_of_kind(&mut self, expr: &Expr, env: &TypeEnv) -> Result<PhpType, CompileError> {
         match &expr.kind {
             ExprKind::IncludeValue { .. }
             | ExprKind::BoolLiteral(_)

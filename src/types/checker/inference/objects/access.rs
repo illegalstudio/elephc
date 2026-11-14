@@ -44,6 +44,11 @@ impl Checker {
             .is_some_and(|key| env.contains_key(&key));
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
+        // A receiver that throws (`never`, a tolerated run-time fault) never reaches the member,
+        // as in php, which evaluates the receiver first: neither does the type.
+        if obj_ty == PhpType::Never {
+            return Ok(PhpType::Never);
+        }
         // A `?ptr<T>` reaches its fields like `ptr<T>`: the value is the bare address, and a
         // null one faults with the null-pointer dereference fatal a null `ptr<T>` raises.
         let nullable_pointer = match &obj_ty {
@@ -192,6 +197,11 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
+        // A receiver that throws (`never`, a tolerated run-time fault) never reaches the member,
+        // as in php, which evaluates the receiver first: neither does the type.
+        if obj_ty == PhpType::Never {
+            return Ok(PhpType::Never);
+        }
         if matches!(obj_ty, PhpType::Mixed) {
             return Ok(PhpType::Mixed);
         }
@@ -225,6 +235,11 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
+        // A receiver that throws (`never`, a tolerated run-time fault) never reaches the member,
+        // as in php, which evaluates the receiver first: neither does the type.
+        if obj_ty == PhpType::Never {
+            return Ok(PhpType::Never);
+        }
         if nullsafe && matches!(obj_ty, PhpType::Void) {
             return Ok(PhpType::Void);
         }

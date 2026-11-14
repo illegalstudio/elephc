@@ -460,3 +460,72 @@ fn test_reflection_probes_stored_in_variables_fold_a_conditional_trait() {
     assert_eq!(out, "typed void\n");
     assert!(!stderr.contains("is not compiled"), "{stderr}");
 }
+
+/// The round that meets a demotable fault also types its demotion: a by-name call, a by-name
+/// read, a `foreach` over an undeclared static property (the Symfony demo's `HttpClientTrait`
+/// shape, a `throw` left in place) and an undeclared constant whose `throw` is hoisted to its
+/// `return` (doctrine/dbal's `PDO\SQLSrv\Statement` shape) compile after ONE full type check, where
+/// demoting after a refused check cost a second one (21 s of the demo's build). Checking the old
+/// way (`ELEPHC_TOLERATE_RUNTIME_FAULTS=0`) gives the same program and php's output, in two.
+#[test]
+fn test_demotable_faults_are_typed_in_the_round_that_meets_them() {
+    let main = format!(
+        "{AUTOLOADER}$probe = new Probe();\nvar_dump($probe->read(new Walker()));\nforeach ([\"call\", \"each\", \"upper\"] as $m) {{\n    try {{ var_dump($probe->$m(new Walker())); }} catch (\\Error $e) {{ echo get_class($e), \": \", $e->getMessage(), \"\\n\"; }}\n}}\necho \"done\\n\";\n"
+    );
+    let probe = "<?php\nclass Probe {\n    public function read(Walker $w): mixed { return $w->missing; }\n    public function call(Walker $w): mixed { return $w->walkElsewhere(fn ($x) => $x + 1, $w->v); }\n    public function each(Walker $w): int { $n = 0; foreach (self::$defaults as $k => $v) { $n++; } return $n; }\n    public function upper(Walker $w): string { return strtoupper(Walker::MISSING); }\n}\n";
+    let files = [("main.php", main.as_str()), ("src/Walker.php", WALKER), ("src/Probe.php", probe)];
+    let expected = "NULL\nError: Call to undefined method Walker::walkElsewhere()\nError: Access to undeclared static property Probe::$defaults\nError: Undefined constant Walker::MISSING\ndone\n";
+    let rounds = |stderr: &str| stderr.matches("[elephc-typecheck] methods_until_stable=").count();
+
+    let (stderr, out, _) = compile_cli_files_with_env_and_run(
+        &files,
+        "main.php",
+        &[("ELEPHC_TYPECHECK_TIMES", "1")],
+    );
+    assert_eq!(out, expected);
+    assert!(!stderr.contains("is not compiled"), "{stderr}");
+    assert_eq!(stderr.matches("note: autoload: ").count(), 4, "{stderr}");
+    assert_eq!(rounds(&stderr), 1, "a demotion re-checked the program:\n{stderr}");
+
+    let (stderr, out, _) = compile_cli_files_with_env_and_run(
+        &files,
+        "main.php",
+        &[("ELEPHC_TYPECHECK_TIMES", "1"), ("ELEPHC_TOLERATE_RUNTIME_FAULTS", "0")],
+    );
+    assert_eq!(out, expected);
+    assert_eq!(stderr.matches("note: autoload: ").count(), 4, "{stderr}");
+    assert_eq!(rounds(&stderr), 2, "{stderr}");
+}
+
+/// A tolerated fault narrows nothing: `Missing\Runner::$result instanceof Result` guarding
+/// `return Missing\Runner::$result;` (laravel/pao's `TestResultParsable` shape) must not type the
+/// second read from the guard, or its own fault stays hidden from the check and the lowering meets
+/// it in the original AST, deferring the file. A member read on the faulted value (`->name`) is
+/// typed `never` like its receiver, which php never gets past either; typed as a refused access it
+/// sent the whole method back to a second check. Every read is demoted in the round that meets it.
+#[test]
+fn test_a_tolerated_fault_does_not_narrow_the_read_it_guards() {
+    let main = format!(
+        "{AUTOLOADER}$g = new Guarded();\necho $g->resolve() ?? \"null\", \" \", $g->direct() ?? \"null\", \"\\n\";\n"
+    );
+    let guarded = "<?php\nclass Guarded {\n    public function resolve(): ?string {\n        if (mt_rand(0, 0) === 1\n            && Missing\\Runner::$result instanceof Outcome) {\n            return Missing\\Runner::$result->name;\n        }\n        return null;\n    }\n    public function direct(): ?string {\n        if (mt_rand(0, 0) === 1) { $r = Missing\\Runner::$result; return $r->name; }\n        return null;\n    }\n}\n";
+    let outcome = "<?php\nclass Outcome { public string $name = \"r\"; }\n";
+    let files = [
+        ("main.php", main.as_str()),
+        ("src/Guarded.php", guarded),
+        ("src/Outcome.php", outcome),
+    ];
+    let (stderr, out, _) = compile_cli_files_with_env_and_run(
+        &files,
+        "main.php",
+        &[("ELEPHC_TYPECHECK_TIMES", "1"), ("ELEPHC_DEFERRAL_MEMO", "0")],
+    );
+    assert_eq!(out, "null null\n");
+    assert!(!stderr.contains("is not compiled"), "{stderr}");
+    assert_eq!(stderr.matches("note: autoload: ").count(), 3, "{stderr}");
+    assert_eq!(
+        stderr.matches("[elephc-typecheck] methods_until_stable=").count(),
+        1,
+        "{stderr}"
+    );
+}

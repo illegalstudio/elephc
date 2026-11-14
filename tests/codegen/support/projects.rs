@@ -386,6 +386,16 @@ pub(crate) fn compile_cli_files_and_run_with_compile_and_run_stderr(
     files: &[(&str, &str)],
     main_file: &str,
 ) -> (String, String, String) {
+    compile_cli_files_with_env_and_run(files, main_file, &[])
+}
+
+/// Like [`compile_cli_files_and_run_with_compile_and_run_stderr`], with `env` set on the COMPILER
+/// (a trace such as `ELEPHC_TYPECHECK_TIMES` that a test counts on the compile stderr).
+pub(crate) fn compile_cli_files_with_env_and_run(
+    files: &[(&str, &str)],
+    main_file: &str,
+    env: &[(&str, &str)],
+) -> (String, String, String) {
     let dir = make_cli_test_dir("elephc_cli_project");
 
     for (path, content) in files {
@@ -399,6 +409,7 @@ pub(crate) fn compile_cli_files_and_run_with_compile_and_run_stderr(
     let main_path = dir.join(main_file);
     let mut compile_cmd = elephc_cli_command(&dir);
     compile_cmd.arg(&main_path);
+    compile_cmd.envs(env.iter().copied());
     let compile_out = compile_cmd.output().expect("failed to run elephc CLI");
     let compile_stderr = String::from_utf8_lossy(&compile_out.stderr).to_string();
     assert!(compile_out.status.success(), "elephc CLI failed: {compile_stderr}");

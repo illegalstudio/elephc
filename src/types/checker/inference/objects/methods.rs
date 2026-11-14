@@ -38,6 +38,11 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
+        // A receiver that throws (`never`, a tolerated run-time fault) never reaches the member,
+        // as in php, which evaluates the receiver first: neither does the type.
+        if obj_ty == PhpType::Never {
+            return Ok(PhpType::Never);
+        }
         if let PhpType::Object(class_name) = &obj_ty {
             if class_name.is_empty() {
                 for arg in args {
@@ -465,6 +470,11 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
         self.record_member_receiver_type(expr.span, &obj_ty);
+        // A receiver that throws (`never`, a tolerated run-time fault) never reaches the member,
+        // as in php, which evaluates the receiver first: neither does the type.
+        if obj_ty == PhpType::Never {
+            return Ok(PhpType::Never);
+        }
         if matches!(obj_ty, PhpType::Mixed)
             || matches!(&obj_ty, PhpType::Union(members) if members.iter().any(|member| *member == PhpType::Mixed))
         {

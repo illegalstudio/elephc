@@ -341,6 +341,13 @@ impl Checker {
     /// property key for a simple instance/static property access. `None` for receivers narrowing
     /// cannot key (complex chains, `static::$p`).
     fn guard_env_key(&self, receiver: &Expr) -> Option<String> {
+        // A tolerated run-time fault is demoted to its throw or by-name form once checking ends,
+        // so it proves nothing about the place it names. Narrowing it would type
+        // `if (Missing::$p instanceof R) { return Missing::$p; }`'s second read from the guard
+        // and hide that read's own fault, which the lowering then meets in the original AST.
+        if self.tolerable_fault_spans.contains(&receiver.span) {
+            return None;
+        }
         match &receiver.kind {
             ExprKind::Variable(var) => Some(var.clone()),
             ExprKind::Assignment {

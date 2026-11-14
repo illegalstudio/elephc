@@ -78,6 +78,8 @@ impl Write for TokenScan {
 pub(super) struct MethodResult {
     pub(super) errors: Vec<CompileError>,
     pub(super) seed_params: Vec<usize>,
+    /// The run-time faults the walk tolerated (`CheckOptions::tolerate_runtime_faults`).
+    pub(super) tolerated: Vec<CompileError>,
     tokens: HashSet<u64>,
 }
 
@@ -115,6 +117,7 @@ impl MethodWorklist {
         method: &ClassMethod,
         errors: Vec<CompileError>,
         seed_params: Vec<usize>,
+        tolerated: Vec<CompileError>,
     ) {
         let tokens = match self.results.remove(&unit) {
             Some(previous) => previous.tokens,
@@ -125,7 +128,7 @@ impl MethodWorklist {
                 scan.tokens
             }
         };
-        self.results.insert(unit, MethodResult { errors, seed_params, tokens });
+        self.results.insert(unit, MethodResult { errors, seed_params, tolerated, tokens });
     }
 
     /// Works out what the next pass must walk from what this one moved.
@@ -367,6 +370,7 @@ mod tests {
         worklist.results.insert(unit, MethodResult {
             errors: Vec::new(),
             seed_params: Vec::new(),
+            tolerated: Vec::new(),
             tokens: tokens("uses getname"),
         });
         assert!(worklist.kept_result(unit, "own").is_none(), "a first pass walks everything");
@@ -389,6 +393,7 @@ mod tests {
         worklist.results.insert(unit, MethodResult {
             errors: Vec::new(),
             seed_params: Vec::new(),
+            tolerated: Vec::new(),
             tokens: tokens("FunctionCall helper"),
         });
         worklist.functions_moved(std::iter::empty());
@@ -415,6 +420,7 @@ mod tests {
         worklist.results.insert(unit, MethodResult {
             errors: Vec::new(),
             seed_params: Vec::new(),
+            tolerated: Vec::new(),
             tokens: tokens("ExprCall"),
         });
         let mut moved = HashSet::from_iter([token_hash("other")]);

@@ -1358,6 +1358,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         strict_locals,
         lint,
         registers_autoloader: autoload_registry.rule_count() > 0,
+        // Decided with the deferrable files below.
+        tolerate_runtime_faults: false,
     };
     // A class file the autoload pass loaded is one php would only have parsed when something
     // asked for the class. When the checker refuses one, that file is handed back to the runtime
@@ -1600,7 +1602,44 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // of them is not helped by rewriting, and the file is deferred like any other.
     let mut demotion_attempts: HashSet<(Span, String)> = HashSet::default();
     let mut runtime_fault_helpers_injected = false;
+    // A construct `runtime_faults` would demote is typed by the checker as its demotion instead of
+    // refusing the body (`CheckOptions::tolerate_runtime_faults`), so the round that meets it is
+    // also the round that types the rewritten program: the Symfony demo's three demotions used to
+    // cost a second full check (21 s). The helpers the rewrites call must then be declared before
+    // that round. `ELEPHC_TOLERATE_RUNTIME_FAULTS=0` checks the old way, again after demoting.
+    let tolerate_runtime_faults = !deferrable_class_files.is_empty()
+        && !matches!(
+            std::env::var("ELEPHC_TOLERATE_RUNTIME_FAULTS").as_deref(),
+            Ok("0") | Ok("off")
+        );
+    if tolerate_runtime_faults {
+        runtime_fault_helpers_injected = true;
+        let helpers = crate::autoload::runtime_faults::declarations();
+        prelude_inventory.record_program(crate::autoload::runtime_faults::PRELUDE_GROUP, &helpers);
+        ast.splice(0..0, helpers);
+    }
+    let check_options = types::CheckOptions {
+        tolerate_runtime_faults,
+        ..check_options
+    };
+    // What `runtime_faults` makes of the faults a round tolerated but could not all demote in
+    // place: handed to the demotion step below instead of demoting the same faults twice.
+    let mut precomputed_demotions: Option<Vec<crate::autoload::runtime_faults::Demotion>> = None;
     let mut check_result = loop {
+        let demote_runtime_faults = |ast: &mut crate::parser::ast::Program,
+                                     faults: &errors::CompileError,
+                                     attempts: &mut HashSet<(Span, String)>| {
+            let autoload_lookup =
+                |name: &str| autoload_registry.psr4().lookup(name).is_some();
+            let world = crate::autoload::runtime_faults::World {
+                class_files: &deferral_class_files,
+                deferrable: &deferrable_class_files,
+                deferred: &deferred_class_files,
+                class_parents: &class_parent_edges,
+                autoload_lookup: &autoload_lookup,
+            };
+            crate::autoload::runtime_faults::demote(ast, faults, &world, attempts)
+        };
         // A class whose parent nothing provides is refused by the checker's inheritance
         // flattening; finding those first spends a program walk on the deferral round instead of
         // a whole failed type check (a second full check of every Symfony build).
@@ -1634,9 +1673,52 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
                     types::check_with_target_and_options(program, target, check_options, bounds)
                 },
             ) {
-                Ok((checked, result)) => {
+                Ok((checked, mut result)) => {
                     ast = checked;
-                    break result;
+                    if result.tolerated_runtime_faults.is_empty() {
+                        break result;
+                    }
+                    let faults =
+                        errors::CompileError::from_many(result.tolerated_runtime_faults.clone());
+                    let demotions = demote_runtime_faults(&mut ast, &faults, &mut demotion_attempts);
+                    // Every tolerated fault demoted: the result already types the rewritten
+                    // program once the checker's own copy of each method (`ClassInfo::
+                    // method_decls`, which lowering reads) is rewritten the same way. A hoisted
+                    // throw ends its statement before the value the checker typed exists, so the
+                    // type it gave that value is never observed. (A copy left half-rewritten when
+                    // one fails is discarded with the result: the program is checked again.)
+                    let unmirrored: Vec<&crate::autoload::runtime_faults::Demotion> = demotions
+                        .iter()
+                        .filter(|demotion| {
+                            !crate::autoload::runtime_faults::mirror_into_checked_methods(
+                                result
+                                    .classes
+                                    .iter_mut()
+                                    .map(|(name, class)| (name, &mut class.method_decls)),
+                                demotion,
+                            )
+                        })
+                        .collect();
+                    // `ELEPHC_TYPECHECK_TIMES` says why a tolerated round is checked again.
+                    if std::env::var_os("ELEPHC_TYPECHECK_TIMES").is_some() {
+                        eprintln!(
+                            "[elephc-typecheck] tolerated={} demoted={} unmirrored={:?}",
+                            faults.flatten().len(),
+                            demotions.len(),
+                            unmirrored
+                                .iter()
+                                .map(|demotion| format!("{} {}", demotion.declaration, demotion.span.line))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    if demotions.len() == faults.flatten().len() && unmirrored.is_empty() {
+                        for demotion in &demotions {
+                            errors::report_note(&demotion.note());
+                        }
+                        break result;
+                    }
+                    precomputed_demotions = Some(demotions);
+                    faults
                 }
                 Err((Some(refused), e)) => {
                     ast = refused;
@@ -1666,21 +1748,10 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         // round: a full check of a Laravel program is 85 s, and a round that only demoted would
         // meet the very same refusals again on the next one.
         let e = {
-            let autoload_lookup =
-                |name: &str| autoload_registry.psr4().lookup(name).is_some();
-            let world = crate::autoload::runtime_faults::World {
-                class_files: &deferral_class_files,
-                deferrable: &deferrable_class_files,
-                deferred: &deferred_class_files,
-                class_parents: &class_parent_edges,
-                autoload_lookup: &autoload_lookup,
+            let demotions = match precomputed_demotions.take() {
+                Some(demotions) => demotions,
+                None => demote_runtime_faults(&mut ast, &e, &mut demotion_attempts),
             };
-            let demotions = crate::autoload::runtime_faults::demote(
-                &mut ast,
-                &e,
-                &world,
-                &mut demotion_attempts,
-            );
             if demotions.is_empty() {
                 e
             } else {

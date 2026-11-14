@@ -186,6 +186,7 @@ impl Checker {
                 mark = std::time::Instant::now();
             }
             let mut pass_errors = Vec::new();
+            let mut pass_tolerated: Vec<CompileError> = Vec::new();
             let recursive_mixed_before = self.recursive_mixed_methods.len();
             let recursive_mixed_snapshot = self.recursive_mixed_methods.clone();
             // Only the LAST round's answer counts: a seed that looked unrefined on an early round
@@ -216,6 +217,7 @@ impl Checker {
                     let unit = (class_index, method_index);
                     if let Some(kept) = worklist.kept_result(unit, &method_key) {
                         pass_errors.extend(kept.errors.iter().cloned());
+                        pass_tolerated.extend(kept.tolerated.iter().cloned());
                         for parameter in &kept.seed_params {
                             self.unspecialized_seed_params.insert((
                                 class.name.clone(),
@@ -342,6 +344,9 @@ impl Checker {
                     Self::seed_vivified_array_locals(&mut method_env, &method.body);
 
                     self.current_class = Some(class.name.clone());
+                    self.tolerating_runtime_faults_in =
+                        self.tolerate_runtime_faults.then(|| class.name.clone());
+                    self.body_tolerated_faults.clear();
                     self.current_method = Some(method_key.clone());
                     self.current_method_is_static = method.is_static;
                     self.current_by_ref_return = method.by_ref_return;
@@ -438,19 +443,44 @@ impl Checker {
                             checker.boxed_parameter_locals.extend(method.params.iter()
                                 .filter(|(_, annotation, _, _)| annotation.is_none())
                                 .map(|(name, _, _, _)| name.clone()));
-                            for s in &method.body {
-                                if let Err(error) = checker.check_stmt(s, &mut method_env) {
-                                    // Naming the enclosing CLASS is what lets `pipeline` recover
-                                    // the FILE: after autoload expansion every spliced file
-                                    // shares one line-number space, so `line:col` alone
-                                    // identifies nothing. `resolve_function_signature` already
-                                    // does this for a plain function; a method body reached the
-                                    // reporter untagged, which is why a Symfony preload error
-                                    // printed as a bare `error[213:13]`.
-                                    method_errors.extend(
-                                        error.within_declaration(class.name.as_str()).flatten(),
-                                    );
+                            // A tolerated fault is one that REFUSED this body: an error a probe
+                            // swallows (`defined()`, a speculative inference) is not, and the
+                            // pipeline never demoted it. So the body is walked as before; a
+                            // fault that escaped a statement is named tolerable and the body is
+                            // walked again from its entry environment, typing it in place.
+                            let entry_env =
+                                checker.tolerating_runtime_faults_in.is_some().then(|| method_env.clone());
+                            loop {
+                                for s in &method.body {
+                                    if let Err(error) = checker.check_stmt(s, &mut method_env) {
+                                        // Naming the enclosing CLASS is what lets `pipeline`
+                                        // recover the FILE: after autoload expansion every
+                                        // spliced file shares one line-number space, so
+                                        // `line:col` alone identifies nothing.
+                                        // `resolve_function_signature` already does this for a
+                                        // plain function; a method body reached the reporter
+                                        // untagged, which is why a Symfony preload error printed
+                                        // as a bare `error[213:13]`.
+                                        method_errors.extend(
+                                            error.within_declaration(class.name.as_str()).flatten(),
+                                        );
+                                    }
                                 }
+                                let Some(entry_env) = entry_env.as_ref() else {
+                                    break;
+                                };
+                                let mut named = false;
+                                for error in &method_errors {
+                                    if error.runtime_fault.is_some() && error.related.is_empty() {
+                                        named |= checker.tolerable_fault_spans.insert(error.span);
+                                    }
+                                }
+                                if !named {
+                                    break;
+                                }
+                                method_errors.clear();
+                                checker.body_tolerated_faults.clear();
+                                method_env = entry_env.clone();
                             }
                             Ok(())
                         },
@@ -522,6 +552,11 @@ impl Checker {
                             }
                         }
                     }
+                    // Kept through `update_method_return_type`, which types the returned
+                    // expressions again.
+                    self.tolerating_runtime_faults_in = None;
+                    let tolerated = std::mem::take(&mut self.body_tolerated_faults);
+                    pass_tolerated.extend(tolerated.iter().cloned());
                     self.current_class = None;
                     self.current_method = None;
                     self.current_method_is_static = false;
@@ -532,6 +567,7 @@ impl Checker {
                         method,
                         pass_errors[first_method_error..].to_vec(),
                         method_seed_params,
+                        tolerated,
                     );
                 }
             }
@@ -622,6 +658,8 @@ impl Checker {
             }
             if stabilized || cycling || out_of_passes {
                 errors.extend(pass_errors);
+                // Every unit is in the last pass, checked or replayed, so it alone answers.
+                self.tolerated_runtime_faults = std::mem::take(&mut pass_tolerated);
                 if trace {
                     eprintln!(
                         "[elephc-methodpass] passes={passes} clone={clone_secs:.2}s \

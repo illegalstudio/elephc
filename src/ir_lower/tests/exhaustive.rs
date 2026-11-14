@@ -123,6 +123,7 @@ fn dummy_check_result() -> CheckResult {
     );
 
     CheckResult {
+        tolerated_runtime_faults: Vec::new(),
         requested_instantiations: Vec::new(),
         requested_class_instantiations: Vec::new(),
         requested_method_instantiations: Vec::new(),
