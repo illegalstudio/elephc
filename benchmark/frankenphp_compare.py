@@ -184,6 +184,71 @@ def main() -> None:
         print(f"Geometric mean Elephc speedup vs FrankenPHP+JIT: **{fp_jit_geomean:.2f}x**")
         print(f"Elephc faster on {sum(value > 1 for value in fp_jit_ratios)}/{len(fp_jit_ratios)} cases")
 
+    cpu_labels = ("elephc", "php", "php-jit", "frankenphp", "frankenphp-jit")
+    rss_labels = cpu_labels
+    print()
+    print("| case | " + " | ".join(f"{label} CPU ms" for label in cpu_labels)
+          + " | CPU×FP | CPU×FP+JIT |")
+    print("|---|" + "---:|" * (len(cpu_labels) + 2))
+    cpu_fp_ratios = []
+    cpu_jit_ratios = []
+    for row in rows:
+        variants = row["variants"]
+        cpu = {label: variants.get(label, {}).get("median_cpu_ms") for label in cpu_labels}
+        fp = ratio(cpu.get("frankenphp"), cpu.get("elephc"))
+        fp_jit = ratio(cpu.get("frankenphp-jit"), cpu.get("elephc"))
+        if fp is not None:
+            cpu_fp_ratios.append(fp)
+        if fp_jit is not None:
+            cpu_jit_ratios.append(fp_jit)
+        print(
+            f"| {row['case']} | "
+            + " | ".join(format_ms(cpu[label]) for label in cpu_labels)
+            + f" | {'n/a' if fp is None else f'{fp:.2f}x'}"
+            + f" | {'n/a' if fp_jit is None else f'{fp_jit:.2f}x'} |"
+        )
+    print()
+    print("| case | " + " | ".join(f"{label} RSS MB" for label in rss_labels)
+          + " | RSS×FP | RSS×FP+JIT |")
+    print("|---|" + "---:|" * (len(rss_labels) + 2))
+    rss_fp_ratios = []
+    rss_jit_ratios = []
+    for row in rows:
+        variants = row["variants"]
+        rss = {
+            label: (
+                variants.get(label, {}).get("peak_rss_kb") / 1024
+                if variants.get(label, {}).get("peak_rss_kb") is not None
+                else None
+            )
+            for label in rss_labels
+        }
+        fp = ratio(rss.get("frankenphp"), rss.get("elephc"))
+        fp_jit = ratio(rss.get("frankenphp-jit"), rss.get("elephc"))
+        if fp is not None:
+            rss_fp_ratios.append(fp)
+        if fp_jit is not None:
+            rss_jit_ratios.append(fp_jit)
+        print(
+            f"| {row['case']} | "
+            + " | ".join(format_ms(rss[label]) for label in rss_labels)
+            + f" | {'n/a' if fp is None else f'{fp:.2f}x'}"
+            + f" | {'n/a' if fp_jit is None else f'{fp_jit:.2f}x'} |"
+        )
+    cpu_fp_geomean = geometric_mean(cpu_fp_ratios)
+    cpu_jit_geomean = geometric_mean(cpu_jit_ratios)
+    rss_fp_geomean = geometric_mean(rss_fp_ratios)
+    rss_jit_geomean = geometric_mean(rss_jit_ratios)
+    print()
+    if cpu_fp_geomean is not None:
+        print(f"Geometric mean CPU efficiency vs FrankenPHP: **{cpu_fp_geomean:.2f}x**")
+    if cpu_jit_geomean is not None:
+        print(f"Geometric mean CPU efficiency vs FrankenPHP+JIT: **{cpu_jit_geomean:.2f}x**")
+    if rss_fp_geomean is not None:
+        print(f"Geometric mean RAM efficiency vs FrankenPHP: **{rss_fp_geomean:.2f}x**")
+    if rss_jit_geomean is not None:
+        print(f"Geometric mean RAM efficiency vs FrankenPHP+JIT: **{rss_jit_geomean:.2f}x**")
+
     record = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "platform": platform.platform(),
@@ -196,6 +261,10 @@ def main() -> None:
         "warmup": args.warmup,
         "frankenphp_geomean_speedup": fp_geomean,
         "frankenphp_jit_geomean_speedup": fp_jit_geomean,
+        "frankenphp_cpu_geomean": cpu_fp_geomean,
+        "frankenphp_jit_cpu_geomean": cpu_jit_geomean,
+        "frankenphp_rss_geomean": rss_fp_geomean,
+        "frankenphp_jit_rss_geomean": rss_jit_geomean,
         "cases": rows,
     }
     if args.json:

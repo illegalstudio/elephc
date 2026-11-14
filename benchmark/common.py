@@ -6,10 +6,12 @@ import hashlib
 import json
 import os
 import platform
+import resource
 import shutil
 import statistics
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -51,25 +53,94 @@ def run_process(command: list[str], cwd: Path, timeout: float = 120,
     return result.stdout
 
 
+def peak_rss_kb(usage: resource.struct_rusage) -> int:
+    """Normalize one child's peak resident set size to kibibytes."""
+    value = usage.ru_maxrss
+    return int(value if platform.system() != "Darwin" else value / 1024)
+
+
+def run_process_measured(command: list[str], cwd: Path, timeout: float = 120,
+                         env: dict | None = None) -> tuple[str, str, resource.struct_rusage]:
+    """Run a child, returning stdout, stderr and its exact wait4 resource usage.
+
+    `subprocess.run()` reaps the child before exposing rusage, so this helper starts the
+    process directly, drains both pipes on reader threads and waits with `os.wait4`. The
+    usage block is the measured process alone (no shell), which makes CPU and peak RSS
+    comparable across Elephc and PHP variants.
+    """
+    process = subprocess.Popen(
+        command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, bufsize=1,
+    )
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+
+    def drain(stream, chunks: list[str]) -> None:
+        try:
+            chunks.append(stream.read())
+        finally:
+            stream.close()
+
+    readers = [
+        threading.Thread(target=drain, args=(process.stdout, stdout_chunks), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, stderr_chunks), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    while True:
+        pid, status, usage = os.wait4(process.pid, os.WNOHANG)
+        if pid == process.pid:
+            break
+        if time.monotonic() >= deadline:
+            timed_out = True
+            process.kill()
+            pid, status, usage = os.wait4(process.pid, 0)
+            break
+        time.sleep(0.005)
+    for reader in readers:
+        reader.join(timeout=5)
+    process.returncode = os.waitstatus_to_exitcode(status)
+    stdout = "".join(stdout_chunks)
+    stderr = "".join(stderr_chunks)
+    if timed_out:
+        raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr)
+    if process.returncode:
+        raise RuntimeError(f"command failed: {' '.join(command)}\n{stdout}\n{stderr}")
+    return stdout, stderr, usage
+
+
 def measure(command: list[str], cwd: Path, expected: str, iterations: int,
             warmup: int, timeout: float, env: dict | None = None) -> dict:
     """Measure execution only, checking output on both warmup and measured runs."""
     samples = []
+    cpu_samples = []
+    rss_samples = []
     for index in range(warmup + iterations):
         start = time.perf_counter()
-        output = run_process(command, cwd, timeout, env=env)
+        output, _stderr, usage = run_process_measured(command, cwd, timeout, env=env)
         elapsed = (time.perf_counter() - start) * 1000
         if output != expected:
             raise RuntimeError(f"unexpected stdout for {' '.join(command)}: "
                                f"expected {expected!r}, got {output!r}")
         if index >= warmup:
             samples.append(elapsed)
+            cpu_samples.append((usage.ru_utime + usage.ru_stime) * 1000)
+            rss_samples.append(peak_rss_kb(usage))
     return {"median_ms": statistics.median(samples), "samples_ms": samples,
+            "median_cpu_ms": statistics.median(cpu_samples),
+            "samples_cpu_ms": cpu_samples,
+            "peak_rss_kb": statistics.median(rss_samples),
+            "samples_rss_kb": rss_samples,
             "skipped": False, "detail": f"{iterations} runs"}
 
 
 def skipped(detail: str) -> dict:
-    return {"median_ms": None, "samples_ms": [], "skipped": True, "detail": detail}
+    return {"median_ms": None, "samples_ms": [],
+            "median_cpu_ms": None, "samples_cpu_ms": [],
+            "peak_rss_kb": None, "samples_rss_kb": [],
+            "skipped": True, "detail": detail}
 
 
 def php_command(php: str, *arguments: str, isolated: bool = False) -> list[str]:

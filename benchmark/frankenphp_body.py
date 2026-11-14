@@ -107,22 +107,28 @@ def parse_body(output: str, expected: str) -> float:
 
 
 def measure_body(command: list[str], cwd: Path, expected: str, iterations: int,
-                 warmup: int, timeout: float, env: dict | None = None) -> float:
-    """Run warmups and measured samples, returning the median body time."""
-    samples = []
+                 warmup: int, timeout: float, env: dict | None = None) -> dict:
+    """Run warmups and measured samples, returning body time plus CPU and peak RSS."""
+    body_samples = []
+    cpu_samples = []
+    rss_samples = []
     for index in range(warmup + iterations):
-        result = subprocess.run(
-            command, cwd=cwd, capture_output=True, text=True,
-            timeout=timeout, env=env,
+        output, _stderr, usage = common.run_process_measured(
+            command, cwd, timeout, env=env
         )
-        if result.returncode:
-            raise RuntimeError(
-                f"command failed: {command!r}\n{result.stdout}\n{result.stderr}"
-            )
-        elapsed = parse_body(result.stdout, expected)
+        elapsed = parse_body(output, expected)
         if index >= warmup:
-            samples.append(elapsed)
-    return statistics.median(samples)
+            body_samples.append(elapsed)
+            cpu_samples.append((usage.ru_utime + usage.ru_stime) * 1000)
+            rss_samples.append(common.peak_rss_kb(usage))
+    return {
+        "body_ms": statistics.median(body_samples),
+        "body_samples_ms": body_samples,
+        "cpu_ms": statistics.median(cpu_samples),
+        "cpu_samples_ms": cpu_samples,
+        "rss_kb": statistics.median(rss_samples),
+        "rss_samples_kb": rss_samples,
+    }
 
 
 def geometric_mean(values: list[float]) -> float | None:
@@ -200,7 +206,7 @@ def main() -> None:
                     )
                     for label in LABELS
                 }
-            rows.append({"case": case["name"], "body_ms": variants})
+            rows.append({"case": case["name"], "variants": variants})
             print(f"measured {case['name']}", flush=True)
 
     print()
@@ -209,14 +215,14 @@ def main() -> None:
     fp_ratios = []
     fp_jit_ratios = []
     for row in rows:
-        body = row["body_ms"]
-        fp = body["frankenphp"] / body["elephc"]
-        fp_jit = body["frankenphp-jit"] / body["elephc"]
+        variants = row["variants"]
+        fp = variants["frankenphp"]["body_ms"] / variants["elephc"]["body_ms"]
+        fp_jit = variants["frankenphp-jit"]["body_ms"] / variants["elephc"]["body_ms"]
         fp_ratios.append(fp)
         fp_jit_ratios.append(fp_jit)
         print(
             f"| {row['case']} | "
-            + " | ".join(f"{body[label]:.3f}" for label in LABELS)
+            + " | ".join(f"{variants[label]['body_ms']:.3f}" for label in LABELS)
             + f" | {fp:.2f}x | {fp_jit:.2f}x |"
         )
     print()
@@ -226,8 +232,49 @@ def main() -> None:
     print(f"Elephc faster on {sum(value > 1 for value in fp_ratios)}/{len(fp_ratios)} cases")
     print(f"Geometric mean Elephc body speedup vs FrankenPHP+JIT: **{fp_jit_geomean:.2f}x**")
     print(f"Elephc faster on {sum(value > 1 for value in fp_jit_ratios)}/{len(fp_jit_ratios)} cases")
+    print()
+    print("| case | elephc CPU ms | FP CPU ms | FP+JIT CPU ms | CPU×FP | CPU×FP+JIT "
+          "| elephc RSS MB | FP RSS MB | FP+JIT RSS MB | RSS×FP | RSS×FP+JIT |")
+    print("|---|" + "---:|" * 10)
+    cpu_fp_ratios = []
+    cpu_jit_ratios = []
+    rss_fp_ratios = []
+    rss_jit_ratios = []
+    for row in rows:
+        variants = row["variants"]
+        elephc_cpu = variants["elephc"]["cpu_ms"]
+        fp_cpu = variants["frankenphp"]["cpu_ms"]
+        jit_cpu = variants["frankenphp-jit"]["cpu_ms"]
+        elephc_rss = variants["elephc"]["rss_kb"] / 1024
+        fp_rss = variants["frankenphp"]["rss_kb"] / 1024
+        jit_rss = variants["frankenphp-jit"]["rss_kb"] / 1024
+        cpu_fp = fp_cpu / elephc_cpu
+        cpu_jit = jit_cpu / elephc_cpu
+        rss_fp = fp_rss / elephc_rss
+        rss_jit = jit_rss / elephc_rss
+        cpu_fp_ratios.append(cpu_fp)
+        cpu_jit_ratios.append(cpu_jit)
+        rss_fp_ratios.append(rss_fp)
+        rss_jit_ratios.append(rss_jit)
+        print(
+            f"| {row['case']} | {elephc_cpu:.2f} | {fp_cpu:.2f} | {jit_cpu:.2f} "
+            f"| {cpu_fp:.2f}x | {cpu_jit:.2f}x | {elephc_rss:.2f} | {fp_rss:.2f} "
+            f"| {jit_rss:.2f} | {rss_fp:.2f}x | {rss_jit:.2f}x |"
+        )
+    print()
+    cpu_fp_geomean = geometric_mean(cpu_fp_ratios)
+    cpu_jit_geomean = geometric_mean(cpu_jit_ratios)
+    rss_fp_geomean = geometric_mean(rss_fp_ratios)
+    rss_jit_geomean = geometric_mean(rss_jit_ratios)
+    print(f"Geometric mean CPU efficiency vs FrankenPHP: **{cpu_fp_geomean:.2f}x** "
+          f"(higher is less CPU)")
+    print(f"Geometric mean CPU efficiency vs FrankenPHP+JIT: **{cpu_jit_geomean:.2f}x**")
+    print(f"Geometric mean RAM efficiency vs FrankenPHP: **{rss_fp_geomean:.2f}x** "
+          f"(higher is less peak RSS)")
+    print(f"Geometric mean RAM efficiency vs FrankenPHP+JIT: **{rss_jit_geomean:.2f}x**")
     print("Instrumentation is inserted directly into the fixture; PHP parses the file "
-          "before the timed region, so parse time is excluded for every runtime.")
+          "before the timed region, so parse time is excluded for every runtime. "
+          "CPU is child user+sys and RSS is the child's peak resident set.")
 
     if args.json:
         record = {
@@ -241,6 +288,10 @@ def main() -> None:
             "warmup": args.warmup,
             "frankenphp_geomean_speedup": fp_geomean,
             "frankenphp_jit_geomean_speedup": fp_jit_geomean,
+            "frankenphp_cpu_geomean": cpu_fp_geomean,
+            "frankenphp_jit_cpu_geomean": cpu_jit_geomean,
+            "frankenphp_rss_geomean": rss_fp_geomean,
+            "frankenphp_jit_rss_geomean": rss_jit_geomean,
             "cases": rows,
         }
         args.json.parent.mkdir(parents=True, exist_ok=True)

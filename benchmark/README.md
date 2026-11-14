@@ -111,6 +111,12 @@ python3 benchmark/frankenphp_body.py \
   --iterations 5 --warmup 2 --json /tmp/frankenphp-body.json
 ```
 
+Both tools also report each child's user+system CPU time and peak resident set
+size from `wait4` rusage, with efficiency ratios against FrankenPHP and
+FrankenPHP+JIT. The JSON records keep every raw sample under
+`cpu_samples_ms`/`rss_samples_kb`, so a higher ratio always means Elephc used less
+CPU or less peak RAM for the same fixture.
+
 Both tools pin OPcache/JIT explicitly: the plain FrankenPHP variant uses an
 `opcache.enable_cli=0`/`opcache.jit=0` `PHPRC`, and the `-jit` variant uses the
 same tracing-JIT settings as the PHP+JIT baseline. Missing FrankenPHP is reported
