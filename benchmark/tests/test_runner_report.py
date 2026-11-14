@@ -21,7 +21,10 @@ class RunnerReportTests(unittest.TestCase):
     def test_all_fixture_paths_and_metadata_are_valid(self):
         suites = discover(list(SUITES), [])
         self.assertEqual(set(suites), set(SUITES))
-        self.assertEqual(len(suites["native"]), 3)
+        native = suites["native"]
+        self.assertGreaterEqual(len(native), 3)
+        self.assertEqual(len({case["name"] for case in native}), len(native))
+        self.assertIn("sum_loop", {case["name"] for case in native})
         self.assertGreater(len(suites["magician"]), 5)
         self.assertEqual(len(suites["hot-path"]), 1)
         with self.assertRaises(ValueError):
