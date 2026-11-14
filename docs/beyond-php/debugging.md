@@ -197,7 +197,8 @@ elephc monitor app.php --debug-ui --serve 127.0.0.1:8080
 
 The source is compiled with `--debug` (a bare debug binary works too), and the
 printed URL opens a self-contained page with file/line breakpoints, stack
-frames, locals, continue/next/step-in/step-out and program output. It binds
+frames, locals, read-only expression evaluation, continue/next/step-in/step-out
+and program output. It binds
 loopback by default; expose `--serve` beyond loopback only when that control is
 intended. `--debug-ui` is a debugger surface, so it cannot be combined with
 profile exporters or `--live`/`--calls`/`--attach`.

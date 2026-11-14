@@ -49,6 +49,9 @@ main{display:grid;grid-template-columns:220px minmax(0,1fr) 330px;grid-template-
       <button id="continue">continue</button><button id="pause">pause</button>
       <button id="next">next</button><button id="stepIn">step in</button><button id="stepOut">step out</button>
     </div>
+    <h2>Evaluate</h2>
+    <div style="display:flex;gap:5px"><input id="expr" placeholder="$value, count($items)" style="min-width:0;flex:1;background:#0d1118;border:1px solid #2a3342;color:#d7deea;border-radius:3px;padding:4px 6px;font:inherit"><button id="eval">run</button></div>
+    <div id="eval-result" style="color:#7ee787;padding:4px 2px;word-break:break-word"></div>
     <h2>Stack</h2><div id="stack"></div>
     <h2>Variables</h2><div id="variables"></div>
   </aside>
@@ -149,6 +152,9 @@ function handleResponse(response){
     case "variables":
       renderVariables(body.variables||[]);
       break;
+    case "evaluate":
+      $("eval-result").textContent = (body.result||"") + (body.type ? "  · "+body.type : "");
+      break;
   }
 }
 
@@ -244,6 +250,14 @@ function renderVariables(variables){
   }
 }
 function setControls(enabled){ for (const id of ["continue","next","stepIn","stepOut"]) $(id).disabled = !enabled; }
+function evaluateExpression(){
+  if (!state.frame){ $("eval-result").textContent = "not stopped"; return; }
+  const expression = $("expr").value.trim();
+  if (!expression) return;
+  request("evaluate", {expression, frameId: state.frame.id, context:"watch"});
+}
+$("eval").onclick = evaluateExpression;
+$("expr").addEventListener("keydown", (event)=>{ if (event.key === "Enter") evaluateExpression(); });
 $("continue").onclick = ()=>{ setControls(false); request("continue", {threadId:1}); };
 $("pause").onclick = ()=>request("pause", {threadId:1});
 $("next").onclick = ()=>{ setControls(false); request("next", {threadId:1}); };

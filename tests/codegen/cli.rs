@@ -347,12 +347,24 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
         }
     }
     let stack = stack.expect("stackTrace response");
-    assert!(
-        stack["body"]["stackFrames"]
-            .as_array()
-            .is_some_and(|frames| !frames.is_empty()),
-        "{stack}"
-    );
+    let frame = stack["body"]["stackFrames"][0]["id"]
+        .as_i64()
+        .expect("debug UI frame id");
+    assert!(!stack["body"]["stackFrames"].as_array().is_none_or(|frames| frames.is_empty()), "{stack}");
+    send("evaluate", serde_json::json!({"expression":"1 + 2","frameId":frame}));
+    let mut evaluation = None;
+    for _ in 0..100 {
+        for message in poll(&mut since) {
+            if message["command"] == "evaluate" {
+                evaluation = Some(message);
+            }
+        }
+        if evaluation.is_some() {
+            break;
+        }
+    }
+    let evaluation = evaluation.expect("evaluate response");
+    assert_eq!(evaluation["body"]["result"], "int(3)", "{evaluation}");
     send("continue", serde_json::json!({"threadId":1}));
     let mut output = String::new();
     let mut terminated = false;
