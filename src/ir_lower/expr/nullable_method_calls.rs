@@ -180,7 +180,7 @@ pub(super) fn try_static_only_method_through_receiver(
     let class_name = static_only_method_class(ctx, object.value, method)?;
     let receiver = static_receiver_for_class_name(&class_name);
     let pins = pin_in_flight_owners(ctx, &[object.value], expr.span);
-    let result = lower_static_method_call(ctx, &receiver, method, args, expr);
+    let result = lower_object_static_method_call(ctx, object.value, &receiver, method, args, expr);
     unpin_in_flight_owners(ctx, pins, expr.span);
     release_owning_receiver_temporary(ctx, object, expr.span);
     Some(result)

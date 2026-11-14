@@ -144,6 +144,31 @@ echo (new StaticOnly)->value();
     assert_eq!(out.trim_end(), "ok\nok");
 }
 
+/// `$object->staticMethod()` binds `static` to the object's runtime class and dispatches
+/// an override declared by a subclass, even when the receiver is a base-typed parameter.
+#[test]
+fn test_static_method_through_instance_binds_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+class StaticDispatchBase {
+    public static function value(): string { return "base:" . static::class; }
+}
+class StaticDispatchChild extends StaticDispatchBase {
+    public static function value(): string { return "child:" . static::class; }
+}
+function callStaticThroughBase(StaticDispatchBase $object): string {
+    return $object->value();
+}
+$base = new StaticDispatchBase;
+$child = new StaticDispatchChild;
+echo callStaticThroughBase($base), "\n";
+echo callStaticThroughBase($child), "\n";
+echo $child?->value(), "\n";
+"#,
+    );
+    assert_eq!(out, "base:StaticDispatchBase\nchild:StaticDispatchChild\nchild:StaticDispatchChild\n");
+}
+
 /// Verifies a named class can be instantiated without constructor parentheses.
 #[test]
 fn test_class_instantiation_without_constructor_parentheses() {

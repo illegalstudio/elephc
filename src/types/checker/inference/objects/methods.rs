@@ -497,6 +497,8 @@ impl Checker {
         let mut magic_return_ty = None;
         let mut magic_original_args = None;
         if let Some(class_info) = self.classes.get(class_name) {
+            let static_method_call = !class_info.methods.contains_key(&method_key)
+                && class_info.static_methods.contains_key(&method_key);
             if let Some(sig) = class_info
                 .methods
                 .get(&method_key)
@@ -591,6 +593,13 @@ impl Checker {
                         &format!("Method {}::{}", class_name, method),
                         class_name,
                     )?;
+                }
+                // `$object->staticMethod()` is the static surface called through an object:
+                // its return type comes from the static signature, not the instance table.
+                if static_method_call {
+                    return Ok(late_static_return_type
+                        .clone()
+                        .unwrap_or_else(|| effective_sig.return_type.clone()));
                 }
             } else if let Some(sig) = class_info.methods.get("__call") {
                 let magic_args = Self::magic_call_args(method, args, expr.span);
