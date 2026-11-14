@@ -1,27 +1,28 @@
 //! Purpose:
-//! Chooses native XML argument read context from a runtime callable's passing modes.
+//! Chooses addressable argument context from a runtime callable's passing modes.
 //!
 //! Called from:
 //! - Signature-unknown direct descriptor call argument construction.
 //!
 //! Key details:
-//! - Modes are captured before argument effects; only the selected reference edge creates nodes.
+//! - Modes are captured before argument effects; only the selected reference edge binds or materializes a place.
 //! - Empty managed cells are published before the argument container to keep unwind records LIFO.
 
 use super::*;
 
 /// One argument's preselected passing mode and independently owned writable cell.
-pub(super) struct SelectionArgument {
+pub(super) struct ReferenceArgument {
     by_reference: LoweredValue,
     alias: String,
+    ordinary: bool,
 }
 
 /// Captures modes and publishes possible reference cells before evaluating any argument.
 pub(super) fn prepare(
     ctx: &mut LoweringContext<'_, '_>, callback: &mut RootedDescriptorCallback,
     args: &[Expr], span: Span,
-) -> Vec<Option<SelectionArgument>> {
-    if !args.iter().any(|arg| may_be_native_selection_reference_argument(ctx, arg)) {
+) -> Vec<Option<ReferenceArgument>> {
+    if !args.iter().any(|arg| needs_context(ctx, arg)) {
         return (0..args.len()).map(|_| None).collect();
     }
     ctx.declare_eval_context_local();
@@ -32,7 +33,7 @@ pub(super) fn prepare(
     let boxed = ctx.box_value_as_mixed(borrowed, PhpType::Mixed, Some(span));
     let (boxed, owner) = root_owned_call_operand(ctx, boxed, span);
     let modes: Vec<_> = args.iter().enumerate().map(|(index, arg)| {
-        if !may_be_native_selection_reference_argument(ctx, arg) { return None; }
+        if !needs_context(ctx, arg) { return None; }
         let name = match &arg.kind { ExprKind::NamedArg { name, .. } => name.as_str(), _ => "" };
         let name_expr = Expr::new(ExprKind::StringLiteral(name.to_string()), arg.span);
         let name = lower_expr(ctx, &name_expr);
@@ -50,25 +51,31 @@ pub(super) fn prepare(
         ctx.promote_local_mixed_ref_cell(&alias, Some(arg.span));
         let slot = ctx.ref_cell_owner_slot(&alias).expect("managed selection cell");
         register_owned_call_operand(ctx, slot, arg.span);
-        callback.selection_aliases.push((alias.clone(), arg.span));
-        SelectionArgument { by_reference, alias }
+        callback.argument_aliases.push((alias.clone(), arg.span));
+        let ordinary = crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+            && super::prepared_builtin_refs::mixed_place(ctx, arg)
+            && !may_be_native_selection_reference_argument(ctx, arg);
+        ReferenceArgument { by_reference, alias, ordinary }
     })).collect()
 }
 
 /// Evaluates exactly one argument in the passing context captured for its selected target.
 pub(super) fn lower(
-    ctx: &mut LoweringContext<'_, '_>, arg: &Expr, selection: &SelectionArgument,
+    ctx: &mut LoweringContext<'_, '_>, arg: &Expr, selection: &ReferenceArgument,
 ) -> LoweredValue {
     let arg = if let ExprKind::NamedArg { value, .. } = &arg.kind { value.as_ref() } else { arg };
     let result = ctx.declare_owned_hidden_temp(PhpType::Mixed);
     let initial = ctx.initialized_slots_snapshot();
-    let reference = ctx.builder.create_named_block("call.xml.reference", Vec::new());
-    let read = ctx.builder.create_named_block("call.xml.value", Vec::new());
-    let merge = ctx.builder.create_named_block("call.xml.argument", Vec::new());
+    let reference = ctx.builder.create_named_block("call.argument.reference", Vec::new());
+    let read = ctx.builder.create_named_block("call.argument.value", Vec::new());
+    let merge = ctx.builder.create_named_block("call.argument.merge", Vec::new());
     ctx.builder.terminate(Terminator::CondBr { cond: selection.by_reference.value,
         then_target: reference, then_args: Vec::new(), else_target: read, else_args: Vec::new() });
     ctx.builder.position_at_end(reference);
-    let value = property_access::lower_runtime_reference_argument(ctx, arg, &selection.alias);
+    let value = if selection.ordinary {
+        crate::ir_lower::stmt::lower_ref_assign(ctx, &selection.alias, arg, arg.span);
+        lower_invoker_ref_arg_marker(ctx, &selection.alias, arg.span)
+    } else { property_access::lower_runtime_reference_argument(ctx, arg, &selection.alias) };
     store_value_into_temp(ctx, &result, PhpType::Mixed, value, arg.span);
     branch_to(ctx, merge);
     let reference_initialized = ctx.initialized_slots_snapshot();
@@ -82,4 +89,11 @@ pub(super) fn lower(
     ctx.restore_initialized_slots(merge_initialized_slots_for_expr(&initial,
         reference_initialized, true, read_initialized, true));
     take_owned_temp(ctx, &result, arg.span)
+}
+
+/// Preserves native selection behavior and checks ordinary Mixed places only in checked profiles.
+fn needs_context(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    may_be_native_selection_reference_argument(ctx, arg)
+        || (crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+            && super::prepared_builtin_refs::mixed_place(ctx, arg))
 }

@@ -76,3 +76,17 @@ eval($source);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Prepared and runtime-selected settype calls write original places and preserve COW and catches.
+#[test]
+fn test_strict_settype_reference_places_bundle() {
+    let source = include_str!("../fixtures/strict/settype_places.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "7|S|8|9:9.9|junk|junk:junk|before:laterW|Array|Vcallback:original", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

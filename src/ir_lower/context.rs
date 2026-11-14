@@ -171,6 +171,8 @@ pub(crate) struct CallArgumentEvaluationScope {
     pub rooted_reference_value_views: HashSet<ValueId>,
     /// Direct native source functions can adopt the call's live property argument owners.
     pub live_property_reference_arguments: bool,
+    /// Prepared builtin graphs require local aliases for addressable reference operands.
+    pub prepared_builtin_reference_arguments: bool,
 }
 
 /// Staging for one `$target = &call()`, recorded while its source expression is lowered.

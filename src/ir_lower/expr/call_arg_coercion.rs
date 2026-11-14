@@ -42,6 +42,9 @@ pub(super) fn lower_arg_with_signature(
 fn lower_signature_argument(
     ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig, index: usize, arg: &Expr,
 ) -> crate::ir::ValueId {
+    if let Some(value) = super::prepared_builtin_refs::lower_argument(ctx, sig, index, arg) {
+        return value;
+    }
     if sig.ref_params.get(index).copied().unwrap_or(false)
         && index < crate::types::call_args::regular_param_count(sig)
         && ctx.call_argument_evaluation_scopes.last().is_some_and(|scope|

@@ -119,3 +119,34 @@ fn prepared(source: &str) -> crate::parser::ast::Program {
     let program = crate::object_cast_prelude::inject_if_used(program, &mut inventory).unwrap();
     crate::name_resolver::resolve(program).unwrap()
 }
+
+/// Emits live property and array aliases with the actual selected-profile checker metadata.
+fn verify_strict_settype_places_alias_contract(name: &str) {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strict/settype_places.php"));
+    let program = prepared(source); let target = Target::parse(name).unwrap();
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+    let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+    let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+    crate::ir::validate_module(&module).unwrap();
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    assert!(module.required_runtime_features.eval_bridge, "runtime-selected passing modes require metadata");
+}
+
+supported_target_cases!(strict_settype_places_alias_contract, verify_strict_settype_places_alias_contract);
+
+/// Checked calls promote a standalone Mixed property without relying on an explicit reference alias.
+#[test]
+fn strict_settype_places_known_receiver_promotions() {
+    for call in ["settype($cell->value, 'int');", "$cast = settype(...); $cast($cell->value, 'int');"] {
+        let source = format!("<?php class StandaloneCastPlace {{ public mixed $value = '7.9'; }} $cell = new StandaloneCastPlace(); {call}");
+        let program = prepared(&source); let target = Target::detect_host();
+        let checked = crate::types::checker::check_staged_semantics(&program, target,
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+        let info = &checked.classes["StandaloneCastPlace"];
+        let slot = info.visible_property_index("value").unwrap();
+        assert!(info.property_slot_owns_reference(slot), "{call}: checked builtin references need live property storage");
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 72 (this commit), following `c064a2192f`. Issue:
+Verified through step 73 (this commit), following `c7361405c6`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 72.
+This progress ledger condenses verified implementation through step 73.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -819,6 +819,38 @@ pass. Check --tests, compiler build and the curl exporter pass; regenerated
 builtin docs and all architecture/site audits report no errors (828 AOT, 77 graph,
 56 primitive, 695 runtime, 679 eval). Public feature admission remains unchanged.
 
+### Live prepared reference places
+
+Prepared checked mutators now share a scoped argument role in the existing call
+planner. Eligible Mixed properties, static properties and array entries acquire
+live managed aliases at their source position. The checker reuses its source-call
+property promotion helper, so direct builtins do not depend on an earlier explicit
+reference alias. Conversion graphs recover the original writable binding and use
+ordinary reference stores; a detached property copy cannot replace this behavior.
+
+Signature-unknown descriptor calls reuse the existing passing-mode metadata probe.
+The generalized descriptor_argument_contexts module replaces the XML-only module
+name and keeps its native selection behavior. It binds supported ordinary Mixed
+places only on the selected by-reference edge; the by-value edge snapshots its
+argument before later argument effects. RootedDescriptorCallback keeps argument
+alias owners outside the argument container and retires them after dispatch. No
+new runtime ABI or per-target emitter is introduced.
+
+Six new compiler checks cover the selected checker, standalone property promotion
+and all five target ABIs. The native shared fixture covers direct/prepared/runtime
+callables, static properties, nested entries, COW peers, catches, by-value source
+order and suppressing/throwing property warning handlers. Both AST/EIR optimizer
+settings pass with a clean heap (9.93 s). The 18 focused settype tests, five existing
+XML argument emitter tests, native XML materialization/ownership control (66.87 s),
+check --tests, compiler build, curl exporter, assembly comments and diff hygiene
+pass. Generated builtin docs, site compatibility and the EIR architecture audit
+pass with unchanged inventory (828 AOT, 77 graph, 56 primitive, 695 runtime,
+679 eval).
+
+Casts admission remains staged. Narrower typed destinations, erased native/ordinary
+reference contexts, public callable bindings from Internal producers and remaining
+host boundaries still need their explicit audit before publication.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -909,4 +941,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 69 | `05cef3fb07` | feat(strict): prepare checked settype callable conversions |
 | 70 | `222c4281fb` | feat(strict): complete settype collection conversions |
 | 71 | `c064a2192f` | feat(strict): share scalar builtin conversion graphs |
-| 72 | this commit | feat(strict): preserve contextual cast warning ownership |
+| 72 | `c7361405c6` | feat(strict): preserve contextual cast warning ownership |
+| 73 | this commit | feat(strict): preserve live builtin reference places |

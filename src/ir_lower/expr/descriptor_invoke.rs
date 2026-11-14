@@ -515,7 +515,7 @@ pub(super) struct RootedDescriptorCallback {
     /// Staging holding the owned result while the callback and container records retire.
     result: Option<PrepublishedCallResult>,
     /// Selection cells published outside the argument container and retired after dispatch.
-    pub(super) selection_aliases: Vec<(String, Span)>,
+    pub(super) argument_aliases: Vec<(String, Span)>,
 }
 
 /// Publishes a descriptor invocation's result staging and then its callback.
@@ -532,7 +532,7 @@ pub(super) fn root_descriptor_callback(
 ) -> RootedDescriptorCallback {
     let result = prepublish_call_result(ctx, &result_type, span);
     let (value, owner) = root_owned_call_operand(ctx, callback, span);
-    RootedDescriptorCallback { value, owner, result_type, result, selection_aliases: Vec::new() }
+    RootedDescriptorCallback { value, owner, result_type, result, argument_aliases: Vec::new() }
 }
 
 /// Roots the temporary container owner across a descriptor call and retires every owner on return.
@@ -551,7 +551,7 @@ pub(super) fn emit_callable_descriptor_invoke(
         owner: callback_owner,
         result_type,
         result: result_staging,
-        selection_aliases,
+        argument_aliases,
     } = callback;
     // The backend borrows this container and owns either its normalized copy
     // or a separate retain of a prebuilt Mixed box. Root both raw and boxed
@@ -575,7 +575,7 @@ pub(super) fn emit_callable_descriptor_invoke(
     } else if ctx.value_is_owning_temporary(arg_container) {
         crate::ir_lower::ownership::release_if_owned(ctx, arg_container, Some(span));
     }
-    for (alias, alias_span) in selection_aliases.into_iter().rev() {
+    for (alias, alias_span) in argument_aliases.into_iter().rev() {
         let slot = ctx.ref_cell_owner_slot(&alias).expect("published selection cell");
         unregister_owned_call_operand(ctx, slot, alias_span);
         ctx.release_ref_cell_owner(&alias, Some(alias_span));

@@ -206,7 +206,7 @@ impl Checker {
     }
 
     /// Gives plain Mixed property arguments stable cell storage before EIR call lowering.
-    fn promote_live_mixed_property_argument(&mut self, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    pub(crate) fn promote_live_mixed_property_argument(&mut self, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
         let ExprKind::PropertyAccess { object, property } = &arg.kind else { return Ok(()); };
         let Some((class_name, true)) = self.ref_property_slot_addressability(object, property, env)? else {
             return Ok(());

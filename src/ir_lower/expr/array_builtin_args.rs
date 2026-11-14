@@ -154,6 +154,12 @@ pub(super) fn lower_builtin_call_args(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    let prepared = super::prepared_builtin_refs::active(ctx, name);
+    let previous = ctx.call_argument_evaluation_scopes.last_mut().map(|scope| {
+        let previous = scope.prepared_builtin_reference_arguments;
+        scope.prepared_builtin_reference_arguments = prepared;
+        previous
+    });
     let rewritten = builtin_string_callbacks_as_first_class(sig, args);
     let args = rewritten.as_deref().unwrap_or(args);
     let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
@@ -173,6 +179,10 @@ pub(super) fn lower_builtin_call_args(
     if let Some(def) = def {
         validate_array_chunk_element_layout(ctx, def, &operands,
             args.first().map_or_else(Span::dummy, |arg| arg.span));
+    }
+    if let Some(previous) = previous {
+        ctx.call_argument_evaluation_scopes.last_mut().expect("builtin argument scope")
+            .prepared_builtin_reference_arguments = previous;
     }
     operands
 }

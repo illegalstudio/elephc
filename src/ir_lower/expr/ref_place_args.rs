@@ -761,6 +761,7 @@ pub(super) fn lower_builtin_ref_place_call(
     expr: &Expr,
 ) -> Option<LoweredValue> {
     let canonical = name.as_str();
+    if super::prepared_builtin_refs::active(ctx, canonical) { return None; }
     let prefer_extension = source_prefers_extension_builtin(canonical);
     if !prefer_extension
         && (ctx.functions.contains_key(canonical) || ctx.extern_functions.contains_key(canonical))

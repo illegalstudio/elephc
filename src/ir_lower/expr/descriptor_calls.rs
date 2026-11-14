@@ -82,14 +82,14 @@ pub(super) fn lower_untyped_descriptor_invoker_arg_container_for_callable(
     ctx: &mut LoweringContext<'_, '_>, callback: &mut RootedDescriptorCallback,
     args: &[Expr], span: Span,
 ) -> LoweredValue {
-    let selections = descriptor_native_selections::prepare(ctx, callback, args, span);
+    let selections = descriptor_argument_contexts::prepare(ctx, callback, args, span);
     lower_untyped_descriptor_invoker_arg_container_with_selections(ctx, args, &selections, span)
 }
 
-/// Builds the ordinary runtime binder container with optional XML selection contexts.
+/// Builds the ordinary runtime binder container with preselected addressable argument contexts.
 fn lower_untyped_descriptor_invoker_arg_container_with_selections(
     ctx: &mut LoweringContext<'_, '_>, args: &[Expr],
-    selections: &[Option<descriptor_native_selections::SelectionArgument>], span: Span,
+    selections: &[Option<descriptor_argument_contexts::ReferenceArgument>], span: Span,
 ) -> LoweredValue {
     if crate::types::call_args::has_named_args(args)
         || descriptor_args_need_runtime_unpack_keys(args)
@@ -117,7 +117,7 @@ pub(super) fn guard_owned_descriptor_callback(ctx: &mut LoweringContext<'_, '_>,
 fn lower_untyped_descriptor_invoker_indexed_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
-    selections: &[Option<descriptor_native_selections::SelectionArgument>],
+    selections: &[Option<descriptor_argument_contexts::ReferenceArgument>],
     span: Span,
 ) -> LoweredValue {
     let elem_ty = PhpType::Mixed;
@@ -156,7 +156,7 @@ fn lower_untyped_descriptor_invoker_indexed_container(
 fn lower_untyped_descriptor_invoker_hash_container(
     ctx: &mut LoweringContext<'_, '_>,
     args: &[Expr],
-    selections: &[Option<descriptor_native_selections::SelectionArgument>],
+    selections: &[Option<descriptor_argument_contexts::ReferenceArgument>],
     span: Span,
 ) -> LoweredValue {
     let hash_ty = PhpType::AssocArray {
@@ -196,13 +196,13 @@ fn lower_untyped_descriptor_invoker_hash_container(
     boxed
 }
 
-/// Selects write context only for an XML argument whose resolved parameter binds by reference.
+/// Selects addressable context only when the resolved parameter binds this argument by reference.
 fn lower_untyped_descriptor_arg_with_selection(
     ctx: &mut LoweringContext<'_, '_>, arg: &Expr,
-    selection: Option<&descriptor_native_selections::SelectionArgument>,
+    selection: Option<&descriptor_argument_contexts::ReferenceArgument>,
 ) -> LoweredValue {
     match selection {
-        Some(selection) => descriptor_native_selections::lower(ctx, arg, selection),
+        Some(selection) => descriptor_argument_contexts::lower(ctx, arg, selection),
         None => lower_untyped_descriptor_invoker_arg_value(ctx, arg),
     }
 }
