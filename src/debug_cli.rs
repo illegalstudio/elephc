@@ -40,6 +40,8 @@ pub(crate) struct DebugCommand {
     pub(crate) break_at: Option<String>,
     /// Serve Debug Adapter Protocol on stdio instead of the human session.
     pub(crate) dap: bool,
+    /// Compile a source with `--debug-optimized` instead of `--debug`.
+    pub(crate) optimized: bool,
     /// Optional DAP attach socket exposed by an already-running debug binary.
     pub(crate) attach: Option<String>,
     /// Optional loopback TCP attach address exposed by a debug binary.
@@ -71,7 +73,7 @@ pub(crate) struct DebugCommand {
 }
 
 /// Usage text for `elephc debug`.
-pub(crate) const HELP: &str = "Usage: elephc debug <source.php|source.lfc|binary> [--break FILE:LINE] [--dap] [--postmortem FILE]
+pub(crate) const HELP: &str = "Usage: elephc debug <source.php|source.lfc|binary> [--break FILE:LINE] [--dap] [--optimized] [--postmortem FILE]
        elephc debug <source.php|source.lfc|binary> --web --listen HOST:PORT
            [--route PATH|PREFIX*] [--method METHOD] [--header NAME:VALUE]
            [--workers N] [--handler-concurrency N] [--web-dir DIR]
@@ -81,7 +83,9 @@ pub(crate) const HELP: &str = "Usage: elephc debug <source.php|source.lfc|binary
        elephc debug --last FILE
 
 Builds a source with --debug, then starts the interactive runtime session.
-Without --break the program stops at its first executed site. Commands in the
+Without --break the program stops at its first executed site. --optimized builds
+the source with --debug-optimized instead: line and exception guards remain, but
+optimized locals report <optimized out> rather than a stale value. Commands in the
 session: continue|c, next|n, step|s, finish|f, bt, frame <index>, locals,
 p <name>, help, quit|q.
 
@@ -125,6 +129,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<DebugCommand, String> {
     let mut target = None;
     let mut break_at = None;
     let mut dap = false;
+    let mut optimized = false;
     let mut attach = None;
     let mut attach_tcp = None;
     let mut key = None;
@@ -159,6 +164,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<DebugCommand, String> {
                 break_at = Some(value["--break=".len()..].to_string());
             }
             "--dap" => dap = true,
+            "--optimized" => optimized = true,
             "--web" => {
                 web = true;
                 dap = true;
@@ -293,6 +299,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<DebugCommand, String> {
         if target.is_some()
             || attach.is_some()
             || dap
+            || optimized
             || break_at.is_some()
             || postmortem.is_some()
             || web
@@ -345,6 +352,12 @@ pub(crate) fn parse_args(args: &[String]) -> Result<DebugCommand, String> {
             "--handler-concurrency/--web-isolation are only valid with --web".to_string(),
         );
     } else if attach.is_some() || attach_tcp.is_some() {
+        if optimized {
+            return Err(
+                "--optimized applies to a source build; an attached process already chose its preset"
+                    .to_string(),
+            );
+        }
         if attach.is_some() && attach_tcp.is_some() {
             return Err(
                 "elephc debug takes either --attach <socket> or --attach-tcp HOST:PORT, not both"
@@ -370,10 +383,21 @@ pub(crate) fn parse_args(args: &[String]) -> Result<DebugCommand, String> {
     } else if key.is_some() {
         return Err("--key is only valid with --attach-tcp".to_string());
     }
+    if optimized
+        && target
+            .as_deref()
+            .is_some_and(|target| !is_source(Path::new(target)))
+    {
+        return Err(
+            "--optimized builds a source target; a prebuilt binary already chose its preset"
+                .to_string(),
+        );
+    }
     Ok(DebugCommand {
         target: target.unwrap_or_default(),
         break_at,
         dap,
+        optimized,
         attach,
         attach_tcp,
         key,
@@ -421,7 +445,7 @@ pub(crate) fn run(command: DebugCommand) -> i32 {
             }
         };
         let status = Command::new(compiler)
-            .arg("--debug")
+            .arg(if command.optimized { "--debug-optimized" } else { "--debug" })
             .arg(&command.target)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
@@ -710,11 +734,17 @@ fn default_web_debug_dir() -> PathBuf {
 }
 
 /// Compiles one source as a `--debug --web` prefork server.
-fn compile_debug_web_source(target: &str, isolation: Option<&str>) -> Result<PathBuf, String> {
+fn compile_debug_web_source(
+    target: &str,
+    isolation: Option<&str>,
+    optimized: bool,
+) -> Result<PathBuf, String> {
     let compiler = std::env::current_exe()
         .map_err(|error| format!("elephc debug: cannot locate the compiler: {error}"))?;
     let mut command = Command::new(compiler);
-    command.arg("--debug").arg("--web");
+    command
+        .arg(if optimized { "--debug-optimized" } else { "--debug" })
+        .arg("--web");
     if let Some(isolation) = isolation {
         command.arg(format!("--web-isolation={isolation}"));
     }
@@ -746,7 +776,11 @@ fn run_web_dap(command: DebugCommand) -> i32 {
     };
     let source = Path::new(&command.target);
     let binary = if is_source(source) {
-        match compile_debug_web_source(&command.target, command.web_isolation.as_deref()) {
+        match compile_debug_web_source(
+            &command.target,
+            command.web_isolation.as_deref(),
+            command.optimized,
+        ) {
             Ok(binary) => binary,
             Err(error) => {
                 eprintln!("{error}");
@@ -912,7 +946,7 @@ fn run_web_dap(command: DebugCommand) -> i32 {
 fn run_dap(command: DebugCommand) -> i32 {
     let source = Path::new(&command.target);
     let binary = if is_source(source) {
-        match compile_debug_source(&command.target) {
+        match compile_debug_source(&command.target, command.optimized) {
             Ok(binary) => binary,
             Err(error) => {
                 eprintln!("{error}");
@@ -1347,11 +1381,11 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Builds one source with `--debug` and captures compiler output so the DAP
 /// stream on stdout stays protocol-only.
-fn compile_debug_source(target: &str) -> Result<PathBuf, String> {
+fn compile_debug_source(target: &str, optimized: bool) -> Result<PathBuf, String> {
     let compiler = std::env::current_exe()
         .map_err(|error| format!("elephc debug: cannot locate the compiler: {error}"))?;
     let output = Command::new(compiler)
-        .arg("--debug")
+        .arg(if optimized { "--debug-optimized" } else { "--debug" })
         .arg(target)
         .output()
         .map_err(|error| format!("elephc debug: failed to compile '{target}': {error}"))?;
@@ -1629,6 +1663,36 @@ mod tests {
         assert!(
             parse_args(&["--last".to_string()]).is_err(),
             "--last needs a path"
+        );
+    }
+
+    /// `--optimized` selects the source build preset and cannot be applied to
+    /// an attached process or an already-built binary.
+    #[test]
+    fn optimized_selects_the_source_preset_only() {
+        let command = parse_args(&[
+            "main.php".to_string(),
+            "--dap".to_string(),
+            "--optimized".to_string(),
+        ])
+        .expect("--optimized parses for a source");
+        assert!(command.optimized);
+        assert!(
+            parse_args(&[
+                "--attach".to_string(),
+                "app.sock".to_string(),
+                "--optimized".to_string(),
+            ])
+            .is_err(),
+            "--attach already chose its preset"
+        );
+        assert!(
+            parse_args(&[
+                "main".to_string(),
+                "--optimized".to_string(),
+            ])
+            .is_err(),
+            "a prebuilt binary already chose its preset"
         );
     }
 }

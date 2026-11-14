@@ -23,7 +23,7 @@ use crate::ir::{
     BlockId, DataId, Function, Immediate, InstId, LocalKind, LocalSlotId, Module, Op, Ownership,
     RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
 };
-use crate::ir_passes::Allocation;
+use crate::ir_passes::{Allocation, DebugLocalAvailability};
 use crate::names::label_fragment;
 use crate::types::PhpType;
 
@@ -103,6 +103,11 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) debug_guarded_lines: std::collections::HashSet<(u32, u32)>,
     /// Compiler-assigned debug function id for enter/exit hooks.
     pub(super) debug_function_id: Option<u32>,
+    /// Compact debug indices of the PHP locals whose slots can be optimized out.
+    pub(super) debug_local_indices: HashMap<LocalSlotId, u32>,
+    /// Must-defined local availability for this function in a `--debug-optimized`
+    /// build. `None` means every debug-visible local is treated as available.
+    pub(super) debug_local_availability: Option<DebugLocalAvailability>,
     /// Allocated debug site ids per `Function::branch_sites` entry.
     pub(super) branch_site_ids: Vec<Option<Vec<u32>>>,
     /// Allocated dedicated counters per logical `Function::path_sites` entry.
@@ -248,6 +253,8 @@ impl<'a> FunctionContext<'a> {
             instr_id: None,
             debug_guarded_lines: std::collections::HashSet::new(),
             debug_function_id: None,
+            debug_local_indices: HashMap::new(),
+            debug_local_availability: None,
             branch_site_ids,
             path_site_ids,
             is_main,

@@ -634,11 +634,15 @@ impl Debugger {
             .get(&(activation.function_id as u64))
             .map(Vec::as_slice)
             .unwrap_or(&[]);
+        let site = activation.last_site;
         evaluate(condition, |name| {
             let local = locals
                 .iter()
                 .find(|local| local.name == name)
                 .ok_or_else(|| format!("unknown local '${name}'"))?;
+            if self.local_optimized_out(local, site) {
+                return Err(format!("local '${name}' is optimized out in this build"));
+            }
             Ok(value::scalar_value(value::local_value(local, frame)))
         })
     }

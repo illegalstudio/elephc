@@ -541,6 +541,9 @@ struct Metadata {
     locals: Vec<Local>,
     #[serde(default)]
     classes: Vec<value::Class>,
+    /// `--debug-optimized`: locals may be absent from their frame slot.
+    #[serde(default)]
+    optimized: bool,
 }
 
 #[derive(Deserialize)]
@@ -567,9 +570,12 @@ struct Site {
     source_id: u64,
     line: u64,
     column: u64,
+    /// Compact debug indices whose slot does not hold the PHP value at this site.
+    #[serde(default)]
+    dead_locals: Vec<u32>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Local {
     function_id: u64,
     name: String,
@@ -583,6 +589,9 @@ struct Local {
     /// Whether the parameter carries PHP's `#[\SensitiveParameter]` attribute.
     #[serde(default)]
     sensitive: bool,
+    /// Compact index matched against `Site::dead_locals`.
+    #[serde(default)]
+    debug_index: Option<u32>,
 }
 
 /// Resumption request recorded by a stepping command.
@@ -824,6 +833,8 @@ struct Debugger {
     thread_fibers: HashMap<i64, u64>,
     /// Next fiber thread-like id; ids start at 2.
     next_fiber_thread: i64,
+    /// `--debug-optimized`: report slots that no longer hold their value.
+    optimized: bool,
 }
 
 impl Debugger {
@@ -865,6 +876,7 @@ impl Debugger {
             .into_iter()
             .map(|class| (class.id, class))
             .collect();
+        let optimized = metadata.optimized;
         Ok(Self {
             sources,
             source_hashes,
@@ -893,6 +905,7 @@ impl Debugger {
             fiber_threads: HashMap::new(),
             thread_fibers: HashMap::new(),
             next_fiber_thread: 2,
+            optimized,
         })
     }
 
@@ -1439,7 +1452,7 @@ impl Debugger {
             return;
         };
         for local in locals {
-            self.print_one_local(local, frame.frame);
+            self.print_one_local(local, frame.frame, frame.last_site);
         }
     }
 
@@ -1457,11 +1470,24 @@ impl Debugger {
             eprintln!("no local '${name}'");
             return;
         };
-        self.print_one_local(local, frame.frame);
+        self.print_one_local(local, frame.frame, frame.last_site);
+    }
+
+    /// Returns whether `local` has no valid frame value at `site`.
+    pub(crate) fn local_optimized_out(&self, local: &Local, site: Option<u32>) -> bool {
+        let Some(index) = local.debug_index else {
+            return false;
+        };
+        site.and_then(|site_id| self.sites.get(&site_id))
+            .is_some_and(|site| site.dead_locals.contains(&index))
     }
 
     /// Reads and prints one local's current value without mutating the program.
-    fn print_one_local(&self, local: &Local, frame: usize) {
+    fn print_one_local(&self, local: &Local, frame: usize, site: Option<u32>) {
+        if self.local_optimized_out(local, site) {
+            eprintln!("{} <optimized out>", local.name);
+            return;
+        }
         let value = value::local_value(local, frame);
         let description = value::describe_with(value, &self.classes);
         eprintln!("{} {}", local.name, value::render(&description));

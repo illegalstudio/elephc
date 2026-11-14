@@ -6744,6 +6744,159 @@ impl Drop for DebuggeeGuard {
     }
 }
 
+/// `--debug` and `--debug-optimized` select different optimization policies and
+/// must be refused together instead of silently picking one.
+#[test]
+fn test_cli_debug_and_debug_optimized_are_mutually_exclusive() {
+    let dir = make_cli_test_dir("elephc_cli_debug_preset_exclusive");
+    fs::write(dir.join("main.php"), "<?php echo 1, \"\\n\";\n")
+        .expect("write preset fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["--debug", "--debug-optimized", "main.php"])
+        .output()
+        .expect("run conflicting debug presets");
+    assert!(
+        !output.status.success(),
+        "two debug presets must not compile"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("different debug presets"),
+        "missing conflict diagnostic: {stderr}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an optimized debug build keeps line guards and metadata while a
+/// promoted local reports `<optimized out>` at its source site; a breakpoint on
+/// a line removed by the optimizer is unverified with an explicit message.
+#[test]
+fn test_cli_debug_optimized_reports_optimized_out_locals() {
+    let dir = make_cli_test_dir("elephc_cli_debug_optimized");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfunction compute(int $n, int ...$rest): int {\n    $x = $n * 2;\n    if (false) {\n        $dead = 1;\n    }\n    return $x + 1;\n}\necho compute(4), \"\\n\";\n",
+    )
+    .expect("write optimized debug fixture");
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "--optimized", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [{"line": 3}, {"line": 5}],
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(
+        response["body"]["breakpoints"][0]["verified"], true,
+        "{response}"
+    );
+    assert_eq!(
+        response["body"]["breakpoints"][1]["verified"], false,
+        "{response}"
+    );
+    assert!(
+        response["body"]["breakpoints"][1]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("optimized build")),
+        "{response}"
+    );
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    let stopped = client.event("stopped");
+    assert_eq!(stopped["body"]["reason"], "breakpoint", "{stopped}");
+    let seq = client.send("stackTrace", None);
+    let response = client.response(seq);
+    let frame = &response["body"]["stackFrames"][0];
+    assert_eq!(frame["name"], "compute", "{response}");
+    assert_eq!(frame["line"], 3, "{response}");
+    let frame_id = frame["id"].as_i64().expect("optimized frame id");
+    let seq = client.send("scopes", Some(serde_json::json!({"frameId": frame_id})));
+    let response = client.response(seq);
+    let reference = response["body"]["scopes"][0]["variablesReference"]
+        .as_i64()
+        .expect("optimized variablesReference");
+    let seq = client.send(
+        "variables",
+        Some(serde_json::json!({"variablesReference": reference})),
+    );
+    let response = client.response(seq);
+    let variables = response["body"]["variables"]
+        .as_array()
+        .expect("optimized variables");
+    let find = |name: &str| {
+        variables
+            .iter()
+            .find(|variable| variable["name"] == name)
+            .unwrap_or_else(|| panic!("missing {name}: {response}"))
+    };
+    assert_eq!(find("$x")["value"], "<optimized out>", "{response}");
+    assert_eq!(find("$n")["value"], "int(4)", "{response}");
+
+    let response = client.evaluate(frame_id, "$x");
+    assert_eq!(response["success"], false, "{response}");
+    assert!(
+        response["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("$x")),
+        "{response}"
+    );
+    let response = client.evaluate(frame_id, "$n");
+    assert_eq!(response["body"]["result"], "int(4)", "{response}");
+
+    client.continue_to_terminated();
+    let status = client.child.wait().expect("wait for optimized DAP adapter");
+    assert!(status.success(), "optimized DAP adapter failed");
+    assert!(
+        client.program_stdout().contains('9'),
+        "program output missing: {:?}",
+        client.program_stdout()
+    );
+
+    let metadata: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("main.edbg.json")).expect("read optimized metadata"),
+    )
+    .expect("parse optimized metadata");
+    assert_eq!(metadata["optimized"], true, "{metadata}");
+    let index = metadata["locals"]
+        .as_array()
+        .expect("metadata locals")
+        .iter()
+        .find(|local| local["name"] == "x")
+        .and_then(|local| local["debug_index"].as_u64())
+        .expect("optimized local debug index");
+    assert!(
+        metadata["sites"]
+            .as_array()
+            .expect("metadata sites")
+            .iter()
+            .any(|site| site["line"] == 3
+                && site["dead_locals"]
+                    .as_array()
+                    .is_some_and(|dead| dead.iter().any(|value| value.as_u64() == Some(index)))),
+        "no site marks $x optimized out: {metadata}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies the DAP launch sequence, breakpoint stop, caller stack, scopes,
 /// variables (including arrays and strings), evaluate and clean termination.
 #[test]

@@ -148,6 +148,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         report_generics,
         emit_debug_info,
         debug_build,
+        debug_optimized,
         keep_symbols,
         regalloc_linear,
         ir_opt,
@@ -887,9 +888,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("opt-fold");
     let phase_started = Instant::now();
-    // A debug build preserves source-mapped statements for breakpoint binding;
-    // constant folding is the first pass that can erase them.
-    let ast = if debug_build {
+    // An unoptimized debug build preserves source-mapped statements for breakpoint
+    // binding; constant folding is the first pass that can erase them.
+    let ast = if debug_build && !debug_optimized {
         ast
     } else {
         optimize::fold_constants_for_target(ast, target)
@@ -1023,7 +1024,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // Substituting a literal for a read of a local the checker boxed as `mixed` would hand EIR
     // lowering a concrete type the checker never approved for that name, so the pass is told which
     // names those are and refuses to record a fact for them.
-    let ast = if debug_build {
+    let ast = if debug_build && !debug_optimized {
         ast
     } else {
         post_typecheck_optimizer.propagate(
@@ -1040,7 +1041,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // default body into BOTH branches of the synthesized `if` with the original's spans. The
     // checker's local-binding decisions are keyed BY SPAN, so these phases are told which spans
     // carry one and the rewrite vetoes itself rather than duplicating a decision.
-    let ast = if debug_build {
+    let ast = if debug_build && !debug_optimized {
         ast
     } else {
         post_typecheck_optimizer.prune(ast, check_result.local_binding_decision_spans())
@@ -1056,7 +1057,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     let phase_started = Instant::now();
     // Tail-sinking clones the tail of an `if`/`switch`/`try` into every branch, and a clone keeps
     // the original's spans — the same span-keyed hazard, in the other pass that clones.
-    let ast = if debug_build {
+    let ast = if debug_build && !debug_optimized {
         ast
     } else {
         post_typecheck_optimizer
@@ -1069,7 +1070,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // A debug build keeps every user declaration, so a breakpoint in an otherwise
     // unreachable function still has a body to bind to. The checker has already
     // validated every declaration, so codegen can emit the larger set.
-    let ast = if debug_build {
+    let ast = if debug_build && !debug_optimized {
         ast
     } else {
         let mut exported_function_names: HashSet<String> =
@@ -1177,6 +1178,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         }
     };
     ir_module.web_application = web_application;
+    ir_module.debug_optimized = debug_optimized;
     crate::phpext::class_helpers::lower(&mut ir_module, &exported_classes);
     ir_module.included_files = opcache_manifest
         .iter()
@@ -1243,6 +1245,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         regalloc_linear,
         emit_debug_info,
         debug_build,
+        debug_optimized,
         keep_symbols,
         output_paths: &output_paths,
         emit_source_map,

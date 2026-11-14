@@ -2381,6 +2381,7 @@ mod tests {
             state_offset: None,
             param: Some(0),
             sensitive: false,
+            debug_index: None,
         };
         let value = local_value(&local, frame);
         assert_eq!(render(&describe(value)), "&int(42)");

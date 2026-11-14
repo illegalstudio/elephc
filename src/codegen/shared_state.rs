@@ -88,6 +88,9 @@ pub(crate) struct SharedCodegenState {
     pub(super) debug_sources: std::collections::HashSet<u32>,
     /// `--debug`: emit per-site hook calls and debug metadata markers.
     pub(super) debug_build: bool,
+    /// `--debug-optimized`: publish per-site local availability so a slot that
+    /// no longer holds its PHP value is reported as `<optimized out>`.
+    pub(super) debug_optimized: bool,
     /// Next compiler-assigned debug site id.
     pub(super) next_debug_site: usize,
     /// Next compiler-assigned debug function id.

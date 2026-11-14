@@ -165,6 +165,10 @@ pub struct Module {
     pub web: bool,
     /// The web entry bootstraps a retained application after fork rather than per request.
     pub web_application: bool,
+    /// The build keeps debug metadata and site guards while allowing optimization.
+    /// Codegen publishes per-site local availability so the debugger can report
+    /// `<optimized out>` instead of reading a stale or uninitialized slot.
+    pub debug_optimized: bool,
     /// Generated `clone()` property-override applicators, sorted by class id then scope id.
     pub clone_override_applicators: Vec<CloneOverrideApplicator>,
 }
@@ -220,6 +224,7 @@ impl Module {
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
             web_application: false,
+            debug_optimized: false,
             clone_override_applicators: Vec::new(),
         }
     }

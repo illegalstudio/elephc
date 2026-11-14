@@ -32,7 +32,7 @@ use std::time::Duration;
 use serde_json::{json, Value as JsonValue};
 use sha2::{Digest, Sha256};
 
-use super::{condition, eval, value, Debugger, StepMode, StepState};
+use super::{condition, eval, value, Debugger, Local, StepMode, StepState};
 
 /// Maximum DAP body accepted from a client.
 const MAX_DAP_BODY: usize = 16 * 1024 * 1024;
@@ -1067,6 +1067,10 @@ impl Debugger {
                     .or(hit_error.as_ref())
                 {
                     result["message"] = json!(message);
+                } else if matching.is_empty() && self.optimized {
+                    result["message"] = json!(
+                        "no executable code on this line; an optimized build may have removed it"
+                    );
                 }
                 results.push(result);
             }
@@ -1119,6 +1123,13 @@ impl Debugger {
                     .get(&function_id)
                     .and_then(|locals| locals.iter().find(|local| local.name == name));
                 match local {
+                    Some(local) if self.local_optimized_out(local, frame.last_site) => (
+                        JsonValue::Null,
+                        format!(
+                            "No watchable backing slot for ${} at this site: the optimized build removed it",
+                            local.name
+                        ),
+                    ),
                     Some(local) => {
                         let function = self
                             .functions
@@ -1492,6 +1503,9 @@ impl Debugger {
                     else {
                         continue;
                     };
+                    if self.local_optimized_out(local, activation.last_site) {
+                        continue;
+                    }
                     let value = value::local_value(local, frame);
                     value::render(&value::describe_with(value, &self.classes))
                 }
@@ -1835,22 +1849,38 @@ impl Debugger {
                 };
                 let function_id = frame.function_id as u64;
                 let frame_pointer = frame.frame;
-                let entries: Vec<(String, value::Value)> = match self.locals.get(&function_id) {
-                    Some(locals) => locals
-                        .iter()
-                        .filter(|local| !local.name.contains('#'))
-                        .map(|local| {
-                            (
-                                format!("${}", local.name),
-                                value::local_value(local, frame_pointer),
-                            )
-                        })
-                        .collect(),
-                    None => Vec::new(),
-                };
+                let site = frame.last_site;
+                let entries: Vec<(String, String, Option<value::Value>)> =
+                    match self.locals.get(&function_id) {
+                        Some(locals) => locals
+                            .iter()
+                            .filter(|local| !local.name.contains('#'))
+                            .map(|local| {
+                                let value = if self.local_optimized_out(local, site) {
+                                    None
+                                } else {
+                                    Some(value::local_value(local, frame_pointer))
+                                };
+                                (
+                                    format!("${}", local.name),
+                                    local.php_type.clone(),
+                                    value,
+                                )
+                            })
+                            .collect(),
+                        None => Vec::new(),
+                    };
                 entries
                     .into_iter()
-                    .map(|(name, value)| self.dap_variable(name, value))
+                    .map(|(name, php_type, value)| match value {
+                        Some(value) => self.dap_variable(name, value),
+                        None => json!({
+                            "name": name,
+                            "value": "<optimized out>",
+                            "type": php_type,
+                            "variablesReference": 0,
+                        }),
+                    })
                     .collect()
             }
             VariableContainer::Value(value) => value::children_with_annotated(value, &self.classes)
@@ -1881,12 +1911,17 @@ impl Debugger {
             return;
         };
         let evaluated = {
-            let locals = self
+            let site = frame.last_site;
+            let available: Vec<Local> = self
                 .locals
                 .get(&(frame.function_id as u64))
                 .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            eval::evaluate(expression, locals, frame.frame, &self.classes)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|local| !self.local_optimized_out(local, site))
+                .cloned()
+                .collect();
+            eval::evaluate(expression, &available, frame.frame, &self.classes)
         };
         match evaluated {
             Ok(eval::EvalValue::Borrowed { value, note }) => {

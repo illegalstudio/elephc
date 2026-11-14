@@ -57,6 +57,36 @@ debug binary plus its `<stem>.edbg.json` sidecar.
 Normal builds carry none of this. `elephc_break()` is the one source helper that
 is also present in a normal build, as a no-op stub.
 
+## Optimized debug builds
+
+`--debug-optimized` keeps the debug metadata, DWARF line information, symbols and
+per-site guards, but lets the AST and EIR optimizers run:
+
+```bash
+elephc --debug-optimized app.php
+elephc debug --optimized app.php --dap
+elephc debug --optimized app.php --break app.php:42
+```
+
+The trade-off is explicit:
+
+- Locals promoted into SSA values or eliminated by the optimizer have no live
+  frame slot. The terminal `locals`/`p` commands and DAP `variables` report
+  `<optimized out>` instead of decoding stale or uninitialized storage.
+  Evaluating an expression that reads such a local is refused; the surrounding
+  expression still works when it only reads live locals.
+- A breakpoint on a source line that no longer has emitted code is reported as
+  unverified (`verified: false`) with a message saying the optimized build may
+  have removed it. Executable lines still carry the same per-line guards as
+  `--debug`, so stepping and breakpoints on surviving lines behave normally.
+- Every parameter enters the function available. A local becomes available only
+  after a store that executes on every path to the current site; branch joins
+  intersect their incoming states. `unset()` makes it unavailable again.
+
+`--debug` and `--debug-optimized` are mutually exclusive presets. Use
+`--debug-optimized` when the optimization difference matters more than a fully
+stable local set, and keep `--debug` for precise local inspection.
+
 ## Breakpoints, stepping and frames
 
 The terminal client supports:

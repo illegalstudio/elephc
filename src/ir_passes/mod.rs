@@ -78,6 +78,7 @@ mod count_hoist;
 mod cse;
 mod dead_inst;
 mod dead_store;
+mod debug_availability;
 mod dominance;
 mod driver;
 mod fresh_mixed_transfer;
@@ -113,6 +114,9 @@ pub use driver::optimize_module;
 pub use intervals::{build_intervals, LiveInterval};
 pub use liveness::{compute_liveness, LivenessInfo};
 pub(crate) use cfg::successors;
+pub(crate) use debug_availability::{
+    compute_debug_availability, format_dead_ranges, DebugLocalAvailability,
+};
 pub(crate) use bounded_mixed_counter::prove_integer_slots;
 pub(crate) use by_ref_alias::address_escaping_slots;
 pub(crate) use liveness::terminator_uses;

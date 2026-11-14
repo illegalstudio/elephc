@@ -27,7 +27,7 @@ use crate::codegen::WebIsolation;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::DeferredFiberWrapper;
 use crate::debug_projection::{debug_info_method, debug_projection, DebugProjectionValue};
-use crate::ir::{BasicBlock, Function, InstId, LocalKind, Module};
+use crate::ir::{BasicBlock, Function, InstId, LocalKind, LocalSlotId, Module};
 use crate::names::{
     function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
@@ -122,6 +122,7 @@ pub(super) fn emit_module(
     shared.counters = counters;
     shared.instrument = instrument;
     shared.debug_build = debug_build;
+    shared.debug_optimized = module.debug_optimized;
     emit_source_file_markers(module, emitter, &mut shared);
     if debug_build {
         emit_debug_class_markers(module, emitter);
@@ -1619,6 +1620,16 @@ pub(super) fn emit_instruction_source_marker(ctx: &mut FunctionContext<'_>, inst
         );
         if let Some(site_id) = site_id {
             let _ = write!(marker, " site={site_id}");
+            if let Some(availability) = &ctx.debug_local_availability {
+                let dead = availability.dead_indices(inst_id);
+                if !dead.is_empty() {
+                    let _ = write!(
+                        marker,
+                        " dead={}",
+                        crate::ir_passes::format_dead_ranges(&dead)
+                    );
+                }
+            }
         }
         if span.has_extent() {
             let _ = write!(marker, " end={}:{}", span.end_line, span.end_column());
@@ -1924,17 +1935,47 @@ fn debug_visibility_name(visibility: &crate::parser::ast::Visibility) -> &'stati
     }
 }
 
+/// Returns whether `name` is a PHP-visible local rather than compiler storage.
+fn is_debug_visible_local_name(name: &str) -> bool {
+    !name.contains('#') && !name.starts_with("__elephc_")
+}
+
 /// Emits one `@local` marker per named source local whose frame offset is
 /// known. Hidden compiler temporaries are omitted; the metadata reader uses
 /// these markers to expose PHP variables and parameter slots.
 fn emit_local_markers(ctx: &mut FunctionContext<'_>) {
+    // A `--debug-optimized` build publishes a compact index per PHP local and a
+    // per-site dead list. Only ordinary `PhpLocal` slots are promoted away by
+    // the EIR passes; reference cells and statics keep stable frame storage.
+    let trackable: Vec<LocalSlotId> = ctx
+        .function
+        .locals
+        .iter()
+        .filter(|local| local.kind == LocalKind::PhpLocal)
+        .filter(|local| {
+            local
+                .name
+                .as_deref()
+                .is_some_and(is_debug_visible_local_name)
+        })
+        .map(|local| local.id)
+        .collect();
+    if ctx.shared.debug_optimized && !trackable.is_empty() {
+        let availability = crate::ir_passes::compute_debug_availability(ctx.function, &trackable);
+        for slot in &trackable {
+            if let Some(index) = availability.index_of(*slot) {
+                ctx.debug_local_indices.insert(*slot, index);
+            }
+        }
+        ctx.debug_local_availability = Some(availability);
+    }
     for local in &ctx.function.locals {
         let Some(name) = local.name.as_deref() else {
             continue;
         };
         // `#` and the internal `__elephc_` prefix mark compiler-owned temporaries;
         // they are not PHP variables and would only add noise to locals/variables.
-        if name.contains('#') || name.starts_with("__elephc_") {
+        if !is_debug_visible_local_name(name) {
             continue;
         }
         if !matches!(
@@ -1962,6 +2003,9 @@ fn emit_local_markers(ctx: &mut FunctionContext<'_>) {
         );
         if let Some(state_offset) = ctx.ref_cell_state_offset(local.id) {
             let _ = write!(marker, " state_offset={state_offset}");
+        }
+        if let Some(index) = ctx.debug_local_indices.get(&local.id) {
+            let _ = write!(marker, " debug_index={index}");
         }
         if let Some(parameter) = parameter {
             let _ = write!(marker, " param={param_index}");

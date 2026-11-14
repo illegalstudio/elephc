@@ -185,6 +185,8 @@ Diagnostics:
   --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug                 Debug build preset: DWARF, symbols, no EIR/AST optimization
+  --debug-optimized       Debug preset that keeps metadata/guards and allows optimization;
+                          optimized-out locals are reported as <optimized out>
   --debug-info            Embed DWARF line info for debuggers
   --keep-symbols          Keep the symbol table (stripped by default; for profilers)
 
@@ -228,10 +230,14 @@ pub(crate) struct CliConfig {
     /// Print a per-template summary of monomorphized generic instantiations on stderr.
     pub(crate) report_generics: bool,
     pub(crate) emit_debug_info: bool,
-    /// Interactive debug build preset. It implies DWARF/symbols and skips the
-    /// source-erasing optimizer passes; the runtime agent and site guards are
-    /// wired by the later debugger stages.
+    /// Interactive debug build preset. It implies DWARF/symbols and, unless
+    /// `debug_optimized` is also set, skips the source-erasing optimizer passes;
+    /// the runtime agent and site guards are wired by the later debugger stages.
     pub(crate) debug_build: bool,
+    /// Debug build that keeps the metadata and site guards but allows the AST
+    /// and EIR optimizations. Locals whose slot no longer holds the PHP value
+    /// are reported as `<optimized out>`.
+    pub(crate) debug_optimized: bool,
     /// Keep the symbol table in the linked executable; it is stripped by default.
     pub(crate) keep_symbols: bool,
     pub(crate) regalloc_linear: bool,
@@ -397,6 +403,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut report_generics = false;
     let mut emit_debug_info = false;
     let mut debug_build = false;
+    let mut debug_optimized = false;
     let mut keep_symbols = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
@@ -515,6 +522,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             report_generics = true;
         } else if arg == "--debug" {
             debug_build = true;
+        } else if arg == "--debug-optimized" {
+            debug_optimized = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
         } else if arg == "--keep-symbols" {
@@ -673,6 +682,12 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
              embeds can never be activated",
         );
     }
+    if debug_build && debug_optimized {
+        fail("--debug and --debug-optimized select two different debug presets; pass only one");
+    }
+    if debug_optimized {
+        debug_build = true;
+    }
     if debug_build {
         // An iOS library is the documented compile-only form: it carries metadata
         // and dormant guards for a host app, but cannot start a debug session.
@@ -684,7 +699,9 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         }
         emit_debug_info = true;
         keep_symbols = true;
-        ir_opt = false;
+        if !debug_optimized {
+            ir_opt = false;
+        }
         with_crates.insert("debug".to_string());
     }
     if web && emit_asm {
@@ -737,6 +754,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         report_generics,
         emit_debug_info,
         debug_build,
+        debug_optimized,
         keep_symbols,
         regalloc_linear,
         ir_opt,
@@ -1167,9 +1185,36 @@ mod tests {
             "app.php".to_string(),
         ]);
         assert!(debug.debug_build, "--debug must record the build mode");
+        assert!(!debug.debug_optimized, "--debug is the unoptimized preset");
         assert!(debug.emit_debug_info, "--debug must imply --debug-info");
         assert!(debug.keep_symbols, "--debug must keep symbols for lldb/gdb");
         assert!(!debug.ir_opt, "--debug must disable EIR optimization");
+
+        let optimized = compile_config(&[
+            "elephc".to_string(),
+            "--debug-optimized".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(
+            optimized.debug_build,
+            "--debug-optimized must carry the debug metadata and guards"
+        );
+        assert!(
+            optimized.debug_optimized,
+            "--debug-optimized must record the optimized preset"
+        );
+        assert!(
+            optimized.emit_debug_info && optimized.keep_symbols,
+            "--debug-optimized must imply the debug artifacts"
+        );
+        assert!(
+            optimized.ir_opt,
+            "--debug-optimized must keep EIR optimization enabled"
+        );
+        assert!(
+            optimized.with_crates.contains("debug"),
+            "--debug-optimized must still link the debug runtime"
+        );
 
         let info = compile_config(&[
             "elephc".to_string(),
@@ -1180,6 +1225,10 @@ mod tests {
         assert!(info.ir_opt, "--debug-info alone must not change optimization");
 
         assert!(HELP.contains("--debug"), "--help must document the preset");
+        assert!(
+            HELP.contains("--debug-optimized"),
+            "--help must document the optimized preset"
+        );
     }
 
     /// Verifies `--debug-info` and `--keep-symbols` are independent flags.

@@ -55,6 +55,8 @@ struct SiteMeta {
     end_column: Option<usize>,
     op: Option<String>,
     origin: Option<String>,
+    /// Compact debug indices whose slot does not hold the PHP value here.
+    dead_locals: Vec<u32>,
 }
 
 /// One emitted class and its layout properties.
@@ -151,12 +153,17 @@ struct LocalMeta {
     by_ref: bool,
     variadic: bool,
     sensitive: bool,
+    /// Compact index used by `SiteMeta::dead_locals` in optimized debug builds.
+    debug_index: Option<usize>,
 }
 
 /// Builds the v1 metadata JSON from `asm`.
 ///
 /// `source_path` is the entry file named on the CLI; it is always source id 0.
-pub(crate) fn build(asm: &str, source_path: &Path) -> Result<String, String> {
+/// `optimized` records the `--debug-optimized` preset so a client knows that a
+/// missing local value means the slot was optimized away, not that the debug
+/// metadata is stale.
+pub(crate) fn build(asm: &str, source_path: &Path, optimized: bool) -> Result<String, String> {
     let root_path = source_path.display().to_string();
     let root = source_file(0, root_path.clone(), true);
     let mut sources: BTreeMap<usize, SourceFile> = BTreeMap::new();
@@ -492,6 +499,10 @@ pub(crate) fn build(asm: &str, source_path: &Path) -> Result<String, String> {
                 end_column,
                 op: marker_value(marker, "op").map(str::to_string),
                 origin: marker_value(marker, "origin").map(str::to_string),
+                dead_locals: marker_value(marker, "dead")
+                    .map(parse_dead_ranges)
+                    .transpose()?
+                    .unwrap_or_default(),
             });
             continue;
         }
@@ -520,6 +531,7 @@ pub(crate) fn build(asm: &str, source_path: &Path) -> Result<String, String> {
                 by_ref: marker_value(marker, "by_ref") == Some("1"),
                 variadic: marker_value(marker, "variadic") == Some("1"),
                 sensitive: marker_value(marker, "sensitive") == Some("1"),
+                debug_index: optional_marker_number(marker, "debug_index")?,
             });
             continue;
         }
@@ -538,6 +550,7 @@ pub(crate) fn build(asm: &str, source_path: &Path) -> Result<String, String> {
         &paths,
         &locals,
         &classes,
+        optimized,
     )
 }
 
@@ -588,6 +601,32 @@ fn optional_marker_number(marker: &str, key: &str) -> Result<Option<usize>, Stri
     }
 }
 
+/// Parses a compact `0-2,4` dead-local index list from a site marker.
+fn parse_dead_ranges(value: &str) -> Result<Vec<u32>, String> {
+    let mut indices = Vec::new();
+    for part in value.split(',').filter(|part| !part.is_empty()) {
+        match part.split_once('-') {
+            Some((start, end)) => {
+                let start = start
+                    .parse::<u32>()
+                    .map_err(|err| format!("invalid debug dead range '{part}': {err}"))?;
+                let end = end
+                    .parse::<u32>()
+                    .map_err(|err| format!("invalid debug dead range '{part}': {err}"))?;
+                if end < start {
+                    return Err(format!("invalid debug dead range '{part}': end precedes start"));
+                }
+                indices.extend(start..=end);
+            }
+            None => indices.push(
+                part.parse::<u32>()
+                    .map_err(|err| format!("invalid debug dead index '{part}': {err}"))?,
+            ),
+        }
+    }
+    Ok(indices)
+}
+
 /// Renders the v1 JSON document.
 fn render_json(
     source_path: &Path,
@@ -598,6 +637,7 @@ fn render_json(
     paths: &[PathMeta],
     locals: &[LocalMeta],
     classes: &[ClassMeta],
+    optimized: bool,
 ) -> Result<String, String> {
     let source_values: Vec<serde_json::Value> = sources
         .values()
@@ -655,6 +695,7 @@ fn render_json(
                 "end_column": site.end_column,
                 "op": site.op,
                 "origin": site.origin,
+                "dead_locals": site.dead_locals,
             })
         })
         .collect();
@@ -716,6 +757,7 @@ fn render_json(
                 "by_ref": local.by_ref,
                 "variadic": local.variadic,
                 "sensitive": local.sensitive,
+                "debug_index": local.debug_index,
             })
         })
         .collect();
@@ -790,6 +832,7 @@ fn render_json(
     let document = serde_json::json!({
         "format": "elephc-debug-metadata",
         "version": 1,
+        "optimized": optimized,
         "source": source_path.display().to_string(),
         "source_sha256": sources.get(&0).and_then(|source| source.sha256.as_ref()),
         "sources": source_values,
@@ -882,8 +925,8 @@ mod tests {
     # @file id=8 path_hex=6c69622e706870
     # @fn name=main symbol=_main file=0 kind=main flags=main
 _main:
-    # @local name_hex=78 offset=16 type_hex=696e74 kind=php_local
-    # @src file=0 line=2 col=1 site=5 op=echo_value
+    # @local name_hex=78 offset=16 type_hex=696e74 kind=php_local debug_index=0
+    # @src file=0 line=2 col=1 site=5 op=echo_value dead=0
     # @branch source=0 line=2 col=1 kind=conditional then_site=3 else_site=4 edges=3,4
     # @branch source=0 line=6 col=1 kind=switch edges=7,8,9
     # @pathgroup source=0 line=2 col=1 kind=logical truncated=0
@@ -907,9 +950,12 @@ _main:
     /// markers, including path alias deduplication and parameter extraction.
     #[test]
     fn builds_sources_functions_sites_and_locals() {
-        let json = build(ASM, Path::new("main.php")).unwrap();
+        let json = build(ASM, Path::new("main.php"), false).unwrap();
         assert!(json.contains("\"format\": \"elephc-debug-metadata\""), "{json}");
         assert!(json.contains("\"version\": 1"), "{json}");
+        assert!(json.contains("\"optimized\": false"), "{json}");
+        assert!(json.contains("\"debug_index\": 0"), "{json}");
+        assert!(json.contains("\"dead_locals\":"), "{json}");
         assert_eq!(json.matches("\"path\": \"lib.php\"").count(), 1, "{json}");
         assert!(json.contains("\"kind\": \"main\""), "{json}");
         assert!(json.contains("\"flags\": ["), "{json}");
@@ -947,6 +993,14 @@ _main:
         assert!(json.contains("\"id\": 5"), "{json}");
         assert!(json.contains("\"line\": 9"), "{json}");
         assert!(json.contains("\"end_column\": 8"), "{json}");
+    }
+
+    /// The optimized preset is published as a top-level flag so clients know
+    /// that a missing local value is deliberate.
+    #[test]
+    fn publishes_the_optimized_preset() {
+        let json = build(ASM, Path::new("main.php"), true).unwrap();
+        assert!(json.contains("\"optimized\": true"), "{json}");
     }
 
     /// Verifies the embedded JSON gets a target-aware section/symbol and the
