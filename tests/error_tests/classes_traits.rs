@@ -72,6 +72,42 @@ class C { use A, B; }
     );
 }
 
+/// Two CONCRETE methods of the same name from separate `use` statements still conflict; only an
+/// abstract trait method (a requirement) merges with another declaration.
+#[test]
+fn test_error_trait_concrete_methods_from_separate_uses_conflict() {
+    expect_error(
+        r#"<?php
+trait A { public function foo() { return 1; } }
+trait B { public function foo() { return 2; } }
+class C { use A; use B; }
+"#,
+        "imports duplicate trait method 'foo'",
+    );
+}
+
+/// A concrete trait method satisfies another trait's abstract one only when both are static or
+/// both are instance methods, in one `use A, B` as in separate `use` statements.
+#[test]
+fn test_error_trait_requirement_static_kind_mismatch() {
+    expect_error(
+        r#"<?php
+trait A { abstract public function foo(): string; }
+trait B { public static function foo(): string { return "s"; } }
+final class C { use A, B; }
+"#,
+        "Cannot change method kind when overriding C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait A { abstract public static function foo(): string; }
+trait B { public function foo(): string { return "i"; } }
+final class C { use A, B; }
+"#,
+        "Cannot change method kind when overriding C::foo",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
