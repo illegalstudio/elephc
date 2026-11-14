@@ -1113,6 +1113,8 @@ the DESCENDANT's visibility.
 
 For abstract methods, the checker keeps the inherited signature but intentionally leaves the implementation-class entry unset until a concrete subclass provides a body. Concrete classes are rejected if any abstract or interface requirement remains unresolved after inheritance + trait flattening + interface conformance checks.
 
+A used trait's abstract methods are requirements on the class, not declarations of it. Right after trait flattening, the driver calls `collect_trait_method_requirements` (`src/types/checker/schema/classes/trait_requirements.rs`) and stores the result in `Checker::trait_method_requirements`: for each trait-using class, the method keys its traits declare abstract (through nested trait uses, plus the `as` aliases of those methods, which flattening makes abstract too) and the method keys its own body declares. While methods are applied to the schema, a flattened abstract method that is such a requirement, not re-declared by the class body, and already implemented by an inherited method is skipped instead of registered, so it reads neither as a re-abstraction nor as an override of a final method. The inherited signature is still checked against the requirement: parameters may only widen, a by-reference return must be kept, and a declared return type must be honoured. An inherited method with lower visibility still satisfies it, as in PHP. `#[\Override]` on a method that implements a trait requirement finds its target there as well.
+
 When checking property access (`$obj->prop`), the type checker validates that:
 - The variable is an `Object` type
 - The class has a property with that name

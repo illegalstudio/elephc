@@ -72,6 +72,79 @@ class C { use A, B; }
     );
 }
 
+/// A class that USES a trait still may not re-declare an inherited concrete method abstract:
+/// only the trait's own abstract methods are requirements an inherited method satisfies.
+#[test]
+fn test_error_trait_using_class_cannot_make_inherited_method_abstract() {
+    expect_error(
+        r#"<?php
+class P { public function foo(): int { return 1; } }
+trait T { public function bar(): int { return 2; } }
+abstract class C extends P { use T; abstract public function foo(): int; }
+"#,
+        "Cannot make concrete method abstract: C::foo",
+    );
+}
+
+/// An inherited method satisfies a trait requirement only with a compatible signature: it may
+/// not narrow a parameter nor break the declared return type, as PHP reports.
+#[test]
+fn test_error_inherited_method_must_match_trait_requirement_signature() {
+    expect_error(
+        r#"<?php
+class P { public function foo(string $x): int { return 1; } }
+trait T { abstract public function foo(int $x): int; }
+final class C extends P { use T; }
+"#,
+        "Cannot narrow parameter $x when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+class P { public static function make(): int { return 1; } }
+trait T { abstract public static function make(): string; }
+final class C extends P { use T; }
+"#,
+        "Cannot change return type when implementing trait method: C::make",
+    );
+}
+
+/// An inherited method returning by value does not satisfy a trait requirement that returns by
+/// reference, and an `as` alias of an abstract trait method is checked against the inherited
+/// method of the alias name, as PHP reports `Declaration of P::bar() must be compatible`.
+#[test]
+fn test_error_inherited_method_must_keep_trait_requirement_by_ref_and_alias_signature() {
+    expect_error(
+        r#"<?php
+class P { public function foo(): int { return 1; } }
+trait T { abstract public function &foo(): int; }
+final class C extends P { use T; }
+"#,
+        "Cannot remove by-reference return when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+class P { public function foo(): int { return 1; } public function bar(): string { return "s"; } }
+trait T { abstract public function foo(): int; }
+final class C extends P { use T { foo as bar; } }
+"#,
+        "Cannot change return type when implementing trait method: C::bar",
+    );
+}
+
+/// `#[\Override]` on a trait-using class still needs a target: a parent method, an interface
+/// method, or an abstract method of a used trait.
+#[test]
+fn test_error_override_in_trait_using_class_requires_a_target() {
+    expect_error(
+        r#"<?php
+class P {}
+trait T { public function bar(): int { return 2; } }
+final class C extends P { use T; #[\Override] public function baz(): int { return 1; } }
+"#,
+        "C::baz() has #[\\Override] attribute, but no matching parent method was found",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
