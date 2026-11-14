@@ -187,6 +187,7 @@ impl Checker {
         &self,
         function: Option<&str>,
         owner: Option<&str>,
+        callee_desc: Option<&str>,
         sig: &FunctionSig,
     ) -> Option<FunctionSig> {
         if !self.strict_types {
@@ -198,10 +199,9 @@ impl Checker {
                 "tidy_parse_string" | "tidy_parse_file" | "tidy_repair_string" | "tidy_repair_file"
             )
         });
-        let tidy_method = owner.is_some_and(|owner| {
-            let owner = owner.trim_start_matches('\\');
-            owner.eq_ignore_ascii_case("tidy") || self.is_subclass_of(owner, "tidy")
-        });
+        let tidy_method = owner
+            .zip(callee_desc)
+            .is_some_and(|(owner, callee_desc)| self.tidy_prelude_declares_method(owner, callee_desc));
         if !tidy_function && !tidy_method {
             return None;
         }
@@ -224,6 +224,32 @@ impl Checker {
             }
         }
         changed.then_some(adjusted)
+    }
+
+    /// Returns whether `callee_desc` names a method declared by the injected `tidy` class.
+    ///
+    /// A subclass receiver may inherit the prelude adapter or override/add its own methods.
+    /// The declaring-class table distinguishes the two: only methods whose implementation
+    /// class is `tidy` get the contract-type strict check.
+    fn tidy_prelude_declares_method(&self, owner: &str, callee_desc: &str) -> bool {
+        let Some((_, method)) = callee_desc.rsplit_once("::") else {
+            return false;
+        };
+        let method = method.trim_matches(|character: char| {
+            !character.is_ascii_alphanumeric() && character != '_'
+        });
+        if method.is_empty() {
+            return false;
+        }
+        let Some(class_info) = self.classes.get(owner.trim_start_matches('\\')) else {
+            return false;
+        };
+        let key = crate::names::php_symbol_key(method);
+        let declares = |declaring: Option<&String>| {
+            declaring.is_some_and(|declaring| declaring.trim_start_matches('\\').eq_ignore_ascii_case("tidy"))
+        };
+        declares(class_info.method_declaring_classes.get(&key))
+            || declares(class_info.static_method_declaring_classes.get(&key))
     }
 
     /// Runs `operation` with `declare(strict_types=1)` parameter binding suspended.

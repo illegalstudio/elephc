@@ -719,3 +719,25 @@ var_dump($u->parseString('<b>y</b>', ['show-body-only' => false], null));
     );
     assert_eq!(out, "tidy\nbool(true)\n");
 }
+
+/// A user method added to a `tidy` subclass keeps its own `mixed` parameter under
+/// `declare(strict_types=1)`; only the injected prelude adapters get contract types.
+#[test]
+fn test_tidy_subclass_user_method_keeps_mixed_under_strict() {
+    if skip_without_tidy_native("test_tidy_subclass_user_method_keeps_mixed_under_strict") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+declare(strict_types=1);
+class CustomTidy extends tidy {
+    public function configure(mixed $config): string {
+        return is_int($config) ? "int" : "other";
+    }
+}
+$tidy = new CustomTidy();
+echo $tidy->configure(123), "\n";
+"#,
+    );
+    assert_eq!(out, "int\n");
+}
