@@ -271,3 +271,21 @@ unlink($path);
     );
     assert_eq!(out, "hi\n0\nint(4)\nkept\n");
 }
+
+/// A command or environment value whose `__toString()` throws frees the staged builder
+/// (probed through the bridge: a freed builder id refuses further staging).
+#[test]
+fn test_proc_open_throwing_conversion_frees_builder() {
+    let out = compile_and_run(
+        r#"<?php
+class Boom { public function __toString(): string { throw new RuntimeException("boom"); } }
+$probe = elephc_proc_builder_new();
+elephc_proc_builder_free($probe);
+try { proc_open(['echo', new Boom()], [], $pipes); } catch (RuntimeException $e) { echo $e->getMessage(), "\n"; }
+try { proc_open('true', [], $pipes, null, ['A' => new Boom()]); } catch (RuntimeException $e) { echo $e->getMessage(), "\n"; }
+var_dump(elephc_proc_builder_env_reset($probe + 1));
+var_dump(elephc_proc_builder_env_reset($probe + 2));
+"#,
+    );
+    assert_eq!(out, "boom\nboom\nint(0)\nint(0)\n");
+}

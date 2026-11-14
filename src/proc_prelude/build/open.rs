@@ -234,58 +234,65 @@ pub(super) fn decl_fn_elephc_proc_open() -> Stmt {
                 None,
             ),
             s_assign("builder", e_call("elephc_proc_builder_new", vec![])),
-            s_if(
-                e_call("is_array", vec![e_var("command")]),
-                vec![
-                    s_assign("position", e_int(0)),
-                    s_foreach(e_var("command"), None, "argument", vec![
-                        s_assign("position", e_binop(e_var("position"), BinOp::Add, e_int(1))),
-                        s_assign("text", e_cast(CastType::String, e_var("argument"))),
-                        s_if(
-                            e_call("str_contains", vec![e_var("text"), e_str("\0")]),
-                            vec![
-                                s_expr(e_call("elephc_proc_builder_free", vec![e_var("builder")])),
-                                s_throw(e_new_fq("ValueError", vec![e_binop(e_binop(e_str("Command array element "), BinOp::Concat, e_var("position")), BinOp::Concat, e_str(" contains a null byte"))])),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                        s_expr(e_call("elephc_proc_builder_arg", vec![e_var("builder"), e_var("text")])),
-                    ]),
-                ],
-                vec![],
-                Some(vec![
-                s_expr(e_call("elephc_proc_builder_shell", vec![e_var("builder"), e_var("command")])),
-            ]),
-            ),
-            s_if(
-                e_binop(e_var("env_vars"), BinOp::StrictNotEq, e_null()),
-                vec![
-                    s_expr(e_call("elephc_proc_builder_env_reset", vec![e_var("builder")])),
-                    s_foreach(e_var("env_vars"), Some("name"), "value", vec![
-                        s_assign("entry", e_cast(CastType::String, e_var("value"))),
-                        s_if(
-                            e_binop(e_var("entry"), BinOp::StrictEq, e_str("")),
-                            vec![
-                                s_continue(1),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                        s_if(
-                            e_binop(e_call("is_string", vec![e_var("name")]), BinOp::And, e_binop(e_var("name"), BinOp::StrictNotEq, e_str(""))),
-                            vec![
-                                s_assign("entry", e_binop(e_binop(e_var("name"), BinOp::Concat, e_str("=")), BinOp::Concat, e_var("entry"))),
-                            ],
-                            vec![],
-                            None,
-                        ),
-                        s_expr(e_call("elephc_proc_builder_env", vec![e_var("builder"), e_var("entry")])),
-                    ]),
-                ],
-                vec![],
-                None,
-            ),
+            // Every conversion after allocation (`__toString()` may throw) frees the builder.
+            s_try(vec![
+                s_if(
+                    e_call("is_array", vec![e_var("command")]),
+                    vec![
+                        s_assign("position", e_int(0)),
+                        s_foreach(e_var("command"), None, "argument", vec![
+                            s_assign("position", e_binop(e_var("position"), BinOp::Add, e_int(1))),
+                            s_assign("text", e_cast(CastType::String, e_var("argument"))),
+                            s_if(
+                                e_call("str_contains", vec![e_var("text"), e_str("\0")]),
+                                vec![
+                                    s_throw(e_new_fq("ValueError", vec![e_binop(e_binop(e_str("Command array element "), BinOp::Concat, e_var("position")), BinOp::Concat, e_str(" contains a null byte"))])),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_expr(e_call("elephc_proc_builder_arg", vec![e_var("builder"), e_var("text")])),
+                        ]),
+                    ],
+                    vec![],
+                    Some(vec![
+                    s_expr(e_call("elephc_proc_builder_shell", vec![e_var("builder"), e_var("command")])),
+                ]),
+                ),
+                s_if(
+                    e_binop(e_var("env_vars"), BinOp::StrictNotEq, e_null()),
+                    vec![
+                        s_expr(e_call("elephc_proc_builder_env_reset", vec![e_var("builder")])),
+                        s_foreach(e_var("env_vars"), Some("name"), "value", vec![
+                            s_assign("entry", e_cast(CastType::String, e_var("value"))),
+                            s_if(
+                                e_binop(e_var("entry"), BinOp::StrictEq, e_str("")),
+                                vec![
+                                    s_continue(1),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_if(
+                                e_binop(e_call("is_string", vec![e_var("name")]), BinOp::And, e_binop(e_var("name"), BinOp::StrictNotEq, e_str(""))),
+                                vec![
+                                    s_assign("entry", e_binop(e_binop(e_var("name"), BinOp::Concat, e_str("=")), BinOp::Concat, e_var("entry"))),
+                                ],
+                                vec![],
+                                None,
+                            ),
+                            s_expr(e_call("elephc_proc_builder_env", vec![e_var("builder"), e_var("entry")])),
+                        ]),
+                    ],
+                    vec![],
+                    None,
+                ),
+            ], vec![
+                (vec!["\\Throwable"], Some("error"), vec![
+                    s_expr(e_call("elephc_proc_builder_free", vec![e_var("builder")])),
+                    s_throw(e_var("error")),
+                ]),
+            ], None),
             s_foreach(e_var("descriptor_spec"), Some("index"), "spec", vec![
                 s_if(
                     e_not(e_call("is_int", vec![e_var("index")])),
