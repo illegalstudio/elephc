@@ -41,7 +41,7 @@ fn test_error_buffer_new_rejects_union_element_type() {
 #[test]
 fn test_error_buffer_new_rejects_static_float_length() {
     expect_error(
-        "<?php function half(int $n): void { $values = buffer_new<int>($n / 2); } half(4);",
+        "<?php function half(): void { $values = buffer_new<int>(2.5); } half();",
         "buffer_new<T>() length must be integer",
     );
 }

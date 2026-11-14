@@ -456,6 +456,26 @@ pub fn runtime_fn_arity_bounds(
     resolved
 }
 
+/// Returns the per-parameter by-reference flags of a runtime function's builtin contract.
+///
+/// `None` means the runtime function is internal or aliases incompatible contracts; callers that
+/// need a fail-closed by-reference proof must treat that as "may write through every operand".
+pub fn runtime_fn_ref_params(runtime_fn: crate::ir::RuntimeFnId) -> Option<&'static [bool]> {
+    let mut resolved: Option<&'static [bool]> = None;
+    for def in registry().values() {
+        if !def.spec.semantics.runtime_functions.contains(runtime_fn) {
+            continue;
+        }
+        let params = def.ref_params.as_slice();
+        match resolved {
+            Some(previous) if previous != params => return None,
+            Some(_) => {}
+            None => resolved = Some(params),
+        }
+    }
+    resolved
+}
+
 /// Validates the argument count for a named builtin and returns a standard arity error on mismatch.
 ///
 /// Uses the registry's enforced arity contract and compares it against

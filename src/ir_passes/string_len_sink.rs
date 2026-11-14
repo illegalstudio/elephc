@@ -16,7 +16,7 @@
 //!   remain.
 
 use crate::ir::{
-    DataPool, Function, Immediate, InstId, IrType, Op, Ownership, RuntimeCallTarget,
+    DataPool, Function, Immediate, InstId, IrType, LocalSlotId, Op, Ownership, RuntimeCallTarget,
     RuntimeFnId, UnaryStringRuntime, ValueId,
 };
 use crate::types::PhpType;
@@ -725,6 +725,12 @@ pub(super) fn const_local_string(
         let Some(Immediate::LocalSlot(slot)) = load.immediate else {
             return None;
         };
+        // A by-reference call or reference binding can rewrite the slot without a
+        // `store_local` in this function. Folding a load from such a slot would report the
+        // pre-call constant after the callee mutated it.
+        if slot_is_mutated_by_reference(function, slot) {
+            return None;
+        }
         let mut stores: Vec<(InstId, ValueId)> = Vec::new();
         for (raw, inst) in function.instructions.iter().enumerate() {
             let id = InstId::from_raw(raw as u32);
@@ -801,6 +807,61 @@ fn store_reaches_load(
         };
         if let Some(terminator) = &block.terminator {
             pending.extend(super::cfg::successors(terminator));
+        }
+    }
+    false
+}
+
+/// Returns whether a reference binding or a by-reference call argument can rewrite `slot`.
+///
+/// Only the builtin contract's declared by-reference parameters count; a call that consumes a
+/// loaded value by value (for example `ltrim`) must not disqualify a constant fold. Internal
+/// runtime functions with no contract stay fail-closed.
+fn slot_is_mutated_by_reference(function: &Function, slot: LocalSlotId) -> bool {
+    for inst in &function.instructions {
+        if inst.op == Op::StoreRefCell {
+            let alias = matches!(inst.immediate, Some(Immediate::LocalSlot(found)) if found == slot);
+            let owner = inst.operands.iter().any(|value| {
+                function.value(*value).is_some_and(|value| match value.def {
+                    crate::ir::ValueDef::Instruction { inst, .. } => function.instruction(inst)
+                        .is_some_and(|definition| {
+                            matches!(definition.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
+                        }),
+                    _ => false,
+                })
+            });
+            if alias || owner {
+                return true;
+            }
+        }
+        let target = match inst.immediate {
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => Some(target),
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::ProfiledFunction {
+                target,
+                arguments: crate::ir::RuntimeArgumentLayout::Values,
+                ..
+            })) => Some(target),
+            Some(Immediate::RuntimeCall(_)) => None,
+            _ => continue,
+        };
+        let ref_params = target.and_then(crate::builtins::registry::runtime_fn_ref_params);
+        for (index, operand) in inst.operands.iter().enumerate() {
+            let loads_slot = function.value(*operand).is_some_and(|value| match value.def {
+                crate::ir::ValueDef::Instruction { inst, .. } => function.instruction(inst)
+                    .is_some_and(|definition| {
+                        matches!(definition.immediate, Some(Immediate::LocalSlot(found)) if found == slot)
+                    }),
+                _ => false,
+            });
+            if !loads_slot {
+                continue;
+            }
+            let by_ref = ref_params
+                .and_then(|params| params.get(index).copied())
+                .unwrap_or(true);
+            if by_ref {
+                return true;
+            }
         }
     }
     false

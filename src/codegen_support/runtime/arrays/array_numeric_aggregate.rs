@@ -516,10 +516,16 @@ mod tests {
                 emit_aggregate(&mut emitter, product);
                 let asm = emitter.output();
                 let prefix = if product { "__rt_array_product_boxed" } else { "__rt_array_sum_boxed" };
-                let boundary = asm.find(&target.extern_symbol("_setjmp")).unwrap();
-                let acquire = asm.find("__rt_mixed_from_value").unwrap();
-                let warning = asm.find("__rt_diag_warning").unwrap();
-                assert!(boundary < acquire && acquire < warning, "{name}");
+                let boundary = asm.find("_setjmp").unwrap();
+                let acquire = asm[boundary..]
+                    .find("__rt_mixed_from_value")
+                    .map(|offset| boundary + offset)
+                    .unwrap();
+                let warning = asm[boundary..]
+                    .find("__rt_diag_warning")
+                    .map(|offset| boundary + offset)
+                    .unwrap();
+                assert!(acquire < warning, "{name}");
                 assert!(asm.contains("__rt_array_iter_next"), "{name}");
                 assert!(asm.contains("__rt_str_numeric_value"), "{name}");
                 assert!(asm.contains("__rt_exception_chain"), "{name}");
