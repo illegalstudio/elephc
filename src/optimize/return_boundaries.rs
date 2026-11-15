@@ -1,5 +1,6 @@
 //! Purpose:
-//! Models the runtime verification at declared int, callable and class-like return boundaries.
+//! Models the runtime verification at declared `int`, `float`, `string`, `bool` and
+//! `callable` return boundaries.
 //!
 //! Called from:
 //! - Callable effect and exception summaries, DCE body scopes, and checker body scopes.
@@ -18,7 +19,8 @@ use crate::types::{declared_int_return_requires_validation, PhpType, TypeEnv};
 /// Immutable source facts for one function-like return contract.
 #[derive(Clone, Debug)]
 pub(crate) struct ReturnBoundaryFacts {
-    declared_int: bool,
+    /// The declared non-nullable scalar return type whose boundary checks a boxed value.
+    declared_scalar: Option<PhpType>,
     /// A declared `callable` return checks the returned value with `is_callable` and raises
     /// `TypeError`; every return is treated as a possible throw, which is conservative.
     declared_callable: bool,
@@ -39,18 +41,20 @@ impl ReturnBoundaryFacts {
         parameters: impl IntoIterator<Item = (&'a str, Option<&'a TypeExpr>)>,
         body: &[Stmt],
     ) -> Rc<Self> {
-        let declared_int = matches!(hint, Some(TypeExpr::Int))
-            || matches!(hint, Some(TypeExpr::Named(name)) if name.as_str().eq_ignore_ascii_case("int"));
-        let declared_object = hint.is_some_and(object_hint);
+        let declared_scalar = declared_scalar_return(hint);
         let declared_result = match hint {
             Some(TypeExpr::Never) => PhpType::Never,
             _ => parameter_type(hint),
         };
         let declared_callable =
             hint.is_some_and(crate::types::checker::type_expr_declares_callable);
-        if !declared_int && !declared_object {
-            return Rc::new(Self { declared_int, declared_callable, declared_object, declared_result,
-                stable_parameters: TypeEnv::new(), stable_object_parameters: Vec::new() });
+        if declared_scalar.is_none() {
+            return Rc::new(Self {
+                declared_scalar,
+                declared_callable,
+                declared_result,
+                stable_parameters: TypeEnv::new(),
+            });
         }
         let invalidated = body.iter().fold(Invalidation::none(),
             |writes, stmt| writes.union(stmt_invalidation(stmt)));
@@ -61,8 +65,18 @@ impl ReturnBoundaryFacts {
             .map(|(name, _)| name.to_string()).collect();
         let stable_parameters = stable.into_iter()
             .map(|(name, hint)| (name.to_string(), parameter_type(hint))).collect();
-        Rc::new(Self { declared_int, declared_callable, declared_object, declared_result,
-            stable_parameters, stable_object_parameters })
+        Rc::new(Self { declared_scalar, declared_callable, declared_result, stable_parameters })
+    }
+
+    /// Returns whether a value of `source` type reaching this boundary is checked at run time.
+    fn checks_source(&self, source: &PhpType) -> bool {
+        self.declared_callable || match &self.declared_scalar {
+            Some(PhpType::Int) => declared_int_return_requires_validation(true, &PhpType::Int, source),
+            // `string`, `float` and `bool` returns check a value that can hold a refused type;
+            // the strict rule is the wider one, so it is the conservative answer here.
+            Some(declared) => crate::types::param_binding::runtime_scalar_guard_needed(declared, source, true),
+            None => false,
+        }
     }
 
     /// Exposes only the representation promised by the source declaration.
@@ -70,19 +84,7 @@ impl ReturnBoundaryFacts {
 
     /// Tests the same representation predicate used by EIR, with unknown values treated as boxed.
     fn may_throw(&self, expr: &Expr) -> bool {
-        self.declared_callable
-            || (self.declared_int
-                && declared_int_return_requires_validation(true, &PhpType::Int, &self.source_type(expr)))
-            || (self.declared_object && !self.object_source(expr))
-    }
-
-    /// Recognizes returned values that are objects before the class-like boundary checks them.
-    fn object_source(&self, expr: &Expr) -> bool {
-        match &expr.kind {
-            ExprKind::This | ExprKind::NewObject { .. } => true,
-            ExprKind::Variable(name) => self.stable_object_parameters.iter().any(|stable| stable == name),
-            _ => false,
-        }
+        self.checks_source(&self.source_type(expr))
     }
 
     /// Recognizes native values without assuming a mutable local keeps its original hint.
@@ -127,6 +129,24 @@ impl ReturnBoundaryFacts {
     }
 }
 
+/// Returns the declared non-nullable scalar return type whose boundary verifies its value.
+fn declared_scalar_return(hint: Option<&TypeExpr>) -> Option<PhpType> {
+    match hint? {
+        TypeExpr::Int => Some(PhpType::Int),
+        TypeExpr::Float => Some(PhpType::Float),
+        TypeExpr::Str => Some(PhpType::Str),
+        TypeExpr::Bool => Some(PhpType::Bool),
+        TypeExpr::Named(name) => match name.as_str().to_ascii_lowercase().as_str() {
+            "int" => Some(PhpType::Int),
+            "float" => Some(PhpType::Float),
+            "string" => Some(PhpType::Str),
+            "bool" => Some(PhpType::Bool),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Resolves only representations whose syntax is authoritative before checker specialization.
 fn parameter_type(hint: Option<&TypeExpr>) -> PhpType {
     match hint {
@@ -159,39 +179,15 @@ pub(super) fn active_return_boundary_may_throw(expr: &Expr) -> bool {
 /// Uses the checker's source-point type once inference has established the current read view.
 pub(crate) fn active_return_boundary_checks_source(source: &PhpType) -> bool {
     ACTIVE_RETURN_BOUNDARY.with(|slot| slot.borrow().as_ref().is_some_and(|facts|
-        facts.declared_callable
-            || declared_int_return_requires_validation(facts.declared_int, &PhpType::Int, source)
-            || (facts.declared_object
-                && crate::types::object_boundary::runtime_checked_object_source(source))))
+        facts.checks_source(source)))
 }
 
-/// Recognizes a parameter hint whose value the class-like return boundary never re-checks.
-///
-/// A nullable or union hint that names the bare `object` type (`?object`, `object|null`) is a
-/// source the boundary checks at run time (`types::object_boundary`), so returning it may throw.
-fn statically_object_parameter_hint(hint: &TypeExpr) -> bool {
-    let bare_object = |hint: &TypeExpr| matches!(hint, TypeExpr::Named(name)
-        if name.as_str().eq_ignore_ascii_case("object"));
-    match hint {
-        TypeExpr::Nullable(inner) => !bare_object(inner) && object_hint(inner),
-        TypeExpr::Union(members) => !members.iter().any(bare_object) && object_hint(hint),
-        _ => object_hint(hint),
-    }
-}
-
-/// Recognizes a class, interface, `object` or nullable-class return hint.
-fn object_hint(hint: &TypeExpr) -> bool {
-    const BUILTIN: [&str; 14] = ["int", "float", "bool", "false", "true", "string", "array",
-        "callable", "iterable", "mixed", "null", "void", "never", "resource"];
-    match hint {
-        TypeExpr::Named(name) => !BUILTIN.iter().any(|builtin| name.as_str().eq_ignore_ascii_case(builtin)),
-        TypeExpr::GenericClass { .. } => true,
-        TypeExpr::Nullable(inner) => object_hint(inner),
-        TypeExpr::Union(members) => members.iter().any(object_hint) && members.iter().all(|member|
-            object_hint(member) || matches!(member, TypeExpr::Void)
-                || matches!(member, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("null"))),
-        _ => false,
-    }
+/// Returns whether the active `string`/`float`/`bool` return boundary checks a returned value
+/// of checked type `source` under the declaring file's `strict` mode (the checker records it).
+pub(crate) fn active_scalar_return_needs_guard(source: &PhpType, strict: bool) -> bool {
+    ACTIVE_RETURN_BOUNDARY.with(|slot| slot.borrow().as_ref().is_some_and(|facts|
+        matches!(&facts.declared_scalar, Some(declared @ (PhpType::Str | PhpType::Float | PhpType::Bool))
+            if crate::types::param_binding::runtime_scalar_guard_needed(declared, source, strict))))
 }
 
 /// Collects contracts using the same free-function and method keys as the summary tables.

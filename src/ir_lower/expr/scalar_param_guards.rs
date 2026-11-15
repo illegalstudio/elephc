@@ -337,6 +337,64 @@ pub(super) fn guard_scalar_param(
     also_release: &[crate::ir::ValueId],
 ) -> Option<LoweredValue> {
     let declared = guarded_scalar_param(ctx, sig, index, value.value, source)?;
+    let argument = sig.params.iter().take(index).filter(|(name, _)| {
+        name != crate::func_args::HIDDEN_ARGC_PARAM && name != crate::func_args::HIDDEN_ARGS_PARAM
+    }).count() + 1;
+    let callable = ctx.call_description.clone().unwrap_or_default();
+    let source_path = ctx.source_path().unwrap_or("unknown").to_string();
+    // PHP's "called in" names the line where the call starts, not the argument's line. An
+    // internal method's refusal (a URI method under `strict_types=1`) has no such suffix.
+    let line = ctx.call_site_span.map_or(span.line, |call| call.line);
+    let prefix = format!(
+        "{}(): Argument #{argument} (${}) must be of type {}, ",
+        guard_callee_label(ctx, &callable),
+        sig.params[index].0,
+        crate::types::diagnostic_names::php_type_name(&declared),
+    );
+    let suffix = if is_internal_uri_callee(&callable) {
+        " given".to_string()
+    } else {
+        format!(" given, called in {source_path} on line {line}")
+    };
+    // The instruction's span is the site its diagnostics report: an `int` binding's precision
+    // deprecation names the parameter's declaration file and line, as in PHP.
+    let diagnostic_span = match declared {
+        PhpType::Int => param_decl_site(&callable, index).unwrap_or(span),
+        _ => span,
+    };
+    emit_scalar_guard(
+        ctx, value, &declared, &prefix, &suffix, span,
+        ScalarGuardEmit { release_on_refusal, also_release: also_release.to_vec(), diagnostic_span },
+    )
+}
+
+/// Per-site options of [`emit_scalar_guard`].
+#[derive(Clone)]
+pub(crate) struct ScalarGuardEmit {
+    /// Release an owned operand no cleanup root covers when the check refuses it.
+    pub(crate) release_on_refusal: bool,
+    /// The call's other unpublished owned operands, also released when the check refuses.
+    pub(crate) also_release: Vec<crate::ir::ValueId>,
+    /// The span the instruction's diagnostics (the int precision deprecation) report.
+    pub(crate) diagnostic_span: Span,
+}
+
+/// Emits one `Op::ScalarParamGuard` checking `value` against the declared scalar `declared`
+/// under the current file's `strict_types` mode; a refused value throws `TypeError` with
+/// `prefix` + its PHP type name + `suffix`.
+///
+/// Shared by argument binding and declared return boundaries. For `int`/`float` it returns the
+/// converted scalar and releases an owned temporary box, which has no reader left.
+pub(crate) fn emit_scalar_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    declared: &PhpType,
+    prefix: &str,
+    suffix: &str,
+    span: Span,
+    options: ScalarGuardEmit,
+) -> Option<LoweredValue> {
+    let declared = declared.clone();
     let mode = match declared {
         PhpType::Str => 's',
         PhpType::Int => 'i',
@@ -347,53 +405,27 @@ pub(super) fn guard_scalar_param(
     // An owned operand no cleanup root covers is released by the refusal itself, so a
     // `TypeError` does not leak it (the accepting path keeps the ordinary ownership flow).
     let mut releases = Vec::new();
-    if release_on_refusal && ctx.value_is_owning_temporary(value) {
+    if options.release_on_refusal && ctx.value_is_owning_temporary(value) {
         releases.push(value.value);
     }
-    releases.extend(also_release.iter().copied());
+    releases.extend(options.also_release.iter().copied());
     let release = if releases.is_empty() { "" } else { "r" };
     // Operand 0 is the checked value; with the `r` flag the rest are released on refusal.
     let mut guard_operands = vec![value.value];
-    if !releases.is_empty() {
-        guard_operands.extend(releases);
-    }
-    let argument = sig.params.iter().take(index).filter(|(name, _)| {
-        name != crate::func_args::HIDDEN_ARGC_PARAM && name != crate::func_args::HIDDEN_ARGS_PARAM
-    }).count() + 1;
-    let callable = ctx.call_description.clone().unwrap_or_default();
-    let source_path = ctx.source_path().unwrap_or("unknown").to_string();
-    // PHP's "called in" names the line where the call starts, not the argument's line. An
-    // internal method's refusal (a URI method under `strict_types=1`) has no such suffix.
-    let line = ctx.call_site_span.map_or(span.line, |call| call.line);
-    let called_in = if is_internal_uri_callee(&callable) {
-        String::new()
-    } else {
-        format!(", called in {source_path} on line {line}")
-    };
-    let encoded = format!(
-        "{mode}{release}\u{1f}{}(): Argument #{argument} (${}) must be of type {}, \u{1f} given{called_in}",
-        guard_callee_label(ctx, &callable),
-        sig.params[index].0,
-        crate::types::diagnostic_names::php_type_name(&declared),
-    );
+    guard_operands.extend(releases);
+    let encoded = format!("{mode}{release}\u{1f}{prefix}\u{1f}{suffix}");
     let data = ctx.intern_string(&encoded);
     if matches!(declared, PhpType::Int | PhpType::Float) {
-        // The instruction's span is the site its diagnostics report: an `int` binding's
-        // precision deprecation names the parameter's declaration file and line, as in PHP.
-        let diagnostic_span = match declared {
-            PhpType::Int => param_decl_site(&callable, index).unwrap_or(span),
-            _ => span,
-        };
         let converted = ctx.emit_value(
             Op::ScalarParamGuard,
             guard_operands.clone(),
             Some(Immediate::Data(data)),
             declared,
             Op::ScalarParamGuard.default_effects(),
-            Some(diagnostic_span),
+            Some(options.diagnostic_span),
         );
-        // The scalar replaces the box as the call operand, so an owned temporary box has no
-        // reader left; a box rooted for the call (a borrow) retires with the call's owners.
+        // The scalar replaces the box, so an owned temporary box has no reader left; a box
+        // rooted for a call (a borrow) retires with that call's owners.
         if ctx.value_is_owning_temporary(value) {
             crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
         }

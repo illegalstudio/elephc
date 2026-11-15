@@ -99,6 +99,8 @@ mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
 mod scalar_param_guards;
+pub(crate) use scalar_param_guards::{emit_scalar_guard, ScalarGuardEmit};
+pub(crate) use unary_logic::lower_truthy_bool;
 mod positional_spreads;
 mod dynamic_spreads;
 mod dynamic_constructors;
