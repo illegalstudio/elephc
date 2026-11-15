@@ -16,6 +16,7 @@ use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty};
 use crate::span::Span;
 
 use super::validation::validate_direct_method_duplicates;
+use super::ImportedMethod;
 
 /// Merges `imported` trait properties with `local` class/trait properties.
 /// Conflicts (same name, incompatible modifiers) are reported as errors.
@@ -89,7 +90,9 @@ pub(super) fn merge_property_into(
 /// Merges `imported` trait methods with `local` class/trait methods.
 /// Validates that `local` has no duplicate method keys (name + is_static).
 /// Imported methods with the same key as local are skipped (local wins).
-/// Duplicate imported methods (same key from multiple traits) are reported as errors.
+/// Duplicate imported methods (same key from multiple traits) are resolved by
+/// `resolve_duplicate_imported_method`; `resolve_trait_uses` has already merged them, so a
+/// collision here is reported without trait names.
 /// Returns the merged list: imported-first, then local.
 pub(super) fn merge_methods(
     imported: Vec<ClassMethod>,
@@ -104,24 +107,30 @@ pub(super) fn merge_methods(
         local_keys.insert((php_symbol_key(&method.name), method.is_static));
     }
 
-    let mut merged = Vec::new();
-    let mut seen_imported = HashSet::new();
+    let mut merged: Vec<ClassMethod> = Vec::new();
+    let mut seen_imported = HashMap::new();
     for imported_method in imported {
         let key = (php_symbol_key(&imported_method.name), imported_method.is_static);
         if local_keys.contains(&key) {
             continue;
         }
-        // `resolve_trait_uses` already merged duplicate imports (requirements included), so a
-        // repeat here is a flattening bug, reported as the duplicate it is.
-        if !seen_imported.insert(key.clone()) {
-            return Err(CompileError::new(
-                span,
-                &format!(
-                    "{} imports duplicate trait method '{}'",
-                    owner_label, imported_method.name
-                ),
-            ));
+        if let Some(&index) = seen_imported.get(&key) {
+            match resolve_duplicate_imported_method(&merged[index], &imported_method) {
+                DuplicateImport::KeepExisting => {}
+                DuplicateImport::ReplaceExisting => merged[index] = imported_method,
+                DuplicateImport::Collision => {
+                    return Err(CompileError::new(
+                        span,
+                        &format!(
+                            "{} imports duplicate trait method '{}'",
+                            owner_label, imported_method.name
+                        ),
+                    ));
+                }
+            }
+            continue;
         }
+        seen_imported.insert(key, merged.len());
         merged.push(imported_method);
     }
 
@@ -131,23 +140,30 @@ pub(super) fn merge_methods(
 
 /// Appends each method in `incoming` to `existing`, tracking seen (name, is_static)
 /// keys to prevent duplicate imports across different trait sources.
-/// Errors if the same method key already exists in `existing` (trait conflict).
+/// A second method with a key already in `existing` is resolved by
+/// `resolve_duplicate_imported_method`; a collision reports both source traits as PHP does.
 /// Used when accumulating methods from multiple traits within one class.
 pub(super) fn merge_imported_method_set(
-    existing: &mut Vec<ClassMethod>,
-    incoming: Vec<ClassMethod>,
+    existing: &mut Vec<ImportedMethod>,
+    incoming: Vec<ImportedMethod>,
     span: Span,
     owner_label: &str,
 ) -> Result<(), CompileError> {
     let mut seen: HashMap<(String, bool), usize> = existing
         .iter()
         .enumerate()
-        .map(|(index, method)| ((php_symbol_key(&method.name), method.is_static), index))
+        .map(|(index, method)| ((php_symbol_key(&method.decl.name), method.decl.is_static), index))
         .collect();
     for method in incoming {
-        let key = (php_symbol_key(&method.name), method.is_static);
+        let key = (php_symbol_key(&method.decl.name), method.decl.is_static);
         if let Some(&index) = seen.get(&key) {
-            merge_duplicate_imported_method(&mut existing[index], method, span, owner_label)?;
+            match resolve_duplicate_imported_method(&existing[index].decl, &method.decl) {
+                DuplicateImport::KeepExisting => {}
+                DuplicateImport::ReplaceExisting => existing[index] = method,
+                DuplicateImport::Collision => {
+                    return Err(trait_method_collision(span, owner_label, &existing[index], &method));
+                }
+            }
             continue;
         }
         seen.insert(key, existing.len());
@@ -156,67 +172,80 @@ pub(super) fn merge_imported_method_set(
     Ok(())
 }
 
+/// What to do with a second imported method that has the key of an existing one.
+enum DuplicateImport {
+    KeepExisting,
+    ReplaceExisting,
+    Collision,
+}
+
 /// Resolves a second imported method with the key of `existing`, as PHP does: an abstract trait
 /// method is a requirement, not a definition, so it never conflicts. A concrete method replaces
 /// an abstract one (`use NeedsInvalidate, ProvidesInvalidate;`), and a second abstract one adds
-/// nothing, each once `check_trait_requirement` accepts the pair. Only two concrete methods
-/// conflict.
-fn merge_duplicate_imported_method(
-    existing: &mut ClassMethod,
-    incoming: ClassMethod,
-    span: Span,
-    owner_label: &str,
-) -> Result<(), CompileError> {
+/// nothing. The same trait method reached along two `use` paths is kept once
+/// (`is_same_trait_method`). Only two different concrete methods collide.
+fn resolve_duplicate_imported_method(
+    existing: &ClassMethod,
+    incoming: &ClassMethod,
+) -> DuplicateImport {
     if incoming.is_abstract {
-        return check_trait_requirement(&incoming, existing, span, owner_label);
+        return DuplicateImport::KeepExisting;
     }
     if existing.is_abstract {
-        check_trait_requirement(existing, &incoming, span, owner_label)?;
-        *existing = incoming;
-        return Ok(());
+        return DuplicateImport::ReplaceExisting;
     }
-    Err(CompileError::new(
-        span,
-        &format!("{} imports duplicate trait method '{}'", owner_label, incoming.name),
-    ))
+    if is_same_trait_method(existing, incoming) {
+        return DuplicateImport::KeepExisting;
+    }
+    DuplicateImport::Collision
 }
 
-/// Checks that `other`, another trait's method of the same name and kind, may stand for the
-/// abstract trait method `required`: a concrete method that implements it, or a second abstract
-/// declaration of it.
+/// Whether two imported copies are the same trait method, reached along two `use` paths
+/// (`trait A { use T; } trait B { use T; } class C { use A, B; }`).
 ///
-/// PHP checks that pair like an override (`Declaration of B::foo() must be compatible with
-/// A::foo()`). Until trait flattening runs that check, only an identical signature is accepted
-/// here: the same parameter types, by-reference flags, optionality and variadic, and the same
-/// return type and by-reference return. Visibility is not compared, as PHP does not compare it.
-/// Anything else is rejected, as it was before abstract trait methods merged at all.
-pub(super) fn check_trait_requirement(
-    required: &ClassMethod,
-    other: &ClassMethod,
+/// Zend keeps the first copy when both share the declaration's opcodes and their visibility
+/// matches, and reports a collision otherwise, even for identical source in two traits. The
+/// declaration span identifies the source method (it carries the file), and an `as` alias keeps
+/// it. The rest of the declaration must match too, because a generic trait's instantiations share
+/// spans while their types differ, and `as <visibility>` changes a copy.
+pub(super) fn is_same_trait_method(left: &ClassMethod, right: &ClassMethod) -> bool {
+    if left.span != right.span
+        || left.visibility != right.visibility
+        || left.is_static != right.is_static
+        || php_symbol_key(&left.name) != php_symbol_key(&right.name)
+    {
+        return false;
+    }
+    let mut left = left.clone();
+    let mut right = right.clone();
+    left.name.clear();
+    right.name.clear();
+    format!("{left:?}") == format!("{right:?}")
+}
+
+/// PHP's error for two different trait methods with one name: `rejected` is the later one,
+/// which is not applied.
+pub(super) fn trait_method_collision(
     span: Span,
     owner_label: &str,
-) -> Result<(), CompileError> {
-    let same_params = required.params.len() == other.params.len()
-        && required.params.iter().zip(&other.params).all(|(left, right)| {
-            left.1 == right.1 && left.3 == right.3 && left.2.is_some() == right.2.is_some()
-        });
-    let same_signature = same_params
-        && required.variadic.is_some() == other.variadic.is_some()
-        && required.variadic_by_ref == other.variadic_by_ref
-        && required.variadic_type == other.variadic_type
-        && required.return_type == other.return_type
-        && required.by_ref_return == other.by_ref_return;
-    if same_signature {
-        return Ok(());
-    }
-    Err(CompileError::new(
+    applied: &ImportedMethod,
+    rejected: &ImportedMethod,
+) -> CompileError {
+    let owner = owner_label
+        .split_once(' ')
+        .map_or(owner_label, |(_, name)| name);
+    CompileError::new(
         span,
         &format!(
-            "{} imports trait method '{}' with a signature that differs from the abstract trait \
-             method it implements; only an identical signature is supported",
-            owner_label, other.name
+            "Trait method {}::{} has not been applied as {}::{}, because of collision with {}::{}",
+            rejected.source_trait,
+            rejected.decl.name,
+            owner,
+            rejected.decl.name,
+            applied.source_trait,
+            applied.decl.name,
         ),
-    ))
+    )
 }
 
 /// Merges imported trait constants with constants declared directly by a class or trait.

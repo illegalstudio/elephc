@@ -41,7 +41,8 @@ use super::builtin_user_filter::inject_builtin_user_filter;
 use super::schema::{
     build_class_info_recursive, build_enum_info, build_interface_info_recursive,
     drop_unresolvable_attribute_arg_refs, validate_deferred_class_constants,
-    validate_deferred_declaration_defaults, validate_enum_trait_requirements,
+    validate_class_trait_requirements, validate_deferred_declaration_defaults,
+    validate_enum_trait_requirements,
     expand_enum_interfaces, validate_enum_interface_contracts,
     validate_trait_property_defaults,
 };
@@ -444,6 +445,9 @@ pub(super) fn check_types_impl(
             }
         }
     }
+    // A trait requirement that another trait's method or the class's own method satisfied is
+    // gone from the flattened class, but that method must still be compatible with it.
+    errors.extend(validate_class_trait_requirements(&checker, program, &flattened_classes));
     checker.box_untyped_interface_method_params();
     report_class_id_inventory(&checker);
     errors.extend(validate_deferred_declaration_defaults(

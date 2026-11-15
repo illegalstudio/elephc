@@ -402,3 +402,61 @@ echo (new C())->foo(), "\n";
     );
     assert_eq!(out, "c\n");
 }
+
+/// The same trait method reached along two `use` paths is one method, not a collision: PHP
+/// compares where the method comes from, not its name. This holds for one `use A, B`, separate
+/// `use` statements, a nested trait, an alias, `insteadof`, a static method, and a class or
+/// parent method that overrides it. Expected output measured with php 8.5.12.
+#[test]
+fn test_trait_method_shared_through_two_traits_is_not_a_collision() {
+    let out = compile_and_run(
+        r#"<?php
+trait Greets { public function hi(): string { return "hi"; } public static function make(): string { return "made"; } }
+trait Loud { use Greets; }
+trait Quiet { use Greets; }
+trait Renames { use Greets { hi as hello; } }
+trait Both { use Loud, Quiet; }
+final class OneUse { use Loud, Quiet; }
+final class TwoUses { use Loud; use Quiet; }
+final class Direct { use Loud, Greets; }
+final class Nested { use Both; }
+final class Aliased { use Renames, Quiet; }
+final class Chosen { use Loud, Quiet { Loud::hi insteadof Quiet; Quiet::hi as hey; } }
+final class Own { use Loud, Quiet; public function hi(): string { return "own"; } }
+class Base { public function hi(): string { return "base"; } }
+final class Child extends Base { use Loud, Quiet; }
+echo (new OneUse())->hi(), OneUse::make(), " ", (new TwoUses())->hi(), " ", (new Direct())->hi(), " ";
+echo (new Nested())->hi(), " ", (new Aliased())->hi(), (new Aliased())->hello(), " ";
+echo (new Chosen())->hi(), (new Chosen())->hey(), " ", (new Own())->hi(), " ", (new Child())->hi(), "\n";
+"#,
+    );
+    assert_eq!(out, "himade hi hi hi hihi hihi own hi\n");
+}
+
+/// A concrete trait method satisfies an abstract one from a sibling trait, also when the
+/// requirement comes from a nested trait, when the concrete method is private or static, when
+/// `insteadof` picks it, when the class defines the method itself, and when it widens the
+/// signature. Expected output measured with php 8.5.12.
+#[test]
+fn test_trait_requirement_satisfied_by_sibling_trait_method() {
+    let out = compile_and_run(
+        r#"<?php
+trait Needs { abstract public function label(): string; public function show(): string { return "<" . $this->label() . ">"; } }
+trait Gives { public function label(): string { return "g"; } }
+trait Wraps { use Needs; }
+trait Hidden { private function label(): string { return "h"; } }
+trait NeedsStatic { abstract public static function tag(): string; public static function tagged(): string { return "[" . static::tag() . "]"; } }
+trait GivesStatic { public static function tag(): string { return "s"; } }
+trait Other { public function label(): string { return "o"; } }
+trait Wide { public function label(int $x = 0): string { return "w$x"; } }
+final class Sibling { use Wraps, Gives; }
+final class Privy { use Needs, Hidden; }
+final class Statics { use NeedsStatic, GivesStatic; }
+final class Picked { use Needs, Gives, Other { Other::label insteadof Gives; Gives::label as gives; } }
+final class Mine { use Needs, Gives; public function label(): string { return "m"; } }
+final class Widened { use Needs, Wide; }
+echo (new Sibling())->show(), (new Privy())->show(), Statics::tagged(), (new Picked())->show(), (new Picked())->gives(), (new Mine())->show(), (new Widened())->show(), "\n";
+"#,
+    );
+    assert_eq!(out, "<g><h>[s]<o>g<m><w0>\n");
+}
