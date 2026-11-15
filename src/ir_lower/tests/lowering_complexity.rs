@@ -212,6 +212,39 @@ fn operator_classes_are_listed_once_per_program() {
     assert_eq!(small, large, "class table walks grew with the bodies: {small} vs {large}");
 }
 
+/// `count` calls of one variadic method name on an untyped receiver.
+fn many_boxed_receiver_variadic_calls(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..4 {
+        source.push_str(&format!(
+            "class V{index} {{ public function run(int ...$xs): int {{ return array_sum($xs) + {index}; }} }}\n"
+        ));
+    }
+    source.push_str("function f(mixed $o): int {\n    $n = 0;\n");
+    for index in 0..count {
+        source.push_str(&format!("    $n += $o->run({index}, 2);\n"));
+    }
+    source.push_str("    return $n;\n}\necho f(new V0()), f(new V3()), \"\\n\";\n");
+    source
+}
+
+/// What the declarations of a method name take is collected once per program: every call on a
+/// boxed receiver walked every class to learn whether some declaration is variadic or takes a
+/// reference.
+#[test]
+fn boxed_receiver_calls_read_each_method_shape_once() {
+    use crate::ir_lower::expr::array_access_types::CLASS_TABLE_WALKS;
+    let walks = |source: &str| {
+        CLASS_TABLE_WALKS.with(|walks| walks.set(0));
+        let _module = lower_source(source);
+        CLASS_TABLE_WALKS.with(|walks| walks.get())
+    };
+    let small = walks(&many_boxed_receiver_variadic_calls(2));
+    let large = walks(&many_boxed_receiver_variadic_calls(40));
+    assert!(small > 0, "the fixture no longer asks for a method shape");
+    assert_eq!(small, large, "class table walks grew with the calls: {small} vs {large}");
+}
+
 /// `count` classes, each writing a runtime-named property on `$this`: every class is a receiver
 /// family the dynamic-storage pass resolves.
 fn many_runtime_named_writers(count: usize) -> String {

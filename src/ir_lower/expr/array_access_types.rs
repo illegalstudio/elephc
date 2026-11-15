@@ -63,6 +63,43 @@ struct ClassTableFacts {
     declares_array_access: Option<bool>,
     /// The program's classes with internal operator handlers, sorted by name.
     operator_classes: Option<std::rc::Rc<Vec<String>>>,
+    /// Method key -> what the program's declarations of it take; see `boxed_method_shape`.
+    boxed_method_shapes: crate::fast_hash::FastMap<String, BoxedMethodShape>,
+}
+
+/// What every class's declaration of one method name takes, as a call on a receiver of unknown
+/// class must plan for.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(in crate::ir_lower) struct BoxedMethodShape {
+    /// Some declaration takes a parameter by reference.
+    pub(in crate::ir_lower) by_ref_param: bool,
+    /// Some declaration is variadic in source (not the hidden `func_get_args()` collector).
+    pub(in crate::ir_lower) source_variadic: bool,
+}
+
+/// What the program's declarations of method `key` take, over every class.
+///
+/// Asked by every call on a boxed receiver; each walked the whole class table again, about 340
+/// samples of a sampled one-core Symfony demo build.
+pub(in crate::ir_lower) fn boxed_method_shape(ctx: &LoweringContext<'_, '_>, key: &str) -> BoxedMethodShape {
+    with_class_table_facts(ctx, |facts| {
+        if let Some(shape) = facts.boxed_method_shapes.get(key) {
+            return *shape;
+        }
+        #[cfg(test)]
+        CLASS_TABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
+        let mut shape = BoxedMethodShape::default();
+        for class_info in ctx.classes.values() {
+            let Some(sig) = class_info.methods.get(key) else {
+                continue;
+            };
+            shape.by_ref_param |= sig.ref_params.iter().any(|by_ref| *by_ref);
+            shape.source_variadic |=
+                sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig);
+        }
+        facts.boxed_method_shapes.insert(key.to_string(), shape);
+        shape
+    })
 }
 
 /// The program's classes with internal operator handlers (`GMP`, `BcMath\Number`, ...), sorted.

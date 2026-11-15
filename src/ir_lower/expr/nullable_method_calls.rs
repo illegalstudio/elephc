@@ -110,20 +110,13 @@ pub(super) fn lower_boxed_receiver_variadic_method_call(
     {
         return None;
     }
-    let key = php_symbol_key(method);
-    let mut declares_variadic = false;
-    for class_info in ctx.classes.values() {
-        let Some(sig) = class_info.methods.get(&key) else {
-            continue;
-        };
-        if sig.ref_params.iter().any(|by_ref| *by_ref) {
-            return None;
-        }
-        // The hidden `func_get_args()` collector is not a source variadic: the class-id dispatch
-        // packs it, and once eval or a backtrace is in the program every method carries one.
-        declares_variadic |=
-            sig.variadic.is_some() && !crate::func_args::sig_collects_surplus_args(sig);
+    // The hidden `func_get_args()` collector is not a source variadic: the class-id dispatch
+    // packs it, and once eval or a backtrace is in the program every method carries one.
+    let shape = super::array_access_types::boxed_method_shape(ctx, &php_symbol_key(method));
+    if shape.by_ref_param {
+        return None;
     }
+    let declares_variadic = shape.source_variadic;
     // Named arguments against a boxed receiver cannot be matched to positions at compile time
     // either: the object may be an instance of any class with this method, or of one only the
     // interpreter knows, and the positional ABI dropped the names — `$builder->withRouting(web:
