@@ -154,6 +154,10 @@ pub(super) fn lower_builtin_call_args(
     sig: Option<&FunctionSig>,
     args: &[Expr],
 ) -> Vec<crate::ir::ValueId> {
+    let canonical = php_symbol_key(name.trim_start_matches('\\'));
+    let def = crate::builtins::registry::lookup(&canonical);
+    let checked_signature = super::builtin_input_contracts::checked_signature(ctx, def, sig);
+    let sig = checked_signature.as_ref().or(sig);
     let prepared = super::prepared_builtin_refs::active(ctx, name);
     let previous = ctx.call_argument_evaluation_scopes.last_mut().map(|scope| {
         let previous = scope.prepared_builtin_reference_arguments;
@@ -164,8 +168,9 @@ pub(super) fn lower_builtin_call_args(
     let args = rewritten.as_deref().unwrap_or(args);
     let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
         .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
-    let canonical = php_symbol_key(name.trim_start_matches('\\'));
-    let def = crate::builtins::registry::lookup(&canonical);
+    let operands = if let Some(signature) = checked_signature.as_ref() {
+        coerce_operands_to_params(ctx, signature, operands)
+    } else { operands };
     let lowering = def.map(|def| def.spec.semantics.argument_lowering);
     let operands = match lowering {
         Some(crate::builtins::semantics::BuiltinArgumentLowering::BareArrayValues { arg, sole }) => {

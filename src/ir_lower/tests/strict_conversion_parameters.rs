@@ -10,6 +10,44 @@
 use elephc_semantics::{SemanticProfile, StrictFeature};
 use crate::{source::SourceMode, codegen_support::platform::Target};
 
+/// Flow-known builtin inputs fail with strict diagnostics while erased values keep runtime guards.
+#[test]
+fn strict_conversion_parameters_builtin_typed_inputs_and_all_targets() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
+    for mode in [SourceMode::Php, SourceMode::Lfc] {
+        for source in [
+            "<?php function checkedLength(int $value): int { return strlen($value); }",
+            "<?php function checkedRepeat(float $value): string { return str_repeat('a', $value); }",
+            "<?php function checkedJson(int $value): mixed { return json_decode($value); }",
+        ] {
+            let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
+            let error = crate::types::checker::check_staged_semantics(&program, Target::detect_host(), profile)
+                .err().unwrap_or_else(|| panic!("{source}"));
+            assert!(error.message.contains("strict-coercions"), "{source}: {error:?}");
+        }
+    }
+    let source = "<?php function builtinDynamic(mixed $value): int { return strlen($value); } function builtinJson(mixed $value): mixed { return json_decode($value); } function builtinLength(mixed $length): string { return substr('abc', 0, $length); }";
+    for mode in [SourceMode::Php, SourceMode::Lfc, SourceMode::Internal] {
+        let program = crate::parser::parse_with_mode(&crate::lexer::tokenize(source).unwrap(), mode).unwrap();
+        for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(target).unwrap();
+            let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+            let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+            for optimize in [false, true] {
+                let mut module = module.clone();
+                if optimize { crate::ir_passes::optimize_module(&mut module); }
+                for name in ["builtinDynamic", "builtinJson", "builtinLength"] {
+                    let function = module.functions.iter().find(|function| function.name == name).unwrap();
+                    assert_eq!(function.instructions.iter().any(|instruction| instruction.op == crate::ir::Op::ThrowTypeError),
+                        mode != SourceMode::Internal, "{target:?} {mode:?}: {name}");
+                }
+                crate::ir::validate_module(&module).unwrap();
+                crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            }
+        }
+    }
+}
+
 /// Original builtin inputs remain subject to exact contracts before constant calls disappear.
 #[test]
 fn strict_conversion_parameters_builtin_inputs_survive_source_folding() {

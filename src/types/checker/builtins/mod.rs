@@ -342,8 +342,12 @@ impl Checker {
                 crate::builtins::semantics::BuiltinValidation::CheckerHook { .. }
             ) {
                 let mut arg_types = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_types.push(self.infer_type(arg, env)?);
+                for (index, arg) in args.iter().enumerate() {
+                    let ty = self.infer_type(arg, env)?;
+                    if let Some(expected) = crate::builtins::input_contracts::parameter_type(def, index) {
+                        self.require_noncoercive_value_type(&expected, &ty, source_mode, arg.span, name)?;
+                    }
+                    arg_types.push(ty);
                 }
                 reject_array_at_string_param(name, &def.params, def.variadic.is_some(), args, &arg_types)?;
                 let semantic_input = crate::builtins::semantics::BuiltinSemanticInput {
@@ -417,7 +421,10 @@ impl Checker {
                     if contextual.contains(&idx) {
                         continue;
                     }
-                    self.infer_type(arg, env)?;
+                    let ty = self.infer_type(arg, env)?;
+                    if let Some(expected) = crate::builtins::input_contracts::parameter_type(def, idx) {
+                        self.require_noncoercive_value_type(&expected, &ty, source_mode, arg.span, name)?;
+                    }
                 }
             }
             let mut cx = crate::builtins::spec::BuiltinCheckCtx {

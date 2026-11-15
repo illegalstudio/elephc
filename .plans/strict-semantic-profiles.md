@@ -918,6 +918,31 @@ above are unchanged.
   Casts-only eval argument aliases remain independent admission audits. The public
   mask still contains the same six completed guarantees.
 
+### Native builtin input contracts
+
+The native dynamic-input regression exposed five unchecked conversions in the
+standard positional builtin path: `strlen` accepted int, bool, null and a
+Stringable object, and `str_repeat` accepted a float count. The old result was
+`1AX1AX0AXS9AXaaAX|1A|abc`, with balanced owners. The corrected five-case fixture
+passes under both optimizer settings and has a clean heap.
+
+The common builtin argument entry now projects fixed value-input types from the
+neutral AOT metadata before planning. Names, defaults, by-reference modes and
+variadic collector shapes stay with the existing signature. Nullable alternatives
+are retained. The common parameter-order pass checks evaluated inputs before
+builtin-specific value adaptation. JSON's source preparation also runs that pass
+before its detached string conversion. Shared and non-lazy checker validation
+reuses each already inferred input type for static strict diagnostics.
+
+The expanded native fixture adds named arguments, unpacking, a first-class
+callable, later-argument effects, JSON and runtime-null substring length. It
+passes under both optimizer settings with clean heaps. Five focused library
+checks pass, including typed source diagnostics, trusted implementation controls
+and EIR generation on all five targets with both optimizer settings. The compiler
+build and builtin architecture audit pass. Numeric and permissive controls are
+checked separately. Coercions remains staged while the remaining
+source/prelude/host paths are audited.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1041,4 +1066,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 
 | 97 | `f36b2321b0` | feat(strict): validate builtin inputs before folding |
 
-| 98 | this commit | fix(strict): retire converted reflection class arguments |
+| 98 | `4d3192488e` | fix(strict): retire converted reflection class arguments |
+| 99 | this commit | feat(strict): guard native builtin input contracts |

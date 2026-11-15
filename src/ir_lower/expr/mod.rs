@@ -93,6 +93,7 @@ mod callable_resolution;
 mod unset;
 mod unset_collection;
 mod array_builtin_args;
+mod builtin_input_contracts;
 mod array_push_spread;
 mod borrowed_string_args;
 mod weak_string_unions;
