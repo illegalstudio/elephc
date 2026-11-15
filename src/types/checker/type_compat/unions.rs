@@ -69,6 +69,20 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        // `int|callable` and other unions with a coercible scalar keep the descriptor-typed
+        // callable member, exactly as `Checker::types_compatible` judges them.
+        if let PhpType::Union(members) = expected {
+            if PhpType::callable_union_needs_descriptor(members) {
+                let members = members
+                    .iter()
+                    .map(|member| match member {
+                        PhpType::DeclaredCallable => PhpType::Callable,
+                        other => other.clone(),
+                    })
+                    .collect();
+                return self.type_accepts(&PhpType::Union(members), actual);
+            }
+        }
         // A declared `callable` keeps any value PHP could call, and a descriptor-typed slot
         // takes one by materializing its descriptor (see `Checker::types_compatible`).
         if matches!(expected, PhpType::DeclaredCallable | PhpType::Callable)

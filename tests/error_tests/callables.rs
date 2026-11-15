@@ -1158,3 +1158,26 @@ fn test_error_direct_mixed_argument_does_not_gain_descriptor_unboxing() {
         expect_error(source, "parameter $callback expects callable, got mixed");
     }
 }
+
+/// A union of `callable` with a coercible scalar keeps the descriptor rules: a string that is
+/// not callable, or an array, does not bind to `int|callable`, as a parameter or a return.
+/// PHP raises `must be of type callable|int, string given` at run time for the same calls.
+#[test]
+fn test_error_scalar_callable_union_rejects_non_callables() {
+    for (source, expected) in [
+        (
+            "<?php function u(int|callable $v): string { return gettype($v); } echo u(\"not_a_function\");",
+            "expects int|callable, got string",
+        ),
+        (
+            "<?php function u(int|callable $v): string { return gettype($v); } echo u([1, 2]);",
+            "expects int|callable, got array",
+        ),
+        (
+            "<?php function u(): int|callable { return \"not_a_function\"; } echo gettype(u());",
+            "int|callable",
+        ),
+    ] {
+        expect_error(source, expected);
+    }
+}
