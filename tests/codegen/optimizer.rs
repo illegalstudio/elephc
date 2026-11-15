@@ -61,6 +61,7 @@ mod boxed_array_snapshots;
 mod implode_effects;
 mod spread_effects;
 mod call_effect_followups;
+mod ctype_discarded_calls;
 mod strip_tags_effects;
 mod str_replace_search;
 
