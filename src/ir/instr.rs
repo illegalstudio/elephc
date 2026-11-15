@@ -1445,6 +1445,15 @@ pub enum Op {
     /// (`"f(): Return value must be of type int, "`), to which codegen appends the runtime
     /// type word and `" returned"`. Result: `I64`.
     ReturnBoundaryMixedToInt,
+    /// Checks a boxed Mixed argument bound to a declared non-nullable scalar parameter and
+    /// throws PHP's catchable `TypeError` when the parameter refuses it; produces no result.
+    /// The hot path is one tag compare and a branch to an out-of-line cold path, so the
+    /// check adds no basic block. Operand: the Mixed value. Immediate: data id of
+    /// `"<mode>\u{1f}<prefix>\u{1f}<suffix>"`, where `<mode>` is `s`/`i`/`f`/`b` for the
+    /// coercive `string`/`int`/`float`/`bool` rule (any scalar, plus a `Stringable` object for
+    /// `string`) and the upper-case letter for `strict_types=1` (the exact scalar, plus `int`
+    /// for `float`). The message is `<prefix>` + PHP's value-type name + `<suffix>`.
+    ScalarParamGuard,
     /// Narrows a checked integer add/sub/mul result stored into a DECLARED `int` property.
     /// The operand can only hold an int or the float promoted by overflow (boxed Mixed, or a
     /// raw I64/F64 after constant folding): an int forwards, a float inside `[-2^63, 2^63)`
@@ -1865,7 +1874,7 @@ impl Op {
             StrEq | StrCmp | StrLooseEq | StrictEq | StrictNotEq | InstanceOf => E::READS_HEAP,
             EnumBackingStringToInt | EnumBackingMixedToInt | PackedFieldMixedToInt
             | PackedFieldMixedToFloat | PackedFieldMixedToBool | ReturnBoundaryMixedToInt
-            | PropertyBoundaryCheckedToInt => {
+            | ScalarParamGuard | PropertyBoundaryCheckedToInt => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW
             }
             EvalFunctionExists | EvalClassExists | EvalConstantExists => E::READS_GLOBAL,
@@ -2209,6 +2218,7 @@ impl Op {
             PackedFieldMixedToFloat => "packed_field_mixed_to_float",
             PackedFieldMixedToBool => "packed_field_mixed_to_bool",
             ReturnBoundaryMixedToInt => "return_boundary_mixed_to_int",
+            ScalarParamGuard => "scalar_param_guard",
             PropertyBoundaryCheckedToInt => "property_boundary_checked_to_int",
             ClassConstant => "class_constant",
             ScopedConstantGet => "scoped_constant_get",

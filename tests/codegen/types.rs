@@ -47,7 +47,8 @@ mod guarded_interface_mutations;
 mod param_coercion;
 #[path = "types/implicit_nullable_params.rs"]
 mod implicit_nullable_params;
-mod mixed_object_boundaries;
+#[path = "types/mixed_scalar_param_guards.rs"]
+mod mixed_scalar_param_guards;
 #[path = "types/declare_groups.rs"]
 mod declare_groups;
 #[path = "types/strict_types.rs"]

@@ -98,6 +98,7 @@ mod preg_match_args;
 mod weak_string_unions;
 mod builtin_special_args;
 mod call_arg_coercion;
+mod scalar_param_guards;
 mod positional_spreads;
 mod dynamic_spreads;
 mod dynamic_constructors;

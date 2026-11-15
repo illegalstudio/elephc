@@ -491,6 +491,9 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Source-body generator classification for closure literals.
     pub closure_generator_spans: &'m HashSet<Span>,
+    /// Argument spans bound to a declared scalar parameter that need the runtime
+    /// `TypeError` check (`CheckResult::scalar_guard_arg_sites`).
+    pub scalar_guard_arg_sites: &'m HashSet<Span>,
     /// Checked property classes and write refusals before opaque calls erase flow facts.
     pub array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
     /// Checked receiver views at property reads and method calls, scoped to the current body.
@@ -717,6 +720,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         throw_access_sites: &'m HashMap<(String, Span), ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         closure_generator_spans: &'m HashSet<Span>,
+        scalar_guard_arg_sites: &'m HashSet<Span>,
         array_push_property_plans: &'m HashMap<(String, Span), crate::types::ArrayPushPropertyPlan>,
         member_receiver_types: &'m HashMap<(String, Span), Option<PhpType>>,
         array_append_element_types: &'m HashMap<(String, Span), Option<PhpType>>,
@@ -792,6 +796,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             throw_access_sites,
             builtin_call_types,
             closure_generator_spans,
+            scalar_guard_arg_sites,
             array_push_property_plans,
             member_receiver_types,
             array_append_element_types,

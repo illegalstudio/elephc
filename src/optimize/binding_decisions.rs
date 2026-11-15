@@ -28,6 +28,8 @@
 //!   SPAN set has an explicit `is_empty()` fast path (`has_local_binding_decisions`) that keeps
 //!   the scan off the hot path entirely; the NAME set has none — `local_has_mixed_storage` is a
 //!   plain hash lookup, which on an empty set is already the cheapest thing it could do.
+//! - Scalar-guard argument spans are installed around every post-typecheck phase: a call that can
+//!   reject a `mixed` argument at run time stays `may_throw` even when the callee is pure.
 //! - Buffer read proofs are installed only for propagation. They remove intrinsic warning-handler
 //!   effects, never effects from evaluating a receiver or index or from a bounds failure.
 
@@ -43,6 +45,49 @@ thread_local! {
     static ACTIVE_MIXED_STORAGE_LOCALS: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
     /// Indexed reads the checker proved cannot dispatch PHP warning handlers.
     static ACTIVE_BUFFER_READ_SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
+    /// Arguments whose parameter binding runs a runtime scalar-parameter `TypeError` check.
+    static ACTIVE_SCALAR_GUARD_ARG_SITES: RefCell<HashSet<Span>> = RefCell::new(HashSet::new());
+}
+
+/// Restores the previously installed scalar-guard argument spans when dropped.
+pub struct ScalarGuardArgSitesScope {
+    previous: Option<HashSet<Span>>,
+}
+
+impl Drop for ScalarGuardArgSitesScope {
+    /// Reinstalls the spans that were active before this scope began.
+    fn drop(&mut self) {
+        if let Some(previous) = self.previous.take() {
+            ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| slot.replace(previous));
+        }
+    }
+}
+
+/// Installs the checker's runtime-guarded argument spans (`CheckResult::scalar_guard_arg_sites`)
+/// until the returned scope drops. Drivers hold it across every post-typecheck phase, including
+/// the effect summaries the optimizer builds when it is constructed.
+pub fn install_scalar_guard_arg_sites(sites: HashSet<Span>) -> ScalarGuardArgSitesScope {
+    ScalarGuardArgSitesScope {
+        previous: Some(ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| slot.replace(sites))),
+    }
+}
+
+/// Returns whether a call with these arguments binds a `mixed`/union value to a declared
+/// scalar parameter, so it can throw `TypeError` before the callee's body runs.
+///
+/// The checker records the bound argument's own span; a named argument is matched through
+/// its value, and a spread through the unpacked expression.
+pub(crate) fn call_has_scalar_guard_arg(args: &[crate::parser::ast::Expr]) -> bool {
+    use crate::parser::ast::ExprKind;
+    ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| {
+        let sites = slot.borrow();
+        !sites.is_empty()
+            && args.iter().any(|arg| {
+                sites.contains(&arg.span)
+                    || matches!(&arg.kind, ExprKind::NamedArg { value, .. } | ExprKind::Spread(value)
+                        if sites.contains(&value.span))
+            })
+    })
 }
 
 /// Installs checker-proven buffer reads for one constant-propagation run.

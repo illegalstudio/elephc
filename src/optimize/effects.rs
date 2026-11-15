@@ -294,6 +294,16 @@ pub(super) fn expr_is_observable(expr: &Expr) -> bool {
     expr_effect(expr).is_observable() || !active_expr_thrown_types(expr).is_empty()
 }
 
+/// Marks a call `may_throw` when the checker recorded a runtime scalar-parameter check for
+/// one of its arguments.
+fn scalar_guard_effect(args: &[Expr]) -> Effect {
+    if super::binding_decisions::call_has_scalar_guard_arg(args) {
+        Effect::PURE.with_may_throw()
+    } else {
+        Effect::PURE
+    }
+}
+
 /// Computes the combined `Effect` for an expression, including all sub-expressions and call effects.
 /// Covers all `ExprKind` variants, classifying reads, writes, calls, throws, output, and runtime-state interactions.
 /// For `MagicConstant`, returns `unreachable!` because they must be lowered before optimizer passes.
@@ -400,12 +410,15 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             } else { effect }
         }
         ExprKind::FunctionCall { name, args } => combine_effects(args.iter().map(expr_effect))
-            .combine(function_call_effect(name.as_str(), args)),
+            .combine(function_call_effect(name.as_str(), args))
+            .combine(scalar_guard_effect(args)),
         ExprKind::ClosureCall { var, args } => combine_effects(args.iter().map(expr_effect))
-            .combine(callable_alias_effect(var)),
+            .combine(callable_alias_effect(var))
+            .combine(scalar_guard_effect(args)),
         ExprKind::ExprCall { callee, args } => expr_effect(callee)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .combine(expr_call_effect(callee)),
+            .combine(expr_call_effect(callee))
+            .combine(scalar_guard_effect(args)),
         ExprKind::NullsafeDynamicMethodCall {
             object,
             method,
@@ -439,20 +452,23 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
             .with_may_throw(),
         ExprKind::MethodCall { object, method, args } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .combine(instance_method_call_effect(object, method)),
+            .combine(instance_method_call_effect(object, method))
+            .combine(scalar_guard_effect(args)),
         ExprKind::NullsafeMethodCall {
             object,
             method,
             args,
         } => expr_effect(object)
             .combine(combine_effects(args.iter().map(expr_effect)))
-            .combine(instance_method_call_effect(object, method)),
+            .combine(instance_method_call_effect(object, method))
+            .combine(scalar_guard_effect(args)),
         ExprKind::StaticMethodCall {
             receiver,
             method,
             args,
         } => combine_effects(args.iter().map(expr_effect))
-            .combine(static_method_call_effect(receiver, method)),
+            .combine(static_method_call_effect(receiver, method))
+            .combine(scalar_guard_effect(args)),
         ExprKind::ArrayLiteral(items) => combine_effects(items.iter().map(expr_effect)),
         ExprKind::ArrayLiteralAssoc(items) => combine_effects(
             items

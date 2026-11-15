@@ -812,6 +812,9 @@ pub(crate) struct Checker {
     /// True only when every visit to an indexed-read span used native buffer storage.
     /// Intersecting observations also fails closed when included files share a span.
     pub buffer_read_observations: HashMap<Span, bool>,
+    /// Argument spans binding a `mixed`/union value to a declared scalar
+    /// parameter, where EIR lowering emits the runtime `TypeError` check.
+    pub scalar_guard_arg_sites: HashSet<Span>,
     /// The warnings that BELONG to a local-binding decision, keyed by that decision's
     /// `(span, local name)` instead of being pushed straight into `warnings`.
     ///
@@ -1753,6 +1756,7 @@ fn check_types_on_compiler_stack(
         boxed_reference_promotion_sites: checker.boxed_reference_promotion_sites,
         buffer_read_sites: checker.buffer_read_observations.into_iter()
             .filter_map(|(span, buffer)| buffer.then_some(span)).collect(),
+        scalar_guard_arg_sites: checker.scalar_guard_arg_sites,
         first_class_builtin_call_types: checker.first_class_builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
         string_incdec_locals: checker.string_incdec_locals,

@@ -271,12 +271,22 @@ impl Checker {
     /// Returns the standard `<context> expects <expected>, got <actual>` mismatch extended with
     /// the `TypeError` PHP would throw at run time.
     pub(crate) fn require_strict_types_param_binding(
-        &self,
+        &mut self,
         expected: &PhpType,
         actual: &PhpType,
         span: Span,
         context: &str,
     ) -> Result<(), CompileError> {
+        // Every declared parameter binding passes through here, in both modes. EIR lowering
+        // checks a `mixed`/union argument bound to a declared scalar at run time; record the
+        // argument so the AST optimizer neither drops the call as pure nor prunes a
+        // `catch (TypeError)` around it. Nullable and by-reference parameters are filtered
+        // by lowering; recording them too only keeps a call observable.
+        if matches!(expected, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool)
+            && crate::types::param_binding::runtime_scalar_guard_needed(expected, actual, self.strict_types)
+        {
+            self.scalar_guard_arg_sites.insert(span);
+        }
         if !self.strict_types {
             return Ok(());
         }

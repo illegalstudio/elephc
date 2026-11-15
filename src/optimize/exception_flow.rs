@@ -917,7 +917,33 @@ impl ExceptionFlowAnalysis {
     }
 
     /// Queries an operation separately from operand evaluation for source-order checker edges.
+    ///
+    /// A call the checker recorded as binding a `mixed`/union argument to a declared scalar
+    /// parameter adds the `TypeError` its runtime argument check raises.
     fn expr_throws_at_boundary(
+        &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
+        class_context: Option<&ExceptionClassContext>, include_operands: bool,
+    ) -> ThrownTypes {
+        let thrown = self.operation_throws_at_boundary(expr, bindings, class_context, include_operands);
+        let args = match &expr.kind {
+            ExprKind::FunctionCall { args, .. }
+            | ExprKind::ClosureCall { args, .. }
+            | ExprKind::ExprCall { args, .. }
+            | ExprKind::MethodCall { args, .. }
+            | ExprKind::NullsafeMethodCall { args, .. }
+            | ExprKind::StaticMethodCall { args, .. }
+            | ExprKind::NewObject { args, .. } => args.as_slice(),
+            _ => &[],
+        };
+        if super::binding_decisions::call_has_scalar_guard_arg(args) {
+            thrown.combined(ThrownTypes::exact("TypeError"))
+        } else {
+            thrown
+        }
+    }
+
+    /// Computes one operation's throws, plus its operands' when `include_operands` is set.
+    fn operation_throws_at_boundary(
         &self, expr: &Expr, bindings: &HashMap<String, ThrownTypes>,
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
     ) -> ThrownTypes {

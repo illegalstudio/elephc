@@ -61,6 +61,7 @@ mod method_call_review;
 mod erased_xml_presence;
 mod ordinary_prefix_storage;
 mod scalar_parameter_owners;
+mod mixed_scalar_param_guards;
 mod global_return_owners;
 mod conditional_assignment_owners;
 mod borrowed_string_reads;
@@ -346,6 +347,10 @@ fn try_lower_source_at_for_target_with_reachability(
         crate::types::check_with_target_and_bounds(program, target, bounds)
     })
     .expect("type check failed");
+    // Mirrors `pipeline::compile`: runtime scalar-parameter guard sites stay observable to
+    // every post-typecheck phase.
+    let scalar_guard_sites =
+        crate::optimize::install_scalar_guard_arg_sites(check_result.scalar_guard_arg_sites.clone());
     let ast = crate::optimize::propagate_constants(ast, check_result.mixed_storage_local_names(), check_result.buffer_read_sites.clone());
     let ast = crate::optimize::prune_constant_control_flow(
         ast,
@@ -357,6 +362,7 @@ fn try_lower_source_at_for_target_with_reachability(
     );
     let ast =
         crate::optimize::eliminate_dead_code(ast, check_result.local_binding_decision_spans());
+    drop(scalar_guard_sites);
     let ast = if prune {
         let roots = crate::generics::instantiation_roots(&check_result.requested_instantiations)
             .into_iter().collect();

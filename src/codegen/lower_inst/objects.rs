@@ -201,6 +201,7 @@ mod property_hook_writes;
 mod property_store_values;
 mod typed_property_guards;
 mod instanceof_helpers;
+pub(in crate::codegen::lower_inst) use instanceof_helpers::{classify_named_target, emit_match_call};
 mod mixed_property_type_guard;
 pub(super) use mixed_property_type_guard::lower_reference_property_coercion;
 mod extern_fields;
