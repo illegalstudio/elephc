@@ -250,18 +250,20 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
             "127.0.0.1:0",
         ])
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::piped())
         .spawn()
         .expect("spawn monitor debug UI");
     let stderr = child.stderr.take().expect("debug UI stderr");
     let mut reader = BufReader::new(stderr);
     let mut address = String::new();
+    let mut stderr_log = String::new();
     for _ in 0..400 {
         let mut line = String::new();
         if reader.read_line(&mut line).unwrap_or(0) == 0 {
             break;
         }
+        stderr_log.push_str(&line);
         if let Some(start) = line.find("http://") {
             let rest = &line[start + "http://".len()..];
             let end = rest.find('/').unwrap_or(rest.len());
@@ -270,7 +272,10 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
         }
     }
     let mut guard = DebuggeeGuard { child };
-    assert!(!address.is_empty(), "debug UI did not print its URL");
+    assert!(
+        !address.is_empty(),
+        "debug UI did not print its URL; stderr:\n{stderr_log}"
+    );
     let page = http(&address, "GET", "/", None);
     assert!(page.contains("<title>elephc monitor · debugger</title>"), "{page}");
     assert!(page.contains("/dap/events"), "{page}");
