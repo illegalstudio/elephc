@@ -38,7 +38,7 @@ pub(in crate::interpreter) fn eval_null_boundary_type_label(
     for variant in ty.variants() {
         match variant {
             EvalParameterTypeVariant::Class(name) => names.push(if owner.is_some() {
-                eval_declared_return_runtime_class_name(name, owner, called, context)?
+                eval_declared_type_runtime_class_name(name, owner, called, context)?
             } else {
                 eval_method_parameter_runtime_class_name(name, context)?
             }),
@@ -101,68 +101,4 @@ pub(in crate::interpreter) fn eval_reject_null_object_argument(
         context,
         values,
     )
-}
-
-/// Validates an eval-declared property before changing its backing slot or a reference alias.
-pub(in crate::interpreter) fn eval_reject_null_object_property(
-    owner: &str,
-    property: &EvalClassProperty,
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    let Some(ty) = property.property_type() else {
-        return Ok(());
-    };
-    if !eval_nonnull_object_boundary(ty) || values.type_tag(value)? != EVAL_TAG_NULL {
-        return Ok(());
-    }
-    let expected = eval_null_boundary_type_label(ty, Some(owner), Some(owner), context)?;
-    eval_throw_type_error(
-        &format!(
-            "Cannot assign null to property {}::${} of type {expected}",
-            owner.trim_start_matches('\\'),
-            property.name()
-        ),
-        context,
-        values,
-    )
-}
-
-/// Shares static-slot validation with Reflection before a borrowed write can replace its owner.
-pub(in crate::interpreter) fn eval_reject_null_object_static_property(
-    class: &str,
-    property: &str,
-    value: RuntimeCellHandle,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    if let Some((owner, metadata)) = context.class_property(class, property) {
-        eval_reject_null_object_property(&owner, &metadata, value, context, values)?;
-    }
-    Ok(())
-}
-
-/// Checks a top-level source before preparation can retarget an already published hidden alias.
-pub(in crate::interpreter) fn eval_preflight_property_reference_source(
-    owner: &str, property: &EvalClassProperty, source: &str,
-    context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    if context.current_function().is_some() || scope.reference_target(source).is_some()
-        || !property.property_type().is_some_and(eval_nonnull_object_boundary) {
-        return Ok(());
-    }
-    let value = match visible_scope_cell(context, scope, source) {
-        Some(value) => value,
-        None => {
-            // PHP creates an absent source as null even when the property bind is refused.
-            let value = values.null()?;
-            for previous in set_owned_scope_cell(context, scope, source.to_string(), value, values)? {
-                eval_release_value(context, values, previous)?;
-            }
-            value
-        }
-    };
-    eval_reject_null_object_property(owner, property, value, context, values)
 }

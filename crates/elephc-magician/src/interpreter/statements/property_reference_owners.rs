@@ -25,7 +25,7 @@ pub(super) fn bind_escaped_cell(
     if property.has_get_hook() || property.has_set_hook() || property.is_virtual() { return Ok(false); }
     validate_eval_property_write_access(&declaring_class, &property, context)?;
     if property.is_readonly() { return Err(EvalStatus::RuntimeFatal); }
-    eval_reject_null_object_property(&declaring_class, &property, reference, context, values)?;
+    eval_validate_property_value(&declaring_class, &property, reference, context, values)?;
     let storage_name = eval_instance_property_storage_name(&declaring_class, &property);
     context.bind_dynamic_property_alias(identity, &storage_name,
         EvalReferenceTarget::Cell { cell: reference.borrowed() });

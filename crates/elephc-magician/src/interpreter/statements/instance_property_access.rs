@@ -465,7 +465,7 @@ pub(crate) fn eval_property_set_result(
                 values,
             );
         }
-        eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
+        eval_validate_property_value(&declaring_class, &property, value, context, values)?;
     }
     if !declared_property_found {
         if let Some((declaring_class, visibility, write_visibility, is_static)) =
@@ -707,7 +707,7 @@ pub(super) fn eval_property_reference_bind_result(
         values,
     )?;
     let value = eval_reference_target_value(&target, context, values)?;
-    eval_reject_null_object_property(&declaring_class, &property, value, context, values)?;
+    eval_validate_property_value(&declaring_class, &property, value, context, values)?;
     context.bind_dynamic_property_alias(identity, &storage_property_name, target);
     eval_with_native_property_storage_scope(
         &object_class_name, &storage_property_name, context, values,

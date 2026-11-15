@@ -7,6 +7,7 @@
 //!
 //! Key details:
 //! - Object layouts mirror the metadata consumed by eval Reflection builtins.
+//! - Factory-created cells transfer their activation owners into the fake object graph.
 
 use super::*;
 
@@ -71,20 +72,8 @@ impl FakeOps {
             EVAL_REFLECTION_OWNER_INTERSECTION_TYPE => "ReflectionIntersectionType",
             _ => return Err(EvalStatus::RuntimeFatal),
         };
+        let first_internal = self.next_id;
         let name = self.string(reflected_name)?;
-        let is_final = self.bool_value((flags & 1) != 0)?;
-        let is_abstract = self.bool_value((flags & 2) != 0)?;
-        let is_interface = self.bool_value((flags & 4) != 0)?;
-        let is_trait = self.bool_value((flags & 8) != 0)?;
-        let is_enum = self.bool_value((flags & 16) != 0)?;
-        let is_readonly = self.bool_value((flags & 32) != 0)?;
-        let is_instantiable = self.bool_value((flags & 64) != 0)?;
-        let is_cloneable = self.bool_value((flags & 128) != 0)?;
-        let is_internal = self.bool_value((flags & 256) != 0)?;
-        let is_user_defined = self.bool_value((flags & 512) != 0)?;
-        let is_iterable = self.bool_value((flags & 1024) != 0)?;
-        let is_anonymous = self.bool_value((flags & 2048) != 0)?;
-        let modifiers_cell = self.int(modifiers as i64)?;
         let mut properties = vec![("__name".to_string(), name), ("__attrs".to_string(), attrs)];
         if matches!(
             owner_kind,
@@ -92,6 +81,18 @@ impl FakeOps {
                 | EVAL_REFLECTION_OWNER_OBJECT
                 | EVAL_REFLECTION_OWNER_ENUM
         ) {
+            let is_final = self.bool_value((flags & 1) != 0)?;
+            let is_abstract = self.bool_value((flags & 2) != 0)?;
+            let is_interface = self.bool_value((flags & 4) != 0)?;
+            let is_trait = self.bool_value((flags & 8) != 0)?;
+            let is_enum = self.bool_value((flags & 16) != 0)?;
+            let is_readonly = self.bool_value((flags & 32) != 0)?;
+            let is_instantiable = self.bool_value((flags & 64) != 0)?;
+            let is_cloneable = self.bool_value((flags & 128) != 0)?;
+            let is_internal = self.bool_value((flags & 256) != 0)?;
+            let is_user_defined = self.bool_value((flags & 512) != 0)?;
+            let is_iterable = self.bool_value((flags & 1024) != 0)?;
+            let is_anonymous = self.bool_value((flags & 2048) != 0)?;
             let (namespace_name, short_name) = reflection_name_parts(reflected_name);
             let has_namespace = !namespace_name.is_empty();
             let namespace_name = self.string(namespace_name)?;
@@ -112,7 +113,7 @@ impl FakeOps {
             properties.push(("__is_iterable".to_string(), is_iterable));
             properties.push(("__is_internal".to_string(), is_internal));
             properties.push(("__is_user_defined".to_string(), is_user_defined));
-            properties.push(("__modifiers".to_string(), modifiers_cell));
+            properties.push(("__modifiers".to_string(), self.int(modifiers as i64)?));
             properties.push(("__short_name".to_string(), short_name));
             properties.push(("__namespace_name".to_string(), namespace_name));
             properties.push(("__in_namespace".to_string(), in_namespace));
@@ -157,7 +158,7 @@ impl FakeOps {
                 properties.push(("__is_final".to_string(), is_final));
                 properties.push(("__is_abstract".to_string(), is_abstract));
                 properties.push(("__is_readonly".to_string(), is_readonly));
-                properties.push(("__modifiers".to_string(), modifiers_cell));
+                properties.push(("__modifiers".to_string(), self.int(modifiers as i64)?));
                 properties.push(("__type".to_string(), method_objects));
                 properties.push(("__settable_type".to_string(), constant_value));
                 properties.push(("__has_default_value".to_string(), has_default_value));
@@ -185,7 +186,7 @@ impl FakeOps {
             let is_deprecated =
                 self.bool_value((flags & EVAL_REFLECTION_CALLABLE_FLAG_DEPRECATED) != 0)?;
             properties.push(("__parameters".to_string(), method_objects));
-            properties.push(("__required_parameter_count".to_string(), modifiers_cell));
+            properties.push(("__required_parameter_count".to_string(), self.int(modifiers as i64)?));
             properties.push(("__is_deprecated".to_string(), is_deprecated));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_METHOD {
@@ -215,7 +216,7 @@ impl FakeOps {
             properties.push(("__is_private".to_string(), is_private));
             properties.push(("__is_final".to_string(), is_final));
             properties.push(("__is_enum_case".to_string(), is_enum_case));
-            properties.push(("__modifiers".to_string(), modifiers_cell));
+            properties.push(("__modifiers".to_string(), self.int(modifiers as i64)?));
         }
         if owner_kind == EVAL_REFLECTION_OWNER_CLASS_CONSTANT {
             properties.push(("__value".to_string(), constant_value));
@@ -290,6 +291,12 @@ impl FakeOps {
             let allows_null = self.bool_value(false)?;
             properties.push(("__types".to_string(), method_objects));
             properties.push(("__allows_null".to_string(), allows_null));
+        }
+        // Graph edges, rather than independent activation leases, own these fresh fields.
+        for id in first_internal + 1..=self.next_id {
+            if self.cell_owners.get(&id).is_some_and(|owners| *owners > 0) {
+                self.transfer_reference_value_owner(RuntimeCellHandle::from_raw(id as *mut RuntimeCell));
+            }
         }
         let object = self.alloc(FakeValue::Object(properties));
         self.object_classes

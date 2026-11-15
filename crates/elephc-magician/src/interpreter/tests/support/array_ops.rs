@@ -54,6 +54,7 @@ impl FakeOps {
             return Err(EvalStatus::UnsupportedConstruct);
         };
         elements.push(value);
+        self.transfer_reference_value_owner(value);
         Ok(array)
     }
     /// Appends one object to a fake direct-object indexed array, retaining it like the
@@ -70,6 +71,7 @@ impl FakeOps {
             return Err(EvalStatus::UnsupportedConstruct);
         };
         elements.push(retained);
+        self.transfer_reference_value_owner(retained);
         Ok(array)
     }
     /// Creates a fake associative array cell.

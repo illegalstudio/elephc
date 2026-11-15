@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 91 (this commit), following `aceb5004d3`. Issue:
+Verified through step 92 (this commit), following `8ddce6abf6`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 91.
+This progress ledger condenses verified implementation through step 92.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -750,6 +750,28 @@ above are unchanged.
   Cargo JSON output inside its queued job. Public admission stays at six until
   the remaining boundaries are done.
 
+### Exact eval-owned property values
+
+- Shared runtime membership now lives in value_contracts.rs, retaining scalar,
+  nominal, union, intersection, generic and callable rules from return checking.
+  Declaration owners resolve self/parent independently of the writing scope.
+- A focused property_value_contracts adapter checks candidates before instance,
+  static, Reflection or reference-binding publication under Coercions. Existing
+  permissive non-null object diagnostics remain in their original policy.
+- The bytecode engine deliberately reports PropertySet as a compilation gap.
+  Focused VM-call tests enter the ordinary walker function-body fallback, so both
+  supported execution routes observe the same property guard.
+- Whole-owner checks exposed independent activation leases in the fake Reflection
+  factory. Fresh metadata fields now transfer into the fake object graph, and
+  class-only flags are allocated only for class reflectors. A permissive control
+  checks that ledger independently of strict property behavior.
+- Verified scalar/union/structural and lexical nominal cases over direct and
+  reflected writes with walker and VM-call fallback, plus a permissive Reflection
+  owner control. Existing null property/reference/return, exact parameter/return
+  and fake graph-owner controls pass. A real opaque native eval Stringable throw
+  passes both optimizer modes with clean heaps. Compiler check/build, architecture
+  inventory828 and hygiene pass. Coercions and Casts remain staged.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -859,4 +881,6 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 88 | `4ecc79b427` | feat(strict): preserve concrete static conversion references |
 | 89 | `a958aab372` | feat(strict): validate static publication before initialization |
 | 90 | `aceb5004d3` | feat(strict): contain scoped runtime static property writes |
-| 91 | this commit | feat(strict): preserve exact declaration reference contracts |
+| 91 | `8ddce6abf6` | feat(strict): preserve exact declaration reference contracts |
+
+| 92 | this commit | feat(strict): share exact eval property value contracts |

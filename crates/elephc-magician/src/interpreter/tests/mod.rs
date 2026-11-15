@@ -104,6 +104,7 @@ mod repl;
 mod trait_adaptations;
 
 mod strict_conversion_parameters;
+mod strict_conversion_properties;
 
 mod strict_conversion_returns;
 
