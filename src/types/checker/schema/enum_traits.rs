@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{ClassMethod, Program, StmtKind, TraitAdaptation, TraitUse};
+use crate::parser::ast::{ClassMethod, Program, StmtKind, TraitAdaptation, TraitUse, TypeExpr};
 use crate::types::{traits::FlattenedClass, PhpType};
 
 use super::super::Checker;
@@ -132,6 +132,7 @@ fn validate_class_requirement(
     if required_sig.declared_return
         && !matches!(actual_sig.return_type, PhpType::Never)
         && (!actual_sig.declared_return
+            || declares_void_return(&required) != declares_void_return(actual)
             || !late_static_compatible.unwrap_or_else(|| {
                 strict_type_accepts(checker, &required_sig.return_type, &actual_sig.return_type, false)
             }))
@@ -142,6 +143,14 @@ fn validate_class_requirement(
         )));
     }
     Ok(())
+}
+
+/// Whether a method declares `void`. `PhpType::Void` stands for both `void` and `null`, so a
+/// return check compares this declared syntax first: a `void` method satisfies only a `void`
+/// requirement, and a `void` requirement only a `void` or `never` method
+/// (`abstract function foo(): ?int;` rejects `function foo(): void {}`, as PHP does).
+fn declares_void_return(method: &ClassMethod) -> bool {
+    matches!(method.return_type, Some(TypeExpr::Void))
 }
 
 /// Finds the consuming enum's source adaptations, including namespace-only checker fixtures.
@@ -246,6 +255,7 @@ fn validate_requirement(
     if required_sig.declared_return
         && !matches!(actual_sig.return_type, PhpType::Never)
         && (!actual_sig.declared_return
+            || declares_void_return(&required) != declares_void_return(actual)
             || !late_static_compatible.unwrap_or_else(|| {
                 strict_type_accepts(checker, &required_sig.return_type, &actual_sig.return_type, false)
             }))

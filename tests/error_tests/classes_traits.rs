@@ -351,6 +351,43 @@ class C { use X; public function foo() { return "c"; } }
     );
 }
 
+/// `void` is not a value type: a `void` method satisfies only a `void` requirement, and a
+/// `void` requirement only a `void` or `never` method, for classes and enums alike. php 8.5.12
+/// rejects each pair below ("Declaration of C::foo(): void must be compatible with
+/// X::foo(): mixed") and accepts `null`/`void`/`never`/untyped requirements as listed.
+#[test]
+fn test_error_trait_requirement_void_return_must_match() {
+    for (required, actual) in [("mixed", "void"), ("?int", "void"), ("void", "?int")] {
+        let body = if actual == "void" { "" } else { "return 1;" };
+        expect_error(
+            &format!(
+                "<?php\ntrait X {{ abstract function foo(): {required}; }}\n\
+                 trait Y {{ function foo(): {actual} {{ {body} }} }}\nclass C {{ use X, Y; }}\n"
+            ),
+            "Cannot change return type when implementing trait method: C::foo",
+        );
+        expect_error(
+            &format!(
+                "<?php\ntrait X {{ abstract function foo(): {required}; }}\n\
+                 trait Y {{ function foo(): {actual} {{ {body} }} }}\nenum E {{ use X, Y; }}\n"
+            ),
+            "Enum method E::foo has incompatible return type for abstract trait method",
+        );
+    }
+    for (required, actual, body) in [
+        (": ?int", ": null", "return null;"),
+        (": mixed", ": null", "return null;"),
+        (": void", ": void", ""),
+        (": void", ": never", "throw new Exception();"),
+        ("", ": void", ""),
+    ] {
+        expect_no_error(&format!(
+            "<?php\ntrait X {{ abstract function foo(){required}; }}\n\
+             trait Y {{ function foo(){actual} {{ {body} }} }}\nclass C {{ use X, Y; }}\n"
+        ));
+    }
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]
