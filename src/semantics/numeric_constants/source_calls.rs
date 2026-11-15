@@ -1,5 +1,5 @@
 //! Purpose:
-//! Checks proven original user-call arguments before folding removes calls or converts their values.
+//! Checks proven original call arguments before folding removes calls or converts their values.
 //!
 //! Called from:
 //! - The source numeric evidence visitor, including expressions in declaration defaults.
@@ -132,10 +132,20 @@ pub(super) fn check(expr: &Expr, class: Option<&str>, definitions: &Definitions,
     -> Result<(), CompileError> {
     if !evidence.profile.contains(StrictFeature::Coercions) || definitions.unresolved_namespaces { return Ok(()); }
     let signatures = &definitions.calls;
+    let generated;
+    let mut builtin = None;
     let (sig, args) = match &expr.kind {
         ExprKind::FunctionCall { name, args } => {
-            let Some(Some(sig)) = signatures.functions.get(&key(name.as_str())) else { return Ok(()); };
-            (sig, args)
+            match signatures.functions.get(&key(name.as_str())) {
+                Some(Some(sig)) => (sig, args),
+                Some(None) => return Ok(()),
+                None => {
+                    let Some(definition) = crate::builtins::registry::lookup(name.as_str()) else { return Ok(()); };
+                    generated = crate::builtins::registry::function_sig(name.as_str()).expect("registered builtin signature");
+                    builtin = Some(definition);
+                    (&generated, args)
+                }
+            }
         }
         ExprKind::NewObject { class_name, args } => {
             let Some((_, sig)) = signatures.method(class_name.as_str(), "__construct") else { return Ok(()); };
@@ -165,7 +175,7 @@ pub(super) fn check(expr: &Expr, class: Option<&str>, definitions: &Definitions,
     if plan.first_named_pos.is_none() {
         for (index, value) in plan.source_args.iter().enumerate() {
             if matches!(value.kind, ExprKind::Spread(_)) { break; }
-            check_argument(sig, if index < regular { index } else { regular }, value, class, definitions, &mut local)?;
+            check_argument(sig, builtin, if index < regular { index } else { regular }, value, class, definitions, &mut local)?;
         }
     } else {
         for value in &plan.source_values {
@@ -173,15 +183,22 @@ pub(super) fn check(expr: &Expr, class: Option<&str>, definitions: &Definitions,
                 PlannedSourceValue::Regular { param_idx, expr, .. } => (*param_idx, expr),
                 PlannedSourceValue::Variadic { expr, .. } => (regular, expr),
             };
-            check_argument(sig, index, value, class, definitions, &mut local)?;
+            check_argument(sig, builtin, index, value, class, definitions, &mut local)?;
         }
     }
     Ok(())
 }
 
 /// Applies a parsed scalar parameter contract to one explicitly supplied original value.
-fn check_argument(sig: &FunctionSig, index: usize, value: &Expr, class: Option<&str>,
+fn check_argument(sig: &FunctionSig, builtin: Option<&crate::builtins::registry::BuiltinDef>,
+    index: usize, value: &Expr, class: Option<&str>,
     definitions: &Definitions, evidence: &mut Evidence) -> Result<(), CompileError> {
+    if let Some(builtin) = builtin {
+        if let Some(expected) = crate::builtins::input_contracts::parameter_type(builtin, index) {
+            declarations::check_expected(&expected, value, class, definitions, evidence, "builtin argument")?;
+        }
+        return Ok(());
+    }
     let Some(Some(hint)) = sig.param_type_exprs.get(index) else { return Ok(()); };
     declarations::check_value(hint, value, class, definitions, evidence, "call argument")
 }

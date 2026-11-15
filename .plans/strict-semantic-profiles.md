@@ -873,6 +873,26 @@ above are unchanged.
   architecture inventory828 and zero structural errors. Whitespace and function
   documentation checks pass. The six-bit public admission mask remains unchanged.
 
+### Original builtin input evidence before folding
+
+- The source call validator also resolves neutral builtin signatures when no
+  source declaration owns the name. User/extern ambiguity and namespace rules
+  retain their existing conservative handling. Named/spread placement reuses the
+  shared argument planner rather than matching parameter names again.
+- A focused builtin input adapter projects selected AOT parameter types with null
+  defaults preserved as API sentinels. Mixed input APIs and output references keep
+  their specialized contracts. Declaration and builtin source checks share the
+  same original-kind proof and diagnostics.
+- The original strlen(7) source-validation test was red. Four focused tests now
+  pass: builtin rejection before and after initial folding; explicit/exact/null
+  sentinel and trusted-source controls; prior scalar parameter rejections; and
+  original-value guarded storage emitted for all five targets in both optimizer
+  modes. Compiler check/build, the curl exporter and the full builtin docs workflow
+  already cover this source snapshot; generated files remain unchanged.
+- This closes the proven scalar source evidence gap. Dynamic builtin inputs still
+  need typed checker/EIR guards before coercive ABI preparation. Coercions remains
+  staged, alongside the independent Casts lifetime and host audits.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -992,4 +1012,6 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 
 | 95 | `c0130103c7` | feat(strict): check evaluated builtin input contracts |
 
-| 96 | this commit | feat(strict): guard source builtin inputs and reference owners |
+| 96 | `3fb2cfffc5` | feat(strict): guard source builtin inputs and reference owners |
+
+| 97 | this commit | feat(strict): validate builtin inputs before folding |

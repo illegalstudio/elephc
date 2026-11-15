@@ -22,10 +22,16 @@ pub(super) fn check(annotation: &TypeExpr, value: &Expr, source: SourceMode, cla
 pub(super) fn check_value(annotation: &TypeExpr, value: &Expr, class: Option<&str>,
     definitions: &Definitions, evidence: &mut Evidence, context: &str) -> Result<(), CompileError> {
     let Some(expected) = super::super::conversions::scalar_hint(annotation) else { return Ok(()); };
+    check_expected(&expected, value, class, definitions, evidence, context)
+}
+
+/// Checks original scalar evidence against a declaration projected by its owning metadata adapter.
+pub(super) fn check_expected(expected: &crate::types::PhpType, value: &Expr, class: Option<&str>,
+    definitions: &Definitions, evidence: &mut Evidence, context: &str) -> Result<(), CompileError> {
+    let Some(allowed) = super::super::conversions::scalar_contract(expected) else { return Ok(()); };
     let Some(actual) = evaluate(value, true, class, definitions, evidence)? else { return Ok(()); };
-    let allowed = super::super::conversions::scalar_contract(&expected).expect("scalar source hint");
     if matches!(plan_implicit_kinds(evidence.profile, actual.value_kind(), allowed), ConversionPlan::Reject(_))
-        || super::super::conversions::only_false(&expected) && matches!(actual, Number::Bool(true)) {
+        || super::super::conversions::only_false(expected) && matches!(actual, Number::Bool(true)) {
         return Err(CompileError::new(value.span, &format!(
             "--strict-coercions: {context} requires {expected} without implicit conversion, got {:?}",
             actual.value_kind())));
