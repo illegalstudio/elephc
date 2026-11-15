@@ -14,15 +14,20 @@ use super::*;
 
 const FRAME: usize = 64;
 
+/// Selects the owner transfer that must happen at publication, before any PHP cleanup.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Retirement { Release, ReturnPrevious, InitializeStatic }
+
 /// Emits commit(context, wrapper, owned_candidate), returning success0, failure1 or Throwable2.
 pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
-    emit_entry(emitter, "__rt_reference_commit_native", false, false);
-    emit_entry(emitter, "__rt_reference_commit_native_rooted", true, false);
-    emit_entry(emitter, "__rt_reference_commit_native_deferred_rooted", true, true);
+    emit_entry(emitter, "__rt_reference_commit_native", false, Retirement::Release);
+    emit_entry(emitter, "__rt_reference_commit_native_rooted", true, Retirement::Release);
+    emit_entry(emitter, "__rt_reference_commit_native_deferred_rooted", true, Retirement::ReturnPrevious);
+    emit_entry(emitter, "__rt_reference_commit_native_static_rooted", true, Retirement::InitializeStatic);
 }
 
 /// Optionally consumes the successful publisher's snapshot lease at the ownership transfer point.
-fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, defer_previous: bool) {
+fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, retirement: Retirement) {
     let result = abi::int_result_reg(emitter);
     let wrapper = abi::secondary_scratch_reg(emitter);
     let pending = format!("{entry}_pending");
@@ -36,7 +41,7 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, defer_pre
     if take_snapshot {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 3), 40);
     }
-    if defer_previous {
+    if retirement != Retirement::Release {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 4), 48);
     }
     abi::load_at_offset(emitter, result, 8);
@@ -52,10 +57,13 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, defer_pre
     abi::store_at_offset(emitter, result, 32);
     abi::load_at_offset(emitter, result, 24);
     abi::emit_store_to_address(emitter, result, wrapper, 8);
-    if defer_previous {
+    if retirement == Retirement::ReturnPrevious {
         abi::load_at_offset(emitter, wrapper, 48);
         abi::load_at_offset(emitter, result, 32);
         abi::emit_store_to_address(emitter, result, wrapper, 0);
+    } else if retirement == Retirement::InitializeStatic {
+        abi::load_at_offset(emitter, wrapper, 48);
+        abi::emit_store_zero_to_address(emitter, wrapper, 0);
     }
     // The wrapper now owns the candidate. Never release that transferred owner again.
     if take_snapshot {
@@ -64,7 +72,7 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, defer_pre
         abi::store_at_offset(emitter, result, 24);
         emit_release_slot(emitter, 24);
     }
-    if !defer_previous { emit_release_slot(emitter, 32); }
+    if retirement != Retirement::ReturnPrevious { emit_release_slot(emitter, 32); }
     if take_snapshot {
         // A snapshot destructor may throw even when the displaced child's release succeeds.
         abi::load_at_offset(emitter, result, 8);
@@ -131,6 +139,13 @@ mod tests {
                 "{name}: publish the displaced owner before snapshot cleanup can throw");
             assert_eq!(deferred.matches("__rt_reference_validation_release").count(), 1,
                 "{name}: Rust, rather than the native commit, retires the previous value");
+            let initialized = assembly.split_once("__rt_reference_commit_native_static_rooted:").unwrap().1
+                .split_once("__rt_reference_commit_native_static_rooted_pending:").unwrap().0;
+            let clear = if name == "linux-x86_64" { "mov QWORD PTR [r10], 0" }
+                else { "str xzr, [x10]" };
+            assert!(initialized.find(store).unwrap() < initialized.find(clear).unwrap(), "{name}");
+            assert!(initialized.find(clear).unwrap() < initialized.find("__rt_reference_validation_pin_take").unwrap(),
+                "{name}: initialization is visible before a snapshot destructor can reenter PHP");
         }
     }
 }

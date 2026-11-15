@@ -314,3 +314,18 @@ fn test_strict_settype_static_typed_property_contracts_bundle() {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Unbound static writes coerce declarations and publish initialization before cleanup reentry.
+#[test]
+fn test_strict_static_write_publication_and_initialization_bundle() {
+    let source = include_str!("../fixtures/strict/static_write_publication.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "double:7|T7|U|textDtext|EF|N:inner|outerOouter",
+            "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

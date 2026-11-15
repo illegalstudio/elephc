@@ -449,7 +449,10 @@ fn emit_direct_store_static_property_result(
     transfer_owner: Option<usize>,
 ) -> Result<()> {
     if slot.storage_type.codegen_repr() == PhpType::Mixed {
-        let done = super::local_stores::emit_static_if_managed(ctx, inst, &slot.symbol, transfer_owner)?;
+        let descriptor = crate::codegen::runtime_metadata::checked_boxed_static_descriptor(
+            ctx.module, &slot.declaring_class, &slot.property);
+        let done = super::local_stores::emit_static_if_managed(ctx, inst, &slot.symbol, transfer_owner,
+            descriptor.as_deref())?;
         let prefix = ctx.next_label("static_mixed_reference_store");
         crate::codegen_support::runtime::reference_cells::publish_mixed_symbol(
             ctx.emitter, &slot.symbol, release_previous, transfer_owner, &prefix,

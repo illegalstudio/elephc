@@ -1509,8 +1509,8 @@ impl Op {
             LoadStaticPropertyRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
                 | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
-            // Declared slots can reject a value with a catchable TypeError before the write.
-            StoreStaticProperty | StoreReflectionStaticProperty => E::WRITES_GLOBAL | E::WRITES_LOCAL | E::MAY_THROW,
+            // Declaration conversion and displaced-value cleanup can reenter arbitrary PHP.
+            StoreStaticProperty | StoreReflectionStaticProperty => E::php_callback(),
             StoreGlobal
             | StoreStaticLocal
             | InitStaticLocal

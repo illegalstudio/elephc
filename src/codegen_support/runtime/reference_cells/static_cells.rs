@@ -38,7 +38,51 @@ pub(super) fn emit(emitter: &mut Emitter) {
     emit_payload(emitter);
     emit_promote(emitter);
     emit_bound_promote(emitter);
+    emit_prepare_store(emitter);
     emit_release(emitter);
+}
+
+/// Prepares an initialized or uninitialized binding without exposing initialization before commit.
+fn emit_prepare_store(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    let bind = "__rt_reference_static_mixed_prepare_store_bind";
+    let done = "__rt_reference_static_mixed_prepare_store_done";
+    emitter.label_global("__rt_reference_static_mixed_prepare_store");
+    abi::emit_frame_prologue(emitter, 64);
+    for (index, offset) in [8, 16].into_iter().enumerate() {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+    }
+    abi::load_at_offset(emitter, scratch, 8);
+    abi::emit_load_from_address(emitter, result, scratch, 8);
+    abi::store_at_offset(emitter, result, 24);
+    abi::emit_load_from_address(emitter, result, scratch, LAYOUT_OFFSET);
+    abi::emit_branch_if_int_result_nonzero(emitter, bind);
+    abi::load_at_offset(emitter, result, 24);
+    let seed = "__rt_reference_static_mixed_prepare_store_seed";
+    branch_uninitialized(emitter, result, scratch, seed);
+    abi::emit_jump(emitter, bind);
+    emitter.label(seed);
+    abi::load_at_offset(emitter, scratch, 8);
+    abi::emit_store_zero_to_address(emitter, scratch, 0);
+    abi::emit_store_zero_to_address(emitter, scratch, 8);
+    emitter.label(bind);
+    for (index, offset) in [8, 16].into_iter().enumerate() {
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+    }
+    abi::emit_call_label(emitter, "__rt_reference_static_mixed_bind");
+    abi::store_at_offset(emitter, result, 32);
+    abi::load_at_offset(emitter, result, 24);
+    let restore = "__rt_reference_static_mixed_prepare_store_restore";
+    branch_uninitialized(emitter, result, scratch, restore);
+    abi::emit_jump(emitter, done);
+    emitter.label(restore);
+    abi::load_at_offset(emitter, scratch, 8);
+    abi::emit_store_to_address(emitter, result, scratch, 8);
+    emitter.label(done);
+    abi::load_at_offset(emitter, result, 32);
+    abi::emit_frame_restore(emitter, 64);
+    abi::emit_return(emitter);
 }
 
 /// Returns a borrowed canonical cell after registering its static declaration exactly once.

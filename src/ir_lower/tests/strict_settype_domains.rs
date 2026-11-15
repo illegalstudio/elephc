@@ -320,3 +320,20 @@ fn strict_settype_static_typed_property_contracts_all_targets() {
         assert!(assembly.contains("__rt_reference_static_mixed_bind"), "{name}");
     }
 }
+
+/// Static writers share initialized publication and exception-safe guards on all target ABIs.
+#[test]
+fn strict_static_write_publication_all_targets() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strict/static_write_publication.php"));
+    let program = prepared(source);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target,
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        crate::ir::validate_module(&module).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_reference_static_mixed_prepare_store"), "{name}");
+        assert!(assembly.contains("__rt_reference_publish_native_static"), "{name}");
+    }
+}

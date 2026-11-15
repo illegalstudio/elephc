@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 82 (this commit), following `94e873a4c5`. Issue:
+Verified through step 89 (this commit), following `4ecc79b427`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 82.
+This progress ledger condenses verified implementation through step 89.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -591,7 +591,8 @@ compiler build, architecture gate, assembly comment checks and diff hygiene.
    callbacks, descriptors, reflection and eval re-entry. Complete checked explicit
    casts with range/domain errors, exact strings and native object cast contracts.
    Original GMP and SimpleXML cast projections are now checked. Before Casts
-   admission, finish settype target domains and host callbacks. Runtime gmp_intval range guards and broad
+   admission, finish protected runtime static setters, host callbacks and the
+   temporary Reflection Stringable lifetime audit. Runtime gmp_intval range guards and broad
    object/interface consumers now share reviewed checked paths. Internal
    implementation helpers must not bypass public contracts.
 3. Finish stable Locals bindings across promotion, parameters, captures, globals,
@@ -617,563 +618,40 @@ The focused checks for each verified commit passed with both optimizer settings
 where relevant, plus ownership/heap evidence for new failure paths. No full local
 suite, push or PR has been requested or performed.
 
-### Broad native cast domains
-
-Step65 admits generic object, interface and nullable/union source domains to the
-same checked native cast dispatch. Known concrete classes without a reviewed
-numeric projection remain compile diagnostics. Unsupported runtime values in a
-partial nominal domain throw TypeError before conversion. The frontend helper
-preparing real GMP/XML/DOM declarations is shared by the independent regressions.
-Six selected-profile checker/EIR tests cover the complete target matrix and known
-invalid inputs. Two managed-native bundles exercise generic object, interface,
-nullable, union and first-class calls with both optimizer settings, exact integer
-limits, failed conversion, caller preservation and clean heaps.
-
-### Checked public GMP integer projection
-
-Step66 selects a separate compiled helper for the public gmp_intval contract under
-Casts. Weak floats are checked before the existing operand adapter can truncate
-them. The ordinary GMP validator keeps its parsing, strict_types and error rules;
-its canonical decimal result must fit a signed machine word before get_si runs.
-AOT direct/callable paths share existing argument boxing and unwind owners. Eval
-selects the same checked helper through a typed values hook and the shared bound
-native-call path. A host missing that helper fails closed instead of using the
-legacy helper. Five selected-profile checker/EIR tests pass for all targets, two
-eval tests cover walker/VM selection and host gaps, and three managed-native
-bundles pass both profiles and optimizers with clean heaps, including PHP
-strict_types error priority. Two existing GMP contract tests, compiler/test-target
-builds, full builtin-docs regeneration/audits, example syntax, assembly comments
-and diff hygiene pass. Generated metadata is unchanged. Original-source folding
-proofs and complete host admission remain part of the outstanding Casts audit.
-
-### Original public GMP source proof
-
-Step67 adds a neutral conservative proof for canonical decimal GMP integer
-sources and original weak floats. A dedicated builtin semantic descriptor marker
-joins that proof to the original-source argument planner before folding. Known
-decimal range loss and invalid scalar kinds are diagnosed through declaration
-aliases, named/static spread arguments, removed branches, defaults and literal
-eval. Proven integer results participate in independently enabled Overflow proof.
-PHP strict_types domain rejection has priority, and Internal/source declaration
-shadowing retain their existing contract. Native radix, whitespace and other
-unfamiliar spellings stay unknown, validated at runtime by the existing compiled
-helper; the source validator never substitutes intval grammar. Three neutral and
-three compiler proof regressions cover these rules. All five selected-profile
-GMP EIR/emitter tests and two existing source-cast controls pass, together with
-compiler/check-tests/exporter builds, complete builtin-docs regeneration/audits,
-assembly comments and diff hygiene. The generated registry records the dedicated
-GMP cast proof contract. No runtime or public admission policy changes.
-
-### Shared settype target validation
-
-Step68 adds SettypeTarget and SettypeTargetFailure to the neutral crate. Complete
-case-insensitive target names and aliases have one owner, distinguishing invalid
-names from forbidden resource conversion and from valid nonnumeric targets.
-NumericCastTarget::from_type_name, checker, EIR static lowering, legacy backend
-classification and eval consume that catalog. Checked invalid runtime names raise
-ValueError before writeback; source proofs identify the typed Settype runtime
-inventory and use CallArgPlan before folding, including aliases, named/static
-spread calls, defaults and literal eval. Permissive and Internal controls remain.
-Valid array/object/null targets are classified but their backend conversions and
-dynamic target parity remain outstanding; public Casts admission is unchanged.
-The current native settype regressions exercise direct/by-reference calls. Add
-explicit AOT first-class/indirect call evidence before claiming those paths from
-the broader eval coverage. Seven new neutral, source, frontend and eval tests
-pass, along with the focused numeric-cast and settype controls, including all
-supported EIR targets and native conversion/owner tests with both optimizers.
-Compiler/check-tests/exporter builds, complete builtin-docs regeneration/audits,
-assembly comments and diff hygiene pass; generated metadata is unchanged. Journal
-task 67c8492a tracks the separate permissive invalid-target mismatch, with the
-existing valid-null and property-reference tasks retained.
-
-### Prepared checked settype calls
-
-Step69 replaces the checked callable's legacy constant-target backend with a
-prepared EIR value conversion graph. Runtime scalar/null target names share the
-neutral alias catalog; numeric conversion delegates the original-value cast
-adapters. One preserve_binding helper retains failed original tags without
-widening an existing reference ABI. Normal stores own writeback and retirement.
-Source and normalized target owners remain rooted. The graph runs with an
-independent write receiver so an enclosing assignment cannot suppress ownership
-of its fresh intermediates. String conversion carries user/global effects.
-
-The AOT callable regression was red on step68: a literal target at the caller
-became a parameter in the generic wrapper, which rejected it as nonconstant.
-Native first-class, string-selected and runtime-target calls now work. Explicit
-call_user_func value contexts need copied cells rather than synthesized caller
-references under the checked contract. Prepared builtin reference signatures
-therefore retain descriptor invocation instead of static argument flattening;
-shared value-container builders detach cells. Direct/native descriptor references
-and actual references in prebuilt arrays remain live. Permissive/Internal routing
-is retained. Array-literal reference syntax remains a target-independent parser
-diagnostic; that limitation does not imply references in existing arrays fail.
-
-Four compiler tests cover every emitter, both native optimizer settings (AST and
-EIR), first-class/dynamic/call_user_func* calls, null/scalar aliases, invalid and
-NUL-bearing target names, by-value copies, actual references, enclosing assignment,
-string callback global effects and clean heaps. Prepared bodies also run with
-ordinary numeric conversion in permissive catalogs. An explicit prepared-invocation
-role keeps static callable inlining consistent with the generated body, without
-selecting it for ordinary legacy direct/value-call lowering. One eval test covers null alias
-and COW-container publication. Valid array/object targets retain an explicit staged
-unsupported error until their conversions and helper dependencies are completed.
-Public Casts admission remains unchanged. Focused compiler, Magician and neutral
-tests, the real opaque-eval assignment regression, cargo check --tests, cargo build,
-the curl exporter, generated builtin audits, assembly comments and diff hygiene
-passed. The updated example also compiled and ran with Bools and DynamicCode.
-
-### Complete settype collection targets
-
-Step70 completes every valid target in the prepared settype graph. Array conversion
-reuses the evaluated-value array cast lowerer; object conversion calls the existing
-injected PHP graph with rooted original storage and hidden ABI argument support.
-No extra synthetic PHP local extends the operand lifetime. Direct checked and
-prepared permissive bodies share collection conversion while numeric policy remains
-independent. The original value is published only after conversion succeeds.
-
-The builtin home declares reusable PreludeHelper requirements. Shared declaration
-usage distinguishes implicit dependencies from explicit calls to the same names;
-the object-cast injector consults this inventory and dynamic callable/eval hazards.
-Reachability retains dependencies from direct and first-class calls. User helper
-names with no cast or implicit dependency keep their ordinary acceptance.
-
-Eval collection conversion preserves existing object identity, uses ordinary array
-casts, and builds stdClass from insertion-order values and byte-exact property
-names. Every temporary and partial object has an explicit owner through failure.
-String and boolean targets now use the common eval cast adapters, so eval-defined
-Stringable effects and throws remain visible. Explicitly owned variable writeback
-uses set_owned_scope_cell to retire an acquired identity-result lease, fixing the
-leak exposed by the new object round-trip regression.
-
-Two compiler collection tests cover all five emitters, dependency pruning, both
-numeric profiles, EIR optimization, object identity, COW and native clean heaps.
-Two eval regressions cover collection/ref/container ownership and Stringable
-callback effects/failure. The existing checked callable and scalar controls are
-retained. Public Casts admission remains staged while remaining host and reference
-contracts are audited. Focused scalar/callable regressions, prior numeric builtin
-controls, implicit dependency and reserved-name diagnostics, the real opaque-eval
-assignment test, check --tests, build and the curl exporter passed. The example
-uses an explicit mixed container for intentional array-to-object retagging.
-
-### Scalar builtin conversions
-
-Step71 shares boolval/strval semantic descriptors and prepared callable lowering
-through the full explicit scalar cast adapter. Checked boolean conversion uses
-reviewed native handlers while permissive IsTruthy behavior remains unchanged.
-String results publish an independent owner, matching a Fresh semantic contract;
-source arguments stay borrowed and rooted, and intermediate string owners retire
-after persistence. Effects::php_conversion reuses the existing PHP callback
-summary without marking the operation itself as a refcount instruction or direct
-blocking I/O. The validator admits that complete cast summary as an explicit
-alternative to legacy cast effects.
-
-The new string regression failed on step70 with an undefined dynamic function.
-After callable support was added, fresh-owner regressions exposed descriptor and
-array_map leaks. One shared predicate now selects full PHP wrapper construction
-and return-status consumption by its invoker; Prepared/Fresh string metadata also
-reaches the callback ownership predicate. These root string regressions pass all
-five emitters and both native profile/optimizer settings, with each call path
-checked separately for clean heaps. Eval strval now uses shared operand leases and
-the existing cast evaluator, which retires object-hook result owners. Its new
-call-surface owner regression passes.
-
-The checked shared Boolval hook uses the ordinary eval cast path. Boolean casts
-adopt protected native failures before returning to a catch; an injected native
-failure regression was red before this handoff. Native SimpleXML parity passes for both profiles and optimizer modes, with clean
-heaps. Its complete matrix took 64.81 seconds and uses the bundle CI timeout.
-The permissive native-handler mismatch is preserved and tracked separately as
-6a5ed1e4. Eight compiler tests, two eval regressions and the effects validator
-pass, as do the focused settype/numeric controls, six existing boolval cases,
-strval dispatch, owned/borrowed descriptor-string cleanup, opaque eval (48.15 s),
-check --tests, build and the curl exporter. Full generated docs and architecture
-audits pass (828 AOT, 77 graph, 56 primitive, 695 runtime, 679 eval). The updated
-PHP-compatible example compiles and runs with Bools/DynamicCode. Task temporary
-directories are removed. No admission change is made before all Casts and
-remaining feature contracts are complete.
-
-### Contextual string warnings and diagnostic owners
-
-Checked eval string conversions now dispatch array-to-string warnings through the
-shared contextual PHP dispatcher before publishing their result. Syntax, strval
-and settype agree on the warning, source-kind snapshot and handler ordering.
-A handler may replace the original binding without changing the conversion result;
-a throw prevents settype writeback. Protected native cast failures are adopted by
-the common cast adapter before returning to either interpreter consumer.
-
-The warning dispatcher has a focused core/error_dispatch.rs home. Four empty
-RuntimeOwnerSlot fields are registered before constructing callback arguments and
-filled incrementally. Callable invocation borrows those arguments, so the dispatcher
-releases each independent lease after native failure handoff. Suspended handler
-cells and returned values remain rooted through restoration and cleanup. This
-closes the leaked callback argument owners exposed by the new conversion tests.
-
-Four string-conversion regressions pass, including warning masks, suppressing and
-throwing handlers, callback mutation and walker/VM conversions. The owner-slot
-visitor test and all 17 directly affected core introspection tests pass. A real
-opaque-eval handler/throw regression passes with both optimizer settings and a
-clean native heap (57.72 s). It uses the admitted Bools profile: Casts remains
-blocked at public eval entry until its whole contract is complete. Staged eval
-fixtures now inject the ordinary implicit object-cast dependencies required by
-the full builtin catalog. Assembly-comment checks, example syntax and diff hygiene
-pass. Check --tests, compiler build and the curl exporter pass; regenerated
-builtin docs and all architecture/site audits report no errors (828 AOT, 77 graph,
-56 primitive, 695 runtime, 679 eval). Public feature admission remains unchanged.
-
-### Live prepared reference places
-
-Prepared checked mutators now share a scoped argument role in the existing call
-planner. Eligible Mixed properties, static properties and array entries acquire
-live managed aliases at their source position. The checker reuses its source-call
-property promotion helper, so direct builtins do not depend on an earlier explicit
-reference alias. Conversion graphs recover the original writable binding and use
-ordinary reference stores; a detached property copy cannot replace this behavior.
-
-Signature-unknown descriptor calls reuse the existing passing-mode metadata probe.
-The generalized descriptor_argument_contexts module replaces the XML-only module
-name and keeps its native selection behavior. It binds supported ordinary Mixed
-places only on the selected by-reference edge; the by-value edge snapshots its
-argument before later argument effects. RootedDescriptorCallback keeps argument
-alias owners outside the argument container and retires them after dispatch. No
-new runtime ABI or per-target emitter is introduced.
-
-Six new compiler checks cover the selected checker, standalone property promotion
-and all five target ABIs. The native shared fixture covers direct/prepared/runtime
-callables, static properties, nested entries, COW peers, catches, by-value source
-order and suppressing/throwing property warning handlers. Both AST/EIR optimizer
-settings pass with a clean heap (9.93 s). The 18 focused settype tests, five existing
-XML argument emitter tests, native XML materialization/ownership control (66.87 s),
-check --tests, compiler build, curl exporter, assembly comments and diff hygiene
-pass. Generated builtin docs, site compatibility and the EIR architecture audit
-pass with unchanged inventory (828 AOT, 77 graph, 56 primitive, 695 runtime,
-679 eval).
-
-Casts admission remains staged. Narrower typed destinations, erased native/ordinary
-reference contexts, public callable bindings from Internal producers and remaining
-host boundaries still need their explicit audit before publication.
-
-### Erased native-capable reference receivers
-
-The native XML argument selector now preserves checked ordinary references on its
-fallback edges. Root array variables use the shared evaluated-receiver element
-binder, retaining the original local/ref-cell origin needed to republish COW
-separation. Named properties select exact runtime classes with owned Mixed cell
-metadata before binding a live cell. The typed object projection borrows from the
-enclosing receiver guard, so access failures do not strand an extra object lease.
-Receiver expressions and index effects are not replayed. Class-name and result
-owners remain rooted through the exact-class dispatch and initialized-slot merge.
-
-The original regression returned unchanged ordinary values when XML was present:
-9.9:9.9|8.9:8.9|7.9. Checked execution now yields 9:9.9|8:8|7.9, keeping the array
-peer and the independent XML view unchanged. Five new target checks validate the
-selected checker and emitters. The native fixture passes both AST/EIR optimizer
-settings with a clean heap (41.84 s), including private access errors and a fresh
-receiver whose destructor rewrites the selected property. PHP CLI and native code
-agree on FD with no warning: the factory and destructor run before conversion,
-and the referenced cell exposes the destructor's replacement value.
-
-The narrower property, dynamic-name/hash, nested erased receiver, Internal
-producer and host-boundary audits remain outstanding. This is a staged Casts
-integration step, with no public admission change. All 23 focused settype tests,
-five existing XML emitter cases, the native XML materialization/ownership control
-(66.72 s), check --tests, build and curl exporter pass. Generated docs, site and
-EIR architecture audits, assembly comments, example syntax and diff checks pass
-with unchanged builtin inventory (828 AOT, 77 graph, 56 primitive, 695 runtime,
-679 eval).
-
-### Runtime property-name reference contexts
-
-The shared native/ordinary dynamic-name dispatcher now accepts an ordinary result
-adapter as well as its native result adapter. Checked runtime-selected reference
-arguments match the evaluated property bytes and reuse the exact-class owned Mixed
-cell binder. Literal and dynamic names share one property eligibility predicate
-and one initialized-branch merge helper. Receiver/name evaluation and their
-existing ownership scopes remain authoritative; names are not evaluated twice.
-
-The extended native regression first failed with an unchanged 10.9 property and
-FNDW from a stale pre-destructor snapshot. It now publishes 10, preserves the XML
-view, and matches PHP FND without a warning. Additional cases preserve the late
-variable receiver selected by the property-name callback (N11.9:12), private-access
-errors and allocated name cleanup. Both AST/EIR optimizer settings pass with a
-clean heap (46.36 s). The shared fixture is also covered by all five selected-
-checker target tests. All 23 settype tests, five existing XML emitter cases and
-the NoFlag XML materialization control (67.28 s) pass. Check --tests passed on an
-unchanged retry after one integration-check process failed; build and the curl
-exporter pass with -j 4. Generated builtin/site/EIR audits, assembly comments,
-example syntax and diff checks pass with unchanged inventory (828 AOT, 77 graph,
-56 primitive, 695 runtime, 679 eval).
-
-This completes the tested runtime-selected name path for declared owned Mixed
-slots. Narrower and hash-backed destinations, nested erased receivers, static
-known-callee dynamic-place staging, Internal producers and host/eval admission
-remain active work before publishing Casts. No public feature mask changes.
-
-### Known builtin runtime-name reference arguments
-
-Known direct and first-class prepared builtins now route runtime-named property
-arguments through the shared descriptor binder. Route selection consumes the
-shared call plan's source arguments; positional passthrough plans intentionally
-have no source_values. The binder remains authoritative for each selected passing
-mode and named argument. Explicit call_user_func value semantics retain their
-existing descriptor path.
-
-Ordinary dynamic references no longer require native XML declarations. A shared
-argument helper preserves receiver/name ordering and selects the available native
-or ordinary protocol. Concrete object pointers use borrowed typed projections;
-boxed receivers use borrowed MixedUnbox projections. Temporary receiver and name
-owners retire after the destination cell has been leased, before the builtin runs.
-
-The shared fixture covers direct and first-class calls, positional and reversed
-named arguments, call_user_func and call_user_func_array value controls, and
-conversion failures that retain the original property. Both AST/EIR optimizer
-settings are heap-clean. Five selected-checker target fixtures validate the same
-source without XML capability. The first regression failed with a missing writable
-binding at the direct call, before the routing correction.
-
-All 28 focused settype tests, five existing XML emitter cases, three strict native
-bundles and the permissive XML materialization control (71.23 s) pass. Compiler,
-test checking and curl exporter builds pass with -j 4. Generated builtin/site/EIR
-audits, assembly comments, PHP fixture/example syntax and diff hygiene pass with
-unchanged builtin inventory.
-
-Casts remains staged. Narrower/hash-backed destinations, unpromoted runtime-name
-slots, nested erased receivers, Internal producers and host admission still need
-their remaining audits. The public integrated feature mask is unchanged.
-
-### Canonical Mixed properties for checked runtime references
-
-Checked casts now request canonical owned cells for eligible declared Mixed
-properties before lowering, through the existing reference-property promotion
-pass. Runtime names and callable passing modes can first select a reference after
-static checking, so they cannot rely on an explicit source alias to choose the
-physical layout. Promotion remains shared across declaring classes and their
-descendants; readonly, hooked, internal and borrowed constructor layouts keep
-their existing exclusions. The permissive profile retains its previous policy.
-
-The five known dynamic-place fixtures now remove the constructor alias and assert
-canonical ownership before EIR lowering. A focused native fixture covers inherited
-properties, successful conversion, rejected array conversion and heap cleanup with
-EIR optimization enabled and disabled. All 29 focused settype regressions,
-check --tests, compiler build, assembly comments and diff checks pass. Casts
-admission remains staged.
-
-### Public Arithmetic admission and fused predicate ownership
-
-The Arithmetic policy now passes the real compiler admission path, not only the
-staged fixture helpers. Public source checks retain invalid original operands
-through initial folding. Library checking and emission cover all five targets;
-native CLI cases cover numeric kinds, float division, negative integer power,
-ordinary overflow promotion, weak user-parameter binding, compound stores,
-opaque eval and repeated execution of the same cached source. The REPL exercises
-the same public profile and caught-error recovery.
-
-The initial public regression produced the correct values but leaked one array
-and one Mixed float box. A minimized EIR fixture showed that the fused
-ArrayElementTypeCheck fast path loaded a local view without retiring it when a
-later opaque eval widened the frame slot. The fast path now uses shared
-pending-owner guards and receiver stabilization/release. Finalization removes
-provisional guards/releases when the view stays borrowed. Five target fixtures
-assert the retained receiver is released, and the existing fusion is preserved.
-A separate permissive native bundle covers successful reads and throwing warning
-handlers under both EIR optimizer modes. CLI docs and the strict example include
-the newly admitted arithmetic contract. Other pending features and the complete
-umbrella remain gated.
-
-Arithmetic admission verification passed: public CLI with both EIR modes and
-cached opaque eval (59.77 s), permissive predicate success/throw cleanup bundle
-(60.00 s), real cached REPL (44.66 s), walker/VM domain and ownership checks,
-independent policy resolution, public checker on all five targets, five predicate
-cleanup emitters and the existing fusion control. Check --tests, compiler and curl
-exporter builds pass. The three-flag example runs with a clean heap. Generated
-builtin/site/EIR audits, assembly comments, PHP syntax and diff hygiene pass.
-Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
-679 eval).
-
-### Public overflow admission and destination ownership
-
-- Overflow is available independently of Arithmetic across public CLI, interpreter
-  and REPL entry points. Source evidence rejects proven literal/arithmetic overflow
-  before folding; dynamic integer failures throw ArithmeticError before mutation.
-  IEEE floating behavior, weak parameter binding and permissive controls remain
-  independent. Native, opaque/cached eval, callable numeric builtins and updates
-  agree with both EIR optimizer settings.
-- A captured array destination now keeps its unwind lease across index/RHS
-  evaluation. Later opaque eval can widen final frame storage to Mixed, making an
-  earlier array view owning. Without this guard, a caught checked RHS leaked the
-  captured array. The regression also covers an ordinary throwing RHS without any
-  strict profile, and all five targets validate and emit the protected graph.
-- Public overflow source/native tests, four native profile/optimizer combinations,
-  the independent arithmetic regression, no-profile RHS ownership, REPL recovery,
-  real interpreter entry and pending-capability gates pass. Check/test-target build,
-  compiler/exporter builds, example output with clean heap, builtin docs/audits,
-  assembly comments and diff hygiene pass.
-
-### Managed scalar property conversion references
-
-- Checked casts now prepare eligible user scalar property cells as owned references.
-  Explicit native validation and generated declaration callbacks preserve the
-  declared contract across a checked conversion. Integer, float, boolean and
-  string selections promote in place through shared typed runtime entries; boxing
-  transfers the raw payload owner and changes only the physical descriptor bits.
-  Existing canonical readers preserve logical kinds, while later direct property
-  writes publish to the canonical child and keep aliases current.
-- Known and runtime-named direct/prepared calls reuse managed reference argument
-  binding. Mixed and scalar eligibility share lexical property resolution; raw
-  constructor cells retain their existing ABI. Casts remains staged while nullable,
-  union, static and remaining eval/reference boundaries continue.
-- Thirty focused settype checks, twenty-one native reference mode/owner checks,
-  native scalar property and existing dynamic Mixed property bundles, both EIR
-  optimizer settings, selected-checker emission and real cross-assembly on all
-  five targets pass. Native fixture output matches PHP and heaps are clean.
-  Compiler/test-target checks and build, architecture inventory, assembly comments,
-  fixture syntax and diff hygiene pass.
-
-### Nullable and scalar-union conversion references
-
-- `types/reference_layout` now owns the shared physical payload classifier for
-  scalar, nullable and scalar-union property contracts. Checker promotion,
-  signature/descriptor argument selection, runtime-name selection, module
-  capabilities and backend promotion consume the same decision. Raw pointers,
-  iterables and unrelated container/object layouts remain outside this scalar
-  protocol. The stronger cast profile is still staged.
-- Nullable-int cells preserve both payload and runtime tag before boxing; other
-  reviewed unions retain their boxed representation. Runtime promotion entry
-  names have one authoritative mapping. Ordinary Mixed reference parameters can
-  retain these managed property cells and validate writes through the existing
-  declaration callbacks, without detaching temporary copies.
-- The native regression covers null-to-int conversion, nullable writes, scalar
-  union member changes, failed settype publication, later direct writes and a
-  refused array assignment through a user Mixed reference parameter. Output
-  matches PHP and heaps are clean with both optimizers. Thirty-one focused settype
-  checks, shared classifier tests, all-five-target graph emission and real helper
-  assembly, the existing scalar native regression, compiler/test-target checks,
-  build, architecture828, assembly comments, fixture syntax and diff hygiene pass.
-
-### Nominal object conversion references and projection
-
-- The shared classifier now includes nominal objects and reviewed object unions.
-  A typed object promotion entry transfers the original owner into a canonical
-  child while retaining nominal declaration constraints. Scalar-specific helper
-  filenames became `reference_cells/canonical_promotion.rs` and
-  `property_stores/canonical_payload.rs` as their responsibility expanded.
-- Checker reference-place validation now both authorizes and schedules reviewed
-  managed property cells for Mixed reference parameters. It preserves inherited
-  physical layouts and excludes raw borrowed constructor storage. The checker and
-  lowering consume the same supported declaration layouts.
-- `CANONICAL_PROPERTY_PAYLOAD_FLAG` retains the existing bit while describing any
-  supported owned concrete payload. Object projection and JSON resolve the live
-  canonical child before interpreting the logical PHP tag. Raw cells keep their
-  original representation and source owners remain balanced.
-- The native object regression verifies Stringable conversion before a refused
-  nominal store, nullable/union updates, preserved aliases, array projection, JSON
-  and a runtime-selected Mixed reference call. An output marker proves the callee
-  reaches the reference publisher before TypeError, rather than failing argument
-  adaptation. The nullable regression carries the same entry proof. Both optimizer
-  modes match PHP with clean heaps.
-- Thirty-two focused settype checks, shared classification and canonical projection
-  checks, all-five-target serialization/JSON metadata and helper assembly, previous
-  scalar/nullable native cases, a no-profile covariant object-reference control,
-  cargo check --tests, compiler build, architecture828, assembly comments, fixture
-  syntax and diff hygiene pass. Arrays/iterables, static and remaining eval/reference
-  integration continue before public Casts admission.
-
-### Array property references and mutation receiver reloads
-
-- Extend the shared canonical property classifier to concrete arrays and hashes,
-  including nullable and boxed PHP array/hash unions. Typed promotion transfers
-  the actual container owner and preserves the managed cell and wrapper identity.
-- Generic mutation receiver reloads now reuse the canonical reader already used
-  by EIR reference loads. The deliberately raw reader used for eval identity
-  snapshots retains its separate contract.
-- Serialization, dump and JSON metadata authenticate reviewed boxed unions as
-  well as concrete payloads. Object projection checks that canonical resolution
-  actually changed the payload address before bypassing its existing promotion
-  gate. Raw unions remain ordinary value projections.
-- The native array fixture covers checked conversion, failed replacement,
-  heterogeneous container replacement, explicit aliases, direct property reads,
-  array_push, hash mutation, JSON and independent value snapshots. Projected
-  references follow the changed wrapper child while snapshots preserve COW.
-- Thirty-three focused settype checks, shared layout and receiver reload tests,
-  five-target projection, serialization and JSON metadata checks, seven typed
-  promotion helpers assembled on every target, four native property bundles and
-  a no-profile Mixed callable receiver control pass. Both optimizer modes retain
-  clean heaps. Compiler build, cargo check --tests, architecture828, assembly
-  comments, fixture syntax and diff hygiene pass.
-- Public admission remains the six completed features. Raw Iterable, static and
-  remaining eval/reference boundaries continue before Casts admission.
-
-### Iterable property references and raw property metadata
-
-- Extend canonical reference classification and promotion to raw Iterable cells.
-  The existing dynamic-container boxer preserves arrays, hashes and Traversable
-  objects rather than interpreting their descriptor seven as an existing box.
-- Raw property metadata has a distinct layout marker, ITERABLE_PROPERTY_TAG (13).
-  A shared leaf reader preserves the payload address and initialization marker,
-  guards absent/uninitialized pointers, and maps heap kinds 2/3/4 to value tags
-  4/5/6. Canonical boxed children bypass this adapter. JSON now uses the same
-  complete property reader as projection, dump and serialization.
-- Hydration transfers the raw container payload through its ordinary typed writer
-  and finisher; previous Iterable container owners use uniform release.
-- Native strict and no-profile fixtures cover initial JSON, object projection,
-  serialize/unserialize, arrays, hashes, Traversable replacements, live aliases,
-  rejected stdClass replacement and uninitialized properties. Current focused
-  checks pass with both optimizer settings and clean heaps. Shared JSON, borrowed
-  constructor, nullable-int and uninitialized-reference controls also pass. The
-  all-five-target EIR/JSON checks, eight typed promotion helpers and raw reader
-  real assembly, declaration classifier, hydration ownership checks, cargo check
-  --tests/build, architecture828, PHP syntax, assembly comments and diff hygiene
-  complete this step.
-- Static and remaining eval/reference integration continue before public Casts
-  admission. The public integrated mask remains the six completed features.
-
-### Boxed static reference bindings and deferred settype reads
-
-- Checked casts now bind declared Mixed/union static storage to its immutable
-  declaration validator. Inherited references use the physical declaring class.
-  Ordinary raw reference paths retain their existing representation.
-- Static binding layout 2 means both canonical promotion and weak source
-  registration are complete. Repeated selections reuse the same cell and
-  generation; retirement detaches the binding and metadata before PHP cleanup.
-- Prepared settype arguments use a non-owning `LocalPlace` EIR marker. Selection
-  captures the original binding at its source argument position; conversion
-  snapshots its current value only after all arguments finish. Later argument
-  assignments and destructors therefore run before that value is read.
-- Focused tests cover static aliases, inherited storage, first-class and erased
-  calls, failed typed writes, collection contracts, GC, and destructor timing for
-  static and local values. Validator and runtime emitter tests cover all targets.
-  Physical scalar static layouts and remaining eval/reference boundaries still
-  precede public Casts admission.
-
-### Checked boxed static exports
-
-- A shared descriptor selector now owns checked boxed static eligibility for both
-  ordinary references and eval's C ABI. Inherited access selects the physical
-  declaration, including its immutable constraint descriptor.
-- Checked exports bind the managed static cell before retaining its canonical
-  wrapper. Multiple exported handles share identity and observe subsequent native
-  conversions and stores. Visibility and uninitialized-property misses remain
-  guarded before promotion. The permissive export path retains its existing ABI.
-- Five-target emitter coverage and native exports verify identity, inherited
-  Mixed/union constraints, aliases, rejected conversion, visibility, missing
-  initialization and independent handle retirement in both optimizer modes with
-  clean heaps. This completes boxed export selection; eval writes and concrete
-  static layouts remain part of the ongoing Casts integration.
-
-### Protected eval reference writes
-
-- The versioned reference replacement boundary validates the original RHS through
-  the same native coordinator and declaration callbacks as compiled assignments.
-  Capability-disabled builds keep the existing replacement behavior.
-- A deferred commit transfers the displaced owner to Rust before snapshot cleanup
-  can throw. Eval keeps its existing metadata-update and old-value-release order;
-  failed calls retire any transferred owner through protected cleanup.
-- The publisher shares one validation body across immediate native retirement and
-  deferred eval retirement. Both paths retain the original snapshot and wrapper
-  roots, publish only an accepted candidate, and return owned Throwable outputs.
-- Focused commit/publisher units, real wrapper/publisher/commit assembly on all
-  five targets, checked and permissive native replacement, destructor timing,
-  five publication ownership regressions, validation pins, prior static settype,
-  two real eval reference controls, test-target/compiler builds and hygiene pass.
-  The new publisher slot is covered by an explicit frame-footer bounds check.
+### Current casts and reference implementation
+
+Checked numeric/string conversion plans, native object-number adapters, original
+GMP projections, settype target aliases and collection targets, prepared scalar
+builtin graphs and protected contextual warnings are implemented. Current
+invocation policy stays distinct from physical Internal producer syntax. Builtin
+contract ownership, callback effects and result kinds remain shared across direct,
+named, dynamic and first-class calls.
+
+Prepared writable places capture their original binding with LocalPlace markers
+at source argument position and read a rooted current-value snapshot after all
+arguments finish. Owned instance scalar, nullable, union, object, array and
+Iterable cells share canonical promotion and immutable declaration validation.
+Generic receiver reloads use the canonical reader; raw eval identity reads retain
+their separate ABI. Exact Mixed retains its established metadata flag, while
+reviewed constrained payloads use bit10. Projection authenticates resolved shape.
+Raw Iterable metadata uses tag13 and a sentinel-safe leaf reader reused by JSON,
+serialization and hydration, preserving arrays, hashes and Traversable values.
+
+Boxed static bindings reserve24 bytes and register their physical declaration
+once. Layout2 includes canonical promotion and weak-source registration; repeated
+selection preserves generation. Retirement detaches metadata before PHP cleanup.
+Source references and eval exports share the descriptor selector and wrapper
+identity. The versioned eval reference replacement boundary validates through the
+same coordinator and transfers the displaced owner back to Rust before snapshot
+cleanup can throw, preserving eval metadata-update/release ordering.
+
+Public Arithmetic and Overflow are independently admitted. Their native fusion,
+warning, callable, source-fold and eval boundaries retain checked policies and
+ownership. The other profiles and the umbrella remain gated as described above.
+Detailed historical steps63 through87 remain in their Git commits, earlier plan
+revisions and architecture document revision76; the full commit ledger below
+retains their traceability. The approved contract and remaining delivery scope
+above are unchanged.
 
 ### Concrete static storage and live conversion references
 
@@ -1200,6 +678,29 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
   including unbound declaration coercion and initialization visibility during
   callbacks. Concrete checked eval setters currently return a guarded miss rather
   than write through a raw-layout handler. The public profile mask is unchanged.
+
+### Validated static publication and initialization
+
+- Direct checked static stores prepare a canonical binding even before an alias
+  exists. Uninitialized bindings retain their sentinel during conversion callbacks;
+  an accepted static commit publishes the child and initialization before cleanup.
+- Native, deferred-eval and initialized-static publication share the same rooted
+  validation body. A typed retirement plan selects old-value cleanup, transfer to
+  Rust or static initialization; it does not duplicate declaration coercion.
+- Static store effects conservatively include arbitrary PHP conversion and cleanup
+  callbacks while excluding invented direct blocking/network I/O boundaries.
+- Selected-checker/EIR and effect tests, commit/publisher units, four static cell
+  tests including all-five-target real assembly, protected reference wrapper
+  assembly, three native static bundles and five publication ownership controls
+  pass. Native cases cover both optimizer modes with clean heaps.
+- Direct Reflection fixtures verify unbound float coercion, failed writes,
+  uninitialized Stringable conversion, contained exceptions and same-field reentry.
+  Use fresh known Reflection receivers for this path. After broad catch effects,
+  a receiver can enter the runtime fallback, whose protected setter wiring is next.
+- Before Casts admission, audit PHP's temporary Reflection Stringable destruction
+  order (knowledgec1351278) separately from old-value retirement. Named retained
+  source values and explicit error release make the current publication probe's
+  lifetimes intentional.
 
 ### Verification discipline
 
@@ -1307,4 +808,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 85 | `82c96130e7` | feat(strict): preserve boxed static conversion references |
 | 86 | `9e2878062e` | feat(strict): share checked static reference exports |
 | 87 | `05382f8d22` | feat(strict): validate eval reference replacement before publication |
-| 88 | this commit | feat(strict): preserve concrete static conversion references |
+| 88 | `4ecc79b427` | feat(strict): preserve concrete static conversion references |
+| 89 | this commit | feat(strict): validate static publication before initialization |

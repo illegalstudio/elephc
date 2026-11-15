@@ -45,7 +45,8 @@ try { reflectedXmlStore($root); } catch (TypeError $error) {}
     for (name, op) in [("directXmlStore", Op::StoreStaticProperty), ("reflectedXmlStore", Op::StoreReflectionStaticProperty)] {
         let function = module.functions.iter().find(|function| function.name == name).unwrap();
         let store = function.instructions.iter().find(|instruction| instruction.op == op).unwrap();
-        assert!(store.effects.contains(Effects::MAY_THROW | Effects::WRITES_GLOBAL));
+        assert!(store.effects.contains(Effects::php_callback()));
+        assert!(!store.effects.intersects(Effects::BLOCKING_IO | Effects::NETWORK_IO));
     }
 }
 

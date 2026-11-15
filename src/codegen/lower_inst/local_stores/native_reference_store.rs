@@ -75,6 +75,7 @@ pub(super) fn emit_if_canonical(
 /// The static parking record borrows this same owner, so detaching it transfers rather than releases.
 pub(in crate::codegen::lower_inst) fn emit_static_if_managed(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, symbol: &str, transfer_owner: Option<usize>,
+    descriptor: Option<&str>,
 ) -> Result<Option<String>> {
     if !ctx.module.required_runtime_features.native_reference_validation || inst.operands.len() < 2 {
         return Ok(None);
@@ -84,6 +85,11 @@ pub(in crate::codegen::lower_inst) fn emit_static_if_managed(
     let result = abi::int_result_reg(ctx.emitter);
     abi::emit_reserve_temporary_stack(ctx.emitter, SCRATCH_BYTES);
     abi::emit_store_to_sp(ctx.emitter, result, RHS);
+    if let Some(descriptor) = descriptor {
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 0), symbol);
+        abi::emit_symbol_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), descriptor);
+        abi::emit_call_label(ctx.emitter, "__rt_reference_static_mixed_prepare_store");
+    }
     abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 16);
     abi::emit_branch_if_int_result_zero(ctx.emitter, &raw);
     abi::emit_load_symbol_to_reg(ctx.emitter, result, symbol, 0);
@@ -100,7 +106,15 @@ pub(in crate::codegen::lower_inst) fn emit_static_if_managed(
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), WRAPPER);
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), RHS);
     abi::emit_temporary_stack_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), OUTCOME);
-    abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native");
+    if descriptor.is_some() {
+        let initialized = abi::int_arg_reg_name(ctx.emitter.target, 4);
+        abi::emit_symbol_address(ctx.emitter, initialized, symbol);
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("add {initialized}, {initialized}, #8")), // publish initialization beside the accepted canonical child
+            Arch::X86_64 => ctx.emitter.instruction(&format!("add {initialized}, 8")), // publish initialization beside the accepted canonical child
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native_static");
+    } else { abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native"); }
     emit_status(ctx, &done);
     ctx.emitter.label(&raw);
     abi::emit_load_temporary_stack_slot(ctx.emitter, result, RHS);
