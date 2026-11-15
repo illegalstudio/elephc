@@ -3760,8 +3760,9 @@ pub(crate) fn is_user_wrapper_contract_method(method_key: &str) -> bool {
 /// length, an option word as a plain integer), and the interpreter coerces its arguments to the
 /// published signature. An undeclared parameter therefore has to publish the prototype's type:
 /// left at the checker's `int` seed, `include 'mem://...'` handed `stream_open()` the path coerced
-/// to `0`, and a compiled `fopen()` handed it the path pointer as an integer. `None` keeps the
-/// parameter gradual (`stream_metadata()`'s `$value` is any value).
+/// to `0`, and a compiled `fopen()` handed it the path pointer as an integer. `stream_metadata()`'s
+/// `$value` is any value: the runtime hands it over boxed, so it publishes `mixed` -- left at the
+/// `int` seed, psysh's `\count($values)` was refused at compile time.
 pub(crate) fn user_wrapper_contract_param_type(method_key: &str, index: usize) -> Option<PhpType> {
     let types: &[PhpType] = match method_key {
         "stream_open" => &[PhpType::Str, PhpType::Str, PhpType::Int, PhpType::Str],
@@ -3770,7 +3771,7 @@ pub(crate) fn user_wrapper_contract_param_type(method_key: &str, index: usize) -
         "stream_seek" => &[PhpType::Int, PhpType::Int],
         "stream_set_option" => &[PhpType::Int, PhpType::Int, PhpType::Int],
         "url_stat" | "rmdir" | "dir_opendir" => &[PhpType::Str, PhpType::Int],
-        "stream_metadata" => &[PhpType::Str, PhpType::Int],
+        "stream_metadata" => &[PhpType::Str, PhpType::Int, PhpType::Mixed],
         "unlink" => &[PhpType::Str],
         "rename" => &[PhpType::Str, PhpType::Str],
         "mkdir" => &[PhpType::Str, PhpType::Int, PhpType::Int],

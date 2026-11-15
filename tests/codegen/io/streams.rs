@@ -6843,6 +6843,32 @@ echo chmod("nm://f", 0644) ? "1" : "0";
     assert_eq!(out, "100");
 }
 
+/// An UNDECLARED `$values` of `stream_metadata()` is any value, as php's prototype says: the
+/// runtime hands over the boxed touch array or the chmod mode, and `count($values)` type-checks.
+/// The parameter kept the checker's `int` seed and psysh's `ProtocolWrapper` failed to compile.
+#[test]
+fn test_stream_metadata_untyped_values_parameter_is_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+class UntypedMetaW {
+    public $context;
+    public function stream_metadata(string $path, int $option, $values): bool {
+        if ($option === STREAM_META_TOUCH) {
+            echo "touch ", \count($values), ":", implode(",", $values), "\n";
+            return true;
+        }
+        echo "option ", $option, " ", gettype($values), " ", $values, "\n";
+        return false;
+    }
+}
+stream_wrapper_register("um", UntypedMetaW::class);
+var_dump(touch("um://f", 5, 6));
+var_dump(chmod("um://f", 0644));
+"#,
+    );
+    assert_eq!(out, "touch 2:5,6\nbool(true)\noption 6 integer 420\nbool(false)\n");
+}
+
 /// Verifies unlink()/mkdir()/rmdir() on a registered userspace-wrapper scheme
 /// dispatch into the wrapper's matching path method, and that a wrapper without
 /// the method (or a non-wrapper path) does not take the wrapper branch.
