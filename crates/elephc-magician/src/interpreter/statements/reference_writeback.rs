@@ -368,13 +368,20 @@ pub(in crate::interpreter) fn write_back_method_ref_target(
         EvalReferenceTarget::Cell { cell } => {
             for declared in context.local_reference_types(*cell) { validate_generic_local(&declared, "reference", value, context, values)?; }
             if *cell != value && values.is_reference(*cell)? {
-                let previous = values.reference_replace(*cell, value)?;
+                let previous = eval_replace_reference_value(*cell, value, context, values)?;
                 context.copy_array_metadata(value, *cell);
                 eval_release_value(context, values, previous)?;
             }
             Ok(())
         },
         EvalReferenceTarget::InvokerSlot { slot, source_tag } => {
+            if *source_tag == EVAL_TAG_MIXED {
+                let current = RuntimeCellHandle::from_raw(unsafe { *(*slot as *const *mut crate::value::RuntimeCell) });
+                if values.is_reference(current)? {
+                    let previous = eval_replace_reference_value(current, value, context, values)?;
+                    return values.release(previous);
+                }
+            }
             write_back_invoker_slot_ref_target(*slot, *source_tag, value, values)
         }
     }

@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 92 (this commit), following `8ddce6abf6`. Issue:
+Verified through step 93 (this commit), following `69bb593ad5`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 92.
+This progress ledger condenses verified implementation through step 93.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -772,6 +772,26 @@ above are unchanged.
   passes both optimizer modes with clean heaps. Compiler check/build, architecture
   inventory828 and hygiene pass. Coercions and Casts remain staged.
 
+### Live eval-owned property reference writes
+
+- Checked property bindings promote source variables into persistent reference cells.
+  The context projects current instance/static associations into borrowed declaration
+  constraints, including parent-private storage names. No association retains a receiver.
+- Interpreter cell replacement checks every live property source before publication.
+  Alias assignments, by-reference parameters, invoker slots and escaped closure
+  captures use this adapter. Unset, rebind and metadata retirement release only the
+  departing source, while other sources continue to constrain a shared cell.
+- Five new regressions cover assignment-point errors before later effects, escaped
+  captures, source retirement, private shadowing and multiple live declarations.
+  Walker and supported VM caller/fallback paths preserve the previous value and
+  balance all fake runtime owners. The fake retirement case explicitly invokes the
+  native metadata-forget equivalent; it does not claim to test native finalization.
+- All eight property tests, existing null-property/local-reference/settype/owner
+  controls and the real opaque native eval Stringable exception test pass. Compiler
+  check/build, architecture inventory828, assembly comments and diff hygiene pass.
+  Native stores outside the interpreter and cross-context interoperability remain
+  admission work. Coercions and Casts stay staged; the public feature mask is six.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -883,4 +903,6 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 90 | `aceb5004d3` | feat(strict): contain scoped runtime static property writes |
 | 91 | `8ddce6abf6` | feat(strict): preserve exact declaration reference contracts |
 
-| 92 | this commit | feat(strict): share exact eval property value contracts |
+| 92 | `69bb593ad5` | feat(strict): share exact eval property value contracts |
+
+| 93 | this commit | feat(strict): validate live eval property reference writes |

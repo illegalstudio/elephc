@@ -45,6 +45,7 @@ mod return_type_compat;
 mod return_values;
 mod value_contracts;
 mod property_value_contracts;
+mod property_reference_contracts;
 mod runtime_ops;
 pub(crate) use runtime_ops::{EVAL_TAG_BOOL, EVAL_TAG_FLOAT, EVAL_TAG_INT, EVAL_TAG_NULL, EVAL_TAG_STRING};
 mod scope_cells;
@@ -100,6 +101,7 @@ use return_type_compat::*;
 use return_values::*;
 use value_contracts::*;
 use property_value_contracts::*;
+use property_reference_contracts::*;
 pub use runtime_ops::{
     NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
 };

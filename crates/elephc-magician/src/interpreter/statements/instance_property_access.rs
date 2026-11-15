@@ -726,6 +726,9 @@ pub(super) fn eval_property_reference_target(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalReferenceTarget, EvalStatus> {
+    if let Some(target) = checked_property_reference_source(source_name, context, scope, values)? {
+        return Ok(target);
+    }
     if let Some(target) = scope.reference_target(source_name).cloned() {
         let resolved = persistent_reference_target(target.clone())?;
         if reference_target_has_object_root(&resolved) {

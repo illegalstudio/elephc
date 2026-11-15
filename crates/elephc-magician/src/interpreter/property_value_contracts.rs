@@ -19,16 +19,22 @@ pub(in crate::interpreter) fn eval_validate_property_value(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    let Some(ty) = property.property_type() else {
-        return Ok(());
-    };
+    let Some(ty) = property.property_type() else { return Ok(()); };
+    eval_validate_property_contract(owner, property.name(), ty, value, context, values)
+}
+
+/// Checks a borrowed candidate against a physical property's immutable declaration.
+pub(in crate::interpreter) fn eval_validate_property_contract(
+    owner: &str, property: &str, ty: &EvalParameterType, value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
         && !eval_declared_value_type_accepts_exact(ty, Some(owner), Some(owner), value, context, values)?
     {
         let expected = eval_null_boundary_type_label(ty, Some(owner), Some(owner), context)?;
         return eval_throw_type_error(&format!(
             "Cannot assign value to property {}::${} of type {expected} (--strict-coercions)",
-            owner.trim_start_matches('\\'), property.name()), context, values);
+            owner.trim_start_matches('\\'), property), context, values);
     }
     if !eval_nonnull_object_boundary(ty) || values.type_tag(value)? != EVAL_TAG_NULL {
         return Ok(());
@@ -38,7 +44,7 @@ pub(in crate::interpreter) fn eval_validate_property_value(
         &format!(
             "Cannot assign null to property {}::${} of type {expected}",
             owner.trim_start_matches('\\'),
-            property.name()
+            property
         ),
         context,
         values,

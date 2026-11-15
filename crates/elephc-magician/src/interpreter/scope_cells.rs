@@ -146,7 +146,7 @@ fn set_scope_cell_unchecked(
                 mark_scope_binding_changed(context, scope, &name)?;
                 return Ok(Vec::new());
             }
-            let previous = values.reference_replace(reference, cell)?;
+            let previous = eval_replace_reference_value(reference, cell, context, values)?;
             context.copy_array_metadata(cell, reference);
             mark_scope_binding_changed(context, scope, &name)?;
             let mut released = vec![previous];
