@@ -334,3 +334,26 @@ foreach (["9007199254740993", "9223372036854775807", "-9223372036854775808", " 9
     );
     assert_eq!(out, "'9007199254740993' => 9007199254740993\n'9223372036854775807' => 9223372036854775807\n'-9223372036854775808' => -9223372036854775808\n' 9223372036854775807 ' => 9223372036854775807\n'9223372036854775808' => ti(): Argument #1 ($i) must be of type int, string given, called in F on line 7\n'-9223372036854775809' => -9223372036854775808\n'1e3' => 1000\n'1.5' => [diag] Implicit conversion from float-string \"1.5\" to int loses precision\n1\n'007' => 7\n'+5' => 5\n'-0' => 0\n");
 }
+
+/// The checker routes a guarded call's `TypeError` to its `catch` while it types the function:
+/// the guarded-argument set the optimizer reads is only installed after type checking, so a
+/// pure callee left the handler unreachable and `$w`, bound only there, unknown after the try
+/// (`strlen()` then refused it at compile time).
+#[test]
+fn test_catch_of_guarded_pure_call_is_reachable_for_the_checker() {
+    let out = compile_and_run(
+        r#"<?php
+function take(string $s): int { return 1; }
+function run(mixed $v): void {
+    try {
+        take($v);
+    } catch (TypeError $e) {
+        $w = "caught";
+    }
+    echo $w, " ", strlen($w), "\n";
+}
+run(null);
+"#,
+    );
+    assert_eq!(out, "caught 6\n");
+}
