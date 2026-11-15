@@ -75,7 +75,7 @@ pub(super) fn emit_if_canonical(
 /// The static parking record borrows this same owner, so detaching it transfers rather than releases.
 pub(in crate::codegen::lower_inst) fn emit_static_if_managed(
     ctx: &mut FunctionContext<'_>, inst: &Instruction, symbol: &str, transfer_owner: Option<usize>,
-    descriptor: Option<&str>,
+    descriptor: Option<&str>, argument_owner: Option<usize>,
 ) -> Result<Option<String>> {
     if !ctx.module.required_runtime_features.native_reference_validation || inst.operands.len() < 2 {
         return Ok(None);
@@ -113,7 +113,10 @@ pub(in crate::codegen::lower_inst) fn emit_static_if_managed(
             Arch::AArch64 => ctx.emitter.instruction(&format!("add {initialized}, {initialized}, #8")), // publish initialization beside the accepted canonical child
             Arch::X86_64 => ctx.emitter.instruction(&format!("add {initialized}, 8")), // publish initialization beside the accepted canonical child
         }
-        abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native_static");
+        if let Some(offset) = argument_owner {
+            abi::emit_frame_slot_address(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 5), offset);
+            abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native_static_call");
+        } else { abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native_static"); }
     } else { abi::emit_call_label(ctx.emitter, "__rt_reference_publish_native"); }
     emit_status(ctx, &done);
     ctx.emitter.label(&raw);

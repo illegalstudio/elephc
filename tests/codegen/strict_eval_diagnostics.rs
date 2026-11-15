@@ -330,6 +330,69 @@ fn test_strict_static_write_publication_and_initialization_bundle() {
     }
 }
 
+/// Temporary Stringable retirement follows the distinct ReflectionClass and ReflectionProperty stores.
+#[test]
+fn test_strict_reflection_stringable_temporary_publication_bundle() {
+    let source = r#"<?php
+class StrictTemporaryTarget { public static string $value = 'old'; }
+class StrictTemporaryText {
+    public function __toString(): string { echo 'S'; return 'new'; }
+    public function __destruct() { echo 'D', StrictTemporaryTarget::$value; }
+}
+$class = new ReflectionClass(StrictTemporaryTarget::class);
+$class->setStaticPropertyValue('value', new StrictTemporaryText());
+echo '|', StrictTemporaryTarget::$value, '|';
+StrictTemporaryTarget::$value = 'old';
+$property = new ReflectionProperty(StrictTemporaryTarget::class, 'value');
+$property->setValue(null, new StrictTemporaryText());
+echo '|', StrictTemporaryTarget::$value;
+gc_collect_cycles();
+"#;
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "SDold|new|SDnew|new", "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
+/// Throwing argument retirement observes old storage, then the catch observes the converted value.
+#[test]
+fn test_strict_reflection_stringable_retirement_failure_bundle() {
+    let source = r#"<?php
+class StrictTemporaryFailureTarget { public static string $value = 'old'; }
+class StrictTemporaryFailureText {
+    public function __toString(): string { echo 'S'; return 'new'; }
+    public function __destruct() { echo 'D', StrictTemporaryFailureTarget::$value; throw new ValueError('release'); }
+}
+$class = new ReflectionClass(StrictTemporaryFailureTarget::class);
+try { $class->setStaticPropertyValue('value', new StrictTemporaryFailureText()); echo 'X'; }
+catch (ValueError $error) { echo '|caught:', StrictTemporaryFailureTarget::$value; }
+unset($error);
+echo '|';
+class StrictTemporaryLateTarget { public static string $value; }
+class StrictTemporaryLateText {
+    public function __toString(): string { echo 'S'; return 'new'; }
+    public function __destruct() { echo 'D'; echo StrictTemporaryLateTarget::$value; }
+}
+$lateClass = new ReflectionClass(StrictTemporaryLateTarget::class);
+try { $lateClass->setStaticPropertyValue('value', new StrictTemporaryLateText()); echo 'X'; }
+catch (Error $error) { echo '|late:', StrictTemporaryLateTarget::$value; }
+unset($error);
+gc_collect_cycles();
+"#;
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "SDold|caught:new|SD|late:new", "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
 /// Scoped native setters contain callbacks and preserve declaration initialization and ownership.
 #[test]
 fn test_strict_static_runtime_setter_publication_and_throwables_bundle() {

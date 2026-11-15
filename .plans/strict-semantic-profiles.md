@@ -893,6 +893,31 @@ above are unchanged.
   need typed checker/EIR guards before coercive ABI preparation. Coercions remains
   staged, alongside the independent Casts lifetime and host audits.
 
+### Converted ReflectionClass argument retirement
+
+- ReflectionClass and ReflectionProperty static writes now carry distinct argument
+  retirement policies through EIR. The class setter hands its borrowed caller
+  parking slot to the checked publisher; ordinary/property setters keep their
+  argument until publication. Both parking operands are validated as registered
+  unwind owners, and the backend uses target-aware ABI helpers.
+- The class-call publisher roots the converted candidate while retiring the source
+  snapshot and clearing the caller's argument owner. PHP destructors therefore see
+  the previous property. A successful conversion is still published when this
+  retirement throws; only then does the pending Throwable reach the caller. The
+  initialization marker follows that publication, including an Error caused by
+  reading a previously uninitialized property from the destructor.
+- Two native tests pass with both optimizers and clean heaps. Five focused root
+  tests also pass, covering EIR policy on every target before/after optimization,
+  root/commit protocols and real clang assembly for the complete reference write
+  family on all five supported targets. Assembly comments and whitespace pass.
+  Three adjacent native setter controls also pass, as do compiler check --tests
+  and build, the architecture828 gate, and source documentation hygiene.
+- Casts remains staged. PHP probes also distinguish a pre-existing reference from
+  one introduced by a destructor: follow up with native rebind fixtures before
+  claiming binding identity parity. Runtime/opaque ReflectionClass calls and
+  Casts-only eval argument aliases remain independent admission audits. The public
+  mask still contains the same six completed guarantees.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1014,4 +1039,6 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 
 | 96 | `3fb2cfffc5` | feat(strict): guard source builtin inputs and reference owners |
 
-| 97 | this commit | feat(strict): validate builtin inputs before folding |
+| 97 | `f36b2321b0` | feat(strict): validate builtin inputs before folding |
+
+| 98 | this commit | fix(strict): retire converted reflection class arguments |

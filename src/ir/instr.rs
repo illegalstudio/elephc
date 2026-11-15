@@ -947,6 +947,9 @@ pub enum Op {
     StoreStaticProperty,
     StaticPropInitialized,
     LoadReflectionStaticProperty,
+    /// Bypasses member visibility with the static store's optional Bool and source owner.
+    /// A fourth borrowed parking-slot operand selects converted ReflectionClass argument
+    /// retirement before publication, including publication before a destructor error escapes.
     StoreReflectionStaticProperty,
     ReflectionStaticPropertyInitialized,
     IAdd,

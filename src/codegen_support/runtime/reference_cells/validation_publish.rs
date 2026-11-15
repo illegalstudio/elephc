@@ -6,13 +6,15 @@
 //!
 //! Key details:
 //! - The owned RHS is detached before callbacks and every source sees that same snapshot.
-//! - The snapshot lease ends at publication, before displaced-value destructors can run.
+//! - Snapshot retirement follows the selected call policy, before displaced-value destructors.
 //! - A conversion conflict owns its TypeError before the last RHS lease is retired.
 //! - Every exit unlinks both roots and contains cleanup exceptions in the caller's context.
 
 use super::*;
 
-const FRAME: usize = 160;
+mod class_arguments;
+
+const FRAME: usize = 176;
 const CONTEXT: usize = 8;
 const WRAPPER: usize = 16;
 const ORIGINAL: usize = 24;
@@ -23,6 +25,7 @@ const WRAPPER_PIN: usize = 80;
 const SNAPSHOT_PIN: usize = 112;
 const PREVIOUS: usize = 120;
 const INITIALIZATION: usize = 128;
+const ARGUMENT_OWNER: usize = 136;
 
 /// Emits publish(context, wrapper, owned_rhs, outcome) with the coordinator's status ABI.
 /// Context and outcome must be valid; the RHS is consumed even on a refused wrapper.
@@ -47,6 +50,14 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     emitter.label_global("__rt_reference_publish_native_static");
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 5), abi::int_arg_reg_name(emitter.target, 4));
     abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 4), 0);
+    abi::emit_jump(emitter, "__rt_reference_publish_native_body");
+    emitter.label_global("__rt_reference_publish_native_static_call");
+    abi::emit_frame_prologue(emitter, FRAME);
+    for (index, offset) in [CONTEXT, WRAPPER, ORIGINAL, OUTCOME, INITIALIZATION, ARGUMENT_OWNER].into_iter().enumerate() {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+    }
+    abi::emit_store_zero_to_local_slot(emitter, PREVIOUS);
+    abi::emit_jump(emitter, "__rt_reference_publish_native_initialized");
     emitter.label("__rt_reference_publish_native_body");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [CONTEXT, WRAPPER, ORIGINAL, OUTCOME].into_iter().enumerate() {
@@ -54,6 +65,8 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     }
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 4), PREVIOUS);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 5), INITIALIZATION);
+    abi::emit_store_zero_to_local_slot(emitter, ARGUMENT_OWNER);
+    emitter.label("__rt_reference_publish_native_initialized");
     for offset in [CONTEXT, OUTCOME] {
         abi::load_at_offset(emitter, result, offset);
         abi::emit_branch_if_int_result_zero(emitter, failed);
@@ -93,6 +106,19 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     emitter.label(candidate_ready);
     abi::load_at_offset(emitter, scratch, OUTCOME);
     abi::emit_store_zero_to_address(emitter, scratch, 0);
+    let argument_ready = "__rt_reference_publish_native_class_argument_ready";
+    abi::load_at_offset(emitter, scratch, ARGUMENT_OWNER);
+    abi::emit_branch_if_zero_wide(emitter, scratch, argument_ready);
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 3), result);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CONTEXT);
+    abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 1), SNAPSHOT_PIN);
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 2), ARGUMENT_OWNER);
+    abi::emit_call_label(emitter, "__rt_reference_retire_static_argument");
+    abi::emit_branch_if_int_result_nonzero(emitter, argument_ready);
+    abi::emit_load_int_immediate(emitter, result, 2);
+    abi::store_at_offset(emitter, result, STATUS);
+    abi::emit_jump(emitter, cleanup);
+    emitter.label(argument_ready);
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 2), result);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CONTEXT);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), WRAPPER);
@@ -100,9 +126,15 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     let previous = abi::int_arg_reg_name(emitter.target, 4);
     abi::load_at_offset(emitter, previous, INITIALIZATION);
     let ordinary = "__rt_reference_publish_native_nonstatic";
+    let ordinary_static = "__rt_reference_publish_native_ordinary_static";
     let immediate = "__rt_reference_publish_native_immediate";
     let committed = "__rt_reference_publish_native_committed";
     abi::emit_branch_if_zero_wide(emitter, previous, ordinary);
+    abi::load_at_offset(emitter, scratch, ARGUMENT_OWNER);
+    abi::emit_branch_if_zero_wide(emitter, scratch, ordinary_static);
+    abi::emit_call_label(emitter, "__rt_reference_commit_native_static_call_rooted");
+    abi::emit_jump(emitter, committed);
+    emitter.label(ordinary_static);
     abi::emit_call_label(emitter, "__rt_reference_commit_native_static_rooted");
     abi::emit_jump(emitter, committed);
     emitter.label(ordinary);
@@ -160,6 +192,7 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     emit_reference_error_allocator(emitter, "__rt_reference_conflict_error_new",
         "_spl_type_error_class_id", "_native_reference_conflict_msg",
         NATIVE_REFERENCE_CONFLICT_MSG.len() as i64);
+    class_arguments::emit(emitter);
 }
 
 /// Selects coordinator status 3 without changing its conflict metadata or owned exception.
@@ -195,7 +228,8 @@ mod tests {
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit(&mut emitter);
-            let assembly = emitter.output();
+            let output = emitter.output();
+            let (assembly, _) = output.split_once("__rt_reference_retire_static_argument:\n").unwrap();
             let snapshot = assembly.find("__rt_mixed_clone").unwrap();
             let validate = assembly.find("__rt_reference_validate_native").unwrap();
             let commit = assembly.find("__rt_reference_commit_native").unwrap();

@@ -338,6 +338,36 @@ fn strict_static_write_publication_all_targets() {
     }
 }
 
+/// Both Reflection APIs retain their distinct argument policies through all target lowerings.
+#[test]
+fn strict_reflection_class_argument_retirement_all_targets() {
+    let program = prepared(r#"<?php
+class StaticRetirementTarget { public static string $value = 'old'; }
+class StaticRetirementText { public function __toString(): string { return 'new'; } }
+$class = new ReflectionClass(StaticRetirementTarget::class);
+$class->setStaticPropertyValue('value', new StaticRetirementText());
+$property = new ReflectionProperty(StaticRetirementTarget::class, 'value');
+$property->setValue(null, new StaticRetirementText());
+"#);
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        for optimize in [false, true] {
+            let mut module = module.clone();
+            if optimize { crate::ir_passes::optimize_module(&mut module); }
+            let main = module.functions.iter().find(|function| function.name == "main").unwrap();
+            let counts = main.instructions.iter().filter(|inst| inst.op == crate::ir::Op::StoreReflectionStaticProperty)
+                .map(|inst| inst.operands.len()).collect::<Vec<_>>();
+            assert_eq!(counts, vec![4, 3], "{name}, opt={optimize}");
+            crate::ir::validate_module(&module).unwrap();
+            let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+            assert!(assembly.contains("__rt_reference_publish_native_static_call"), "{name}");
+        }
+    }
+}
+
 /// Exact Coercions independently selects managed declarations on every supported target.
 #[test]
 fn strict_reference_exact_coercions_eir_all_targets() {

@@ -106,12 +106,14 @@ pub(super) fn lower_reflection_class_set_static_property_value(
     let value = lower_expr(ctx, &value);
     // PHP null or a packed record address bound for a pointer slot becomes the stored word.
     let value = ctx.retype_packed_address_for_pointer_sink(value, &property_ty, Some(expr.span));
-    store_reflection_static_property_by_class_name(
+    store_static_property_with_argument_retirement(
         ctx,
         &declaring_class,
         &property,
         value.value,
         expr.span,
+        Op::StoreReflectionStaticProperty,
+        StaticArgumentRetirement::BeforePublication,
     );
     Some(lower_null(ctx, expr))
 }
@@ -374,6 +376,19 @@ pub(super) fn store_static_property_by_class_name_with_op(
     span: Span,
     op: Op,
 ) {
+    store_static_property_with_argument_retirement(ctx, class_name, property, value, span, op,
+        StaticArgumentRetirement::AfterPublication);
+}
+
+/// Distinguishes PHP's converted class-setter argument from ordinary store operand lifetimes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StaticArgumentRetirement { BeforePublication, AfterPublication }
+
+/// Carries the selected call argument lifetime to the checked static publisher.
+fn store_static_property_with_argument_retirement(
+    ctx: &mut LoweringContext<'_, '_>, class_name: &str, property: &str,
+    value: ValueId, span: Span, op: Op, retirement: StaticArgumentRetirement,
+) {
     if crate::ir_lower::property_default_errors::for_class(ctx, class_name, span).is_some() {
         return;
     }
@@ -383,8 +398,8 @@ pub(super) fn store_static_property_by_class_name_with_op(
     }).is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
     {
         let source = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
-        // Reflection is a call: its by-value argument remains alive until the setter returns,
-        // independently of the destination publisher's consuming owner.
+        // The call argument and destination publisher have separate consuming owners.
+        // The class setter can retire the converted argument before publication.
         let argument = ctx.box_value_as_mixed(source, PhpType::Mixed, Some(span));
         let argument_pins = super::pin_in_flight_owners(ctx, &[argument.value], span);
         let stored = ctx.emit_value(Op::MixedClone, vec![argument.value], None, PhpType::Mixed,
@@ -397,6 +412,12 @@ pub(super) fn store_static_property_by_class_name_with_op(
         && crate::source::current_strict_types());
     let mut operands = vec![value, strict];
     if let Some(owner) = super::pinned_transfer_owner(ctx, &pins, span) { operands.push(owner); }
+    if retirement == StaticArgumentRetirement::BeforePublication {
+        if let Some(owner) = super::pinned_transfer_owner(ctx, &argument_pins, span) {
+            debug_assert_eq!(operands.len(), 3);
+            operands.push(owner);
+        }
+    }
     ctx.emit_void(
         op,
         operands,

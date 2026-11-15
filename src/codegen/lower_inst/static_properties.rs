@@ -420,7 +420,14 @@ fn static_transfer_owner_offset(
     if slot.storage_type.codegen_repr() != PhpType::Mixed || source_ty.codegen_repr() != PhpType::Mixed {
         return Ok(None);
     }
-    let Some(owner) = inst.operands.get(2) else { return Ok(None); };
+    static_parking_owner_offset(ctx, inst, 2)
+}
+
+/// Resolves an authenticated unwind parking slot carried by a static-store operand.
+fn static_parking_owner_offset(
+    ctx: &FunctionContext<'_>, inst: &Instruction, index: usize,
+) -> Result<Option<usize>> {
+    let Some(owner) = inst.operands.get(index) else { return Ok(None); };
     let Some(value) = ctx.function.value(*owner) else {
         return Err(CodegenIrError::invalid_module("static transfer owner is missing"));
     };
@@ -451,8 +458,9 @@ fn emit_direct_store_static_property_result(
     if slot.storage_type.codegen_repr() == PhpType::Mixed {
         let descriptor = crate::codegen::runtime_metadata::checked_boxed_static_descriptor(
             ctx.module, &slot.declaring_class, &slot.property);
+        let argument_owner = static_parking_owner_offset(ctx, inst, 3)?;
         let done = super::local_stores::emit_static_if_managed(ctx, inst, &slot.symbol, transfer_owner,
-            descriptor.as_deref())?;
+            descriptor.as_deref(), argument_owner)?;
         let prefix = ctx.next_label("static_mixed_reference_store");
         crate::codegen_support::runtime::reference_cells::publish_mixed_symbol(
             ctx.emitter, &slot.symbol, release_previous, transfer_owner, &prefix,

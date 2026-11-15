@@ -20,14 +20,15 @@ enum Retirement { Release, ReturnPrevious, InitializeStatic }
 
 /// Emits commit(context, wrapper, owned_candidate), returning success0, failure1 or Throwable2.
 pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
-    emit_entry(emitter, "__rt_reference_commit_native", false, Retirement::Release);
-    emit_entry(emitter, "__rt_reference_commit_native_rooted", true, Retirement::Release);
-    emit_entry(emitter, "__rt_reference_commit_native_deferred_rooted", true, Retirement::ReturnPrevious);
-    emit_entry(emitter, "__rt_reference_commit_native_static_rooted", true, Retirement::InitializeStatic);
+    emit_entry(emitter, "__rt_reference_commit_native", false, Retirement::Release, false);
+    emit_entry(emitter, "__rt_reference_commit_native_rooted", true, Retirement::Release, false);
+    emit_entry(emitter, "__rt_reference_commit_native_deferred_rooted", true, Retirement::ReturnPrevious, false);
+    emit_entry(emitter, "__rt_reference_commit_native_static_rooted", true, Retirement::InitializeStatic, false);
+    emit_entry(emitter, "__rt_reference_commit_native_static_call_rooted", true, Retirement::InitializeStatic, true);
 }
 
-/// Optionally consumes the successful publisher's snapshot lease at the ownership transfer point.
-fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, retirement: Retirement) {
+/// Consumes snapshot leases at transfer; a converted class argument may already own a cleanup error.
+fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, retirement: Retirement, converted_argument: bool) {
     let result = abi::int_result_reg(emitter);
     let wrapper = abi::secondary_scratch_reg(emitter);
     let pending = format!("{entry}_pending");
@@ -44,9 +45,11 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, retiremen
     if retirement != Retirement::Release {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 4), 48);
     }
-    abi::load_at_offset(emitter, result, 8);
-    abi::emit_load_from_address(emitter, result, result, 8);
-    abi::emit_branch_if_int_result_nonzero(emitter, &pending);
+    if !converted_argument {
+        abi::load_at_offset(emitter, result, 8);
+        abi::emit_load_from_address(emitter, result, result, 8);
+        abi::emit_branch_if_int_result_nonzero(emitter, &pending);
+    }
     abi::load_at_offset(emitter, result, 24);
     abi::emit_branch_if_int_result_zero(emitter, &invalid);
     abi::load_at_offset(emitter, result, 16);

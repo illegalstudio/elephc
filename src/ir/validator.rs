@@ -1089,13 +1089,14 @@ fn validate_opcode_rules(
             Ok(())
         }
         StoreStaticProperty | StoreReflectionStaticProperty => {
-            if !(1..=3).contains(&inst.operands.len()) {
-                return check_count(inst_id, inst, 1, "original RHS, optional assignment-site Bool and source owner");
+            let maximum = if inst.op == StoreReflectionStaticProperty { 4 } else { 3 };
+            if !(1..=maximum).contains(&inst.operands.len()) {
+                return check_count(inst_id, inst, 1, "original RHS, optional assignment-site Bool, source owner and class argument owner");
             }
             if inst.operands.len() >= 2 {
                 check_operand_type(function, inst_id, inst, 1, IrType::I64, "assignment-site bool (I64)")?;
             }
-            if let Some(owner_id) = inst.operands.get(2) {
+            for owner_id in inst.operands.iter().skip(2) {
                 let owner = function.value(*owner_id).ok_or(ValidationError::UnknownValue(*owner_id))?;
                 let ValueDef::Instruction { inst: load, .. } = owner.def else {
                     return Err(ValidationError::OwnershipTypeMismatch(*owner_id));
