@@ -570,6 +570,9 @@ struct Function {
     source_id: Option<u64>,
     #[serde(default)]
     line_start: Option<u64>,
+    /// Lexical PHP class for methods and closures.
+    #[serde(default)]
+    class: Option<String>,
 }
 
 #[derive(Deserialize)]

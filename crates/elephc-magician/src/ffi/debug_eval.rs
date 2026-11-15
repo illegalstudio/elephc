@@ -15,7 +15,7 @@
 use crate::abi::{ElephcEvalContext, ElephcEvalResult, ABI_VERSION};
 use crate::interpreter::{debug_eval_render_value, RuntimeValueOps};
 use crate::runtime_hooks::ElephcRuntimeOps;
-use crate::value::RuntimeCellHandle;
+use crate::value::{RuntimeCell, RuntimeCellHandle};
 
 /// Renders one eval result cell into `out_ptr` and releases it.
 ///
@@ -71,6 +71,54 @@ pub unsafe extern "C" fn __elephc_debug_eval_render(
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_ptr, written);
         }
         written as u64
+    })
+    .unwrap_or(0)
+}
+
+/// Reads one eval cell's concrete runtime tag and raw payload words.
+///
+/// The cell stays owned by the eval scope; this is a read-only projection used
+/// by the debugger to write scalar assignments back into native frame slots.
+///
+/// # Safety
+/// `ctx` must be a live eval context and `cell` a live runtime cell. Output
+/// pointers may be null.
+#[no_mangle]
+pub unsafe extern "C" fn __elephc_debug_eval_value_bits(
+    ctx: *mut ElephcEvalContext,
+    cell: *mut RuntimeCell,
+    out_tag: *mut u32,
+    out_lo: *mut u64,
+    out_hi: *mut u64,
+) -> u32 {
+    std::panic::catch_unwind(|| unsafe {
+        let Some(context) = ctx.as_mut() else {
+            return 0;
+        };
+        if context.abi_version() != ABI_VERSION || cell.is_null() {
+            return 0;
+        }
+        let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
+        let handle = RuntimeCellHandle::from_raw(cell);
+        let Ok(tag) = values.type_tag(handle) else {
+            return 0;
+        };
+        let Ok(lo) = values.raw_value_word(handle) else {
+            return 0;
+        };
+        let Ok(hi) = values.raw_value_high_word(handle) else {
+            return 0;
+        };
+        if !out_tag.is_null() {
+            *out_tag = tag as u32;
+        }
+        if !out_lo.is_null() {
+            *out_lo = lo;
+        }
+        if !out_hi.is_null() {
+            *out_hi = hi;
+        }
+        1
     })
     .unwrap_or(0)
 }

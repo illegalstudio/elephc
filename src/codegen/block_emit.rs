@@ -124,10 +124,12 @@ fn emit_debug_eval_hooks(
         "__elephc_eval_scope_new",
         "__elephc_eval_scope_free_v2",
         "__elephc_eval_scope_set_v2",
+        "__elephc_eval_scope_get",
         "__elephc_eval_context_new_with_native_catalog",
         "__elephc_eval_context_free_v2",
         "__elephc_eval_execute",
         "__elephc_debug_eval_render",
+        "__elephc_debug_eval_value_bits",
         "__elephc_eval_context_push_class_scope",
         "__elephc_eval_context_pop_class_scope",
     ] {
@@ -410,6 +412,7 @@ fn emit_user_function(
         function_source_id(function),
         function_kind(function),
         &function_flags(function),
+        function.lexical_class.as_deref(),
     );
     if function.flags.is_generator {
         emit_generator_function(
@@ -593,6 +596,7 @@ fn emit_class_method(
         function_source_id(function),
         function_kind(function),
         &function_flags(function),
+        function.lexical_class.as_deref(),
     );
     if function.flags.is_generator {
         emit_generator_function(
@@ -941,6 +945,7 @@ fn emit_generator_body(
         function_source_id(function),
         function_kind(function),
         &function_flags(function),
+        function.lexical_class.as_deref(),
     );
     let layout = frame::layout_for_function(
         function,
@@ -1189,6 +1194,7 @@ fn emit_main_function(
         function_source_id(function),
         function_kind(function),
         &function_flags(function),
+        function.lexical_class.as_deref(),
     );
     let mut layout = frame::layout_for_function(
         function,
@@ -1763,6 +1769,7 @@ fn emit_fn_marker(
     source_id: Option<u32>,
     kind: &str,
     flags: &str,
+    lexical_class: Option<&str>,
 ) -> Option<usize> {
     let function_id = shared.debug_build.then(|| shared.next_debug_function());
     let mut marker = format!("@fn name={} symbol={}", name, symbol);
@@ -1773,6 +1780,9 @@ fn emit_fn_marker(
         let _ = write!(marker, " id={function_id}");
     }
     let _ = write!(marker, " kind={kind}");
+    if let Some(class) = lexical_class.filter(|class| !class.is_empty()) {
+        let _ = write!(marker, " class_hex={}", hex_encode(class.as_bytes()));
+    }
     if !flags.is_empty() {
         let _ = write!(marker, " flags={flags}");
     }
@@ -2001,6 +2011,23 @@ fn debug_visibility_name(visibility: &crate::parser::ast::Visibility) -> &'stati
     }
 }
 
+/// Returns the metadata category used to describe one local in DWARF.
+fn debug_local_category(php_type: &PhpType) -> &'static str {
+    match php_type.codegen_repr() {
+        PhpType::Str => "string",
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array",
+        PhpType::Object(_) => "object",
+        PhpType::Mixed | PhpType::Union(_) => "mixed",
+        PhpType::Iterable => "iterable",
+        PhpType::Callable => "callable",
+        PhpType::Resource(_) => "resource",
+        PhpType::TaggedScalar => "tagged_scalar",
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
+        | PhpType::Void | PhpType::Never | PhpType::Narrow(_)
+        | PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_) => "scalar",
+    }
+}
+
 /// Returns whether `name` is a PHP-visible local rather than compiler storage.
 fn is_debug_visible_local_name(name: &str) -> bool {
     !name.contains('#') && !name.starts_with("__elephc_")
@@ -2060,10 +2087,11 @@ fn emit_local_markers(ctx: &mut FunctionContext<'_>) {
             .get(param_index)
             .filter(|parameter| parameter.name == name);
         let mut marker = format!(
-            "@local name_hex={} offset={} type_hex={} kind={} storage={}",
+            "@local name_hex={} offset={} type_hex={} category={} kind={} storage={}",
             hex_encode(name.as_bytes()),
             offset,
             hex_encode(local.php_type.to_string().as_bytes()),
+            debug_local_category(&local.php_type),
             local_kind_name(local.kind),
             ctx.local_representation_name(local.id)
         );
@@ -2335,6 +2363,7 @@ pub(super) fn emit_folded_body(
         function_source_id(function),
         function_kind(function),
         &function_flags(function),
+        function.lexical_class.as_deref(),
     );
     // `label_global` gives the thunk the same section and `%function` type the full bodies get
     // on Linux; a bare `.globl` would leave the jump in the PREVIOUS symbol's section and skip

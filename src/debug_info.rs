@@ -49,12 +49,12 @@ struct SubprogramInfo {
     locals: Vec<LocalInfo>,
 }
 
-/// One scalar PHP local rendered as a DWARF `DW_TAG_variable`.
+/// One PHP local rendered as a DWARF `DW_TAG_variable`.
 struct LocalInfo {
     name: String,
     /// Positive distance below the frame pointer, matching the debug metadata.
     frame_offset: usize,
-    /// `int`, `float` or `bool`; the matching base-type DIE owns the encoding.
+    /// Type label key: `int`, `float`, `bool`, `string` or `ref`.
     php_type: &'static str,
 }
 
@@ -147,7 +147,7 @@ pub fn inject_line_directives(
         if php_variables {
             if let Some(marker) = line.split("@local ").nth(1) {
                 if let Some((_, _, locals)) = open.as_mut() {
-                    if let Some(local) = parse_scalar_local(marker) {
+                    if let Some(local) = parse_debug_local(marker) {
                         locals.push(local);
                     }
                 }
@@ -252,6 +252,11 @@ fn debug_info_sections(
     //   name, DW_AT_type(0x49)/ref4(0x13), DW_AT_location(0x02)/exprloc(0x18).
     // Abbrev 4: DW_TAG_base_type (0x24), no children;
     //   name, DW_AT_encoding(0x3e)/data1(0x0b), DW_AT_byte_size(0x0b)/data1.
+    // Abbrev 5: DW_TAG_structure_type (0x13), has children;
+    //   name, DW_AT_byte_size(0x0b)/data1.
+    // Abbrev 6: DW_TAG_member (0x0d), no children;
+    //   name, DW_AT_type(0x49)/ref4(0x13),
+    //   DW_AT_data_member_location(0x38)/data1(0x0b).
     let abbrev_anchor = if platform == Platform::Linux { "Lelephc_debug_abbrev0:\n" } else { "" };
     let mut out = String::new();
     out.push_str(abbrev_section);
@@ -262,7 +267,7 @@ fn debug_info_sections(
     );
     if php_variables {
         out.push_str(
-            "    .byte 2\n    .byte 0x2e\n    .byte 1\n    .byte 0x03, 0x08\n    .byte 0x11, 0x01\n    .byte 0x12, 0x07\n    .byte 0x40, 0x18\n    .byte 0, 0\n    .byte 3\n    .byte 0x34\n    .byte 0\n    .byte 0x03, 0x08\n    .byte 0x49, 0x13\n    .byte 0x02, 0x18\n    .byte 0, 0\n    .byte 4\n    .byte 0x24\n    .byte 0\n    .byte 0x03, 0x08\n    .byte 0x3e, 0x0b\n    .byte 0x0b, 0x0b\n    .byte 0, 0\n",
+            "    .byte 2\n    .byte 0x2e\n    .byte 1\n    .byte 0x03, 0x08\n    .byte 0x11, 0x01\n    .byte 0x12, 0x07\n    .byte 0x40, 0x18\n    .byte 0, 0\n    .byte 3\n    .byte 0x34\n    .byte 0\n    .byte 0x03, 0x08\n    .byte 0x49, 0x13\n    .byte 0x02, 0x18\n    .byte 0, 0\n    .byte 4\n    .byte 0x24\n    .byte 0\n    .byte 0x03, 0x08\n    .byte 0x3e, 0x0b\n    .byte 0x0b, 0x0b\n    .byte 0, 0\n    .byte 5\n    .byte 0x13\n    .byte 1\n    .byte 0x03, 0x08\n    .byte 0x0b, 0x0b\n    .byte 0, 0\n    .byte 6\n    .byte 0x0d\n    .byte 0\n    .byte 0x03, 0x08\n    .byte 0x49, 0x13\n    .byte 0x38, 0x0b\n    .byte 0, 0\n",
         );
     } else {
         out.push_str(
@@ -278,7 +283,7 @@ fn debug_info_sections(
     );
     if php_variables {
         out.push_str(
-            "Lelephc_debug_type_int:\n    .byte 4\n    .asciz \"int\"\n    .byte 0x05\n    .byte 8\nLelephc_debug_type_float:\n    .byte 4\n    .asciz \"float\"\n    .byte 0x04\n    .byte 8\nLelephc_debug_type_bool:\n    .byte 4\n    .asciz \"bool\"\n    .byte 0x02\n    .byte 8\n",
+            "Lelephc_debug_type_int:\n    .byte 4\n    .asciz \"int\"\n    .byte 0x05\n    .byte 8\nLelephc_debug_type_float:\n    .byte 4\n    .asciz \"float\"\n    .byte 0x04\n    .byte 8\nLelephc_debug_type_bool:\n    .byte 4\n    .asciz \"bool\"\n    .byte 0x02\n    .byte 8\nLelephc_debug_type_ptr:\n    .byte 4\n    .asciz \"ptr\"\n    .byte 0x01\n    .byte 8\nLelephc_debug_type_size:\n    .byte 4\n    .asciz \"size_t\"\n    .byte 0x07\n    .byte 8\nLelephc_debug_type_ref:\n    .byte 4\n    .asciz \"php_ref\"\n    .byte 0x01\n    .byte 8\nLelephc_debug_type_string:\n    .byte 5\n    .asciz \"php_string\"\n    .byte 16\n    .byte 6\n    .asciz \"ptr\"\n    .long Lelephc_debug_type_ptr - Lelephc_debug_cu_start\n    .byte 0\n    .byte 6\n    .asciz \"len\"\n    .long Lelephc_debug_type_size - Lelephc_debug_cu_start\n    .byte 8\n    .byte 0\n",
         );
     }
     let frame_base = match arch {
@@ -307,12 +312,12 @@ fn debug_info_sections(
     out
 }
 
-/// Parses one `@local` marker into the scalar subset DWARF can describe.
+/// Parses one `@local` marker into the subset DWARF can describe.
 ///
 /// Reference cells and compiler-owned storage are skipped: their frame word is
 /// an indirection, not the PHP value. Sensitive parameters are skipped so DWARF
 /// cannot leak what the runtime call capture redacts.
-fn parse_scalar_local(marker: &str) -> Option<LocalInfo> {
+fn parse_debug_local(marker: &str) -> Option<LocalInfo> {
     if marker_value(marker, "kind").unwrap_or("php_local") != "php_local" {
         return None;
     }
@@ -327,11 +332,18 @@ fn parse_scalar_local(marker: &str) -> Option<LocalInfo> {
     if frame_offset == 0 || frame_offset > i64::MAX as usize {
         return None;
     }
-    let php_type = match decode_hex_path(marker_value(marker, "type_hex")?)?.as_str() {
-        "int" => "int",
-        "float" => "float",
-        "bool" => "bool",
-        _ => return None,
+    let type_text = decode_hex_path(marker_value(marker, "type_hex")?)?;
+    let category = marker_value(marker, "category").unwrap_or("");
+    let php_type = match category {
+        "string" => "string",
+        "array" | "object" | "mixed" | "iterable" | "callable" | "resource" => "ref",
+        _ => match type_text.as_str() {
+            "int" => "int",
+            "float" => "float",
+            "bool" => "bool",
+            "string" => "string",
+            _ => return None,
+        },
     };
     Some(LocalInfo {
         name,
@@ -557,12 +569,13 @@ _php_bar:
         let asm = "\
     # @fn name=compute symbol=_php_compute
 _php_compute:
-    # @local name_hex=6e offset=16 type_hex=696e74 kind=php_local storage=raw
-    # @local name_hex=726174696f offset=32 type_hex=666c6f6174 kind=php_local storage=raw
-    # @local name_hex=666c6167 offset=48 type_hex=626f6f6c kind=php_local storage=raw
-    # @local name_hex=6e616d65 offset=64 type_hex=737472696e67 kind=php_local storage=raw
-    # @local name_hex=726566 offset=80 type_hex=696e74 kind=php_local storage=ref_cell
-    # @local name_hex=736563726574 offset=96 type_hex=696e74 kind=php_local storage=raw sensitive=1
+    # @local name_hex=6e offset=16 type_hex=696e74 category=scalar kind=php_local storage=raw
+    # @local name_hex=726174696f offset=32 type_hex=666c6f6174 category=scalar kind=php_local storage=raw
+    # @local name_hex=666c6167 offset=48 type_hex=626f6f6c category=scalar kind=php_local storage=raw
+    # @local name_hex=6e616d65 offset=64 type_hex=737472696e67 category=string kind=php_local storage=raw
+    # @local name_hex=6974656d73 offset=112 type_hex=61727261793c696e743e category=array kind=php_local storage=raw
+    # @local name_hex=726566 offset=80 type_hex=696e74 category=scalar kind=php_local storage=ref_cell
+    # @local name_hex=736563726574 offset=96 type_hex=696e74 category=scalar kind=php_local storage=raw sensitive=1
     # @src line=4 col=5
     ret
     # @endfn name=compute
@@ -574,15 +587,25 @@ _php_compute:
             Arch::X86_64,
             true,
         );
-        assert!(x86.contains("Lelephc_debug_type_int:"), "{x86}");
-        assert!(x86.contains("Lelephc_debug_type_float:"), "{x86}");
-        assert!(x86.contains("Lelephc_debug_type_bool:"), "{x86}");
-        for name in ["n", "ratio", "flag"] {
+        for kind in ["int", "float", "bool", "string", "ref"] {
+            assert!(x86.contains(&format!("Lelephc_debug_type_{kind}:")), "{kind}: {x86}");
+        }
+        for name in ["n", "ratio", "flag", "name", "items"] {
             assert!(x86.contains(&format!(".asciz \"{name}\"")), "{name}: {x86}");
         }
-        for name in ["name", "ref", "secret"] {
+        for name in ["ref", "secret"] {
             assert!(!x86.contains(&format!(".asciz \"{name}\"")), "{name}: {x86}");
         }
+        assert!(x86.contains(".asciz \"php_string\""), "{x86}");
+        assert!(x86.contains(".asciz \"php_ref\""), "{x86}");
+        assert!(
+            x86.contains(".long Lelephc_debug_type_string - Lelephc_debug_cu_start"),
+            "{x86}"
+        );
+        assert!(
+            x86.contains(".long Lelephc_debug_type_ref - Lelephc_debug_cu_start"),
+            "{x86}"
+        );
         assert!(x86.contains("    .byte 0x76, 0x00"), "{x86}");
         assert!(x86.contains("    .byte 0x91, 0x70"), "{x86}");
         assert!(x86.contains("    .byte 0x91, 0x60"), "{x86}");

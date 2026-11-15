@@ -38,6 +38,8 @@ struct FunctionMeta {
     symbol: String,
     source_id: Option<usize>,
     kind: String,
+    /// Lexical PHP class shared by methods and closures declared inside one.
+    class: Option<String>,
     flags: Vec<String>,
     synthetic: bool,
     asm_start: usize,
@@ -223,6 +225,12 @@ pub(crate) fn build(
             let raw_source = optional_marker_number(marker, "file")?;
             let source_id = raw_source.map(|id| source_aliases.get(&id).copied().unwrap_or(id));
             let kind = marker_value(marker, "kind").unwrap_or("function").to_string();
+            let class = marker_value(marker, "class_hex")
+                .map(|class| {
+                    decode_hex_path(class)
+                        .ok_or_else(|| format!("invalid debug function class '{}'", line.trim()))
+                })
+                .transpose()?;
             let flags = marker_value(marker, "flags")
                 .map(|flags| flags.split(',').map(str::to_string).collect())
                 .unwrap_or_default();
@@ -233,6 +241,7 @@ pub(crate) fn build(
                 symbol: symbol.to_string(),
                 source_id,
                 kind,
+                class,
                 flags,
                 synthetic: marker_value(marker, "synthetic") == Some("1"),
                 asm_start: asm_line,
@@ -680,6 +689,7 @@ fn render_json(
                 "symbol": function.symbol,
                 "source_id": function.source_id,
                 "kind": function.kind,
+                "class": function.class,
                 "asm_start": function.asm_start,
                 "asm_end": function.asm_end.unwrap_or(function.asm_start),
                 "line_start": line_start,

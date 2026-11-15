@@ -274,6 +274,17 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
     let page = http(&address, "GET", "/", None);
     assert!(page.contains("<title>elephc monitor · debugger</title>"), "{page}");
     assert!(page.contains("/dap/events"), "{page}");
+    for control in [
+        "id=\"breakpoints\"",
+        "id=\"function-breakpoints\"",
+        "id=\"data-breakpoints\"",
+        "setExceptionBreakpoints",
+        "setFunctionBreakpoints",
+        "setDataBreakpoints",
+        "dataBreakpointInfo",
+    ] {
+        assert!(page.contains(control), "missing {control}: {page}");
+    }
 
     let mut since = 0u64;
     let mut seq = 0i64;
@@ -2096,28 +2107,27 @@ echo scalars(3, 2.0, true), "\n";
     let rest = &info[start..];
     let end = rest.find("\n <1>").unwrap_or(rest.len());
     let function_info = &rest[..end];
-    for name in ["n", "f", "b", "mask", "half", "flag"] {
+    for name in ["n", "f", "b", "mask", "half", "flag", "name"] {
         assert!(
             function_info
                 .lines()
                 .any(|line| line.contains("DW_AT_name") && line.trim_end().ends_with(&format!(": {name}"))),
-            "missing scalar ${name}:\n{function_info}"
+            "missing ${name}:\n{function_info}"
         );
     }
-    assert!(
-        !function_info
-            .lines()
-            .any(|line| line.contains("DW_AT_name") && line.trim_end().ends_with(": name")),
-        "string local leaked into DWARF as a scalar:\n{function_info}"
-    );
     assert!(function_info.contains("DW_AT_frame_base"), "{function_info}");
     assert!(function_info.contains("DW_OP_breg"), "{function_info}");
     assert!(function_info.contains("DW_AT_location"), "{function_info}");
     assert!(function_info.contains("DW_OP_fbreg"), "{function_info}");
-    // The base-type DIEs precede the subprograms in the compile unit.
+    // The type DIEs precede the subprograms in the compile unit.
     assert!(info.contains("DW_AT_encoding    : 5"), "{info}");
     assert!(info.contains("DW_AT_encoding    : 4"), "{info}");
     assert!(info.contains("DW_AT_encoding    : 2"), "{info}");
+    assert!(info.contains("DW_TAG_structure_type"), "{info}");
+    assert!(info.contains("DW_TAG_member"), "{info}");
+    assert!(info.contains("php_string"), "{info}");
+    assert!(info.contains("ptr"), "{info}");
+    assert!(info.contains("len"), "{info}");
 
     // The optimized preset keeps line/subprogram info but omits variable DIEs:
     // its slots may no longer hold the PHP value (DAP reports <optimized out>).
@@ -3050,12 +3060,11 @@ fn test_cli_debug_allow_eval_terminal_command() {
         "terminal allow-eval failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stdout).ends_with("6\n"));
+    assert!(String::from_utf8_lossy(&output.stdout).ends_with("43\n"));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("Stopped at main.php:7:"), "{stderr}");
     assert!(stderr.contains("int(10)"), "{stderr}");
     assert!(stderr.contains("int(42)"), "{stderr}");
-    assert!(stderr.contains("int(5)"), "{stderr}");
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -6964,7 +6973,7 @@ fn test_cli_debug_allow_eval_runs_magician_expressions() {
     let dir = make_cli_test_dir("elephc_cli_debug_allow_eval");
     fs::write(
         dir.join("main.php"),
-        "<?php\nfunction double(int $n): int {\n    return $n * 2;\n}\nfunction probe(int $n): int {\n    $x = 5;\n    $name = \"abc\";\n    $items = [1, 2, 3];\n    $total = 0;\n    foreach ($items as $item) {\n        $total += $item;\n    }\n    return $x + $total + strlen($name) + $n;\n}\necho probe(1), \"\\n\";\n",
+        "<?php\nfunction double(int $n): int {\n    return $n * 2;\n}\nfunction probe(int $n): int {\n    $x = 5;\n    $name = \"abc\";\n    $items = [1, 2, 3];\n    $total = 0;\n    $ratio = 1.5;\n    $flag = true;\n    foreach ($items as $item) {\n        $total += $item;\n    }\n    return $x + $total + strlen($name) + $n;\n}\necho probe(1), \"\\n\";\n",
     )
     .expect("write allow-eval fixture");
     let mut client = DapClient::spawn(
@@ -6990,7 +6999,7 @@ fn test_cli_debug_allow_eval_runs_magician_expressions() {
         "setBreakpoints",
         Some(serde_json::json!({
             "source": {"path": "main.php"},
-            "breakpoints": [{"line": 13}],
+            "breakpoints": [{"line": 15}],
         })),
     );
     assert_eq!(
@@ -7010,6 +7019,8 @@ fn test_cli_debug_allow_eval_runs_magician_expressions() {
         ("double($x)", "int(10)"),
         ("array_sum($items)", "int(6)"),
         ("strtoupper($name)", "string(3) \"ABC\""),
+        ("$ratio = 2.5", "float(2.5)"),
+        ("$flag = false", "bool(false)"),
         ("$x = 42", "int(42)"),
     ] {
         let response = client.evaluate(frame, expression);
@@ -7017,7 +7028,11 @@ fn test_cli_debug_allow_eval_runs_magician_expressions() {
         assert_eq!(response["body"]["result"], expected, "{expression}: {response}");
     }
     let response = client.evaluate(frame, "$x");
-    assert_eq!(response["body"]["result"], "int(5)", "{response}");
+    assert_eq!(response["body"]["result"], "int(42)", "{response}");
+    let response = client.evaluate(frame, "$ratio");
+    assert_eq!(response["body"]["result"], "float(2.5)", "{response}");
+    let response = client.evaluate(frame, "$flag");
+    assert_eq!(response["body"]["result"], "bool(false)", "{response}");
     let response = client.evaluate(frame, "missing_func()");
     assert_eq!(response["success"], false, "{response}");
     assert!(
@@ -7031,8 +7046,8 @@ fn test_cli_debug_allow_eval_runs_magician_expressions() {
     let status = client.child.wait().expect("wait for allow-eval adapter");
     assert!(status.success(), "allow-eval adapter failed");
     assert!(
-        client.program_output().contains("15"),
-        "program output missing: {:?}",
+        client.program_output().contains("52"),
+        "write-back not reflected in program output: {:?}",
         client.program_output()
     );
     let metadata: serde_json::Value = serde_json::from_str(
@@ -7118,6 +7133,79 @@ fn test_cli_debug_allow_eval_uses_class_scope_and_suppresses_hooks() {
     assert!(status.success(), "allow-eval class adapter failed");
     assert!(
         client.program_output().contains("14"),
+        "program output missing: {:?}",
+        client.program_output()
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies eval falls back from an expression to a statement list, and that a
+/// closure carries its lexical class scope so private methods remain visible.
+#[test]
+fn test_cli_debug_allow_eval_closure_scope_and_statements() {
+    let dir = make_cli_test_dir("elephc_cli_debug_allow_eval_closure");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nclass Box {\n    private function secret(): int { return 7; }\n    public function probe(): int {\n        $fn = function(): int {\n            $x = 3;\n            return $this->secret() + $x;\n        };\n        return $fn();\n    }\n}\necho (new Box())->probe(), \"\\n\";\n",
+    )
+    .expect("write allow-eval closure fixture");
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "--allow-eval", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [{"line": 7}],
+        })),
+    );
+    assert_eq!(
+        client.response(seq)["body"]["breakpoints"][0]["verified"], true
+    );
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    let stopped = client.event("stopped");
+    assert!(
+        stopped["body"]["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("closure")),
+        "{stopped}"
+    );
+    let seq = client.send("stackTrace", None);
+    let response = client.response(seq);
+    let frame = response["body"]["stackFrames"][0]["id"]
+        .as_i64()
+        .expect("allow-eval closure frame id");
+
+    let response = client.evaluate(frame, "$this->secret()");
+    assert_eq!(response["success"], true, "{response}");
+    assert_eq!(response["body"]["result"], "int(7)", "{response}");
+
+    let response = client.evaluate(frame, "if (true) { $tmp = 1; }");
+    assert_eq!(response["success"], true, "{response}");
+    assert_eq!(response["body"]["result"], "NULL", "{response}");
+
+    client.continue_to_terminated();
+    let status = client.child.wait().expect("wait for closure adapter");
+    assert!(status.success(), "closure adapter failed");
+    assert!(
+        client.program_output().contains("10"),
         "program output missing: {:?}",
         client.program_output()
     );

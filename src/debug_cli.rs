@@ -90,8 +90,8 @@ Without --break the program stops at its first executed site. --optimized builds
 the source with --debug-optimized instead: line and exception guards remain, but
 optimized locals report <optimized out> rather than a stale value. --allow-eval
 links Magician and lets DAP `evaluate` and the terminal `eval <expr>` command run
-arbitrary PHP against a snapshot of the stopped frame; assignments do not write
-back into native locals. Commands in the session: continue|c, next|n, step|s,
+arbitrary PHP against a snapshot of the stopped frame; type-compatible scalar
+assignments write back into native locals. Commands in the session: continue|c, next|n, step|s,
 finish|f, bt, frame <index>, locals, p <name>, eval <expr>, help, quit|q.
 
 --postmortem FILE writes a bounded JSON postmortem (PHP stack, recent calls and

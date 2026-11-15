@@ -11,7 +11,7 @@ header{display:flex;align-items:center;gap:12px;padding:9px 14px;background:var(
 header h1{font-size:14px;margin:0;color:var(--accent);font-weight:600}
 header .status{margin-left:auto;color:var(--muted)}
 header .status.stopped{color:var(--stop)}
-main{display:grid;grid-template-columns:220px minmax(0,1fr) 330px;grid-template-rows:minmax(0,1fr) 190px;height:calc(100vh - 42px)}
+main{display:grid;grid-template-columns:220px minmax(0,1fr) 380px;grid-template-rows:minmax(0,1fr) 190px;height:calc(100vh - 42px)}
 #files{border-right:1px solid var(--line);overflow:auto;padding:7px 0;background:var(--panel)}
 #files button{display:block;width:100%;text-align:left;background:none;border:0;color:var(--text);padding:5px 12px;cursor:pointer;font:inherit;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #files button:hover,#files button.active{background:#223047;color:var(--accent)}
@@ -33,10 +33,23 @@ main{display:grid;grid-template-columns:220px minmax(0,1fr) 330px;grid-template-
 .frame.active{background:#2b4262;color:var(--accent)}
 .var .value{color:var(--ok);margin-left:6px}
 .var .children{margin-left:14px;border-left:1px solid var(--line);padding-left:6px}
+.bp-row,.fn-row,.data-row,.watch-row{padding:3px 0;border-bottom:1px solid #202938}
+.bp-row .head,.fn-row .head,.data-row .head,.watch-row .head{display:flex;align-items:center;gap:4px;min-width:0}
+.bp-row .where,.fn-row .name,.data-row .name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bp-row input,.fn-row input,.watch-row input{min-width:0;flex:1;background:#0d1118;border:1px solid #2a3342;color:var(--text);border-radius:3px;padding:2px 4px;font:inherit}
+.bp-row .remove,.fn-row .remove,.data-row .remove,.watch-row .remove{background:none;border:0;color:var(--muted);cursor:pointer;font:inherit;padding:0 3px}
+.bp-row .remove:hover,.fn-row .remove:hover,.data-row .remove:hover,.watch-row .remove:hover{color:var(--bad)}
+.bp-row .message,.fn-row .message,.data-row .message{color:var(--bad);font-size:11px;padding-left:4px;word-break:break-word}
+.bp-row .ok,.fn-row .ok,.data-row .ok{color:var(--ok)}
+#side label{display:flex;align-items:center;gap:5px;color:var(--text);margin:2px 0}
+#side .filter-class{width:100%;background:#0d1118;border:1px solid #2a3342;color:var(--text);border-radius:3px;padding:3px 5px;font:inherit;margin-top:3px}
+.watch{padding:2px 5px;border-radius:3px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.watch:hover{background:#223047}
+.watch .result{color:var(--ok);margin-left:6px}
 #console{grid-column:1 / -1;border-top:1px solid var(--line);background:#0b0f16;padding:8px 12px;overflow:auto;white-space:pre-wrap}
 #console .err{color:var(--bad)}
 #console .meta{color:var(--muted)}
-@media(max-width:900px){main{grid-template-columns:150px minmax(0,1fr) 260px}}
+@media(max-width:1000px){main{grid-template-columns:150px minmax(0,1fr) 300px}}
 </style>
 </head>
 <body>
@@ -49,6 +62,19 @@ main{display:grid;grid-template-columns:220px minmax(0,1fr) 330px;grid-template-
       <button id="continue">continue</button><button id="pause">pause</button>
       <button id="next">next</button><button id="stepIn">step in</button><button id="stepOut">step out</button>
     </div>
+    <h2>Breakpoints</h2><div id="breakpoints"></div>
+    <h2>Exceptions</h2>
+    <label><input type="checkbox" id="exc-uncaught" checked> uncaught</label>
+    <label><input type="checkbox" id="exc-caught"> caught</label>
+    <label><input type="checkbox" id="exc-throw"> throw</label>
+    <input class="filter-class" id="exc-class" placeholder="class filter (optional)">
+    <h2>Function breakpoints</h2>
+    <div class="head" style="display:flex;gap:4px"><input id="fn-name" placeholder="function name" style="min-width:0;flex:1;background:#0d1118;border:1px solid #2a3342;color:#d7deea;border-radius:3px;padding:3px 5px;font:inherit"><input id="fn-condition" placeholder="condition" style="min-width:0;flex:1;background:#0d1118;border:1px solid #2a3342;color:#d7deea;border-radius:3px;padding:3px 5px;font:inherit"><button id="fn-add">add</button></div>
+    <div id="function-breakpoints"></div>
+    <h2>Data breakpoints</h2><div id="data-breakpoints"></div>
+    <h2>Watch</h2>
+    <div style="display:flex;gap:5px"><input id="watch-expr" placeholder="$value > 3" style="min-width:0;flex:1;background:#0d1118;border:1px solid #2a3342;color:#d7deea;border-radius:3px;padding:3px 5px;font:inherit"><button id="watch-add">add</button></div>
+    <div id="watches"></div>
     <h2>Evaluate</h2>
     <div style="display:flex;gap:5px"><input id="expr" placeholder="$value, count($items)" style="min-width:0;flex:1;background:#0d1118;border:1px solid #2a3342;color:#d7deea;border-radius:3px;padding:4px 6px;font:inherit"><button id="eval">run</button></div>
     <div id="eval-result" style="color:#7ee787;padding:4px 2px;word-break:break-word"></div>
@@ -60,20 +86,27 @@ main{display:grid;grid-template-columns:220px minmax(0,1fr) 330px;grid-template-
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (text) => String(text).replace(/[&<>"]/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch]));
-const state = {seq:0, since:0, sources:[], current:null, content:"", breakpoints:new Map(), stopped:false, frame:null};
+const basename = (path) => { const parts = String(path || "").split("/"); return parts[parts.length - 1] || path || "<source>"; };
+const state = {
+  seq: 0, since: 0, sources: [], current: null, content: "", stopped: false, frame: null,
+  breakpoints: new Map(), functionBreakpoints: [], dataBreakpoints: [], watches: [],
+  localsRef: 0, pending: new Map(),
+};
 
 function status(text, stopped=false){ const el=$("status"); el.textContent=text; el.className="status"+(stopped?" stopped":""); }
 function log(text, cls=""){ const el=$("console"); const line=document.createElement("div"); line.className=cls; line.textContent=text; el.appendChild(line); el.scrollTop=el.scrollHeight; }
 
-async function send(command, args){
+async function send(command, args, handler){
   state.seq += 1;
-  const message = {seq: state.seq, type:"request", command};
+  const seq = state.seq;
+  const message = {seq, type:"request", command};
   if (args !== undefined) message.arguments = args;
+  if (handler) state.pending.set(seq, handler);
   const r = await fetch("/dap/request", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(message)});
-  if (!r.ok) log("request failed: "+command, "err");
-  return state.seq;
+  if (!r.ok) { state.pending.delete(seq); log("request failed: "+command, "err"); }
+  return seq;
 }
-function request(command, args){ send(command,args).catch((e)=>log(String(e),"err")); }
+function request(command, args, handler){ send(command,args,handler).catch((e)=>{ log(String(e),"err"); }); }
 
 async function poll(){
   while(true){
@@ -95,6 +128,7 @@ function handleEvent(event){
   const body = event.body || {};
   switch(event.event){
     case "initialized":
+      sendExceptionFilters();
       request("configurationDone", {});
       break;
     case "stopped":
@@ -116,6 +150,8 @@ function handleEvent(event){
   }
 }
 function handleResponse(response){
+  const pending = state.pending.get(response.request_seq);
+  if (pending){ state.pending.delete(response.request_seq); pending(response); return; }
   if (!response.success){ log("DAP error: "+(response.message||response.command), "err"); return; }
   const command = response.command, body = response.body || {};
   switch(command){
@@ -132,26 +168,19 @@ function handleResponse(response){
       state.content = body.content || "";
       renderCode();
       break;
-    case "setBreakpoints": {
-      const path = state.current && state.current.path;
-      if (path && state.breakpoints.has(path) && body.breakpoints){
-        const verified = body.breakpoints.map((bp)=>bp.verified !== false);
-        state.breakpoints.set(path, new Set([...state.breakpoints.get(path)].filter((_line, index)=>verified[index] !== false)));
-        renderCode();
-      }
-      break;
-    }
     case "stackTrace":
       renderStack(body.stackFrames||[]);
       break;
     case "scopes": {
       const scope = (body.scopes||[]).find((scope)=>scope.variablesReference);
-      if (scope) request("variables", {variablesReference: scope.variablesReference});
+      if (scope){
+        state.localsRef = scope.variablesReference;
+        request("variables", {variablesReference: scope.variablesReference}, (r)=>{
+          if (r.success) renderVariables(r.body.variables||[]);
+        });
+      }
       break;
     }
-    case "variables":
-      renderVariables(body.variables||[]);
-      break;
     case "evaluate":
       $("eval-result").textContent = (body.result||"") + (body.type ? "  · "+body.type : "");
       break;
@@ -181,7 +210,7 @@ function renderCode(){
   const body = $("code-body"); body.innerHTML = "";
   if (!lines.length){ body.innerHTML = '<div class="code-line"><span class="src">loading source…</span></div>'; return; }
   const path = state.current && state.current.path;
-  const marked = (path && state.breakpoints.get(path)) || new Set();
+  const marked = (path && state.breakpoints.get(path)) || new Map();
   lines.forEach((text, index)=>{
     const line = index + 1;
     const row = document.createElement("div"); row.className = "code-line";
@@ -193,18 +222,162 @@ function renderCode(){
     row.appendChild(num); row.appendChild(src); body.appendChild(row);
   });
 }
+
+function sortedBreakpoints(path){
+  const map = state.breakpoints.get(path) || new Map();
+  return [...map.entries()].sort((left,right)=>left[0]-right[0]);
+}
+function allBreakpoints(){
+  const out = [];
+  for (const [path, map] of state.breakpoints){
+    for (const [line, bp] of map) out.push({path, line, ...bp});
+  }
+  return out.sort((left,right)=>left.path.localeCompare(right.path) || left.line-right.line);
+}
+function renderBreakpoints(){
+  const panel = $("breakpoints"); panel.innerHTML = "";
+  const entries = allBreakpoints();
+  if (!entries.length){ panel.textContent = "click a line number"; return; }
+  for (const entry of entries){
+    const row = document.createElement("div"); row.className = "bp-row";
+    const head = document.createElement("div"); head.className = "head";
+    const where = document.createElement("span"); where.className = "where"; where.textContent = basename(entry.path)+":"+entry.line; where.title = entry.path;
+    const condition = document.createElement("input"); condition.placeholder = "condition"; condition.value = entry.condition || "";
+    condition.onchange = ()=>{ entry.condition = condition.value.trim(); sendBreakpoints(entry.path); };
+    const hits = document.createElement("input"); hits.placeholder = "hits"; hits.value = entry.hitCondition || ""; hits.style.flex = "0 0 54px";
+    hits.onchange = ()=>{ entry.hitCondition = hits.value.trim(); sendBreakpoints(entry.path); };
+    const remove = document.createElement("button"); remove.className = "remove"; remove.textContent = "×"; remove.title = "remove breakpoint";
+    remove.onclick = ()=>{ state.breakpoints.get(entry.path)?.delete(entry.line); renderBreakpoints(); renderCode(); sendBreakpoints(entry.path); };
+    head.appendChild(where); head.appendChild(condition); head.appendChild(hits); head.appendChild(remove);
+    row.appendChild(head);
+    if (entry.verified === false){
+      const message = document.createElement("div"); message.className = "message"; message.textContent = entry.message || "unverified";
+      row.appendChild(message);
+    }
+    panel.appendChild(row);
+  }
+}
+function sendBreakpoints(path){
+  const requested = sortedBreakpoints(path).map(([line, bp])=>{
+    const out = {line};
+    if (bp.condition) out.condition = bp.condition;
+    if (bp.hitCondition) out.hitCondition = bp.hitCondition;
+    return out;
+  });
+  request("setBreakpoints", {source:{path}, breakpoints:requested}, (response)=>{
+    if (!response.success){ log("breakpoint error: "+(response.message||"setBreakpoints"), "err"); return; }
+    const map = state.breakpoints.get(path) || new Map();
+    (response.body.breakpoints||[]).forEach((bp, index)=>{
+      const line = requested[index] ? requested[index].line : bp.line;
+      const entry = map.get(line);
+      if (entry){ entry.verified = bp.verified !== false; entry.message = bp.message || ""; }
+    });
+    renderBreakpoints(); renderCode();
+  });
+}
 function toggleBreakpoint(line){
   if (!state.current) return;
   const path = state.current.path;
-  const set = state.breakpoints.get(path) || new Set();
-  if (set.has(line)) set.delete(line); else set.add(line);
-  state.breakpoints.set(path, set);
-  renderCode();
-  request("setBreakpoints", {source:{path}, breakpoints:[...set].sort((a,b)=>a-b).map((line)=>({line}))});
+  let map = state.breakpoints.get(path);
+  if (!map){ map = new Map(); state.breakpoints.set(path, map); }
+  if (map.has(line)) map.delete(line);
+  else map.set(line, {condition:"", hitCondition:"", verified:true, message:""});
+  if (map.size === 0) state.breakpoints.delete(path);
+  renderBreakpoints(); renderCode();
+  sendBreakpoints(path);
 }
+
+function sendExceptionFilters(){
+  const filters = [];
+  for (const name of ["uncaught","caught","throw"]) if ($("exc-"+name).checked) filters.push(name);
+  const condition = $("exc-class").value.trim();
+  const filterOptions = condition ? filters.map((filter)=>({filter, condition})) : [];
+  request("setExceptionBreakpoints", {filters, filterOptions});
+}
+
+function sendFunctionBreakpoints(){
+  const requested = state.functionBreakpoints.map(({name, condition})=>{
+    const out = {name};
+    if (condition) out.condition = condition;
+    return out;
+  });
+  request("setFunctionBreakpoints", {breakpoints:requested}, (response)=>{
+    if (!response.success){ log("function breakpoint error: "+(response.message||"setFunctionBreakpoints"), "err"); return; }
+    (response.body.breakpoints||[]).forEach((bp, index)=>{
+      if (state.functionBreakpoints[index]){
+        state.functionBreakpoints[index].verified = bp.verified !== false;
+        state.functionBreakpoints[index].message = bp.message || "";
+      }
+    });
+    renderFunctionBreakpoints();
+  });
+}
+function renderFunctionBreakpoints(){
+  const panel = $("function-breakpoints"); panel.innerHTML = "";
+  if (!state.functionBreakpoints.length){ panel.textContent = "none"; return; }
+  state.functionBreakpoints.forEach((entry, index)=>{
+    const row = document.createElement("div"); row.className = "fn-row";
+    const head = document.createElement("div"); head.className = "head";
+    const name = document.createElement("span"); name.className = "name"; name.textContent = entry.name;
+    const condition = document.createElement("input"); condition.placeholder = "condition"; condition.value = entry.condition || "";
+    condition.onchange = ()=>{ entry.condition = condition.value.trim(); sendFunctionBreakpoints(); };
+    const remove = document.createElement("button"); remove.className = "remove"; remove.textContent = "×";
+    remove.onclick = ()=>{ state.functionBreakpoints.splice(index,1); renderFunctionBreakpoints(); sendFunctionBreakpoints(); };
+    head.appendChild(name); head.appendChild(condition); head.appendChild(remove);
+    row.appendChild(head);
+    if (entry.verified === false){
+      const message = document.createElement("div"); message.className = "message"; message.textContent = entry.message || "unverified";
+      row.appendChild(message);
+    }
+    panel.appendChild(row);
+  });
+}
+
+function applyDataBreakpointInfo(response, name){
+  if (!response.success || !response.body || !response.body.dataId){
+    log("cannot watch "+name+": "+((response.body && response.body.description) || response.message || "not watchable"), "err");
+    return;
+  }
+  const accessTypes = response.body.accessTypes || [];
+  const accessType = accessTypes.includes("write") ? "write" : (accessTypes[0] || "write");
+  state.dataBreakpoints.push({dataId: response.body.dataId, description: response.body.description || name, accessType, verified:true, message:""});
+  renderDataBreakpoints(); sendDataBreakpoints();
+}
+function sendDataBreakpoints(){
+  const requested = state.dataBreakpoints.map(({dataId, accessType})=>({dataId, accessType}));
+  request("setDataBreakpoints", {breakpoints:requested}, (response)=>{
+    if (!response.success){ log("data breakpoint error: "+(response.message||"setDataBreakpoints"), "err"); return; }
+    (response.body.breakpoints||[]).forEach((bp, index)=>{
+      if (state.dataBreakpoints[index]){
+        state.dataBreakpoints[index].verified = bp.verified !== false;
+        state.dataBreakpoints[index].message = bp.message || "";
+      }
+    });
+    renderDataBreakpoints();
+  });
+}
+function renderDataBreakpoints(){
+  const panel = $("data-breakpoints"); panel.innerHTML = "";
+  if (!state.dataBreakpoints.length){ panel.textContent = "none — use watch on a local"; return; }
+  state.dataBreakpoints.forEach((entry, index)=>{
+    const row = document.createElement("div"); row.className = "data-row";
+    const head = document.createElement("div"); head.className = "head";
+    const name = document.createElement("span"); name.className = "name"; name.textContent = entry.description; name.title = entry.accessType;
+    const remove = document.createElement("button"); remove.className = "remove"; remove.textContent = "×";
+    remove.onclick = ()=>{ state.dataBreakpoints.splice(index,1); renderDataBreakpoints(); sendDataBreakpoints(); };
+    head.appendChild(name); head.appendChild(remove);
+    row.appendChild(head);
+    if (entry.verified === false){
+      const message = document.createElement("div"); message.className = "message"; message.textContent = entry.message || "unverified";
+      row.appendChild(message);
+    }
+    panel.appendChild(row);
+  });
+}
+
 function renderStack(frames){
   const stack = $("stack"); stack.innerHTML = "";
-  if (!frames.length){ stack.textContent = "no frames"; return; }
+  if (!frames.length){ stack.textContent = "no frames"; state.frame = null; return; }
   state.frame = frames[0];
   frames.forEach((frame, index)=>{
     const row = document.createElement("div"); row.className = "frame" + (index===0?" active":"");
@@ -215,12 +388,14 @@ function renderStack(frames){
       if (frame.source && frame.source.path !== (state.current&&state.current.path)) loadFrameSource(frame.source);
       renderCode();
       request("scopes", {frameId: frame.id});
+      evaluateWatches();
     };
     stack.appendChild(row);
   });
   const top = frames[0];
   if (top.source && top.source.path !== (state.current&&state.current.path)) loadFrameSource(top.source);
   request("scopes", {frameId: top.id});
+  evaluateWatches();
 }
 function loadFrameSource(source){
   const known = state.sources.find((candidate)=>candidate.path === source.path);
@@ -229,26 +404,63 @@ function loadFrameSource(source){
   state.content = "";
   request("source", {source:{path:source.path, sourceReference:source.sourceReference||0}, sourceReference:source.sourceReference||0});
 }
-function renderVariables(variables){
-  const panel = $("variables"); panel.innerHTML = "";
-  if (!variables.length){ panel.textContent = "no locals"; return; }
+
+function renderVariableList(variables, container, topLevel){
+  if (!variables.length){ container.textContent = topLevel ? "no locals" : "(empty)"; return; }
   for (const variable of variables){
     const row = document.createElement("div"); row.className = "var";
     const name = document.createElement("span"); name.textContent = (variable.name||"")+" = ";
     const value = document.createElement("span"); value.className = "value"; value.textContent = variable.value||"";
     row.appendChild(name); row.appendChild(value);
+    if (topLevel && state.localsRef){
+      const watch = document.createElement("button"); watch.className = "remove"; watch.textContent = "watch"; watch.title = "break when this local is written";
+      watch.onclick = (event)=>{ event.stopPropagation(); request("dataBreakpointInfo", {variablesReference: state.localsRef, name: variable.name}, (response)=>applyDataBreakpointInfo(response, variable.name)); };
+      row.appendChild(watch);
+    }
     if (variable.variablesReference){
       const children = document.createElement("div"); children.className = "children"; children.style.display = "none";
-      row.onclick = async ()=>{
+      row.onclick = ()=>{
         if (children.style.display === "none"){
           children.style.display = "block";
-          request("variables", {variablesReference: variable.variablesReference});
+          request("variables", {variablesReference: variable.variablesReference}, (response)=>{
+            if (response.success) renderVariableList(response.body.variables||[], children, false);
+          });
         } else children.style.display = "none";
       };
-      row.appendChild(children); panel.appendChild(row);
-    } else panel.appendChild(row);
+      row.appendChild(children);
+    }
+    container.appendChild(row);
   }
 }
+function renderVariables(variables){
+  const panel = $("variables"); panel.innerHTML = "";
+  renderVariableList(variables, panel, true);
+}
+
+function evaluateWatches(){
+  if (!state.stopped || !state.frame){ state.watches.forEach((watch)=>{ watch.result = ""; }); renderWatches(); return; }
+  state.watches.forEach((watch, index)=>{
+    request("evaluate", {expression:watch.expression, frameId:state.frame.id, context:"watch"}, (response)=>{
+      watch.result = response.success ? (response.body.result||"") : (response.message||"error");
+      if (state.watches[index] === watch) renderWatches();
+    });
+  });
+}
+function renderWatches(){
+  const panel = $("watches"); panel.innerHTML = "";
+  if (!state.watches.length){ panel.textContent = "none"; return; }
+  state.watches.forEach((watch, index)=>{
+    const row = document.createElement("div"); row.className = "watch-row";
+    const head = document.createElement("div"); head.className = "head";
+    const expr = document.createElement("span"); expr.className = "name"; expr.textContent = watch.expression; expr.title = watch.expression;
+    const result = document.createElement("span"); result.className = "result"; result.textContent = watch.result || "";
+    const remove = document.createElement("button"); remove.className = "remove"; remove.textContent = "×";
+    remove.onclick = ()=>{ state.watches.splice(index,1); renderWatches(); };
+    head.appendChild(expr); head.appendChild(result); head.appendChild(remove);
+    row.appendChild(head); panel.appendChild(row);
+  });
+}
+
 function setControls(enabled){ for (const id of ["continue","next","stepIn","stepOut"]) $(id).disabled = !enabled; }
 function evaluateExpression(){
   if (!state.frame){ $("eval-result").textContent = "not stopped"; return; }
@@ -256,14 +468,37 @@ function evaluateExpression(){
   if (!expression) return;
   request("evaluate", {expression, frameId: state.frame.id, context:"watch"});
 }
+function addWatch(){
+  const expression = $("watch-expr").value.trim();
+  if (!expression) return;
+  state.watches.push({expression, result:""});
+  $("watch-expr").value = "";
+  renderWatches(); evaluateWatches();
+}
+function addFunctionBreakpoint(){
+  const name = $("fn-name").value.trim();
+  if (!name) return;
+  state.functionBreakpoints.push({name, condition:$("fn-condition").value.trim(), verified:true, message:""});
+  $("fn-name").value = ""; $("fn-condition").value = "";
+  renderFunctionBreakpoints(); sendFunctionBreakpoints();
+}
+
 $("eval").onclick = evaluateExpression;
 $("expr").addEventListener("keydown", (event)=>{ if (event.key === "Enter") evaluateExpression(); });
+$("watch-add").onclick = addWatch;
+$("watch-expr").addEventListener("keydown", (event)=>{ if (event.key === "Enter") addWatch(); });
+$("fn-add").onclick = addFunctionBreakpoint;
+$("fn-name").addEventListener("keydown", (event)=>{ if (event.key === "Enter") addFunctionBreakpoint(); });
+$("fn-condition").addEventListener("keydown", (event)=>{ if (event.key === "Enter") addFunctionBreakpoint(); });
+for (const name of ["uncaught","caught","throw"]) $("exc-"+name).addEventListener("change", sendExceptionFilters);
+$("exc-class").addEventListener("change", sendExceptionFilters);
 $("continue").onclick = ()=>{ setControls(false); request("continue", {threadId:1}); };
 $("pause").onclick = ()=>request("pause", {threadId:1});
 $("next").onclick = ()=>{ setControls(false); request("next", {threadId:1}); };
 $("stepIn").onclick = ()=>{ setControls(false); request("stepIn", {threadId:1}); };
 $("stepOut").onclick = ()=>{ setControls(false); request("stepOut", {threadId:1}); };
 setControls(false);
+renderBreakpoints(); renderFunctionBreakpoints(); renderDataBreakpoints(); renderWatches();
 poll();
 request("initialize", {clientID:"elephc-monitor-web", adapterID:"elephc", linesStartAt1:true, columnsStartAt1:true});
 </script>

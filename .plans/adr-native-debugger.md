@@ -280,8 +280,9 @@ Value formatting:
 `count`, simple arithmetic. Arbitrary PHP evaluation is implemented as a
 separate opt-in through Magician (`--allow-eval`), debug builds only. The
 debugger snapshots the selected frame's locals into a fresh eval scope, pushes
-the method class scope, executes and renders the result; assignments stay in the
-snapshot and debug stops are suppressed while eval runs.
+the method/closure class scope, executes and renders the result. Type-compatible
+scalar assignments write back to native slots; containers and references stay in
+the snapshot. Debug stops are suppressed while eval runs.
 
 ## D8. Target matrix
 

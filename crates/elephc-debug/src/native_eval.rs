@@ -11,9 +11,10 @@
 //! - The terminal `eval` command in `crate::Debugger::run_session`.
 //!
 //! Key details:
-//! - The scope is a snapshot: assignments inside eval do not write back into the
-//!   native frame. Objects and functions still execute real code and can have
-//!   side effects; `--allow-eval` is an explicit opt-in.
+//! - The scope starts as a snapshot. Type-compatible scalar assignments write
+//!   back into the native frame slot; containers, references and type-changing
+//!   assignments stay in the snapshot. Objects and functions still execute real
+//!   code and can have side effects; `--allow-eval` is an explicit opt-in.
 //! - Site, exception and `elephc_break` hooks are suppressed while eval runs, so
 //!   a user function called from the expression cannot re-enter the stopped
 //!   debugger and deadlock on its own mutex.
@@ -32,6 +33,10 @@ const EVAL_HOOK_VERSION: u64 = 1;
 const SCOPE_FLAG_OWNED: u32 = 1 << 4;
 /// `SCOPE_FLAG_NATIVE_SNAPSHOT`: the imported value is a clean native snapshot.
 const SCOPE_FLAG_NATIVE_SNAPSHOT: u32 = 1 << 5;
+/// `SCOPE_FLAG_PRESENT`: the scope still has a value for the name.
+const SCOPE_FLAG_PRESENT: u32 = 1 << 0;
+/// `SCOPE_FLAG_DIRTY`: eval mutated the value since the native import.
+const SCOPE_FLAG_DIRTY: u32 = 1 << 2;
 /// Process-lifetime catalog token used by the debug eval context.
 static CATALOG_TOKEN: AtomicU64 = AtomicU64::new(0);
 /// True while arbitrary eval executes, so generated hooks stay dormant.
@@ -44,10 +49,12 @@ struct RawHooks {
     scope_new: usize,
     scope_free: usize,
     scope_set: usize,
+    scope_get: usize,
     context_new: usize,
     context_free: usize,
     execute: usize,
     render: usize,
+    value_bits: usize,
     push_class: usize,
     pop_class: usize,
     register_inventory: usize,
@@ -67,6 +74,13 @@ struct EvalHooks {
         u32,
         *mut *mut c_void,
     ) -> i32,
+    scope_get: unsafe extern "C" fn(
+        *mut c_void,
+        *const u8,
+        u64,
+        *mut *mut c_void,
+        *mut u32,
+    ) -> i32,
     context_new: unsafe extern "C" fn(*mut u64) -> *mut c_void,
     context_free: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     execute: unsafe extern "C" fn(
@@ -77,6 +91,13 @@ struct EvalHooks {
         *mut EvalResult,
     ) -> i32,
     render: unsafe extern "C" fn(*mut c_void, *mut EvalResult, *mut u8, u64) -> u64,
+    value_bits: unsafe extern "C" fn(
+        *mut c_void,
+        *mut c_void,
+        *mut u32,
+        *mut u64,
+        *mut u64,
+    ) -> u32,
     push_class: unsafe extern "C" fn(*mut c_void, *const u8, u64, *const u8, u64) -> i32,
     pop_class: unsafe extern "C" fn(*mut c_void) -> i32,
     register_inventory: unsafe extern "C" fn(*mut c_void),
@@ -108,10 +129,12 @@ pub extern "C" fn elephc_debug_set_eval_hooks(raw: *const c_void) {
         raw.scope_new,
         raw.scope_free,
         raw.scope_set,
+        raw.scope_get,
         raw.context_new,
         raw.context_free,
         raw.execute,
         raw.render,
+        raw.value_bits,
         raw.push_class,
         raw.pop_class,
         raw.register_inventory,
@@ -127,10 +150,12 @@ pub extern "C" fn elephc_debug_set_eval_hooks(raw: *const c_void) {
         scope_new: unsafe { std::mem::transmute(raw.scope_new) },
         scope_free: unsafe { std::mem::transmute(raw.scope_free) },
         scope_set: unsafe { std::mem::transmute(raw.scope_set) },
+        scope_get: unsafe { std::mem::transmute(raw.scope_get) },
         context_new: unsafe { std::mem::transmute(raw.context_new) },
         context_free: unsafe { std::mem::transmute(raw.context_free) },
         execute: unsafe { std::mem::transmute(raw.execute) },
         render: unsafe { std::mem::transmute(raw.render) },
+        value_bits: unsafe { std::mem::transmute(raw.value_bits) },
         push_class: unsafe { std::mem::transmute(raw.push_class) },
         pop_class: unsafe { std::mem::transmute(raw.pop_class) },
         register_inventory: unsafe { std::mem::transmute(raw.register_inventory) },
@@ -171,7 +196,12 @@ pub(crate) fn evaluate(
     let class = debugger
         .functions
         .get(&(activation.function_id as u64))
-        .and_then(|function| function.name.split_once("::").map(|(class, _)| class.to_string()));
+        .and_then(|function| {
+            function
+                .class
+                .clone()
+                .or_else(|| function.name.split_once("::").map(|(class, _)| class.to_string()))
+        });
     let pushed_class = class.as_deref().is_some_and(|class| {
         unsafe {
             (hooks.push_class)(
@@ -192,20 +222,43 @@ pub(crate) fn evaluate(
     // makes PHP's implied result value observable and also accepts assignment
     // expressions (`$x = 1`), which the statement parser would otherwise reject
     // at end of input.
-    let source = format!("return {expression};");
+    let expression_source = format!("return {expression};");
     let _executing = ExecutingGuard::new();
-    let status = unsafe {
+    let mut status = unsafe {
         (hooks.execute)(
             context,
             scope,
-            source.as_ptr(),
-            source.len() as u64,
+            expression_source.as_ptr(),
+            expression_source.len() as u64,
             &mut result,
         )
     };
+    // A statement list (`echo ...;`, `if (...) { ... }`) is not a valid
+    // expression. Parse errors are safe to retry because no user code ran;
+    // execute the fragment as written and let its side effects happen.
+    if status == 1 {
+        let statement_source = if expression.trim_end().ends_with(';') {
+            expression.to_string()
+        } else {
+            format!("{expression};")
+        };
+        result.kind = 0;
+        result.value_cell = std::ptr::null_mut();
+        result.error = std::ptr::null_mut();
+        status = unsafe {
+            (hooks.execute)(
+                context,
+                scope,
+                statement_source.as_ptr(),
+                statement_source.len() as u64,
+                &mut result,
+            )
+        };
+    }
     if pushed_class {
         unsafe { (hooks.pop_class)(context) };
     }
+    write_back_scalars(debugger, activation, hooks, scope, context);
     let mut buffer = vec![0u8; 16 * 1024];
     let written = unsafe {
         (hooks.render)(
@@ -232,6 +285,66 @@ pub(crate) fn evaluate(
         Err(format!("eval failed with status {status}"))
     } else {
         Err(text)
+    }
+}
+
+/// Writes type-compatible scalar assignments back into native frame slots.
+///
+/// Containers, references and type-changing assignments stay in the eval
+/// snapshot: replacing their storage while the native frame is stopped would
+/// require the full relocation/COW path, not a word store.
+fn write_back_scalars(
+    debugger: &Debugger,
+    activation: StackFrame,
+    hooks: &EvalHooks,
+    scope: *mut c_void,
+    context: *mut c_void,
+) {
+    let Some(locals) = debugger.locals.get(&(activation.function_id as u64)) else {
+        return;
+    };
+    for local in locals {
+        if !importable(local)
+            || local.storage != "raw"
+            || debugger.local_optimized_out(local, activation.last_site)
+            || !matches!(local.php_type.as_str(), "int" | "float" | "bool")
+        {
+            continue;
+        }
+        let mut cell = std::ptr::null_mut();
+        let mut flags = 0u32;
+        let status = unsafe {
+            (hooks.scope_get)(
+                scope,
+                local.name.as_ptr(),
+                local.name.len() as u64,
+                &mut cell,
+                &mut flags,
+            )
+        };
+        if status != 0
+            || cell.is_null()
+            || flags & SCOPE_FLAG_PRESENT == 0
+            || flags & SCOPE_FLAG_DIRTY == 0
+        {
+            continue;
+        }
+        let mut tag = 0u32;
+        let mut low = 0u64;
+        let mut high = 0u64;
+        if unsafe { (hooks.value_bits)(context, cell, &mut tag, &mut low, &mut high) } == 0 {
+            continue;
+        }
+        let word = match (local.php_type.as_str(), tag) {
+            ("int", 0) => low,
+            ("float", 2) => low,
+            ("bool", 3) => u64::from(low != 0),
+            _ => continue,
+        };
+        let address = activation.frame.wrapping_sub(local.frame_offset);
+        unsafe {
+            std::ptr::write_unaligned(address as *mut u64, word);
+        }
     }
 }
 

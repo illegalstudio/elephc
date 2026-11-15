@@ -164,18 +164,19 @@ parser; when that rejects an expression it falls back to Magician, and the
 terminal `eval <expr>` command uses it directly. `--allow-eval` requires
 `--debug` or `--debug-optimized`, and is refused for iOS compile-only builds.
 
-- The input is an expression, not a statement list: `$x = 42`, `strlen($name)`
-  and `$this->refresh()` work; `echo ...` and multiple `;`-separated statements
-  do not.
+- The input may be an expression or a statement list. An expression is returned
+  (`$x = 42`, `strlen($name)`, `$this->refresh()`); a statement list executes for
+  its side effects and returns `null` (`echo ...`, `if (...) { ... }`).
 - The selected frame's locals are imported as a snapshot: scalars, strings,
   arrays, objects and `$this`. Generated temporaries, `<optimized out>` slots
   and `#[\SensitiveParameter]` values are not imported.
-- Method frames push their class scope, so private methods and properties are
-  visible to eval. Closure frames do not have a class scope.
-- Assignments are evaluated in the eval scope and returned, but do not write back
-  into native frame locals. Objects and functions still execute real code, so
-  property mutation, I/O and exceptions have their normal side effects. This is
-  not a sandbox.
+- Method and closure frames push their lexical class scope, so private methods
+  and properties are visible to eval.
+- Type-compatible scalar assignments (`int`, `float`, `bool`) write back to the
+  native local slot, so code that runs after the stop sees the new value.
+  Container, reference and type-changing assignments stay in the eval snapshot.
+  Objects and functions still execute real code, so property mutation, I/O and
+  exceptions have their normal side effects. This is not a sandbox.
 - Breakpoints, exception stops and `elephc_break()` are suppressed while the
   expression runs, so a function called from eval cannot re-enter the stopped
   debugger and deadlock.
@@ -260,10 +261,12 @@ checks the breakpoint, stack frame, local, one `next` step and normal exit.
 
 ### lldb and gdb
 
-`--debug` keeps DWARF line information and also publishes scalar PHP locals
-(`int`, `float`, `bool`) as `DW_TAG_variable` children of each subprogram. The
+`--debug` keeps DWARF line information and also publishes PHP locals as
+`DW_TAG_variable` children of each subprogram. Scalars (`int`, `float`, `bool`)
+use base types, strings use a 16-byte `php_string` structure (`ptr`, `len`), and
+arrays/objects/`mixed`/iterable values use an opaque `php_ref` pointer. The
 location is frame-relative (`DW_OP_fbreg` from the `x29`/`rbp` frame base), so a
-native debugger can print them directly:
+native debugger can print the raw storage directly:
 
 ```bash
 elephc --debug app.php
@@ -273,13 +276,13 @@ lldb ./app
 (lldb) frame variable n f b
 ```
 
-Strings, arrays, objects, references and `mixed` values are deliberately not
-described by DWARF: their native slots are multi-word or reference-cell
-encodings, and showing a raw pointer would be misleading. Use the terminal
-client or DAP for those. `--debug-optimized` omits variable DIEs because the
-optimizer may have removed the slot; the DAP/terminal clients report
-`<optimized out>` from the debug metadata instead. `--debug-info` alone keeps its
-previous scope: line tables and subprograms, but no PHP variable DIEs.
+Reference-cell storage and optimized-out slots are not described by DWARF.
+Containers are raw pointers, not decoded PHP values; use the terminal client or
+DAP for structured strings/arrays/objects and references. `--debug-optimized`
+omits variable DIEs because the optimizer may have removed the slot; the
+DAP/terminal clients report `<optimized out>` from the debug metadata instead.
+`--debug-info` alone keeps its previous scope: line tables and subprograms, but
+no PHP variable DIEs.
 
 ## Browser debugger in `monitor`
 
@@ -291,9 +294,11 @@ elephc monitor app.php --debug-ui --allow-eval --serve 127.0.0.1:8080
 ```
 
 The source is compiled with `--debug` (a bare debug binary works too), and the
-printed URL opens a self-contained page with file/line breakpoints, stack
-frames, locals, read-only expression evaluation, continue/next/step-in/step-out
-and program output. It binds
+printed URL opens a self-contained page with file/line breakpoints (conditions
+and hit counts included), caught/uncaught/throw exception filters with an
+optional class filter, function breakpoints, local/property data breakpoints,
+watch expressions, stack frames, locals, read-only expression evaluation,
+continue/next/step-in/step-out and program output. It binds
 loopback by default; expose `--serve` beyond loopback only when that control is
 intended. `--debug-ui` is a debugger surface, so it cannot be combined with
 profile exporters or `--live`/`--calls`/`--attach`. The monitor page uses the
