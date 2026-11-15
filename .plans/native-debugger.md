@@ -532,9 +532,12 @@ extend that capture:
 - Postmortem: implemented for uncaught PHP exceptions through
   `elephc debug --postmortem FILE`; the document carries the exception fields,
   PHP stack and recent call ring, and `--last FILE` inspects it. A normal or
-  caught exit writes nothing. A native crash is not promised to flush: JSON is
-  encoded in synchronized code, never in a signal handler. Segfaults are
-  explicitly outside the v1 guarantee.
+  caught exit writes nothing. Synchronous native crashes
+  (`SIGSEGV`/`SIGBUS`/`SIGILL`/`SIGFPE`/`SIGABRT`) now write a compact
+  signal-safe document with the signal, fault address and PHP stack, then
+  re-raise the original signal. The handler uses prebuilt immutable tables and a
+  static JSON buffer; call events are omitted. Asynchronous termination and
+  hard-fatal paths outside the runtime are still not captured.
 
 ### 8. Coverage
 

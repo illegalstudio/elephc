@@ -18,8 +18,9 @@
 //!   `ELEPHC_DEBUG_DAP_LISTEN` Unix socket. `SIGUSR1` requests a stop at the
 //!   next executed site.
 //! - `ELEPHC_DEBUG_POSTMORTEM=<file>` keeps a bounded call ring and writes a
-//!   postmortem JSON document on an uncaught exception. A normal exit writes
-//!   nothing; native crashes are not promised to flush from a signal handler.
+//!   postmortem JSON document on an uncaught exception, plus a compact
+//!   signal-safe document on a synchronous native crash. A normal exit writes
+//!   nothing.
 //! - The site hook blocks on stdin only while the program is paused; the
 //!   generated wrapper has already saved every caller-saved register.
 //! - Current-frame locals are readable for scalar/string slots; arrays/objects
@@ -41,6 +42,7 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 
 mod condition;
+mod crash_postmortem;
 mod dap;
 mod dap_output;
 mod eval;
@@ -1723,6 +1725,9 @@ pub extern "C" fn elephc_debug_boot(
             return;
         }
     };
+    if let Some(path) = postmortem.as_ref() {
+        crash_postmortem::install(path, &debugger);
+    }
     // The site-id space mixes source sites and branch/path counters; remember
     // which ids are real source locations so the hook can update `last_site`
     // without taking the debugger lock on every line.

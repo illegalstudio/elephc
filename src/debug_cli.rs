@@ -48,7 +48,8 @@ pub(crate) struct DebugCommand {
     pub(crate) attach_tcp: Option<String>,
     /// Mode-0600 key file for `--attach-tcp`.
     pub(crate) key: Option<String>,
-    /// Write a postmortem JSON document here on an uncaught exception.
+    /// Write a postmortem JSON document here on an uncaught exception or a
+    /// synchronous native crash.
     pub(crate) postmortem: Option<String>,
     /// Inspect an existing postmortem document and exit.
     pub(crate) last: Option<String>,
@@ -90,9 +91,10 @@ session: continue|c, next|n, step|s, finish|f, bt, frame <index>, locals,
 p <name>, help, quit|q.
 
 --postmortem FILE writes a bounded JSON postmortem (PHP stack, recent calls and
-exception fields) when the program exits with an uncaught exception. A normal
-exit writes nothing. --last FILE prints that document; it does not launch a
-program. Native crashes are not promised to flush from a signal handler.
+exception fields) when the program exits with an uncaught exception, plus a
+compact signal-safe document (signal, fault address and PHP stack) on a
+synchronous native crash. A normal exit writes nothing. --last FILE prints that
+document; it does not launch a program.
 
 `bt` walks the activation stack (current frame and callers). `frame <index>`
 selects one of those frames for `locals` and `p`. `next` steps over calls,

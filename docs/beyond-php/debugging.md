@@ -350,11 +350,31 @@ A normal exit writes nothing. A caught exception writes nothing. `--last FILE`
 is a read-only inspector: it prints the exception, stack, throw site and recent
 calls without launching the program.
 
-Native crashes and hard fatal exits that bypass the throw hook are **not**
-promised to flush a postmortem. The supported path allocates and encodes JSON in
-normal synchronized code, not in a signal handler; a segfault receives no unsafe
-allocator work and may leave no file. Treat `--postmortem` as an uncaught-PHP-
-exception capture, not a crash dump.
+### Native crash postmortem
+
+The same `--postmortem` path also captures synchronous native crashes. The debug
+runtime installs handlers for `SIGSEGV`, `SIGBUS`, `SIGILL`, `SIGFPE` and
+`SIGABRT` and writes a compact document with:
+
+- `reason: "native_crash"`, the signal number and the faulting address;
+- the PHP activation stack, innermost frame first, using the same file/line
+  metadata as the DAP adapter;
+- empty `calls` with `captured: 0`; the call ring is deliberately not read from
+  a signal handler because its lock may belong to the crashing thread.
+
+The handler is deliberately small: immutable lookup tables are built at boot,
+JSON is formatted in a static buffer without allocating, and `open`/`write`/
+`close` are the only I/O calls. It then restores the default action, unblocks the
+signal and re-raises it, so the process still reports the original signal to its
+parent. The boot thread installs an alternate signal stack, which lets a
+stack-overflow fault run the handler on supported desktop targets.
+
+This is a best-effort crash dump, not a replacement for a native debugger. A
+crash on a thread without an alternate stack, a crash while the activation stack
+is already borrowed, an asynchronous termination (`SIGKILL`, `_exit`) or a hard
+fatal path outside the generated runtime can leave an empty stack or no document.
+When an uncaught-exception postmortem already wrote the file, the crash handler
+does not overwrite it.
 
 ## Coverage
 

@@ -7823,6 +7823,71 @@ fn test_cli_debug_ios_gate_and_compile_only_metadata() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a synchronous native crash writes a bounded signal-safe postmortem
+/// with the faulting signal/address and the PHP stack, and that `debug --last`
+/// renders it.
+#[test]
+fn test_cli_debug_postmortem_flushes_native_crash() {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    let dir = make_cli_test_dir("elephc_cli_debug_postmortem_native_crash");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfunction crash(int $n): int {\n    $p = ptr_offset(ptr_null(), 1);\n    return ptr_get($p) + $n;\n}\necho crash(1), \"\\n\";\n",
+    )
+    .expect("write native crash fixture");
+    let compile = elephc_cli_command(&dir)
+        .args(["--debug", "main.php"])
+        .output()
+        .expect("compile native crash fixture");
+    assert!(
+        compile.status.success(),
+        "native crash fixture failed to compile: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let document = dir.join("crash.json");
+    let run = std::process::Command::new(dir.join("main"))
+        .env("ELEPHC_DEBUG_POSTMORTEM", &document)
+        .output()
+        .expect("run native crash fixture");
+    assert!(!run.status.success(), "a native crash must not exit successfully");
+    assert_eq!(
+        run.status.signal(),
+        Some(libc::SIGSEGV),
+        "the crash handler must re-raise the original signal"
+    );
+    let postmortem: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(&document).expect("native crash postmortem document"),
+    )
+    .expect("valid native crash JSON");
+    assert_eq!(postmortem["format"], "elephc-postmortem", "{postmortem}");
+    assert_eq!(postmortem["reason"], "native_crash", "{postmortem}");
+    assert_eq!(postmortem["signal"], libc::SIGSEGV, "{postmortem}");
+    assert_eq!(postmortem["address"], "0x1", "{postmortem}");
+    assert_eq!(postmortem["captured"], 0, "{postmortem}");
+    let stack = postmortem["stack"].as_array().expect("native crash stack");
+    assert!(
+        stack.iter().any(|frame| frame["function"] == "crash"
+            && frame["file"] == "main.php"
+            && frame["line"] == 4),
+        "{postmortem}"
+    );
+    assert!(
+        stack.iter().any(|frame| frame["function"] == "main"),
+        "{postmortem}"
+    );
+
+    let inspect = elephc_cli_command(&dir)
+        .args(["debug", "--last", "crash.json"])
+        .output()
+        .expect("inspect native crash postmortem");
+    assert!(inspect.status.success(), "debug --last failed");
+    let rendered = String::from_utf8_lossy(&inspect.stdout);
+    assert!(rendered.contains("reason: native_crash"), "{rendered}");
+    assert!(rendered.contains("crash at main.php:4"), "{rendered}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies an uncaught exception writes a postmortem document with the throw
 /// site, PHP stack, recent calls and exception fields, and that `debug --last`
 /// renders the same document.
