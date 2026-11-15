@@ -189,7 +189,7 @@ fn emit_static_numeric_conversion(
             if string_ptr != payload {
                 ctx.emitter.instruction(&format!("mov {payload}, {string_ptr}")); // stage the string pointer where the numeric scan reads it
             }
-            super::objects::emit_string_into_int_diagnostics(ctx, &refuse);
+            emit_string_to_int_parameter(ctx, &refuse);
         }
         (PhpType::Str, Numeric::Float) => {
             // -- a raw string bound to float: only a fully numeric string binds --
@@ -213,6 +213,64 @@ fn emit_static_numeric_conversion(
     ctx.emitter.label(&refuse);
     let given = if matches!(loaded, PhpType::Str) { "string" } else { "float" };
     super::exceptions::emit_type_error(ctx, &format!("{prefix}{given}{suffix}"));
+    ctx.emitter.label(&done);
+}
+
+/// Binds a string (pointer in the Mixed unbox payload register, length in the string length
+/// register) to an `int` parameter, leaving the integer in the int result register or jumping
+/// to `refuse`.
+///
+/// An integer-form string is parsed exactly by `__rt_str_numeric_value`, so every value of the
+/// int range binds unchanged (`"9223372036854775807"`, `"9007199254740993"`); a value outside
+/// it is classified as float-form. Only a float-form string goes through the float path, with
+/// PHP's float-string precision deprecation and range refusal; a non-numeric one is refused.
+fn emit_string_to_int_parameter(ctx: &mut FunctionContext<'_>, refuse: &str) {
+    let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+    let (_, length) = abi::string_result_regs(ctx.emitter);
+    let float_form = ctx.next_label("scalar_param_guard_float_string");
+    let refused = ctx.next_label("scalar_param_guard_string_refused");
+    let exact = ctx.next_label("scalar_param_guard_exact_int");
+    let (scratch_lo, scratch_hi) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x9", "x10"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    // -- classify the whole string: exact integer, float form, or not numeric --
+    abi::emit_push_reg_pair(ctx.emitter, payload, length);
+    let ptr_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let len_arg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    // The pointer moves first: on AArch64 the length argument register is the payload register.
+    abi::emit_reg_move(ctx.emitter, ptr_arg, payload);
+    abi::emit_reg_move(ctx.emitter, len_arg, length);
+    abi::emit_call_label(ctx.emitter, "__rt_str_numeric_value");
+    let tag = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz {length}, {refused}"));      // only a whole-string numeric spelling binds
+            ctx.emitter.instruction(&format!("cbz {tag}, {exact}"));            // tag 0: the classifier parsed an exact integer
+            ctx.emitter.instruction(&format!("b {float_form}"));                // any other numeric spelling is float-form
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {length}, {length}"));       // set flags from the whole-string numeric status
+            ctx.emitter.instruction(&format!("jne {refused}"));                 // only a whole-string numeric spelling binds
+            ctx.emitter.instruction(&format!("test {tag}, {tag}"));             // tag 0: the classifier parsed an exact integer
+            ctx.emitter.instruction(&format!("je {exact}"));                    // bind the exact integer
+            ctx.emitter.instruction(&format!("jmp {float_form}"));              // any other numeric spelling is float-form
+        }
+    }
+    // -- an integer-form string binds its exact value --
+    ctx.emitter.label(&exact);
+    super::enums::emit_move_reg(ctx, tag, payload);
+    abi::emit_pop_reg_pair(ctx.emitter, scratch_lo, scratch_hi);
+    let done = ctx.next_label("scalar_param_guard_string_int_done");
+    abi::emit_jump(ctx.emitter, &done);
+    // -- a non-numeric string is refused --
+    ctx.emitter.label(&refused);
+    abi::emit_pop_reg_pair(ctx.emitter, scratch_lo, scratch_hi);
+    abi::emit_jump(ctx.emitter, refuse);
+    // -- a float-form string takes the float-string precision and range rules --
+    ctx.emitter.label(&float_form);
+    abi::emit_pop_reg_pair(ctx.emitter, payload, length);
+    super::objects::emit_string_into_int_diagnostics(ctx, refuse);
     ctx.emitter.label(&done);
 }
 
@@ -345,7 +403,7 @@ fn emit_numeric_cold_check(
     // -- cold path: only a fully numeric string binds --
     ctx.emitter.label(&string_label);
     match target {
-        Numeric::Int => super::objects::emit_string_into_int_diagnostics(ctx, &refuse),
+        Numeric::Int => emit_string_to_int_parameter(ctx, &refuse),
         Numeric::Float => {
             let (string_ptr, _) = abi::string_result_regs(ctx.emitter);
             if string_ptr != payload {
