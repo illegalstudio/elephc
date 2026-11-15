@@ -128,6 +128,7 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
 fn emit_hot_check(ctx: &mut FunctionContext<'_>, rule: Rule, cold: &str, done: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- hot path: read the boxed tag and accept the declared scalar inline --
             ctx.emitter.instruction("cbz x0, 1f");                              // a null cell pointer is PHP null: reject out of line
             ctx.emitter.instruction("ldr x9, [x0]");                            // read the boxed value's runtime tag
             match rule {
@@ -144,10 +145,12 @@ fn emit_hot_check(ctx: &mut FunctionContext<'_>, rule: Rule, cold: &str, done: &
                     }
                 }
             }
+            // -- every refused shape leaves for the cold section --
             ctx.emitter.label("1");
             ctx.emitter.instruction(&format!("b {cold}"));                      // enter the out-of-line rejection path
         }
         Arch::X86_64 => {
+            // -- hot path: read the boxed tag and accept the declared scalar inline --
             ctx.emitter.instruction("test rax, rax");                           // is the boxed cell pointer null?
             ctx.emitter.instruction(&format!("jz {cold}"));                     // a null cell pointer is PHP null: reject out of line
             ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // read the boxed value's runtime tag
@@ -165,6 +168,7 @@ fn emit_hot_check(ctx: &mut FunctionContext<'_>, rule: Rule, cold: &str, done: &
                     }
                 }
             }
+            // -- every refused shape leaves for the cold section --
             ctx.emitter.instruction(&format!("jmp {cold}"));                    // enter the out-of-line rejection path
         }
     }
@@ -172,6 +176,7 @@ fn emit_hot_check(ctx: &mut FunctionContext<'_>, rule: Rule, cold: &str, done: &
 
 /// Branches to `done` when the unboxed tag in the integer result register passes `rule`.
 fn emit_peeled_accept(ctx: &mut FunctionContext<'_>, rule: Rule, done: &str) {
+    // -- cold path: re-check the peeled tag, which a nested cell may have hidden --
     match ctx.emitter.target.arch {
         Arch::AArch64 => match rule {
             Rule::Coercive { .. } => {
@@ -221,11 +226,13 @@ fn emit_cold_check(
 ) -> Result<()> {
     let null_label = ctx.next_label("scalar_param_guard_null");
     let name_label = ctx.next_label("scalar_param_guard_name");
+    // -- cold path: peel nested cells before deciding --
     ctx.load_value_to_result(value)?;
     emit_branch_if_null_cell(ctx, &null_label);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     emit_peeled_accept(ctx, rule, done);
     if rule == (Rule::Coercive { string: true }) {
+        // -- cold path: a Stringable object still binds to a coercive string --
         emit_tag_not_equal_branch(ctx, 6, &name_label);
         if ctx.module.required_runtime_features.eval_bridge {
             super::builtins::lower_eval_object_is_a(ctx, inst, value, "Stringable", false)?;
@@ -303,6 +310,7 @@ fn emit_rejected_type_name(
     ];
     let word_labels: Vec<String> =
         words.iter().map(|_| ctx.next_label("scalar_param_guard_word")).collect();
+    // -- message: dispatch on the rejected value's tag to PHP's type name --
     ctx.load_value_to_result(value)?;
     emit_branch_if_null_cell(ctx, null_label);
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -315,6 +323,7 @@ fn emit_rejected_type_name(
     }
     abi::emit_jump(ctx.emitter, word_labels.last().expect("fallback word"));
 
+    // -- message: an object is named by its runtime class --
     ctx.emitter.label(&object);
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // expose the unboxed object pointer to the class lookup
@@ -323,6 +332,7 @@ fn emit_rejected_type_name(
     super::builtins::types::emit_dynamic_object_class_name(ctx, "get_class");
     abi::emit_jump(ctx.emitter, &joined);
 
+    // -- message: a boolean is named by its value, true or false --
     ctx.emitter.label(&boolean);
     let (true_label, true_len) = ctx.data.add_string(b"true");
     let (false_label, false_len) = ctx.data.add_string(b"false");
@@ -376,6 +386,7 @@ fn emit_throw_with_name(ctx: &mut FunctionContext<'_>, prefix: &str, suffix: &st
         Arch::AArch64 => ("x3", "x4"),
         Arch::X86_64 => ("rdi", "rsi"),
     };
+    // -- message: prefix . type name . suffix, persisted, then thrown as TypeError --
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &prefix_label);
