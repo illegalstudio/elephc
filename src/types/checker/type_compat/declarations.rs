@@ -274,6 +274,12 @@ impl Checker {
             // the parent's physical property or dimension storage.
             return Ok(());
         }
+        if *expected_ty == PhpType::Mixed
+            && self.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+            && self.promote_live_property_reference_argument(arg, env)?
+        {
+            return Ok(());
+        }
         // Guards refine the current value, while a reference still addresses the original
         // slot. Coalescing assignments likewise keep nullable parameter storage alive.
         let storage_ty = self.guarded_local_storage_type(arg, env).unwrap_or(actual_ty).clone();

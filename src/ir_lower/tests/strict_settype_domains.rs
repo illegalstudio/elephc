@@ -238,3 +238,19 @@ fn strict_settype_nullable_property_contracts_all_targets() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Nominal and nullable object constraints survive conversion and canonical property projection.
+#[test]
+fn strict_settype_object_property_contracts_all_targets() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strict/settype_object_properties.php"));
+    let program = prepared(&format!("{source}\ntry {{ replaceObjectConversionValue($box->value, new stdClass()); }} catch (TypeError $directError) {{}}"));
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target,
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(module.required_runtime_features.native_reference_validation, "{name}");
+        crate::ir::validate_module(&module).unwrap();
+        crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+    }
+}

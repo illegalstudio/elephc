@@ -273,7 +273,7 @@ impl Checker {
                             crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_))
                         && def.params.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
                     {
-                        self.promote_live_mixed_property_argument(arg, env)?;
+                        self.promote_live_property_reference_argument(arg, env)?;
                     }
                     // A mixed reference can replace a guarded value and require a wider cell.
                     // Publish the same storage transition as an ordinary mixed-reference call.

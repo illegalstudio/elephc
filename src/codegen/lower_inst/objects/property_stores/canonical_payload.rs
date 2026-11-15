@@ -1,5 +1,5 @@
 //! Purpose:
-//! Publishes typed scalar property writes into already canonical managed cells.
+//! Publishes typed property writes into already canonical managed cells.
 //!
 //! Called from:
 //! - Shared reference-property publication after ordinary declaration validation.
@@ -10,7 +10,7 @@
 
 use super::*;
 
-/// Publishes a selected scalar path, returning false when the ordinary writer remains authoritative.
+/// Publishes a selected concrete payload path, returning false when the ordinary writer remains authoritative.
 pub(super) fn publish(ctx: &mut FunctionContext<'_>, pointer_reg: &str, prop_ty: &PhpType,
     incoming_result_ty: &PhpType) -> Result<bool> {
     if !ctx.module.required_runtime_features.native_reference_validation

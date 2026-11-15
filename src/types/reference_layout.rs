@@ -19,11 +19,12 @@ pub(crate) enum CanonicalReferencePayload {
     Bool,
     String,
     NullableInt,
+    Object,
 }
 
-/// Selects only reviewed scalar, nullable and scalar-union declaration layouts.
+/// Selects reviewed declaration layouts without inferring indirection from pointer size.
 pub(crate) fn canonical_property_reference_payload(ty: &PhpType) -> Option<CanonicalReferencePayload> {
-    if !scalar_contract(ty) { return None; }
+    if !declaration_contract(ty) { return None; }
     Some(match ty.codegen_repr() {
         PhpType::Mixed => CanonicalReferencePayload::Boxed,
         PhpType::Int => CanonicalReferencePayload::Int,
@@ -31,16 +32,17 @@ pub(crate) fn canonical_property_reference_payload(ty: &PhpType) -> Option<Canon
         PhpType::Bool => CanonicalReferencePayload::Bool,
         PhpType::Str => CanonicalReferencePayload::String,
         PhpType::TaggedScalar => CanonicalReferencePayload::NullableInt,
+        PhpType::Object(_) => CanonicalReferencePayload::Object,
         _ => return None,
     })
 }
 
-/// Keeps unsupported declaration members out of the canonical scalar reference protocol.
-fn scalar_contract(ty: &PhpType) -> bool {
+/// Keeps unsupported declaration members out of the canonical reference protocol.
+fn declaration_contract(ty: &PhpType) -> bool {
     match ty {
         PhpType::Mixed | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
-        | PhpType::Str | PhpType::Void => true,
-        PhpType::Union(members) => !members.is_empty() && members.iter().all(scalar_contract),
+        | PhpType::Str | PhpType::Void | PhpType::Object(_) => true,
+        PhpType::Union(members) => !members.is_empty() && members.iter().all(declaration_contract),
         _ => false,
     }
 }
@@ -55,12 +57,14 @@ mod tests {
         assert_eq!(canonical_property_reference_payload(&PhpType::Union(vec![PhpType::Int, PhpType::Void])),
             Some(CanonicalReferencePayload::NullableInt));
         for members in [vec![PhpType::Str, PhpType::Void], vec![PhpType::Int, PhpType::Str],
-            vec![PhpType::Bool, PhpType::Void], vec![PhpType::Float, PhpType::Str]] {
+            vec![PhpType::Bool, PhpType::Void], vec![PhpType::Float, PhpType::Str],
+            vec![PhpType::Object("NativeObject".into()), PhpType::Void]] {
             assert_eq!(canonical_property_reference_payload(&PhpType::Union(members)),
                 Some(CanonicalReferencePayload::Boxed));
         }
-        for ty in [PhpType::Iterable, PhpType::Pointer(None), PhpType::Array(Box::new(PhpType::Int)),
-            PhpType::Object("NativeObject".into())] {
+        assert_eq!(canonical_property_reference_payload(&PhpType::Object("NativeObject".into())),
+            Some(CanonicalReferencePayload::Object));
+        for ty in [PhpType::Iterable, PhpType::Pointer(None), PhpType::Array(Box::new(PhpType::Int))] {
             assert_eq!(canonical_property_reference_payload(&ty), None, "{ty:?}");
         }
     }

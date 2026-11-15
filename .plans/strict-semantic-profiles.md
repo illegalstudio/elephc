@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 81 (this commit), following `63b866b2a7`. Issue:
+Verified through step 82 (this commit), following `94e873a4c5`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 81.
+This progress ledger condenses verified implementation through step 82.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -1048,6 +1048,34 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
   assembly, the existing scalar native regression, compiler/test-target checks,
   build, architecture828, assembly comments, fixture syntax and diff hygiene pass.
 
+### Nominal object conversion references and projection
+
+- The shared classifier now includes nominal objects and reviewed object unions.
+  A typed object promotion entry transfers the original owner into a canonical
+  child while retaining nominal declaration constraints. Scalar-specific helper
+  filenames became `reference_cells/canonical_promotion.rs` and
+  `property_stores/canonical_payload.rs` as their responsibility expanded.
+- Checker reference-place validation now both authorizes and schedules reviewed
+  managed property cells for Mixed reference parameters. It preserves inherited
+  physical layouts and excludes raw borrowed constructor storage. The checker and
+  lowering consume the same supported declaration layouts.
+- `CANONICAL_PROPERTY_PAYLOAD_FLAG` retains the existing bit while describing any
+  supported owned concrete payload. Object projection and JSON resolve the live
+  canonical child before interpreting the logical PHP tag. Raw cells keep their
+  original representation and source owners remain balanced.
+- The native object regression verifies Stringable conversion before a refused
+  nominal store, nullable/union updates, preserved aliases, array projection, JSON
+  and a runtime-selected Mixed reference call. An output marker proves the callee
+  reaches the reference publisher before TypeError, rather than failing argument
+  adaptation. The nullable regression carries the same entry proof. Both optimizer
+  modes match PHP with clean heaps.
+- Thirty-two focused settype checks, shared classification and canonical projection
+  checks, all-five-target serialization/JSON metadata and helper assembly, previous
+  scalar/nullable native cases, a no-profile covariant object-reference control,
+  cargo check --tests, compiler build, architecture828, assembly comments, fixture
+  syntax and diff hygiene pass. Arrays/iterables, static and remaining eval/reference
+  integration continue before public Casts admission.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1147,4 +1175,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 78 | `c694b9c796` | feat(strict): enable the arithmetic semantic profile |
 | 79 | `a1a4296e52` | feat(strict): enable the overflow semantic profile |
 | 80 | `63b866b2a7` | feat(strict): preserve scalar property conversion references |
-| 81 | this commit | feat(strict): preserve nullable property reference contracts |
+| 81 | `94e873a4c5` | feat(strict): preserve nullable property reference contracts |
+| 82 | this commit | feat(strict): preserve object property conversion references |

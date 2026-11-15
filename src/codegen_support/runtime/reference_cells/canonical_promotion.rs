@@ -1,5 +1,5 @@
 //! Purpose:
-//! Gives managed scalar property cells persistent boxed reference identities.
+//! Gives managed property cells persistent boxed reference identities.
 //!
 //! Called from:
 //! - Explicit native-reference validation runtime emission and property reference selection.
@@ -20,16 +20,18 @@ pub(crate) fn promotion_entry(payload: CanonicalReferencePayload) -> &'static st
         CanonicalReferencePayload::Bool => "__rt_reference_cell_promote_bool",
         CanonicalReferencePayload::String => "__rt_reference_cell_promote_string",
         CanonicalReferencePayload::NullableInt => "__rt_reference_cell_promote_nullable_int",
+        CanonicalReferencePayload::Object => "__rt_reference_cell_promote_object",
     }
 }
 
-/// Emits one typed entry per raw scalar layout, sharing ordinary boxing and reference promotion.
+/// Emits one typed entry per raw value layout, sharing ordinary boxing and reference promotion.
 pub(super) fn emit(emitter: &mut Emitter) {
     for (payload, ty) in [(CanonicalReferencePayload::Int, PhpType::Int),
         (CanonicalReferencePayload::Float, PhpType::Float),
         (CanonicalReferencePayload::Bool, PhpType::Bool),
         (CanonicalReferencePayload::String, PhpType::Str),
-        (CanonicalReferencePayload::NullableInt, PhpType::TaggedScalar)] {
+        (CanonicalReferencePayload::NullableInt, PhpType::TaggedScalar),
+        (CanonicalReferencePayload::Object, PhpType::Object(String::new()))] {
         let entry = promotion_entry(payload);
         let done = format!("{entry}_done");
         let result = abi::int_result_reg(emitter);
@@ -103,8 +105,8 @@ mod tests {
             process.stdin.take().unwrap().write_all(assembly.as_bytes()).unwrap();
             let output = process.wait_with_output().unwrap();
             assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
-            assert_eq!(assembly.matches("__rt_reference_cell_canonical").count(), 5, "{name}");
-            assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), 5, "{name}");
+            assert_eq!(assembly.matches("__rt_reference_cell_canonical").count(), 6, "{name}");
+            assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), 6, "{name}");
         }
     }
 }

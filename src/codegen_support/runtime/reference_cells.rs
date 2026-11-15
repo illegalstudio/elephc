@@ -22,8 +22,8 @@ mod mixed_payload;
 mod mixed_symbol;
 mod property_payload;
 mod canonical;
-mod scalar_payload;
-pub(crate) use scalar_payload::promotion_entry;
+mod canonical_promotion;
+pub(crate) use canonical_promotion::promotion_entry;
 mod parameter_bindings;
 mod argument_pins;
 mod validation_pins;
@@ -41,7 +41,7 @@ pub(crate) use static_cells::{BINDING_BYTES as STATIC_BINDING_BYTES, load_mixed_
 pub(super) use source_lifecycle::emit as emit_source_lifecycle;
 pub(super) use source_lifecycle::require_success as require_source_success;
 pub(crate) use validation_pins::subtract as subtract_validation_pins;
-pub(crate) use canonical::resolve_scalar_property;
+pub(crate) use canonical::resolve_property_payload_shape;
 pub(crate) use property_unset::emit_owned_property_unset;
 pub(crate) use mixed_payload::follow_mixed_reference_slot;
 pub(crate) use mixed_symbol::publish_mixed_symbol;
@@ -83,7 +83,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: boo
     emit_release(emitter);
     emit_clone(emitter);
     mixed_payload::emit_promote_mixed(emitter, native_validation);
-    if native_validation { scalar_payload::emit(emitter); }
+    if native_validation { canonical_promotion::emit(emitter); }
     mixed_payload::emit_retain_mixed(emitter);
     validation_pins::emit(emitter);
     argument_pins::emit(emitter);

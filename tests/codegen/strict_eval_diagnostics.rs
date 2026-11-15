@@ -141,7 +141,21 @@ fn test_strict_settype_nullable_property_contracts_bundle() {
     for optimize in [false, true] {
         let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
         assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
-        assert_eq!(output.stdout, "N|0|9|A9|18|S|22|19|F|T|R9", "opt={optimize}");
+        assert_eq!(output.stdout, "N|0|9|A9|18|S|22|19|F|TW|R9", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
+/// Object property conversion failures retain original instances, constraints and projection owners.
+#[test]
+fn test_strict_settype_object_property_contracts_bundle() {
+    let source = include_str!("../fixtures/strict/settype_object_properties.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "SC|IS|item|N|ObjectConversionItem|{\"value\":{\"name\":\"item\"},\"optional\":null,\"choice\":\"item\"}W|R", "opt={optimize}");
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }

@@ -23,7 +23,7 @@ use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 use crate::codegen_support::sentinels::{
     emit_branch_if_null_container, emit_resolve_tagged_scalar_property_tag, NULL_SENTINEL,
-    SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, CANONICAL_SCALAR_PROPERTY_FLAG,
+    SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, CANONICAL_PROPERTY_PAYLOAD_FLAG,
 };
 
 #[cfg(test)]
@@ -232,7 +232,7 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("b.ne __rt_object_to_hash_box");                        // other tags box their payload directly
     emitter.instruction("ldr x9, [sp, #80]");                                   // recover the declared row's canonical-reference capability
-    emitter.instruction(&format!("tst x9, #{CANONICAL_SCALAR_PROPERTY_FLAG}")); // a scalar reaches Mixed dispatch only after canonical shape resolution
+    emitter.instruction(&format!("tst x9, #{CANONICAL_PROPERTY_PAYLOAD_FLAG}")); // a scalar reaches Mixed dispatch only after canonical shape resolution
     emitter.instruction("b.eq __rt_object_to_hash_mixed_capability");           // ordinary Mixed slots retain their original promotion gate
     emitter.instruction("ldr x17, [sp, #0]");                                   // recover the physical receiver before inspecting native cell ownership
     emitter.instruction("ldr x12, [sp, #72]");                                  // recover this property's original byte offset
@@ -531,7 +531,7 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
     emitter.instruction("cmp rax, 7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("jne __rt_object_to_hash_box_x");                       // other tags box their payload directly
-    emitter.instruction(&format!("test QWORD PTR [rbp - 88], {CANONICAL_SCALAR_PROPERTY_FLAG}"));// a scalar reaches Mixed dispatch only after canonical shape resolution
+    emitter.instruction(&format!("test QWORD PTR [rbp - 88], {CANONICAL_PROPERTY_PAYLOAD_FLAG}"));// a scalar reaches Mixed dispatch only after canonical shape resolution
     emitter.instruction("jz __rt_object_to_hash_mixed_capability_x");           // ordinary Mixed slots retain their original promotion gate
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover the physical receiver before inspecting native cell ownership
     emitter.instruction("mov r11, QWORD PTR [rbp - 80]");                       // recover this property's original byte offset

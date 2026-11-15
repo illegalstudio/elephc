@@ -199,33 +199,38 @@ impl Checker {
         }
         let property_ty = self.infer_type(arg, env)?;
         let compatible = crate::types::param_binding::by_ref_property_storage_compatible(expected_ty, &property_ty);
-        if compatible && *expected_ty == PhpType::Mixed && property_ty == PhpType::Mixed {
-            self.promote_live_mixed_property_argument(arg, env)?;
+        if compatible && *expected_ty == PhpType::Mixed {
+            self.promote_live_property_reference_argument(arg, env)?;
         }
         Ok(compatible)
     }
 
-    /// Gives plain Mixed property arguments stable cell storage before EIR call lowering.
-    pub(crate) fn promote_live_mixed_property_argument(&mut self, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
-        let ExprKind::PropertyAccess { object, property } = &arg.kind else { return Ok(()); };
+    /// Gives reviewed writable property arguments managed cells before reference call lowering.
+    pub(crate) fn promote_live_property_reference_argument(&mut self, arg: &Expr, env: &TypeEnv) -> Result<bool, CompileError> {
+        let ExprKind::PropertyAccess { object, property } = &arg.kind else { return Ok(false); };
         let Some((class_name, true)) = self.ref_property_slot_addressability(object, property, env)? else {
-            return Ok(());
+            return Ok(false);
         };
         let (access_class, index) = match crate::types::resolve_property_name(
             &self.classes, &class_name, property, self.current_class.as_deref(),
         ) {
             crate::types::PropertyNameResolution::ScopePrivate { scope, index } => (scope, index),
             crate::types::PropertyNameResolution::Visible => {
-                let Some(index) = self.classes[&class_name].visible_property_index(property) else { return Ok(()); };
+                let Some(index) = self.classes[&class_name].visible_property_index(property) else { return Ok(false); };
                 (class_name, index)
             }
-            _ => return Ok(()),
+            _ => return Ok(false),
         };
         let info = &self.classes[&access_class];
-        if info.properties.get(index).is_none_or(|(_, ty)| *ty != PhpType::Mixed)
-            || info.is_internal || info.readonly_properties.contains(property)
+        let Some((_, property_ty)) = info.properties.get(index) else { return Ok(false); };
+        let supported = *property_ty == PhpType::Mixed || (self.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+            && crate::types::canonical_property_reference_payload(property_ty).is_some());
+        let borrowed_constructor = *property_ty != PhpType::Mixed
+            && info.reference_properties.contains(property) && info.promoted_properties.contains(property)
+            && !info.property_slot_owns_reference(index);
+        if !supported || borrowed_constructor || info.is_internal || info.readonly_properties.contains(property)
             || info.property_hooks.get(property).is_some_and(|hooks| hooks.any())
-        { return Ok(()); }
+        { return Ok(false); }
         let mut owner = info.property_declaring_classes.get(property).cloned().unwrap_or(access_class);
         // Public/protected redeclarations reuse their ancestor's physical slot. Every view
         // of that storage must agree on indirection before inherited method bodies are emitted.
@@ -233,12 +238,12 @@ impl Checker {
             let Some(parent) = self.classes.get(&owner).and_then(|info| info.parent.clone()) else { break; };
             let Some(info) = self.classes.get(&parent) else { break; };
             if info.visible_property_index(property) != Some(index)
-                || info.properties.get(index).is_none_or(|(_, ty)| *ty != PhpType::Mixed) { break; }
-            if info.is_internal { return Ok(()); }
+                || info.properties.get(index).is_none_or(|(_, ty)| ty != property_ty) { break; }
+            if info.is_internal { return Ok(false); }
             owner = parent;
         }
         self.reference_property_promotions.insert((owner, property.clone()));
-        Ok(())
+        Ok(true)
     }
 
     /// Returns true when an argument expression is an l-value supported by by-reference calls.

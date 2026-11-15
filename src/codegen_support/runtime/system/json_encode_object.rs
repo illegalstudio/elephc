@@ -306,7 +306,7 @@ pub(crate) fn emit_json_encode_object(emitter: &mut Emitter) {
     emitter.instruction(&format!("tbz x17, #{}, __rt_json_obj_direct_payload", JSON_REFERENCE_PROPERTY_FLAG.trailing_zeros())); // ordinary properties already point at their payload words
     emitter.instruction("ldr x9, [x9]");                                        // follow the reference cell without acquiring another owner
     emitter.instruction("ldr x14, [x9]");                                       // provide the low word for canonical scalar payload resolution
-    crate::codegen_support::runtime::reference_cells::resolve_scalar_property(
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload_shape(
         emitter, "x9", "x17", "x14", "__rt_json_obj_scalar",
     );
     emitter.label("__rt_json_obj_direct_payload");
@@ -696,7 +696,7 @@ fn emit_json_encode_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_json_obj_direct_payload_x");                   // ordinary properties already address their payload
     emitter.instruction("mov rax, QWORD PTR [rax]");                            // follow the reference cell without acquiring another owner
     emitter.instruction("mov rcx, QWORD PTR [rax]");                            // provide the low word for canonical scalar payload resolution
-    crate::codegen_support::runtime::reference_cells::resolve_scalar_property(
+    crate::codegen_support::runtime::reference_cells::resolve_property_payload_shape(
         emitter, "rax", "r9", "rcx", "__rt_json_obj_scalar_x",
     );
     emitter.label("__rt_json_obj_direct_payload_x");

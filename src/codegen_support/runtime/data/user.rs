@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::{CANONICAL_SCALAR_PROPERTY_FLAG, JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, TAGGED_SCALAR_PROPERTY_TAG};
+use crate::codegen_support::sentinels::{CANONICAL_PROPERTY_PAYLOAD_FLAG, JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, TAGGED_SCALAR_PROPERTY_TAG};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -1466,7 +1466,7 @@ pub(crate) fn emit_runtime_data_user(
             let tag = tag | if class_info.property_slot_is_declared(*prop_index, prop_name) {
                 JSON_DECLARED_PROPERTY_FLAG
             } else { 0 };
-            let tag = tag | canonical_scalar_property_flag(class_info, *prop_index, prop_ty);
+            let tag = tag | canonical_property_payload_flag(class_info, *prop_index, prop_ty);
             out.push_str(&format!(
                 "    .quad _class_json_pname_{}_{}\n",
                 class_info.class_id, prop_index,
@@ -1585,7 +1585,7 @@ pub(crate) fn emit_runtime_data_user(
                     && !metadata.property_set_visibilities.contains_key(*prop_name)
                     && metadata.property_hooks.get(*prop_name).is_none_or(|hooks| !hooks.any())
                 { SERPROP_MIXED_REFERENCE_PROPERTY_FLAG } else { 0 }
-                | canonical_scalar_property_flag(class_info, *prop_index, prop_ty);
+                | canonical_property_payload_flag(class_info, *prop_index, prop_ty);
             out.push_str(&format!(
                 "    .quad _class_serpname_{}_{}\n",
                 class_info.class_id, prop_index
@@ -4441,16 +4441,16 @@ fn serprop_widens_int_to_float(prop_ty: &PhpType) -> bool {
 fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType, index: usize) -> u64 {
     serialized_property_payload_tag(prop_ty)
         | if class_info.property_slot_is_reference(index, prop_name) { SERPROP_REFERENCE_PROPERTY_FLAG } else { 0 }
-        | canonical_scalar_property_flag(class_info, index, prop_ty)
+        | canonical_property_payload_flag(class_info, index, prop_ty)
 }
 
-/// Marks only owned scalar cells, so renderer probes never inspect a borrowed slot's header.
-fn canonical_scalar_property_flag(class: &ClassInfo, index: usize, ty: &PhpType) -> u64 {
+/// Marks owned cells with supported canonical payloads without probing borrowed slot headers.
+fn canonical_property_payload_flag(class: &ClassInfo, index: usize, ty: &PhpType) -> u64 {
     if class.property_slot_owns_reference(index)
         && matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::False
-            | PhpType::Float | PhpType::Str | PhpType::TaggedScalar)
+            | PhpType::Float | PhpType::Str | PhpType::TaggedScalar | PhpType::Object(_))
     {
-        CANONICAL_SCALAR_PROPERTY_FLAG
+        CANONICAL_PROPERTY_PAYLOAD_FLAG
     } else { 0 }
 }
 

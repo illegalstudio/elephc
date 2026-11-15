@@ -10,7 +10,7 @@
 
 use super::*;
 
-mod canonical_scalar;
+mod canonical_payload;
 
 /// Emits a declared-property store from an SSA value into the object slot.
 pub(super) fn emit_property_store(
@@ -314,7 +314,7 @@ pub(super) fn publish_reference_cell_result_then_release_previous(
     prop_ty: &PhpType,
     incoming_result_ty: &PhpType,
 ) -> Result<()> {
-    if canonical_scalar::publish(ctx, pointer_reg, prop_ty, incoming_result_ty)? { return Ok(()); }
+    if canonical_payload::publish(ctx, pointer_reg, prop_ty, incoming_result_ty)? { return Ok(()); }
     publish_raw_reference_cell_result(ctx, pointer_reg, prop_ty, incoming_result_ty)
 }
 

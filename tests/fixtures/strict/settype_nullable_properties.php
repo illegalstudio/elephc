@@ -34,6 +34,7 @@ echo is_float($decimal) ? '|F' : '|X';
 $cast($box->enabled, 'int');
 echo $enabled ? '|T' : '|X';
 function replaceNullableConversionValue(mixed &$value, mixed $replacement): void {
+    echo 'W';
     $value = $replacement;
 }
 try { replaceNullableConversionValue($box->number, ['refused']); echo 'X'; }
