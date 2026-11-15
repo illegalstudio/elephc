@@ -241,3 +241,29 @@ echo "end\n";
     );
     assert_eq!(out, "side:a\nt(): Argument #1 ($s) must be of type string, null given, called in F on line 8\nside:b\nt(): Argument #1 ($s) must be of type string, null given, called in F on line 9\nside:c\nk(): Argument #2 ($b) must be of type string, null given, called in F on line 13\nside:d\nt(): Argument #1 ($s) must be of type string, null given, called in F on line 14\nt(): Argument #1 ($s) must be of type string, null given, called in F on line 15\nside:e\nok1\nend\n");
 }
+
+/// A string held in `mixed` binds to `int`/`float` only when PHP's numeric grammar accepts all
+/// of it (surrounding whitespace allowed); leading-numeric, hex, `INF` and empty strings throw.
+/// A lossy float or float-string to `int` emits the 8.1+ deprecation, and a float or integer
+/// string outside the int range throws, exactly as php 8.5 does.
+#[test]
+fn test_numeric_strings_and_floats_from_mixed_follow_php_binding_rules() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $no, string $msg): bool { echo "[diag] ", $msg, "\n"; return true; });
+function ti(int $i): string { return var_export($i, true); }
+function tf(float $f): string { return var_export($f, true); }
+function m(mixed $v): mixed { return $v; }
+function show(TypeError $e): void { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+foreach (["12", " 12", "12 ", "12abc", "abc", "", "1.5", "1e3", "0x1A", " ", "1.0", "9999999999999999999", ".5", "INF", "1e100", "12.5abc", "-7"] as $s) {
+    try { echo "ti(", var_export($s, true), ") = ", ti(m($s)), "\n"; } catch (TypeError $e) { show($e); }
+    try { echo "tf(", var_export($s, true), ") = ", tf(m($s)), "\n"; } catch (TypeError $e) { show($e); }
+}
+foreach ([1.5, 1.0, 1e100, NAN, INF, true, false, 3] as $v) {
+    try { echo "ti(", var_export($v, true), ") = ", ti(m($v)), "\n"; } catch (TypeError $e) { show($e); }
+    try { echo "tf(", var_export($v, true), ") = ", tf(m($v)), "\n"; } catch (TypeError $e) { show($e); }
+}
+"#,
+    );
+    assert_eq!(out, "ti('12') = 12\ntf('12') = 12.0\nti(' 12') = 12\ntf(' 12') = 12.0\nti('12 ') = 12\ntf('12 ') = 12.0\nti('12abc') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('12abc') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('abc') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('abc') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('1.5') = [diag] Implicit conversion from float-string \"1.5\" to int loses precision\n1\ntf('1.5') = 1.5\nti('1e3') = 1000\ntf('1e3') = 1000.0\nti('0x1A') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('0x1A') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti(' ') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf(' ') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('1.0') = 1\ntf('1.0') = 1.0\nti('9999999999999999999') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('9999999999999999999') = 1.0E+19\nti('.5') = [diag] Implicit conversion from float-string \".5\" to int loses precision\n0\ntf('.5') = 0.5\nti('INF') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('INF') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('1e100') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('1e100') = 1.0E+100\nti('12.5abc') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('12.5abc') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('-7') = -7\ntf('-7') = -7.0\nti(1.5) = [diag] Implicit conversion from float 1.5 to int loses precision\n1\ntf(1.5) = 1.5\nti(1.0) = 1\ntf(1.0) = 1.0\nti(1.0E+100) = ti(): Argument #1 ($i) must be of type int, float given, called in F on line 12\ntf(1.0E+100) = 1.0E+100\nti(NAN) = ti(): Argument #1 ($i) must be of type int, float given, called in F on line 12\ntf(NAN) = NAN\nti(INF) = ti(): Argument #1 ($i) must be of type int, float given, called in F on line 12\ntf(INF) = INF\nti(true) = 1\ntf(true) = 1.0\nti(false) = 0\ntf(false) = 0.0\nti(3) = 3\ntf(3) = 3.0\n");
+}
