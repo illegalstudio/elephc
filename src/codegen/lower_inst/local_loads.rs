@@ -178,7 +178,7 @@ pub(super) fn coerce_borrowed_ref_cell_local(
 }
 
 /// Loads a ref-cell's physical payload before exposing the requested borrowed logical view.
-pub(super) fn load_ref_cell_local_to_result_as(
+pub(in crate::codegen) fn load_ref_cell_local_to_result_as(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
     ty: &PhpType,

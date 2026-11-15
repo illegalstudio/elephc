@@ -175,6 +175,7 @@ pub(super) use direct_calls::{
 };
 pub(super) use instruction_helpers::instruction_php_only_profile;
 pub(super) use local_loads::coerce_loaded_local_to_result_type;
+pub(super) use local_loads::load_ref_cell_local_to_result_as;
 pub(super) use runtime_wrappers::{
     emit_runtime_builtin_wrapper_inline, emit_runtime_extern_wrapper_inline,
     runtime_builtin_wrapper_sig,

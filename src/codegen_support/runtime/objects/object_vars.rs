@@ -39,7 +39,7 @@ mod canonical_projection_tests {
             emit_object_to_hash(&mut emitter);
             let assembly = emitter.output();
             let (restore, owners) = if target.arch == Arch::AArch64 {
-                ("ldr x17, [x17, x12]", "ldr w9, [x17, #-12]")
+                ("ldr x17, [x17, x10]", "ldr w9, [x17, #-12]")
             } else {
                 ("mov r10, QWORD PTR [r10 + r11]", "mov r9d, DWORD PTR [r10 - 12]")
             };
@@ -47,6 +47,14 @@ mod canonical_projection_tests {
             let owners = assembly.find(owners).unwrap();
             assert!(restore < owners,
                 "{name}: an interior wrapper-child address has no native cell owner header");
+            let (raw_shape, raw_gate) = if target.arch == Arch::AArch64 {
+                ("cmp x12, x17", "b.eq __rt_object_to_hash_mixed_capability")
+            } else {
+                ("cmp r8, r10", "je __rt_object_to_hash_mixed_capability_x")
+            };
+            let authenticated = &assembly[restore..owners];
+            assert!(authenticated.contains(raw_shape) && authenticated.contains(raw_gate),
+                "{name}: raw boxed unions must keep their existing promotion gate");
         }
     }
 }
@@ -232,13 +240,16 @@ fn emit_object_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("b.ne __rt_object_to_hash_box");                        // other tags box their payload directly
     emitter.instruction("ldr x9, [sp, #80]");                                   // recover the declared row's canonical-reference capability
-    emitter.instruction(&format!("tst x9, #{CANONICAL_PROPERTY_PAYLOAD_FLAG}")); // a scalar reaches Mixed dispatch only after canonical shape resolution
+    emitter.instruction(&format!("tst x9, #{CANONICAL_PROPERTY_PAYLOAD_FLAG}")); // reviewed rows still need their live canonical shape authenticated
     emitter.instruction("b.eq __rt_object_to_hash_mixed_capability");           // ordinary Mixed slots retain their original promotion gate
+    emitter.instruction("mov x12, x17");                                        // preserve the resolved payload address for canonical authentication
     emitter.instruction("ldr x17, [sp, #0]");                                   // recover the physical receiver before inspecting native cell ownership
-    emitter.instruction("ldr x12, [sp, #72]");                                  // recover this property's original byte offset
-    emitter.instruction("ldr x17, [x17, x12]");                                 // restore the native cell rather than its interior child slot
+    emitter.instruction("ldr x10, [sp, #72]");                                  // recover this property's original byte offset
+    emitter.instruction("ldr x17, [x17, x10]");                                 // restore the native cell rather than its interior child slot
+    emitter.instruction("cmp x12, x17");                                        // a raw boxed union still points at the managed cell itself
+    emitter.instruction("b.eq __rt_object_to_hash_mixed_capability");           // only resolved canonical children bypass the ordinary promotion gate
     emitter.instruction("ldr x1, [x17]");                                       // restore the canonical wrapper for visible-owner projection
-    emitter.instruction("b __rt_object_to_hash_owned_reference");               // share the existing wrapper without enabling raw scalar promotion
+    emitter.instruction("b __rt_object_to_hash_owned_reference");               // share an existing wrapper while preserving raw boxed-union policy
     emitter.label("__rt_object_to_hash_mixed_capability");
     emitter.instruction(&format!("tst x9, #{SERPROP_MIXED_REFERENCE_PROPERTY_FLAG}"));// constrained storage cannot acquire an unconstrained wrapper
     emitter.instruction("b.eq __rt_object_to_hash_wrapper_owners");             // ordinary and typed slots keep their existing projection policy
@@ -531,13 +542,16 @@ fn emit_object_to_hash_x86_64(emitter: &mut Emitter) {
     // -- a Mixed slot that holds no cell (implicit or explicit null) projects canonical null --
     emitter.instruction("cmp rax, 7");                                          // does the slot hold a boxed Mixed cell pointer?
     emitter.instruction("jne __rt_object_to_hash_box_x");                       // other tags box their payload directly
-    emitter.instruction(&format!("test QWORD PTR [rbp - 88], {CANONICAL_PROPERTY_PAYLOAD_FLAG}"));// a scalar reaches Mixed dispatch only after canonical shape resolution
+    emitter.instruction(&format!("test QWORD PTR [rbp - 88], {CANONICAL_PROPERTY_PAYLOAD_FLAG}"));// reviewed rows still need their live canonical shape authenticated
     emitter.instruction("jz __rt_object_to_hash_mixed_capability_x");           // ordinary Mixed slots retain their original promotion gate
+    emitter.instruction("mov r8, r10");                                         // preserve the resolved payload address for canonical authentication
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover the physical receiver before inspecting native cell ownership
     emitter.instruction("mov r11, QWORD PTR [rbp - 80]");                       // recover this property's original byte offset
     emitter.instruction("mov r10, QWORD PTR [r10 + r11]");                      // restore the native cell rather than its interior child slot
+    emitter.instruction("cmp r8, r10");                                         // a raw boxed union still points at the managed cell itself
+    emitter.instruction("je __rt_object_to_hash_mixed_capability_x");           // only resolved canonical children bypass the ordinary promotion gate
     emitter.instruction("mov rdi, QWORD PTR [r10]");                            // restore the canonical wrapper for visible-owner projection
-    emitter.instruction("jmp __rt_object_to_hash_owned_reference_x");           // share the existing wrapper without enabling raw scalar promotion
+    emitter.instruction("jmp __rt_object_to_hash_owned_reference_x");           // share an existing wrapper while preserving raw boxed-union policy
     emitter.label("__rt_object_to_hash_mixed_capability_x");
     emitter.instruction(&format!("test QWORD PTR [rbp - 88], {SERPROP_MIXED_REFERENCE_PROPERTY_FLAG}"));// only unconstrained Mixed cells acquire a canonical wrapper
     emitter.instruction("jz __rt_object_to_hash_wrapper_owners_x");             // ordinary and typed slots keep their existing projection policy

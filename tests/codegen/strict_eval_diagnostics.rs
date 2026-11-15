@@ -159,3 +159,35 @@ fn test_strict_settype_object_property_contracts_bundle() {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Array property conversions preserve their container contract and heterogeneous reference replacements.
+#[test]
+fn test_strict_settype_array_property_contracts_bundle() {
+    let source = include_str!("../fixtures/strict/settype_array_properties.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "1,2|A1|3|0W|S:textW|kept|Ptext:kept|C1|Mtext,tail:changed|Vtext,tail|Btext:kept|J{\"values\":[\"text\",\"tail\"],\"named\":{\"other\":\"changed\"},\"optional\":[]}W|Rtext", "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
+/// Default-profile mutation reloads canonical Mixed property references and preserves value copies.
+#[test]
+fn test_managed_mixed_array_mutation_without_strict_bundle() {
+    let source = r#"<?php
+class ManagedMixedArrayReceiver { public mixed $values = [1]; }
+$box = new ManagedMixedArrayReceiver();
+$values =& $box->values; $copy = $box->values; $projection = (array)$box;
+$push = array_push(...); $push($values, 2);
+echo implode(',', $values), '|', implode(',', $copy), '|', implode(',', $box->values), '|', implode(',', $projection['values']);
+"#;
+    for optimization in ["--ir-opt=off", "--ir-opt=on"] {
+        let output = StrictFixture::new(source).capture(&[optimization, "--heap-debug"]);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "1,2|1|1,2|1,2", "{optimization}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{optimization}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}

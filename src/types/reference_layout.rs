@@ -20,6 +20,7 @@ pub(crate) enum CanonicalReferencePayload {
     String,
     NullableInt,
     Object,
+    Array,
 }
 
 /// Selects reviewed declaration layouts without inferring indirection from pointer size.
@@ -33,6 +34,7 @@ pub(crate) fn canonical_property_reference_payload(ty: &PhpType) -> Option<Canon
         PhpType::Str => CanonicalReferencePayload::String,
         PhpType::TaggedScalar => CanonicalReferencePayload::NullableInt,
         PhpType::Object(_) => CanonicalReferencePayload::Object,
+        PhpType::Array(_) | PhpType::AssocArray { .. } => CanonicalReferencePayload::Array,
         _ => return None,
     })
 }
@@ -41,7 +43,8 @@ pub(crate) fn canonical_property_reference_payload(ty: &PhpType) -> Option<Canon
 fn declaration_contract(ty: &PhpType) -> bool {
     match ty {
         PhpType::Mixed | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
-        | PhpType::Str | PhpType::Void | PhpType::Object(_) => true,
+        | PhpType::Str | PhpType::Void | PhpType::Object(_) | PhpType::Array(_)
+        | PhpType::AssocArray { .. } => true,
         PhpType::Union(members) => !members.is_empty() && members.iter().all(declaration_contract),
         _ => false,
     }
@@ -64,7 +67,9 @@ mod tests {
         }
         assert_eq!(canonical_property_reference_payload(&PhpType::Object("NativeObject".into())),
             Some(CanonicalReferencePayload::Object));
-        for ty in [PhpType::Iterable, PhpType::Pointer(None), PhpType::Array(Box::new(PhpType::Int))] {
+        assert_eq!(canonical_property_reference_payload(&PhpType::Array(Box::new(PhpType::Int))),
+            Some(CanonicalReferencePayload::Array));
+        for ty in [PhpType::Iterable, PhpType::Pointer(None)] {
             assert_eq!(canonical_property_reference_payload(&ty), None, "{ty:?}");
         }
     }

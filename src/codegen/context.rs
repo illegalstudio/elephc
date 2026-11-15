@@ -1014,14 +1014,7 @@ impl<'a> FunctionContext<'a> {
     /// Loads the value pointed to by a local ref-cell pointer slot.
     fn load_ref_cell_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let storage_ty = self.local_php_type(slot)?;
-        let payload_ty = self.ref_cell_payload_type(slot)?;
-        self.load_ref_cell_payload_to_result(slot, &payload_ty)?;
-        super::lower_inst::coerce_loaded_local_to_result_type(
-            self,
-            &payload_ty,
-            &storage_ty,
-        )?;
-        Ok(storage_ty)
+        super::lower_inst::load_ref_cell_local_to_result_as(self, slot, &storage_ty)
     }
 
     /// Loads a reference cell's physical payload without coercing it to the logical slot type.

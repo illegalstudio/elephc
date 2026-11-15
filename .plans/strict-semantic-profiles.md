@@ -1076,6 +1076,31 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
   syntax and diff hygiene pass. Arrays/iterables, static and remaining eval/reference
   integration continue before public Casts admission.
 
+### Array property references and mutation receiver reloads
+
+- Extend the shared canonical property classifier to concrete arrays and hashes,
+  including nullable and boxed PHP array/hash unions. Typed promotion transfers
+  the actual container owner and preserves the managed cell and wrapper identity.
+- Generic mutation receiver reloads now reuse the canonical reader already used
+  by EIR reference loads. The deliberately raw reader used for eval identity
+  snapshots retains its separate contract.
+- Serialization, dump and JSON metadata authenticate reviewed boxed unions as
+  well as concrete payloads. Object projection checks that canonical resolution
+  actually changed the payload address before bypassing its existing promotion
+  gate. Raw unions remain ordinary value projections.
+- The native array fixture covers checked conversion, failed replacement,
+  heterogeneous container replacement, explicit aliases, direct property reads,
+  array_push, hash mutation, JSON and independent value snapshots. Projected
+  references follow the changed wrapper child while snapshots preserve COW.
+- Thirty-three focused settype checks, shared layout and receiver reload tests,
+  five-target projection, serialization and JSON metadata checks, seven typed
+  promotion helpers assembled on every target, four native property bundles and
+  a no-profile Mixed callable receiver control pass. Both optimizer modes retain
+  clean heaps. Compiler build, cargo check --tests, architecture828, assembly
+  comments, fixture syntax and diff hygiene pass.
+- Public admission remains the six completed features. Raw Iterable, static and
+  remaining eval/reference boundaries continue before Casts admission.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1176,4 +1201,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 79 | `a1a4296e52` | feat(strict): enable the overflow semantic profile |
 | 80 | `63b866b2a7` | feat(strict): preserve scalar property conversion references |
 | 81 | `94e873a4c5` | feat(strict): preserve nullable property reference contracts |
-| 82 | this commit | feat(strict): preserve object property conversion references |
+| 82 | `e2b20ae08a` | feat(strict): preserve object property conversion references |
+| 83 | this commit | feat(strict): preserve array property conversion references |

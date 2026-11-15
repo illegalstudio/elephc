@@ -613,25 +613,31 @@ that never export the property to eval. A singleton reference projects an
 independent value when neither the native cell nor its PHP wrapper has another
 visible owner.
 The serialization row separately marks eligible exact `mixed` backing storage.
-Projection uses that capability before creating a wrapper; a constrained union
-that also uses boxed storage retains its existing representation until its
-property type sources can accompany the shared reference.
+Projection uses that capability before creating a wrapper. A constrained union
+that also uses boxed storage retains its existing promotion gate. When its
+property type sources already accompany a canonical reference, the projection
+shares that wrapper. It verifies the resolved child address differs from the
+native cell, so a raw boxed union cannot acquire a new wrapper through this path.
 
-Scalar reference readers authenticate a canonical cell through the allocator's
+Reference readers authenticate a canonical cell through the allocator's
 exact live-base index, heap kind `8`, descriptor `7`, and a live kind-`5` wrapper
 with nested tag `7` and reference marker `1`. Raw frames, interior addresses,
 uninitialized cells and raw `Iterable` payloads retain their existing ABI.
 The shape probe returns a borrowed wrapper and runs again on every read rather
 than caching a result across PHP callbacks. Typed scalar and union promotion
 still requires the matching assignment validators and property-source lifecycle.
-JSON and serialization/rendering rows separately mark owned scalar cells eligible
-for that shape check. Borrowed constructor slots have no such flag. These leaf
-walkers preserve their raw payload path and resolve a canonical scalar child as
+JSON and serialization/rendering rows separately mark reviewed owned scalar, object,
+array and constrained-union cells eligible for that shape check. Borrowed constructor
+slots have no such flag. These leaf walkers preserve their raw payload path and resolve a canonical child as
 Mixed, without calls or unrelated register clobbers. Object projections recover
 the original managed cell before testing its visible owners; an interior wrapper
-child address must never be used as a cell header. Shared canonical scalars then
-retain the wrapper, while singleton wrappers copy their PHP value. Raw scalar
-projection never creates a wrapper through this path.
+child address must never be used as a cell header. Shared canonical references then
+retain the wrapper, while singleton wrappers copy their PHP value. Raw constrained
+projection never creates a wrapper through this path. Generic mutation receiver
+reloads use the same canonical-aware reader as EIR reference loads. Referenced
+arrays can therefore split their container during mutation while aliases and
+projected references continue to follow the stable wrapper child; ordinary value
+copies keep their previous container.
 A separated canonical cell contains a new persistent wrapper. Its descriptor
 remains `7`, so flattening the wrapper into a scalar value box would violate the
 physical shape required by scalar readers.

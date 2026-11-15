@@ -4446,9 +4446,8 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType, in
 
 /// Marks owned cells with supported canonical payloads without probing borrowed slot headers.
 fn canonical_property_payload_flag(class: &ClassInfo, index: usize, ty: &PhpType) -> u64 {
-    if class.property_slot_owns_reference(index)
-        && matches!(ty.codegen_repr(), PhpType::Int | PhpType::Bool | PhpType::False
-            | PhpType::Float | PhpType::Str | PhpType::TaggedScalar | PhpType::Object(_))
+    if class.property_slot_owns_reference(index) && ty != &PhpType::Mixed
+        && crate::types::canonical_property_reference_payload(ty).is_some()
     {
         CANONICAL_PROPERTY_PAYLOAD_FLAG
     } else { 0 }

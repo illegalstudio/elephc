@@ -27,22 +27,29 @@ Native reads probe a managed reference's canonical wrapper before using its lega
 payload layout. The current boxed child supplies the PHP tag for the requested
 logical view, including a Mixed read after eval changes a typed parameter's value.
 Raw and headerless references continue to load through their original physical ABI.
-Checked-cast lowering also gives eligible scalar, object, nullable and union user
-properties owned managed cells. The shared `types/reference_layout` classifier
+Checked-cast lowering also gives eligible scalar, object, array, nullable and union
+user properties owned managed cells. The shared `types/reference_layout` classifier
 distinguishes their logical contracts from boxed or inline nullable-int payloads.
-Selecting an integer, float, boolean, string or object reference transfers its raw payload
-into a canonical child while preserving the cell address and collector flags.
+Selecting an integer, float, boolean, string, object or concrete array reference
+transfers its raw payload into a canonical child while preserving the cell address
+and collector flags. Generic PHP array declarations may instead use a boxed
+array/hash union; their canonical child preserves the actual container kind.
 Nullable-int promotion copies both the raw value and its runtime tag before boxing.
 The module explicitly selects native reference validation and declaration callbacks;
 conversion writeback validates the original candidate against the live property
-constraint before publication. Later direct scalar-property writes follow the same
+constraint before publication. Later direct property writes follow the same
 canonical child, keeping existing aliases current. Borrowed constructor cells keep
 their original ABI. Checker reference-place validation authorizes and schedules the
 same managed cells consumed by lowering, including nominal object properties passed
 to a Mixed reference parameter. Property projection and JSON metadata retain the
 logical PHP tag while `CANONICAL_PROPERTY_PAYLOAD_FLAG` authenticates a managed cell
 whose live payload may be boxed. The shared resolver exposes its current child
-before a renderer interprets the value. This machinery supports staged cast integration; it does not
+before a renderer interprets the value. Object projection authenticates that the
+resolved child address differs from the native cell before sharing a constrained
+boxed union; raw unions keep the existing promotion gate. Generic mutation receiver
+reloads use the same canonical reader as explicit EIR reference reads. Ordinary
+value copies remain detached when a referenced array changes through copy-on-write.
+This machinery supports staged cast integration; it does not
 admit the unfinished cast profile at public entry points.
 An owning `LoadRefCellValue` copies a typed parameter's current value into Mixed:
 canonical children are cloned, and raw concrete payloads are boxed once. The copy
