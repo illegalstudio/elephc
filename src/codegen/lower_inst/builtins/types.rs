@@ -699,11 +699,24 @@ pub(crate) fn lower_is_a_relation(
     let object = expect_operand(inst, 0)?;
     let target = expect_operand(inst, 1)?;
     let exclude_self = name == "is_subclass_of";
-    if matches!(ctx.value_php_type(object)?, PhpType::Str)
-        && optional_const_string_operand(ctx, object)?.is_none()
+    if matches!(ctx.value_php_type(object)?, PhpType::Str) {
+        match optional_const_string_operand(ctx, target)? {
+            Some(target_class) if optional_const_string_operand(ctx, object)?.is_none() => {
+                return class_string_relation::lower(ctx, inst, object, &target_class, exclude_self);
+            }
+            _ => {}
+        }
+    }
+    // A target known only at runtime (`is_a($name, $name, true)`) cannot be folded: the static
+    // walk below needs a literal target and answered `false` for every such call.
+    if matches!(ctx.value_php_type(target)?, PhpType::Str)
+        && optional_const_string_operand(ctx, target)?.is_none()
     {
-        if let Some(target_class) = optional_const_string_operand(ctx, target)? {
-            return class_string_relation::lower(ctx, inst, object, &target_class, exclude_self);
+        if matches!(
+            ctx.value_php_type(object)?,
+            PhpType::Str | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+        ) {
+            return class_string_relation::lower_runtime_target(ctx, inst, object, target, exclude_self);
         }
     }
     if matches!(ctx.value_php_type(object)?, PhpType::Mixed | PhpType::Union(_)) {

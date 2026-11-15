@@ -28,11 +28,14 @@
 //!   but `"0.0"` and `" "` are true, and a hand-rolled test gets that wrong.
 //! - A name that resolves to nothing answers `false`, INCLUDING against itself: PHP looks the
 //!   subject up before comparing, so `is_a("Ghost", "Ghost", true)` is false.
-//! - Still `false`, and deliberately: a NON-LITERAL name. That needs a name-keyed table the
-//!   emitted program can consult at runtime, which is the second half of #1113 and what
-//!   `ReflectionAttribute::IS_INSTANCEOF` actually needs.
+//! - A NON-LITERAL target (`is_a($name, $name, true)`) used to answer `false` for every
+//!   subject: the static walk needs a literal target. The subject now selects the ancestor list
+//!   of one compiled class or interface (by name, or by an object's runtime class id), and the
+//!   target is compared with it at runtime.
+//! - A class only an autoloader could load, and that the program never names, is not compiled,
+//!   so a runtime name cannot reach it: the same AOT limit as `class_exists($name)`.
 
-use crate::support::compile_and_run;
+use crate::support::{compile_and_run, compile_and_run_files_per_argv, compile_and_run_per_argv};
 
 /// Boxed subjects use runtime class and interface metadata without requiring an eval context.
 #[test]
@@ -257,4 +260,120 @@ echo is_subclass_of("Derived", "Base", pick(200, "1")) ? "y" : "n";
     );
 
     assert_eq!(out, "nyyny");
+}
+
+/// A target class name known only at runtime: `is_a($name, $name, true)` was `false` for every
+/// subject. Covers a name against itself, parents, interfaces through an interface parent,
+/// builtin exceptions, case-insensitive and backslash-rooted names, unknown names, and the
+/// `$allow_string` flag, in a namespace. Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_runtime_target_name() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+namespace App;
+interface Root {}
+interface Leaf extends Root {}
+class Base implements Leaf {}
+class Child extends Base {}
+class Failure extends \RuntimeException {}
+function rel(string $sub, string $target, bool $flag): string {
+    return (is_a($sub, $target, true) ? "y" : "n") . (is_subclass_of($sub, $target) ? "y" : "n")
+        . (is_a($sub, $target, $flag) ? "y" : "n") . (is_subclass_of($sub, $target, $flag) ? "y" : "n");
+}
+$sub = $argv[1] ?? "App\\Child";
+$target = $argv[2] ?? "App\\Base";
+echo rel($sub, $sub, true), " ", rel($sub, $target, true), " ", rel($sub, $target, false), " ", rel($target, $sub, true), "\n";
+foreach ([["app\\child", "\\APP\\ROOT"], ["\\App\\Leaf", "App\\Root"], ["App\\Root", "App\\Root"], ["Ghost", "Ghost"],
+          ["App\\Failure", "Exception"], ["App\\Failure", "Throwable"], ["RuntimeException", "App\\Failure"]] as [$s, $t]) {
+    echo rel($s, $t, true), " ";
+}
+echo "\n";
+"#,
+        &[&[], &["App\\Base", "App\\Child"], &["App\\Root", "App\\Leaf"], &["Nope", "App\\Base"]],
+    );
+    let catalog = "yyyy yyyy ynyn nnnn yyyy yyyy nnnn \n";
+    assert_eq!(out, [
+        format!("ynyn yyyy yynn nnnn\n{catalog}"),
+        format!("ynyn nnnn nnnn yyyy\n{catalog}"),
+        format!("ynyn nnnn nnnn yyyy\n{catalog}"),
+        format!("nnnn nnnn nnnn nnnn\n{catalog}"),
+    ]);
+}
+
+/// An object subject with a runtime target answers from the object's runtime class, not its
+/// static type (`Square $o` holding a `Cube`), and ignores `$allow_string`. A Mixed subject is
+/// matched as an object or as a class name by its runtime tag, and any other value is `false`.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_object_and_mixed_subject_runtime_target() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+interface Shape {}
+class Square implements Shape {}
+class Cube extends Square {}
+function probe(Square $o, string $target): string {
+    return (is_a($o, $target) ? "y" : "n") . (is_subclass_of($o, $target) ? "y" : "n") . (is_a($o, $target, false) ? "y" : "n");
+}
+$target = $argv[1] ?? "Square";
+echo probe(new Cube(), $target), " ", probe(new Square(), $target), " ", probe(new Cube(), "shape"), " ", probe(new Square(), "Nope"), "\n";
+$values = [$argc > 9 ? 1 : new Cube(), "Cube", 7, null];
+foreach ($values as $value) {
+    echo is_a($value, $target, true) ? "y" : "n", is_subclass_of($value, $target) ? "y" : "n", is_a($value, $target) ? "y" : "n";
+}
+echo "\n";
+"#,
+        &[&[], &["Cube"], &["Shape"], &["stdClass"]],
+    );
+    assert_eq!(out, [
+        "yyy yny yyy nnn\nyyyyynnnnnnn\n",
+        "yny nnn yyy nnn\nynyynnnnnnnn\n",
+        "yyy yyy yyy nnn\nyyyyynnnnnnn\n",
+        "nnn nnn yyy nnn\nnnnnnnnnnnnn\n",
+    ]);
+}
+
+/// Classes loaded through a PSR-4 autoloader relate to a runtime name once the program names
+/// them. Expected output measured with php 8.5.12 and an equivalent `spl_autoload_register`.
+#[test]
+fn test_is_a_runtime_target_name_autoloaded_classes() {
+    let out = compile_and_run_files_per_argv(
+        &[
+            ("composer.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
+            ("src/Shapes/Shape.php", "<?php\nnamespace App\\Shapes;\ninterface Shape {}\n"),
+            ("src/Shapes/Square.php", "<?php\nnamespace App\\Shapes;\nclass Square implements Shape {}\n"),
+            ("src/Shapes/Cube.php", "<?php\nnamespace App\\Shapes;\nclass Cube extends Square {}\n"),
+            ("main.php", r#"<?php
+$known = [App\Shapes\Cube::class];
+$n = $argv[1] ?? "App\\Shapes\\Cube";
+$t = $argv[2] ?? "App\\Shapes\\Shape";
+var_dump(is_a($n, $n, true), is_a($n, $t, true), is_subclass_of($n, $t), is_subclass_of($t, $n));
+"#),
+        ],
+        "main.php",
+        &[&[], &["App\\Shapes\\Square", "App\\Shapes\\Cube"]],
+    );
+    assert_eq!(out, [
+        "bool(true)\nbool(true)\nbool(true)\nbool(false)\n",
+        "bool(true)\nbool(false)\nbool(false)\nbool(true)\n",
+    ]);
+}
+
+/// With eval in the program, a compiled subject still answers from compiled metadata, and an
+/// eval-declared class (by name, as an object, or boxed in a Mixed) asks the eval bridge, which
+/// knows the eval class itself. Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_runtime_target_name_with_eval_classes() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+class Bar extends Foo {}
+eval('class Dyn extends Bar {}');
+$n = $argv[1] ?? 'Foo';
+$o = $argc > 9 ? 1 : new Dyn();
+echo is_a('Bar', $n, true) ? "y" : "n", is_a($argv[2] ?? 'Bar', $n, true) ? "y" : "n", is_subclass_of(new Bar(), $n) ? "y" : "n";
+echo is_a('Dyn', $n, true) ? "y" : "n", is_subclass_of('Dyn', $n) ? "y" : "n", is_a(new Dyn(), $n) ? "y" : "n", is_a($o, $n) ? "y" : "n", is_subclass_of($o, $n) ? "y" : "n", "\n";
+"#,
+        &[&[], &["Dyn"], &["Bar"]],
+    );
+    assert_eq!(out, ["yyyyyyyy\n", "nnnynyyn\n", "yynyyyyy\n"]);
 }
