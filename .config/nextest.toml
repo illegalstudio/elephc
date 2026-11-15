@@ -167,13 +167,16 @@ filter = 'binary(codegen_tests) and test(~codegen::gmp_eval)'
 slow-timeout = { period = "60s", terminate-after = 10 }
 
 # REPL integration probes compile real dynamic-eval hosts, including multiple cache variants.
+# The PHP 8.6 catalog grew those hosts enough that three separate probes hit the former
+# 240s budget on both Linux x86_64 and macOS runners. Give the family a bounded ten-period
+# budget so a loaded shard cannot turn a passing probe into a timeout.
 [[profile.default.overrides]]
 filter = 'binary(codegen_tests) and test(~codegen::repl)'
-slow-timeout = { period = "60s", terminate-after = 4 }
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 [[profile.ci.overrides]]
 filter = 'binary(codegen_tests) and test(~codegen::repl)'
-slow-timeout = { period = "60s", terminate-after = 4 }
+slow-timeout = { period = "60s", terminate-after = 10 }
 
 # Core eval GC fixtures use opaque eval and link Magician just like codegen::eval.
 # Collection comparisons and heap-debug/tagged controls often compile twice.
