@@ -145,6 +145,21 @@ final class C extends P { use T; #[\Override] public function baz(): int { retur
     );
 }
 
+/// An alias of a trait method that the trait implements itself is concrete, even when the
+/// trait also uses a trait declaring that method abstract: `#[\Override]` on a class method of
+/// the alias name has no target, as in PHP.
+#[test]
+fn test_error_override_on_alias_of_trait_implemented_requirement() {
+    expect_error(
+        r#"<?php
+trait N { abstract public function foo(): string; }
+trait A { use N; public function foo(): string { return "A::foo"; } }
+final class C { use A { foo as bar; } #[\Override] public function bar(): string { return "C::bar"; } }
+"#,
+        "C::bar() has #[\\Override] attribute, but no matching parent method was found",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]

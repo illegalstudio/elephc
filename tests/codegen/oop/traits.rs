@@ -258,3 +258,22 @@ fn test_trait_requirements_of_shared_nested_traits_are_walked_once() {
     let out = compile_and_run(&source);
     assert_eq!(out, "need\n");
 }
+
+/// A trait that implements a method a used trait declares abstract satisfies it for its users:
+/// aliasing that method gives a concrete alias. An alias taken inside the trait's own `use`
+/// block, from the abstract method itself, stays a requirement, so a class method of that name
+/// may carry `#[\Override]`.
+#[test]
+fn test_trait_aliases_follow_the_abstractness_of_the_selected_method() {
+    let out = compile_and_run(
+        r#"<?php
+trait N { abstract public function foo(): string; }
+trait A { use N; public function foo(): string { return "A::foo"; } }
+trait B { use N { foo as bar; } public function foo(): string { return "B::foo"; } }
+final class C { use A { foo as bar; } }
+final class D { use B; #[\Override] public function bar(): string { return "D::bar"; } }
+echo (new C())->bar(), (new C())->foo(), "|", (new D())->bar(), (new D())->foo(), "\n";
+"#,
+    );
+    assert_eq!(out, "A::fooA::foo|D::barB::foo\n");
+}

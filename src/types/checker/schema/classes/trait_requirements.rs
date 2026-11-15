@@ -15,6 +15,8 @@
 //!   requirement found no target.
 //! - Requirements are collected through nested trait uses, by trait name, case-insensitively,
 //!   and include the `as` aliases of abstract trait methods, which flattening makes abstract too.
+//!   A requirement a trait implements itself is satisfied for that trait's users, and an alias
+//!   of a method its trait implements is concrete, not required.
 //!   Each trait's set is memoized once complete, so traits shared along many `use` paths are not
 //!   walked again per path.
 //! - Methods the class body declares itself are recorded too: a requirement satisfied by an
@@ -52,10 +54,20 @@ impl TraitMethodRequirements {
     }
 }
 
-/// One trait declaration's abstract method keys and the trait uses it declares itself.
+/// One trait declaration's abstract and concrete method keys and the trait uses it declares
+/// itself.
 struct TraitShape {
     abstract_methods: HashSet<String>,
+    concrete_methods: HashSet<String>,
     uses: Vec<TraitUse>,
+}
+
+/// What a trait (or a set of `use` blocks) brings into its user once flattened: the method keys
+/// still abstract, and those it implements. Aliases follow the method they select.
+#[derive(Debug, Clone, Default)]
+struct TraitSummary {
+    required: HashSet<String>,
+    provided: HashSet<String>,
 }
 
 /// Collects the trait requirements of every class that uses a trait, keyed by class name.
@@ -76,8 +88,8 @@ pub(crate) fn collect_trait_method_requirements(
 /// nested traits stays linear instead of exponential.
 struct RequirementWalk<'a> {
     traits: &'a HashMap<String, TraitShape>,
-    /// Completed requirement sets by trait key.
-    done: HashMap<String, HashSet<String>>,
+    /// Completed summaries by trait key.
+    done: HashMap<String, TraitSummary>,
     /// Traits on the current path, only to break use cycles (flattening reports those).
     visiting: HashSet<String>,
 }
@@ -87,8 +99,10 @@ fn collect_trait_shapes(program: &[Stmt], traits: &mut HashMap<String, TraitShap
     for statement in program {
         match &statement.kind {
             StmtKind::TraitDecl { name, trait_uses, methods, .. } => {
+                let (abstract_methods, concrete_methods) = method_keys_by_abstractness(methods);
                 traits.insert(php_symbol_key(name), TraitShape {
-                    abstract_methods: abstract_method_keys(methods),
+                    abstract_methods,
+                    concrete_methods,
                     uses: trait_uses.clone(),
                 });
             }
@@ -111,7 +125,7 @@ fn collect_class_requirements(
                 if trait_uses.is_empty() || !classes.iter().any(|class| class.name == *name) {
                     continue;
                 }
-                let required = requirements_of_uses(trait_uses, walk);
+                let required = summary_of_uses(trait_uses, walk).required;
                 if required.is_empty() {
                     continue;
                 }
@@ -126,37 +140,42 @@ fn collect_class_requirements(
     }
 }
 
-/// Returns the abstract method keys `trait_key` brings into a user: its own, those of the traits
-/// it uses, and the aliases its own `use` blocks give to them. Each trait is computed once and
-/// memoized in `walk.done`; `walk.visiting` only breaks use cycles.
-fn trait_requirements(trait_key: &str, walk: &mut RequirementWalk<'_>) -> HashSet<String> {
-    if let Some(required) = walk.done.get(trait_key) {
-        return required.clone();
+/// Returns what `trait_key` brings into a user: its own abstract methods plus the requirements
+/// of the traits it uses that it does not implement itself (`trait A { use N; function foo() }`
+/// leaves `N::foo` satisfied), and its own concrete methods plus those it imports. Each trait is
+/// computed once and memoized in `walk.done`; `walk.visiting` only breaks use cycles.
+fn trait_summary(trait_key: &str, walk: &mut RequirementWalk<'_>) -> TraitSummary {
+    if let Some(summary) = walk.done.get(trait_key) {
+        return summary.clone();
     }
     let traits = walk.traits;
-    let Some(shape) = traits.get(trait_key) else { return HashSet::new() };
+    let Some(shape) = traits.get(trait_key) else { return TraitSummary::default() };
     if !walk.visiting.insert(trait_key.to_string()) {
-        return HashSet::new();
+        return TraitSummary::default();
     }
+    let used = summary_of_uses(&shape.uses, walk);
     let mut required = shape.abstract_methods.clone();
-    required.extend(requirements_of_uses(&shape.uses, walk));
+    required.extend(used.required.into_iter().filter(|key| !shape.concrete_methods.contains(key)));
+    let mut provided = shape.concrete_methods.clone();
+    provided.extend(used.provided.into_iter().filter(|key| !shape.abstract_methods.contains(key)));
+    let summary = TraitSummary { required, provided };
     walk.visiting.remove(trait_key);
-    walk.done.insert(trait_key.to_string(), required.clone());
-    required
+    walk.done.insert(trait_key.to_string(), summary.clone());
+    summary
 }
 
-/// Returns the abstract method keys that `uses` bring into their user. An `as` alias of an
-/// abstract trait method is itself abstract once flattened (`use T { foo as bar; }` requires
-/// `bar` too), so the alias joins the requirements.
-fn requirements_of_uses(uses: &[TraitUse], walk: &mut RequirementWalk<'_>) -> HashSet<String> {
-    let mut required = HashSet::new();
+/// Returns what `uses` bring into their user. An `as` alias takes the abstractness of the
+/// method it selects (`use T { foo as bar; }` requires `bar` only while `T::foo` is still
+/// abstract).
+fn summary_of_uses(uses: &[TraitUse], walk: &mut RequirementWalk<'_>) -> TraitSummary {
+    let mut summary = TraitSummary::default();
     for use_decl in uses {
-        let per_trait: HashMap<String, HashSet<String>> = use_decl
+        let per_trait: HashMap<String, TraitSummary> = use_decl
             .trait_names
             .iter()
             .map(|name| {
                 let key = php_symbol_key(name.as_str());
-                let methods = trait_requirements(&key, walk);
+                let methods = trait_summary(&key, walk);
                 (key, methods)
             })
             .collect();
@@ -165,28 +184,30 @@ fn requirements_of_uses(uses: &[TraitUse], walk: &mut RequirementWalk<'_>) -> Ha
                 continue;
             };
             let method_key = php_symbol_key(method);
-            let aliases_requirement = match trait_name {
-                Some(name) => per_trait
-                    .get(&php_symbol_key(name.as_str()))
-                    .is_some_and(|methods| methods.contains(&method_key)),
-                None => per_trait.values().any(|methods| methods.contains(&method_key)),
+            let selected: Vec<&TraitSummary> = match trait_name {
+                Some(name) => per_trait.get(&php_symbol_key(name.as_str())).into_iter().collect(),
+                None => per_trait.values().collect(),
             };
-            if aliases_requirement {
-                required.insert(php_symbol_key(alias));
+            if selected.iter().any(|methods| methods.provided.contains(&method_key)) {
+                summary.provided.insert(php_symbol_key(alias));
+            } else if selected.iter().any(|methods| methods.required.contains(&method_key)) {
+                summary.required.insert(php_symbol_key(alias));
             }
         }
-        required.extend(per_trait.into_values().flatten());
+        for methods in per_trait.into_values() {
+            summary.required.extend(methods.required);
+            summary.provided.extend(methods.provided);
+        }
     }
-    required
+    summary
 }
 
-/// Returns the keys of the abstract methods among `methods`.
-fn abstract_method_keys(methods: &[ClassMethod]) -> HashSet<String> {
-    methods
-        .iter()
-        .filter(|method| method.is_abstract)
-        .map(|method| php_symbol_key(&method.name))
-        .collect()
+/// Splits the keys of `methods` into the abstract ones and the concrete ones.
+fn method_keys_by_abstractness(methods: &[ClassMethod]) -> (HashSet<String>, HashSet<String>) {
+    let (abstract_methods, concrete_methods): (Vec<_>, Vec<_>) =
+        methods.iter().partition(|method| method.is_abstract);
+    let keys = |methods: Vec<&ClassMethod>| methods.into_iter().map(|method| php_symbol_key(&method.name)).collect();
+    (keys(abstract_methods), keys(concrete_methods))
 }
 
 /// Checks that an inherited implementation is compatible with the trait requirement it
