@@ -326,6 +326,24 @@ stopping the listener and the key never crosses the wire. Only loopback peers
 are accepted. The existing Unix `--attach <socket>` path remains available.
 `--attach-tcp` is an attach client: it does not compile or launch the debuggee.
 
+### Remote attach
+
+By default the TCP attach listener binds loopback only. A debug build compiled
+with `--allow-remote-debug` may bind a non-loopback address instead:
+
+```bash
+elephc --debug --allow-remote-debug app.php
+ELEPHC_DEBUG_ATTACH_ADDR=0.0.0.0:41237 \
+ELEPHC_DEBUG_ATTACH_KEY=/tmp/elephc-key \
+  ./app
+elephc debug --attach-tcp 203.0.113.10:41237 --key elephc-key
+```
+
+The mode-0600 key and mutual HMAC-SHA256 challenge remain mandatory; a wrong key
+is rejected without stopping the listener. DAP traffic itself is not encrypted,
+so prefer an SSH tunnel (`ssh -L 41237:127.0.0.1:41237 host`) and a loopback bind
+unless the network path is already trusted.
+
 ## Call capture and traces
 
 `elephc monitor` owns call values; there is no separate `trace` command:

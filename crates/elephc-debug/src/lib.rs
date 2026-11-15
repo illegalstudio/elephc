@@ -553,6 +553,9 @@ struct Metadata {
     /// `--allow-eval`: the eval hook table and Magician bridge are present.
     #[serde(default)]
     allow_eval: bool,
+    /// `--allow-remote-debug`: the TCP attach listener may bind non-loopback.
+    #[serde(default)]
+    allow_remote_debug: bool,
 }
 
 #[derive(Deserialize)]
@@ -852,6 +855,8 @@ struct Debugger {
     optimized: bool,
     /// `--allow-eval`: arbitrary Magician evaluation is enabled.
     allow_eval: bool,
+    /// `--allow-remote-debug`: the TCP attach listener may bind non-loopback.
+    allow_remote_debug: bool,
 }
 
 impl Debugger {
@@ -895,6 +900,7 @@ impl Debugger {
             .collect();
         let optimized = metadata.optimized;
         let allow_eval = metadata.allow_eval;
+        let allow_remote_debug = metadata.allow_remote_debug;
         Ok(Self {
             sources,
             source_hashes,
@@ -925,6 +931,7 @@ impl Debugger {
             next_fiber_thread: 2,
             optimized,
             allow_eval,
+            allow_remote_debug,
         })
     }
 
@@ -1819,7 +1826,11 @@ pub extern "C" fn elephc_debug_boot(
                 .ok()
                 .filter(|path| !path.is_empty())
             {
-                Some(key_path) => dap::listen_tcp_for_client(address, &key_path),
+                Some(key_path) => dap::listen_tcp_for_client(
+                    address,
+                    &key_path,
+                    debugger.allow_remote_debug,
+                ),
                 None => Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "ELEPHC_DEBUG_ATTACH_KEY must name the attach key file",

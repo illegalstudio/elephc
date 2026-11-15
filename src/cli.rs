@@ -189,6 +189,8 @@ Diagnostics:
                           optimized-out locals are reported as <optimized out>
   --allow-eval            Debug-only: enable arbitrary Magician evaluation in the
                           terminal/DAP debugger (links the eval bridge)
+  --allow-remote-debug    Debug-only: let the TCP attach listener bind a non-loopback
+                          address (the HMAC key handshake is still required)
   --debug-info            Embed DWARF line info for debuggers
   --keep-symbols          Keep the symbol table (stripped by default; for profilers)
 
@@ -243,6 +245,9 @@ pub(crate) struct CliConfig {
     /// Debug-only: link the Magician eval bridge and publish the debugger eval
     /// hook table, enabling arbitrary expression evaluation at a stop.
     pub(crate) allow_eval: bool,
+    /// Debug-only: permit the TCP attach listener to bind a non-loopback address.
+    /// The HMAC key handshake is still mandatory.
+    pub(crate) allow_remote_debug: bool,
     /// Keep the symbol table in the linked executable; it is stripped by default.
     pub(crate) keep_symbols: bool,
     pub(crate) regalloc_linear: bool,
@@ -410,6 +415,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut debug_build = false;
     let mut debug_optimized = false;
     let mut allow_eval = false;
+    let mut allow_remote_debug = false;
     let mut keep_symbols = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
@@ -532,6 +538,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             debug_optimized = true;
         } else if arg == "--allow-eval" {
             allow_eval = true;
+        } else if arg == "--allow-remote-debug" {
+            allow_remote_debug = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
         } else if arg == "--keep-symbols" {
@@ -699,8 +707,14 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if allow_eval && !debug_build {
         fail("--allow-eval requires --debug or --debug-optimized: the eval hooks live in the debug runtime");
     }
+    if allow_remote_debug && !debug_build {
+        fail("--allow-remote-debug requires --debug or --debug-optimized");
+    }
     if allow_eval && target.is_ios() {
         fail("--allow-eval is not supported for iOS: interactive debug builds are compile-only");
+    }
+    if allow_remote_debug && target.is_ios() {
+        fail("--allow-remote-debug is not supported for iOS: there is no attachable process");
     }
     if debug_build {
         // An iOS library is the documented compile-only form: it carries metadata
@@ -776,6 +790,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         debug_build,
         debug_optimized,
         allow_eval,
+        allow_remote_debug,
         keep_symbols,
         regalloc_linear,
         ir_opt,
@@ -1247,6 +1262,17 @@ mod tests {
         assert!(
             evaluated.with_crates.contains("eval"),
             "--allow-eval must force the Magician bridge"
+        );
+
+        let remote = compile_config(&[
+            "elephc".to_string(),
+            "--debug".to_string(),
+            "--allow-remote-debug".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(
+            remote.allow_remote_debug,
+            "--allow-remote-debug must record the opt-in"
         );
 
         let info = compile_config(&[

@@ -51,6 +51,7 @@ pub(super) struct BackendInputs<'a> {
     pub(super) debug_build: bool,
     pub(super) debug_optimized: bool,
     pub(super) allow_eval: bool,
+    pub(super) allow_remote_debug: bool,
     pub(super) keep_symbols: bool,
     pub(super) output_paths: &'a OutputPaths,
     pub(super) emit_source_map: bool,
@@ -104,6 +105,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         debug_build,
         debug_optimized,
         allow_eval,
+        allow_remote_debug,
         keep_symbols,
         output_paths,
         emit_source_map,
@@ -266,6 +268,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
             Path::new(filename),
             debug_optimized,
             allow_eval,
+            allow_remote_debug,
         ) {
             Ok(json) => Some(json),
             Err(err) => {

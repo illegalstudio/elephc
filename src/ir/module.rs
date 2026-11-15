@@ -172,6 +172,8 @@ pub struct Module {
     /// The debugger may evaluate arbitrary Magician fragments against a snapshot
     /// of the stopped frame. Codegen emits the hook table and eval wrappers.
     pub allow_eval: bool,
+    /// The TCP attach listener may bind a non-loopback address when a key is set.
+    pub allow_remote_debug: bool,
     /// Generated `clone()` property-override applicators, sorted by class id then scope id.
     pub clone_override_applicators: Vec<CloneOverrideApplicator>,
 }
@@ -229,6 +231,7 @@ impl Module {
             web_application: false,
             debug_optimized: false,
             allow_eval: false,
+            allow_remote_debug: false,
             clone_override_applicators: Vec::new(),
         }
     }

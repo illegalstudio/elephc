@@ -150,6 +150,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         debug_build,
         debug_optimized,
         allow_eval,
+        allow_remote_debug,
         keep_symbols,
         regalloc_linear,
         ir_opt,
@@ -1185,6 +1186,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     ir_module.web_application = web_application;
     ir_module.debug_optimized = debug_optimized;
     ir_module.allow_eval = allow_eval;
+    ir_module.allow_remote_debug = allow_remote_debug;
     if allow_eval {
         // Linking the Magician archive alone is not enough: the eval runtime
         // surface, catalog inventory helper and native wrappers are gated behind
@@ -1259,6 +1261,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         debug_build,
         debug_optimized,
         allow_eval,
+        allow_remote_debug,
         keep_symbols,
         output_paths: &output_paths,
         emit_source_map,

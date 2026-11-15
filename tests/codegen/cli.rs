@@ -4154,6 +4154,103 @@ fn test_cli_debug_tcp_attach_rejects_wrong_key_then_accepts_correct_key() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `--allow-remote-debug` lets the TCP attach listener bind a
+/// non-loopback address while still requiring the mode-0600 key handshake.
+#[test]
+fn test_cli_debug_remote_attach_opt_in() {
+    let dir = make_cli_test_dir("elephc_cli_debug_remote_attach");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfunction add(int $a, int $b): int {\n    return $a + $b;\n}\necho add(2, 3), \"\\n\";\n",
+    )
+    .expect("write remote attach fixture");
+    let compile = elephc_cli_command(&dir)
+        .args(["--debug", "--allow-remote-debug", "main.php"])
+        .output()
+        .expect("compile remote attach fixture");
+    assert!(
+        compile.status.success(),
+        "remote attach fixture failed to compile: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("main.edbg.json")).expect("remote attach metadata"),
+    )
+    .expect("valid remote attach metadata");
+    assert_eq!(metadata["allow_remote_debug"], true, "{metadata}");
+
+    let key = dir.join("attach.key");
+    let address_file = dir.join("attach.key.addr");
+    let mut debuggee = DebuggeeGuard {
+        child: std::process::Command::new(dir.join("main"))
+            .env("ELEPHC_DEBUG_DAP", "1")
+            .env("ELEPHC_DEBUG_ATTACH_ADDR", "0.0.0.0:0")
+            .env("ELEPHC_DEBUG_ATTACH_KEY", &key)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn remote attach debuggee"),
+    };
+    for _ in 0..400 {
+        if address_file.exists() {
+            break;
+        }
+        if let Some(status) = debuggee.child.try_wait().expect("poll remote attach debuggee") {
+            panic!("remote attach debuggee exited before listening: {status}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let bound = fs::read_to_string(&address_file)
+        .expect("remote attach address file")
+        .trim()
+        .to_string();
+    let port = bound.rsplit_once(':').expect("remote attach port").1;
+    let address = format!("127.0.0.1:{port}");
+
+    let mut client = DapClient::spawn(elephc_cli_command(&dir).args([
+        "debug",
+        "--attach-tcp",
+        &address,
+        "--key",
+        "attach.key",
+    ]));
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main", "stopOnEntry": true})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    let entry = client.event("stopped");
+    assert_eq!(entry["body"]["reason"], "entry", "{entry}");
+    let seq = client.send("continue", None);
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("exited");
+    client.event("terminated");
+    let status = client.child.wait().expect("wait remote attach adapter");
+    assert!(status.success(), "remote attach adapter failed");
+    assert!(
+        client.program_output().contains("5"),
+        "remote attach program output missing: {:?}",
+        client.program_output()
+    );
+    let status = debuggee.child.wait().expect("wait remote attach debuggee");
+    assert!(status.success(), "remote attach debuggee failed");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `elephc_break()` stops at the caller's source line in a DAP session
 /// without a line breakpoint, and that the helper frame itself is transparent.
 #[test]

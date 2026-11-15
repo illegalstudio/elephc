@@ -303,9 +303,10 @@ the process and the entry point.
 
 - `--debug` is visibly a debug build; warn at link time and document the risk.
 - Launch uses an inherited socketpair; no listener.
-- Attach binds loopback only. Remote attach requires the build key (reuse the
-  `elephc-probe` HMAC handshake) plus an explicit `--allow-remote-debug`; no
-  environment variable turns a debug server on.
+- Attach binds loopback only by default. A build compiled with
+  `--allow-remote-debug` may bind a non-loopback address; the build key (reuse
+  the `elephc-probe` HMAC handshake) remains mandatory. DAP traffic is not
+  encrypted, so an SSH tunnel is the preferred remote path.
 - No arbitrary `evaluate` by default; opt-in Magician evaluation, debug builds
   only.
 - Redact values in logs/traces by default; full capture is explicit.

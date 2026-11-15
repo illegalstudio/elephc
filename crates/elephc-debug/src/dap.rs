@@ -2222,7 +2222,11 @@ fn remove_tcp_attach_files(key_path: &str) {
 /// listener keeps running, so an operator can retry with the right key. The
 /// handshake is mutual: the server proves the key first, then the client proves
 /// it; the key itself never crosses the wire.
-pub(crate) fn listen_tcp_for_client(addr: &str, key_path: &str) -> std::io::Result<DapConnection> {
+pub(crate) fn listen_tcp_for_client(
+    addr: &str,
+    key_path: &str,
+    allow_remote: bool,
+) -> std::io::Result<DapConnection> {
     if key_path.is_empty() {
         return Err(IoError::new(
             ErrorKind::InvalidInput,
@@ -2235,10 +2239,10 @@ pub(crate) fn listen_tcp_for_client(addr: &str, key_path: &str) -> std::io::Resu
             format!("attach address '{addr}' must be IP:PORT"),
         )
     })?;
-    if !requested.ip().is_loopback() {
+    if !requested.ip().is_loopback() && !allow_remote {
         return Err(IoError::new(
             ErrorKind::InvalidInput,
-            "TCP attach only listens on a loopback address",
+            "TCP attach only listens on a loopback address; rebuild with --allow-remote-debug",
         ));
     }
     let key = random_bytes::<32>()?;
@@ -2279,7 +2283,7 @@ pub(crate) fn listen_tcp_for_client(addr: &str, key_path: &str) -> std::io::Resu
                 return Err(error);
             }
         };
-        if !peer.ip().is_loopback() {
+        if !peer.ip().is_loopback() && !allow_remote {
             continue;
         }
         let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
@@ -2532,7 +2536,7 @@ mod tests {
         let key_path_text = key_path.to_str().expect("key path").to_string();
         let thread_key = key_path_text.clone();
         let handle = std::thread::spawn(move || {
-            listen_tcp_for_client("127.0.0.1:0", &thread_key)
+            listen_tcp_for_client("127.0.0.1:0", &thread_key, false)
         });
         let address_path = format!("{key_path_text}.addr");
         for _ in 0..200 {
@@ -2560,6 +2564,55 @@ mod tests {
         assert!(!std::path::Path::new(&key_path_text).exists());
         assert!(!std::path::Path::new(&address_path).exists());
         assert!(!std::path::Path::new(&format!("{key_path_text}.pid")).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Verifies a non-loopback bind is refused unless the build opted in, and
+    /// that the opt-in listener still requires the HMAC key.
+    #[test]
+    fn tcp_attach_non_loopback_requires_opt_in() {
+        let dir = std::env::temp_dir().join(format!(
+            "elephc-debug-tcp-remote-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create remote TCP temp dir");
+        let key_path = dir.join("attach.key");
+        let key_path_text = key_path.to_str().expect("key path").to_string();
+        let refused = match listen_tcp_for_client("0.0.0.0:0", &key_path_text, false) {
+            Ok(_) => panic!("non-loopback bind must be refused without opt-in"),
+            Err(error) => error,
+        };
+        assert!(
+            refused.to_string().contains("--allow-remote-debug"),
+            "{refused}"
+        );
+        assert!(!key_path.exists(), "refused listener must not write a key");
+
+        let thread_key = key_path_text.clone();
+        let handle = std::thread::spawn(move || {
+            listen_tcp_for_client("0.0.0.0:0", &thread_key, true)
+        });
+        let address_path = format!("{key_path_text}.addr");
+        for _ in 0..200 {
+            if std::path::Path::new(&address_path).exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let bound = std::fs::read_to_string(&address_path)
+            .expect("remote TCP attach address file")
+            .trim()
+            .to_string();
+        let port = bound.rsplit_once(':').expect("bound port").1;
+        let local = format!("127.0.0.1:{port}");
+        let key = test_key(&std::fs::read_to_string(&key_path).expect("attach key file"));
+        assert!(
+            tcp_attach_probe(&local, &key).expect("remote opt-in probe"),
+            "the opt-in listener must still accept the correct key"
+        );
+        let connection = handle.join().expect("remote TCP attach thread").expect("listener");
+        drop(connection);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
