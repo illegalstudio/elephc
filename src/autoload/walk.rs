@@ -17,13 +17,61 @@ use crate::parser::ast::{
 };
 
 /// Stable l-value shapes whose deterministic class-string assignments can seed dynamic `new`.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+///
+/// An element target shares its array's target and carries its own hash: every entry of an
+/// assigned array literal is a key of the facts map, so cloning, hashing and dropping the whole
+/// chain per entry was most of `update_dynamic_class_target_default` (about 1 000 samples of a
+/// sampled one-core Symfony demo build).
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum DynamicClassTarget {
     Variable(String),
     ArrayAccess {
-        array: Box<DynamicClassTarget>,
+        /// `element_hash` of the array's digest and the index; compared first, so most unequal
+        /// targets differ here.
+        hash: u64,
         index: DynamicClassIndex,
+        array: std::sync::Arc<DynamicClassTarget>,
     },
+}
+
+impl std::hash::Hash for DynamicClassTarget {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.digest().hash(state);
+    }
+}
+
+impl DynamicClassTarget {
+    /// The element `index` of the array `array` targets.
+    fn element(array: DynamicClassTarget, index: DynamicClassIndex) -> Self {
+        Self::ArrayAccess {
+            hash: Self::element_hash(array.digest(), &index),
+            index,
+            array: std::sync::Arc::new(array),
+        }
+    }
+
+    /// A hash of the whole target, computed in O(1): equal targets have equal digests.
+    fn digest(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        match self {
+            Self::Variable(name) => {
+                let mut hasher = rustc_hash::FxHasher::default();
+                0u8.hash(&mut hasher);
+                name.hash(&mut hasher);
+                hasher.finish()
+            }
+            Self::ArrayAccess { hash, .. } => *hash,
+        }
+    }
+
+    fn element_hash(array: u64, index: &DynamicClassIndex) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        1u8.hash(&mut hasher);
+        array.hash(&mut hasher);
+        index.hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 /// Literal array indexes accepted in a stable dynamic-class target.
@@ -573,10 +621,7 @@ fn update_dynamic_class_defaults(
                 return;
             };
             (
-                DynamicClassTarget::ArrayAccess {
-                    array: Box::new(DynamicClassTarget::Variable(array.clone())),
-                    index,
-                },
+                DynamicClassTarget::element(DynamicClassTarget::Variable(array.clone()), index),
                 value,
             )
         }
@@ -646,10 +691,7 @@ fn update_dynamic_class_array_defaults(
     defaults.remove(target);
     for (index, value) in entries {
         update_dynamic_class_target_default(
-            DynamicClassTarget::ArrayAccess {
-                array: Box::new(target.clone()),
-                index,
-            },
+            DynamicClassTarget::element(target.clone(), index),
             value,
             defaults,
         );
@@ -759,10 +801,10 @@ fn collect_possible_class_strings(
 fn dynamic_class_target(expr: &Expr) -> Option<DynamicClassTarget> {
     match &expr.kind {
         ExprKind::Variable(name) => Some(DynamicClassTarget::Variable(name.clone())),
-        ExprKind::ArrayAccess { array, index } => Some(DynamicClassTarget::ArrayAccess {
-            array: Box::new(dynamic_class_target(array)?),
-            index: dynamic_class_index(index)?,
-        }),
+        ExprKind::ArrayAccess { array, index } => Some(DynamicClassTarget::element(
+            dynamic_class_target(array)?,
+            dynamic_class_index(index)?,
+        )),
         _ => None,
     }
 }
@@ -1901,5 +1943,59 @@ fn collect_class_like_name_argument(arg: Option<&Expr>, out: &mut ReferenceSet) 
             receiver: StaticReceiver::Named(name),
         } => push_name(name, out),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod dynamic_class_target_tests {
+    use super::*;
+
+    /// The expression of the program's single expression statement.
+    fn expression(source: &str) -> Expr {
+        let tokens = crate::lexer::tokenize(source).expect("tokens");
+        let program = crate::parser::parse(&tokens).expect("program");
+        match program.into_iter().next().map(|stmt| stmt.kind) {
+            Some(StmtKind::ExprStmt(expr)) => expr,
+            other => panic!("not an expression statement: {other:?}"),
+        }
+    }
+
+    /// The fact recorded by assigning a nested literal is found by the element expression that
+    /// reads it, however each side built its target: equal targets hash alike.
+    #[test]
+    fn element_targets_built_two_ways_find_the_same_fact() {
+        let read = dynamic_class_target(&expression("<?php $c['a'][0];")).expect("target");
+        let written = DynamicClassTarget::element(
+            DynamicClassTarget::element(
+                DynamicClassTarget::Variable("c".to_string()),
+                DynamicClassIndex::String("a".to_string()),
+            ),
+            DynamicClassIndex::Int(0),
+        );
+        assert_eq!(read, written);
+        let mut facts: HashMap<DynamicClassTarget, HashSet<String>> = HashMap::default();
+        facts.insert(written, HashSet::from_iter(["Fixture\\A".to_string()]));
+        assert!(facts.contains_key(&read));
+        let other = dynamic_class_target(&expression("<?php $c['a'][1];")).expect("target");
+        assert!(!facts.contains_key(&other));
+    }
+
+    /// Cloning an element target shares its array's target instead of copying the chain: every
+    /// entry of an assigned array literal clones its array's target once.
+    #[test]
+    fn cloning_an_element_target_shares_its_array() {
+        let mut target = DynamicClassTarget::Variable("c".to_string());
+        for index in 0..32 {
+            target = DynamicClassTarget::element(target, DynamicClassIndex::Int(index));
+        }
+        let copy = target.clone();
+        match (&target, &copy) {
+            (
+                DynamicClassTarget::ArrayAccess { array: left, .. },
+                DynamicClassTarget::ArrayAccess { array: right, .. },
+            ) => assert!(std::sync::Arc::ptr_eq(left, right)),
+            _ => panic!("element targets expected"),
+        }
+        assert_eq!(target.digest(), copy.digest());
     }
 }
