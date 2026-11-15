@@ -13,10 +13,11 @@ use super::*;
 /// Publishes a selected scalar path, returning false when the ordinary writer remains authoritative.
 pub(super) fn publish(ctx: &mut FunctionContext<'_>, pointer_reg: &str, prop_ty: &PhpType,
     incoming_result_ty: &PhpType) -> Result<bool> {
-    let prop_ty = prop_ty.codegen_repr();
     if !ctx.module.required_runtime_features.native_reference_validation
-        || !matches!(prop_ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str)
+        || !crate::types::canonical_property_reference_payload(prop_ty).is_some_and(|payload|
+            payload != crate::types::CanonicalReferencePayload::Boxed)
     { return Ok(false); }
+    let prop_ty = prop_ty.codegen_repr();
     let raw = ctx.next_label("scalar_property_reference_raw");
     let done = ctx.next_label("scalar_property_reference_done");
     abi::emit_push_result_value(ctx.emitter, &incoming_result_ty.codegen_repr());

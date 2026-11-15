@@ -131,3 +131,17 @@ fn test_strict_settype_typed_property_contracts_bundle() {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Nullable and scalar-union property conversions preserve declaration types and alias identity.
+#[test]
+fn test_strict_settype_nullable_property_contracts_bundle() {
+    let source = include_str!("../fixtures/strict/settype_nullable_properties.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "N|0|9|A9|18|S|22|19|F|T|R9", "opt={optimize}");
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

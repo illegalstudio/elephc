@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 80 (this commit), following `a1a4296e52`. Issue:
+Verified through step 81 (this commit), following `63b866b2a7`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 80.
+This progress ledger condenses verified implementation through step 81.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -1027,6 +1027,27 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
   Compiler/test-target checks and build, architecture inventory, assembly comments,
   fixture syntax and diff hygiene pass.
 
+### Nullable and scalar-union conversion references
+
+- `types/reference_layout` now owns the shared physical payload classifier for
+  scalar, nullable and scalar-union property contracts. Checker promotion,
+  signature/descriptor argument selection, runtime-name selection, module
+  capabilities and backend promotion consume the same decision. Raw pointers,
+  iterables and unrelated container/object layouts remain outside this scalar
+  protocol. The stronger cast profile is still staged.
+- Nullable-int cells preserve both payload and runtime tag before boxing; other
+  reviewed unions retain their boxed representation. Runtime promotion entry
+  names have one authoritative mapping. Ordinary Mixed reference parameters can
+  retain these managed property cells and validate writes through the existing
+  declaration callbacks, without detaching temporary copies.
+- The native regression covers null-to-int conversion, nullable writes, scalar
+  union member changes, failed settype publication, later direct writes and a
+  refused array assignment through a user Mixed reference parameter. Output
+  matches PHP and heaps are clean with both optimizers. Thirty-one focused settype
+  checks, shared classifier tests, all-five-target graph emission and real helper
+  assembly, the existing scalar native regression, compiler/test-target checks,
+  build, architecture828, assembly comments, fixture syntax and diff hygiene pass.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1125,4 +1146,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 77 | `fed394dc1d` | feat(strict): canonicalize dynamic mixed property references |
 | 78 | `c694b9c796` | feat(strict): enable the arithmetic semantic profile |
 | 79 | `a1a4296e52` | feat(strict): enable the overflow semantic profile |
-| 80 | this commit | feat(strict): preserve scalar property conversion references |
+| 80 | `63b866b2a7` | feat(strict): preserve scalar property conversion references |
+| 81 | this commit | feat(strict): preserve nullable property reference contracts |

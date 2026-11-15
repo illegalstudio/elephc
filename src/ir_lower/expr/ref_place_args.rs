@@ -70,18 +70,13 @@ pub(super) struct RefPlaceRewrite {
     plans: Vec<RefPlacePlan>,
 }
 
-/// Selects an owned exact-Mixed physical slot whose ordinary PHP binding can cross a native call.
+/// Selects an owned physical slot usable by an ordinary Mixed reference parameter.
 pub(super) fn live_mixed_property_argument(
     ctx: &LoweringContext<'_, '_>, arg: &Expr, expected: &PhpType,
 ) -> bool {
-    *expected == PhpType::Mixed && writable_property_argument_type(ctx, arg) == Some(PhpType::Mixed)
-}
-
-/// Selects managed scalar properties whose reference reads support canonical boxed children.
-pub(super) fn live_scalar_property_argument(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
-    ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
-        && matches!(writable_property_argument_type(ctx, arg),
-            Some(PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str))
+    *expected == PhpType::Mixed && writable_property_argument_type(ctx, arg).is_some_and(|ty|
+        ty == PhpType::Mixed || (ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+            && crate::types::canonical_property_reference_payload(&ty).is_some()))
 }
 
 /// Resolves an owned writable physical cell using the caller's lexical property scope.

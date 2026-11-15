@@ -115,7 +115,7 @@ fn eligible_property(info: &crate::types::ClassInfo, property: &str, profile: el
     let Some(index) = info.visible_property_index(property) else { return false; };
     !info.is_internal && (info.properties[index].1 == PhpType::Mixed
         || (profile.contains(elephc_semantics::StrictFeature::Casts)
-            && matches!(info.properties[index].1, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str)))
+            && crate::types::canonical_property_reference_payload(&info.properties[index].1).is_some()))
         && info.property_slot_owns_reference(index)
         && !info.readonly_properties.contains(property)
         && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())

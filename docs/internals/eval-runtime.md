@@ -27,9 +27,12 @@ Native reads probe a managed reference's canonical wrapper before using its lega
 payload layout. The current boxed child supplies the PHP tag for the requested
 logical view, including a Mixed read after eval changes a typed parameter's value.
 Raw and headerless references continue to load through their original physical ABI.
-Checked-cast lowering also gives eligible user scalar properties owned managed cells.
+Checked-cast lowering also gives eligible scalar, nullable and scalar-union user
+properties owned managed cells. The shared `types/reference_layout` classifier
+distinguishes their logical contracts from boxed or inline nullable-int payloads.
 Selecting an integer, float, boolean or string reference transfers its raw payload
 into a canonical child while preserving the cell address and collector flags.
+Nullable-int promotion copies both the raw value and its runtime tag before boxing.
 The module explicitly selects native reference validation and declaration callbacks;
 conversion writeback validates the original candidate against the live property
 constraint before publication. Later direct scalar-property writes follow the same

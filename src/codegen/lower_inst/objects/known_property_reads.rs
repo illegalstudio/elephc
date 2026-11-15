@@ -476,14 +476,10 @@ pub(super) fn store_ref_cell_pointer_result(ctx: &mut FunctionContext<'_>, inst:
 fn promote_managed_property_reference(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
     if !ctx.module.class_infos.get(&slot.class_name)
         .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16)) { return; }
-    if slot.php_type == PhpType::Mixed {
-        abi::emit_call_label(ctx.emitter, "__rt_reference_cell_promote_mixed");
-    } else if ctx.module.required_runtime_features.native_reference_validation {
-        let suffix = match slot.php_type {
-            PhpType::Int => "int", PhpType::Float => "float", PhpType::Bool => "bool",
-            PhpType::Str => "string", _ => return,
-        };
-        abi::emit_call_label(ctx.emitter, &format!("__rt_reference_cell_promote_{suffix}"));
+    let Some(payload) = crate::types::canonical_property_reference_payload(&slot.php_type) else { return; };
+    if slot.php_type == PhpType::Mixed || ctx.module.required_runtime_features.native_reference_validation {
+        abi::emit_call_label(ctx.emitter,
+            crate::codegen_support::runtime::reference_cells::promotion_entry(payload));
     }
 }
 

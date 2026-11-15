@@ -49,8 +49,7 @@ pub(super) fn managed_place(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool
         return managed_place(ctx, value);
     }
     match &place.kind {
-        ExprKind::PropertyAccess { .. } => super::ref_place_args::live_mixed_property_argument(ctx, place, &PhpType::Mixed)
-            || super::ref_place_args::live_scalar_property_argument(ctx, place),
+        ExprKind::PropertyAccess { .. } => super::ref_place_args::live_mixed_property_argument(ctx, place, &PhpType::Mixed),
         ExprKind::StaticPropertyAccess { .. } => super::ref_place_args::static_place_type(ctx, place) == Some(PhpType::Mixed),
         ExprKind::ArrayAccess { array, .. } => {
             super::ref_place_args::static_place_type(ctx, place) == Some(PhpType::Mixed)

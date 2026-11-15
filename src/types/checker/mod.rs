@@ -1770,7 +1770,7 @@ fn apply_reference_property_promotions(checker: &mut Checker) {
             info.properties.iter().enumerate().filter_map(move |(index, (property, ty))| {
                 let declaring = info.property_declaring_classes.get(property).unwrap_or(name);
                 let checked_scalar = checked_scalar_references
-                    && matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str);
+                    && crate::types::canonical_property_reference_payload(ty).is_some();
                 ((ty == &PhpType::Mixed || checked_scalar) && info.visible_property_index(property) == Some(index)
                     && info.property_slot_is_declared(index, property)
                     && ((!info.reference_properties.contains(property) && canonical_mixed_references)

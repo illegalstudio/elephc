@@ -23,6 +23,7 @@ mod mixed_symbol;
 mod property_payload;
 mod canonical;
 mod scalar_payload;
+pub(crate) use scalar_payload::promotion_entry;
 mod parameter_bindings;
 mod argument_pins;
 mod validation_pins;

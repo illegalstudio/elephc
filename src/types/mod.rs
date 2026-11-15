@@ -42,6 +42,8 @@ pub(crate) mod diagnostic_names;
 pub(crate) mod pcntl_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
+mod reference_layout;
+pub(crate) use reference_layout::{CanonicalReferencePayload, canonical_property_reference_payload};
 pub(crate) mod object_operators;
 /// Return-to-argument storage alias summaries used by ownership lowering.
 mod return_alias;
