@@ -248,6 +248,36 @@ impl TypeExpr {
         }
     }
 
+    /// The type PHP gives a parameter declared with this type and a literal `null` default, when
+    /// that differs from the declared one.
+    ///
+    /// `string $s = null` is implicitly `?string` (deprecated since PHP 8.4, still nullable), so
+    /// the parameter accepts and holds null. A type that already admits null (`?T`, `T|null`,
+    /// `mixed`, `null`) is returned as `None`, as is an intersection, whose `(A&B)|null` form
+    /// has no representation here.
+    pub fn implicitly_nullable(&self) -> Option<TypeExpr> {
+        match self {
+            TypeExpr::Nullable(_) | TypeExpr::Void | TypeExpr::Intersection(_) => None,
+            // Property-style annotations (promoted parameters) spell the `null` type by name.
+            TypeExpr::Named(name)
+                if name.as_str().eq_ignore_ascii_case("mixed")
+                    || name.as_str().eq_ignore_ascii_case("null") =>
+            {
+                None
+            }
+            TypeExpr::Union(members) => {
+                if members.iter().any(|member| member.implicitly_nullable().is_none()) {
+                    return None;
+                }
+                // The canonical shape the parser gives a written `A|B|null`.
+                let mut widened = members.clone();
+                widened.push(TypeExpr::Void);
+                Some(TypeExpr::Union(widened))
+            }
+            _ => Some(TypeExpr::Nullable(Box::new(self.clone()))),
+        }
+    }
+
     /// Returns whether this type expression contains PHP's late-bound `static` class type.
     pub fn contains_late_static(&self) -> bool {
         match self {

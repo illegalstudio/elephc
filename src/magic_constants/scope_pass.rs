@@ -7,11 +7,13 @@
 //!
 //! Key details:
 //! - Trait-origin `__CLASS__` uses a placeholder so concrete class binding can happen after trait flattening.
+//! - Also widens implicitly nullable parameters (`T $p = null`) and queues their PHP 8.4
+//!   deprecation, since this is the pass that knows each parameter's php-src owner name.
 
 use std::path::Path;
 
 use crate::names::Name;
-use crate::parser::ast::{ExprKind, MagicConstant, Program};
+use crate::parser::ast::{Expr, ExprKind, MagicConstant, Program, TypeExpr};
 use crate::span::Span;
 
 use super::walker::{walk_program, Pass};
@@ -107,9 +109,62 @@ impl ScopePass {
         };
         format!("{{closure:{}:{}}}", context, span.line)
     }
+
+    /// Returns `__METHOD__` for the current scope: the closure name inside a closure, otherwise
+    /// `Class::method` or the namespace-qualified function name.
+    fn method_name(&self) -> String {
+        let s = &self.scope;
+        if let Some(closure_name) = s.closure_names.last() {
+            return closure_name.clone();
+        }
+        match (self.fqn_class().or_else(|| self.fqn_trait()), &s.function) {
+            (Some(c), Some(f)) => format!("{}::{}", c, f),
+            (None, Some(f)) => qualify(s.namespace.as_deref(), f),
+            _ => String::new(),
+        }
+    }
 }
 
 impl Pass for ScopePass {
+    /// Widens `T $p = null` to the nullable type PHP gives it and queues PHP 8.4's compile-time
+    /// deprecation, named the way php-src names the function (`f`, `C::m`, `{closure:...}`).
+    ///
+    /// Done per physical file, where the lexical owner is still known; every later pass then
+    /// sees an ordinary `?T` parameter, so a passed or defaulted null arrives as null.
+    ///
+    /// A by-reference parameter keeps its declared type and only gets the deprecation: a `?T`
+    /// reference parameter needs nullable storage in every caller variable, so widening it
+    /// would refuse `int &$r = null` called with an `int` local, which compiles today.
+    fn transform_param_type(
+        &mut self,
+        name: &str,
+        ty: TypeExpr,
+        default: Option<&Expr>,
+        by_ref: bool,
+        span: Span,
+    ) -> TypeExpr {
+        if !default.is_some_and(|default| matches!(default.kind, ExprKind::Null)) {
+            return ty;
+        }
+        let Some(widened) = ty.implicitly_nullable() else {
+            return ty;
+        };
+        crate::errors::defer_warning(crate::errors::CompileWarning::deprecation(
+            span,
+            &format!(
+                "{}(): Implicitly marking parameter ${} as nullable is deprecated, the explicit \
+                 nullable type must be used instead",
+                self.method_name(),
+                name
+            ),
+        ));
+        if by_ref {
+            ty
+        } else {
+            widened
+        }
+    }
+
     /// Transforms a magic constant into a string literal based on current lexical scope.
     ///
     /// - `__NAMESPACE__`: current namespace or empty string.
@@ -142,18 +197,7 @@ impl Pass for ScopePass {
                 };
                 ExprKind::StringLiteral(name)
             }
-            MagicConstant::Method => {
-                if let Some(closure_name) = s.closure_names.last() {
-                    ExprKind::StringLiteral(closure_name.clone())
-                } else {
-                    let name = match (self.fqn_class().or_else(|| self.fqn_trait()), &s.function) {
-                        (Some(c), Some(f)) => format!("{}::{}", c, f),
-                        (None, Some(f)) => qualify(s.namespace.as_deref(), f),
-                        _ => String::new(),
-                    };
-                    ExprKind::StringLiteral(name)
-                }
-            }
+            MagicConstant::Method => ExprKind::StringLiteral(self.method_name()),
             // File/Dir are handled by the file pass; if they reach here it
             // means the file pass was skipped — substitute to empty rather
             // than panic, since this is best-effort.
@@ -240,5 +284,60 @@ impl Pass for ScopePass {
     fn leave_closure(&mut self) {
         self.scope.closure_names.pop();
         self.scope.closure_depth -= 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::StmtKind;
+
+    /// Parses `source` and returns the declared parameter types of its first function.
+    fn widened_param_types(source: &str) -> Vec<Option<TypeExpr>> {
+        let tokens = crate::lexer::tokenize(source).expect("tokenize");
+        let program = crate::parser::parse(&tokens).expect("parse");
+        let program = substitute_scope_constants_with_file(program, Some("t.php".to_string()));
+        match &program[0].kind {
+            StmtKind::FunctionDecl { params, .. } => {
+                params.iter().map(|(_, ty, _, _)| ty.clone()).collect()
+            }
+            other => panic!("expected a function, got {other:?}"),
+        }
+    }
+
+    /// Verifies only a literal-null default on a type that rejects null is widened, a
+    /// by-reference parameter keeps its type, and each declaration deprecates exactly once.
+    #[test]
+    fn widens_implicitly_nullable_params_and_queues_one_deprecation_each() {
+        let _ = crate::errors::take_deferred_warnings();
+        let types = widened_param_types(
+            "<?php function f(string $a = null, ?int $b = null, mixed $c = null, int $d = 0, \
+             int|string $e = null, int &$g = null, $h = null) {}",
+        );
+        assert_eq!(
+            types,
+            vec![
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Str))),
+                Some(TypeExpr::Nullable(Box::new(TypeExpr::Int))),
+                Some(TypeExpr::Named(Name::unqualified("mixed"))),
+                Some(TypeExpr::Int),
+                Some(TypeExpr::Union(vec![TypeExpr::Int, TypeExpr::Str, TypeExpr::Void])),
+                Some(TypeExpr::Int),
+                None,
+            ]
+        );
+        let messages: Vec<String> = crate::errors::take_deferred_warnings()
+            .into_iter()
+            .map(|warning| warning.message)
+            .collect();
+        let suffix = "as nullable is deprecated, the explicit nullable type must be used instead";
+        assert_eq!(
+            messages,
+            vec![
+                format!("f(): Implicitly marking parameter $a {suffix}"),
+                format!("f(): Implicitly marking parameter $e {suffix}"),
+                format!("f(): Implicitly marking parameter $g {suffix}"),
+            ]
+        );
     }
 }

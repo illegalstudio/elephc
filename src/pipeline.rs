@@ -272,6 +272,11 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         }
     };
     timings.record_since("resolve", phase_started);
+    // Compile-time deprecations raised while each physical file was prepared, reported where
+    // php-src reports them: before the program runs, ahead of the checker's own diagnostics.
+    for warning in errors::take_deferred_warnings() {
+        errors::report_warning(&warning);
+    }
 
     // Report how the PHP profile is observable in THIS program, while `ast` is still the
     // user's own code: after include resolution, but before any compiler prelude is injected.
@@ -956,7 +961,8 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         eprintln!("{PHPEXT_CORE_RUNTIME_ONLY}");
         process::exit(1);
     }
-    for warning in &check_result.warnings {
+    // A file autoloaded while checking was prepared after the drain above.
+    for warning in errors::take_deferred_warnings().iter().chain(&check_result.warnings) {
         errors::report_warning(warning);
     }
     // The instantiation report is printed here, before declaration pruning and codegen: every

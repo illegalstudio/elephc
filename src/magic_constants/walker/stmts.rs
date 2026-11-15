@@ -377,14 +377,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             pass.enter_function(&name);
             let new_params = params
                 .into_iter()
-                .map(|(n, t, default, by_ref)| {
-                    (
-                        n,
-                        t.map(|ty| pass.transform_value_type(ty, span)),
-                        default.map(|d| walk_expr(d, pass)),
-                        by_ref,
-                    )
-                })
+                .map(|param| super::walk_param(param, pass, span))
                 .collect();
             let walked_body = walk_program(body, pass);
             let new_body = pass.transform_scope_body(walked_body);

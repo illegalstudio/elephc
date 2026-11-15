@@ -27,6 +27,20 @@ pub(crate) fn walk_expression<P: Pass>(expr: crate::parser::ast::Expr, pass: &mu
 
 use crate::parser::ast::TypeExpr;
 
+/// Walks one function, method or closure parameter: its declared type and its default.
+pub(super) fn walk_param<P: Pass>(
+    (name, ty, default, by_ref): (String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool),
+    pass: &mut P,
+    span: Span,
+) -> (String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool) {
+    let ty = ty.map(|ty| {
+        let ty = pass.transform_param_type(&name, ty, default.as_ref(), by_ref, span);
+        pass.transform_value_type(ty, span)
+    });
+    let default = default.map(|default| exprs::walk_expr(default, pass));
+    (name, ty, default, by_ref)
+}
+
 /// Routes one inheritance clause entry (`extends Box<int>`, `implements Repository<User>`)
 /// through [`Pass::transform_type`], and puts the answer back in the shape the AST stores it.
 ///
@@ -242,6 +256,20 @@ pub(crate) trait Pass {
     /// Generic substitution uses scalar carriers here while other passes retain their type hook.
     fn transform_value_type(&self, ty: TypeExpr, span: Span) -> TypeExpr {
         self.transform_type(ty, span)
+    }
+
+    /// Rewrites one parameter's declared type, given the parameter's name, default and
+    /// by-reference flag, before [`Pass::transform_value_type`] sees it. Called with the
+    /// function, method or closure scope already entered. Default returns it unchanged.
+    fn transform_param_type(
+        &mut self,
+        _name: &str,
+        ty: TypeExpr,
+        _default: Option<&crate::parser::ast::Expr>,
+        _by_ref: bool,
+        _span: Span,
+    ) -> TypeExpr {
+        ty
     }
 
     /// Transforms a class NAMED at a use site — a construction or a static receiver.

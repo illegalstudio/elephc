@@ -129,6 +129,31 @@ impl std::fmt::Display for CompileError {
     }
 }
 
+thread_local! {
+    /// Warnings raised by per-file frontend passes whose results carry no diagnostics channel.
+    /// Drained by the pipeline through [`take_deferred_warnings`].
+    static DEFERRED_WARNINGS: std::cell::RefCell<Vec<CompileWarning>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Queues a warning raised while a source file is prepared, for the pipeline to report.
+pub fn defer_warning(warning: CompileWarning) {
+    DEFERRED_WARNINGS.with(|warnings| warnings.borrow_mut().push(warning));
+}
+
+/// Takes every queued warning in the order raised, once each.
+///
+/// The resolver may prepare an included file more than once, so a repeat of the same message
+/// at the same span is dropped.
+pub fn take_deferred_warnings() -> Vec<CompileWarning> {
+    let queued = DEFERRED_WARNINGS.with(|warnings| std::mem::take(&mut *warnings.borrow_mut()));
+    let mut seen = std::collections::HashSet::new();
+    queued
+        .into_iter()
+        .filter(|warning| seen.insert((warning.span, warning.message.clone())))
+        .collect()
+}
+
 /// Prints the error message to stderr with file:line:col formatting when available.
 pub fn report(error: &CompileError) {
     report::print_error(error);

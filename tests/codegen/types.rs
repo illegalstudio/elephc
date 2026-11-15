@@ -42,6 +42,8 @@ mod guarded_interface_receivers;
 mod guarded_interface_mutations;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
+#[path = "types/implicit_nullable_params.rs"]
+mod implicit_nullable_params;
 #[path = "types/declare_groups.rs"]
 mod declare_groups;
 #[path = "types/strict_types.rs"]
