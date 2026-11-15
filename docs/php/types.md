@@ -613,11 +613,12 @@ Because elephc maps the `Closure` type hint onto its callable descriptor type, a
   unless told otherwise, `is_a` only when told to). The flag itself may be computed at runtime and
   need not be a `bool`: coercive mode admits any scalar there, and an `int`, `string` or `float`
   is converted with PHP's own truthiness, so `"0"` is false while `"0.0"` and `" "` are true.
-  The name must be a compile-time **literal**: a
-  name only known at runtime still answers `false` rather than walking the hierarchy, because the
-  emitted program has no name-keyed class table to consult. The same restriction is louder in
-  `class_parents()`, `class_implements()` and `class_exists()`, which reject a non-literal name at
-  compile time instead of answering. One gap of its own: an enum declared in the compiled
+  Either name may be known only at runtime (`is_a($name, $name, true)`): the subject (a class
+  name, an object's runtime class, or a `mixed` value holding either) selects the ancestor list
+  of one compiled class or interface, and the target is compared with it. A class that only an
+  autoloader could load and that the program never names is not compiled, so a runtime name
+  cannot reach it. `class_parents()`, `class_implements()` and `class_exists()` still reject a
+  non-literal name at compile time. One gap of its own: an enum declared in the compiled
   program does not carry its implicit `UnitEnum`/`BackedEnum` interfaces, so
   `is_subclass_of("Suit", "UnitEnum")` is `false` where PHP says `true`. This limitation also
   affects compiled `is_a()` and `is_subclass_of()` calls with a class-name string for an enum

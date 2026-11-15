@@ -8,6 +8,9 @@
 //! - The source string and optional runtime flag survive every comparison call.
 //! - Candidate names include classes and interfaces, with PHP case-insensitive matching.
 //! - A versioned query follows dynamic inheritance through the compiled positive candidates.
+//! - A runtime target name (`is_a($name, $name, true)`) dispatches the subject over every
+//!   compiled class and interface, then compares the target with that subject's ancestors.
+//!   An object subject dispatches on its runtime class id the same way.
 
 use super::*;
 
@@ -53,8 +56,8 @@ pub(super) fn lower(
         abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
     }
     for candidate in &candidates {
-        emit_match(ctx, candidate, &matched);
-        emit_match(ctx, &format!("\\{candidate}"), &matched);
+        emit_match(ctx, 0, candidate, &matched);
+        emit_match(ctx, 0, &format!("\\{candidate}"), &matched);
     }
     if ctx.module.required_runtime_features.eval_bridge {
         let mut related = vec![target.trim_start_matches('\\').to_string()];
@@ -87,15 +90,16 @@ pub(super) fn lower(
     store_if_result(ctx, inst)
 }
 
-/// Compares one saved class string using the target's string-comparison ABI.
-fn emit_match(ctx: &mut FunctionContext<'_>, candidate: &str, matched: &str) {
+/// Compares the class string saved at `slot` (pointer, then length) with `candidate`, using the
+/// target's string-comparison ABI, and branches to `matched` when they are equal.
+fn emit_match(ctx: &mut FunctionContext<'_>, slot: usize, candidate: &str, matched: &str) {
     let (label, len) = ctx.data.add_string(candidate.as_bytes());
     let regs = match ctx.emitter.target.arch {
         Arch::AArch64 => ["x1", "x2", "x3", "x4"],
         Arch::X86_64 => ["rdi", "rsi", "rdx", "rcx"],
     };
-    abi::emit_load_temporary_stack_slot(ctx.emitter, regs[0], 0);
-    abi::emit_load_temporary_stack_slot(ctx.emitter, regs[1], 8);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, regs[0], slot);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, regs[1], slot + 8);
     abi::emit_symbol_address(ctx.emitter, regs[2], &label);
     abi::emit_load_int_immediate(ctx.emitter, regs[3], len as i64);
     abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
@@ -109,4 +113,269 @@ fn emit_match(ctx: &mut FunctionContext<'_>, candidate: &str, matched: &str) {
             ctx.emitter.instruction(&format!("je {matched}"));                  // accept this related class or interface
         }
     }
+}
+
+/// Emits a relation test whose target class name is only known at runtime
+/// (`is_a($name, $name, true)`, `is_subclass_of($object, $name)`).
+///
+/// Every compiled class and interface the subject may be is known, and so is each one's set of
+/// ancestors (itself unless `exclude_self`, its parents, and its interfaces), so the subject
+/// selects one ancestor list and the target is compared against it. A string subject is matched
+/// by name; an object subject by its runtime class id, not its static type, which may be a
+/// parent. A Mixed subject is either, by its runtime tag. The `$allow_string` flag only governs a
+/// string subject. A name no compiled class-like matches can only be an eval-declared class.
+pub(super) fn lower_runtime_target(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, subject: ValueId,
+    target: ValueId, exclude_self: bool,
+) -> Result<()> {
+    let subject_ty = ctx.value_php_type(subject)?;
+    if ctx.module.required_runtime_features.eval_bridge {
+        // An eval-declared object carries the class id of its nearest compiled ancestor, so the
+        // class-id table below would miss the eval class itself. Objects go to the eval bridge.
+        match subject_ty {
+            PhpType::Object(_) => {
+                return super::super::lower_eval_object_is_a_dynamic(ctx, inst, subject, target, exclude_self);
+            }
+            PhpType::Mixed | PhpType::Union(_) => {
+                let object_label = ctx.next_label("class_relation_eval_object");
+                let done = ctx.next_label("class_relation_eval_done");
+                ctx.load_value_to_reg(subject, abi::int_result_reg(ctx.emitter))?;
+                abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                match ctx.emitter.target.arch {
+                    Arch::AArch64 => {
+                        ctx.emitter.instruction("cmp x0, #6");                  // runtime tag 6 means the subject is an object
+                        ctx.emitter.instruction(&format!("b.eq {object_label}")); // ask the eval bridge about an object subject
+                    }
+                    Arch::X86_64 => {
+                        ctx.emitter.instruction("cmp rax, 6");                  // runtime tag 6 means the subject is an object
+                        ctx.emitter.instruction(&format!("je {object_label}")); // ask the eval bridge about an object subject
+                    }
+                }
+                emit_runtime_target(ctx, inst, subject, &subject_ty, target, exclude_self)?;
+                abi::emit_jump(ctx.emitter, &done);
+                ctx.emitter.label(&object_label);
+                super::super::lower_eval_object_is_a_dynamic(ctx, inst, subject, target, exclude_self)?;
+                ctx.emitter.label(&done);
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+    emit_runtime_target(ctx, inst, subject, &subject_ty, target, exclude_self)
+}
+
+/// Emits the compiled-metadata half of [`lower_runtime_target`].
+fn emit_runtime_target(
+    ctx: &mut FunctionContext<'_>, inst: &Instruction, subject: ValueId,
+    subject_ty: &PhpType, target: ValueId, exclude_self: bool,
+) -> Result<()> {
+    let flag = inst.operands.get(2).copied();
+    let literal_flag = match flag {
+        Some(value) => const_bool_operand(ctx, value)?,
+        None => Some(exclude_self),
+    };
+    let literal_subject = optional_const_string_operand(ctx, subject)?
+        .map(|name| php_symbol_key(name.trim_start_matches('\\')));
+    let table = ancestor_table(ctx, exclude_self);
+    let named = table.iter()
+        .filter(|(name, _)| literal_subject.as_ref().is_none_or(|key| php_symbol_key(name) == *key))
+        .map(|(name, ancestors)| (name.clone(), ancestors))
+        .collect::<Vec<_>>();
+    let class_ids = ctx.module.class_infos.iter()
+        .filter_map(|(name, info)| table.get_key_value(name.trim_start_matches('\\')).map(|(name, _)| (info.class_id, name.clone())))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let blocks = table.keys()
+        .map(|name| (name.clone(), ctx.next_label("class_relation_ancestors")))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let string_dispatch = ctx.next_label("class_relation_string_subject");
+    let object_dispatch = ctx.next_label("class_relation_object_subject");
+    let matched = ctx.next_label("class_relation_match");
+    let unknown = ctx.next_label("class_relation_unknown_name");
+    let unrelated = ctx.next_label("class_relation_unrelated");
+    let done = ctx.next_label("class_relation_done");
+
+    // Frame: [0) subject name ptr, [8) its length, [16) the answer when related (the runtime
+    // `$allow_string` truthiness for a name, 1 for an object), [24) target ptr, [32) its length,
+    // [40) the object subject's class id.
+    abi::emit_reserve_temporary_stack(ctx.emitter, 48);
+    let (ptr, len) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(target, ptr, len)?;
+    abi::emit_store_to_sp(ctx.emitter, ptr, 24);
+    abi::emit_store_to_sp(ctx.emitter, len, 32);
+    if literal_flag.is_none() {
+        predicates::emit_value_truthiness(ctx, flag.expect("runtime flag exists"), "is_a")?;
+        abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    }
+    let result = abi::int_result_reg(ctx.emitter);
+    match subject_ty {
+        PhpType::Str => {
+            ctx.load_string_value_to_regs(subject, ptr, len)?;
+            abi::emit_store_to_sp(ctx.emitter, ptr, 0);
+            abi::emit_store_to_sp(ctx.emitter, len, 8);
+            abi::emit_jump(ctx.emitter, &string_dispatch);
+        }
+        PhpType::Object(_) => {
+            ctx.load_value_to_reg(subject, result)?;
+            emit_object_class_id(ctx, &unrelated);
+            abi::emit_jump(ctx.emitter, &object_dispatch);
+        }
+        _ => {
+            ctx.load_value_to_reg(subject, result)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+            let object_label = ctx.next_label("class_relation_mixed_object");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #6");                      // runtime tag 6 means the subject is an object
+                    ctx.emitter.instruction(&format!("b.eq {object_label}"));   // match an object subject by its class id
+                    ctx.emitter.instruction("cmp x0, #1");                      // runtime tag 1 means the subject is a class name
+                    ctx.emitter.instruction(&format!("b.ne {unrelated}"));      // any other value names no class
+                    ctx.emitter.instruction("str x1, [sp, #0]");                // save the unboxed subject name pointer
+                    ctx.emitter.instruction("str x2, [sp, #8]");                // save the unboxed subject name length
+                    ctx.emitter.instruction(&format!("b {string_dispatch}"));   // match the subject by name
+                    ctx.emitter.label(&object_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // move the unboxed object pointer into the result register
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 6");                      // runtime tag 6 means the subject is an object
+                    ctx.emitter.instruction(&format!("je {object_label}"));     // match an object subject by its class id
+                    ctx.emitter.instruction("cmp rax, 1");                      // runtime tag 1 means the subject is a class name
+                    ctx.emitter.instruction(&format!("jne {unrelated}"));       // any other value names no class
+                    ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");        // save the unboxed subject name pointer
+                    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");    // save the unboxed subject name length
+                    ctx.emitter.instruction(&format!("jmp {string_dispatch}")); // match the subject by name
+                    ctx.emitter.label(&object_label);
+                    ctx.emitter.instruction("mov rax, rdi");                    // move the unboxed object pointer into the result register
+                }
+            }
+            emit_object_class_id(ctx, &unrelated);
+            abi::emit_jump(ctx.emitter, &object_dispatch);
+        }
+    }
+
+    // -- object subject: the runtime class id selects the ancestor list --
+    ctx.emitter.label(&object_dispatch);
+    if literal_flag.is_none() {
+        abi::emit_load_int_immediate(ctx.emitter, result, 1);
+        abi::emit_store_to_sp(ctx.emitter, result, 16);
+    }
+    let (id_reg, candidate_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x9", "x10"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    abi::emit_load_temporary_stack_slot(ctx.emitter, id_reg, 40);
+    for (class_id, name) in &class_ids {
+        abi::emit_load_int_immediate(ctx.emitter, candidate_reg, *class_id as i64);
+        let block = &blocks[name];
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("cmp x9, x10");                         // is the object an instance of exactly this class?
+                ctx.emitter.instruction(&format!("b.eq {block}"));              // test the target against this class's ancestors
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("cmp r10, r11");                        // is the object an instance of exactly this class?
+                ctx.emitter.instruction(&format!("je {block}"));                // test the target against this class's ancestors
+            }
+        }
+    }
+    abi::emit_jump(ctx.emitter, &unrelated);
+
+    // -- string subject: the class or interface name selects the ancestor list --
+    ctx.emitter.label(&string_dispatch);
+    if literal_flag == Some(false) {
+        abi::emit_jump(ctx.emitter, &unrelated);
+    } else {
+        for (name, _) in &named {
+            let block = blocks[name].clone();
+            emit_match(ctx, 0, name, &block);
+            emit_match(ctx, 0, &format!("\\{name}"), &block);
+        }
+        abi::emit_jump(ctx.emitter, &unknown);
+    }
+
+    for (name, ancestors) in &table {
+        ctx.emitter.label(&blocks[name]);
+        for ancestor in ancestors {
+            emit_match(ctx, 24, ancestor, &matched);
+            emit_match(ctx, 24, &format!("\\{ancestor}"), &matched);
+        }
+        abi::emit_jump(ctx.emitter, &unrelated);
+    }
+
+    ctx.emitter.label(&unknown);
+    if ctx.module.required_runtime_features.eval_bridge {
+        // Only an eval-declared class can still answer. The bridge treats its first candidate
+        // as the target, so the runtime target name is the whole candidate list.
+        for index in 0..2 {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, index), index * 8);
+        }
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 2), 24);
+        abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 3), 32);
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 4), i64::from(exclude_self));
+        let symbol = ctx.emitter.target.extern_symbol("__elephc_eval_class_string_relation_v1");
+        abi::emit_call_label(ctx.emitter, &symbol);
+        if literal_flag.is_none() {
+            abi::emit_branch_if_int_result_nonzero(ctx.emitter, &matched);
+        }
+        abi::emit_jump(ctx.emitter, &done);
+    }
+    ctx.emitter.label(&unrelated);
+    emit_bool_result(ctx, false);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&matched);
+    if literal_flag.is_none() {
+        abi::emit_load_temporary_stack_slot(ctx.emitter, result, 16);
+    } else { emit_bool_result(ctx, true); }
+    ctx.emitter.label(&done);
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    store_if_result(ctx, inst)
+}
+
+/// Saves the class id of the object in the result register to the frame's slot 40, branching
+/// to `unrelated` for a null object.
+fn emit_object_class_id(ctx: &mut FunctionContext<'_>, unrelated: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {unrelated}"));           // a null object is related to no class
+            ctx.emitter.instruction("ldr x0, [x0]");                            // load the runtime class id from the object header
+            ctx.emitter.instruction("str x0, [sp, #40]");                       // save the subject's class id for the dispatch
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a null object is related to no class
+            ctx.emitter.instruction(&format!("je {unrelated}"));                // answer false without reading a header
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // load the runtime class id from the object header
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 40], rax");           // save the subject's class id for the dispatch
+        }
+    }
+}
+
+/// Lists every compiled class and interface with the names it is related to: itself unless
+/// `exclude_self`, its parent classes and its interfaces (an interface's own parents). Sorted, so
+/// the emitted comparisons do not depend on hash order.
+fn ancestor_table(
+    ctx: &FunctionContext<'_>, exclude_self: bool,
+) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let mut table = std::collections::BTreeMap::new();
+    for (name, info) in &ctx.module.class_infos {
+        let name = name.trim_start_matches('\\').to_string();
+        let mut ancestors = std::collections::BTreeSet::new();
+        if !exclude_self { ancestors.insert(name.clone()); }
+        let mut current = info.parent.clone();
+        while let Some(parent) = current {
+            let parent = parent.trim_start_matches('\\').to_string();
+            current = lookup_class(ctx, &parent).and_then(|info| info.parent.clone());
+            if !ancestors.insert(parent) { break; }
+        }
+        ancestors.extend(info.interfaces.iter().map(|name| name.trim_start_matches('\\').to_string()));
+        if !ancestors.is_empty() { table.insert(name, ancestors); }
+    }
+    for name in ctx.module.interface_infos.keys() {
+        let mut parents = Vec::new();
+        super::super::class_relations::collect_interface_parents(ctx, name, &mut parents);
+        let name = name.trim_start_matches('\\').to_string();
+        let mut ancestors: std::collections::BTreeSet<String> =
+            parents.iter().map(|parent| parent.trim_start_matches('\\').to_string()).collect();
+        if !exclude_self { ancestors.insert(name.clone()); }
+        if !ancestors.is_empty() { table.insert(name, ancestors); }
+    }
+    table
 }
