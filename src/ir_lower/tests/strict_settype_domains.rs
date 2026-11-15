@@ -202,3 +202,24 @@ fn strict_settype_unaliased_property_native_owners() {
         assert!(stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {stderr}");
     }
 }
+
+/// Checked scalar references keep declaration callbacks and canonical layouts on every target.
+#[test]
+fn strict_settype_typed_property_contracts_all_targets() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strict/settype_typed_properties.php"));
+    // The selected checker must establish scalar cells even without a preceding explicit alias.
+    let source = source.lines().filter(|line| !line.starts_with("$numberAlias")
+        && !line.starts_with("$amountAlias") && !line.starts_with("$enabledAlias")).collect::<Vec<_>>().join("\n");
+    let program = prepared(&source);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target,
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(module.required_runtime_features.native_reference_validation, "{name}");
+        crate::ir::validate_module(&module).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_reference_cell_promote_string"), "{name}");
+        assert!(assembly.contains("__rt_reference_publish_native"), "{name}");
+    }
+}

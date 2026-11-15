@@ -191,6 +191,13 @@ fn lower_on_compiler_stack(
     super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);
     reserve_eval_subclass_property_storage(&mut module);
+    if module.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+        && module.class_infos.values().any(|class| class.properties.iter().enumerate().any(|(index, (_, ty))|
+            class.property_slot_owns_reference(index)
+                && matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str)))
+    {
+        super::reference_property_validators::enable_native_reference_validation(&mut module)?;
+    }
     // A refused shape is reported before validation: the placeholder EIR those sites emit
     // keeps the module well formed, but the program must not reach codegen regardless.
     if let Some(error) = super::diagnostics::take_first() {

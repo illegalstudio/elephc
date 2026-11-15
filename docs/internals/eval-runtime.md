@@ -27,6 +27,15 @@ Native reads probe a managed reference's canonical wrapper before using its lega
 payload layout. The current boxed child supplies the PHP tag for the requested
 logical view, including a Mixed read after eval changes a typed parameter's value.
 Raw and headerless references continue to load through their original physical ABI.
+Checked-cast lowering also gives eligible user scalar properties owned managed cells.
+Selecting an integer, float, boolean or string reference transfers its raw payload
+into a canonical child while preserving the cell address and collector flags.
+The module explicitly selects native reference validation and declaration callbacks;
+conversion writeback validates the original candidate against the live property
+constraint before publication. Later direct scalar-property writes follow the same
+canonical child, keeping existing aliases current. Borrowed constructor cells keep
+their original ABI. This machinery supports staged cast integration; it does not
+admit the unfinished cast profile at public entry points.
 An owning `LoadRefCellValue` copies a typed parameter's current value into Mixed:
 canonical children are cloned, and raw concrete payloads are boxed once. The copy
 has explicit allocation and reference-count effects, and its cleanup survives

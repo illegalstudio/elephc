@@ -10,6 +10,8 @@
 
 use super::*;
 
+mod canonical_scalar;
+
 /// Emits a declared-property store from an SSA value into the object slot.
 pub(super) fn emit_property_store(
     ctx: &mut FunctionContext<'_>,
@@ -310,6 +312,15 @@ pub(super) fn publish_reference_cell_result_then_release_previous(
     ctx: &mut FunctionContext<'_>,
     pointer_reg: &str,
     prop_ty: &PhpType,
+    incoming_result_ty: &PhpType,
+) -> Result<()> {
+    if canonical_scalar::publish(ctx, pointer_reg, prop_ty, incoming_result_ty)? { return Ok(()); }
+    publish_raw_reference_cell_result(ctx, pointer_reg, prop_ty, incoming_result_ty)
+}
+
+/// Publishes through a raw physical payload or an already selected canonical child slot.
+fn publish_raw_reference_cell_result(
+    ctx: &mut FunctionContext<'_>, pointer_reg: &str, prop_ty: &PhpType,
     incoming_result_ty: &PhpType,
 ) -> Result<()> {
     let prop_ty = prop_ty.codegen_repr();

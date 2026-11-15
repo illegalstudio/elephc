@@ -1,5 +1,5 @@
 //! Purpose:
-//! Retains live Mixed property references behind ordinary-object receivers.
+//! Retains managed property references behind ordinary-object receivers.
 //!
 //! Called from:
 //! - Checked known or runtime-selected reference arguments, including native XML fallbacks.
@@ -10,11 +10,11 @@
 
 use super::*;
 
-/// Selects a declared owned Mixed cell without treating a concrete borrowed payload as boxed storage.
+/// Selects a supported declared owned cell without mistaking a borrowed raw payload for boxed storage.
 pub(super) fn named(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
     property: &str, alias: &str, expr: &Expr) -> LoweredValue {
     let mut classes = ctx.classes.iter().filter_map(|(name, info)| {
-        eligible_property(info, property).then(|| name.clone())
+        eligible_property(info, property, ctx.semantic_profile).then(|| name.clone())
     }).collect::<Vec<_>>();
     classes.sort();
     if classes.is_empty() {
@@ -74,7 +74,7 @@ pub(super) fn named(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
 pub(super) fn dynamic(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
     property: LoweredValue, alias: &str, expr: &Expr) -> LoweredValue {
     let mut properties = ctx.classes.values().flat_map(|info| info.properties.iter()
-        .filter(|(name, _)| eligible_property(info, name)).map(|(name, _)| name.clone()))
+        .filter(|(name, _)| eligible_property(info, name, ctx.semantic_profile)).map(|(name, _)| name.clone()))
         .collect::<Vec<_>>();
     properties.sort(); properties.dedup();
     if properties.is_empty() {
@@ -110,10 +110,12 @@ pub(super) fn dynamic(ctx: &mut LoweringContext<'_, '_>, object: LoweredValue,
     take_owned_temp(ctx, &result, span)
 }
 
-/// Shares the owned Mixed slot eligibility between literal and runtime property names.
-fn eligible_property(info: &crate::types::ClassInfo, property: &str) -> bool {
+/// Shares managed slot eligibility between literal and runtime property names.
+fn eligible_property(info: &crate::types::ClassInfo, property: &str, profile: elephc_semantics::SemanticProfile) -> bool {
     let Some(index) = info.visible_property_index(property) else { return false; };
-    !info.is_internal && info.properties[index].1 == PhpType::Mixed
+    !info.is_internal && (info.properties[index].1 == PhpType::Mixed
+        || (profile.contains(elephc_semantics::StrictFeature::Casts)
+            && matches!(info.properties[index].1, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str)))
         && info.property_slot_owns_reference(index)
         && !info.readonly_properties.contains(property)
         && info.property_hooks.get(property).is_none_or(|hooks| !hooks.any())

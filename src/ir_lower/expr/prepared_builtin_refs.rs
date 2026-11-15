@@ -23,7 +23,7 @@ fn active_at(ctx: &LoweringContext<'_, '_>, name: &str, source: crate::source::S
             && def.params.iter().zip(&def.ref_params).any(|((_, ty), by_ref)| *by_ref && *ty == PhpType::Mixed))
 }
 
-/// Binds one Mixed property or element through the same cells as ordinary PHP references.
+/// Binds one managed property or Mixed element through the same cells as ordinary PHP references.
 pub(super) fn lower_argument(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSig,
     index: usize, arg: &Expr) -> Option<ValueId> {
     if !sig.ref_params.get(index).copied().unwrap_or(false)
@@ -33,7 +33,7 @@ pub(super) fn lower_argument(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSi
     { return None; }
     let mut place = arg;
     while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind { place = value; }
-    if !mixed_place(ctx, place) { return None; }
+    if !managed_place(ctx, place) { return None; }
     let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
     let owner = ctx.declare_ref_cell_owner(&alias, PhpType::Mixed);
     ctx.builder.mark_reference_argument_owner(owner);
@@ -43,13 +43,14 @@ pub(super) fn lower_argument(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSi
     Some(lower_arg_with_signature(ctx, sig, index, &variable))
 }
 
-/// Recognizes original Mixed storage that can expose a managed reference without narrowing.
-pub(super) fn mixed_place(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool {
+/// Recognizes original storage that can expose a managed reference without detaching its value.
+pub(super) fn managed_place(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool {
     if let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind {
-        return mixed_place(ctx, value);
+        return managed_place(ctx, value);
     }
     match &place.kind {
-        ExprKind::PropertyAccess { .. } => super::ref_place_args::live_mixed_property_argument(ctx, place, &PhpType::Mixed),
+        ExprKind::PropertyAccess { .. } => super::ref_place_args::live_mixed_property_argument(ctx, place, &PhpType::Mixed)
+            || super::ref_place_args::live_scalar_property_argument(ctx, place),
         ExprKind::StaticPropertyAccess { .. } => super::ref_place_args::static_place_type(ctx, place) == Some(PhpType::Mixed),
         ExprKind::ArrayAccess { array, .. } => {
             super::ref_place_args::static_place_type(ctx, place) == Some(PhpType::Mixed)

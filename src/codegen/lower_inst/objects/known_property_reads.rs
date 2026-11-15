@@ -311,7 +311,7 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell(
     if slot.is_declared {
         emit_uninitialized_owned_ref_property_guard(ctx, &slot, int_reg);
     }
-    promote_mixed_property_reference(ctx, &slot);
+    promote_managed_property_reference(ctx, &slot);
     store_ref_cell_pointer_result(ctx, inst)
 }
 
@@ -358,7 +358,7 @@ pub(in crate::codegen::lower_inst) fn lower_load_prop_ref_cell_checked(
     ctx.load_value_to_reg(object, base_reg)?;
     let int_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset); // load the reference-cell pointer from the property slot (no deref)
-    promote_mixed_property_reference(ctx, &slot);
+    promote_managed_property_reference(ctx, &slot);
     store_ref_cell_pointer_result(ctx, inst)
 }
 
@@ -427,7 +427,7 @@ fn lower_mixed_load_prop_ref_cell_checked(
         let slot = &candidate.candidate.slot;
         if slot.php_type.reference_payload_compatible(expected) {
             abi::emit_load_from_address(ctx.emitter, int_reg, int_reg, slot.offset); // load the reference-cell pointer from the matched class's property slot
-            promote_mixed_property_reference(ctx, slot);
+            promote_managed_property_reference(ctx, slot);
         } else {
             any_mismatch = true;
             abi::emit_jump(ctx.emitter, &mismatch_label);
@@ -472,13 +472,18 @@ pub(super) fn store_ref_cell_pointer_result(ctx: &mut FunctionContext<'_>, inst:
     Ok(())
 }
 
-/// Gives an owned Mixed property's native and eval aliases one persistent value identity.
-fn promote_mixed_property_reference(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
-    if slot.php_type == PhpType::Mixed
-        && ctx.module.class_infos.get(&slot.class_name)
-            .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16))
-    {
+/// Gives a supported owned property's native aliases one persistent, constraint-bearing value identity.
+fn promote_managed_property_reference(ctx: &mut FunctionContext<'_>, slot: &PropertySlot) {
+    if !ctx.module.class_infos.get(&slot.class_name)
+        .is_some_and(|class| class.property_slot_owns_reference((slot.offset - 8) / 16)) { return; }
+    if slot.php_type == PhpType::Mixed {
         abi::emit_call_label(ctx.emitter, "__rt_reference_cell_promote_mixed");
+    } else if ctx.module.required_runtime_features.native_reference_validation {
+        let suffix = match slot.php_type {
+            PhpType::Int => "int", PhpType::Float => "float", PhpType::Bool => "bool",
+            PhpType::Str => "string", _ => return,
+        };
+        abi::emit_call_label(ctx.emitter, &format!("__rt_reference_cell_promote_{suffix}"));
     }
 }
 
@@ -541,7 +546,7 @@ pub(super) fn lower_mixed_load_prop_ref_cell(
                 int_reg,
             );
         }
-        promote_mixed_property_reference(ctx, &candidate.candidate.slot);
+        promote_managed_property_reference(ctx, &candidate.candidate.slot);
         abi::emit_jump(ctx.emitter, &done_label);
     }
 

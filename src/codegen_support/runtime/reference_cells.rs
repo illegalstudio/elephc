@@ -22,6 +22,7 @@ mod mixed_payload;
 mod mixed_symbol;
 mod property_payload;
 mod canonical;
+mod scalar_payload;
 mod parameter_bindings;
 mod argument_pins;
 mod validation_pins;
@@ -81,6 +82,7 @@ pub(super) fn emit_reference_cells(emitter: &mut Emitter, native_validation: boo
     emit_release(emitter);
     emit_clone(emitter);
     mixed_payload::emit_promote_mixed(emitter, native_validation);
+    if native_validation { scalar_payload::emit(emitter); }
     mixed_payload::emit_retain_mixed(emitter);
     validation_pins::emit(emitter);
     argument_pins::emit(emitter);

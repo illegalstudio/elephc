@@ -1759,16 +1759,19 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 /// hierarchy. Exact Mixed constructor-promoted references also acquire an object owner;
 /// other constructor-promoted payloads retain their existing representation. Owned cells are recorded
 /// in `owned_reference_properties` so the object allocates and frees them. Checked casts also
-/// need canonical Mixed slots when a runtime property name or callable first selects a reference.
+/// need managed Mixed and scalar slots when a runtime name or callable first selects a reference.
 fn apply_reference_property_promotions(checker: &mut Checker) {
     {
         let canonical_mixed_references = checker.program_contains_eval
             || checker.semantic_profile.contains(elephc_semantics::StrictFeature::Casts);
+        let checked_scalar_references = checker.semantic_profile.contains(elephc_semantics::StrictFeature::Casts);
         let classes = &checker.classes;
         let candidates = classes.iter().flat_map(|(name, info)| {
             info.properties.iter().enumerate().filter_map(move |(index, (property, ty))| {
                 let declaring = info.property_declaring_classes.get(property).unwrap_or(name);
-                (ty == &PhpType::Mixed && info.visible_property_index(property) == Some(index)
+                let checked_scalar = checked_scalar_references
+                    && matches!(ty, PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str);
+                ((ty == &PhpType::Mixed || checked_scalar) && info.visible_property_index(property) == Some(index)
                     && info.property_slot_is_declared(index, property)
                     && ((!info.reference_properties.contains(property) && canonical_mixed_references)
                         || (info.reference_properties.contains(property)

@@ -74,27 +74,32 @@ pub(super) struct RefPlaceRewrite {
 pub(super) fn live_mixed_property_argument(
     ctx: &LoweringContext<'_, '_>, arg: &Expr, expected: &PhpType,
 ) -> bool {
-    if *expected != PhpType::Mixed { return false; }
-    let ExprKind::PropertyAccess { object, property } = &arg.kind else { return false; };
-    let Some(class_name) = place_object_class_name(ctx, object) else { return false; };
-    let Some(info) = ctx.classes.get(class_name.as_str()) else { return false; };
+    *expected == PhpType::Mixed && writable_property_argument_type(ctx, arg) == Some(PhpType::Mixed)
+}
+
+/// Selects managed scalar properties whose reference reads support canonical boxed children.
+pub(super) fn live_scalar_property_argument(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
+    ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+        && matches!(writable_property_argument_type(ctx, arg),
+            Some(PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::Str))
+}
+
+/// Resolves an owned writable physical cell using the caller's lexical property scope.
+fn writable_property_argument_type(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> Option<PhpType> {
+    let ExprKind::PropertyAccess { object, property } = &arg.kind else { return None; };
+    let class_name = place_object_class_name(ctx, object)?;
+    let info = ctx.classes.get(class_name.as_str())?;
     let (index, metadata) = match crate::types::resolve_property_name(
         ctx.classes, &class_name, property, ctx.current_class.as_deref(),
     ) {
-        crate::types::PropertyNameResolution::Visible => {
-            let Some(index) = info.visible_property_index(property) else { return false; };
-            (index, info)
-        }
-        crate::types::PropertyNameResolution::ScopePrivate { scope, index } => {
-            let Some(metadata) = ctx.classes.get(&scope) else { return false; };
-            (index, metadata)
-        }
-        _ => return false,
+        crate::types::PropertyNameResolution::Visible => (info.visible_property_index(property)?, info),
+        crate::types::PropertyNameResolution::ScopePrivate { scope, index } => (index, ctx.classes.get(&scope)?),
+        _ => return None,
     };
-    info.properties.get(index).is_some_and(|(_, ty)| *ty == PhpType::Mixed)
-        && info.property_slot_owns_reference(index)
+    (info.property_slot_owns_reference(index)
         && !metadata.is_internal && !metadata.readonly_properties.contains(property)
-        && metadata.property_hooks.get(property).is_none_or(|hooks| !hooks.any())
+        && metadata.property_hooks.get(property).is_none_or(|hooks| !hooks.any()))
+        .then(|| info.properties.get(index).map(|(_, ty)| ty.clone())).flatten()
 }
 
 /// Rewrites a direct user method/constructor call whose by-reference argument is a property

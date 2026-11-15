@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 79 (this commit), following `c694b9c796`. Issue:
+Verified through step 80 (this commit), following `a1a4296e52`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 79.
+This progress ledger condenses verified implementation through step 80.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -1007,6 +1007,26 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
   compiler/exporter builds, example output with clean heap, builtin docs/audits,
   assembly comments and diff hygiene pass.
 
+### Managed scalar property conversion references
+
+- Checked casts now prepare eligible user scalar property cells as owned references.
+  Explicit native validation and generated declaration callbacks preserve the
+  declared contract across a checked conversion. Integer, float, boolean and
+  string selections promote in place through shared typed runtime entries; boxing
+  transfers the raw payload owner and changes only the physical descriptor bits.
+  Existing canonical readers preserve logical kinds, while later direct property
+  writes publish to the canonical child and keep aliases current.
+- Known and runtime-named direct/prepared calls reuse managed reference argument
+  binding. Mixed and scalar eligibility share lexical property resolution; raw
+  constructor cells retain their existing ABI. Casts remains staged while nullable,
+  union, static and remaining eval/reference boundaries continue.
+- Thirty focused settype checks, twenty-one native reference mode/owner checks,
+  native scalar property and existing dynamic Mixed property bundles, both EIR
+  optimizer settings, selected-checker emission and real cross-assembly on all
+  five targets pass. Native fixture output matches PHP and heaps are clean.
+  Compiler/test-target checks and build, architecture inventory, assembly comments,
+  fixture syntax and diff hygiene pass.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1104,4 +1124,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 76 | `0c94688cfc` | feat(strict): bind known dynamic property arguments |
 | 77 | `fed394dc1d` | feat(strict): canonicalize dynamic mixed property references |
 | 78 | `c694b9c796` | feat(strict): enable the arithmetic semantic profile |
-| 79 | this commit | feat(strict): enable the overflow semantic profile |
+| 79 | `a1a4296e52` | feat(strict): enable the overflow semantic profile |
+| 80 | this commit | feat(strict): preserve scalar property conversion references |
