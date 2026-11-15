@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
-- **Lowering**: [`src/backend_gap_prelude.rs`:815](https://github.com/illegalstudio/elephc/blob/main/src/backend_gap_prelude.rs#L815) (`levenshtein`)
+- **Lowering**: [`src/backend_gap_prelude.rs`:796](https://github.com/illegalstudio/elephc/blob/main/src/backend_gap_prelude.rs#L796) (`levenshtein`)
 - **Function symbol**: `levenshtein()`
 
 
