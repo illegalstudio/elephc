@@ -70,6 +70,9 @@ pub(crate) use objects::MIXED_READ_SEARCHES;
 pub(crate) use objects::CLASS_DESCENDANT_BUILDS;
 #[cfg(test)]
 pub(crate) use objects::IS_A_INDEX_BUILDS;
+#[cfg(test)]
+pub(crate) use objects::NAMED_SCOPE_GROUP_BUILDS;
+pub(in crate::codegen) use objects::NamedHelperScopes;
 mod ownership;
 mod pointers;
 mod scalar_widths;

@@ -822,18 +822,25 @@ pub(super) fn try_lower_outlined_named_mixed_prop_get(
         || inst.result_php_type.codegen_repr() != PhpType::Mixed
         || inst.result_ownership != Ownership::Owned
         || ctx.value_php_type(object)?.codegen_repr() != PhpType::Mixed
-        || !matches!(inst.immediate, Some(Immediate::Data(_)))
     {
         return Ok(false);
     }
-    let scope = if named_property_is_scope_sensitive(ctx, property) {
-        ctx.function
-            .lexical_class
-            .as_deref()
-            .map(|class| class.trim_start_matches('\\').to_string())
-    } else {
-        None
+    // `$o->name` carries the name as its data immediate. `$o->{'name'}` -- what `??`, `isset()`
+    // and `empty()` over a literal name lower to -- carries its fetch mode instead and takes the
+    // name as a literal operand, which the helper re-creates from the same data id. Symfony's
+    // container reads `$container->privates['id'] ?? ...` that way at over a thousand sites,
+    // each of which inlined a ladder over every class of the program.
+    let name_data = match (inst.op, &inst.immediate) {
+        (Op::PropGet, Some(Immediate::Data(_))) => None,
+        (Op::DynamicPropGet, Some(Immediate::PropertyFetchMode(_))) => {
+            match literal_name_data(ctx, expect_operand(inst, 1)?)? {
+                Some(data) => Some(data),
+                None => return Ok(false),
+            }
+        }
+        _ => return Ok(false),
     };
+    let scope = named_helper_scope(ctx, property, false);
     let mode = super::property_resolution::property_fetch_mode(inst);
     let key = format!(
         "{}:{}:{}:{:?}:{}",
@@ -856,11 +863,30 @@ pub(super) fn try_lower_outlined_named_mixed_prop_get(
         },
         scope.as_deref(),
     );
-    pending_named_get_ops(ctx, &key, inst);
+    pending_named_get_ops(ctx, &key, inst, name_data);
     ctx.load_value_to_reg(object, abi::int_arg_reg_name(ctx.emitter.target, 0))?;
     abi::emit_call_label(ctx.emitter, &label);
     store_if_result(ctx, inst)?;
     Ok(true)
+}
+
+/// The data id of a property-name operand defined by a string literal, `None` for any other.
+fn literal_name_data(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<Option<crate::ir::DataId>> {
+    let Some(metadata) = ctx.function.value(value) else {
+        return Ok(None);
+    };
+    let crate::ir::ValueDef::Instruction { inst, .. } = metadata.def else {
+        return Ok(None);
+    };
+    Ok(ctx.function.instruction(inst).and_then(|instruction| {
+        match (instruction.op, &instruction.immediate) {
+            (Op::ConstStr, Some(Immediate::Data(data))) => Some(*data),
+            _ => None,
+        }
+    }))
 }
 
 /// Readable part of the named-write helper's entry symbol.
@@ -898,14 +924,7 @@ pub(super) fn try_lower_outlined_named_mixed_prop_set(
     {
         return Ok(false);
     }
-    let scope = if named_property_is_scope_sensitive(ctx, property) {
-        ctx.function
-            .lexical_class
-            .as_deref()
-            .map(|class| class.trim_start_matches('\\').to_string())
-    } else {
-        None
-    };
+    let scope = named_helper_scope(ctx, property, true);
     let key = format!("{}:{}:{}", NAMED_SET_PREFIX, property, scope.as_deref().unwrap_or(""));
     if arm_count.is_none() && !ctx.shared.dynamic_prop_helper_requested(&key) {
         return Ok(false);
@@ -917,7 +936,7 @@ pub(super) fn try_lower_outlined_named_mixed_prop_set(
         DynamicPropHelperKind::NamedMixedSet { property: property.to_string() },
         scope.as_deref(),
     );
-    pending_named_get_ops(ctx, &key, inst);
+    pending_named_get_ops(ctx, &key, inst, None);
     let target = ctx.emitter.target;
     ctx.load_value_to_reg(object, abi::int_arg_reg_name(target, 0))?;
     ctx.load_value_to_reg(value, abi::int_arg_reg_name(target, 1))?;
@@ -939,7 +958,7 @@ fn emit_named_set_helper(
 ) -> Result<()> {
     use crate::ir::{Builder, Function, FunctionParam, LocalKind, LocalSlotId, Terminator};
 
-    let Some((op, immediate)) = shared.named_get_templates.get(&pending.key).cloned() else {
+    let Some((op, immediate, _)) = shared.named_get_templates.get(&pending.key).cloned() else {
         return Err(CodegenIrError::invalid_module(format!(
             "named property write helper {} has no template",
             pending.key
@@ -993,29 +1012,191 @@ fn emit_named_set_helper(
     )
 }
 
-/// Remembers the opcode and name immediate a named-read helper is built from.
-fn pending_named_get_ops(ctx: &mut FunctionContext<'_>, key: &str, inst: &Instruction) {
+/// Remembers the opcode, immediate and literal-name operand a named helper is built from.
+fn pending_named_get_ops(
+    ctx: &mut FunctionContext<'_>,
+    key: &str,
+    inst: &Instruction,
+    name_data: Option<crate::ir::DataId>,
+) {
     ctx.shared
         .named_get_templates
         .entry(key.to_string())
-        .or_insert_with(|| (inst.op, inst.immediate.clone()));
+        .or_insert_with(|| (inst.op, inst.immediate.clone(), name_data));
 }
 
-/// Whether a read of `property` may resolve differently from one class scope to another.
-fn named_property_is_scope_sensitive(ctx: &FunctionContext<'_>, property: &str) -> bool {
-    ctx.module.class_infos.values().any(|info| {
-        let slots = info
-            .properties
+/// The lexical class a named helper for `property` is built in and keyed on, `None` for the
+/// module-wide helper.
+///
+/// A name no class declares non-public, nor keeps under more than one slot, reads alike from
+/// every scope. Otherwise php's answer depends on the scope only through its relation to the
+/// classes DECLARING the name non-public (`crate::types::resolve_property_name`): whether the
+/// scope is one of them (its own private slot), and whether it descends from or is an ancestor of
+/// each (the protected test). Scopes with the same relations therefore build the same helper and
+/// share it, in the scope with the smallest name. Symfony's dumped container has one factory class
+/// per service, all extending the container, and keyed by the raw lexical class every one of them
+/// built its own copy of the `$container->privates` ladder over every class of the program.
+///
+/// Raw lexical keying stays where something besides name resolution reads the scope: a builtin
+/// scope (engine storage and `ReflectionProperty`), a write to a name some class declares
+/// readonly or with an asymmetric `set` visibility (the scope is in the refusal), and a program
+/// that can run eval (the eval bridge receives the scope by name).
+fn named_helper_scope(ctx: &FunctionContext<'_>, property: &str, write: bool) -> Option<String> {
+    let module = ctx.module;
+    let scopes = ctx
+        .shared
+        .named_helper_scopes(property, write, || named_helper_scope_groups(module, property, write));
+    let lexical = || {
+        ctx.function
+            .lexical_class
+            .as_deref()
+            .map(|class| class.trim_start_matches('\\').to_string())
+    };
+    match &*scopes {
+        NamedHelperScopes::Insensitive => None,
+        NamedHelperScopes::ByLexicalClass => lexical(),
+        NamedHelperScopes::Grouped(groups) => {
+            let lexical = lexical()?;
+            match groups.get(lexical.as_str()) {
+                Some(representative) => Some(representative.clone()),
+                // Related to no declaring class: resolves every name as global code does.
+                None if !module.class_infos.get(lexical.as_str()).is_some_and(|info| info.is_internal) => None,
+                None => Some(lexical),
+            }
+        }
+    }
+}
+
+/// How the scopes of a program share the named helpers of one property; see `named_helper_scope`.
+pub(in crate::codegen) enum NamedHelperScopes {
+    /// Every scope reads the name alike: one module-wide helper.
+    Insensitive,
+    /// Every scope keeps its own helper.
+    ByLexicalClass,
+    /// Each class related to a declaring class -> the scope its helper is built in. A class
+    /// absent from the map shares the module-wide helper.
+    Grouped(crate::fast_hash::FastMap<String, String>),
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Builds of a property's scope groups.
+    pub(crate) static NAMED_SCOPE_GROUP_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Groups the program's class scopes by their relations to the classes declaring `property`
+/// non-public; see `named_helper_scope`.
+fn named_helper_scope_groups(module: &Module, property: &str, write: bool) -> NamedHelperScopes {
+    #[cfg(test)]
+    NAMED_SCOPE_GROUP_BUILDS.with(|count| count.set(count.get() + 1));
+    let classes = &module.class_infos;
+    let mut sensitive = false;
+    let mut declaring: Vec<&str> = Vec::new();
+    for (name, info) in classes {
+        let slots = info.properties.iter().filter(|(slot, _)| slot == property).count();
+        if slots == 0 {
+            continue;
+        }
+        if write
+            && (info.is_readonly_class
+                || info.readonly_properties.contains(property)
+                || info.property_set_visibilities.contains_key(property))
+        {
+            return NamedHelperScopes::ByLexicalClass;
+        }
+        let non_public = !matches!(info.property_visibilities.get(property), Some(Visibility::Public));
+        sensitive |= slots > 1 || non_public;
+        if non_public {
+            declaring.push(
+                info.property_declaring_classes
+                    .get(property)
+                    .map(String::as_str)
+                    .unwrap_or(name.as_str()),
+            );
+        }
+    }
+    if !sensitive {
+        return NamedHelperScopes::Insensitive;
+    }
+    let features = &module.required_runtime_features;
+    if features.eval_bridge || features.eval_scope {
+        return NamedHelperScopes::ByLexicalClass;
+    }
+    declaring.sort_unstable();
+    declaring.dedup();
+    let index: crate::fast_hash::FastMap<&str, u32> =
+        declaring.iter().enumerate().map(|(position, name)| (*name, position as u32)).collect();
+    // The strict ancestors `crate::types::class_inherits_from` walks: the parent chain, with the
+    // same cycle bound.
+    let ancestors = |class: &str| {
+        let mut chain = Vec::new();
+        let mut current = classes.get(class).and_then(|info| info.parent.as_deref());
+        while let Some(name) = current {
+            if chain.len() > classes.len() {
+                break;
+            }
+            chain.push(name);
+            current = classes.get(name).and_then(|info| info.parent.as_deref());
+        }
+        chain
+    };
+    const IS: u8 = 1;
+    const DESCENDS: u8 = 2;
+    const ANCESTOR: u8 = 4;
+    // Per class -- named in the program or only in a parent chain, as a scope may be -- its
+    // (declaring class position, relation bits) pairs.
+    fn mark<'a>(
+        relations: &mut crate::fast_hash::FastMap<&'a str, Vec<(u32, u8)>>,
+        class: &'a str,
+        position: u32,
+        bit: u8,
+    ) {
+        let entry = relations.entry(class).or_default();
+        match entry.iter_mut().find(|(at, _)| *at == position) {
+            Some((_, bits)) => *bits |= bit,
+            None => entry.push((position, bit)),
+        }
+    }
+    let mut relations: crate::fast_hash::FastMap<&str, Vec<(u32, u8)>> = Default::default();
+    for name in classes.keys() {
+        if let Some(&position) = index.get(name.as_str()) {
+            mark(&mut relations, name, position, IS);
+        }
+        for ancestor in ancestors(name) {
+            if let Some(&position) = index.get(ancestor) {
+                mark(&mut relations, name, position, DESCENDS);
+            }
+        }
+    }
+    for (&declaring, &position) in &index {
+        for ancestor in ancestors(declaring) {
+            mark(&mut relations, ancestor, position, ANCESTOR);
+        }
+    }
+    let mut by_relations: std::collections::BTreeMap<Vec<(u32, u8)>, Vec<&str>> = Default::default();
+    for (name, mut bits) in relations {
+        if classes.get(name).is_some_and(|info| info.is_internal) {
+            continue;
+        }
+        bits.sort_unstable();
+        by_relations.entry(bits).or_default().push(name);
+    }
+    let mut groups = crate::fast_hash::FastMap::default();
+    for members in by_relations.into_values() {
+        // A class the program declares, so the helper's scope is a real class of the module.
+        let representative = members
             .iter()
-            .filter(|(name, _)| name == property)
-            .count();
-        slots > 1
-            || (slots == 1
-                && !matches!(
-                    info.property_visibilities.get(property),
-                    Some(Visibility::Public)
-                ))
-    })
+            .filter(|member| classes.contains_key(**member))
+            .min()
+            .or_else(|| members.iter().min())
+            .copied()
+            .unwrap_or_default()
+            .to_string();
+        for member in members {
+            groups.insert(member.to_string(), representative.clone());
+        }
+    }
+    NamedHelperScopes::Grouped(groups)
 }
 
 /// Emits a named-read helper as a synthetic EIR function holding the one read instruction.
@@ -1030,7 +1211,8 @@ fn emit_named_get_helper(
 ) -> Result<()> {
     use crate::ir::{Builder, Function, FunctionParam, LocalKind, LocalSlotId, Terminator};
 
-    let Some((op, immediate)) = shared.named_get_templates.get(&pending.key).cloned() else {
+    let Some((op, immediate, name_data)) = shared.named_get_templates.get(&pending.key).cloned()
+    else {
         return Err(CodegenIrError::invalid_module(format!(
             "named property read helper {} has no template",
             pending.key
@@ -1054,9 +1236,13 @@ fn emit_named_get_helper(
         builder.set_entry(entry);
         builder.position_at_end(entry);
         let object = builder.emit_load_local(LocalSlotId::from_raw(0), mixed.clone(), PhpType::Mixed);
+        let mut operands = vec![object];
+        if let Some(data) = name_data {
+            operands.push(builder.emit_const_str(data));
+        }
         let value = builder.emit_with_effects(
             op,
-            vec![object],
+            operands,
             immediate,
             mixed.clone(),
             PhpType::Mixed,

@@ -100,6 +100,11 @@ pub(crate) struct SharedCodegenState {
     class_like_names: std::cell::RefCell<
         crate::fast_hash::FastMap<String, std::sync::Arc<super::lower_inst::builtins::ClassLikeNames>>,
     >,
+    /// How the class scopes share the named property helpers, per (is a write, property name):
+    /// a whole-program fact each site of a name asked again (`named_helper_scope`).
+    named_helper_scopes: std::cell::RefCell<
+        crate::fast_hash::FastMap<(bool, String), std::sync::Arc<super::lower_inst::NamedHelperScopes>>,
+    >,
     mixed_hash_arm_base: std::cell::OnceCell<std::sync::Arc<Vec<(u64, std::sync::Arc<str>, usize)>>>,
     non_public_static_base: std::cell::OnceCell<
         std::sync::Arc<Vec<super::lower_inst::callables::NonPublicStaticMethod>>,
@@ -305,9 +310,12 @@ pub(crate) struct SharedCodegenState {
     dynamic_prop_pending: Vec<PendingDynamicPropHelper>,
     /// Helpers a parallel worker left to the compiling thread.
     postponed_helpers: Vec<PendingDynamicPropHelper>,
-    /// The opcode and name immediate each named-read helper repeats, by helper key.
-    pub(super) named_get_templates:
-        crate::fast_hash::FastMap<String, (crate::ir::Op, Option<crate::ir::Immediate>)>,
+    /// The opcode and immediate each named-read helper repeats, by helper key, plus the data id of
+    /// the literal name for an opcode that takes the name as an operand (`$o->{'name'}`).
+    pub(super) named_get_templates: crate::fast_hash::FastMap<
+        String,
+        (crate::ir::Op, Option<crate::ir::Immediate>, Option<crate::ir::DataId>),
+    >,
     /// What each shared untyped-receiver method-call helper is built from, by helper key.
     pub(super) method_call_templates:
         crate::fast_hash::FastMap<String, MethodCallHelperTemplate>,
@@ -682,6 +690,22 @@ impl SharedCodegenState {
         built
     }
 
+    /// How the scopes share the named helpers of `property`, built by `build` on first request.
+    pub(super) fn named_helper_scopes(
+        &self,
+        property: &str,
+        write: bool,
+        build: impl FnOnce() -> super::lower_inst::NamedHelperScopes,
+    ) -> std::sync::Arc<super::lower_inst::NamedHelperScopes> {
+        let key = (write, property.to_string());
+        if let Some(found) = self.named_helper_scopes.borrow().get(&key) {
+            return found.clone();
+        }
+        let built = std::sync::Arc::new(build());
+        self.named_helper_scopes.borrow_mut().insert(key, built.clone());
+        built
+    }
+
     /// The scope-independent mixed hash arms, collected once by `build`; see the field.
     pub(super) fn mixed_hash_arm_base(
         &self,
@@ -765,6 +789,7 @@ impl SharedCodegenState {
             non_public_static_base: std::cell::OnceCell::new(),
             mixed_hash_arm_base: std::cell::OnceCell::new(),
             class_like_names: Default::default(),
+            named_helper_scopes: Default::default(),
             class_descendants: std::cell::OnceCell::new(),
             class_ancestors: std::cell::OnceCell::new(),
             instance_target_split: std::cell::OnceCell::new(),

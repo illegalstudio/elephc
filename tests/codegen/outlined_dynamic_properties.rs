@@ -374,3 +374,184 @@ echo $r, "\n";
     );
     assert_ran_clean(&out, "O52'O'Error\n");
 }
+
+const SILENT_LITERAL_READS: &str = r#"<?php
+class Base {
+    public $pub = 'p';
+    protected $prot = 'q';
+    private $priv = 'r';
+    function viaBase($o) { return [$o->prot ?? 'none', isset($o->prot) ? 'set' : 'unset']; }
+}
+class Kid extends Base {
+    function viaKid($o) { return [$o->prot ?? 'none', isset($o->prot) ? 'set' : 'unset']; }
+}
+class Magic {
+    public function __get($n) { return "magic-$n"; }
+    public function __isset($n) { return $n === 'pub'; }
+}
+#[\AllowDynamicProperties]
+class Dyn {}
+function outside($o) {
+    return [
+        $o->pub ?? 'none',
+        isset($o->pub) ? 'set' : 'unset',
+        empty($o->pub) ? 'empty' : 'full',
+        $o->prot ?? 'none',
+        isset($o->prot) ? 'set' : 'unset',
+    ];
+}
+function outside2($o) { return [$o->pub ?? 'none2', isset($o->pub) ? 'set2' : 'unset2']; }
+$d = new Dyn;
+$d->pub = 'dyn';
+$s = new stdClass;
+$s->pub = 0;
+$n = new Base;
+$n->pub = null;
+foreach ([new Base, new Kid, new Magic, $d, $s, $n, null, 42, 'str', []] as $o) {
+    echo implode(',', outside($o)), ' | ', implode(',', outside2($o)), "\n";
+}
+echo implode(',', (new Base)->viaBase(new Kid)), "\n";
+echo implode(',', (new Kid)->viaKid(new Base)), "\n";
+echo implode(',', (new Kid)->viaKid(new Magic)), "\n";
+"#;
+
+/// `??`, `isset()` and `empty()` over a literal name on untyped receivers go through the shared
+/// named-read helper, and answer as php does for declared, protected, magic, dynamic, stdClass,
+/// null-valued and non-object receivers, from global and from class scope, without leaking.
+#[test]
+fn test_silent_literal_name_reads_on_untyped_receivers_match_php() {
+    let out = compile_and_run_with_heap_debug(SILENT_LITERAL_READS);
+    assert_ran_clean(
+        &out,
+        "p,set,full,none,unset | p,set2\n\
+         p,set,full,none,unset | p,set2\n\
+         magic-pub,set,full,none,unset | magic-pub,set2\n\
+         dyn,set,full,none,unset | dyn,set2\n\
+         0,set,empty,none,unset | 0,set2\n\
+         none,unset,empty,none,unset | none2,unset2\n\
+         none,unset,empty,none,unset | none2,unset2\n\
+         none,unset,empty,none,unset | none2,unset2\n\
+         none,unset,empty,none,unset | none2,unset2\n\
+         none,unset,empty,none,unset | none2,unset2\n\
+         q,set\n\
+         q,set\n\
+         none,unset\n",
+    );
+}
+
+/// Sibling scopes that relate to the declaring class alike share one named helper, built in one
+/// of them; a scope related differently, an unrelated class and global code keep their own
+/// answers. Reads and writes through untyped receivers answer as php does from each scope,
+/// including a protected name seen from a sibling, from a stranger and from global code, a
+/// private name seen from a subclass, and dynamic and stdClass receivers.
+#[test]
+fn test_sibling_scopes_sharing_named_helpers_keep_php_visibility() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Container {
+    protected $privates = ['base'];
+    protected mixed $box = 'box';
+    private $secret = 's';
+    public function secretOf($o) { return $o->secret ?? 'no-secret'; }
+}
+class Kernel extends Container {}
+class ServiceA extends Kernel {
+    public static function read($o) { return $o->privates ?? 'none'; }
+    public static function plain($o) { return $o->privates; }
+    public static function box($o) { return $o->box ?? 'no-box'; }
+    public static function write($o, $v) { $o->box = $v; }
+    public function peek($o) { return $o->secret ?? 'hidden'; }
+}
+class ServiceB extends Kernel {
+    public static function read($o) { return $o->privates ?? 'none'; }
+    public static function write($o, $v) { $o->box = $v; }
+}
+class Stranger {
+    public static function read($o) { return $o->privates ?? 'none'; }
+    public static function box($o) { return $o->box ?? 'no-box'; }
+    public static function write($o, $v) { $o->box = $v; }
+}
+#[\AllowDynamicProperties]
+class Loose {}
+function read($o) { return $o->privates ?? 'none'; }
+function show($label, $value) { echo $label, '=', json_encode($value), "\n"; }
+
+$k = new Kernel();
+$loose = new Loose();
+$loose->privates = 'loose';
+$std = new stdClass();
+$std->privates = 'std';
+foreach (['kernel' => $k, 'service' => new ServiceB(), 'loose' => $loose, 'std' => $std, 'null' => null, 'int' => 3] as $name => $o) {
+    show("$name A", ServiceA::read($o));
+    show("$name B", ServiceB::read($o));
+    show("$name S", Stranger::read($o));
+    show("$name G", read($o));
+}
+ServiceB::write($k, ['x']);
+show('after B write', ServiceA::box($k));
+show('stranger box', Stranger::box($k));
+show('plain', ServiceA::plain($k));
+Stranger::write($loose, 'stranger');
+show('after stranger', Stranger::box($loose));
+ServiceA::write($loose, 'again');
+show('loose again', ServiceB::read($loose) . '/' . Stranger::box($loose));
+show('peek', (new ServiceA())->peek($k));
+show('own', $k->secretOf($k));
+"#,
+    );
+    assert_ran_clean(
+        &out,
+        "kernel A=[\"base\"]\n\
+kernel B=[\"base\"]\n\
+kernel S=\"none\"\n\
+kernel G=\"none\"\n\
+service A=[\"base\"]\n\
+service B=[\"base\"]\n\
+service S=\"none\"\n\
+service G=\"none\"\n\
+loose A=\"loose\"\n\
+loose B=\"loose\"\n\
+loose S=\"loose\"\n\
+loose G=\"loose\"\n\
+std A=\"std\"\n\
+std B=\"std\"\n\
+std S=\"std\"\n\
+std G=\"std\"\n\
+null A=\"none\"\n\
+null B=\"none\"\n\
+null S=\"none\"\n\
+null G=\"none\"\n\
+int A=\"none\"\n\
+int B=\"none\"\n\
+int S=\"none\"\n\
+int G=\"none\"\n\
+after B write=[\"x\"]\n\
+stranger box=\"no-box\"\n\
+plain=[\"base\"]\n\
+after stranger=\"stranger\"\n\
+loose again=\"loose\\/again\"\n\
+peek=\"hidden\"\n\
+own=\"s\"\n",
+    );
+}
+
+/// A literal-name read under `??` or `isset()` lowers to the dynamic-name opcode in a silent fetch
+/// mode, not to `prop_get`; its sites call the named-read helper instead of inlining a ladder over
+/// every class. Symfony's container reads `$container->privates['id'] ?? ...` at over a thousand
+/// sites.
+#[test]
+fn test_silent_literal_name_reads_share_the_named_read_helper() {
+    for target in ["macos-aarch64", "linux-x86_64"] {
+        let asm = emit_asm_for("elephc_silent_named_reads", SILENT_LITERAL_READS, target);
+        let prefix = "_eir_shared_named_prop_get_";
+        let defs = count_definitions(&asm, prefix);
+        let calls = count_calls(&asm, prefix);
+        assert!(defs > 0, "{target}: no named-read helper was emitted");
+        // `outside()` and `outside2()` alone hold seven silent literal reads; none of them called
+        // a named-read helper before (the fixture has no plain `$o->name` value read).
+        assert!(
+            calls >= 7,
+            "{target}: expected the silent literal reads to call the named-read helpers, found {calls} calls to {defs} helpers"
+        );
+    }
+}

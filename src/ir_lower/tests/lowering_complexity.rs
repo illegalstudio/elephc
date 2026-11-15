@@ -944,6 +944,84 @@ fn mixed_reads_of_one_name_search_the_program_once() {
     assert_eq!(small, large, "arm searches grew with the sites: {small} vs {large}");
 }
 
+/// `count` silent reads (`??`, `isset()`) of one literal name on untyped receivers.
+fn many_mixed_coalesce_reads(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..4 {
+        source.push_str(&format!("class R{index} {{ public $value = {index}; }}\n"));
+    }
+    source.push_str("function f(mixed $o): int {\n    $n = 0;\n");
+    for _ in 0..count {
+        source.push_str("    $n += (int) ($o->value ?? 7);\n    $n += isset($o->value) ? 1 : 0;\n");
+    }
+    source.push_str("    return $n;\n}\necho f(new R0()), f(new R1()), f(new R2()), f(new R3());\n");
+    source
+}
+
+/// A literal-name read under `??` or `isset()` lowers to the dynamic-name opcode in a silent mode,
+/// not to `prop_get`; its sites share the named helper too. Symfony's container reads
+/// `$container->privates['id'] ?? ...` at over a thousand sites, each of which searched and
+/// inlined a ladder over every class of the program.
+#[test]
+fn mixed_coalesce_reads_of_one_name_search_the_program_once() {
+    let small = mixed_read_searches(&many_mixed_coalesce_reads(4));
+    let large = mixed_read_searches(&many_mixed_coalesce_reads(64));
+    assert!(small > 0, "the fixture no longer reaches the named read");
+    assert_eq!(small, large, "arm searches grew with the sites: {small} vs {large}");
+}
+
+/// `count` service-like classes extending a base that declares `protected $privates`, each reading
+/// and writing `$mixed->privates` from its own scope, as Symfony's dumped container factories do.
+fn many_related_scopes_reading_a_protected_name(count: usize) -> String {
+    let mut source = String::from(
+        "<?php\nclass Container { protected $privates = []; public $other = 0; }\nclass Holder { public $privates = 1; }\nclass Other { public $privates = 2; }\n",
+    );
+    for index in 0..count {
+        source.push_str(&format!(
+            "class Service{index} extends Container {{ public static function make(mixed $c, mixed $v) {{ $c->privates = $v; return $c->privates ?? $c->privates; }} }}\n"
+        ));
+    }
+    source.push_str("$c = new Container();\n");
+    for index in 0..count {
+        source.push_str(&format!("echo json_encode(Service{index}::make($argc > 1 ? new Holder() : $c, [{index}])), \"\\n\";\n"));
+    }
+    source
+}
+
+/// Named property helpers defined in the assembly generated for `source`.
+fn named_helper_definitions(source: &str) -> usize {
+    let module = lower_source(source);
+    let asm = crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    asm.lines()
+        .filter(|line| {
+            (line.starts_with("_eir_shared_named_prop_get_") || line.starts_with("_eir_shared_named_prop_set_"))
+                && line.trim_end().ends_with("_0:")
+        })
+        .count()
+}
+
+/// Scopes that relate to the declaring class the same way resolve the name alike, so they share
+/// one helper per access instead of one per scope: Symfony's container has a factory class per
+/// service, and each built its own copy of a ladder over every class of the program.
+#[test]
+fn related_scopes_share_the_named_property_helpers() {
+    let small = named_helper_definitions(&many_related_scopes_reading_a_protected_name(3));
+    let large = named_helper_definitions(&many_related_scopes_reading_a_protected_name(24));
+    assert!(small > 0, "the fixture no longer reaches the named helpers");
+    assert_eq!(small, large, "named helpers grew with the scopes: {small} vs {large}");
+}
+
+/// The scope groups of a name are built once per program, not once per site.
+#[test]
+fn named_helper_scope_groups_are_built_once_per_name() {
+    let module = lower_source(&many_related_scopes_reading_a_protected_name(12));
+    crate::codegen::NAMED_SCOPE_GROUP_BUILDS.with(|count| count.set(0));
+    crate::codegen::generate_user_asm_from_ir(&module, false, false).expect("codegen");
+    let builds = crate::codegen::NAMED_SCOPE_GROUP_BUILDS.with(|count| count.get());
+    // One build per (access kind, name): a read and a write of `privates`.
+    assert!((1..=2).contains(&builds), "{builds} scope group builds for one name");
+}
+
 /// `count` classes with public instance methods, one with a protected one, and runtime
 /// callable-array calls from eight class scopes.
 fn callable_array_scopes_over_public_methods(count: usize) -> String {
