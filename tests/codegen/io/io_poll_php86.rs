@@ -94,13 +94,11 @@ fn test_io_poll_fd_setsize_descriptor_throws_php86() {
     let out = run86(
         r#"<?php
 $pairs = [];
-for ($i = 0; $i < 520; $i++) {
-    [$reader, $writer] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
-    $pairs[] = $reader;
-    $pairs[] = $writer;
+for ($i = 0; $i < 1030; $i++) {
+    $pairs[] = fopen('/dev/null', 'r');
 }
 $context = new Io\Poll\Context(Io\Poll\Backend::Poll);
-$context->add(new StreamPollHandle($pairs[count($pairs) - 1]), [Io\Poll\Event::Read], "high");
+$context->add(new StreamPollHandle($pairs[1029]), [Io\Poll\Event::Read], "high");
 try {
     $context->wait(Time\Duration::fromMicroseconds(1000));
     echo "no-throw";

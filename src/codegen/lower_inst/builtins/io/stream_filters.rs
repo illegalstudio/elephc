@@ -592,6 +592,13 @@ pub(crate) fn lower_stream_filter_remove(
     super::super::ensure_arg_count(inst, "stream_filter_remove", 1)?;
     let filter = expect_operand(inst, 0)?;
     load_stream_fd_to_result(ctx, filter, "stream_filter_remove")?;
+    let out_of_range = ctx.next_label("sf_remove_out_of_range");
+    let done_label = ctx.next_label("sf_remove_done");
+    abi::emit_branch_if_fd_table_index_out_of_range(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        &out_of_range,
+    );
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the descriptor to the user-filter teardown helper
     }
@@ -603,6 +610,10 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
             ctx.emitter.instruction("strb wzr, [x9, x0]");                      // clear the write-direction filter slot for this descriptor
             ctx.emitter.instruction("mov x0, #1");                              // return true after removing the filter state
+            ctx.emitter.instruction(&format!("b {}", done_label)); // skip the out-of-range arm
+            ctx.emitter.label(&out_of_range);
+            ctx.emitter.instruction("mov x0, #1");                              // descriptors above the side-table capacity have no tracked filter state
+            ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
@@ -610,6 +621,10 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
             ctx.emitter.instruction("mov BYTE PTR [r9 + rax], 0");              // clear the write-direction filter slot for this descriptor
             ctx.emitter.instruction("mov eax, 1");                              // return true after removing the filter state
+            ctx.emitter.instruction(&format!("jmp {}", done_label)); // skip the out-of-range arm
+            ctx.emitter.label(&out_of_range);
+            ctx.emitter.instruction("mov eax, 1");                              // descriptors above the side-table capacity have no tracked filter state
+            ctx.emitter.label(&done_label);
         }
     }
     store_if_result(ctx, inst)

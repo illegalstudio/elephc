@@ -18,6 +18,16 @@
 /// here is what enforces it: a `://` at index 0 or 1 is simply never found.
 pub(crate) const MIN_WRAPPER_SCHEME_LEN: usize = 2;
 
+/// Number of descriptors each per-fd side table can describe.
+///
+/// The stream side tables are intentionally independent of `stream_select()`'s 1024-bit
+/// `FD_SETSIZE` bitmaps: holding more than 1024 file streams is valid PHP, and a plain
+/// `fopen()` / `fread()` / `feof()` sequence must not write past its table when the
+/// descriptor number grows. Every side-table access is bounds-checked, so a descriptor
+/// above this capacity performs its raw I/O without recording per-fd metadata instead of
+/// corrupting adjacent runtime state.
+pub(crate) const FD_TABLE_SLOTS: usize = 4096;
+
 mod basename;
 mod backtrace_arg;
 mod cstr;

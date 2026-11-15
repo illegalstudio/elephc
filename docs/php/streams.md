@@ -254,6 +254,15 @@ milestones, `$message`, `$message_code`, and `$bytes_max` are deferred.
 | `stream_bucket_append()` | `stream_bucket_append(resource $brigade, object $bucket): void` | Push a bucket to the end of a brigade. |
 | `stream_bucket_prepend()` | `stream_bucket_prepend(resource $brigade, object $bucket): void` | Push a bucket to the beginning of a brigade. |
 
+Per-descriptor stream state (the EOF flag, chunk size, attached filters and the
+TLS/connection tables) covers descriptors `0..4095`. A descriptor above that range
+still performs its raw read, write and close, but elephc records no side-table
+state for it: `feof()` reports `false`, `stream_get_meta_data()` reports no EOF,
+and `stream_filter_append()` leaves the filter unattached. Holding more than 1024
+file streams is supported and does not write past the side tables.
+`stream_select()` remains limited to `0..1023` by `FD_SETSIZE`, independent of
+this capacity.
+
 `zlib.deflate` and `gzcompress()` use system `libz`. `bzip2.compress`,
 `bzip2.decompress`, and `compress.bzip2://` use `libbz2`. `convert.iconv.*`
 uses libc `iconv` and auto-links `-liconv` on macOS. A `convert.iconv.<from>/<to>`

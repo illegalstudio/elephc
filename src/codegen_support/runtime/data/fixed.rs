@@ -1104,24 +1104,24 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".p2align 3\n.globl _cstr_cap\n_cstr_cap:\n    .quad 4096\n");
     out.push_str(".p2align 3\n.globl _cstr2_base\n_cstr2_base:\n    .quad _cstr_buf2\n");
     out.push_str(".p2align 3\n.globl _cstr2_cap\n_cstr2_cap:\n    .quad 4096\n");
-    out.push_str(&comm_directive("_eof_flags", 1024, target));
-    out.push_str(&comm_directive("_popen_files", 8192, target));
-    out.push_str(&comm_directive("_dir_handles", 8192, target));
+    out.push_str(&comm_directive("_eof_flags", crate::codegen_support::runtime::FD_TABLE_SLOTS, target));
+    out.push_str(&comm_directive("_popen_files", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
+    out.push_str(&comm_directive("_dir_handles", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
     // Per-fd glob:// state pointers (1024 fds × 8B). Each slot is a pointer to
     // a heap-allocated glob_state struct (pathv ptr + pathc + index + the
     // libc glob_t whose lifetime globfree() needs at closedir time). The
     // readdir/closedir/rewinddir helpers probe this table first; a non-zero
     // entry routes them through the glob iterator instead of the libc DIR*.
-    out.push_str(&comm_directive("_glob_handles", 8192, target));
-    out.push_str(&comm_directive("_stream_read_filters", 1024, target));
-    out.push_str(&comm_directive("_stream_write_filters", 1024, target));
+    out.push_str(&comm_directive("_glob_handles", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
+    out.push_str(&comm_directive("_stream_read_filters", crate::codegen_support::runtime::FD_TABLE_SLOTS, target));
+    out.push_str(&comm_directive("_stream_write_filters", crate::codegen_support::runtime::FD_TABLE_SLOTS, target));
     out.push_str(&comm_directive("_stream_filter_buf", 65536, target));
     // 64KB scratch used by length-growing stream filters (convert.base64-encode,
     // convert.quoted-printable-encode). The filter encodes into the scratch and
     // then memcpy()s back into the caller's buffer, capping input at 49152 bytes
     // so the 4/3 base64 expansion still fits the scratch.
     out.push_str(&comm_directive("_stream_grow_scratch", 65536, target));
-    out.push_str(&comm_directive("_zstream_handles", 8192, target));
+    out.push_str(&comm_directive("_zstream_handles", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
     out.push_str(&comm_directive("_zlib_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_zlib_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_zlib_inflate_init2_fn", 8, target));
@@ -1131,21 +1131,21 @@ pub(crate) fn emit_runtime_data_fixed(
     // bzip2.compress write-filter state: per-fd bz_stream pointer table
     // (_bzstream_handles, indexed by fd) plus the indirect fn-pointer slots the
     // shared runtime calls through so non-bzip2 programs never link -lbz2.
-    out.push_str(&comm_directive("_bzstream_handles", 8192, target));
+    out.push_str(&comm_directive("_bzstream_handles", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
     out.push_str(&comm_directive("_bz2_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_bz2_close_fn", 8, target));
     out.push_str(&comm_directive("_phar_bz2_decompress_fn", 8, target));
     // convert.iconv.* WRITE-filter state: per-fd iconv_t descriptor table
     // (_iconv_handles) plus the indirect fn-pointer slots the shared runtime
     // calls through so it never names libc iconv (which needs -liconv on macOS).
-    out.push_str(&comm_directive("_iconv_handles", 8192, target));
+    out.push_str(&comm_directive("_iconv_handles", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
     out.push_str(&comm_directive("_iconv_fwrite_fn", 8, target));
     out.push_str(&comm_directive("_iconv_close_fn", 8, target));
     // Apple iconv shares //TRANSLIT and //IGNORE per charset pair, so Apple targets record
     // each write filter's own option bits per fd (1024 fds x 1B) for the fwrite helper to
     // restore before converting; glibc keeps them per descriptor and needs no table.
     if target.platform == Platform::MacOS {
-        out.push_str(&comm_directive("_iconv_write_options", 1024, target));
+        out.push_str(&comm_directive("_iconv_write_options", crate::codegen_support::runtime::FD_TABLE_SLOTS, target));
     }
     out.push_str(&comm_directive("_ftp_resp_buf", 4096, target));
     out.push_str(&comm_directive("_ftp_data_addr", 64, target));
@@ -1358,18 +1358,18 @@ pub(crate) fn emit_runtime_data_fixed(
     // fd up to 256; the runtime fread/fwrite/fclose paths consult this
     // table and route through the elephc-tls helpers when an entry is
     // non-zero, falling back to read/write/close syscalls otherwise.
-    out.push_str(&comm_directive("_tls_sessions", 8192, target));
+    out.push_str(&comm_directive("_tls_sessions", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
     // _stream_chunk_size: per-fd read/write chunk size set by
     // stream_set_chunk_size, indexed by raw fd up to 256 (8 bytes each). A zero
     // entry means "unset" and reports PHP's default of 8192. stream_set_chunk_size
     // returns the previous value (the PHP-observable contract); the size does not
     // currently change read granularity (reads return identical data).
-    out.push_str(&comm_directive("_stream_chunk_size", 8192, target));
+    out.push_str(&comm_directive("_stream_chunk_size", crate::codegen_support::runtime::FD_TABLE_SLOTS * 8, target));
     // _stream_connect_host: per-fd transport host string (ptr, len) captured by
     // stream_socket_client so stream_socket_enable_crypto can default the TLS
     // SNI / peer-name to the connection host when no ssl.peer_name context
     // option is set. 1024 fds * 16 bytes (ptr + len). A zero len means "unset".
-    out.push_str(&comm_directive("_stream_connect_host", 16384, target));
+    out.push_str(&comm_directive("_stream_connect_host", crate::codegen_support::runtime::FD_TABLE_SLOTS * 16, target));
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
     // stream_context_create / stream_context_set_params. __rt_http_open fires
@@ -1628,7 +1628,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // filter, keyed by (fd, direction). Slot = _user_filter_instances[fd*2
     // + dir] where dir=0 is read, dir=1 is write. Slot is null when no
     // user filter is attached. 1024 fds × 2 dirs × 8 B = 16384 bytes.
-    out.push_str(&comm_directive("_user_filter_instances", 16384, target));
+    out.push_str(&comm_directive("_user_filter_instances", crate::codegen_support::runtime::FD_TABLE_SLOTS * 16, target));
     // _stream_context_options: pointer to the current stream-context
     // options hash (nested array of `wrapper => option => value`).
     // stream_context_create() stores its options arg here; consumers

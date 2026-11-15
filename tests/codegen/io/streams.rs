@@ -7522,6 +7522,37 @@ echo $n === 0 ? "ok" : "bad:$n";
     assert_eq!(out, "ok");
 }
 
+/// Holding more than 1024 file streams must not write past the per-fd side tables.
+///
+/// `_eof_flags` sat immediately before the exception-frame chain head, so `fopen()`'s
+/// "clear stale EOF" store for descriptor 1026 cleared a byte of the frame pointer and the
+/// next call-operand pop followed the corrupted pointer. The side tables now cover
+/// `FD_TABLE_SLOTS` entries and every plain-stream access is bounds-checked, so 1030
+/// simultaneously open streams stay clean under heap debugging.
+#[test]
+fn test_more_than_1024_retained_streams_do_not_corrupt_the_frame_chain() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function openOne(string $path): mixed {
+    $stream = @fopen($path, 'r');
+    return $stream;
+}
+$files = [];
+for ($i = 0; $i < 1030; $i++) { $files[] = openOne('/dev/null'); }
+echo count($files), ":", get_resource_id($files[1029]), "
+";
+foreach ($files as $file) { fclose($file); }
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    assert_eq!(out.stdout, "1030:1034\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}
+
 /// A descriptor at or above `FD_SETSIZE` reports php-src's recompile warning once and
 /// makes `stream_select()` return false without waiting, like PHP.
 #[test]
@@ -7529,12 +7560,10 @@ fn test_stream_select_warns_and_returns_false_above_fd_setsize() {
     let out = compile_and_run_capture(
         r#"<?php
 $pairs = [];
-for ($i = 0; $i < 520; $i++) {
-    [$reader, $writer] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
-    $pairs[] = $reader;
-    $pairs[] = $writer;
+for ($i = 0; $i < 1030; $i++) {
+    $pairs[] = fopen('/dev/null', 'r');
 }
-$read = [$pairs[count($pairs) - 1]];
+$read = [$pairs[1029]];
 $write = null;
 $except = null;
 var_dump(stream_select($read, $write, $except, 0));

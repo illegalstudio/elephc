@@ -88,9 +88,11 @@ pub(super) fn finish_builtin_stream_filter_attach(
     materialize_stream_filter_mode(ctx, inst)?;
     let skip_read = ctx.next_label("sf_skip_read");
     let skip_write = ctx.next_label("sf_skip_write");
+    let out_of_range = ctx.next_label("sf_out_of_range");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, "x1", &out_of_range);
             ctx.emitter.instruction("tst x0, #1");                              // test whether STREAM_FILTER_READ is enabled
             ctx.emitter.instruction(&format!("b.eq {}", skip_read));            // skip the read-filter table when the read bit is clear
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
@@ -103,10 +105,12 @@ pub(super) fn finish_builtin_stream_filter_attach(
             ctx.emitter.instruction(&format!("mov w10, #{}", id));              // materialize the built-in stream-filter id
             ctx.emitter.instruction("strb w10, [x9, x1]");                      // record the write filter for this descriptor
             ctx.emitter.label(&skip_write);
+            ctx.emitter.label(&out_of_range);
             ctx.emitter.instruction("mov x0, x1");                              // move the descriptor into the resource payload register
         }
         Arch::X86_64 => {
             abi::emit_pop_reg(ctx.emitter, "rcx");
+            abi::emit_branch_if_fd_table_index_out_of_range(ctx.emitter, "rcx", &out_of_range);
             ctx.emitter.instruction("test rax, 1");                             // test whether STREAM_FILTER_READ is enabled
             ctx.emitter.instruction(&format!("jz {}", skip_read));              // skip the read-filter table when the read bit is clear
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
@@ -121,6 +125,7 @@ pub(super) fn finish_builtin_stream_filter_attach(
                 &format!("mov BYTE PTR [r9 + rcx], {}", id)
             );                                                                  // record the write filter for this descriptor
             ctx.emitter.label(&skip_write);
+            ctx.emitter.label(&out_of_range);
             ctx.emitter.instruction("mov rax, rcx");                            // move the descriptor into the resource payload register
         }
     }

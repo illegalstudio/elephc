@@ -61,6 +61,7 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #24]");                                  // no independent filtered output is owned yet
 
     // -- look up the write filter for this descriptor --
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", "__rt_fwrite_direct");
     abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
     emitter.instruction("ldrb w3, [x9, x0]");                                   // write filter id for this descriptor
     emitter.instruction("cbz w3, __rt_fwrite_direct");                          // no filter: write the payload directly
@@ -153,6 +154,7 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // payload length
     // -- TLS dispatch: route through elephc_tls_write when fd has an
     //    attached session (Phase 11 B3). --
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", "__rt_fwrite_syscall");
     abi::emit_symbol_address(emitter, "x13", "_tls_sessions");
     emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // _tls_sessions[fd] handle (0 = plain TCP)
     emitter.instruction("cbz x14, __rt_fwrite_syscall");                        // no TLS attached → write syscall
@@ -205,6 +207,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // no independent filtered output is owned yet
 
     // -- look up the write filter for this descriptor --
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "rdi", "__rt_fwrite_direct_x86");
     abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");           // write-filter table base
     emitter.instruction("movzx ecx, BYTE PTR [r9 + rdi]");                      // write filter id for this descriptor
     emitter.instruction("test rcx, rcx");                                       // is a write filter attached?
@@ -292,6 +295,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // payload pointer (original or filtered)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length
     // -- TLS dispatch (Phase 11 B3) --
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "rdi", "__rt_fwrite_syscall_x86");
     abi::emit_symbol_address(emitter, "r10", "_tls_sessions");                  // load runtime data address
     emitter.instruction("mov r11, QWORD PTR [r10 + rdi * 8]");                  // _tls_sessions[fd] handle
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero

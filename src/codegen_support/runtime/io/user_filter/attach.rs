@@ -50,6 +50,8 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save fd
     emitter.instruction("str x3, [sp, #8]");                                    // save mode
     emitter.instruction("str x4, [sp, #16]");                                   // save boxed filter params
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the descriptor for the side-table bounds check
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x9", "__rt_sfau_fail_release_params");
 
     // -- resolve filter name → id --
     emitter.instruction("mov x0, x1");                                          // move name_ptr into the resolver's first arg
@@ -187,6 +189,8 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save fd
     emitter.instruction("mov QWORD PTR [rbp - 16], rcx");                       // save mode
     emitter.instruction("mov QWORD PTR [rbp - 24], r8");                        // save boxed filter params
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the descriptor for the side-table bounds check
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "r9", "__rt_sfau_fail_release_params_x86");
 
     // -- resolve filter name → id --
     emitter.instruction("mov rdi, rsi");                                        // move name_ptr into the resolver's first arg

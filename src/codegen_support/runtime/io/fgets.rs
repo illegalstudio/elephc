@@ -179,6 +179,7 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- EOF reached: set eof flag for this fd --
     emitter.label("__rt_fgets_eof");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd
+    crate::codegen_support::abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", "__rt_fgets_done");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("mov w10, #1");                                         // eof marker value
     emitter.instruction("strb w10, [x9, x0]");                                  // set _eof_flags[fd] = 1
@@ -329,6 +330,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fgets_eof_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor so the eof-flag table can mark this stream as exhausted
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "r10", "__rt_fgets_done_x86");
     abi::emit_symbol_address(emitter, "r11", "_eof_flags");                     // materialize the eof-flag table base address for the current stream descriptor
     emitter.instruction("mov BYTE PTR [r11 + r10], 1");                         // mark the current file descriptor as EOF-reached after the zero-byte or failed read
     emitter.instruction("jmp __rt_fgets_done_x86");                             // return the possibly empty borrowed slice accumulated before EOF or read failure

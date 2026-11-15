@@ -210,6 +210,29 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
     }
 }
 
+/// Branches to `label` when a descriptor index is at or above the per-fd table capacity.
+///
+/// Every per-fd side table has `FD_TABLE_SLOTS` entries. A descriptor the operating system
+/// opened past that capacity must skip the side-table access while keeping its raw I/O; writing
+/// the index anyway would corrupt whatever symbol follows the table.
+pub fn emit_branch_if_fd_table_index_out_of_range(
+    emitter: &mut Emitter,
+    index_reg: &str,
+    label: &str,
+) {
+    let limit = crate::codegen_support::runtime::FD_TABLE_SLOTS;
+    match emitter.target.arch {
+        crate::codegen_support::platform::Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {index_reg}, #{limit}"));          // is the descriptor inside the side-table capacity?
+            emitter.instruction(&format!("b.hs {label}"));                      // above it: keep the raw I/O and skip side-table state
+        }
+        crate::codegen_support::platform::Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {index_reg}, {limit}"));           // is the descriptor inside the side-table capacity?
+            emitter.instruction(&format!("jae {label}"));                       // above it: keep the raw I/O and skip side-table state
+        }
+    }
+}
+
 /// Branches to `label` when the integer result register is zero (coerced truthiness).
 ///
 /// AArch64: inverse `cbnz` over an unconditional `b`; x86_64: `test` + `je`.

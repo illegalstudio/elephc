@@ -311,8 +311,10 @@ pub fn emit_fopen(emitter: &mut Emitter) {
 
     // -- restore frame and return fd in x0 --
     emitter.label("__rt_fopen_opened");
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", "__rt_fopen_eof_done");
     abi::emit_symbol_address(emitter, "x9", "_eof_flags");
     emitter.instruction("strb wzr, [x9, x0]");                                  // clear stale EOF state for the newly opened descriptor
+    emitter.label("__rt_fopen_eof_done");
     emitter.label("__rt_fopen_return");
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
@@ -628,8 +630,10 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fopen_opened_x86");
     emitter.instruction("cdqe");                                                // normalize the successful C int fd into the runtime's 64-bit descriptor value
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "rax", "__rt_fopen_eof_done_x86");
     abi::emit_symbol_address(emitter, "r10", "_eof_flags");                     // materialize the eof-flag table for the newly opened descriptor
     emitter.instruction("mov BYTE PTR [r10 + rax], 0");                         // clear stale EOF state before returning the descriptor
+    emitter.label("__rt_fopen_eof_done_x86");
     emitter.label("__rt_fopen_return_x86");
 
     emitter.instruction("add rsp, 32");                                         // release the temporary pathname and mode spill slots before returning the file descriptor

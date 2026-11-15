@@ -103,7 +103,7 @@ pub(crate) fn lower_stream_set_chunk_size(
             abi::emit_pop_reg(ctx.emitter, "x2");
             ctx.emitter.instruction("cmp x2, #0");                              // negative descriptors cannot index the chunk-size table
             ctx.emitter.instruction(&format!("b.lt {}", default_label));        // out-of-range descriptors report the default
-            ctx.emitter.instruction("cmp x2, #256");                            // descriptors above the fixed table are ignored
+            ctx.emitter.instruction(&format!("cmp x2, #{}", crate::codegen_support::runtime::FD_TABLE_SLOTS)); // descriptors above the fixed table are ignored
             ctx.emitter.instruction(&format!("b.ge {}", default_label));        // out-of-range descriptors report the default
             abi::emit_symbol_address(ctx.emitter, "x9", "_stream_chunk_size");
             ctx.emitter.instruction("ldr x10, [x9, x2, lsl #3]");               // load the previous per-fd chunk size
@@ -122,7 +122,7 @@ pub(crate) fn lower_stream_set_chunk_size(
             abi::emit_pop_reg(ctx.emitter, "rdi");
             ctx.emitter.instruction("cmp rdi, 0");                              // negative descriptors cannot index the chunk-size table
             ctx.emitter.instruction(&format!("jl {}", default_label));          // out-of-range descriptors report the default
-            ctx.emitter.instruction("cmp rdi, 256");                            // descriptors above the fixed table are ignored
+            ctx.emitter.instruction(&format!("cmp rdi, {}", crate::codegen_support::runtime::FD_TABLE_SLOTS)); // descriptors above the fixed table are ignored
             ctx.emitter.instruction(&format!("jge {}", default_label));         // out-of-range descriptors report the default
             abi::emit_symbol_address(ctx.emitter, "r9", "_stream_chunk_size");
             ctx.emitter.instruction("mov rax, QWORD PTR [r9 + rdi * 8]");       // load the previous per-fd chunk size
