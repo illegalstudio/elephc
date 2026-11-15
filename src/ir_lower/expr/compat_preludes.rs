@@ -1009,7 +1009,6 @@ pub(super) fn lower_backend_gap_builtin_shape(
             crate::stream_select_prelude::STREAM_SELECT_NAME
         }
         ("levenshtein", 2) => crate::backend_gap_prelude::LEVENSHTEIN_TWO_ARG_NAME,
-        ("random_bytes", 1) => crate::backend_gap_prelude::RANDOM_BYTES_NAME,
         ("str_replace", 4) => crate::str_replace_count_prelude::STR_REPLACE_COUNT_NAME,
         ("exec", 1..=3) => crate::exec_prelude::EXEC_FULL_NAME,
         ("passthru", 2) => crate::exec_prelude::PASSTHRU_FULL_NAME,

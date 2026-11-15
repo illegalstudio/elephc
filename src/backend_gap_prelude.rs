@@ -28,9 +28,6 @@ pub(crate) const ARRAY_UNSHIFT_TRAILING_SPREAD_NAME: &str =
 /// Reserved helper used for supported integer-only `pack()` formats.
 pub(crate) const PACK_INTEGER_NAME: &str = "__elephc_pack_integer";
 
-/// Reserved helper used for `random_bytes()`.
-pub(crate) const RANDOM_BYTES_NAME: &str = "__elephc_random_bytes";
-
 /// Reserved helper used for one-argument `sort()` calls on gradual indexed arrays.
 pub(crate) const SORT_MIXED_NAME: &str = "__elephc_sort_mixed";
 
@@ -281,22 +278,6 @@ function __elephc_pack_integer(string $format, int ...$values): string {
             $result .= chr(($value >> 8) & 255);
             $result .= chr($value & 255);
         }
-        $i++;
-    }
-    return $result;
-}
-"#;
-
-/// Builds a binary string from Elephc's cryptographic `random_int()` primitive.
-const RANDOM_BYTES_SRC: &str = r#"<?php
-function __elephc_random_bytes(int $length): string {
-    if ($length < 1) {
-        throw new \ValueError('random_bytes(): Argument #1 ($length) must be greater than 0');
-    }
-    $result = '';
-    $i = 0;
-    while ($i < $length) {
-        $result .= chr(random_int(0, 255));
         $i++;
     }
     return $result;
@@ -815,11 +796,6 @@ const LEVENSHTEIN_WRAPPER_SRC: &str = r#"<?php
 function levenshtein(string $first, string $second): int { return __elephc_levenshtein_two_arg($first, $second); }
 "#;
 
-/// PHP-visible wrapper for `random_bytes()`.
-const RANDOM_BYTES_WRAPPER_SRC: &str = r#"<?php
-function random_bytes(int $length): string { return __elephc_random_bytes($length); }
-"#;
-
 /// PHP-visible wrapper for `escapeshellarg()`.
 const ESCAPESHELLARG_WRAPPER_SRC: &str = r#"<?php
 function escapeshellarg(string $argument): string { return __elephc_escapeshellarg($argument); }
@@ -868,10 +844,6 @@ pub fn inject_if_used(
     }
     if usage.references("pack") {
         sources.push(PACK_INTEGER_SRC);
-    }
-    if usage.references("random_bytes") {
-        sources.push(RANDOM_BYTES_SRC);
-        sources.push(RANDOM_BYTES_WRAPPER_SRC);
     }
     if usage.references("sort") || usage.references("rsort") {
         sources.push(SORT_MIXED_SRC);
