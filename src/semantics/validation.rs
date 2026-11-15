@@ -15,7 +15,7 @@ use crate::parser::ast::{BinOp, CastType, Expr, ExprKind, Program, Stmt, StmtKin
 
 /// Validates syntax-dependent guarantees without pruning any branch or declaration.
 pub fn validate_source(program: &Program, profile: SemanticProfile) -> Result<(), CompileError> {
-    if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
+    if ![StrictFeature::DynamicCode, StrictFeature::Bools, StrictFeature::Overflow, StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons].into_iter().any(|feature| profile.contains(feature)) { return Ok(()); }
     crate::compiler_stack::with_compiler_stack(|| {
         super::numeric_constants::validate(program, profile)?;
         let mut validator = SourceValidator { depth: 0, error: None, profile, source_modes: Vec::new() };
@@ -36,6 +36,22 @@ impl AstVisitor for SourceValidator {
     /// Tracks physical source for trusted implementation statements and validates raw conditions.
     fn statement(&mut self, stmt: &Stmt) {
         self.source_modes.push(stmt.source_mode);
+        if super::comparisons::active(self.profile, stmt.source_mode) {
+            if let StmtKind::Switch { subject, cases, .. } = &stmt.kind {
+                if let Some(subject) = literal_type(subject) {
+                    for (labels, _) in cases {
+                        for label in labels {
+                            if let Some(case) = literal_type(label) {
+                                if super::numeric::value_kind(&subject) != super::numeric::value_kind(&case) {
+                                    self.error = Some(CompileError::new(label.span,
+                                        "--strict-comparisons: switch label cannot match the subject's value kind"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if !self.profile.contains(StrictFeature::Bools) || stmt.source_mode == crate::source::SourceMode::Internal { return; }
         match &stmt.kind {
             StmtKind::If { condition, elseif_clauses, .. } => {
@@ -56,6 +72,22 @@ impl AstVisitor for SourceValidator {
     /// Requires eval source to be literal and recursively verifies its source restrictions.
     fn expression(&mut self, expr: &Expr) {
         if self.error.is_some() { return; }
+        if super::comparisons::active(self.profile,
+            self.source_modes.last().copied().unwrap_or(crate::source::SourceMode::Php))
+        {
+            if let ExprKind::BinaryOp { left, op, right } = &expr.kind {
+                if matches!(op, BinOp::Eq | BinOp::NotEq) {
+                    self.error = Some(CompileError::new(expr.span,
+                        elephc_semantics::comparisons::EQUALITY_MESSAGE));
+                    return;
+                }
+                if let (Some(left), Some(right)) = (literal_type(left), literal_type(right)) {
+                    if let Err(error) = super::comparisons::validate(self.profile,
+                        crate::source::SourceMode::Php, op, &left, &right, expr.span)
+                    { self.error = Some(error); return; }
+                }
+            }
+        }
         if self.profile.contains(StrictFeature::Bools) && self.source_modes.last() != Some(&crate::source::SourceMode::Internal) {
             match &expr.kind {
                 ExprKind::Not(inner) => self.boolean_literal(inner),
@@ -103,7 +135,7 @@ impl AstVisitor for SourceValidator {
             return;
         };
         let verification_flag = [StrictFeature::DynamicCode, StrictFeature::Overflow, StrictFeature::Bools,
-            StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts].into_iter()
+            StrictFeature::Arithmetic, StrictFeature::Coercions, StrictFeature::Casts, StrictFeature::Comparisons].into_iter()
             .find(|feature| self.profile.contains(*feature)).expect("source verification was requested").flag();
         if self.depth >= 64 {
             self.error = Some(CompileError::new(expr.span,

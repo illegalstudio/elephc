@@ -28,6 +28,7 @@ mod instance_property_access;
 mod interface_contracts;
 mod interface_member_validation;
 mod loop_statements;
+mod strict_switch;
 mod local_offset_writes;
 mod method_dispatch;
 mod native_argument_binding;

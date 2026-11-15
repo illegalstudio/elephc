@@ -368,6 +368,7 @@ pub(crate) fn pattern_matches_scalar(
     let pattern = scalar_value(pattern)?;
     match comparison {
         CaseComparison::Strict => compare_scalar_strict(subject, &pattern),
+        CaseComparison::LooseSwitch if crate::optimize::semantic_context::enabled(elephc_semantics::StrictFeature::Comparisons) => compare_scalar_strict(subject, &pattern),
         CaseComparison::LooseSwitch => compare_scalar_switch(subject, &pattern),
     }
 }

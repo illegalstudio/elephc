@@ -56,6 +56,8 @@ pub enum EvalParseError {
     ExpectedSemicolon,
     /// Checked integer spelling cannot fit a signed 64-bit value.
     IntegerLiteralOverflow,
+    /// Loose equality syntax is forbidden by the selected semantic profile.
+    StrictComparisonSyntax,
 }
 
 impl EvalParseError {
@@ -69,6 +71,7 @@ impl EvalParseError {
             | Self::UnexpectedEof
             | Self::InvalidNumber
             | Self::IntegerLiteralOverflow
+            | Self::StrictComparisonSyntax
             | Self::UnterminatedString
             | Self::UnterminatedComment
             | Self::ExpectedVariable

@@ -51,6 +51,7 @@ pub fn parse_fragment_with_semantics(code: &[u8], profile: elephc_semantics::Sem
     with_parser_stack(|| {
         let source = std::str::from_utf8(code).map_err(|_| EvalParseError::InvalidUtf8)?;
         let tokens = tokenize_with_semantics(source, profile)?;
+        validate_semantic_tokens(&tokens, profile)?;
         Parser::new(tokens, code.len()).parse_program().map(|program| program.with_semantic_profile(profile))
     })
 }
@@ -72,7 +73,22 @@ pub(crate) fn parse_tokens(
 pub(crate) fn parse_tokens_with_semantics(
     tokens: Vec<crate::lexer::Token>, source_len: usize, profile: elephc_semantics::SemanticProfile,
 ) -> Result<EvalProgram, EvalParseError> {
-    with_parser_stack(|| Parser::new(tokens, source_len).parse_program().map(|program| program.with_semantic_profile(profile)))
+    with_parser_stack(|| {
+        validate_semantic_tokens(&tokens, profile)?;
+        Parser::new(tokens, source_len).parse_program().map(|program| program.with_semantic_profile(profile))
+    })
+}
+
+/// Rejects forbidden equality syntax before branch pruning or declaration execution.
+fn validate_semantic_tokens(tokens: &[crate::lexer::Token], profile: elephc_semantics::SemanticProfile)
+    -> Result<(), EvalParseError> {
+    use crate::lexer::TokenKind;
+    if profile.contains(elephc_semantics::StrictFeature::Comparisons)
+        && (tokens.iter().any(|token| matches!(token.kind(), TokenKind::EqualEqual | TokenKind::NotEqual))
+            || tokens.windows(2).any(|pair| matches!((pair[0].kind(), pair[1].kind()),
+                (TokenKind::Less, TokenKind::Greater))))
+    { return Err(EvalParseError::StrictComparisonSyntax); }
+    Ok(())
 }
 
 /// Uses an explicit stack because native coroutine switches do not update OS-thread stack bounds.

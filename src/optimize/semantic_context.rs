@@ -60,6 +60,12 @@ pub(super) fn implicit_value_boundary_may_throw(expr: &crate::parser::ast::Expr)
         | ExprKind::Assignment { .. })
 }
 
+/// A dynamic ordering guard can reject original kinds independently of operand effects.
+pub(super) fn comparison_boundary_may_throw(expr: &crate::parser::ast::Expr) -> bool {
+    enabled(StrictFeature::Comparisons) && matches!(&expr.kind,
+        crate::parser::ast::ExprKind::BinaryOp { op, .. } if crate::semantics::comparisons::is_ordering(op))
+}
+
 /// A declared store can reject its source independently of operand effects or retirement.
 pub(super) fn implicit_store_may_throw(stmt: &crate::parser::ast::Stmt) -> bool {
     if matches!(stmt.kind, crate::parser::ast::StmtKind::Assign { .. }) {

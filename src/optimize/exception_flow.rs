@@ -882,7 +882,8 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
     ) -> ThrownTypes {
         let thrown = self.expr_throws_without_binding(expr, bindings, class_context, include_operands);
-        if super::semantic_context::implicit_value_boundary_may_throw(expr) {
+        if super::semantic_context::implicit_value_boundary_may_throw(expr)
+            || super::semantic_context::comparison_boundary_may_throw(expr) {
             thrown.combined(ThrownTypes::exact("TypeError"))
         } else { thrown }
     }

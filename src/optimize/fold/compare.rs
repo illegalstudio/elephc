@@ -154,6 +154,9 @@ fn compare_bytes(left: &str, right: &str) -> Ordering {
 /// direction, or that are both infinite, fall back to the byte comparison exactly as PHP
 /// does to avoid the accuracy loss of the `f64` round-trip.
 fn compare_strings(left: &str, right: &str) -> Ordering {
+    if crate::optimize::semantic_context::enabled(elephc_semantics::StrictFeature::Comparisons) {
+        return compare_bytes(left, right);
+    }
     let (Some(left_num), Some(right_num)) = (php_numeric_string(left), php_numeric_string(right))
     else {
         return compare_bytes(left, right);

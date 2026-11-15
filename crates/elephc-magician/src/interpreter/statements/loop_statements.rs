@@ -49,6 +49,9 @@ pub(in crate::interpreter) fn execute_switch_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Comparisons) {
+        return super::strict_switch::execute(expr, cases, context, scope, values);
+    }
     let subject = eval_expr(expr, context, scope, values)?;
     let mut default_index = None;
     let mut matched_index = None;

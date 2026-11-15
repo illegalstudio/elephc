@@ -943,6 +943,41 @@ build and builtin architecture audit pass. Numeric and permissive controls are
 checked separately. Coercions remains staged while the remaining
 source/prelude/host paths are audited.
 
+### Verified scalar comparison core
+
+Step 100 was implemented in the owned `feat/strict-next` worktree while
+`feat/strict-mode` retained the verified step 99 checkpoint. The worktree is based
+on `b8f700b0467fc1c14794dda1b9068e9b1c6dfcd4`; no feature admission mask changed.
+
+The dependency-neutral comparison policy distinguishes exact scalar ordering,
+runtime guards and rejection. Source validation retains loose equality rejection
+and original-kind evidence before folding, including nested literal eval.
+The native path uses ordinary EIR predicates and branches: matching scalar kinds
+are checked before conversion; strings use bytewise `StrCmp`, including spaceship;
+other matching scalar kinds keep the reviewed IEEE/PHP scalar kernel. Operand
+snapshots precede later source effects. AST folding, exception summaries and DCE
+preserve these boundaries. Native switch matching uses strict equality and keeps
+null distinct from integer zero.
+
+Walker and VM binary evaluation share the same scalar policy and bytewise string
+operation. Eval parsing rejects loose equality tokens before executing source.
+Strict eval switch keeps source-order label effects, live variable subjects and
+existing operand-owner ledgers, retiring temporary subjects before the case body.
+Nine focused tests pass: source/folding/all-target checks, walker and VM scalar
+contracts, parse rejection, live switch subjects, the native heap bundle and the
+neutral policy matrix. Both native fixtures pass with both optimizer settings
+and clean heaps. The compiler build, builtin architecture audit, example syntax
+and whitespace/docblocks pass. The runnable example sorts string labels through
+an explicit comparator while retaining leading zeros, verified as `02, 10, 9`.
+An existing DCE comparison-guard regression also passed. Array construction stays
+in the walker in the VM fixture; its comparison still executes in both engines.
+Eval's already unsupported `<>` spelling stays unsupported in permissive mode
+and gets the strict equality diagnostic in the checked parser.
+
+Comparisons remains staged. Native value-class comparison domains, comparison
+builtin policies, typed switch-label evidence and the remaining literal-eval/host
+paths must be completed before admitting the feature.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1067,4 +1102,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 97 | `f36b2321b0` | feat(strict): validate builtin inputs before folding |
 
 | 98 | `4d3192488e` | fix(strict): retire converted reflection class arguments |
-| 99 | this commit | feat(strict): guard native builtin input contracts |
+| 99 | `b8f700b046` | feat(strict): guard native builtin input contracts |
+| 100 | this commit | feat(strict): implement exact scalar comparison boundaries |

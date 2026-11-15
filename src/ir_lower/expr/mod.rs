@@ -45,6 +45,7 @@ mod scalar_literals;
 mod local_values;
 use local_values::lower_local_value;
 mod numeric_binary;
+mod strict_ordering;
 pub(super) mod builtin_numeric;
 pub(in crate::ir_lower) mod builtin_casts;
 pub(in crate::ir_lower) mod builtin_settype;

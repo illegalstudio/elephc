@@ -245,6 +245,12 @@ fn try_fold_logical_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprK
 /// the operands rather than inverting the ordering. That is what keeps every NAN comparison
 /// false: `zend_compare` answers `1` for any NAN pair in either direction.
 fn try_fold_compare_binop(op: &BinOp, left: &Expr, right: &Expr) -> Option<ExprKind> {
+    if super::super::semantic_context::enabled(elephc_semantics::StrictFeature::Comparisons) {
+        if matches!(op, BinOp::Eq | BinOp::NotEq) { return None; }
+        if crate::semantics::comparisons::is_ordering(op)
+            && std::mem::discriminant(&scalar_value(left)?) != std::mem::discriminant(&scalar_value(right)?)
+        { return None; }
+    }
     match op {
         BinOp::Eq => Some(ExprKind::BoolLiteral(loose_eq(left, right)?)),
         BinOp::NotEq => Some(ExprKind::BoolLiteral(!loose_eq(left, right)?)),

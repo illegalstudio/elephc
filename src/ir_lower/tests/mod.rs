@@ -742,6 +742,7 @@ mod strict_numeric_domains;
 mod strict_unary_domains;
 
 mod strict_conversion_parameters;
+mod strict_comparisons;
 
 mod strict_conversion_returns;
 

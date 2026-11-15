@@ -23,6 +23,22 @@ pub(super) fn can_contain_object(ty: &PhpType) -> bool {
 pub(super) fn capture_left_operand(
     ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, right: &Expr, span: Span,
 ) -> (LoweredValue, Vec<super::call_operand_owners::PinnedInFlightOwner>) {
+    capture_left_operand_with_policy(ctx, value, right, span, false)
+}
+
+/// Captures comparison values without enabling snapshots for unrelated PHP operator families.
+pub(super) fn capture_comparison_operand(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, right: &Expr, span: Span,
+) -> (LoweredValue, Vec<super::call_operand_owners::PinnedInFlightOwner>) {
+    let exact = crate::semantics::comparisons::active(ctx.semantic_profile, ctx.source_mode);
+    capture_left_operand_with_policy(ctx, value, right, span, exact)
+}
+
+/// Shares the original native-class lifetime policy with an explicit scalar snapshot requirement.
+fn capture_left_operand_with_policy(
+    ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, right: &Expr, span: Span,
+    exact: bool,
+) -> (LoweredValue, Vec<super::call_operand_owners::PinnedInFlightOwner>) {
     if ctx.builder.value_defining_op(value.value) == Some(Op::StrCharAt) {
         let captured = crate::ir_lower::ownership::persist_string_byte_view(ctx, value, Some(span));
         let pins = pin_in_flight_owners(ctx, &[captured.value], span);
@@ -39,7 +55,7 @@ pub(super) fn capture_left_operand(
     {
         return (value, Vec::new());
     }
-    if ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())) {
+    if exact || ctx.classes.keys().any(|name| elephc_builtin_contract::lookup_class(name).is_some_and(|class| class.operators.is_some())) {
         let captured = if matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
             ctx.emit_owned_value(Op::MixedClone, vec![value.value], None, ty,
                 Op::MixedClone.default_effects(), Some(span))

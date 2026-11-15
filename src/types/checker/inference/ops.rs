@@ -43,6 +43,8 @@ impl Checker {
             self.require_boolean_type(&lt, left.span)?;
             self.require_boolean_type(&rt, right.span)?;
         }
+        crate::semantics::comparisons::validate(self.semantic_profile, self.semantic_source_mode,
+            op, &lt, &rt, expr.span)?;
         if let Some(plan) = crate::types::object_operators::binary_plan_with_classes(op, &lt, &rt, &self.classes) {
             return Ok(plan.result_type(op));
         }

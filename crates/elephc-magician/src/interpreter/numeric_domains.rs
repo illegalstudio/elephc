@@ -24,7 +24,7 @@ fn operator(op: EvalBinOp) -> Option<NumericOperator> {
 }
 
 /// Maps canonical runtime tags without interpreting strings or confusing booleans with integers.
-fn value_kind(tag: u64) -> ValueKind {
+pub(super) fn value_kind(tag: u64) -> ValueKind {
     match tag {
         EVAL_TAG_INT => ValueKind::Integer, EVAL_TAG_FLOAT => ValueKind::Float,
         EVAL_TAG_BOOL => ValueKind::Boolean, EVAL_TAG_STRING => ValueKind::String,
