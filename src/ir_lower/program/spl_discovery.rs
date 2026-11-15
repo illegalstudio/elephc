@@ -549,6 +549,10 @@ pub(super) fn lower_dynamic_constructor_thunks(
     // symbol nothing will call.
     // One thunk per constructor IMPLEMENTATION: descendants that inherit a constructor share the
     // ancestor's thunk (see `function::dynamic_constructor_thunk_owner`).
+    // Only the class id and the constructor's signature are needed past this point; copying the
+    // whole `ClassInfo` of every owner (the module is borrowed mutably below) was a measurable
+    // share of this pass on Symfony.
+    let constructor_key = php_method_key("__construct");
     let mut owners = std::collections::BTreeMap::new();
     for class_name in module.class_infos.keys() {
         if !is_dynamic_new_mixed_metadata_candidate(class_name) {
@@ -557,24 +561,44 @@ pub(super) fn lower_dynamic_constructor_thunks(
         if let Some((owner_name, owner_info)) =
             function::dynamic_constructor_thunk_owner(&module.class_infos, class_name)
         {
-            owners
-                .entry(owner_name.to_string())
-                .or_insert_with(|| owner_info.clone());
+            if owners.contains_key(owner_name) {
+                continue;
+            }
+            if let Some(constructor) = owner_info.methods.get(&constructor_key) {
+                owners.insert(owner_name.to_string(), (owner_info.class_id, constructor.clone()));
+            }
         }
     }
-    for (class_name, class_info) in owners {
+    let thunk_prefix = function::dynamic_constructor_thunk_name_prefix();
+    let mut existing_thunks: crate::fast_hash::FastSet<String> = module
+        .functions
+        .iter()
+        .filter(|function| function.name.starts_with(thunk_prefix))
+        .map(|function| function.name.clone())
+        .collect();
+    #[cfg(test)]
+    THUNK_PASS_FUNCTIONS_WALKED.with(|count| count.set(count.get() + module.functions.len()));
+    for (class_name, (class_id, constructor)) in owners {
         for &provided_args in &arg_counts {
             function::lower_dynamic_constructor_thunk(
                 &class_name,
-                &class_info,
+                class_id,
+                &constructor,
                 provided_args,
                 module,
                 check_result,
                 constants,
                 fiber_return_sigs,
+                &mut existing_thunks,
             );
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Module functions the constructor thunk pass walked looking for existing thunks.
+    pub(crate) static THUNK_PASS_FUNCTIONS_WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -604,5 +628,44 @@ mod tests {
         module.functions.push(caller);
         let again = referenced_builtin_spl_methods(&module, &mut progress);
         assert!(again.iter().any(|(_, key)| key == "count"), "an appended body is scanned: {again:?}");
+    }
+
+    /// The constructor thunk pass reads the module's function table once, whatever the number of
+    /// (class, argument count) pairs it lowers: each pair used to search every function of the
+    /// program for its thunk name.
+    #[test]
+    fn constructor_thunks_walk_the_function_table_once() {
+        let mut source = String::from("<?php\n");
+        for index in 0..24 {
+            source.push_str(&format!(
+                "class K{index} {{ public function __construct(public int $a = {index}, public int $b = 2, public int $c = 3) {{}} }}\n"
+            ));
+        }
+        source.push_str(
+            "function make(string $c) { return [new $c(), new $c(1), new $c(1, 2)]; }\n\
+             foreach (['K0', 'K7', 'K23'] as $c) { $o = make($c); echo $o[0]->a + $o[1]->b + $o[2]->c, \"\\n\"; }\n",
+        );
+        let dir = std::env::temp_dir();
+        THUNK_PASS_FUNCTIONS_WALKED.with(|count| count.set(0));
+        let module = crate::ir_lower::tests::lower_source_at_for_target(
+            &source,
+            &dir.join("ctor_thunks.php"),
+            &dir,
+            crate::codegen::platform::Target::parse("macos-aarch64").expect("target"),
+        );
+        let walked = THUNK_PASS_FUNCTIONS_WALKED.with(|count| count.get());
+        let thunks = module
+            .functions
+            .iter()
+            .filter(|function| function.name.starts_with(function::dynamic_constructor_thunk_name_prefix()))
+            .count();
+        // 24 classes padded at 0, 1 and 2 arguments.
+        assert!(thunks >= 72, "{thunks} constructor thunks lowered");
+        assert!(walked > 0, "the fixture no longer reaches the thunk pass");
+        assert!(
+            walked <= module.functions.len(),
+            "{walked} functions walked for a module of {} functions",
+            module.functions.len()
+        );
     }
 }

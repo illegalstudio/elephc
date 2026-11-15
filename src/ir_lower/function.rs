@@ -990,24 +990,22 @@ fn coercible_or_throw_stmt(
 /// arguments the site did not provide, which a dynamic call site cannot know.
 pub(crate) fn lower_dynamic_constructor_thunk(
     class_name: &str,
-    class_info: &ClassInfo,
+    class_id: u64,
+    constructor: &FunctionSig,
     provided_args: usize,
     module: &mut Module,
     check_result: &CheckResult,
     constants: &crate::fast_hash::FastMap<String, (ExprKind, PhpType)>,
     fiber_return_sigs: &crate::fast_hash::FastMap<String, FunctionSig>,
+    existing_thunks: &mut crate::fast_hash::FastSet<String>,
 ) {
-    let function_name = dynamic_constructor_thunk_name(class_info.class_id, provided_args);
-    if module
-        .functions
-        .iter()
-        .any(|function| function.name == function_name)
-    {
+    let function_name = dynamic_constructor_thunk_name(class_id, provided_args);
+    // `existing_thunks` holds every thunk name the module already defines. Searching the
+    // module's functions instead compared each name against every body of the program, for every
+    // (class, argument count) pair: about 600 samples of a sampled one-core Symfony demo build.
+    if existing_thunks.contains(&function_name) {
         return;
     }
-    let Some(constructor) = class_info.methods.get(&php_symbol_key("__construct")) else {
-        return;
-    };
     let regular = crate::types::call_args::regular_param_count(constructor);
     let is_variadic = constructor.variadic.is_some();
     if is_variadic {
@@ -1253,6 +1251,7 @@ pub(crate) fn lower_dynamic_constructor_thunk(
         web,
     );
     add_closures(module, closures);
+    existing_thunks.insert(function.name.clone());
     module.add_function(function);
 }
 
@@ -1416,7 +1415,12 @@ pub(crate) fn dynamic_constructor_thunk_owner<'a>(
 
 /// The symbol a dynamic-new candidate calls when it has to pad the constructor with defaults.
 pub(crate) fn dynamic_constructor_thunk_name(class_id: u64, provided_args: usize) -> String {
-    format!("_class_ctor_{}_{}", class_id, provided_args)
+    format!("{}{}_{}", dynamic_constructor_thunk_name_prefix(), class_id, provided_args)
+}
+
+/// The prefix every `dynamic_constructor_thunk_name` starts with.
+pub(crate) fn dynamic_constructor_thunk_name_prefix() -> &'static str {
+    "_class_ctor_"
 }
 
 /// Returns the internal function name that materializes one native eval parameter default.
