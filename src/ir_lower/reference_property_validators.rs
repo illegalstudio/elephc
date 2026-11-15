@@ -41,8 +41,7 @@ pub(crate) fn required_by_profile(module: &Module) -> bool {
                     && crate::types::canonical_property_reference_payload(ty).is_some())
                 || class.static_properties.iter().any(|(name, ty)|
                     class.declared_static_properties.contains(name)
-                        && crate::types::canonical_property_reference_payload(ty)
-                            == Some(crate::types::CanonicalReferencePayload::Boxed))
+                        && crate::types::canonical_property_reference_payload(ty).is_some())
         })
 }
 

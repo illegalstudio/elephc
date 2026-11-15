@@ -153,10 +153,11 @@ mod tests {
                 emit(&module, &mut emitter, &mut DataSection::new(), &slots);
                 let assembly = emitter.output();
                 assert_eq!(assembly.matches("__rt_reference_cell_promote_mixed").count(), if selected { 0 } else { 4 }, "{name}");
-                assert_eq!(assembly.matches("__rt_reference_static_mixed_bind").count(), if selected { 6 } else { 0 }, "{name}");
+                assert_eq!(assembly.matches("__rt_reference_static_mixed_bind").count(), if selected { 8 } else { 0 }, "{name}");
                 assert!(assembly.contains("__rt_incref"), "{name}: an alias outlives the static symbol's owner");
                 assert!(!assembly.contains("__rt_mixed_clone"), "{name}: exporting aliases must preserve identity");
-                assert!(!assembly.contains(&static_property_symbol("StaticReferenceBase", "raw")), "{name}: raw typed storage stays distinct");
+                assert_eq!(assembly.contains(&static_property_symbol("StaticReferenceBase", "raw")), selected,
+                    "{name}: concrete declarations use boxed storage only under checked casts");
                 assert_eq!(assembly.contains(&static_property_symbol("StaticReferenceBase", "union")), selected, "{name}");
             }
         }

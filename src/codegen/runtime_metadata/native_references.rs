@@ -29,8 +29,7 @@ pub(in crate::codegen) fn checked_boxed_static_descriptor(
     if class.is_internal || !class.declared_static_properties.contains(property) { return None; }
     let (index, (_, ty)) = class.static_properties.iter().enumerate()
         .find(|(_, (name, _))| name == property)?;
-    (crate::types::canonical_property_reference_payload(ty)
-        == Some(crate::types::CanonicalReferencePayload::Boxed))
+    crate::types::canonical_property_reference_payload(ty).is_some()
         .then(|| descriptor_symbol(class.class_id, index as u32, true))
 }
 

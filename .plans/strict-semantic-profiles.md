@@ -1175,6 +1175,32 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
   two real eval reference controls, test-target/compiler builds and hygiene pass.
   The new publisher slot is covered by an explicit frame-footer bounds check.
 
+### Concrete static storage and live conversion references
+
+- The shared static storage planner keeps original declarations in ClassInfo,
+  selecting boxed physical storage for reviewed user statics under Casts. Native
+  reads project the declared ABI from that box; validators still use the original
+  int, float, bool, string, nullable, object or Iterable contract.
+- Assignment and Reflection ownership planning, eval getters/exports, and
+  process/web owner enumeration consume the same physical policy. Typed scalar
+  statics now own boxes and participate in cleanup just like constrained unions.
+- Literal defaults also follow the physical policy in the initializer prologue,
+  which bypasses ordinary EIR static stores. They retain their original declared
+  conversion before their resulting owned native value is boxed for storage.
+- Native fixtures cover inherited aliases, conversion and rejected replacement,
+  declaration-preserving scalar results, object/Iterable values, direct Mixed
+  reference functions, Reflection, self-assignment, missing fields and GC.
+- The physical policy unit, selected-checker/EIR generation and export checks on
+  all five targets, three native static bundles with both optimizer settings and
+  clean heaps, two permissive Reflection/string lifetime controls, architecture828
+  and assembly/diff checks pass. The fixture converts an array and separately
+  replaces it with an iterator: pre-existing ArrayIterator array-cast behavior is
+  tracked independently as task97375be9.
+- Before Casts admission, complete protected direct static setter publication,
+  including unbound declaration coercion and initialization visibility during
+  callbacks. Concrete checked eval setters currently return a guarded miss rather
+  than write through a raw-layout handler. The public profile mask is unchanged.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1280,4 +1306,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 84 | `3ca4036dd5` | feat(strict): preserve iterable property conversion references |
 | 85 | `82c96130e7` | feat(strict): preserve boxed static conversion references |
 | 86 | `9e2878062e` | feat(strict): share checked static reference exports |
-| 87 | this commit | feat(strict): validate eval reference replacement before publication |
+| 87 | `05382f8d22` | feat(strict): validate eval reference replacement before publication |
+| 88 | this commit | feat(strict): preserve concrete static conversion references |

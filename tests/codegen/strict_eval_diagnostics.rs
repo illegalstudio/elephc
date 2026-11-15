@@ -299,3 +299,18 @@ free($previous); free($error);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Concrete static declarations retain checked live references without losing their logical types.
+#[test]
+fn test_strict_settype_static_typed_property_contracts_bundle() {
+    let source = include_str!("../fixtures/strict/settype_static_typed_properties.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "integer:7|A7|double:8|string:19|B|N|12|OstdClass|2,3|I4WP|25W|R25|31:31|19|U",
+            "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

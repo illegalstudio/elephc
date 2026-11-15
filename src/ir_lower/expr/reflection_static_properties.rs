@@ -377,8 +377,10 @@ pub(super) fn store_static_property_by_class_name_with_op(
     if crate::ir_lower::property_default_errors::for_class(ctx, class_name, span).is_some() {
         return;
     }
-    let (value, argument_pins) = if reflection_class_static_property_target(ctx, class_name, property)
-        .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+    let (value, argument_pins) = if ctx.classes.get(class_name).and_then(|class| {
+        let owner = class.static_property_declaring_classes.get(property).map(String::as_str).unwrap_or(class_name);
+        crate::types::static_property_storage_type(ctx.classes.get(owner)?, property, ctx.semantic_profile)
+    }).is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
     {
         let source = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
         // Reflection is a call: its by-value argument remains alive until the setter returns,

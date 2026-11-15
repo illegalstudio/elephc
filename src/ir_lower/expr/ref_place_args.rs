@@ -82,13 +82,12 @@ pub(super) fn live_mixed_property_argument(
             && crate::types::canonical_property_reference_payload(&ty).is_some()))
 }
 
-/// Selects reviewed boxed static bindings without enabling a raw scalar layout implicitly.
+/// Selects reviewed static declarations whose checked physical storage is boxed.
 pub(super) fn live_boxed_static_property(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
         && matches!(arg.kind, ExprKind::StaticPropertyAccess { .. })
         && static_place_type(ctx, arg).is_some_and(|ty|
-            crate::types::canonical_property_reference_payload(&ty)
-                == Some(crate::types::CanonicalReferencePayload::Boxed))
+            crate::types::canonical_property_reference_payload(&ty).is_some())
 }
 
 /// Resolves an owned writable physical cell using the caller's lexical property scope.

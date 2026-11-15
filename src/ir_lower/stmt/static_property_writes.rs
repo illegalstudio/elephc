@@ -59,7 +59,7 @@ pub(super) fn lower_static_property_assign(
         .unwrap_or(source);
     // Canonical publication consumes one boxed owner. Retire a concrete temporary's lease
     // before the store can invoke a displaced destructor, while its new box keeps it alive.
-    let source = if static_property_type(ctx, receiver, property)
+    let source = if super::static_property_helpers::static_property_storage_type(ctx, receiver, property)
         .is_some_and(|ty| ty.codegen_repr() == PhpType::Mixed)
         && ctx.builder.value_php_type(source.value).codegen_repr() != PhpType::Mixed
     {
@@ -145,7 +145,7 @@ pub(super) fn static_property_store_retains_independent_value(
     property: &str,
     value: LoweredValue,
 ) -> bool {
-    let Some(slot_ty) = static_property_type(ctx, receiver, property) else {
+    let Some(slot_ty) = super::static_property_helpers::static_property_storage_type(ctx, receiver, property) else {
         return false;
     };
     let value_ty = ctx.builder.value_php_type(value.value);

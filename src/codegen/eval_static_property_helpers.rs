@@ -40,6 +40,13 @@ struct EvalStaticPropertySlot {
     is_declared: bool,
 }
 
+/// Reads physical storage policy without erasing the PHP declaration used by bridge validation.
+fn static_property_storage_type(module: &Module, slot: &EvalStaticPropertySlot) -> PhpType {
+    module.class_infos.get(&slot.declaring_class).and_then(|class|
+        crate::types::static_property_storage_type(class, &slot.property, module.semantic_profile))
+        .unwrap_or_else(|| slot.ty.clone())
+}
+
 /// Emits eval static-property helpers when any lowered function owns an eval context.
 pub(super) fn emit_eval_static_property_helpers(
     module: &Module,
@@ -757,7 +764,7 @@ fn emit_x86_64_uninitialized_guard(
 
 /// Boxes an ARM64 static property symbol payload into a Mixed cell.
 fn emit_aarch64_box_static_property_slot(module: &Module, emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
-    match slot.ty.codegen_repr() {
+    match static_property_storage_type(module, slot).codegen_repr() {
         // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
         PhpType::Int
         | PhpType::Bool
@@ -815,7 +822,7 @@ fn emit_aarch64_box_static_property_slot(module: &Module, emitter: &mut Emitter,
 
 /// Boxes an x86_64 static property symbol payload into a Mixed cell.
 fn emit_x86_64_box_static_property_slot(module: &Module, emitter: &mut Emitter, slot: &EvalStaticPropertySlot) {
-    match slot.ty.codegen_repr() {
+    match static_property_storage_type(module, slot).codegen_repr() {
         // A `?ptr<T>` word boxes by the declared union in `slot.ty`, address 0 as PHP null.
         PhpType::Int
         | PhpType::Bool
@@ -880,6 +887,12 @@ fn emit_aarch64_store_static_property_slot(
     slot: &EvalStaticPropertySlot,
     fail_label: &str,
 ) {
+    if static_property_storage_type(module, slot).codegen_repr() == PhpType::Mixed
+        && slot.ty.codegen_repr() != PhpType::Mixed
+    {
+        abi::emit_jump(emitter, fail_label);
+        return;
+    }
     if slot.ty.is_php_array() {
         emitter.instruction("ldr x0, [sp, #32]");                               // borrow the boxed static-property assignment before PHP type validation
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
@@ -933,6 +946,12 @@ fn emit_x86_64_store_static_property_slot(
     slot: &EvalStaticPropertySlot,
     fail_label: &str,
 ) {
+    if static_property_storage_type(module, slot).codegen_repr() == PhpType::Mixed
+        && slot.ty.codegen_repr() != PhpType::Mixed
+    {
+        abi::emit_jump(emitter, fail_label);
+        return;
+    }
     if slot.ty.is_php_array() {
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed static-property assignment before PHP type validation
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);

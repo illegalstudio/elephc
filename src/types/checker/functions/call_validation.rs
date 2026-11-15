@@ -211,8 +211,7 @@ impl Checker {
             && self.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
         {
             let ty = self.infer_type(arg, env)?;
-            return Ok(crate::types::canonical_property_reference_payload(&ty)
-                == Some(crate::types::CanonicalReferencePayload::Boxed));
+            return Ok(crate::types::canonical_property_reference_payload(&ty).is_some());
         }
         let ExprKind::PropertyAccess { object, property } = &arg.kind else { return Ok(false); };
         let Some((class_name, true)) = self.ref_property_slot_addressability(object, property, env)? else {

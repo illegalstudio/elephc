@@ -303,3 +303,20 @@ fn strict_settype_static_boxed_property_contracts_all_targets() {
         assert!(assembly.contains("__rt_reference_static_mixed_bind"), "{name}");
     }
 }
+
+/// Concrete static storage remains boxed while declaration checks stay typed on every target.
+#[test]
+fn strict_settype_static_typed_property_contracts_all_targets() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strict/settype_static_typed_properties.php"));
+    let program = prepared(&format!("{source}\nreplaceTypedStaticValue(TypedStaticCells::$number, 41);"));
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target,
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(module.required_runtime_features.native_reference_validation, "{name}");
+        crate::ir::validate_module(&module).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_reference_static_mixed_bind"), "{name}");
+    }
+}

@@ -1410,9 +1410,15 @@ fn emit_static_property_default_value(
         }
     }
     let symbol = static_property_symbol(class_name, property);
-    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, php_type, false);
+    let storage_type = ctx.module.class_infos.get(class_name).and_then(|class|
+        crate::types::static_property_storage_type(class, property, ctx.module.semantic_profile))
+        .unwrap_or_else(|| php_type.clone());
+    if storage_type.codegen_repr() == PhpType::Mixed && php_type.codegen_repr() != PhpType::Mixed {
+        crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &php_type.codegen_repr());
+    }
+    abi::emit_store_result_to_symbol(ctx.emitter, &symbol, &storage_type, false);
     if !matches!(
-        php_type.codegen_repr(),
+        storage_type.codegen_repr(),
         PhpType::Str | PhpType::TaggedScalar
     ) {
         abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 8);
