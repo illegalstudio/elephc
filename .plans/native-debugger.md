@@ -42,7 +42,8 @@ Epic: `elephc-jwio` — Native PHP debugger, call tracing and coverage
   with `.file`/`.loc`, source-map v3 `sources`/`source_id`, focused unit and
   codegen tests.
 - `elephc-qq34` (ADR): **accepted**; D2/D4/D6 ratified. Remaining implementation
-  gates: macOS execution, shared-stack extraction, metadata-schema review.
+  gates: macOS execution and shared-stack extraction; the metadata schema v1
+  review gate is closed.
 - `elephc-jwio.5` (debug build preset): **closed**; `--debug` implies DWARF and
   symbols, disables EIR optimization, skips the source-erasing AST passes, and
   refuses library emits.
@@ -54,7 +55,7 @@ Epic: `elephc-jwio` — Native PHP debugger, call tracing and coverage
 - DAP adapter (`elephc-ms89`, in progress): `elephc debug --dap` serves DAP over stdio, proxying to the runtime over a socketpair. Supported: launch (`stopOnEntry`), line/conditional/function/local, declared-object-property and dynamic-property write data breakpoints (virtual properties are refused), hooked-property rendering and caught/uncaught/throw exception filters with SHA-256 source verification/stale-source rejection, configurationDone, threads (main plus live fibers/generators as thread-like stacks), stackTrace (selectable by `threadId`), scopes, variables (arrays/strings/ref-cells/objects with class/property children, dynamic properties and folded `__debugInfo()` projections), evaluate (simple locals), continue/next/stepIn/stepOut, pause via SIGUSR1 in launch mode (child pid) and attach mode (`<socket>.pid`), `--attach <socket>` to a debug binary waiting on a one-shot mode-0600 Unix socket, and disconnect. Program stdout goes to stderr. Real nvim-dap and headless VS Code smoke tests run through `scripts/smoke-nvim-dap.sh` and `scripts/smoke-vscode.sh`; the minimal VS Code extension contribution lives in `tests/editor/vscode-extension/`. The loopback attach path uses a mode-0600 per-run key and a mutual HMAC-SHA256 challenge; a wrong key is rejected without stopping the listener. macOS arm64 execution is enforced by `debug-tests-macos-aarch64` (merge queue / `ci:macos`).
 - `monitor --calls` (`elephc-lx21`, in progress): compiles a source with `--debug` (or uses a debug binary), runs with `ELEPHC_DEBUG_CALLS=<mode>`, and joins the function-enter argument capture with the exit-hook return capture. Modes are `none|types|scalars|full` (`full` default, `all`/`1` aliases): none omits values, types records type names, scalars renders full scalars with container summaries, and full adds bounded nested children. It prints an indented PHP-formatted args/returns table, `--calls-out FILE` writes the same bounded events as JSONL, and `--html FILE` renders one unified page with the exact Profile view plus Calls/Dumps/Trace segments tabs (no network assets). Every calls-mode run uses the same `--debug --with-monitoring` build and prints the exact per-function profile before the call values, so timing and call capture come from one run; `--exact` is accepted but implied. A `.php` source is built with `--debug`; a binary needs its `.edbg.json` sidecar (and the monitoring marker for `--exact`/`--html`). Debug builds also inject the `elephc_dump()`/`elephc_trace_start()`/`elephc_trace_end()` helpers; explicit dumps and named segments are captured as `dump`/`segment_start`/`segment_end` events, exported in JSONL, and rendered in the HTML Dumps and Trace segments panels. Values are bounded at 256 string bytes, 16 children and 3 nested levels with `truncated`/`overflow` reporting; `#[\SensitiveParameter]` values are redacted and event-ring overflow is written as a `capture_overflow` JSONL record. Each call event also records its caller file/line, start/end timestamps, running fiber, entry alloc/free counters, exit alloc/free deltas and exception class/message/code/caught state; the Calls panel renders that context under every call line, including in `--calls=none` and postmortem runs.
 - `test --coverage` (`elephc-bwx6`, in progress): compiles the suite with `--debug`, runs it in one process with `ELEPHC_DEBUG_SITES=1`, joins line and branch site counters with the `.edbg.json` sites/branches tables, and prints per-file line coverage plus uncovered lines and branch edges. Every leaf of an `if`/loop/ternary condition (including `&&`/`||`/`!`) gets a two-edge guard; each `switch` gets one edge per case label plus default, on both static and dynamic dispatch. `--coverage-format text|lcov|cobertura` and `--coverage-out FILE` export text, LCOV (`DA`/`BRDA`/`BRF`/`BRH`) or Cobertura (`<line branch>`/`<conditions>`) reports; the dynamic `exit()` path publishes the debug dump. Logical paths enumerate every full reachable short-circuit prefix combination (hidden 2-bit-per-leaf state, dedicated counter per route); switch paths reuse their branch edges. Groups are recorded in a `paths` metadata table with a `truncated` flag and rendered as path coverage in text, LCOV (`PATH`/`PTF`/`PTH`), Cobertura (`path-rate`/`path-coverage`/`<condition type="path">`) and HTML. Remaining: cross-target execution evidence.
-- Next production slice: cross-target execution evidence (macOS arm64). Web route debugging is implemented for worker, pool and request isolation.
+- Next production slice: cross-target execution evidence (macOS arm64). Web route debugging is implemented for worker, pool and request isolation; the browser debugger covers breakpoints, exception filters, function/data breakpoints, watches and stepping.
 
 ## Why
 
@@ -98,8 +99,9 @@ Do not rebuild these; they are the foundation and the compatibility contract.
    no PHP-aware agent, no locals, no stepping semantics for inlined code,
    fibers, or web workers.
 2. **Variables are absent from DWARF.** `--debug-info` emits only a line table
-   and subprograms. lldb sees registers and assembly, not `$order`, `$total` or
-   `$this`.
+   and subprograms. Fixed for `--debug`: scalar locals use base types, strings a
+   `php_string` structure and containers an opaque `php_ref` pointer. References
+   and optimized-out slots remain DAP/terminal-only.
 3. **Included files were collapsed in debug artifacts.** `@src` printed only
    `line`/`col`, `.file 1` named the entry file, and the source map had one
    `source` field, so a breakpoint in `src/Cart.php` mapped to the entry file
@@ -243,8 +245,11 @@ for VS Code/Neovim.
 
 Do not build a second IDE. Extend the existing self-contained monitor HTML with a
 postmortem/call-collection view: call tree, timeline, source lines, arguments,
-returns, exceptions. Live stepping remains in the IDE/CLI; the browser page is
-for reading a capture after the fact.
+returns, exceptions. `monitor --debug-ui` additionally serves a live debugger
+page over a proxied DAP bridge: sources, conditional/hit-count line breakpoints,
+exception filters, function and data breakpoints, watches, stack, locals,
+read-only evaluation and stepping. Postmortem capture reading remains the
+after-the-fact view.
 
 ### Elephc-native debug helpers
 
@@ -562,11 +567,13 @@ extend that capture:
 
 ### 9. Native / lldb mode (later)
 
-The source file table already exists. `--debug` now also emits
-`DW_TAG_variable` entries for scalar PHP locals (`int`, `float`, `bool`) with
-frame-relative `DW_OP_fbreg` locations, so lldb/gdb can print them during native
-crash analysis. Strings, arrays, objects, references and `mixed` values stay in
-the in-process DAP metadata, and `--debug-optimized` omits variable DIEs because
+The source file table already exists. `--debug` also emits
+`DW_TAG_variable` entries for PHP locals with frame-relative `DW_OP_fbreg`
+locations: scalars (`int`, `float`, `bool`) use base types, strings a 16-byte
+`php_string` (`ptr`, `len`) structure and arrays/objects/`mixed`/iterable values
+an opaque `php_ref` pointer, so lldb/gdb can print the raw storage during native
+crash analysis. Reference-cell storage and structured PHP rendering stay in the
+in-process DAP metadata, and `--debug-optimized` omits variable DIEs because
 their slots may be gone. This is Option A as a companion, not a replacement for
 the in-process agent.
 
