@@ -866,6 +866,12 @@ fn label_first_bytes(names: &[&str]) -> [bool; 256] {
 /// The reference pass over lines `range`: widens, per label, the lowest and highest line that
 /// references it in `touched`, and adds the hard intervals (conditional branches, numeric locals)
 /// the range opens to `hard`.
+#[cfg(test)]
+thread_local! {
+    /// Lines `scan_references` tokenized looking for label references, on this thread.
+    static TOKENIZED_LINES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[allow(clippy::too_many_arguments)]
 fn scan_references(
     lines: &Lines<'_>,
@@ -878,6 +884,19 @@ fn scan_references(
     hard: &mut Vec<(usize, usize)>,
     address_taken: &mut Vec<u32>,
 ) {
+    // Every label of the listing begins with one of a few bytes (`L` and `_` on macOS). A line
+    // holding none of them names no label, and most instruction lines (`mov`, `ldr`, `add`, ...)
+    // hold none: one vectorized search skips the per-byte tokenizing of the 107 M-line Symfony
+    // listing, the top self-time frame of the assembling phase.
+    let label_start_bytes: Vec<u8> =
+        (0..=255u8).filter(|byte| starts_a_label[*byte as usize]).collect();
+    let may_name_a_label = |raw: &str| match label_start_bytes.as_slice() {
+        [] => false,
+        [one] => memchr::memchr(*one, raw.as_bytes()).is_some(),
+        [one, two] => memchr::memchr2(*one, *two, raw.as_bytes()).is_some(),
+        [one, two, three] => memchr::memchr3(*one, *two, *three, raw.as_bytes()).is_some(),
+        _ => true,
+    };
     for index in range {
         let raw = lines.get(index);
         let line = ascii_trim(raw);
@@ -889,7 +908,10 @@ fn scan_references(
             && !line.starts_with(".globl ")
             && !line.starts_with(".private_extern ")
             && !line.starts_with(".comm ")
+            && may_name_a_label(raw)
         {
+            #[cfg(test)]
+            TOKENIZED_LINES.with(|count| count.set(count.get() + 1));
             // Asked only once a token names a known label: most of the 44 M lines of a Symfony
             // build name none, and two substring searches per line were a visible share of this
             // pass. `@GOTPAGE` contains `PAGE` after its `@`, so one `@PAGE`/`@GOTPAGE` test is
@@ -923,11 +945,19 @@ fn scan_references(
         // the alternative and is deliberately not taken: keeping the pair together
         // costs nothing, because every such pair is intra-function, and rewriting
         // would change instruction counts and therefore later branch distances.
-        if let Some(target) = conditional_branch_target(line) {
-            if let Some(&id) = ids.get(target) {
-                let def = spans[id].def;
-                hard.push((index.min(def), index.max(def)));
+        // Only `b.<cond>`, `cbz`/`cbnz` and `tbz`/`tbnz` qualify, so a line starting with any
+        // other byte is not split on Unicode whitespace to find out.
+        if matches!(line.as_bytes()[0], b'b' | b'c' | b't') {
+            if let Some(target) = conditional_branch_target(line) {
+                if let Some(&id) = ids.get(target) {
+                    let def = spans[id].def;
+                    hard.push((index.min(def), index.max(def)));
+                }
             }
+        }
+        // A numeric reference is digits followed by `b` or `f`; a line with neither byte has none.
+        if memchr::memchr2(b'b', b'f', raw.as_bytes()).is_none() {
+            continue;
         }
         // A numeric local (`1:`) is resolved by direction, so `1f`/`1b` reaches
         // the nearest definition and can never leave the object it was written in.
@@ -1576,6 +1606,47 @@ mod tests {
     /// The visibility footer names exactly the `.globl` symbols outside the export
     /// allowlist, which is what `append_visibility_directives` produces
     /// (src/codegen_support/visibility.rs:65-78) — `_main` is the only export.
+    /// Lines the reference scan tokenizes over a listing whose `_first` holds `filler` plain
+    /// instructions, with the touched spans and hard intervals it finds.
+    fn tokenized_lines(filler: usize) -> (usize, Vec<(usize, usize)>, Vec<(usize, usize)>) {
+        let mut source = fixture();
+        let body = format!("_first:\n{}", "    mov x0, #1\n    add x1, x1, #8\n    ldr x2, [x29, #-16]\n".repeat(filler));
+        source = source.replacen("_first:\n", &body, 1);
+        let analysis = analyze(&source, MACOS_LOCAL);
+        let starts = label_first_bytes(&analysis.names);
+        let (mut touched, mut hard, mut taken) = (FastMap::default(), Vec::new(), Vec::new());
+        TOKENIZED_LINES.with(|count| count.set(0));
+        scan_references(
+            &analysis.lines,
+            0..analysis.lines.len(),
+            &analysis.ids,
+            &analysis.spans,
+            &FastMap::default(),
+            &starts,
+            &mut touched,
+            &mut hard,
+            &mut taken,
+        );
+        let tokenized = TOKENIZED_LINES.with(|count| count.get());
+        let mut spans: Vec<(usize, usize)> = touched.values().map(|&(lo, hi)| (lo as usize, hi as usize)).collect();
+        spans.sort_unstable();
+        (tokenized, spans, hard)
+    }
+
+    /// A line holding no byte any label starts with names no label and is not tokenized: plain
+    /// instructions were split into identifiers one byte at a time, the top self-time frame of the
+    /// Symfony assembling phase. The references the scan finds are those of the full tokenizing.
+    #[test]
+    fn the_reference_scan_tokenizes_only_lines_that_may_name_a_label() {
+        let (small, small_spans, small_hard) = tokenized_lines(1);
+        let (large, large_spans, large_hard) = tokenized_lines(300);
+        assert!(small > 0, "the fixture no longer references a label");
+        assert_eq!(small, large, "plain instructions were tokenized: {small} vs {large}");
+        assert_eq!(small_spans.len(), large_spans.len());
+        assert_eq!(small_hard.len(), large_hard.len(), "the b.eq pair is still a hard interval");
+        assert!(!small_hard.is_empty());
+    }
+
     fn fixture() -> String {
         let mut asm = String::new();
         asm.push_str(".globl _main\n_main:\n    bl _first\n    ret\n");
