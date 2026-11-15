@@ -27,3 +27,4 @@ pub(super) use dynamic_references::*;
 pub(super) use static_members::*;
 
 pub(super) use native_references::emit_native_reference_metadata;
+pub(super) use native_references::descriptor_symbol as native_reference_descriptor_symbol;

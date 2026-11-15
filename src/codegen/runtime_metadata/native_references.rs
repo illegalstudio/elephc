@@ -15,7 +15,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, IrHeapKind, IrType, Module, RuntimeCallTarget};
 
 /// Names immutable metadata for one physical declaration independently of a live receiver.
-fn descriptor_symbol(class_id: u64, slot: u32, is_static: bool) -> String {
+pub(in crate::codegen) fn descriptor_symbol(class_id: u64, slot: u32, is_static: bool) -> String {
     let storage = if is_static { "static" } else { "instance" };
     format!("_native_reference_declaration_{class_id}_{slot}_{storage}")
 }

@@ -16,6 +16,8 @@ use super::*;
 pub(crate) const LAYOUT_OFFSET: usize = 16;
 /// Required static storage size, including the separate promoted-layout word.
 pub(crate) const BINDING_BYTES: usize = LAYOUT_OFFSET + 8;
+/// Managed storage whose immutable declaration has also entered the weak source registry.
+const BOUND_LAYOUT: i64 = 2;
 
 /// Loads the borrowed PHP value owned by a raw or promoted static Mixed binding.
 /// The promoted cell owns its wrapper; readers expose the current child without retaining it.
@@ -35,7 +37,56 @@ pub(crate) fn load_mixed_value(emitter: &mut Emitter, symbol: &str, native_valid
 pub(super) fn emit(emitter: &mut Emitter) {
     emit_payload(emitter);
     emit_promote(emitter);
+    emit_bound_promote(emitter);
     emit_release(emitter);
+}
+
+/// Returns a borrowed canonical cell after registering its static declaration exactly once.
+fn emit_bound_promote(emitter: &mut Emitter) {
+    let result = abi::int_result_reg(emitter);
+    let scratch = abi::secondary_scratch_reg(emitter);
+    let ready = "__rt_reference_static_mixed_bind_ready";
+    let done = "__rt_reference_static_mixed_bind_done";
+    emitter.label_global("__rt_reference_static_mixed_bind");
+    abi::emit_frame_prologue(emitter, 48);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
+    abi::emit_reg_move(emitter, result, abi::int_arg_reg_name(emitter.target, 0));
+    abi::emit_load_from_address(emitter, scratch, result, LAYOUT_OFFSET);
+    abi::emit_load_int_immediate(emitter, result, BOUND_LAYOUT);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("cmp {scratch}, {result}"));           // repeated selections keep the existing declaration generation
+            emitter.instruction(&format!("b.eq {ready}"));                      // skip registry mutation for an already bound cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction(&format!("cmp {scratch}, {result}"));           // repeated selections keep the existing declaration generation
+            emitter.instruction(&format!("je {ready}"));                        // skip registry mutation for an already bound cell
+        }
+    }
+    abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
+    abi::emit_call_label(emitter, "__rt_reference_static_mixed_promote");
+    abi::emit_branch_if_int_result_zero(emitter, done);
+    abi::store_at_offset(emitter, result, 24);
+    for (index, offset) in [8, 24, 16].into_iter().enumerate() {
+        abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
+    }
+    let bind = emitter.target.extern_symbol("__elephc_reference_sources_bind_v1");
+    abi::emit_call_label(emitter, &bind);
+    super::source_lifecycle::require_binding_token(emitter);
+    abi::load_at_offset(emitter, result, 24);
+    super::source_lifecycle::associate_result(emitter);
+    abi::load_at_offset(emitter, scratch, 8);
+    abi::emit_load_int_immediate(emitter, result, BOUND_LAYOUT);
+    abi::emit_store_to_address(emitter, result, scratch, LAYOUT_OFFSET);
+    abi::load_at_offset(emitter, result, 24);
+    abi::emit_jump(emitter, done);
+    emitter.label(ready);
+    abi::load_at_offset(emitter, result, 8);
+    abi::emit_load_from_address(emitter, result, result, 0);
+    emitter.label(done);
+    abi::emit_frame_restore(emitter, 48);
+    abi::emit_return(emitter);
 }
 
 /// Returns a borrowed payload address, accepting a raw binding or its allocated managed cell.
@@ -193,6 +244,50 @@ mod tests {
             let unbind = release.find("__elephc_reference_sources_unbind_v1").unwrap();
             let retire = release.find("__rt_reference_cell_release").unwrap();
             assert!(detached < unbind && unbind < retire, "{name}: detachment and weak metadata precede PHP cleanup");
+        }
+    }
+
+    /// Static declaration registration precedes layout publication and repeated selections keep its generation.
+    #[test]
+    fn static_mixed_reference_binding_registers_once_on_every_target() {
+        for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit(&mut emitter);
+            let assembly = emitter.output();
+            let binding = assembly.split_once("__rt_reference_static_mixed_bind:").unwrap().1
+                .split_once("__rt_reference_static_mixed_release:").unwrap().0;
+            let fast = binding.find("__rt_reference_static_mixed_bind_ready").unwrap();
+            let promote = binding.find("__rt_reference_static_mixed_promote").unwrap();
+            let register = binding.find("__elephc_reference_sources_bind_v1").unwrap();
+            let associate = binding.find("__rt_reference_source_associate_native").unwrap();
+            let publish = if target.arch == Arch::AArch64 { "str x0, [x10, #16]" }
+                else { "mov QWORD PTR [r10 + 16], rax" };
+            assert!(fast < promote && promote < register && register < associate, "{name}");
+            assert!(associate < binding.find(publish).unwrap(), "{name}: publish a registered layout last");
+        }
+    }
+
+    /// Real assemblers accept the static binding protocol and its shared registry boundary on every target.
+    #[test]
+    #[ignore = "requires clang with ELF and Apple AArch64 assembler support"]
+    fn static_mixed_reference_bindings_assemble_on_all_supported_targets() {
+        use std::{io::Write, process::{Command, Stdio}};
+        for (name, triple) in [("linux-x86_64", "x86_64-linux-gnu"),
+            ("linux-aarch64", "aarch64-linux-gnu"), ("macos-aarch64", "arm64-apple-macos11"),
+            ("ios-arm64", "arm64-apple-ios13"), ("ios-sim-arm64", "arm64-apple-ios13-simulator")] {
+            let target = Target::parse(name).unwrap();
+            let mut emitter = Emitter::new(target);
+            emit(&mut emitter);
+            super::super::source_lifecycle::emit(&mut emitter);
+            let syntax = if target.arch == Arch::X86_64 { ".intel_syntax noprefix\n" } else { "" };
+            let assembly = format!("{syntax}.text\n{}", emitter.output());
+            let mut process = Command::new("clang").args(["-target", triple, "-x", "assembler",
+                "-c", "-o", "/dev/null", "-"]).stdin(Stdio::piped()).stderr(Stdio::piped())
+                .spawn().expect("clang is required for explicit cross-target assembly validation");
+            process.stdin.take().unwrap().write_all(assembly.as_bytes()).unwrap();
+            let output = process.wait_with_output().unwrap();
+            assert!(output.status.success(), "{name}: {}", String::from_utf8_lossy(&output.stderr));
         }
     }
 

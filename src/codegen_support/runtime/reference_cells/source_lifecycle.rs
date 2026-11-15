@@ -47,6 +47,11 @@ pub(in crate::codegen_support::runtime) fn require_success(emitter: &mut Emitter
     abi::emit_branch_if_int_result_nonzero(emitter, FAILURE);
 }
 
+/// Rejects a failed binding allocation before a reference can escape without its declaration.
+pub(in crate::codegen_support::runtime) fn require_binding_token(emitter: &mut Emitter) {
+    abi::emit_branch_if_int_result_zero(emitter, FAILURE);
+}
+
 /// Registers initialized owned cells from immutable physical rows before exposing a new object.
 fn emit_bind_object(emitter: &mut Emitter) {
     let result = abi::int_result_reg(emitter);
@@ -103,7 +108,7 @@ fn emit_bind_object(emitter: &mut Emitter) {
     }
     let entry = emitter.target.extern_symbol("__elephc_reference_sources_bind_v1");
     abi::emit_call_label(emitter, &entry);
-    abi::emit_branch_if_int_result_zero(emitter, FAILURE);
+    require_binding_token(emitter);
     abi::load_at_offset(emitter, result, 48);
     associate_result(emitter);
     emitter.label(advance);

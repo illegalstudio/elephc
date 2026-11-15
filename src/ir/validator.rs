@@ -790,7 +790,7 @@ fn validate_instruction_immediate(
         PropUnset => require_immediate(inst_id, inst, "property name or initializer physical slot", |imm| {
             matches!(imm, Imm::Data(_) | Imm::PropertyRef { .. })
         }),
-        StrAppend | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
+        StrAppend | LocalPlace | LoadLocal | StoreLocal | UnsetLocal | ZeroLocalSlot | LoadRefCell | LoadRefCellValue | StoreRefCell
         | ReleaseLocalRefCell | AcquireRefCell
         | ReleaseLocalSlot | ReleaseRawLocalSlot | PushCallOperandOwner | PopCallOperandOwner
         | LoadStaticLocal | StoreStaticLocal | InitStaticLocal | StaticLocalUninitialized
@@ -1049,6 +1049,14 @@ fn validate_opcode_rules(
             if inst.result_type != IrType::Heap(crate::ir::IrHeapKind::Mixed)
                 || inst.result_php_type != PhpType::Mixed
                 || inst.result_ownership != Ownership::Owned
+            { return Err(ValidationError::ResultTypeMismatch(result)); }
+            Ok(())
+        }
+        LocalPlace => {
+            check_count(inst_id, inst, 0, "0")?;
+            let result = inst.result.ok_or(ValidationError::InstructionResultMissing(inst_id))?;
+            if inst.result_type != IrType::I64 || !matches!(inst.result_php_type, PhpType::Pointer(_))
+                || inst.result_ownership != Ownership::NonHeap
             { return Err(ValidationError::ResultTypeMismatch(result)); }
             Ok(())
         }

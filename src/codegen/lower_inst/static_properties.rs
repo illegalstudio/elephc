@@ -29,6 +29,8 @@ use super::{
 };
 use crate::codegen::{CodegenIrError, Result};
 
+mod reference_cells;
+
 /// Resolved direct static property metadata for symbol-backed storage.
 struct StaticPropertySlot {
     declaring_class: String,
@@ -108,8 +110,7 @@ pub(super) fn lower_load_static_property_ref_cell(
     if slot.is_declared {
         emit_uninitialized_static_property_guard(ctx, &slot);
     }
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, result_reg, &slot.symbol);
+    reference_cells::load(ctx, &slot)?;
     store_if_result(ctx, inst)
 }
 
@@ -577,7 +578,6 @@ fn emit_dynamic_static_property_ref_cell_result(
     class_id_reg: &str,
 ) -> Result<()> {
     let done = ctx.next_label("static_prop_ref_cell_done");
-    let result_reg = abi::int_result_reg(ctx.emitter);
     let mut labels = Vec::new();
     for branch in &slot.branches {
         let label = ctx.next_label("static_prop_ref_cell_branch");
@@ -587,7 +587,7 @@ fn emit_dynamic_static_property_ref_cell_result(
     if slot.is_declared {
         emit_uninitialized_static_property_guard(ctx, slot);
     }
-    abi::emit_symbol_address(ctx.emitter, result_reg, &slot.symbol);
+    reference_cells::load(ctx, slot)?;
     abi::emit_jump(ctx.emitter, &done);
     for (label, branch) in labels {
         ctx.emitter.label(&label);
@@ -599,7 +599,7 @@ fn emit_dynamic_static_property_ref_cell_result(
         if branch_slot.is_declared {
             emit_uninitialized_static_property_guard(ctx, &branch_slot);
         }
-        abi::emit_symbol_address(ctx.emitter, result_reg, &branch_slot.symbol);
+        reference_cells::load(ctx, &branch_slot)?;
         abi::emit_jump(ctx.emitter, &done);
     }
     ctx.emitter.label(&done);

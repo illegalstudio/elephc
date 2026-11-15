@@ -896,6 +896,9 @@ pub enum Op {
     ConstEnumCase,
     LoadCalledClassId,
     DataAddr,
+    /// Identifies an addressable local slot without reading or retaining its current PHP value.
+    /// Prepared by-reference graphs resolve this binding after all source arguments finish.
+    LocalPlace,
     LoadLocal,
     StoreLocal,
     UnsetLocal,
@@ -1417,6 +1420,7 @@ impl Op {
             | ConstBool
             | ConstClassName
             | DataAddr
+            | LocalPlace
             | IAdd
             | ISub
             | IMul
@@ -1502,7 +1506,8 @@ impl Op {
             | CatchCurrent => E::READS_GLOBAL,
             // Address selection can raise a catchable typed-uninitialized error or a
             // late-static visibility fatal before exposing the writable symbol slot.
-            LoadStaticPropertyRefCell => E::READS_GLOBAL | E::MAY_THROW | E::MAY_FATAL,
+            LoadStaticPropertyRefCell => E::READS_GLOBAL | E::WRITES_GLOBAL | E::READS_HEAP
+                | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::MAY_FATAL,
             CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             // Declared slots can reject a value with a catchable TypeError before the write.
             StoreStaticProperty | StoreReflectionStaticProperty => E::WRITES_GLOBAL | E::WRITES_LOCAL | E::MAY_THROW,
@@ -1841,6 +1846,7 @@ impl Op {
             ConstEnumCase => "const_enum_case",
             LoadCalledClassId => "load_called_class_id",
             DataAddr => "data_addr",
+            LocalPlace => "local_place",
             LoadLocal => "load_local",
             StoreLocal => "store_local",
             UnsetLocal => "unset_local",

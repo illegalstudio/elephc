@@ -13,11 +13,17 @@ use crate::builtins::semantics::{BuiltinLoweringContext, BuiltinLoweringError};
 use elephc_semantics::settype_target::{SettypeTarget, SettypeTargetFailure};
 
 /// Applies conversion policy and stores only after the selected conversion succeeds.
-pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, value: ValueId,
+pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, place: ValueId,
     target: ValueId, span: Span) -> Result<LoweredValue, BuiltinLoweringError> {
-    let name = ctx.operand_local_name(value).ok_or_else(|| BuiltinLoweringError::new(
+    let name = ctx.operand_local_name(place).ok_or_else(|| BuiltinLoweringError::new(
         "settype requires a writable local or reference binding"))?;
     preserve_binding(ctx, &name);
+    // Argument evaluation captures the binding, not a value that a later argument can retire.
+    let live = ctx.load_local(&name, Some(span));
+    let snapshot = ctx.emit_value(Op::MixedClone, vec![live.value], None, PhpType::Mixed,
+        Op::MixedClone.default_effects(), Some(span));
+    release_binary_operand_temporary(ctx, live, span);
+    let value = snapshot.value;
     let original = pin_in_flight_owners(ctx, &[value, target], span);
     let text = ctx.emit_value(Op::RuntimeCall, vec![target], Some(Immediate::RuntimeCall(
         crate::ir::RuntimeCallTarget::UnaryString(crate::ir::UnaryStringRuntime::StrToLower))),
@@ -47,7 +53,7 @@ pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, value: Value
             super::ternary_cast::lower_scalar_cast_value(ctx, &cast, input, &expression)
         };
         let converted = ctx.box_value_as_mixed(converted, PhpType::Mixed, Some(span));
-        if !ctx.store_operand_local(value, converted.value, PhpType::Mixed, Some(span)) {
+        if !ctx.store_operand_local(place, converted.value, PhpType::Mixed, Some(span)) {
             return Err(BuiltinLoweringError::new("checked settype lost its original writable binding"));
         }
         ctx.set_local_logical_type(&name, PhpType::Mixed);
@@ -65,6 +71,7 @@ pub(in crate::ir_lower) fn lower(ctx: &mut LoweringContext<'_, '_>, value: Value
     ctx.builder.position_at_end(done); ctx.restore_initialized_slots(initial);
     unpin_in_flight_owners(ctx, text_owner, span); release_binary_operand_temporary(ctx, text, span);
     unpin_in_flight_owners(ctx, original, span);
+    release_binary_operand_temporary(ctx, snapshot, span);
     ctx.set_local_logical_type(&name, PhpType::Mixed);
     Ok(emit_bool_literal(ctx, true, Some(span)))
 }

@@ -207,6 +207,13 @@ impl Checker {
 
     /// Gives reviewed writable property arguments managed cells before reference call lowering.
     pub(crate) fn promote_live_property_reference_argument(&mut self, arg: &Expr, env: &TypeEnv) -> Result<bool, CompileError> {
+        if matches!(arg.kind, ExprKind::StaticPropertyAccess { .. })
+            && self.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+        {
+            let ty = self.infer_type(arg, env)?;
+            return Ok(crate::types::canonical_property_reference_payload(&ty)
+                == Some(crate::types::CanonicalReferencePayload::Boxed));
+        }
         let ExprKind::PropertyAccess { object, property } = &arg.kind else { return Ok(false); };
         let Some((class_name, true)) = self.ref_property_slot_addressability(object, property, env)? else {
             return Ok(false);

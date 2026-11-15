@@ -32,6 +32,20 @@ fn supports_declaration(ty: &PhpType) -> bool {
     }
 }
 
+/// Selects validation when checked casts can expose owned instance or boxed static references.
+pub(crate) fn required_by_profile(module: &Module) -> bool {
+    module.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+        && module.class_infos.values().any(|class| {
+            class.properties.iter().enumerate().any(|(index, (_, ty))|
+                class.property_slot_owns_reference(index) && *ty != PhpType::Mixed
+                    && crate::types::canonical_property_reference_payload(ty).is_some())
+                || class.static_properties.iter().any(|(name, ty)|
+                    class.declared_static_properties.contains(name)
+                        && crate::types::canonical_property_reference_payload(ty)
+                            == Some(crate::types::CanonicalReferencePayload::Boxed))
+        })
+}
+
 /// Enables native validation and generates callbacks for the module's physical declarations.
 ///
 /// Ordinary lowering does not need these callbacks. In particular, opaque eval must not

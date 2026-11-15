@@ -10,6 +10,13 @@
 
 use super::*;
 
+/// Materializes a binding address without interpreting or acquiring the value stored there.
+pub(super) fn lower_local_place(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let offset = ctx.local_offset(expect_local_slot(inst)?)?;
+    abi::emit_frame_slot_address(ctx.emitter, abi::int_result_reg(ctx.emitter), offset);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers a signed integer comparison into a boolean result value.
 pub(super) fn lower_int_compare(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let predicate = immediate_operands::emit_int_compare(ctx, inst)?;

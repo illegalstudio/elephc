@@ -1125,6 +1125,24 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
 - Static and remaining eval/reference integration continue before public Casts
   admission. The public integrated mask remains the six completed features.
 
+### Boxed static reference bindings and deferred settype reads
+
+- Checked casts now bind declared Mixed/union static storage to its immutable
+  declaration validator. Inherited references use the physical declaring class.
+  Ordinary raw reference paths retain their existing representation.
+- Static binding layout 2 means both canonical promotion and weak source
+  registration are complete. Repeated selections reuse the same cell and
+  generation; retirement detaches the binding and metadata before PHP cleanup.
+- Prepared settype arguments use a non-owning `LocalPlace` EIR marker. Selection
+  captures the original binding at its source argument position; conversion
+  snapshots its current value only after all arguments finish. Later argument
+  assignments and destructors therefore run before that value is read.
+- Focused tests cover static aliases, inherited storage, first-class and erased
+  calls, failed typed writes, collection contracts, GC, and destructor timing for
+  static and local values. Validator and runtime emitter tests cover all targets.
+  Physical scalar static layouts and remaining eval/reference boundaries still
+  precede public Casts admission.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1227,4 +1245,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 81 | `94e873a4c5` | feat(strict): preserve nullable property reference contracts |
 | 82 | `e2b20ae08a` | feat(strict): preserve object property conversion references |
 | 83 | `15faacbb39` | feat(strict): preserve array property conversion references |
-| 84 | this commit | feat(strict): preserve iterable property conversion references |
+| 84 | `3ca4036dd5` | feat(strict): preserve iterable property conversion references |
+| 85 | this commit | feat(strict): preserve boxed static conversion references |

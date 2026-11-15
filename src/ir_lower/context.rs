@@ -6063,7 +6063,7 @@ impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, 
 }
 
 impl LoweringContext<'_, '_> {
-    /// Returns the PHP variable an operand was loaded from, for every load shape
+    /// Returns the PHP variable an operand addresses, for place markers and every load shape
     /// `load_local` emits, or `None` for any other value (a literal, a call result, a
     /// property read).
     ///
@@ -6074,7 +6074,7 @@ impl LoweringContext<'_, '_> {
         let inst = self.builder.value_defining_instruction(operand)?;
         match (inst.op, &inst.immediate) {
             (
-                Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadRefCellValue,
+                Op::LocalPlace | Op::LoadLocal | Op::LoadStaticLocal | Op::LoadRefCell | Op::LoadRefCellValue,
                 Some(Immediate::LocalSlot(slot)),
             ) => self
                 .local_slots

@@ -191,11 +191,7 @@ fn lower_on_compiler_stack(
     super::closure_scopes::specialize_module(&mut module);
     super::effect_refinement::refine_module(&mut module);
     reserve_eval_subclass_property_storage(&mut module);
-    if module.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
-        && module.class_infos.values().any(|class| class.properties.iter().enumerate().any(|(index, (_, ty))|
-            class.property_slot_owns_reference(index)
-                && *ty != PhpType::Mixed && crate::types::canonical_property_reference_payload(ty).is_some()))
-    {
+    if super::reference_property_validators::required_by_profile(&module) {
         super::reference_property_validators::enable_native_reference_validation(&mut module)?;
     }
     // A refused shape is reported before validation: the placeholder EIR those sites emit

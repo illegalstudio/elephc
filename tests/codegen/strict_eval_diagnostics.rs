@@ -237,3 +237,17 @@ echo '|', json_encode($borrowed), '|', json_encode((array)$borrowed);
             "{optimization}: {}", String::from_utf8_lossy(&output.stderr));
     }
 }
+
+/// Boxed static references validate assignments inside the callee and preserve argument-time selection.
+#[test]
+fn test_strict_settype_static_boxed_property_contracts_bundle() {
+    let source = include_str!("../fixtures/strict/settype_static_boxed_properties.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "7|18|integer:8|A8WP|textW|RtextWP|nextW|TnextDB|S27DB|L31", "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

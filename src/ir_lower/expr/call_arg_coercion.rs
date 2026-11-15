@@ -57,7 +57,7 @@ fn lower_signature_argument(
         ctx.builder.mark_reference_argument_owner(owner);
         // Receiver cleanup can throw after the cell binds, including into a same-frame catch.
         publish_scoped_ref_receiver_alias(ctx, &alias, arg.span);
-        lower_ref_assign_property(ctx, &alias, arg, arg.span);
+        crate::ir_lower::stmt::lower_ref_assign(ctx, &alias, arg, arg.span);
         let variable = Expr::new(ExprKind::Variable(alias), arg.span);
         return lower_arg_with_signature(ctx, sig, index, &variable);
     }

@@ -286,3 +286,20 @@ fn strict_settype_iterable_property_contracts_all_targets() {
         crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
     }
 }
+
+/// Static boxed declarations acquire live cells and validators on all supported targets.
+#[test]
+fn strict_settype_static_boxed_property_contracts_all_targets() {
+    let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/strict/settype_static_boxed_properties.php"));
+    let program = prepared(&format!("{source}\ntry {{ replaceStaticConversionValue(StaticConversionPlace::$choice, []); }} catch (TypeError $directError) {{}}"));
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target,
+            SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(module.required_runtime_features.native_reference_validation, "{name}");
+        crate::ir::validate_module(&module).unwrap();
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_reference_static_mixed_bind"), "{name}");
+    }
+}

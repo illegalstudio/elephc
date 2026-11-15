@@ -33,14 +33,17 @@ pub(super) fn lower_argument(ctx: &mut LoweringContext<'_, '_>, sig: &FunctionSi
     { return None; }
     let mut place = arg;
     while let ExprKind::NamedArg { value, .. } | ExprKind::ErrorSuppress(value) = &place.kind { place = value; }
-    if !managed_place(ctx, place) { return None; }
+    if let ExprKind::Variable(name) = &place.kind {
+        super::builtin_settype::preserve_binding(ctx, name);
+    } else if !managed_place(ctx, place) { return None; }
     let alias = ctx.declare_synthetic_php_local(PhpType::Mixed);
     let owner = ctx.declare_ref_cell_owner(&alias, PhpType::Mixed);
     ctx.builder.mark_reference_argument_owner(owner);
     publish_scoped_ref_receiver_alias(ctx, &alias, place.span);
     crate::ir_lower::stmt::lower_ref_assign(ctx, &alias, place, place.span);
-    let variable = Expr::new(ExprKind::Variable(alias), place.span);
-    Some(lower_arg_with_signature(ctx, sig, index, &variable))
+    let slot = ctx.local_slots[&alias];
+    Some(ctx.emit_value(Op::LocalPlace, Vec::new(), Some(Immediate::LocalSlot(slot)),
+        PhpType::Pointer(None), Op::LocalPlace.default_effects(), Some(place.span)).value)
 }
 
 /// Recognizes original storage that can expose a managed reference without detaching its value.
@@ -50,7 +53,8 @@ pub(super) fn managed_place(ctx: &LoweringContext<'_, '_>, place: &Expr) -> bool
     }
     match &place.kind {
         ExprKind::PropertyAccess { .. } => super::ref_place_args::live_mixed_property_argument(ctx, place, &PhpType::Mixed),
-        ExprKind::StaticPropertyAccess { .. } => super::ref_place_args::static_place_type(ctx, place) == Some(PhpType::Mixed),
+        ExprKind::StaticPropertyAccess { .. } => super::ref_place_args::live_boxed_static_property(ctx, place)
+            || super::ref_place_args::static_place_type(ctx, place) == Some(PhpType::Mixed),
         ExprKind::ArrayAccess { array, .. } => {
             super::ref_place_args::static_place_type(ctx, place) == Some(PhpType::Mixed)
                 || matches!(super::array_cast_source::array_cast_source_type_for_ir(ctx, array).codegen_repr(),
