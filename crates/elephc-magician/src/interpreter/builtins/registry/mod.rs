@@ -28,6 +28,7 @@ mod dynamic_mutation;
 mod names;
 mod owned_arguments;
 mod signature;
+mod value_contracts;
 
 pub(in crate::interpreter) use arity::*;
 pub(in crate::interpreter) use binding::*;
@@ -327,6 +328,7 @@ pub(in crate::interpreter) fn eval_declared_builtin_values_call_from_scope(
     let Some(spec) = eval_declared_builtin_spec(name) else {
         return Ok(None);
     };
+    value_contracts::validate_builtin_value_contracts(name, evaluated_args, context, values)?;
     if let Some(runtime_builtin) = spec.runtime_builtin {
         if runtime_builtin.supports_arity(evaluated_args.len()) || RuntimeBuiltinId::MBSTRING.contains(&runtime_builtin) {
             if let Some(result) = call_shared_runtime_builtin(runtime_builtin, evaluated_args, context, values)? {

@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 94 (this commit), following `da8624a166`. Issue:
+Verified through step 95 (this commit), following `eae00db419`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 94.
+This progress ledger condenses verified implementation through step 95.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -588,7 +588,9 @@ compiler build, architecture gate, assembly comment checks and diff hygiene.
    numeric guards or typed source violations. Close any concrete remaining literal,
    compound-store, update, callable, reference and exception ownership gaps.
 2. Integrate shared conversion plans for implicit assignments, parameters, returns,
-   callbacks, descriptors, reflection and eval re-entry. Complete checked explicit
+   builtin inputs, callbacks, descriptors, reflection and eval re-entry. Complete
+   source-sensitive/direct builtin handlers and pre-fold AOT builtin checks before
+   admitting Coercions. Complete checked explicit
    casts with range/domain errors, exact strings and native object cast contracts.
    Original GMP and SimpleXML cast projections are now checked. Before Casts
    admission, finish host callbacks and the
@@ -818,6 +820,29 @@ above are unchanged.
   builtin parameter types and existing argument ownership/binding paths to close
   builtin conversions before admitting Coercions; then finish all other profiles.
 
+### Eval builtin value input contracts
+
+- The evaluated builtin dispatcher validates fixed input parameters against the
+  canonical neutral TypeSpec contract before runtime or value hooks can convert
+  them. Scalars, nullable types, unions, arrays, objects and callable membership
+  share one adapter. No second builtin name or signature table was introduced.
+- Mixed input APIs and explicit conversion functions retain their declared
+  behavior. Null defaults remain explicit API sentinels. Reference outputs retain
+  their callee-owned validation and writeback policy, since their old kind can be
+  irrelevant to the operation. Special source/direct reference handlers still
+  require their own shared boundary before runtime admission.
+- A strlen(7) fixture was red with output1 and no exception. Three new tests cover
+  direct, named, spread, callback and mixed-case calls; scalar/null rejections;
+  exact and explicit input controls; a supported VM caller; Stringable rejection
+  before its hook; and complete fake owner accounting. The old one-argument eval
+  implode limitation is tracked separately as task94773458; the strict control
+  uses its supported two-argument form.
+- All fifteen selected parameter, return, property and pending-profile tests pass,
+  plus compiler check/build and the curl builtin exporter. The complete generated
+  builtin workflow passes with no generated diff, architecture inventory828,
+  assembly comments and diff hygiene. Coercions remains staged with six public
+  features until special source handlers, AOT/folding and host audits are complete.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -933,4 +958,6 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 
 | 93 | `da8624a166` | feat(strict): validate live eval property reference writes |
 
-| 94 | this commit | feat(strict): guard native writes with live eval property sources |
+| 94 | `eae00db419` | feat(strict): guard native writes with live eval property sources |
+
+| 95 | this commit | feat(strict): check evaluated builtin input contracts |
