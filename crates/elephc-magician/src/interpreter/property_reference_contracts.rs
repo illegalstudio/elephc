@@ -27,11 +27,29 @@ pub(in crate::interpreter) fn eval_replace_reference_value(
     reference: RuntimeCellHandle, value: RuntimeCellHandle,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) {
-        for source in context.property_reference_types(reference) {
-            eval_validate_property_contract(&source.owner, &source.property, &source.declared,
-                value, context, values)?;
+    eval_validate_property_reference(reference, value, context, values)?;
+    // A reference may escape the eval activation that owns its property's declaration.
+    let current = context as *mut ElephcEvalContext;
+    for pointer in unsafe { crate::context::live_native_reference_contexts() } {
+        if pointer == current { continue; }
+        let Some(owner) = (unsafe { pointer.as_mut() }) else { continue; };
+        if let Err(status) = eval_validate_property_reference(reference, value, owner, values) {
+            if let Some(error) = owner.take_pending_throw() { context.set_pending_throw(error); }
+            return Err(status);
         }
     }
     values.reference_replace(reference, value)
+}
+
+/// Validates the current declaration set without publishing, retaining or consuming a candidate.
+pub(crate) fn eval_validate_property_reference(
+    reference: RuntimeCellHandle, value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    if !context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) { return Ok(()); }
+    for source in context.property_reference_types(reference) {
+        eval_validate_property_contract(&source.owner, &source.property, &source.declared,
+            value, context, values)?;
+    }
+    Ok(())
 }

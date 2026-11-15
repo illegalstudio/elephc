@@ -24,6 +24,19 @@ pub(crate) fn unregister_live_native_context(context: *mut ElephcEvalContext) {
     LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow_mut().retain(|entry| *entry != context));
 }
 
+/// Copies stable ABI contexts and the current native caller without retaining either owner.
+///
+/// # Safety
+/// Returned pointers are thread-bound and must be consumed before running context teardown.
+pub(crate) unsafe fn live_native_reference_contexts() -> Vec<*mut ElephcEvalContext> {
+    let mut contexts = LIVE_NATIVE_CONTEXTS.with(|contexts| contexts.borrow().clone());
+    if let Some(active) = native_frame_active_eval_context() {
+        if !contexts.contains(&active) { contexts.push(active); }
+    }
+    contexts.retain(|context| unsafe { context.as_ref() }.is_some_and(|owner| !owner.teardown_active()));
+    contexts
+}
+
 /// Finds a live request owner for class-based factories called after an eval activation returns.
 ///
 /// # Safety

@@ -102,6 +102,8 @@ use return_values::*;
 use value_contracts::*;
 use property_value_contracts::*;
 use property_reference_contracts::*;
+#[cfg(not(test))]
+pub(crate) use property_reference_contracts::eval_validate_property_reference;
 pub use runtime_ops::{
     NativeCallableParameterMetadata, NativeCallableSignatureMetadata, RuntimeValueOps,
 };

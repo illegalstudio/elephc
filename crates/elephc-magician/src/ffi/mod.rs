@@ -22,6 +22,8 @@ mod dynamic_properties;
 pub(crate) mod ob_handlers;
 pub mod execute;
 #[cfg(not(test))]
+mod property_references;
+#[cfg(not(test))]
 pub mod function_calls;
 pub mod native_catalog;
 pub mod native_functions;

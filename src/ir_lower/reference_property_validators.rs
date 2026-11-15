@@ -35,14 +35,15 @@ fn supports_declaration(ty: &PhpType) -> bool {
 /// Selects validation when checked casts can expose owned instance or boxed static references.
 pub(crate) fn required_by_profile(module: &Module) -> bool {
     crate::types::checked_property_references(module.semantic_profile)
-        && module.class_infos.values().any(|class| {
+        && ((module.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+            && module.required_runtime_features.eval_bridge) || module.class_infos.values().any(|class| {
             class.properties.iter().enumerate().any(|(index, (_, ty))|
                 class.property_slot_owns_reference(index) && *ty != PhpType::Mixed
                     && crate::types::canonical_property_reference_payload(ty).is_some())
                 || class.static_properties.iter().any(|(name, ty)|
                     class.declared_static_properties.contains(name)
                         && crate::types::canonical_property_reference_payload(ty).is_some())
-        })
+        }))
 }
 
 /// Enables native validation and generates callbacks for the module's physical declarations.

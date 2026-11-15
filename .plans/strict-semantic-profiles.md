@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 93 (this commit), following `69bb593ad5`. Issue:
+Verified through step 94 (this commit), following `da8624a166`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 93.
+This progress ledger condenses verified implementation through step 94.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -792,6 +792,32 @@ above are unchanged.
   Native stores outside the interpreter and cross-context interoperability remain
   admission work. Coercions and Casts stay staged; the public feature mask is six.
 
+### Eval-owned constraints at native reference publication
+
+- The native coordinator checks eval-owned property sources before its native
+  declaration coercers. A versioned Magician callback returns success, failure
+  or an owned raw Throwable; no native exception crosses Rust. Inputs stay borrowed.
+- The callback copies live thread-local ABI context handles and an active native
+  caller, then checks their weak property associations. The interpreter also checks
+  foreign live sources and moves a source owner's TypeError to the writing context.
+  Context and receiver lifetimes are not extended by these metadata scans.
+- EIR requests canonical validation for Coercions with eval even when an opaque
+  class has no corresponding AOT property declaration. Other profiles and binaries
+  without the eval bridge retain their existing dependency boundary.
+- A real opaque native experiment was red with later callee effects and a changed
+  integer value. With the guard it passes both optimizers with clean heaps,
+  including native catches, nested eval, static/shared sources, unset and native
+  object finalization. That experiment temporarily opened the development runtime
+  admission gate. The gate was restored before this commit because a separate
+  builtin probe still accepts strlen(7) under Coercions. Those integration fixtures
+  remain pending the completed runtime admission step and are not this commit's CI
+  coverage. No new public profile is enabled.
+- Nine property tests, the pending-profile API rejection, three native coordinator
+  tests including real five-target clang assembly, compiler check/build,
+  architecture inventory828 and selected-source hygiene pass. Next use neutral
+  builtin parameter types and existing argument ownership/binding paths to close
+  builtin conversions before admitting Coercions; then finish all other profiles.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -905,4 +931,6 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 
 | 92 | `69bb593ad5` | feat(strict): share exact eval property value contracts |
 
-| 93 | this commit | feat(strict): validate live eval property reference writes |
+| 93 | `da8624a166` | feat(strict): validate live eval property reference writes |
+
+| 94 | this commit | feat(strict): guard native writes with live eval property sources |

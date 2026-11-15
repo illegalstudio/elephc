@@ -266,3 +266,37 @@ fn clean_property_fixture(context: &mut ElephcEvalContext, scope: &mut ElephcEva
         assert_eq!(*owners, 0, "{label}: {:?}", values.values[id]);
     }
 }
+
+/// A second eval context honors an escaped reference's live source and releases only that source.
+#[test]
+fn strict_conversion_properties_cross_context_live_source_retirement() {
+    let mut owner = Box::new(ElephcEvalContext::new());
+    owner.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true)).unwrap();
+    let mut owner_scope = ElephcEvalScope::new(); let mut values = FakeOps::default();
+    staged_numeric_execution("class CrossContextPropertyRef { public float $value = 1.5; }
+        $object = new CrossContextPropertyRef(); $alias = 1.5; $object->value =& $alias;", false,
+        &mut owner, &mut owner_scope, &mut values).unwrap();
+    let pointer = &mut *owner as *mut ElephcEvalContext;
+    crate::context::register_live_native_context(pointer);
+    /// Unregisters exactly this test's borrowed stable context even when an assertion fails.
+    struct Registration(*mut ElephcEvalContext);
+    impl Drop for Registration {
+        /// Removes the borrowed pointer before its test-owned context can be reclaimed.
+        fn drop(&mut self) { crate::context::unregister_live_native_context(self.0); }
+    }
+    let registration = Registration(pointer);
+    let reference = owner_scope.visible_cell("alias").unwrap();
+    let mut caller = ElephcEvalContext::new(); let mut caller_scope = ElephcEvalScope::new();
+    caller_scope.set("alias".to_string(), values.retain(reference).unwrap(), ScopeCellOwnership::Owned);
+    let result = staged_numeric_execution("$alias = 7;", false, &mut caller, &mut caller_scope, &mut values);
+    assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)));
+    assert!(owner.take_pending_throw().is_none());
+    let error = caller.take_pending_throw().expect("caller receives the source owner's TypeError");
+    assert!(values.object_is_a(error, "TypeError", false).unwrap()); values.release(error).unwrap();
+    staged_numeric_execution("unset($object->value);", false, &mut owner, &mut owner_scope, &mut values).unwrap();
+    staged_numeric_execution("$alias = 7;", false, &mut caller, &mut caller_scope, &mut values).unwrap();
+    for value in caller_scope.drain_owned_cells() { values.release(value).unwrap(); }
+    for value in caller.take_persistent_cell_owners() { values.release(value).unwrap(); }
+    drop(registration);
+    clean_property_fixture(&mut owner, &mut owner_scope, &mut values, "cross-context reference source");
+}
