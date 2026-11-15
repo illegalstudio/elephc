@@ -131,3 +131,30 @@ echo ti(m(1.5));
         assert!(main.contains("float_to_int_diag_exact"), "{target}: a raw float must go through precision diagnostics");
     }
 }
+
+/// The string conversion that follows a deferred positional guard carries the call's span.
+///
+/// A conversion that can warn publishes its span as the current diagnostic line, so a
+/// span-less one published line 0. Inside an injected prelude body (where the call's own span
+/// is compiler-generated and never published) that overwrote the user's call-site line, and a
+/// later exception reported line 0.
+#[test]
+fn deferred_guard_string_conversion_keeps_the_call_span() {
+    let module = super::lower_source(
+        r#"<?php
+function take(string $s): string { return $s; }
+function fromMixed(mixed $v): string {
+    return take($v);
+}
+echo fromMixed("a");
+"#,
+    );
+    let function = module.functions.iter().find(|function| function.name == "fromMixed").unwrap();
+    let guarded = function.instructions.iter().find(|inst| inst.op == Op::ScalarParamGuard)
+        .map(|guard| guard.operands[0]).expect("the mixed argument is guarded");
+    let conversion = function.instructions.iter()
+        .find(|inst| inst.op == Op::Cast && inst.operands.first() == Some(&guarded))
+        .expect("the guarded box converts to the string parameter");
+    let span = conversion.span.expect("the conversion carries a span");
+    assert_eq!(span.line, 4, "the conversion reports the call's line");
+}
