@@ -463,6 +463,35 @@ fn filter_statements(
                     continue;
                 }
             }
+            // A deferred file's hoisted file-scope code (`lazy_init`) is the runtime autoloader's
+            // to run now, when it includes the file. Its compiled copy keeps naming the classes
+            // just removed -- psysh's `ProtocolWrapper.php` ends with
+            // `stream_wrapper_register('hoa', ProtocolWrapper::class)`, which then failed the
+            // build as an undefined class -- so the initializer keeps its name, which the
+            // rewritten uses still call, and loses its body.
+            StmtKind::FunctionDecl { name, body, .. } => {
+                if super::lazy_init::initialized_class(name).is_some_and(|class| is_deferred(&class)) {
+                    body.clear();
+                }
+            }
+            // Without a closed world the file's file-scope code is spliced as written, and it
+            // runs again when the runtime autoloader includes the deferred file: the compiled copy
+            // ran it twice and, naming the removed class, failed the build the same way.
+            StmtKind::ExprStmt(_)
+            | StmtKind::Echo(_)
+            | StmtKind::Assign { .. }
+            | StmtKind::ArrayAssign { .. }
+            | StmtKind::ArrayPush { .. }
+            | StmtKind::PropertyAssign { .. }
+            | StmtKind::StaticPropertyAssign { .. } => {
+                if stmt
+                    .span
+                    .source_path()
+                    .is_some_and(|path| deferred.contains(&canonical(Path::new(&path))))
+                {
+                    continue;
+                }
+            }
             StmtKind::NamespaceBlock { body, .. }
             | StmtKind::Synthetic(body)
             | StmtKind::IncludeOnceGuard { body, .. } => {

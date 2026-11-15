@@ -167,6 +167,22 @@ fn init_name(class: &str) -> String {
     }
 }
 
+/// The class-like an initializer function named `function_name` (fully qualified) belongs to, as
+/// `<namespace>\<case-folded short name>`; `None` for any other function. Class lookups are
+/// case-insensitive, so the case-folded short name finds the class.
+pub(crate) fn initialized_class(function_name: &str) -> Option<String> {
+    let name = function_name.trim_start_matches('\\');
+    let (namespace, short) = match name.rsplit_once('\\') {
+        Some((namespace, short)) => (Some(namespace), short),
+        None => (None, name),
+    };
+    let class = short.strip_prefix(INIT_PREFIX)?;
+    Some(match namespace {
+        Some(namespace) => format!("{namespace}\\{class}"),
+        None => class.to_string(),
+    })
+}
+
 /// The guarded initializer: `static $done = false; if ($done) return null; $done = true; ...`.
 fn initializer(name: &str, effects: Vec<Stmt>) -> Stmt {
     use crate::synthetic_class::{e_bool, e_null, e_var, function, s_assign, s_if, s_return, s_static};

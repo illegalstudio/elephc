@@ -700,6 +700,38 @@ fn closed_world_class_file_scope_code_runs_on_first_use() {
     assert!(text(&output.stderr).contains("HEAP DEBUG: leak summary: clean"), "{}", text(&output.stderr));
 }
 
+/// A class file with file-scope code that the checker then refuses is handed to the runtime
+/// autoloader WHOLE: its file-scope code (hoisted in the closed-world round, spliced in the
+/// interpreter round) is the autoloader's to run, once, and the compiled program no longer names
+/// the removed class. psysh's `ProtocolWrapper.php` ends with
+/// `stream_wrapper_register('hoa', ProtocolWrapper::class)`, which failed the build as an undefined
+/// class once the file was deferred.
+#[test]
+fn deferred_class_file_takes_its_file_scope_code_along() {
+    let dir = make_test_dir("cw_lazy_deferred");
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("vendor")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"Hoa\\\\":"src/"}}}"#).unwrap();
+    fs::write(
+        dir.join("src/Wrapper.php"),
+        "<?php\nnamespace Hoa;\nclass Wrapper {\n    public $context;\n    public function stream_open(string $path, string $mode, int $options, &$opened): bool { return true; }\n    public function stream_eof(): bool { return true; }\n    public function bad(): int { return strlen(1, 2, 3); }\n    public static function hi(): string { return 'hi'; }\n}\n\\stream_wrapper_register('hoa', Wrapper::class);\necho \"registered\\n\";\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("vendor/autoload.php"),
+        "<?php\nspl_autoload_register(function (string $class): void { require __DIR__ . '/../src/' . substr($class, 4) . '.php'; });\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nrequire __DIR__ . '/vendor/autoload.php';\necho \"boot\\n\";\necho Hoa\\Wrapper::hi(), \"\\n\";\necho Hoa\\Wrapper::hi(), \"\\n\";\n",
+    )
+    .unwrap();
+    let output = compile(&dir, &[]);
+    assert!(output.status.success(), "{}{}", text(&output.stdout), text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+}
+
 /// The php-parser shape of a lazy file: `Lexer.php` requires a file that declares a function behind
 /// `if (!function_exists(...))` and then calls it to define its compatibility tokens. The guarded
 /// declaration stays a declaration, and the call runs when `Lexer` is first used.
