@@ -12,7 +12,8 @@
 //! Key details:
 //! - Only boxed `mixed`/union storage is checked; a statically typed argument emits nothing.
 //! - The check is one `Op::ScalarParamGuard` (no new basic block): codegen keeps the tag test
-//!   inline and the `TypeError` construction in the function's out-of-line cold section.
+//!   inline and the `TypeError` construction in the function's out-of-line cold section. For
+//!   `int`/`float` it also yields the converted value (PHP's numeric-string and float rules).
 //! - The message reports the call's line (`LoweringContext::call_site_span`).
 //! - Coercive mode rejects every non-scalar (`null`, arrays, objects other than a `Stringable`
 //!   bound to `string`, resources); `strict_types=1` additionally requires the exact scalar,
@@ -94,8 +95,10 @@ pub(super) fn deferred_guard_source(ctx: &LoweringContext<'_, '_>, arg: &Expr) -
 ///
 /// The instruction adds no basic block: codegen keeps the tag test inline and the rejection in
 /// the function's cold section, which throws PHP's `TypeError` with the value's type name.
-/// It yields nothing (`None`): the existing conversion runs afterwards. Earlier arguments stay
-/// published for cleanup when it throws.
+/// For an `int` or `float` parameter the instruction also yields the converted scalar, with
+/// PHP's numeric-string rules, the lossy-conversion deprecation and the range check, and the
+/// caller passes it instead of the box. For `string` and `bool` it yields nothing and the
+/// existing conversion runs afterwards. Earlier arguments stay published when it throws.
 pub(super) fn guard_scalar_param(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
@@ -125,6 +128,16 @@ pub(super) fn guard_scalar_param(
         crate::types::diagnostic_names::php_type_name(&declared),
     );
     let data = ctx.intern_string(&encoded);
+    if matches!(declared, PhpType::Int | PhpType::Float) {
+        return Some(ctx.emit_value(
+            Op::ScalarParamGuard,
+            vec![value.value],
+            Some(Immediate::Data(data)),
+            declared,
+            Op::ScalarParamGuard.default_effects(),
+            Some(span),
+        ));
+    }
     ctx.emit_void(
         Op::ScalarParamGuard,
         vec![value.value],

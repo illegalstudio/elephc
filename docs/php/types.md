@@ -438,7 +438,7 @@ echo f("ok");  // ok
 echo f(null);  // TypeError: t(): Argument #1 ($s) must be of type string, null given, called in … on line 2
 ```
 
-`?string`, unions containing `null`, `mixed`, and a parameter whose default is `null` keep accepting `null`. Statically typed arguments carry no check. Builtins keep their own argument rules, and positional spread arguments (`f(...$args)`) are not checked, as for `strict_types`. As in PHP, every argument is evaluated before the parameters are checked in order, and the message reports the line where the call starts. In coercive mode a non-numeric string held in a `mixed` value and bound to `int` or `float` still converts instead of throwing.
+`?string`, unions containing `null`, `mixed`, and a parameter whose default is `null` keep accepting `null`. Statically typed arguments carry no check. Builtins keep their own argument rules, and positional spread arguments (`f(...$args)`) are not checked, as for `strict_types`. As in PHP, every argument is evaluated before the parameters are checked in order, and the message reports the line where the call starts. For `int` and `float` the check also converts as PHP does: a string must be numeric as a whole (surrounding whitespace is allowed), so `"12abc"`, `"0x1A"`, `"INF"` and `""` throw `TypeError`; a lossy float or float-string bound to `int` emits PHP's `Implicit conversion from float … to int loses precision` deprecation, reported at the call's line rather than the parameter's; a float or integer string outside the int range throws.
 
 ### Strict types
 
