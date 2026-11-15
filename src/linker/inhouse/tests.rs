@@ -69,6 +69,77 @@ fn layout_aligns_and_folds_label_differences() {
     assert_eq!(padding(16, 3), 0);
 }
 
+/// The single pass places labels while it emits, and resolves what needed a later label after:
+/// forward and backward branches (named and numeric), external calls, `A - B` data operands in
+/// either order, several operands on one line, commons and alignment. Its object is byte for byte
+/// the two-pass assembler's, relocations and their order included; so is its refusal of a
+/// listing it cannot assemble.
+#[test]
+fn one_pass_matches_two_pass() {
+    let listings = [
+        r#".globl _main
+.p2align 2
+_main:
+    stp x29, x30, [sp, #-32]!
+    b.eq Llater
+    cbz x1, 2f
+    tbnz x2, #3, Llater
+    bl _external
+    bl _helper
+    adrp x9, _counter@PAGE
+    add x9, x9, _counter@PAGEOFF
+    adrp x10, Ltable@PAGE
+    ldr x1, [x10, Ltable@PAGEOFF]
+1:
+    subs x3, x3, #1
+    b.ne 1b
+2:
+    b 3f
+    mov x0, #9
+3:
+    adr x4, Llater
+Llater:
+    ldp x29, x30, [sp], #32
+    ret
+_helper:
+    b _main
+    mov x0, #42
+    ret
+.data
+.comm _counter, 8, 3
+Lmsg:
+    .ascii "hello\n"
+    .long Ltable - Lmsg, Lend - Lmsg
+.p2align 3
+Ltable:
+    .quad 0, Lmsg, _external+8, Lend - Ltable
+    .quad Lmsg
+    .long Ltable - Lmsg
+Lend:
+    .byte 1, 2, 3
+"#,
+        "1:\n    mov x0, x1\n1:\n    mov x0, x2\n    b 1b\n    b 1f\n1:\n    ret\n",
+        ".section __TEXT,__cstring\n",
+        "    b.eq _undefined_short\n",
+        ".data\n    mov x0, x1\n",
+    ];
+    for listing in listings {
+        let one = super::assemble_parts(&[listing], Names::IDENTITY);
+        let two = super::assemble_parts_two_pass(&[listing], Names::IDENTITY);
+        match (&one, &two) {
+            (Ok(one), Ok(two)) => assert!(one == two, "objects differ for:\n{listing}"),
+            (Err(_), Err(_)) => {}
+            _ => panic!("one pass {:?} vs two pass {:?} for:\n{listing}", one.is_ok(), two.is_ok()),
+        }
+    }
+    // The same listing cut into parts at line boundaries assembles the same.
+    let whole = super::assemble_parts(&[listings[0]], Names::IDENTITY).expect("assembles");
+    let lines: Vec<&str> = listings[0].split_inclusive('\n').collect();
+    let parts: Vec<String> = lines.chunks(5).map(|chunk| chunk.concat()).collect();
+    let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
+    assert!(super::assemble_parts(&parts, Names::IDENTITY).expect("assembles") == whole);
+}
+
 /// A directive or section the assembler does not model hands the slice back to `as`.
 #[test]
 fn unknown_directives_are_unsupported() {
@@ -170,6 +241,7 @@ fn inhouse_bench() {
     let started = std::time::Instant::now();
     let plan = super::super::asm_split::plan_split(&text, 6, "L", encode).expect("a legal cut");
     let (mut render, mut assemble_time, mut bytes) = (0f64, 0f64, 0usize);
+    let mut two_pass_time = 0f64;
     let direct = std::env::var_os("ELEPHC_INHOUSE_BENCH_RENDERED").is_none();
     let names = super::Names::promoted(plan.promoted(), plan.local_prefix());
     for part in 0..plan.slices() {
@@ -179,8 +251,20 @@ fn inhouse_bench() {
             render += mark.elapsed().as_secs_f64();
             let mark = std::time::Instant::now();
             let object = super::assemble_parts(&[prologue.as_str(), body, footer.as_str()], names);
-            bytes += object.map(|object| object.len()).unwrap_or(0);
             assemble_time += mark.elapsed().as_secs_f64();
+            // `ELEPHC_INHOUSE_BENCH_COMPARE=1` also times the two-pass reference and requires the
+            // same object from it.
+            if std::env::var_os("ELEPHC_INHOUSE_BENCH_COMPARE").is_some() {
+                let mark = std::time::Instant::now();
+                let reference = super::assemble_parts_two_pass(&[prologue.as_str(), body, footer.as_str()], names);
+                two_pass_time += mark.elapsed().as_secs_f64();
+                assert!(
+                    matches!((&object, &reference), (Ok(a), Ok(b)) if a == b)
+                        || (object.is_err() && reference.is_err()),
+                    "slice {part}: the one-pass object differs from the two-pass one"
+                );
+            }
+            bytes += object.map(|object| object.len()).unwrap_or(0);
             continue;
         }
         let mut slice = String::new();
@@ -195,7 +279,7 @@ fn inhouse_bench() {
         assemble_time += mark.elapsed().as_secs_f64();
     }
     eprintln!(
-        "encode={encode} total {:.2}s render {render:.2}s assemble {assemble_time:.2}s object bytes {bytes}",
+        "encode={encode} total {:.2}s render {render:.2}s assemble {assemble_time:.2}s two-pass {two_pass_time:.2}s object bytes {bytes}",
         started.elapsed().as_secs_f64()
     );
 }

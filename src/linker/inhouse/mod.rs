@@ -238,6 +238,7 @@ fn integer(text: &str) -> Option<i64> {
 }
 
 /// The size in bytes a data directive occupies (`.ascii` is decoded to count it).
+#[cfg(test)]
 fn data_size(name: &str, rest: &str, scratch: &mut Vec<u8>) -> Option<u64> {
     let width = match name {
         ".quad" | ".xword" => 8,
@@ -263,11 +264,14 @@ fn padding(offset: u64, log2: u64) -> u64 {
 
 /// First pass over one listing: places every line and records labels and symbol attributes.
 #[cfg(test)]
+#[cfg(test)]
 fn layout(text: &str) -> Result<Layout<'_>> {
     layout_parts(&[text], Names::IDENTITY)
 }
 
 /// [`layout`] over a listing given as consecutive parts, with its names mapped through `names`.
+/// The first pass of the two-pass reference (`assemble_parts_two_pass`).
+#[cfg(test)]
 fn layout_parts<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Layout<'a>> {
     // Sized up front, as `asm_split` does: a slice defines about one label per 400 bytes, and
     // growing a map of hundreds of thousands of labels by doubling rehashes all of it.
@@ -438,6 +442,326 @@ pub(crate) fn assemble(text: &str) -> Result<Vec<u8>> {
 /// names mapped through `names`: the object [`assemble`] would build from the parts joined and
 /// renamed, without a copy of them.
 pub(crate) fn assemble_parts<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Vec<u8>> {
+    let (layout, sections, relocs) = assemble_one_pass(parts, names)?;
+    write_object(&layout, sections, relocs)
+}
+
+/// A branch to a label the single pass had not reached yet; resolved once every label is placed.
+struct DeferredBranch<'a> {
+    /// Line index of the branch, for numeric targets and to keep relocations in line order.
+    index: usize,
+    offset: u64,
+    word: u32,
+    kind: FixupKind,
+    target: &'a str,
+    addend: i64,
+    line: &'a str,
+}
+
+/// A `.quad`/`.long` operand of the form `A - B`, folded once both labels are placed.
+struct DeferredDifference<'a> {
+    index: usize,
+    /// Operand position on its line, to keep relocations in line order.
+    position: usize,
+    sect: Sect,
+    offset: u64,
+    width: usize,
+    operand: &'a str,
+    line: &'a str,
+}
+
+/// Assembles `parts` in ONE pass over their lines, placing labels as it emits bytes.
+///
+/// The two-pass form read every line twice, once to place labels and size sections and once to
+/// encode: on the Symfony demo that is 107 M lines and about a third of the assembler's time. A
+/// reference that needs a label's place -- a branch to a later label, `1f`, an `A - B` data
+/// operand -- is noted and resolved after the pass; everything else needs no layout. The result
+/// is byte for byte the two-pass one (`one_pass_matches_two_pass`), relocations included and in
+/// the same order.
+fn assemble_one_pass<'a>(
+    parts: &[&'a str],
+    names: Names<'a>,
+) -> Result<(Layout<'a>, [Vec<u8>; 2], Vec<PendingReloc<'a>>)> {
+    let source_len: usize = parts.iter().map(|part| part.len()).sum();
+    let mut layout = Layout {
+        text_align: 2,
+        data_align: 0,
+        // About one label per 400 bytes of text, as `asm_split` measured.
+        labels: HashMap::with_capacity_and_hasher(source_len / 400, Default::default()),
+        ..Layout::default()
+    };
+    // Code runs about seven source bytes per code byte; reserving that avoids copying a 100 MB
+    // section on every doubling.
+    let mut sections: [Vec<u8>; 2] = [Vec::with_capacity(source_len / 6), Vec::new()];
+    // (line index, operand position, relocation): sorted back into line order at the end.
+    let mut relocs: Vec<(usize, usize, PendingReloc<'a>)> = Vec::new();
+    let mut branches: Vec<DeferredBranch<'a>> = Vec::new();
+    let mut differences: Vec<DeferredDifference<'a>> = Vec::new();
+    let mut sect = Sect::Text;
+    let mut plain_words: HashMap<&str, u32> = HashMap::default();
+    for (index, line) in part_lines(parts).enumerate() {
+        let bytes = &mut sections[sect as usize];
+        match classify(line) {
+            Line::Label(name) => {
+                let place = Place { sect, offset: bytes.len() as u64 };
+                if numeric_label(name) {
+                    layout.numeric.entry(name).or_default().push((index, place));
+                } else if layout.labels.insert(names.get(name), place).is_some() {
+                    return unsupported("label defined twice", line);
+                }
+            }
+            Line::Instruction(instruction) => {
+                if sect != Sect::Text {
+                    return unsupported("instruction outside the text section", line);
+                }
+                if let Some(word) = plain_words.get(instruction) {
+                    bytes.extend_from_slice(&word.to_le_bytes());
+                    continue;
+                }
+                #[cfg(test)]
+                INSTRUCTIONS_PARSED.with(|count| count.set(count.get() + 1));
+                let Some(encoded) = encode_instruction(instruction) else {
+                    return unsupported("instruction", line);
+                };
+                let offset = bytes.len() as u64;
+                let word = encoded.word;
+                let Some(fixup) = encoded.fixup else {
+                    plain_words.insert(instruction, word);
+                    bytes.extend_from_slice(&word.to_le_bytes());
+                    continue;
+                };
+                let numeric = numeric_label(fixup.target.trim_end_matches(['f', 'b']));
+                let r_type = match fixup.kind {
+                    FixupKind::Page21 => Some((macho::ARM64_RELOC_PAGE21, true)),
+                    FixupKind::GotPage21 => Some((macho::ARM64_RELOC_GOT_LOAD_PAGE21, true)),
+                    FixupKind::PageOff12 => Some((macho::ARM64_RELOC_PAGEOFF12, false)),
+                    FixupKind::GotPageOff12 => Some((macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12, false)),
+                    FixupKind::Branch26 | FixupKind::Branch19 | FixupKind::Branch14 | FixupKind::Adr21 => None,
+                };
+                let Some((r_type, r_pcrel)) = r_type else {
+                    // A branch: patched now when its target is already placed, else noted.
+                    let placed = if numeric {
+                        if fixup.target.ends_with('b') {
+                            Some(numeric_target(&layout, fixup.target, index).ok_or_else(|| {
+                                Unsupported(format!("numeric label: {line}"))
+                            })?)
+                        } else {
+                            None
+                        }
+                    } else {
+                        layout.labels.get(names.get(fixup.target)).copied()
+                    };
+                    match placed {
+                        Some(place) if place.sect == Sect::Text => {
+                            let distance = place.offset as i64 + fixup.addend - offset as i64;
+                            let word = patch_branch(word, fixup.kind, distance)
+                                .ok_or_else(|| Unsupported(format!("branch out of range: {line}")))?;
+                            bytes.extend_from_slice(&word.to_le_bytes());
+                        }
+                        Some(_) => return unsupported("branch into data", line),
+                        None => {
+                            branches.push(DeferredBranch {
+                                index,
+                                offset,
+                                word,
+                                kind: fixup.kind,
+                                target: fixup.target,
+                                addend: fixup.addend,
+                                line,
+                            });
+                            bytes.extend_from_slice(&word.to_le_bytes());
+                        }
+                    }
+                    continue;
+                };
+                if numeric {
+                    return unsupported("page relocation to a numeric label", line);
+                }
+                relocs.push((
+                    index,
+                    0,
+                    PendingReloc {
+                        sect,
+                        offset,
+                        target: names.get(fixup.target),
+                        addend: fixup.addend,
+                        r_type,
+                        r_pcrel,
+                        r_length: 2,
+                    },
+                ));
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+            Line::Directive(name, rest) => match name {
+                ".text" => sect = Sect::Text,
+                ".data" => sect = Sect::Data,
+                ".globl" | ".global" => {
+                    layout.exported.entry(names.get(rest)).or_insert(false);
+                }
+                ".private_extern" => {
+                    layout.exported.insert(names.get(rest), true);
+                }
+                ".comm" => {
+                    let mut operands = data_operands(rest);
+                    let (Some(symbol), Some(size)) = (operands.next(), operands.next().and_then(integer)) else {
+                        return unsupported("common symbol", line);
+                    };
+                    let align = operands.next().and_then(integer).unwrap_or(0);
+                    layout.commons.push((names.get(symbol), size as u64, align as u64));
+                }
+                ".subsections_via_symbols" => layout.subsections_via_symbols = true,
+                ".p2align" | ".align" => {
+                    let log2 = rest.split(',').next().and_then(integer).and_then(|v| u64::try_from(v).ok());
+                    let Some(log2) = log2.filter(|log2| *log2 <= 15) else {
+                        return unsupported("alignment", line);
+                    };
+                    let pad = padding(bytes.len() as u64, log2);
+                    if sect == Sect::Text && pad % 4 == 0 {
+                        for _ in 0..pad / 4 {
+                            bytes.extend_from_slice(&NOP.to_le_bytes());
+                        }
+                    } else {
+                        bytes.resize(bytes.len() + pad as usize, 0);
+                    }
+                    let align = match sect {
+                        Sect::Text => &mut layout.text_align,
+                        Sect::Data => &mut layout.data_align,
+                    };
+                    *align = (*align).max(log2);
+                }
+                ".ascii" | ".asciz" => {
+                    if decode_ascii(rest, bytes).is_none() {
+                        return unsupported("string", line);
+                    }
+                    if name == ".asciz" {
+                        bytes.push(0);
+                    }
+                }
+                ".space" | ".zero" | ".skip" => {
+                    let size = integer(rest).and_then(|size| usize::try_from(size).ok());
+                    let Some(size) = size else { return unsupported("space", line) };
+                    bytes.resize(bytes.len() + size, 0);
+                }
+                _ => {
+                    let width: usize = match name {
+                        ".quad" | ".xword" => 8,
+                        ".long" | ".word" | ".inst" | ".4byte" => 4,
+                        ".short" | ".hword" | ".2byte" => 2,
+                        ".byte" => 1,
+                        _ => return unsupported("directive", line),
+                    };
+                    for (position, operand) in data_operands(rest).enumerate() {
+                        let offset = bytes.len() as u64;
+                        let value = if let Some(value) = integer(operand) {
+                            value
+                        } else if is_label_difference(operand) {
+                            differences.push(DeferredDifference {
+                                index,
+                                position,
+                                sect,
+                                offset,
+                                width,
+                                operand,
+                                line,
+                            });
+                            0
+                        } else {
+                            relocs.push((index, position, data_reloc(sect, offset, width, operand, names, line)?));
+                            0
+                        };
+                        bytes.extend_from_slice(&value.to_le_bytes()[..width]);
+                    }
+                }
+            },
+        }
+    }
+    for branch in branches {
+        let placed = if numeric_label(branch.target.trim_end_matches(['f', 'b'])) {
+            Some(numeric_target(&layout, branch.target, branch.index).ok_or_else(|| {
+                Unsupported(format!("numeric label: {}", branch.line))
+            })?)
+        } else {
+            layout.labels.get(names.get(branch.target)).copied()
+        };
+        match placed {
+            Some(place) if place.sect == Sect::Text => {
+                let distance = place.offset as i64 + branch.addend - branch.offset as i64;
+                let word = patch_branch(branch.word, branch.kind, distance)
+                    .ok_or_else(|| Unsupported(format!("branch out of range: {}", branch.line)))?;
+                let at = branch.offset as usize;
+                sections[Sect::Text as usize][at..at + 4].copy_from_slice(&word.to_le_bytes());
+            }
+            Some(_) => return unsupported("branch into data", branch.line),
+            None if branch.kind == FixupKind::Branch26 => relocs.push((
+                branch.index,
+                0,
+                PendingReloc {
+                    sect: Sect::Text,
+                    offset: branch.offset,
+                    target: names.get(branch.target),
+                    addend: branch.addend,
+                    r_type: macho::ARM64_RELOC_BRANCH26,
+                    r_pcrel: true,
+                    r_length: 2,
+                },
+            )),
+            None => return unsupported("short branch to an undefined symbol", branch.line),
+        }
+    }
+    for difference in differences {
+        let at = difference.offset as usize;
+        match label_difference(&layout, difference.operand, names) {
+            Some(value) => {
+                sections[difference.sect as usize][at..at + difference.width]
+                    .copy_from_slice(&value.to_le_bytes()[..difference.width]);
+            }
+            None => relocs.push((
+                difference.index,
+                difference.position,
+                data_reloc(difference.sect, difference.offset, difference.width, difference.operand, names, difference.line)?,
+            )),
+        }
+    }
+    relocs.sort_by_key(|(index, position, _)| (*index, *position));
+    layout.sizes = [sections[0].len() as u64, sections[1].len() as u64];
+    Ok((layout, sections, relocs.into_iter().map(|(_, _, reloc)| reloc).collect()))
+}
+
+/// Whether a data operand is spelled `A - B`, the form `label_difference` folds.
+fn is_label_difference(operand: &str) -> bool {
+    let bytes = operand.as_bytes();
+    memchr::memchr_iter(b'-', bytes).any(|at| at > 0 && bytes[at - 1] == b' ' && bytes.get(at + 1) == Some(&b' '))
+}
+
+/// The relocation of a data operand naming a symbol (with an optional addend).
+fn data_reloc<'a>(
+    sect: Sect,
+    offset: u64,
+    width: usize,
+    operand: &'a str,
+    names: Names<'a>,
+    line: &str,
+) -> Result<PendingReloc<'a>> {
+    let (symbol, addend) = symbol_and_addend(operand);
+    let symbol = names.get(symbol);
+    if width != 8 || !is_symbol(symbol) {
+        return unsupported("data operand", line);
+    }
+    Ok(PendingReloc {
+        sect,
+        offset,
+        target: symbol,
+        addend,
+        r_type: macho::ARM64_RELOC_UNSIGNED,
+        r_pcrel: false,
+        r_length: 3,
+    })
+}
+
+/// The two-pass assembler `assemble_one_pass` replaced, kept as the reference it is tested
+/// against.
+#[cfg(test)]
+pub(crate) fn assemble_parts_two_pass<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Vec<u8>> {
     let layout = layout_parts(parts, names)?;
     // Allocated once at the size the first pass measured: growing a 150 MB text section by
     // doubling copied it again on every step.
