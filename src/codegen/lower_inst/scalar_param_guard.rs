@@ -122,9 +122,7 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
     if !matches!(loaded, PhpType::Mixed | PhpType::Union(_)) {
         if rule.accepts_static(&loaded) {
             if let Some((target, _)) = numeric {
-                if target == Numeric::Float && !matches!(loaded, PhpType::Float) {
-                    emit_int_result_to_float(ctx);
-                }
+                emit_static_numeric_conversion(ctx, &loaded, target, &prefix, &suffix);
                 return store_if_result(ctx, inst);
             }
             return Ok(());
@@ -160,6 +158,62 @@ pub(in crate::codegen::lower_inst) fn lower_scalar_param_guard(
         ctx.emitter.label(&cold);
         emit_cold_check(ctx, inst, value, rule, &done, &prefix, &suffix)
     })
+}
+
+/// Converts a raw scalar operand (left by a pass that retyped the guard's operand) to the
+/// numeric parameter with the same rules as the cold path; nothing is reinterpreted.
+///
+/// An int or bool payload is already the integer word, and a float is already the float
+/// result; a string goes through the numeric scan (and the int precision diagnostics), and a
+/// float bound to `int` through the float precision diagnostics. A refused value throws with
+/// its static type name.
+fn emit_static_numeric_conversion(
+    ctx: &mut FunctionContext<'_>,
+    loaded: &PhpType,
+    target: Numeric,
+    prefix: &str,
+    suffix: &str,
+) {
+    let refuse = ctx.next_label("scalar_param_guard_static_refuse");
+    let done = ctx.next_label("scalar_param_guard_static_done");
+    match (loaded, target) {
+        (PhpType::Float, Numeric::Float) => {}
+        (PhpType::Float, Numeric::Int) => {
+            // -- a raw float bound to int: PHP's precision deprecation or range refusal --
+            super::builtins::strings::emit_float_result_int_coercion_diagnostics(ctx, &refuse);
+        }
+        (PhpType::Str, Numeric::Int) => {
+            // -- a raw string bound to int: the numeric scan and precision diagnostics --
+            let payload = crate::codegen_support::mixed_unbox_payload_reg(ctx.emitter.target);
+            let (string_ptr, _) = abi::string_result_regs(ctx.emitter);
+            if string_ptr != payload {
+                ctx.emitter.instruction(&format!("mov {payload}, {string_ptr}")); // stage the string pointer where the numeric scan reads it
+            }
+            super::objects::emit_string_into_int_diagnostics(ctx, &refuse);
+        }
+        (PhpType::Str, Numeric::Float) => {
+            // -- a raw string bound to float: only a fully numeric string binds --
+            abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cbnz x0, 1f");                     // a fully numeric string keeps its parsed float
+                    ctx.emitter.instruction(&format!("b {refuse}"));            // any other string is refused
+                    ctx.emitter.label("1");
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("test rax, rax");                   // did the numeric scan accept the whole string?
+                    ctx.emitter.instruction(&format!("jz {refuse}"));           // any other string is refused
+                }
+            }
+        }
+        (_, Numeric::Float) => emit_int_result_to_float(ctx),
+        (_, Numeric::Int) => {}
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&refuse);
+    let given = if matches!(loaded, PhpType::Str) { "string" } else { "float" };
+    super::exceptions::emit_type_error(ctx, &format!("{prefix}{given}{suffix}"));
+    ctx.emitter.label(&done);
 }
 
 /// Converts the integer result register to a double in the float result register.
