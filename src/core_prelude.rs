@@ -212,15 +212,23 @@ pub fn ensure_weak_reference(
 ///
 /// Run by `crate::autoload::prelude_probe` over the autoload closure: a Composer class file
 /// that types a property `\WeakMap` is only loaded after this prelude's injection decision.
+/// Introspection on a computed name (`class_exists($name)`) or a dynamic `new $class` keeps the
+/// class too, as [`inject_if_used`] does for the entry program.
 pub fn program_uses_weak_map(program: &[Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
-    usage.classes.contains("weakmap") || usage.literals.contains("weakmap")
+    usage.introspects
+        || usage.constructs_dynamic_class
+        || usage.classes.contains("weakmap")
+        || usage.literals.contains("weakmap")
 }
 
 /// Returns true when `program` names `WeakReference`; see [`program_uses_weak_map`].
 pub fn program_uses_weak_reference(program: &[Stmt]) -> bool {
     let usage = crate::prelude_prune::usage::collect(program);
-    usage.classes.contains("weakreference") || usage.literals.contains("weakreference")
+    usage.introspects
+        || usage.constructs_dynamic_class
+        || usage.classes.contains("weakreference")
+        || usage.literals.contains("weakreference")
 }
 
 /// Injects the reachable Core class declarations, widening for introspection and eval.

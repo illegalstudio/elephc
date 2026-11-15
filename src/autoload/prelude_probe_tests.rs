@@ -241,7 +241,8 @@ fn probe_detects_web_environment_observers_in_autoloaded_classes() {
     }
 }
 
-/// WeakMap and WeakReference named only by Composer-loaded classes keep their core prelude.
+/// WeakMap and WeakReference named only by Composer-loaded classes keep their core prelude, and
+/// so does introspection or a dynamic `new` there, which may reach either class.
 #[test]
 fn probe_detects_weak_references_in_autoloaded_classes() {
     let project = ProbeProject::new();
@@ -250,6 +251,10 @@ fn probe_detects_weak_references_in_autoloaded_classes() {
         (r"public function __construct(private \WeakMap $seen) {}", "weak_map"),
         (r"public function make(): object { return new \WeakMap(); }", "weak_map"),
         (r"private ?\WeakReference $last = null;", "weak_reference"),
+        (r"public function all(): array { return \get_declared_classes(); }", "weak_map"),
+        (r"public function all(): array { return \get_declared_classes(); }", "weak_reference"),
+        (r"public function make(string $c): object { return new $c(); }", "weak_map"),
+        (r"public function make(string $c): object { return new $c(); }", "weak_reference"),
     ] {
         fs::write(project.0.join("src/Probe.php"), format!(
             "<?php namespace App; class Probe {{ {body} }}",

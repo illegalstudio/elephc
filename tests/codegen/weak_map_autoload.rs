@@ -60,3 +60,36 @@ echo $registry->count(), $registry->lastIs($a) ? "|last" : "|other", "\n";
         String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8(output.stdout).unwrap(), "1|other\n");
 }
+
+/// A Composer-loaded class that instantiates a runtime-supplied class name (`new $name()`)
+/// keeps the weak classes declared, as the entry program would, so `new $name()` builds the
+/// `WeakMap` php builds instead of failing with `Class "WeakMap" not found`.
+#[test]
+fn test_weak_map_composer_autoload_dynamic_class_construction() {
+    let project = WeakMapAutoloadProject(make_cli_test_dir("elephc_weak_map_autoload_dynamic"));
+    let dir = &project.0;
+    fs::create_dir(dir.join("src")).unwrap();
+    fs::write(dir.join("composer.json"), r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#).unwrap();
+    fs::write(dir.join("src/Factory.php"), r#"<?php
+namespace App;
+final class Factory {
+    public function make(string $name): string {
+        $made = new $name();
+        return \get_class($made) . ":" . \count($made);
+    }
+}
+"#).unwrap();
+    fs::write(dir.join("main.php"), r#"<?php
+echo (new App\Factory())->make($argv[1]), "\n";
+"#).unwrap();
+    let compiled = elephc_cli_command(dir)
+        .args(["--target", target().as_str(), "main.php"])
+        .output()
+        .expect("run compiler");
+    assert!(compiled.status.success(), "autoloaded dynamic construction compilation failed: {}",
+        String::from_utf8_lossy(&compiled.stderr));
+    let output = run_binary_with_args(&dir.join("main"), dir, &["WeakMap"]);
+    assert!(output.status.success(), "autoloaded dynamic construction execution failed: {}",
+        String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "WeakMap:0\n");
+}
