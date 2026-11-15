@@ -963,6 +963,49 @@ class Config {
     );
 }
 
+/// The declared-ancestry fallback that lets a covariant return name a class built later does
+/// not relate unrelated classes: the override is still rejected.
+#[test]
+fn test_error_override_return_to_unrelated_later_class() {
+    expect_error(
+        r#"<?php
+class Scalar {}
+class ADef { protected function make(): Scalar { return new Scalar(); } }
+class BDef extends ADef { protected function make(): ZUnrelated { return new ZUnrelated(); } }
+class ZUnrelated {}
+"#,
+        "Cannot override method BDef::make with incompatible return type ZUnrelated (parent returns Scalar)",
+    );
+}
+
+/// A pure enum implements `UnitEnum` but not `BackedEnum`: its declared ancestry must not
+/// relate it to `BackedEnum` while class schemas are built.
+#[test]
+fn test_error_override_return_pure_enum_for_backed_enum() {
+    expect_error(
+        r#"<?php
+enum Kind { case A; }
+abstract class Base { abstract public function make(): BackedEnum; }
+class Child extends Base { public function make(): Kind { return Kind::A; } }
+"#,
+        "Cannot override method Child::make with incompatible return type Kind (parent returns BackedEnum)",
+    );
+}
+
+/// The declared-ancestry fallback for `iterable` returns does not accept a later class that
+/// implements neither `Iterator` nor `IteratorAggregate`.
+#[test]
+fn test_error_override_iterable_return_to_unrelated_later_class() {
+    expect_error(
+        r#"<?php
+class ZPlain {}
+class AFactory { public function make(): iterable { return []; } }
+class BFactory extends AFactory { public function make(): ZPlain { return new ZPlain(); } }
+"#,
+        "Cannot override method BFactory::make with incompatible return type ZPlain (parent returns iterable)",
+    );
+}
+
 /// Verifies that assigning an incompatible value to a static property is rejected.
 /// Input: `class Box { public static int $count = 1; } Box::$count = "x";`
 #[test]

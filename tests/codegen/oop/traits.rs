@@ -158,6 +158,69 @@ echo $demo->reveal();
     assert_eq!(out, "hello");
 }
 
+/// Trait adaptations accept a semi-reserved keyword wherever they name a method: the bare target
+/// (`match as …`), the `Trait::list` target and the alias (`as print`), with or without a
+/// visibility change — as tempest/highlight's `use IsPattern { match as matchContent; }` does.
+#[test]
+fn test_trait_adaptation_keyword_method_names() {
+    let out = compile_and_run(
+        r#"<?php
+trait Patterns {
+    public function match(string $s): string { return "m:" . $s; }
+    public function list(): string { return "l"; }
+}
+
+final class Highlighter {
+    use Patterns {
+        match as protected matchContent;
+        Patterns::list as print;
+    }
+
+    public function match(string $s): string { return "[" . $this->matchContent($s) . "]"; }
+}
+
+$h = new Highlighter();
+echo $h->match("x"), "|", $h->print(), "|", $h->list();
+"#,
+    );
+    assert_eq!(out, "[m:x]|l|l");
+}
+
+/// Keyword method names also resolve conflicts: `A::print insteadof B` and `B::list insteadof A`
+/// pick each trait's keyword method, `B::print as function` keeps the excluded one under a keyword
+/// alias, and after a visibility the alias may itself be a modifier (`as protected static`), as in
+/// PHP's `member_modifier identifier` rule.
+#[test]
+fn test_trait_insteadof_and_modifier_alias_with_keyword_names() {
+    let out = compile_and_run(
+        r#"<?php
+trait A {
+    public function print(): string { return "A"; }
+    public function list(): string { return "Al"; }
+}
+trait B {
+    public function print(): string { return "B"; }
+    public function list(): string { return "Bl"; }
+}
+
+class C {
+    use A, B {
+        A::print insteadof B;
+        B::list insteadof A;
+        B::print as function;
+        A::list as protected static;
+    }
+
+    public function viaStatic(): string { return $this->static(); }
+}
+
+$c = new C();
+echo $c->print(), "|", $c->list(), "|", $c->function(), "|", $c->viaStatic();
+"#,
+    );
+    assert_eq!(out, "A|Bl|B|Al");
+}
+
 /// Verifies that a child class can satisfy an abstract property declaration from a trait it inherits via an abstract class.
 #[test]
 fn test_abstract_trait_property_can_be_satisfied_by_concrete_child() {

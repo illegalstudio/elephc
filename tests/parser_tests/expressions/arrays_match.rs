@@ -170,6 +170,27 @@ fn test_parse_standalone_match_expression_statement() {
     }
 }
 
+/// A trailing comma after the last condition of a multi-condition arm is valid PHP
+/// (`'a', 'b', => …`), and so is one after `default` (`default, => …`): every condition
+/// stays on the arm and the next arm still parses.
+#[test]
+fn test_parse_match_arm_condition_list_trailing_comma() {
+    let stmts = parse_source(
+        "<?php $x = match ($s) {\n    'a',\n    'b',\n        => 1,\n    'c', => 2,\n    default, => 3,\n};",
+    );
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Assign { value, .. } = &stmts[0].kind else {
+        panic!("expected Assign containing Match");
+    };
+    let ExprKind::Match { arms, default, .. } = &value.kind else {
+        panic!("expected Match, got {:?}", value.kind);
+    };
+    assert_eq!(arms.len(), 2);
+    assert_eq!(arms[0].0.len(), 2);
+    assert_eq!(arms[1].0.len(), 1);
+    assert!(default.is_some());
+}
+
 // --- Foreach with key => value ---
 
 /// Automatic keys at the integer limit retain real appends without overflowing the parser.
