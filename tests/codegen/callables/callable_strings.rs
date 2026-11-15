@@ -514,3 +514,26 @@ echo json_encode(call_user_func($f, [1, 2], [3], [5])), "\n";
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A string spelling a builtin that reads its CALLER's scope (`get_called_class`, `func_get_args`,
+/// `func_num_args`, `get_defined_vars`) is only a string: no callable wrapper is declared for it,
+/// since a wrapper's own scope would answer instead of the caller's -- and `get_called_class()`
+/// inside one, outside any class, failed the build. psysh's `CalledClassPass` lists these names.
+#[test]
+fn test_caller_scope_builtin_names_are_plain_strings() {
+    let out = compile_and_run(
+        r#"<?php
+echo "get_called_class", "\n";
+$n = strtolower($argc > 5 ? "x" : "Get_Called_Class");
+if (in_array($n, ["get_class", "get_called_class", "func_get_args", "func_num_args", "get_defined_vars"])) {
+    echo sprintf("%s() called without object from outside a class", $n), "\n";
+}
+$f = $argc > 5 ? "get_called_class" : "strtoupper";
+echo $f("abc"), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "get_called_class\nget_called_class() called without object from outside a class\nABC\n"
+    );
+}

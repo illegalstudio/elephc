@@ -38,6 +38,13 @@ const WRAPPER_PREFIX: &str = "__elephc_callable_";
 const LITERAL_ARGUMENT_BUILTINS: [&str; 6] =
     ["array_chunk", "array_reverse", "array_slice", "class_implements", "class_parents", "class_uses"];
 
+/// Builtins that read their CALLER's frame or class scope. A wrapper has a frame and scope of its
+/// own, so its answer would be the wrapper's: `get_called_class` even fails the checker there,
+/// since the wrapper sits outside any class -- a bare `'get_called_class'` string in a program
+/// (psysh's `CalledClassPass` lists it) stopped the whole build.
+const CALLER_SCOPE_BUILTINS: [&str; 5] =
+    ["get_called_class", "func_get_args", "func_get_arg", "func_num_args", "get_defined_vars"];
+
 /// The builtin name a compiled function answers for, when it is one of these wrappers.
 pub fn builtin_name_of_wrapper(function: &str) -> Option<&str> {
     function.strip_prefix(WRAPPER_PREFIX)
@@ -127,6 +134,7 @@ fn wrapper_of(name: &str) -> Option<Stmt> {
     let contract = elephc_builtin_contract::lookup(name)?;
     if crate::codegen_support::callable_dispatch::builtin_may_have_runtime_wrapper(name)
         || LITERAL_ARGUMENT_BUILTINS.contains(&name)
+        || CALLER_SCOPE_BUILTINS.contains(&name)
         || contract.name != name
         // A language construct or a dedicated syntax (`buffer_new`, `ptr_get`) is no function a
         // name can call.
