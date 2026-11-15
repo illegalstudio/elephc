@@ -236,3 +236,25 @@ echo (new C())->bar(), (new D())->bar(), (new C())->viaT(), "\n";
     );
     assert_eq!(out, "223\n");
 }
+
+/// Thirty levels of traits where each level's two traits both use the previous level's two
+/// traits: the class-level requirement walk reaches the bottom traits along 2^30 `use` paths,
+/// so each trait's requirement set must be memoized for this to compile at all. The abstract
+/// method of a sibling trait is still found as a requirement, so `#[\Override]` on its
+/// implementation holds.
+#[test]
+fn test_trait_requirements_of_shared_nested_traits_are_walked_once() {
+    let mut source = String::from("<?php\ntrait T0a {}\ntrait T0b {}\n");
+    for level in 1..=30 {
+        for side in ["a", "b"] {
+            source.push_str(&format!("trait T{level}{side} {{ use T{prev}a, T{prev}b; }}\n", prev = level - 1));
+        }
+    }
+    source.push_str(
+        "trait Needs { abstract public function need(): string; }\n\
+         final class C { use T30a, T30b, Needs; #[\\Override] public function need(): string { return 'need'; } }\n\
+         echo (new C())->need(), \"\\n\";\n",
+    );
+    let out = compile_and_run(&source);
+    assert_eq!(out, "need\n");
+}

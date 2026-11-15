@@ -15,6 +15,8 @@
 //!   requirement found no target.
 //! - Requirements are collected through nested trait uses, by trait name, case-insensitively,
 //!   and include the `as` aliases of abstract trait methods, which flattening makes abstract too.
+//!   Each trait's set is memoized once complete, so traits shared along many `use` paths are not
+//!   walked again per path.
 //! - Methods the class body declares itself are recorded too: a requirement satisfied by an
 //!   inherited method is skipped only when the abstract method is the trait's, never when the
 //!   class itself re-declares the method abstract.
@@ -63,9 +65,21 @@ pub(crate) fn collect_trait_method_requirements(
 ) -> HashMap<String, TraitMethodRequirements> {
     let mut traits = HashMap::new();
     collect_trait_shapes(program, &mut traits);
+    let mut walk = RequirementWalk { traits: &traits, done: HashMap::new(), visiting: HashSet::new() };
     let mut requirements = HashMap::new();
-    collect_class_requirements(program, classes, &traits, &mut requirements);
+    collect_class_requirements(program, classes, &mut walk, &mut requirements);
     requirements
+}
+
+/// The trait index plus the memo of each trait's completed requirement set, shared by every
+/// class: a trait reached along several `use` paths is walked once, so a diamond of shared
+/// nested traits stays linear instead of exponential.
+struct RequirementWalk<'a> {
+    traits: &'a HashMap<String, TraitShape>,
+    /// Completed requirement sets by trait key.
+    done: HashMap<String, HashSet<String>>,
+    /// Traits on the current path, only to break use cycles (flattening reports those).
+    visiting: HashSet<String>,
 }
 
 /// Indexes every trait declaration, including those nested in namespace blocks.
@@ -88,7 +102,7 @@ fn collect_trait_shapes(program: &[Stmt], traits: &mut HashMap<String, TraitShap
 fn collect_class_requirements(
     program: &[Stmt],
     classes: &[FlattenedClass],
-    traits: &HashMap<String, TraitShape>,
+    walk: &mut RequirementWalk<'_>,
     requirements: &mut HashMap<String, TraitMethodRequirements>,
 ) {
     for statement in program {
@@ -97,7 +111,7 @@ fn collect_class_requirements(
                 if trait_uses.is_empty() || !classes.iter().any(|class| class.name == *name) {
                     continue;
                 }
-                let required = requirements_of_uses(trait_uses, traits, &mut HashSet::new());
+                let required = requirements_of_uses(trait_uses, walk);
                 if required.is_empty() {
                     continue;
                 }
@@ -105,7 +119,7 @@ fn collect_class_requirements(
                 requirements.insert(name.clone(), TraitMethodRequirements { required, declared });
             }
             StmtKind::NamespaceBlock { body, .. } => {
-                collect_class_requirements(body, classes, traits, requirements);
+                collect_class_requirements(body, classes, walk, requirements);
             }
             _ => {}
         }
@@ -113,30 +127,28 @@ fn collect_class_requirements(
 }
 
 /// Returns the abstract method keys `trait_key` brings into a user: its own, those of the traits
-/// it uses, and the aliases its own `use` blocks give to them. `visiting` breaks use cycles.
-fn trait_requirements(
-    trait_key: &str,
-    traits: &HashMap<String, TraitShape>,
-    visiting: &mut HashSet<String>,
-) -> HashSet<String> {
+/// it uses, and the aliases its own `use` blocks give to them. Each trait is computed once and
+/// memoized in `walk.done`; `walk.visiting` only breaks use cycles.
+fn trait_requirements(trait_key: &str, walk: &mut RequirementWalk<'_>) -> HashSet<String> {
+    if let Some(required) = walk.done.get(trait_key) {
+        return required.clone();
+    }
+    let traits = walk.traits;
     let Some(shape) = traits.get(trait_key) else { return HashSet::new() };
-    if !visiting.insert(trait_key.to_string()) {
+    if !walk.visiting.insert(trait_key.to_string()) {
         return HashSet::new();
     }
     let mut required = shape.abstract_methods.clone();
-    required.extend(requirements_of_uses(&shape.uses, traits, visiting));
-    visiting.remove(trait_key);
+    required.extend(requirements_of_uses(&shape.uses, walk));
+    walk.visiting.remove(trait_key);
+    walk.done.insert(trait_key.to_string(), required.clone());
     required
 }
 
 /// Returns the abstract method keys that `uses` bring into their user. An `as` alias of an
 /// abstract trait method is itself abstract once flattened (`use T { foo as bar; }` requires
 /// `bar` too), so the alias joins the requirements.
-fn requirements_of_uses(
-    uses: &[TraitUse],
-    traits: &HashMap<String, TraitShape>,
-    visiting: &mut HashSet<String>,
-) -> HashSet<String> {
+fn requirements_of_uses(uses: &[TraitUse], walk: &mut RequirementWalk<'_>) -> HashSet<String> {
     let mut required = HashSet::new();
     for use_decl in uses {
         let per_trait: HashMap<String, HashSet<String>> = use_decl
@@ -144,7 +156,7 @@ fn requirements_of_uses(
             .iter()
             .map(|name| {
                 let key = php_symbol_key(name.as_str());
-                let methods = trait_requirements(&key, traits, visiting);
+                let methods = trait_requirements(&key, walk);
                 (key, methods)
             })
             .collect();
