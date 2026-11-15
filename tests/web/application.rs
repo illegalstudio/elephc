@@ -290,16 +290,28 @@ fn web_application_cli_rejects_unsupported_lifecycles() {
     }
 }
 
-/// Registration enforces the nominal request/shutdown interface during type checking.
+/// Registration enforces the nominal request/shutdown interface. As in php, an object of the
+/// wrong class is a `TypeError` at the call, not a compile refusal: the checker defers a
+/// mismatch an object might still satisfy at run time. The bootstrap fails on it, so the
+/// application never serves and the master gives up.
 #[test]
 fn web_application_registration_is_typed() {
     let fixture = Fixture(make_test_dir("web_application_type"));
-    let source = fixture.0.join("invalid.php");
-    fs::write(&source, "<?php Elephc\\Web\\Worker::register(new stdClass());").unwrap();
-    let result = Command::new(elephc_bin()).args(["--web", "--web-lifecycle=application"]).arg(source).output().unwrap();
-    assert!(!result.status.success());
-    let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(stderr.contains("WorkerApplication"), "{stderr}");
+    let binary = application(&fixture, "<?php Elephc\\Web\\Worker::register(new stdClass());");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let stderr_path = fixture.0.join("bootstrap.stderr");
+    let stderr_file = fs::File::create(&stderr_path).unwrap();
+    let mut server = ServerGuard::new(Command::new(binary).args(["--listen", &addr, "--workers", "1"]).stdout(Stdio::null()).stderr(Stdio::from(stderr_file)).spawn().unwrap());
+    let deadline = Instant::now() + Duration::from_secs(25);
+    let status = loop {
+        assert!(TcpStream::connect(&addr).is_err(), "an unregistered application accepted a connection");
+        if let Some(status) = server.try_wait().unwrap() { break status; }
+        assert!(Instant::now() < deadline, "startup crash-loop protection did not stop the master");
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert!(!status.success());
+    let diagnostics = fs::read_to_string(stderr_path).unwrap();
+    assert!(diagnostics.contains("bootstrap TypeError: ") && diagnostics.contains("WorkerApplication"), "{diagnostics}");
 }
 
 /// Failed and missing registrations never admit HTTP requests or trigger application shutdown.
