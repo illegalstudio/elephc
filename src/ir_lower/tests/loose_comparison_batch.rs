@@ -5,6 +5,8 @@
 //! - The AST-to-EIR unit test module.
 //!
 //! Key details:
+//! - Callable fixtures declare `Closure`, which keeps the descriptor ABI these tests pin; a
+//!   declared `callable` keeps the PHP value it receives instead (`PhpType::DeclaredCallable`).
 //! - Bool and iterable subjects must not take integer switch dispatch.
 
 /// All supported targets retain loose equality for bool, iterable and boxed object subjects.
@@ -31,7 +33,7 @@ function referenceSwitch(): int {
     restore_error_handler();
     return $result;
 }
-function callableNumber(callable $callback): bool { return $callback == 1; }
+function callableNumber(Closure $callback): bool { return $callback == 1; }
 echo boolSwitch(true), boolLabels(2), iterableSwitch([1]), mixedSwitch(new stdClass()), referenceSwitch(),
     callableNumber("strlen"), callableNumber(callback: "strlen"), callableNumber(strlen(...));
 "#;

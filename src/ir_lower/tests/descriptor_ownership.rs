@@ -5,6 +5,8 @@
 //! - The AST-to-EIR unit test module.
 //!
 //! Key details:
+//! - Callable fixtures declare `Closure`, which keeps the descriptor ABI these tests pin; a
+//!   declared `callable` keeps the PHP value it receives instead (`PhpType::DeclaredCallable`).
 //! - Frame roots must survive exceptional calls and retire after ordinary returns on all targets.
 //! - Descriptor source-profile flags are non-heap metadata, not argument-container owners.
 
@@ -198,10 +200,10 @@ fn static_callable_array_string_results_are_owned_and_staged_on_all_targets() {
 fn callable_parameter_descriptor_string_results_stay_owned_on_all_targets() {
     let source = r#"<?php
         function descriptor_string(string $value): string { return '[' . $value . ']'; }
-        function invoke_descriptor_direct(callable $callback, array $arguments): string {
+        function invoke_descriptor_direct(Closure $callback, array $arguments): string {
             return $callback(...$arguments);
         }
-        function invoke_descriptor_cufa(callable $callback, array $arguments): string {
+        function invoke_descriptor_cufa(Closure $callback, array $arguments): string {
             return call_user_func_array($callback, $arguments);
         }
         echo invoke_descriptor_direct(descriptor_string(...), ['direct']);
@@ -368,7 +370,7 @@ fn named_descriptor_arguments_release_persisted_strings_before_invocation_on_all
         function named_string_target(string $first, string $second): int {
             return strlen($first) + strlen($second);
         }
-        function invoke_named_strings(callable $callback): int {
+        function invoke_named_strings(Closure $callback): int {
             return call_user_func($callback, str_repeat("a", 24), second: str_repeat("b", 24));
         }
         echo invoke_named_strings(named_string_target(...));
@@ -442,7 +444,7 @@ fn descriptor_string_return_ownership_requires_every_return_to_transfer_an_owner
             $result = $value . "!";
             return $result;
         }
-        function invoke_return(callable $callback, string $value): string {
+        function invoke_return(Closure $callback, string $value): string {
             return call_user_func($callback, $value);
         }
         echo invoke_return(owned_return(...), "a");
@@ -472,7 +474,7 @@ fn descriptor_string_return_ownership_requires_every_return_to_transfer_an_owner
 fn named_descriptor_argument_boxes_have_scoped_caller_owners_on_all_targets() {
     let source = r#"<?php
         function named_owned_target(int $value): int { return $value; }
-        function named_owned_invoke(callable $callback): mixed {
+        function named_owned_invoke(Closure $callback): mixed {
             return call_user_func($callback, value: 17);
         }
         echo named_owned_invoke(named_owned_target(...));
@@ -509,7 +511,7 @@ fn named_descriptor_argument_boxes_have_scoped_caller_owners_on_all_targets() {
 fn callback_builtin_operands_have_unwind_scopes_on_all_targets() {
     let source = r#"<?php
         function callback_root_predicate(int $value): bool { return $value > 0; }
-        function invoke_callback_root(callable $callback): bool { return array_all([1, 2, 3], $callback); }
+        function invoke_callback_root(Closure $callback): bool { return array_all([1, 2, 3], $callback); }
         echo invoke_callback_root(callback_root_predicate(...));
     "#;
     for target in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
@@ -554,7 +556,7 @@ fn callback_builtin_operands_have_unwind_scopes_on_all_targets() {
 fn normalized_descriptor_calls_use_owned_argument_boundaries_on_all_targets() {
     let source = r#"<?php
         class NormalizedDescriptorReceiver { public function ping(string $value): int { return 7; } }
-        function invoke_normalized_descriptor(callable $callback, NormalizedDescriptorReceiver $receiver, string $method): void {
+        function invoke_normalized_descriptor(Closure $callback, NormalizedDescriptorReceiver $receiver, string $method): void {
             $arguments = ["input"];
             echo call_user_func_array($callback, $arguments);
             echo call_user_func_array([$receiver, $method], $arguments);

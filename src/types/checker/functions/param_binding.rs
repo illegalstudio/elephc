@@ -69,15 +69,7 @@ impl Checker {
         if !by_ref && *expected == PhpType::DeclaredCallable {
             return self.require_declared_callable_arg(expected, actual, arg, env, context, owner);
         }
-        // A by-reference `callable` shares the caller's cell, so only boxed storage (or a
-        // Closure) can be bound; the referenced value is then checked on entry. A concrete
-        // string or array local keeps the descriptor-era refusal.
-        if by_ref && *expected == PhpType::DeclaredCallable {
-            if actual.is_callable_like() || actual.codegen_repr() == PhpType::Mixed {
-                return Ok(());
-            }
-            return self.require_compatible_arg_type(&PhpType::Callable, actual, arg.span, context);
-        }
+
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
         }

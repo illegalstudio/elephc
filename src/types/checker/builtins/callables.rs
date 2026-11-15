@@ -1163,8 +1163,16 @@ fn check_callback_builtin_call_in_engine_frame(
         return checker.check_function_call(cb_name, callback_args, span, env);
     }
 
-    if let Some(sig) = checker.resolve_expr_callable_sig(callback, env)? {
-        return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+    // A declared `callable` local copied out of an array or another value reaches the builtin
+    // as a boxed value with no static descriptor, so its result is boxed like any runtime
+    // callback. A `callable` parameter keeps the signature its callers bound to it.
+    let boxed_declared_callable = matches!(&callback.kind, ExprKind::Variable(name)
+        if env.get(name) == Some(&PhpType::DeclaredCallable)
+            && !checker.callable_param_names.contains(name));
+    if !boxed_declared_callable {
+        if let Some(sig) = checker.resolve_expr_callable_sig(callback, env)? {
+            return checker.check_known_callable_call(&sig, callback_args, span, env, label);
+        }
     }
 
     if let Some(ret_ty) =
@@ -1201,7 +1209,7 @@ fn check_callback_builtin_call_in_engine_frame(
         return Ok(PhpType::Mixed);
     }
     if matches!(label, "usort() callback" | "uksort() callback" | "uasort() callback")
-        && callback_ty.codegen_repr() == PhpType::Callable
+        && (callback_ty.codegen_repr() == PhpType::Callable || callback_ty.is_callable_like())
     {
         // Sort emitters already invoke descriptors and validate their selected
         // targets at runtime. A callable-returning factory may have no static

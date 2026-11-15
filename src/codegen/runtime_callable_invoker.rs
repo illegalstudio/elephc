@@ -139,6 +139,12 @@ pub(super) fn needs_callable_argument_normalizer(sig: &FunctionSig) -> bool {
     })
 }
 
+/// Returns whether an eval-facing invoker converts eval-only callbacks for a declared
+/// `callable` parameter, which calls the callable argument normalizer.
+pub(super) fn needs_declared_callable_argument_normalizer(sig: &FunctionSig) -> bool {
+    sig.params.iter().any(|(_, ty)| *ty == PhpType::DeclaredCallable)
+}
+
 /// Minimal state needed by the descriptor invoker emitter.
 struct InvokerEmitContext {
     label_prefix: String,
@@ -152,6 +158,8 @@ struct InvokerEmitContext {
     defaults: InvokerDefaults,
     /// The declared literal parameter currently being decoded, before ABI coercion.
     literal_parameter: Option<(usize, String)>,
+    /// Eval-facing invokers convert eval-only callbacks bound to a declared `callable`.
+    convert_eval_callables: bool,
 }
 
 impl InvokerEmitContext {
@@ -174,6 +182,7 @@ impl InvokerEmitContext {
             mbstring_operation: None,
             mbstring_variable_ref_warnings: false,
             literal_parameter: None,
+            convert_eval_callables: false,
         }
     }
 
@@ -271,6 +280,7 @@ fn emit_runtime_callable_invoker_impl(
     );
     ctx.mbstring_operation = invoker.mbstring_operation;
     ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
+    ctx.convert_eval_callables = catch_native_throws;
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -2841,7 +2851,13 @@ fn coerce_current_value_to_target(
         return (PhpType::TaggedScalar, false);
     }
     if source_repr == PhpType::Mixed && target_ty == Some(&PhpType::DeclaredCallable) {
-        emit_owned_declared_callable_argument(emitter, ctx);
+        if ctx.convert_eval_callables {
+            emit_owned_declared_callable_argument(emitter, ctx);
+        } else {
+            // Native callers pass values native dispatch resolves; the callee's entry check
+            // rejects anything else. The argument keeps its value with an owner of its own.
+            abi::emit_incref_if_refcounted(emitter, &PhpType::Mixed);
+        }
         return (PhpType::Mixed, true);
     }
     if source_repr != PhpType::Callable

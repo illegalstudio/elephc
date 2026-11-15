@@ -165,6 +165,27 @@ pub(crate) fn lower_elephc_callable_ptr(
     store_if_result(ctx, inst)
 }
 
+/// Returns the runtime callable names a declared `callable` may resolve: functions the
+/// program declares (not compiler preludes), static methods (`class::method`), and the
+/// function names written as literals where a declared callable keeps the string.
+fn declared_callable_runtime_names(ctx: &FunctionContext<'_>) -> Vec<String> {
+    let key = |name: &str| crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    let mut names: Vec<String> = ctx.module.declared_callable_names.iter().map(|name| key(name)).collect();
+    names.extend(
+        ctx.module
+            .functions
+            .iter()
+            .filter(|function| !function.flags.is_internal && !function.flags.is_synthetic)
+            .map(|function| key(&function.name)),
+    );
+    for (class_name, info) in &ctx.module.class_infos {
+        names.extend(info.static_methods.keys().map(|method| key(&format!("{class_name}::{method}"))));
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// Lowers `__elephc_normalize_callable($cb)` into an owned callable descriptor.
 ///
 /// Static descriptors tolerate retains as persistent values, while runtime descriptors
@@ -182,12 +203,20 @@ pub(crate) fn lower_elephc_normalize_callable(
             abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Callable);
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            super::super::callables::emit_runtime_mixed_callable_descriptor_value(
+            // A declared `callable` resolves a runtime name among user functions, static
+            // methods and the literal names bound to declared callables, so its conversion
+            // does not emit a wrapper for every builtin.
+            if inst.immediate == Some(crate::ir::Immediate::Bool(true)) {
+                ctx.declared_callable_candidates = Some(declared_callable_runtime_names(ctx));
+            }
+            let lowered = super::super::callables::emit_runtime_mixed_callable_descriptor_value(
                 ctx,
                 value,
                 "__elephc_normalize_callable",
                 true,
-            )?;
+            );
+            ctx.declared_callable_candidates = None;
+            lowered?;
         }
         PhpType::Str => {
             let result_reg = abi::int_result_reg(ctx.emitter).to_string();

@@ -77,6 +77,9 @@ pub(crate) struct FunctionContext<'a> {
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
     callable_reachability: CallableReachabilityAnalysis,
+    /// Runtime names a declared-`callable` conversion may resolve when provenance is open
+    /// (see `lower_elephc_normalize_callable`); `None` outside such a conversion.
+    pub(super) declared_callable_candidates: Option<Vec<String>>,
     /// Typed EIR adopters identify calls whose result remains a transferred reference cell.
     raw_reference_call_results: HashSet<ValueId>,
     current_inst: Option<InstId>,
@@ -215,6 +218,7 @@ impl<'a> FunctionContext<'a> {
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,
             callable_reachability,
+            declared_callable_candidates: None,
             raw_reference_call_results: function.instructions.iter()
                 .filter(|inst| inst.op == Op::AdoptRefCellPtr)
                 .filter_map(|inst| inst.operands.first().copied()).collect(),
@@ -409,7 +413,9 @@ impl<'a> FunctionContext<'a> {
 
     /// Returns the finite runtime callable names proven for one EIR value.
     pub(super) fn runtime_callable_candidates(&self, value: ValueId) -> Option<Vec<String>> {
-        self.callable_reachability.candidates(value)
+        self.callable_reachability
+            .candidates(value)
+            .or_else(|| self.declared_callable_candidates.clone())
     }
 
     /// Returns a function value or a structured backend error.
