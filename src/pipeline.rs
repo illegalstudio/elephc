@@ -1131,6 +1131,9 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     // An autoloaded class that streams a hash (`hash_init()` / `HashContext`) is only visible
     // here; the early hash gate saw the entry program alone.
     let ast = crate::hash_prelude::inject_late_if_used(ast, &mut prelude_inventory);
+    // `random_bytes()` first named by an autoloaded file (Symfony's `FilesystemCommonTrait` in a
+    // `--web` build) is likewise only visible here.
+    let ast = crate::random_prelude::inject_late_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_edge_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_gradual_prelude::inject_if_used(ast, &mut prelude_inventory);
     let ast = crate::array_ucompare_prelude::inject_if_used(ast, &mut prelude_inventory);

@@ -462,6 +462,33 @@ pub fn inject_if_used(
     })
 }
 
+/// Injects the random prelude for a program whose first random call sits in a file loaded
+/// after the early gate: an autoloaded vendor class (Symfony's `FilesystemCommonTrait`
+/// calling `random_bytes()` in a `--web` build) is only visible here. A program that already
+/// carries the group is returned unchanged, so the surface is declared once.
+///
+/// This gate runs after name resolution, and the surface declares `namespace Random` blocks,
+/// so its declarations are resolved on their own before they join the program.
+pub fn inject_late_if_used(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
+    if inventory.groups.contains_key(PRELUDE_GROUP) {
+        return program;
+    }
+    crate::compiler_stack::with_compiler_stack(|| {
+        if !program_uses_random_on_compiler_stack(&program) {
+            return program;
+        }
+        let declarations = random_declarations();
+        inventory.record_program(PRELUDE_GROUP, &declarations);
+        let mut resolved = crate::name_resolver::resolve(declarations)
+            .unwrap_or_else(|error| panic!("the random prelude resolves on its own: {error:?}"));
+        resolved.extend(program);
+        resolved
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Shared AST constructors used by the engine and Randomizer builders
 // ---------------------------------------------------------------------------
@@ -675,6 +702,35 @@ mod tests {
         let injected = inject_if_used(Vec::new(), false, &mut inventory);
         assert!(injected.is_empty());
         assert!(!inventory.groups.contains_key(PRELUDE_GROUP));
+    }
+
+    /// The late gate declares the surface for a call only an autoloaded file makes, and never
+    /// a second time once either gate has injected it.
+    #[test]
+    fn late_injection_declares_the_surface_once() {
+        let source = "<?php echo strlen(random_bytes(4));";
+        let tokens = crate::lexer::tokenize(source).expect("tokenize the fixture");
+        let program = crate::parser::parse(&tokens).expect("parse the fixture");
+        let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+        let late = inject_late_if_used(program.clone(), &mut inventory);
+        assert!(inventory.groups.contains_key(PRELUDE_GROUP));
+        let declares_random_bytes = |program: &Program| {
+            program
+                .iter()
+                .filter(|stmt| {
+                    matches!(&stmt.kind, crate::parser::ast::StmtKind::FunctionDecl { name, .. }
+                        if name == "random_bytes")
+                })
+                .count()
+        };
+        assert_eq!(declares_random_bytes(&late), 1);
+        let again = inject_late_if_used(late, &mut inventory);
+        assert_eq!(declares_random_bytes(&again), 1);
+
+        let mut early_inventory = crate::optimize::reachability::PreludeInventory::new();
+        let early = inject_if_used(program, false, &mut early_inventory);
+        let after_both = inject_late_if_used(early, &mut early_inventory);
+        assert_eq!(declares_random_bytes(&after_both), 1);
     }
 
     /// Detection covers every entry point that needs the injected surface.

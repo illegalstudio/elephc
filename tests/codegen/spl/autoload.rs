@@ -3207,3 +3207,23 @@ echo eval($argc > 0 ? $code : 'echo 0;');
     );
     assert_eq!(out, "true|1|array|load|2");
 }
+
+/// `random_bytes()` named only by a PSR-4 autoloaded class (as Symfony's
+/// `FilesystemCommonTrait` is in a `--web` build) is invisible to the early random gate,
+/// which reads the entry program alone; the late gate declares it once. Expected output
+/// from php 8.5.
+#[test]
+fn test_random_bytes_first_named_by_an_autoloaded_class() {
+    let out = compile_and_run_files(
+        &[
+            ("module.json", r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#),
+            (
+                "src/Token.php",
+                "<?php\nnamespace App;\nclass Token {\n    public static function make(int $n): string { return bin2hex(random_bytes($n)); }\n    public static function seeded(): int { return (new \\Random\\Randomizer(new \\Random\\Engine\\Mt19937(42)))->getInt(1, 1000); }\n}\n",
+            ),
+            ("main.php", "<?php\necho strlen(App\\Token::make(8)), ':', App\\Token::seeded();\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "16:543");
+}

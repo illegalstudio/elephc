@@ -703,6 +703,9 @@ fn compile_and_run_files_with_defines_per_argv(
     // Mirrors `pipeline::compile`'s compat-preludes phase: a hash context used only by an
     // autoloaded class receives the hash prelude after autoloading.
     let resolved = elephc::hash_prelude::inject_late_if_used(resolved, &mut prelude_inventory);
+    // Likewise a random call (`random_bytes()`, `Random\Randomizer`) only an autoloaded or
+    // included file makes.
+    let resolved = elephc::random_prelude::inject_late_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::object_cast_prelude::inject_if_used(resolved, &mut prelude_inventory)
         .expect("object-cast prelude injection failed");
     // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
