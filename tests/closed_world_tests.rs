@@ -2640,3 +2640,14 @@ try { var_dump((new Validator)->code()); } catch (\Error $e) { echo get_class($e
     assert_eq!(stdout, php_stdout(&dir));
     assert_eq!(stdout, "start\nError: Class \"Missing\\EqualTo\" not found\n");
 }
+
+/// A string that names one of elephc's buffer builtins (`'buffer_free'`, a key of the opcache
+/// status array) declares no callable wrapper for it: the wrapper failed the checker
+/// ("buffer_free() argument must be buffer<T>") and stopped the build. Output from php.
+#[test]
+fn closed_world_buffer_builtin_name_in_a_string_compiles() {
+    let source = "<?php\n$a = ['buffer_free' => 1, 'buffer_len' => 2];\necho implode(',', array_keys($a)), ':', array_sum($a), \"\\n\";\n";
+    let (stdout, _, dir) = closed_run("cw_buffer_name", source);
+    assert_eq!(stdout, "buffer_free,buffer_len:3\n");
+    assert_eq!(stdout, php_stdout(&dir));
+}

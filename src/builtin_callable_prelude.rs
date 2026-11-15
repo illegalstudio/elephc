@@ -139,6 +139,11 @@ fn wrapper_of(name: &str) -> Option<Stmt> {
         // A language construct or a dedicated syntax (`buffer_new`, `ptr_get`) is no function a
         // name can call.
         || !matches!(contract.kind, elephc_builtin_contract::BuiltinKind::Function)
+        // elephc's own pointer and buffer API wants typed operands (`buffer_free()` a local
+        // `buffer<T>` variable), which an untyped wrapper parameter is not: the wrapper failed
+        // the checker and stopped every `--web` build that names one in a string, as the opcache
+        // status array's `'buffer_free'` key does.
+        || matches!(contract.area, elephc_builtin_contract::Area::Pointers)
         || contract.internal
         || contract.params.iter().any(|param| param.by_ref)
         || contract.variadic.is_some_and(|variadic| {
@@ -231,4 +236,20 @@ fn default_expr(default: &DefaultSpec) -> Option<Expr> {
         _ => return None,
     };
     Some(Expr::new(kind, Span::dummy()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// elephc's pointer and buffer builtins keep no callable wrapper: an untyped parameter
+    /// cannot carry the `buffer<T>` or pointer operand their checker demands. An ordinary
+    /// builtin still gets one.
+    #[test]
+    fn pointer_and_buffer_builtins_keep_no_wrapper() {
+        for name in ["buffer_free", "buffer_len", "buffer_ptr"] {
+            assert!(wrapper_of(name).is_none(), "{name} must keep no wrapper");
+        }
+        assert!(["ucfirst", "str_pad", "lcfirst", "nl2br", "abs", "hypot"].iter().any(|name| wrapper_of(name).is_some()));
+    }
 }
