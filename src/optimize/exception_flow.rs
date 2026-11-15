@@ -129,6 +129,7 @@ fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
     signature.params.iter().enumerate().any(|(index, (_, ty))| {
         matches!(ty.codegen_repr(), PhpType::Object(_))
             || ty.declares_callable()
+            || matches!(ty, PhpType::Array(element) if element.declares_callable())
             || (signature.ref_params.get(index).copied().unwrap_or(false)
                 && by_ref_param_checks_boxed_argument(signature, index, ty))
     })

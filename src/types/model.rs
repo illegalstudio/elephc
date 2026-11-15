@@ -117,14 +117,30 @@ impl PhpType {
         matches!(self, Self::Callable | Self::DeclaredCallable)
     }
 
-    /// Returns whether this declared parameter type is `callable`, `?callable` or a union
-    /// with `callable`: a by-value binding of it keeps the PHP value and checks it on entry.
+    /// Returns whether this declared parameter type is `callable`, `?callable`, or a union of
+    /// `callable` with members PHP checks by exact membership (`null`, `false`, arrays,
+    /// objects): a binding of it keeps the PHP value and checks it on entry.
+    ///
+    /// A union that also names a coercible scalar (`int|callable`, `string|callable`) is not
+    /// one: PHP converts a non-callable argument to that scalar, which an entry predicate
+    /// cannot do, so such unions keep the descriptor-typed `callable` member instead (see
+    /// `callable_union_needs_descriptor`).
     pub(crate) fn declares_callable(&self) -> bool {
         match self {
             Self::DeclaredCallable => true,
-            Self::Union(members) => members.contains(&Self::DeclaredCallable),
+            Self::Union(members) => {
+                members.contains(&Self::DeclaredCallable) && !Self::callable_union_needs_descriptor(members)
+            }
             _ => false,
         }
+    }
+
+    /// Returns whether a union containing `callable` also names a coercible scalar member.
+    pub(crate) fn callable_union_needs_descriptor(members: &[PhpType]) -> bool {
+        members.contains(&Self::DeclaredCallable)
+            && members.iter().any(|member| {
+                matches!(member, Self::Int | Self::Float | Self::Str | Self::Bool | Self::Mixed)
+            })
     }
 
     /// Replaces every `DeclaredCallable` (also inside unions and containers) by `Mixed`.

@@ -69,6 +69,15 @@ impl Checker {
         if !by_ref && *expected == PhpType::DeclaredCallable {
             return self.require_declared_callable_arg(expected, actual, arg, env, context, owner);
         }
+        // A by-reference `callable` shares the caller's cell, so only boxed storage (or a
+        // Closure) can be bound; the referenced value is then checked on entry. A concrete
+        // string or array local keeps the descriptor-era refusal.
+        if by_ref && *expected == PhpType::DeclaredCallable {
+            if actual.is_callable_like() || actual.codegen_repr() == PhpType::Mixed {
+                return Ok(());
+            }
+            return self.require_compatible_arg_type(&PhpType::Callable, actual, arg.span, context);
+        }
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
         }
@@ -241,7 +250,7 @@ impl Checker {
     /// here: an unknown name is a compile error, and a known target registers its signature
     /// so invocations of the parameter keep their static result type. Every other string,
     /// array, object or boxed value is left to PHP's runtime callable check.
-    fn require_declared_callable_arg(
+    pub(crate) fn require_declared_callable_arg(
         &mut self,
         expected: &PhpType,
         actual: &PhpType,

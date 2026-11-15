@@ -148,7 +148,7 @@ fn params_have_object_reference(
         hint.as_ref().is_some_and(|hint| {
             type_hint_is_class(hint)
                 || (*by_ref && type_hint_mentions_array(hint))
-                || (!*by_ref && type_hint_mentions_callable(hint))
+                || type_hint_mentions_callable(hint)
         })
     })
 }

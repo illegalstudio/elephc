@@ -51,3 +51,61 @@ pub(crate) fn expr_is_declared_callable(ctx: &LoweringContext<'_, '_>, expr: &Ex
             == PhpType::DeclaredCallable,
     }
 }
+
+/// Lowers `$callable->bindTo(...)` / `$callable->call(...)` on a declared `callable` value.
+///
+/// Only a Closure has the rebinding methods. The value is published in a `mixed` temp once,
+/// then `instanceof Closure` selects the descriptor path (`Closure` rebinding) or ordinary
+/// dynamic method dispatch, which runs an invokable object's own method and raises PHP's
+/// `Call to a member function bindTo() on string` for a string or array.
+pub(crate) fn lower_declared_callable_closure_method(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    method: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let span = expr.span;
+    let temp = ctx.declare_hidden_temp(PhpType::Mixed);
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, object, span);
+    let receiver = Expr::new(ExprKind::Variable(temp), span);
+    let condition = Expr::new(
+        ExprKind::InstanceOf {
+            value: Box::new(receiver.clone()),
+            target: InstanceOfTarget::Name(Name::unqualified("Closure")),
+        },
+        span,
+    );
+    let descriptor = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("__elephc_normalize_callable"),
+            args: vec![receiver.clone()],
+        },
+        span,
+    );
+    let closure_call = Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(descriptor),
+            method: method.to_string(),
+            args: args.to_vec(),
+        },
+        span,
+    );
+    let dynamic_call = Expr::new(
+        ExprKind::MethodCall {
+            object: Box::new(receiver),
+            method: method.to_string(),
+            args: args.to_vec(),
+        },
+        span,
+    );
+    let selected = Expr::new(
+        ExprKind::Ternary {
+            condition: Box::new(condition),
+            then_expr: Box::new(closure_call),
+            else_expr: Box::new(dynamic_call),
+        },
+        span,
+    );
+    lower_expr(ctx, &selected)
+}

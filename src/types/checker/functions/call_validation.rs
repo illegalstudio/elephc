@@ -614,6 +614,20 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        // `int|callable` and other unions with a coercible scalar keep the descriptor-typed
+        // callable member: only a value-preserving `callable` accepts any string or array.
+        if let PhpType::Union(members) = expected {
+            if PhpType::callable_union_needs_descriptor(members) {
+                let members = members
+                    .iter()
+                    .map(|member| match member {
+                        PhpType::DeclaredCallable => PhpType::Callable,
+                        other => other.clone(),
+                    })
+                    .collect();
+                return Self::types_compatible(&PhpType::Union(members), actual);
+            }
+        }
         match (expected, actual) {
             (PhpType::Mixed, _) => true,
             (_, PhpType::Never) => true, // never is the bottom type — compatible with any expected type
@@ -1159,6 +1173,16 @@ impl Checker {
                             &actual_ty,
                             arg.span,
                             &format!("{} variadic parameter ${}", callee_desc, vname),
+                        )?;
+                    }
+                    if *expected_ty == PhpType::DeclaredCallable {
+                        self.require_declared_callable_arg(
+                            expected_ty,
+                            &actual_ty,
+                            arg,
+                            caller_env,
+                            &format!("{} variadic parameter ${}", callee_desc, vname),
+                            None,
                         )?;
                     }
                     self.require_compatible_arg_type(

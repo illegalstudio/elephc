@@ -1874,6 +1874,7 @@ fn lower_body_into_function(
         .collect::<Vec<_>>();
     // By-reference parameters of a union of null, arrays and objects are checked on entry,
     // after the caller evaluated every argument (php's RECV order).
+    let mut callable_variadic_guard: Option<(String, usize, String)> = None;
     let reference_entry_guards = {
         let display = function
             .display_name
@@ -1891,17 +1892,22 @@ fn lower_body_into_function(
             }
             position += 1;
             let by_ref = by_ref_params.get(index).copied().unwrap_or(false);
+            let variadic = function
+                .signature
+                .as_ref()
+                .is_some_and(|signature| signature.variadic.as_deref() == Some(name.as_str()));
             if by_ref && crate::ir_lower::expr::reference_parameter_needs_entry_guard(php_type) {
                 guards.push((display.clone(), position, name.clone(), php_type.clone()));
-            } else if !by_ref
-                && function.signature.as_ref().is_none_or(|signature| {
-                    signature.variadic.as_deref() != Some(name.as_str())
-                })
-                && php_type.declares_callable()
-            {
+            } else if !variadic && php_type.declares_callable() {
                 // A declared `callable` keeps the PHP value it received, so PHP's binding
-                // check (`must be of type callable, T given`) runs here, on entry.
+                // check (`must be of type callable, T given`) runs here, on entry. A by-reference
+                // parameter checks the referenced value.
                 guards.push((display.clone(), position, name.clone(), php_type.clone()));
+            } else if variadic
+                && !by_ref
+                && matches!(php_type, PhpType::Array(element) if element.declares_callable())
+            {
+                callable_variadic_guard = Some((display.clone(), position, name.clone()));
             }
         }
         guards
@@ -2024,6 +2030,11 @@ fn lower_body_into_function(
     ctx.lower_with_final_string_storage(|ctx| {
         if !eager_parameters {
             super::object_boundaries::guard_parameters(ctx, &reference_entry_guards);
+            if let Some((display, position, name)) = &callable_variadic_guard {
+                crate::ir_lower::expr::guard_declared_callable_variadic_entry(
+                    ctx, display, *position, name,
+                );
+            }
         }
         if let Some(class) = property_initializers {
             super::property_initializers::lower(ctx, class);
@@ -2033,6 +2044,11 @@ fn lower_body_into_function(
                 // place at the start of the body.
                 for (display, position, name, php_type) in &reference_entry_guards {
                     crate::ir_lower::expr::guard_reference_parameter_entry(ctx, display, *position, name, php_type);
+                }
+                if let Some((display, position, name)) = &callable_variadic_guard {
+                    crate::ir_lower::expr::guard_declared_callable_variadic_entry(
+                        ctx, display, *position, name,
+                    );
                 }
             }
             crate::ir_lower::numeric_storage::lower_body(ctx, body);
