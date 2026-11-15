@@ -171,7 +171,7 @@ pub(crate) struct SharedCodegenState {
     /// compared only within it.
     runtime_instance_method_descriptors:
         crate::fast_hash::FastMap<u64, Vec<RuntimeInstanceMethodDescriptorCacheEntry>>,
-    runtime_callable_invokers: Vec<RuntimeCallableInvokerCacheEntry>,
+    runtime_callable_invokers: InvokerCache,
     eval_registration_helper: Option<String>,
     /// Set when the eval registration helper was emitted ahead of the bodies: its label is then
     /// a constant, and reading it is not a shared access a worker must avoid.
@@ -428,7 +428,7 @@ pub(crate) struct ModulePreset {
     static_case_entries: crate::fast_hash::FastMap<String, RuntimeStaticMethodCallableCase>,
     instance_descriptors:
         crate::fast_hash::FastMap<u64, Vec<RuntimeInstanceMethodDescriptorCacheEntry>>,
-    invokers: Vec<RuntimeCallableInvokerCacheEntry>,
+    invokers: InvokerCache,
     builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     /// The module-wide open Mixed callable sharing decision per strictness profile. It is decided
@@ -464,6 +464,62 @@ struct RuntimeInstanceMethodDescriptorCacheEntry {
     impl_class: String,
     signature: FunctionSig,
     template: RuntimeInstanceMethodDescriptorTemplate,
+}
+
+/// The descriptor invokers emitted so far, in emission order, indexed by key fingerprint.
+///
+/// A lookup used to walk every entry comparing fingerprints: Symfony caches thousands of
+/// invokers and asks once per callable site, about 460 samples of a sampled one-core demo build.
+/// The index hands a lookup only the entries whose fingerprint matches. Emission order is kept
+/// because a worker forgets a deferred body's entries by truncating back to a mark.
+#[derive(Clone, Default)]
+struct InvokerCache {
+    entries: Vec<RuntimeCallableInvokerCacheEntry>,
+    by_fingerprint: crate::fast_hash::FastMap<u64, Vec<usize>>,
+}
+
+impl InvokerCache {
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn push(&mut self, entry: RuntimeCallableInvokerCacheEntry) {
+        self.by_fingerprint
+            .entry(entry.fingerprint)
+            .or_default()
+            .push(self.entries.len());
+        self.entries.push(entry);
+    }
+
+    /// The first entry, in emission order, with this fingerprint that `matches` accepts.
+    fn find(
+        &self,
+        fingerprint: u64,
+        matches: impl Fn(&RuntimeCallableInvokerCacheEntry) -> bool,
+    ) -> Option<&RuntimeCallableInvokerCacheEntry> {
+        self.by_fingerprint.get(&fingerprint)?.iter().find_map(|&index| {
+            #[cfg(test)]
+            INVOKER_ENTRIES_VISITED.with(|count| count.set(count.get() + 1));
+            let entry = &self.entries[index];
+            matches(entry).then_some(entry)
+        })
+    }
+
+    /// Forgets the entries pushed after the first `len`.
+    fn truncate(&mut self, len: usize) {
+        if len >= self.entries.len() {
+            return;
+        }
+        for entry in &self.entries[len..] {
+            if let Some(indices) = self.by_fingerprint.get_mut(&entry.fingerprint) {
+                indices.retain(|&index| index < len);
+                if indices.is_empty() {
+                    self.by_fingerprint.remove(&entry.fingerprint);
+                }
+            }
+        }
+        self.entries.truncate(len);
+    }
 }
 
 /// Cache key and label for one signature-compatible descriptor invoker body.
@@ -729,7 +785,7 @@ impl SharedCodegenState {
             runtime_static_method_descriptor_case_entries: Default::default(),
             runtime_instance_method_descriptors: crate::fast_hash::FastMap::default(),
             literal_methods: Default::default(),
-            runtime_callable_invokers: Vec::new(),
+            runtime_callable_invokers: InvokerCache::default(),
             eval_registration_helper: None,
             eval_registration_preset: false,
             preset: None,
@@ -1556,7 +1612,7 @@ impl SharedCodegenState {
         defaults: &[Option<crate::codegen::runtime_callable_invoker::InvokerDefaultValue>],
     ) -> Option<String> {
         let fingerprint = invoker_fingerprint(signature, captures, owns_string_return, php_return_status, defaults);
-        let matches = |entry: &&RuntimeCallableInvokerCacheEntry| {
+        let matches = |entry: &RuntimeCallableInvokerCacheEntry| {
             entry.fingerprint == fingerprint
                 && {
                     #[cfg(test)]
@@ -1569,13 +1625,12 @@ impl SharedCodegenState {
                 && entry.defaults == defaults
         };
         let preset = self.preset.as_ref();
-        if let Some(entry) = preset.and_then(|preset| preset.invokers.iter().find(matches)) {
+        if let Some(entry) = preset.and_then(|preset| preset.invokers.find(fingerprint, matches)) {
             return Some(entry.label.clone());
         }
         self.touch_cache_keyed();
         self.runtime_callable_invokers
-            .iter()
-            .find(matches)
+            .find(fingerprint, matches)
             .map(|entry| entry.label.clone())
     }
 
@@ -1781,6 +1836,8 @@ fn cache_runtime_call_wrapper(
 std::thread_local! {
     /// Full invoker-key comparisons the cache lookup made after the fingerprint matched.
     static INVOKER_KEY_COMPARISONS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Cached invokers a lookup visited, whatever their fingerprint.
+    static INVOKER_ENTRIES_VISITED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -1827,6 +1884,44 @@ mod invoker_fingerprint_tests {
         assert_eq!(shared.runtime_callable_invoker(&sigs[150], &[], true, false, &[]), None);
         let compared = INVOKER_KEY_COMPARISONS.with(|count| count.get());
         assert!(compared <= 2, "{compared} full key comparisons for two lookups among 200 entries");
+    }
+
+    /// A lookup visits only the entries filed under its fingerprint, not every cached invoker:
+    /// walking thousands of fingerprints per callable site was a top self-time frame of the
+    /// Symfony build. Forgetting a deferred body's entries drops them from the index too, and a
+    /// re-emitted entry under the same key is found again.
+    #[test]
+    fn invoker_lookup_visits_only_its_fingerprint_bucket() {
+        let module = Module::new(Target::parse("macos-aarch64").expect("target"));
+        let mut shared = SharedCodegenState::for_module(&module);
+        let sigs = signatures(200);
+        for (index, sig) in sigs.iter().take(150).enumerate() {
+            shared.cache_runtime_callable_invoker(sig, &[], false, false, &[], &format!("_inv_{index}"));
+        }
+        let mark = shared.out_of_line_cache_mark();
+        for (index, sig) in sigs.iter().enumerate().skip(150) {
+            shared.cache_runtime_callable_invoker(sig, &[], false, false, &[], &format!("_inv_{index}"));
+        }
+        INVOKER_ENTRIES_VISITED.with(|count| count.set(0));
+        assert_eq!(
+            shared.runtime_callable_invoker(&sigs[180], &[], false, false, &[]).as_deref(),
+            Some("_inv_180")
+        );
+        assert_eq!(shared.runtime_callable_invoker(&sigs[180], &[], true, false, &[]), None);
+        let visited = INVOKER_ENTRIES_VISITED.with(|count| count.get());
+        assert!(visited <= 2, "{visited} entries visited for two lookups among 200 entries");
+
+        shared.forget_out_of_line_caches_since(mark);
+        assert_eq!(shared.runtime_callable_invoker(&sigs[180], &[], false, false, &[]), None);
+        assert_eq!(
+            shared.runtime_callable_invoker(&sigs[20], &[], false, false, &[]).as_deref(),
+            Some("_inv_20")
+        );
+        shared.cache_runtime_callable_invoker(&sigs[180], &[], false, false, &[], "_inv_again");
+        assert_eq!(
+            shared.runtime_callable_invoker(&sigs[180], &[], false, false, &[]).as_deref(),
+            Some("_inv_again")
+        );
     }
 }
 
