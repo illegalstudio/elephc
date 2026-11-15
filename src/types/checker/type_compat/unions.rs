@@ -69,6 +69,14 @@ impl Checker {
         if expected == actual {
             return true;
         }
+        // A declared `callable` keeps any value PHP could call, and a descriptor-typed slot
+        // takes one by materializing its descriptor (see `Checker::types_compatible`).
+        if matches!(expected, PhpType::DeclaredCallable | PhpType::Callable)
+            && (actual.is_callable_like() || *expected == PhpType::DeclaredCallable)
+            && Self::types_compatible(expected, actual)
+        {
+            return true;
+        }
         // The arithmetic union is decided by the arms below, not here: this per-member rule asks
         // whether `int` accepts `float`, which is false, so it would refuse `int|float` at every
         // position — including the `int` parameters the preludes pass a loop counter to.

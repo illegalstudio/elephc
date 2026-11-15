@@ -172,7 +172,7 @@ impl Checker {
             crate::parser::ast::TypeExpr::Never => Ok(PhpType::Never),
             crate::parser::ast::TypeExpr::Iterable => Ok(PhpType::Iterable),
             crate::parser::ast::TypeExpr::Array(inner) => {
-                Ok(PhpType::Array(Box::new(self.resolve_type_expr(inner, span)?)))
+                Ok(PhpType::Array(Box::new(self.resolve_type_expr(inner, span)?.as_container_element())))
             }
             crate::parser::ast::TypeExpr::AssocArray { key, value } => {
                 let key_ty = self.resolve_type_expr(key, span)?;
@@ -187,7 +187,7 @@ impl Checker {
                 }
                 Ok(PhpType::AssocArray {
                     key: Box::new(key_ty),
-                    value: Box::new(self.resolve_type_expr(value, span)?),
+                    value: Box::new(self.resolve_type_expr(value, span)?.as_container_element()),
                 })
             }
             crate::parser::ast::TypeExpr::Nullable(inner) => {

@@ -805,7 +805,8 @@ fn emit_eval_runtime_callable_invoker_inline(
     current_class: Option<&str>,
 ) -> String {
     state.argument_normalizer_needed |=
-        super::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
+        super::runtime_callable_invoker::needs_callable_argument_normalizer(sig)
+            || super::runtime_callable_invoker::needs_declared_callable_argument_normalizer(sig);
     let defaults = super::runtime_callable_invoker::resolve_invoker_defaults(
         module,
         current_class,

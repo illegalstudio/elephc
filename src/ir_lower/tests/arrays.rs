@@ -5,6 +5,8 @@
 //! - `crate::ir_lower::tests`.
 //!
 //! Key details:
+//! - Callable fixtures declare `Closure`, which keeps the descriptor ABI these tests pin; a
+//!   declared `callable` keeps the PHP value it receives instead (`PhpType::DeclaredCallable`).
 //! - Array access result metadata must come from the lowered array value, not
 //!   from syntactic fallback inference that lacks local type facts.
 
@@ -476,7 +478,7 @@ fn indexed_array_word_writes_preserve_semantic_tags_on_every_target() {
     let source = r#"<?php
 function appendFloatMetadata(float $value): array { $items = []; $items[] = $value; return $items; }
 function appendBoolMetadata(bool $value): array { $items = []; $items[] = $value; return $items; }
-function appendCallableMetadata(callable $value): array { $items = []; $items[] = $value; return $items; }
+function appendCallableMetadata(Closure $value): array { $items = []; $items[] = $value; return $items; }
 function setFloatMetadata(float $value): array { $items = []; $items[0] = $value; return $items; }
 function metadataIdentity(int $value): int { return $value; }
 echo count(appendFloatMetadata($argc / 2.0));
@@ -710,7 +712,7 @@ fn php_array_map_uses_boxed_traversal_on_every_target() {
     use std::path::Path;
 
     let source = r#"<?php
-function mapPhpArray(array $items, callable $callback): array { return array_map($callback, $items); }
+function mapPhpArray(array $items, Closure $callback): array { return array_map($callback, $items); }
 function directMapPhpArray(array $items): array { return array_map(fn(mixed $value): mixed => $value, $items); }
 function labelPhpArrayValue(mixed $value): string { return "v:" . $value; }
 echo count(mapPhpArray([$argc], labelPhpArrayValue(...)));
@@ -775,7 +777,7 @@ fn php_array_merge_callable_unpacks_backend_operands_on_every_target() {
     use std::path::Path;
 
     let source = r#"<?php
-function mergeDescriptor(callable $callback, array $left, array $right): mixed {
+function mergeDescriptor(Closure $callback, array $left, array $right): mixed {
     return $callback($left, $right);
 }
 $callback = array_merge(...);
@@ -1045,7 +1047,7 @@ fn boxed_usort_publishes_private_arrays_on_every_target() {
     let source = r#"<?php
 class TargetSortBag { public array $items = ['b' => 2, 'a' => 1]; }
 function targetBoxedSort(array &$items): void { usort($items, fn(int $a, int $b): int => $a <=> $b); }
-function dynamicBoxedSort(callable $sort, array &$items): void {
+function dynamicBoxedSort(Closure $sort, array &$items): void {
     $sort($items, fn(int $a, int $b): int => $a <=> $b);
 }
 $bag = new TargetSortBag();

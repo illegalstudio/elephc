@@ -143,6 +143,14 @@ impl PhpType {
             })
     }
 
+    /// Returns the container element type for a `callable` written inside `array<...>`.
+    ///
+    /// A typed array (an elephc extension) stores callable descriptors, so its element keeps
+    /// the descriptor type; only a parameter or return declared `callable` keeps PHP values.
+    pub(crate) fn as_container_element(self) -> PhpType {
+        if self == Self::DeclaredCallable { Self::Callable } else { self }
+    }
+
     /// Replaces every `DeclaredCallable` (also inside unions and containers) by `Mixed`.
     ///
     /// The distinction only matters to the checker and EIR lowering, which materialize a

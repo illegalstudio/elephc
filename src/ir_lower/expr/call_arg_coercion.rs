@@ -407,13 +407,13 @@ fn guard_boxed_object_reference_argument(
 }
 
 /// Whether a by-reference parameter of type `ty` takes a boxed cell a promoted local can share:
-/// `mixed`, an object, a union of objects only (`A|B`), or a NULLABLE union of objects, arrays
+/// `mixed` (or a declared `callable`, stored the same way), an object, a union of objects only (`A|B`), or a NULLABLE union of objects, arrays
 /// and floats (`?Base`, `?array`, `?float`). The checker authorizes promotion only for a whole
 /// local it gave boxed storage: one that may receive `null` (or a sibling class) through such a
 /// parameter, which its typed slot could not hold.
 fn boxed_reference_param_type(ty: &PhpType) -> bool {
     match ty {
-        PhpType::Mixed | PhpType::Object(_) => true,
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Object(_) => true,
         PhpType::Union(members) => {
             let objects_only = members.iter().any(|member| matches!(member, PhpType::Object(_)))
                 && members

@@ -387,7 +387,9 @@ pub(super) fn reflection_named_type_metadata(ty: &PhpType) -> Option<ReflectionN
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             Some(reflection_builtin_named_type("array", false))
         }
-        PhpType::Callable => Some(reflection_builtin_named_type("callable", false)),
+        PhpType::Callable | PhpType::DeclaredCallable => {
+            Some(reflection_builtin_named_type("callable", false))
+        }
         PhpType::Object(name) if name.is_empty() => {
             Some(reflection_builtin_named_type("object", false))
         }

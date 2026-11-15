@@ -1025,9 +1025,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                 crate::types::width_type_from_type_expr(inner)
                     .unwrap_or_else(|| self.type_expr_to_php_type_for_value(inner)),
             )),
-            TypeExpr::Array(inner) => {
-                PhpType::Array(Box::new(self.type_expr_to_php_type_for_value(inner)))
-            }
+            TypeExpr::Array(inner) => PhpType::Array(Box::new(
+                self.type_expr_to_php_type_for_value(inner).as_container_element(),
+            )),
             TypeExpr::Nullable(inner) => PhpType::Union(vec![
                 PhpType::Void,
                 self.type_expr_to_php_type_for_value(inner),
@@ -4206,6 +4206,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             // `MixedUnbox` stays the borrowed projection its consumers expect.
             return true;
         }
+        if self.builder.value_defining_op(value.value) == Some(Op::NormalizeCallable)
+            && self.builder.value_ownership(value.value) == Ownership::Owned
+        {
+            // A normalized descriptor carries its own lease (a retained selected descriptor
+            // or a freshly built one), released after the call or store that consumes it.
+            return true;
+        }
         if self.value_is_owned_temp_load(value.value) {
             return true;
         }
@@ -6373,10 +6380,12 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
         TypeExpr::Void => PhpType::Void,
         TypeExpr::Never => PhpType::Never,
         TypeExpr::Iterable => PhpType::Iterable,
-        TypeExpr::Array(inner) => PhpType::Array(Box::new(type_expr_to_php_type(inner))),
+        TypeExpr::Array(inner) => {
+            PhpType::Array(Box::new(type_expr_to_php_type(inner).as_container_element()))
+        }
         TypeExpr::AssocArray { key, value } => PhpType::AssocArray {
             key: Box::new(type_expr_to_php_type(key)),
-            value: Box::new(type_expr_to_php_type(value)),
+            value: Box::new(type_expr_to_php_type(value).as_container_element()),
         },
         TypeExpr::Ptr(name) => {
             PhpType::Pointer(name.as_ref().map(|name| {

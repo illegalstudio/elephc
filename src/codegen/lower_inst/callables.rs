@@ -79,7 +79,7 @@ fn php_argument_type_name(ty: &PhpType) -> String {
         PhpType::Array(_) => "array".to_string(),
         PhpType::AssocArray { .. } => "array".to_string(),
         PhpType::Iterable => "iterable".to_string(),
-        PhpType::Callable => "callable".to_string(),
+        PhpType::Callable | PhpType::DeclaredCallable => "callable".to_string(),
         PhpType::Object(name) => name.clone(),
         PhpType::Void | PhpType::Never => "null".to_string(),
         PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar => "mixed".to_string(),

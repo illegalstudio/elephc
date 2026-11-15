@@ -5,6 +5,8 @@
 //! - The AST-to-EIR unit suite.
 //!
 //! Key details:
+//! - Callable fixtures declare `Closure`, which keeps the descriptor ABI these tests pin; a
+//!   declared `callable` keeps the PHP value it receives instead (`PhpType::DeclaredCallable`).
 //! - Heap cell owners are distinct from dereferenced PHP values and borrowed element addresses.
 //! - Every supported target must emit balanced retain and retirement helpers.
 
@@ -256,14 +258,14 @@ consumeNormalizedArray();
 #[test]
 fn omitted_reference_defaults_have_managed_unwind_leases_on_every_target() {
     let source = r#"<?php
-function keepDefaultReferences(array &$left = [], array &$right = [7], int $value = 0): callable {
+function keepDefaultReferences(array &$left = [], array &$right = [7], int $value = 0): Closure {
     $left[] = $value;
     return function() use (&$left, &$right): int {
         $left[] = 1; $right[] = 2;
         return count($left) * 10 + count($right);
     };
 }
-function callDefaultReferences(int $value): callable {
+function callDefaultReferences(int $value): Closure {
     return keepDefaultReferences(value: $value);
 }
 $callback = callDefaultReferences(3);
@@ -359,7 +361,7 @@ echo $direct[0], $method[0], $static[0], $spread[0];
 #[test]
 fn closure_local_reference_cells_have_frame_owners_on_every_target() {
     let source = r#"<?php
-function localReferenceClosure(string $text): callable {
+function localReferenceClosure(string $text): Closure {
     $counter = 0;
     return function() use (&$text, &$counter): string { $counter++; return $text; };
 }
@@ -391,7 +393,7 @@ unset($callback);
 #[test]
 fn closures_retain_managed_reference_arguments_on_every_target() {
     let source = r#"<?php
-function captureManagedArgument(array &$items): callable {
+function captureManagedArgument(array &$items): Closure {
     return function() use (&$items): int { return count($items); };
 }
 $items = [1];

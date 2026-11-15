@@ -5,6 +5,8 @@
 //! - The AST-to-EIR library test suite.
 //!
 //! Key details:
+//! - Callable fixtures declare `Closure`, which keeps the descriptor ABI these tests pin; a
+//!   declared `callable` keeps the PHP value it receives instead (`PhpType::DeclaredCallable`).
 //! - Scope selection remains typed EIR metadata after closure identity becomes runtime-shaped.
 //! - Original and rebound entries share capture layouts and can be rebound across scopes again.
 
@@ -20,16 +22,16 @@ fn runtime_closure_scope_variants_compile_on_all_targets() {
 class ScopeOne { private string $value = "one"; }
 class ScopeTwo { private string $value = "two"; }
 class ScopePublic { public string $value = "public"; }
-function bind_one(callable $closure): callable {
+function bind_one(Closure $closure): Closure {
     return Closure::bind($closure, new ScopeOne(), ScopeOne::class);
 }
-function bind_two(callable $closure): callable {
+function bind_two(Closure $closure): Closure {
     return $closure->bindTo(new ScopeTwo(), ScopeTwo::class);
 }
-function bind_object(callable $closure, ScopeOne $object): callable {
+function bind_object(Closure $closure, ScopeOne $object): Closure {
     return Closure::bind($closure, $object, $object);
 }
-function bind_boxed_scope(callable $closure, mixed $scope): callable {
+function bind_boxed_scope(Closure $closure, mixed $scope): Closure {
     return Closure::bind($closure, new ScopePublic(), $scope);
 }
 $reader = function () { return $this->value; };

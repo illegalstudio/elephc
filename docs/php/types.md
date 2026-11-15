@@ -466,15 +466,15 @@ function apply(callable $f, string $s) { return $f($s); }
 echo apply("strtoupper", "abc");            // ABC
 echo apply("Formatter::wrap", "abc");       // "Class::method"
 echo apply([new Formatter(), "pad"], "abc"); // callable array
-$name = $argc > 1 ? "strtolower" : "strtoupper";
+$name = $argc > 1 ? "my_helper" : "Formatter::wrap";
 echo apply($name, "abc");                   // runtime-selected name
 ```
 
 Names are matched case-insensitively and a leading `\` is allowed, matching PHP. A literal name that names nothing is a compile error. A value that is not callable at run time raises PHP's `TypeError` (`apply(): Argument #1 ($f) must be of type callable, array given`) when it reaches the parameter, without PHP's trailing `called in FILE on line N`.
 
-A runtime-selected name reaches user functions and the builtins with a runtime wrapper; a builtin named only at run time without one stops with `Argument must be a valid callback`. A name written as a literal at a `callable` argument always works.
+Invoking a declared `callable` resolves a runtime-selected name among the program's functions, static methods (`"Class::method"`) and the builtin names written as literals at `callable` arguments, so a binary does not carry a wrapper for every builtin. A builtin named only at run time, never as such a literal, stops with `Argument must be a valid callback`; pass it as a literal or as a first-class callable (`strtolower(...)`).
 
-The same check covers `callable &$c` (the referenced value) and each element of `callable ...$fs` (`Argument #2 must be of type callable, string given`). A by-reference `callable` binds a `mixed` variable or a Closure; a concrete string or array variable is refused at compile time. A union of `callable` with `null`, `false`, arrays or objects behaves like `callable`; a union with a scalar such as `int|callable` keeps elephc's stricter rules for callable strings (a literal string that is not an int is refused at compile time), because PHP would convert a non-callable argument to that scalar.
+The same check covers `callable &$c` (the referenced value) and each element of `callable ...$fs` (`Argument #2 must be of type callable, string given`). A union of `callable` with `null`, `false`, arrays or objects behaves like `callable`; a union with a scalar such as `int|callable` keeps elephc's stricter rules for callable strings (a literal string that is not an int is refused at compile time), because PHP would convert a non-callable argument to that scalar.
 
 Because elephc maps the `Closure` type hint onto its callable descriptor type, a `Closure` parameter still accepts a callable string or array where PHP requires an actual `Closure`.
 

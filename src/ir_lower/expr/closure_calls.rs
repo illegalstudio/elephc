@@ -46,6 +46,7 @@ pub(super) fn lower_closure_call(ctx: &mut LoweringContext<'_, '_>, var: &str, a
         }
     }
     let callable = ctx.load_local(var, Some(expr.span));
+    let callable = super::declared_callables::normalize_declared_callable(ctx, callable, expr.span);
     let result_type = result_type
         .or_else(|| {
             descriptor_signature
@@ -246,6 +247,8 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
             return take_prepublished_call_result(ctx, result_staging, value, expr.span);
         }
     }
+    let lowered_callee =
+        super::declared_callables::normalize_declared_callable(ctx, lowered_callee, expr.span);
     let result_type = dynamic_callable_result_type(ctx, lowered_callee.value, expr);
     let mut lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
     let arg_container = lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut lowered_callee, args, expr.span);
@@ -253,10 +256,13 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
 }
 
 /// Returns whether lowering `callee` itself can publish the static binding of its result: a
-/// closure literal, or a `Closure::bind` / `->bindTo()` rebinding of one.
+/// closure literal or first-class callable (also through an assignment), or a
+/// `Closure::bind` / `->bindTo()` rebinding of one.
 fn callee_may_publish_static_binding(callee: &Expr) -> bool {
     match &callee.kind {
-        ExprKind::Closure { .. } => true,
+        ExprKind::Closure { .. } | ExprKind::FirstClassCallable(_) => true,
+        // `($f = function () {...})()` evaluates to the assigned closure.
+        ExprKind::Assignment { value, .. } => callee_may_publish_static_binding(value),
         ExprKind::StaticMethodCall { method, .. } => php_symbol_key(method) == "bind",
         ExprKind::MethodCall { method, .. } => php_symbol_key(method) == "bindto",
         _ => false,
