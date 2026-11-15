@@ -212,6 +212,43 @@ fn operator_classes_are_listed_once_per_program() {
     assert_eq!(small, large, "class table walks grew with the bodies: {small} vs {large}");
 }
 
+/// `count` subclasses of a class with constant arrays, all reachable through a runtime-named
+/// `ReflectionClass`.
+fn many_reflected_subclasses(count: usize) -> String {
+    let mut source = String::from(
+        "<?php\nclass Base { const MAP = ['a' => 1, 'b' => [2, 3], 'c' => 'x']; const N = 5; const LIST = [1, 2, 3, 4]; }\n",
+    );
+    for index in 0..count {
+        source.push_str(&format!("class C{index} extends Base {{ const OWN{index} = {index}; }}\n"));
+    }
+    source.push_str("$r = new ReflectionClass($argc > 1 ? 'C0' : 'Base');\necho count($r->getConstants()), \"\\n\";\n");
+    source
+}
+
+/// Reflection constant evaluations while generating code for `source`.
+fn reflection_constant_evaluations(source: &str) -> usize {
+    // The class table is a closed-world build's: every class gets a row.
+    crate::closed_world::set_enabled(true);
+    let mut module = lower_source(source);
+    module.closed_world = true;
+    crate::codegen::CLASS_CONSTANT_EVALUATIONS.with(|count| count.set(0));
+    let generated = crate::codegen::generate_user_asm_from_ir(&module, false, false);
+    crate::closed_world::set_enabled(false);
+    generated.expect("codegen");
+    crate::codegen::CLASS_CONSTANT_EVALUATIONS.with(|count| count.get())
+}
+
+/// A class's constants are evaluated once for its Reflection metadata, not once per member list.
+#[test]
+fn reflection_constants_are_evaluated_once_per_class() {
+    let small = reflection_constant_evaluations(&many_reflected_subclasses(2));
+    let large = reflection_constant_evaluations(&many_reflected_subclasses(20));
+    assert!(small > 0, "the fixture no longer emits Reflection constant metadata");
+    // Each added subclass evaluates its own constant once; the three it inherits from `Base` were
+    // evaluated with `Base`. Without the cache each one cost its own and the inherited ones twice.
+    assert_eq!(large - small, 18, "{small} evaluations for 2 subclasses, {large} for 20");
+}
+
 /// `count` calls of one variadic method name on an untyped receiver.
 fn many_boxed_receiver_variadic_calls(count: usize) -> String {
     let mut source = String::from("<?php\n");

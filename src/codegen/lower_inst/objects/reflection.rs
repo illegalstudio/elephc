@@ -54,6 +54,8 @@ mod parameter_defaults;
 mod object_defaults;
 mod default_export;
 mod names_constants;
+#[cfg(test)]
+pub(crate) use names_constants::CLASS_CONSTANT_EVALUATIONS;
 mod constant_arithmetic;
 mod constant_arrays;
 mod operand_extract;

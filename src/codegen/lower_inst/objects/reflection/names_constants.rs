@@ -238,6 +238,50 @@ pub(super) fn push_unique_constant_member(
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Constant evaluations `class_constant_value` did not answer from its cache.
+    pub(crate) static CLASS_CONSTANT_EVALUATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `reflection_constant_value` of the constant `constant` that `class` declares as `expr`,
+/// evaluated once per module.
+///
+/// The Reflection metadata of every class walks up its ancestors and evaluates each inherited
+/// constant again, in two member lists: a parent's constant arrays were folded once per
+/// descendant and list (about 500 samples of a sampled one-core Symfony demo build). The value
+/// depends only on the declaring class and the constant, so it is kept in the codegen state.
+pub(super) fn class_constant_value(
+    ctx: &FunctionContext<'_>,
+    class: &str,
+    info: Option<&crate::types::ClassInfo>,
+    constant: &str,
+    expr: &Expr,
+) -> Result<ReflectionConstantValue> {
+    let key = (class.to_string(), constant.to_string(), info.is_some());
+    let cached = ctx.shared.reflection_constant_values.borrow().get(&key).map(|stored| {
+        stored
+            .as_ref()
+            .and_then(|value| value.downcast_ref::<ReflectionConstantValue>())
+            .cloned()
+    });
+    match cached {
+        Some(Some(value)) => return Ok(value),
+        // A failure is evaluated again for its error, which callers report or skip.
+        Some(None) => return reflection_constant_value(ctx, class, info, expr, 0),
+        None => {}
+    }
+    #[cfg(test)]
+    CLASS_CONSTANT_EVALUATIONS.with(|count| count.set(count.get() + 1));
+    let value = reflection_constant_value(ctx, class, info, expr, 0);
+    let stored = value
+        .as_ref()
+        .ok()
+        .map(|value| Box::new(value.clone()) as Box<dyn std::any::Any + Send>);
+    ctx.shared.reflection_constant_values.borrow_mut().insert(key, stored);
+    value
+}
+
 /// Evaluates one class/interface/trait constant expression for static Reflection metadata.
 pub(super) fn reflection_constant_value(
     ctx: &FunctionContext<'_>,

@@ -242,12 +242,12 @@ pub(super) fn reflection_class_constant_members(
             // php evaluates a constant when it is read, so a class naming an extension's constant
             // (`RedisCaster` and `\Redis::FAILOVER_NONE`) loads without that extension. The world
             // of a closed build holds every such class: its value simply has no static form.
-            let value = match reflection_constant_value(
+            let value = match super::names_constants::class_constant_value(
                 ctx,
                 resolved_name,
                 Some(current_info),
+                constant_name,
                 value_expr,
-                0,
             ) {
                 Ok(value) => value,
                 Err(_) if ctx.module.closed_world => continue,
@@ -427,12 +427,12 @@ pub(super) fn reflection_class_constant_reflection_members(
             }
             let value_expr = &current_info.constants[constant_name];
             // As in `reflection_class_constant_members`: no static form in a closed world.
-            let value = match reflection_constant_value(
+            let value = match super::names_constants::class_constant_value(
                 ctx,
                 resolved_name,
                 Some(current_info),
+                constant_name,
                 value_expr,
-                0,
             ) {
                 Ok(value) => value,
                 Err(_) if ctx.module.closed_world => continue,

@@ -100,6 +100,12 @@ pub(crate) struct SharedCodegenState {
     class_like_names: std::cell::RefCell<
         crate::fast_hash::FastMap<String, std::sync::Arc<super::lower_inst::builtins::ClassLikeNames>>,
     >,
+    /// Reflection constant values already evaluated, by (declaring class, constant, class info at
+    /// hand); `None` records a failed evaluation. Type-erased: the value type is private to the
+    /// reflection emitter (`class_constant_value`).
+    pub(super) reflection_constant_values: std::cell::RefCell<
+        crate::fast_hash::FastMap<(String, String, bool), Option<Box<dyn std::any::Any + Send>>>,
+    >,
     /// How the class scopes share the named property helpers, per (is a write, property name):
     /// a whole-program fact each site of a name asked again (`named_helper_scope`).
     named_helper_scopes: std::cell::RefCell<
@@ -789,6 +795,7 @@ impl SharedCodegenState {
             non_public_static_base: std::cell::OnceCell::new(),
             mixed_hash_arm_base: std::cell::OnceCell::new(),
             class_like_names: Default::default(),
+            reflection_constant_values: Default::default(),
             named_helper_scopes: Default::default(),
             class_descendants: std::cell::OnceCell::new(),
             class_ancestors: std::cell::OnceCell::new(),

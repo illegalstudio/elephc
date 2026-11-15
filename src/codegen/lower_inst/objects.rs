@@ -243,6 +243,8 @@ pub(crate) use property_resolution::CLASS_DESCENDANT_BUILDS;
 #[cfg(test)]
 pub(crate) use mixed_property_type_guard::IS_A_INDEX_BUILDS;
 #[cfg(test)]
+pub(crate) use reflection::CLASS_CONSTANT_EVALUATIONS;
+#[cfg(test)]
 pub(crate) use outlined_dynamic_property::NAMED_SCOPE_GROUP_BUILDS;
 pub(in crate::codegen) use outlined_dynamic_property::NamedHelperScopes;
 mod dynamic_property_read_entry;
