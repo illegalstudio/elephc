@@ -292,3 +292,26 @@ echo named(...[box("ok"), box(" 7")]), "\n";
     );
     assert_eq!(out, "named(): Argument #1 ($s) must be of type string, null given, called in F on line 9\nnamed(): Argument #1 ($s) must be of type string, null given, called in F on line 10\nnamed(): Argument #2 ($n) must be of type int, string given, called in F on line 11\npure(): Argument #1 ($s) must be of type string, null given, called in F on line 12\npure(): Argument #1 ($s) must be of type string, null given, called in F on line 13\nn:ok7\n");
 }
+
+/// The `int`/`float` guard replaces a temporary box with the converted scalar, so the box must
+/// be released: 400k guarded calls run inside a 1 MiB heap.
+#[test]
+fn test_numeric_guard_releases_the_temporary_box() {
+    let out = compile_and_run_with_heap_size(
+        r#"<?php
+function twice(int $n): int { return $n * 2; }
+function half(float $f): float { return $f / 2; }
+function box(mixed $v): mixed { return $v; }
+$nums = [box(1), box("2"), box(3.0), box(true)];
+$total = 0;
+$sum = 0.0;
+for ($i = 0; $i < 200000; $i++) {
+    $total += twice($nums[$i & 3]);
+    $sum += half($nums[$i & 3]);
+}
+echo $total, " ", $sum, "\n";
+"#,
+        1_048_576,
+    );
+    assert_eq!(out, "700000 175000\n");
+}

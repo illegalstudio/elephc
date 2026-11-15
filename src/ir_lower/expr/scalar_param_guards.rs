@@ -129,14 +129,20 @@ pub(super) fn guard_scalar_param(
     );
     let data = ctx.intern_string(&encoded);
     if matches!(declared, PhpType::Int | PhpType::Float) {
-        return Some(ctx.emit_value(
+        let converted = ctx.emit_value(
             Op::ScalarParamGuard,
             vec![value.value],
             Some(Immediate::Data(data)),
             declared,
             Op::ScalarParamGuard.default_effects(),
             Some(span),
-        ));
+        );
+        // The scalar replaces the box as the call operand, so an owned temporary box has no
+        // reader left; a box rooted for the call (a borrow) retires with the call's owners.
+        if ctx.value_is_owning_temporary(value) {
+            crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
+        }
+        return Some(converted);
     }
     ctx.emit_void(
         Op::ScalarParamGuard,
