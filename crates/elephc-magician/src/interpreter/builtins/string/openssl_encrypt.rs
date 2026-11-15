@@ -38,7 +38,7 @@ pub(in crate::interpreter) fn eval_builtin_openssl_encrypt_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+    with_eval_builtin_call_arguments("openssl_encrypt", args, context, scope, values, |evaluated_args, context, _, values| {
         let (bound_args, _) = bind_evaluated_ref_builtin_args(
             &[
                 "data",

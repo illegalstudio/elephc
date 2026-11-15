@@ -843,6 +843,36 @@ above are unchanged.
   assembly comments and diff hygiene. Coercions remains staged with six public
   features until special source handlers, AOT/folding and host audits are complete.
 
+### Eval source builtin contracts and reference owners
+
+- Selected eval signature parameter types now travel with EvalParamSpec and the
+  passing-mode view, including eval-specific extra parameters. Shared source
+  wrappers check the already evaluated inputs before invoking original handlers;
+  regex outputs, OpenSSL tags, socket/stream outputs and other source-sensitive
+  behavior keep their existing targets and source order. Array mutators share
+  their established evaluated reference dispatcher under Coercions.
+- Checked reference variables, ordinary mutable eval properties and eval statics
+  capture stable cells at their source position. Later argument writes are visible
+  without reading a property again; an unset/rebind leaves the captured old cell
+  separate from the replacement property. Casts-only alias preparation remains an
+  independent admission audit.
+- Fresh direct replacements share an owning publication helper. Variable storage
+  consumes its lease; reference cells and other borrowed targets receive the value
+  before its producer lease is retired. Explicit Owned output writes also honor
+  that transfer policy outside plain variables. Source/output failures retire the
+  candidate while preserving the original target and pending TypeError.
+- Rooted sort/splice builders retire owned key/value reads, generated integer keys
+  and partial results. Sort collection also cleans reads on conversion failure;
+  scalar float extraction retires its conversion temporary. Positive source
+  controls exposed these ownership errors rather than accepting leaked results.
+- All twenty-five focused tests pass, including nine parameter tests and
+  direct/named/callable input checks, exact mutation/output controls, live and
+  detached arguments, typed output rejection, legacy splice/settype and complete
+  fake owner ledgers. Compiler check --tests, build and curl exporter pass.
+  The full generated-builtin workflow passes without generated changes, with
+  architecture inventory828 and zero structural errors. Whitespace and function
+  documentation checks pass. The six-bit public admission mask remains unchanged.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -960,4 +990,6 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 
 | 94 | `eae00db419` | feat(strict): guard native writes with live eval property sources |
 
-| 95 | this commit | feat(strict): check evaluated builtin input contracts |
+| 95 | `c0130103c7` | feat(strict): check evaluated builtin input contracts |
+
+| 96 | this commit | feat(strict): guard source builtin inputs and reference owners |

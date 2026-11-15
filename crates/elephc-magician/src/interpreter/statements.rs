@@ -57,6 +57,9 @@ mod static_property_access;
 mod trait_declarations;
 
 use super::*;
+pub(in crate::interpreter) use property_reference_owners::{
+    eval_property_reference_for_access, eval_static_property_reference_after_read,
+};
 use property_write_receivers::{prepare_property_write_receiver, finish_property_write_receiver,
     eval_write_property_get_result, with_eval_property_write_operands, with_eval_named_property_write_operands,
     with_eval_named_property_write_result};

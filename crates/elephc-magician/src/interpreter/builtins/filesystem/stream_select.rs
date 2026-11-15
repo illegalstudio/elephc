@@ -52,7 +52,7 @@ pub(in crate::interpreter) fn eval_builtin_stream_select_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+    with_eval_builtin_call_arguments("stream_select", args, context, scope, values, |evaluated_args, context, _, values| {
         let (bound, _) = bind_evaluated_ref_builtin_args(
             &["read", "write", "except", "seconds", "microseconds"],
             &evaluated_args,

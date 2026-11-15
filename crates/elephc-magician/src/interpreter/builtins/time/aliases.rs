@@ -39,7 +39,7 @@ pub(in crate::interpreter) fn eval_date_procedural_alias_call(
     let Some(name) = eval_date_alias_key(name) else {
         return Ok(None);
     };
-    with_eval_call_arguments(args, context, scope, values, |arguments, context, _, values| {
+    with_eval_builtin_call_arguments(&name, args, context, scope, values, |arguments, context, _, values| {
         if eval_date_alias_should_fall_back_to_builtin(&name, &arguments) {
             // Named mktime/gmmktime calls keep their already evaluated operands at fallback.
             eval_bound_builtin_call(&name, arguments, context, values)

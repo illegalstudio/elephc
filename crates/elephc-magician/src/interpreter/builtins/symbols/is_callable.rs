@@ -43,7 +43,7 @@ pub(in crate::interpreter) fn eval_builtin_is_callable_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, scope, values| {
+    with_eval_builtin_call_arguments("is_callable", args, context, scope, values, |evaluated_args, context, scope, values| {
         eval_is_callable_call_with_evaluated_args_from_scope(
             &evaluated_args,
             Some(scope),

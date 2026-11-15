@@ -95,6 +95,8 @@ impl EvalArea {
 pub(in crate::interpreter) struct EvalParamSpec {
     /// PHP-visible parameter name.
     pub(in crate::interpreter) name: &'static str,
+    /// Selected neutral PHP input type, including explicit eval signature adaptations.
+    pub(in crate::interpreter) ty: elephc_builtin_contract::TypeSpec,
     /// Optional PHP default value in Magician's runtime representation.
     pub(in crate::interpreter) default: Option<EvalBuiltinDefaultValue>,
     /// Whether this parameter must bind to caller storage.
@@ -290,6 +292,7 @@ impl EvalBuiltinSpec {
 fn eval_param_spec(param: ParamSpec) -> EvalParamSpec {
     EvalParamSpec {
         name: param.name,
+        ty: param.ty,
         default: param.default.map(eval_default_value),
         by_ref: param.by_ref,
     }

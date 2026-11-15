@@ -9,6 +9,8 @@
 
 use super::super::super::*;
 
+mod builders;
+
 eval_builtin! {
     contract: "array_splice",
     area: Array,
@@ -18,13 +20,13 @@ eval_builtin! {
 /// Dispatches by-value callable eval calls for the `array_splice` array mutator.
 pub(in crate::interpreter) fn eval_array_splice_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let result = match evaluated_args {
-        [array, offset] => eval_array_splice_value_result(*array, *offset, None, values)?,
-        [array, offset, length] => eval_array_splice_value_result(*array, *offset, Some(*length), values)?,
-        [array, offset, length, _replacement] => eval_array_splice_value_result(*array, *offset, Some(*length), values)?,
+        [array, offset] => eval_array_splice_value_result(*array, *offset, None, context, values)?,
+        [array, offset, length] => eval_array_splice_value_result(*array, *offset, Some(*length), context, values)?,
+        [array, offset, length, _replacement] => eval_array_splice_value_result(*array, *offset, Some(*length), context, values)?,
         _ => return Err(EvalStatus::RuntimeFatal),
     };
     values.warning("array_splice(): Argument #1 ($array) must be passed by reference, value given")?;
@@ -42,7 +44,7 @@ pub(in crate::interpreter) fn eval_builtin_array_splice_call(
         eval_array_splice_direct_args(args, context, scope, values)?;
 
     let (removed, replacement) =
-        eval_array_splice_removed_and_replacement(array, offset, length, replacement_arg, values)?;
+        eval_array_splice_removed_and_replacement(array, offset, length, replacement_arg, context, values)?;
     eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(removed)
 }
@@ -124,13 +126,14 @@ pub(in crate::interpreter) fn eval_array_splice_value_result(
     array: RuntimeCellHandle,
     offset: RuntimeCellHandle,
     length: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     if !matches!(values.type_tag(array)?, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
         return Err(EvalStatus::RuntimeFatal);
     }
     let (start, end) = eval_array_splice_bounds(array, offset, length, values)?;
-    eval_array_splice_removed(array, start, end, values)
+    builders::build(array, start..end, None, 0..0, context, values)
 }
 
 /// Builds both removed and replacement arrays for direct `array_splice()` write-back.
@@ -139,13 +142,23 @@ pub(in crate::interpreter) fn eval_array_splice_removed_and_replacement(
     offset: RuntimeCellHandle,
     length: Option<RuntimeCellHandle>,
     replacement: Option<RuntimeCellHandle>,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, RuntimeCellHandle), EvalStatus> {
     let (start, end) = eval_array_splice_bounds(array, offset, length, values)?;
-    let removed = eval_array_splice_removed(array, start, end, values)?;
-    let inserted = eval_array_splice_insert_values(replacement, values)?;
-    let replacement = eval_array_splice_replacement(array, start, end, &inserted, values)?;
-    Ok((removed, replacement))
+    let removed = builders::build(array, start..end, None, 0..0, context, values)?;
+    let removed = crate::runtime_hooks::owner_frames::RuntimeOwnerSlot::new(removed);
+    crate::runtime_hooks::owner_frames::with_runtime_owners(&removed, || {
+        let result = values.array_len(array).and_then(|len|
+            builders::build(array, 0..start, replacement, end..len, context, values));
+        match result {
+            Ok(replacement) => Ok((removed.take(), replacement)),
+            Err(status) => {
+                let _ = release_expr_result(removed.take(), context, values);
+                Err(status)
+            }
+        }
+    })
 }
 
 /// Converts splice offset and length cells into bounded source positions.
@@ -165,182 +178,4 @@ pub(in crate::interpreter) fn eval_array_splice_bounds(
         _ => len,
     };
     Ok((start, end))
-}
-
-/// Builds the reindexed/string-key-preserving removed array returned by `array_splice()`.
-pub(in crate::interpreter) fn eval_array_splice_removed(
-    array: RuntimeCellHandle,
-    start: usize,
-    end: usize,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let len = end.saturating_sub(start);
-    if eval_array_range_keys_are_int(array, start, end, values)? {
-        let mut result = values.array_new(len)?;
-        let mut target = 0_i64;
-        for position in start..end {
-            let key = values.array_iter_key(array, position)?;
-            let value = values.array_get(array, key)?;
-            let target_key = values.int(target)?;
-            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-            result = values.array_set(result, target_key, value)?;
-        }
-        return Ok(result);
-    }
-
-    let mut result = values.assoc_new(len)?;
-    let mut next_int_key = 0_i64;
-    for position in start..end {
-        let source_key = values.array_iter_key(array, position)?;
-        let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
-            let key = values.int(next_int_key)?;
-            next_int_key = next_int_key
-                .checked_add(1)
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            key
-        } else {
-            source_key
-        };
-        let value = values.array_get(array, source_key)?;
-        result = values.array_set(result, target_key, value)?;
-    }
-    Ok(result)
-}
-
-/// Expands the optional `array_splice()` replacement value into inserted values.
-pub(in crate::interpreter) fn eval_array_splice_insert_values(
-    replacement: Option<RuntimeCellHandle>,
-    values: &mut impl RuntimeValueOps,
-) -> Result<Vec<RuntimeCellHandle>, EvalStatus> {
-    let Some(replacement) = replacement else {
-        return Ok(Vec::new());
-    };
-    if !matches!(
-        values.type_tag(replacement)?,
-        EVAL_TAG_ARRAY | EVAL_TAG_ASSOC
-    ) {
-        return Ok(vec![replacement]);
-    }
-
-    let len = values.array_len(replacement)?;
-    let mut inserted = Vec::with_capacity(len);
-    for position in 0..len {
-        let key = values.array_iter_key(replacement, position)?;
-        inserted.push(values.array_get(replacement, key)?);
-    }
-    Ok(inserted)
-}
-
-/// Builds the source replacement after removing the requested splice range.
-pub(in crate::interpreter) fn eval_array_splice_replacement(
-    array: RuntimeCellHandle,
-    start: usize,
-    end: usize,
-    inserted: &[RuntimeCellHandle],
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let len = values.array_len(array)?;
-    let new_len = len
-        .saturating_sub(end.saturating_sub(start))
-        .checked_add(inserted.len())
-        .ok_or(EvalStatus::RuntimeFatal)?;
-    if eval_array_splice_remaining_keys_are_int(array, start, end, len, values)? {
-        let mut result = values.array_new(new_len)?;
-        let mut target = 0_i64;
-        for position in 0..start {
-            let key = values.array_iter_key(array, position)?;
-            let value = values.array_get(array, key)?;
-            let target_key = values.int(target)?;
-            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-            result = values.array_set(result, target_key, value)?;
-        }
-        for value in inserted {
-            let target_key = values.int(target)?;
-            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-            result = values.array_set(result, target_key, *value)?;
-        }
-        for position in end..len {
-            let key = values.array_iter_key(array, position)?;
-            let value = values.array_get(array, key)?;
-            let target_key = values.int(target)?;
-            target = target.checked_add(1).ok_or(EvalStatus::RuntimeFatal)?;
-            result = values.array_set(result, target_key, value)?;
-        }
-        return Ok(result);
-    }
-
-    let mut result = values.assoc_new(new_len)?;
-    let mut next_int_key = 0_i64;
-    for position in 0..start {
-        let source_key = values.array_iter_key(array, position)?;
-        let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
-            let key = values.int(next_int_key)?;
-            next_int_key = next_int_key
-                .checked_add(1)
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            key
-        } else {
-            source_key
-        };
-        let value = values.array_get(array, source_key)?;
-        result = values.array_set(result, target_key, value)?;
-    }
-    for value in inserted {
-        let target_key = values.int(next_int_key)?;
-        next_int_key = next_int_key
-            .checked_add(1)
-            .ok_or(EvalStatus::RuntimeFatal)?;
-        result = values.array_set(result, target_key, *value)?;
-    }
-    for position in end..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let target_key = if values.type_tag(source_key)? == EVAL_TAG_INT {
-            let key = values.int(next_int_key)?;
-            next_int_key = next_int_key
-                .checked_add(1)
-                .ok_or(EvalStatus::RuntimeFatal)?;
-            key
-        } else {
-            source_key
-        };
-        let value = values.array_get(array, source_key)?;
-        result = values.array_set(result, target_key, value)?;
-    }
-    Ok(result)
-}
-
-/// Returns true when every key in one source position range is integer-shaped.
-pub(in crate::interpreter) fn eval_array_range_keys_are_int(
-    array: RuntimeCellHandle,
-    start: usize,
-    end: usize,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    for position in start..end {
-        let key = values.array_iter_key(array, position)?;
-        if values.type_tag(key)? != EVAL_TAG_INT {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
-/// Returns true when every key outside the removed splice range is integer-shaped.
-pub(in crate::interpreter) fn eval_array_splice_remaining_keys_are_int(
-    array: RuntimeCellHandle,
-    start: usize,
-    end: usize,
-    len: usize,
-    values: &mut impl RuntimeValueOps,
-) -> Result<bool, EvalStatus> {
-    for position in 0..len {
-        if (start..end).contains(&position) {
-            continue;
-        }
-        let key = values.array_iter_key(array, position)?;
-        if values.type_tag(key)? != EVAL_TAG_INT {
-            return Ok(false);
-        }
-    }
-    Ok(true)
 }

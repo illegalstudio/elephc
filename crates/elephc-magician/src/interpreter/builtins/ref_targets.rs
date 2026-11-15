@@ -13,6 +13,24 @@
 use super::super::*;
 use crate::runtime_hooks::owner_frames::{RuntimeOwnerSlot, with_runtime_owners};
 
+/// Publishes a fresh replacement and balances its lease independently from the returned value.
+pub(in crate::interpreter) fn finish_owned_direct_ref_replacement(
+    target: &EvalReferenceTarget, replacement: RuntimeCellHandle, result: RuntimeCellHandle,
+    context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let replacement = RuntimeOwnerSlot::new(replacement);
+    let result = RuntimeOwnerSlot::new(result);
+    with_runtime_owners(&(&replacement, &result), || {
+        let written = if matches!(target, EvalReferenceTarget::Variable { .. }) {
+            eval_write_direct_ref_target(target, replacement.take(), context, values, Some(ScopeCellOwnership::Owned))
+        } else {
+            eval_write_direct_ref_target(target, replacement.borrowed(), context, values, None)
+        };
+        let outcome = written.map(|()| result.take());
+        finish_eval_argument_values(outcome, [replacement.take(), result.take()], context, values)
+    })
+}
+
 /// Retires a nonescaping builtin target's owned keys and receivers after mutation or failure.
 pub(in crate::interpreter) fn with_direct_ref_target<V: RuntimeValueOps>(
     mut target: EvalReferenceTarget, context: &mut ElephcEvalContext, values: &mut V,
@@ -52,6 +70,14 @@ pub(in crate::interpreter) fn eval_write_direct_ref_target(
             } else { set_scope_cell(context, scope, name.clone(), value, ownership, values)? };
             for replaced in replaced { values.release(replaced)?; }
             Ok(())
+        }
+        _ if variable_ownership == Some(ScopeCellOwnership::Owned) => {
+            let owner = RuntimeOwnerSlot::new(value);
+            with_runtime_owners(&owner, || {
+                let written = write_back_method_ref_target(target, owner.borrowed(), context, values);
+                let released = release_expr_result(owner.take(), context, values);
+                written.and(released)
+            })
         }
         _ => write_back_method_ref_target(target, value, context, values),
     }

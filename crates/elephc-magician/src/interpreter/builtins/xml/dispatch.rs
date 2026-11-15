@@ -161,7 +161,7 @@ pub(in crate::interpreter) fn eval_builtin_xml_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     eval_xml_require_bridge(name, context, values)?;
-    with_eval_call_arguments(args, context, scope, values, |evaluated, context, _, values| {
+    with_eval_builtin_call_arguments(name, args, context, scope, values, |evaluated, context, _, values| {
         eval_xml_forward_evaluated(name, evaluated, context, values)
     })
 }

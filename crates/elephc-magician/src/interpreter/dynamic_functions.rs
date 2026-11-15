@@ -266,7 +266,7 @@ fn eval_property_call_arg_value(
     selection: Option<elephc_builtin_contract::ObjectProperty>,
     context: &mut ElephcEvalContext, values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
-    let mut persistent_native = false;
+    let mut persistent_reference = false;
     let selected = (|| {
         if let Some(operation) = selection {
             if let Some(value) = runtime_ops::simplexml_properties::invoke(values, object, &property,
@@ -277,7 +277,11 @@ fn eval_property_call_arg_value(
             if let Some(reference) = eval_native_property_reference_for_access(
                 object, &property, context, values,
             )? {
-                persistent_native = true;
+                persistent_reference = true;
+                return Ok(reference);
+            }
+            if let Some(reference) = eval_property_reference_for_access(object, &property, context, values)? {
+                persistent_reference = true;
                 return Ok(reference);
             }
         }
@@ -290,7 +294,7 @@ fn eval_property_call_arg_value(
             return Err(status);
         }
     };
-    if persistent_native {
+    if persistent_reference {
         return argument_owners::finish_argument_reference_owners(
             Ok((value, Some(EvalReferenceTarget::Cell { cell: value.borrowed() }))),
             vec![object], context, values,
@@ -379,7 +383,11 @@ fn eval_static_property_call_arg_value(
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
     let value = eval_static_property_get_result(&class_name, &property, context, values)?;
     if by_reference && values.supports_persistent_references() {
-        let reference = eval_native_static_property_reference_after_read(&class_name, &property, context, values);
+        let reference = eval_native_static_property_reference_after_read(&class_name, &property, context, values)
+            .and_then(|reference| match reference {
+                Some(reference) => Ok(Some(reference)),
+                None => eval_static_property_reference_after_read(&class_name, &property, context, values),
+            });
         match reference {
             Ok(Some(reference)) => {
                 let result = Ok((reference, Some(EvalReferenceTarget::Cell { cell: reference.borrowed() })));

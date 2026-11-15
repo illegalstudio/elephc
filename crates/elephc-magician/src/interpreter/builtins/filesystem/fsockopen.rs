@@ -55,7 +55,7 @@ pub(in crate::interpreter) fn eval_builtin_fsockopen_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |evaluated_args, context, _, values| {
+    with_eval_builtin_call_arguments("fsockopen", args, context, scope, values, |evaluated_args, context, _, values| {
         let (bound, _) = bind_evaluated_ref_builtin_args(
             &["hostname", "port", "error_code", "error_message", "timeout"],
             &evaluated_args,

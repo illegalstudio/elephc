@@ -50,9 +50,13 @@ impl CallArgumentModes {
     /// Captures shared builtin reference flags, including named parameters.
     pub(in crate::interpreter) fn for_builtin(name: &str) -> Self {
         let Some(contract) = elephc_builtin_contract::lookup(name) else { return Self::default(); };
-        Self { names: contract.params.iter().map(|parameter| parameter.name.to_string()).collect(),
-            references: contract.params.iter().map(|parameter| parameter.by_ref).collect(), variadic: None,
-            ..Self::default() }
+        let signature = elephc_builtin_contract::eval_signature(contract);
+        let mut names = signature.params.iter().map(|parameter| parameter.name.to_string()).collect::<Vec<_>>();
+        let mut references = signature.params.iter().map(|parameter| parameter.by_ref).collect::<Vec<_>>();
+        let variadic = signature.variadic.map(|name| {
+            let index = names.len(); names.push(name.to_string()); references.push(contract.variadic_by_ref); index
+        });
+        Self { names, references, variadic, ..Self::default() }
     }
 
     /// Chooses the declared parameter or the source variadic without rebinding values.

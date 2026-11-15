@@ -22,6 +22,7 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    validate_builtin_call_arguments(name, evaluated_args, context, values)?;
     let result = match name {
         "settype" => eval_dynamic_settype_call(evaluated_args, context, values)?,
         "array_walk" => eval_dynamic_array_walk_call(evaluated_args, context, values)?,
@@ -187,8 +188,7 @@ fn eval_dynamic_array_pop_shift_call(
         return Ok(None);
     };
     let (result, replacement) = eval_array_pop_shift_replacement(name, array.value, values)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    finish_owned_direct_ref_replacement(target, replacement, result, context, values).map(Some)
 }
 
 /// Evaluates dynamic `array_push()` or `array_unshift()` calls against a writable array.
@@ -211,8 +211,7 @@ fn eval_dynamic_array_push_unshift_call(
     let replacement =
         eval_array_push_unshift_replacement(name, array.value, &inserted_values, values)?;
     let result = eval_array_push_unshift_count_result(array.value, inserted_values.len(), values)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    finish_owned_direct_ref_replacement(target, replacement, result, context, values).map(Some)
 }
 
 /// Evaluates a dynamic `array_splice()` call against a writable array.
@@ -238,10 +237,10 @@ fn eval_dynamic_array_splice_call(
         offset.value,
         length,
         replacement_arg,
+        context,
         values,
     )?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(removed))
+    finish_owned_direct_ref_replacement(target, replacement, removed, context, values).map(Some)
 }
 
 /// Evaluates a dynamic internal array pointer call against a writable array.
@@ -282,10 +281,9 @@ fn eval_dynamic_array_sort_call(
     let Some(target) = array.ref_target.as_ref() else {
         return Ok(None);
     };
-    let replacement = eval_array_sort_replacement(name, array.value, flags, values)?;
+    let replacement = eval_array_sort_replacement(name, array.value, flags, context, values)?;
     let result = values.bool_value(true)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    finish_owned_direct_ref_replacement(target, replacement, result, context, values).map(Some)
 }
 
 /// Evaluates a dynamic user-comparator sort call against a writable array.
@@ -305,8 +303,7 @@ fn eval_dynamic_user_sort_call(
     let replacement =
         eval_user_sort_replacement(name, array.value, callback.value, context, values)?;
     let result = values.bool_value(true)?;
-    eval_write_direct_ref_target(target, replacement, context, values, None)?;
-    Ok(Some(result))
+    finish_owned_direct_ref_replacement(target, replacement, result, context, values).map(Some)
 }
 
 /// Evaluates a dynamic `preg_match()` call when `$matches` is a writable lvalue.

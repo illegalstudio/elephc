@@ -108,7 +108,10 @@ fn eval_source_call_argument(
     context: &mut ElephcEvalContext, scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, Option<EvalReferenceTarget>), EvalStatus> {
-    if modes.persistent_native_reference(argument.name(), position) {
+    if modes.persistent_native_reference(argument.name(), position)
+        || (context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions)
+            && modes.by_reference(argument.name(), position))
+    {
         if let EvalExpr::LoadVar(name) = argument.value() {
             if let Some(reference) = eval_persistent_variable_reference(name, context, scope, values)? {
                 return Ok((reference.borrowed(), Some(EvalReferenceTarget::Cell { cell: reference.borrowed() })));

@@ -26,7 +26,7 @@ pub(in crate::interpreter) fn eval_builtin_call(
     if value_only || eval_builtin_uses_owned_arguments(name) {
         return eval_owned_builtin_call(name, args, false, context, scope, values);
     }
-    with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+    with_eval_builtin_call_arguments(name, args, context, scope, values, |arguments, context, scope, values| {
         eval_bound_builtin_call_from_scope(name, arguments, Some(scope), context, values)
     })
 }

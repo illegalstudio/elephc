@@ -39,6 +39,7 @@ pub(in crate::interpreter) use dynamic_mutation::*;
 pub(in crate::interpreter) use names::*;
 pub(in crate::interpreter) use owned_arguments::*;
 pub(in crate::interpreter) use signature::*;
+pub(in crate::interpreter) use value_contracts::{validate_builtin_call_arguments, with_eval_builtin_call_arguments};
 
 /// Lazy registry of builtins migrated to declarative eval specs.
 struct DeclaredBuiltinRegistry {

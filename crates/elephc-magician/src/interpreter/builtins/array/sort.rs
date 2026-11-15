@@ -9,6 +9,8 @@
 
 use super::super::super::*;
 
+mod owners;
+
 eval_builtin! {
     contract: "sort",
     area: Array,
@@ -58,39 +60,42 @@ pub(in crate::interpreter) fn eval_array_sort_replacement(
     name: &str,
     array: RuntimeCellHandle,
     flags: i64,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut entries = match name {
-        "krsort" | "ksort" => eval_array_key_sort_entries(array, values)?,
-        "natcasesort" => eval_array_natural_sort_entries(array, true, values)?,
-        "natsort" => eval_array_natural_sort_entries(array, false, values)?,
-        "arsort" | "asort" | "rsort" | "sort" => eval_array_value_sort_entries(array, values)?,
-        "shuffle" => return eval_array_shuffle_replacement(array, values),
+    let entries = match name {
+        "krsort" | "ksort" => eval_array_key_sort_entries(array, context, values)?,
+        "natcasesort" => eval_array_natural_sort_entries(array, true, context, values)?,
+        "natsort" => eval_array_natural_sort_entries(array, false, context, values)?,
+        "arsort" | "asort" | "rsort" | "sort" => eval_array_value_sort_entries(array, context, values)?,
+        "shuffle" => return eval_array_shuffle_replacement(array, context, values),
         _ => return Err(EvalStatus::UnsupportedConstruct),
     };
-    if matches!(name, "ksort" | "krsort") {
-        let mode = super::key_sort_flags::eval_key_sort_mode(flags);
-        let descending = name == "krsort";
-        if mode == super::key_sort_flags::EvalKeySortMode::Regular {
-            eval_array_regular_key_sort_entries(&mut entries, descending, values)?;
+    owners::with_entries(entries, context, values, |entries, context, values| {
+        if matches!(name, "ksort" | "krsort") {
+            let mode = super::key_sort_flags::eval_key_sort_mode(flags);
+            let descending = name == "krsort";
+            if mode == super::key_sort_flags::EvalKeySortMode::Regular {
+                eval_array_regular_key_sort_entries(entries, descending, values)?;
+            } else {
+                eval_array_flagged_key_sort_entries(entries, mode, descending, values)?;
+            }
         } else {
-            eval_array_flagged_key_sort_entries(&mut entries, mode, descending, values)?;
+            eval_array_value_sort_entries_stable(
+                entries,
+                matches!(name, "arsort" | "rsort"),
+                values,
+            )?;
         }
-    } else {
-        eval_array_value_sort_entries_stable(
-            &mut entries,
-            matches!(name, "arsort" | "rsort"),
-            values,
-        )?;
-    }
 
-    if matches!(
-        name,
-        "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort"
-    ) {
-        return eval_array_preserve_key_sort_result(entries, values);
-    }
-    eval_array_reindex_sort_result(entries, values)
+        if matches!(
+            name,
+            "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort"
+        ) {
+            return eval_array_preserve_key_sort_result(entries, context, values);
+        }
+        eval_array_reindex_sort_result(entries, context, values)
+    })
 }
 
 /// Stably orders eval array keys through the runtime's native key comparator.
@@ -152,89 +157,53 @@ pub(in crate::interpreter) fn eval_array_flagged_key_sort_entries(
 
 /// Builds a shuffled, reindexed replacement array for `shuffle()`.
 pub(in crate::interpreter) fn eval_array_shuffle_replacement(
-    array: RuntimeCellHandle,
+    array: RuntimeCellHandle, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut entries = Vec::with_capacity(len);
-    for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        entries.push(values.array_get(array, source_key)?);
-    }
-
-    for index in (1..entries.len()).rev() {
-        let swap_with = (eval_random_u128() % ((index + 1) as u128)) as usize;
-        entries.swap(index, swap_with);
-    }
-
-    let mut result = values.array_new(entries.len())?;
-    for (index, value) in entries.into_iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        result = values.array_set(result, key, value)?;
-    }
-    Ok(result)
+    let entries = eval_array_key_sort_entries(array, context, values)?;
+    owners::with_entries(entries, context, values, |entries, context, values| {
+        for index in (1..entries.len()).rev() {
+            let swap_with = (eval_random_u128() % ((index + 1) as u128)) as usize;
+            entries.swap(index, swap_with);
+        }
+        owners::build_result(entries, false, context, values)
+    })
 }
 
-/// Builds an indexed result for `sort()` / `rsort()` after value ordering.
+/// Builds an indexed result while the caller retains each entry's read lease.
 pub(in crate::interpreter) fn eval_array_reindex_sort_result(
-    entries: Vec<EvalArraySortEntry>,
+    entries: &[EvalArraySortEntry], context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.array_new(entries.len())?;
-    for (index, entry) in entries.into_iter().enumerate() {
-        let key = values.int(i64::try_from(index).map_err(|_| EvalStatus::RuntimeFatal)?)?;
-        result = values.array_set(result, key, entry.value)?;
-    }
-    Ok(result)
+    owners::build_result(entries, false, context, values)
 }
 
-/// Builds a key-preserving associative result after value or key ordering.
+/// Builds a key-preserving result while the caller retains each entry's read lease.
 pub(in crate::interpreter) fn eval_array_preserve_key_sort_result(
-    entries: Vec<EvalArraySortEntry>,
+    entries: &[EvalArraySortEntry], context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let mut result = values.assoc_new(entries.len())?;
-    for entry in entries {
-        result = values.array_set(result, entry.source_key, entry.value)?;
-    }
-    Ok(result)
+    owners::build_result(entries, true, context, values)
 }
 
 /// Collects values and comparable value-sort keys from one eval array.
 pub(in crate::interpreter) fn eval_array_value_sort_entries(
-    array: RuntimeCellHandle,
+    array: RuntimeCellHandle, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalArraySortEntry>, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut entries = Vec::with_capacity(len);
     let mut expects_numeric = None;
-
-    for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, source_key)?;
-        let sort_key = eval_array_sort_key(value, values)?;
-        let is_numeric = match sort_key {
-            EvalArraySortKey::Numeric(_) => Some(true),
-            // Internal value objects participate through their operator adapter, so they
-            // must not force the scalar numeric/string homogeneity guard.
-            EvalArraySortKey::Object => None,
-            _ => Some(false),
-        };
-        if let Some(is_numeric) = is_numeric {
+    owners::collect(array, context, values, |_, value, values| {
+        let key = eval_array_sort_key(value, values)?;
+        let numeric = match key { EvalArraySortKey::Numeric(_) => Some(true), EvalArraySortKey::Object => None, _ => Some(false) };
+        if let Some(numeric) = numeric {
             match expects_numeric {
-                Some(expected) if expected != is_numeric => return Err(EvalStatus::RuntimeFatal),
-                Some(_) => {}
-                None => expects_numeric = Some(is_numeric),
+                Some(expected) if expected != numeric => return Err(EvalStatus::RuntimeFatal),
+                Some(_) => {},
+                None => expects_numeric = Some(numeric),
             }
         }
-        entries.push(EvalArraySortEntry {
-            sort_key,
-            source_key,
-            value,
-        });
-    }
-
-    Ok(entries)
+        Ok(key)
+    })
 }
 
 /// Stably orders value-sorted entries, dispatching internal objects through their adapter.
@@ -283,54 +252,28 @@ fn eval_array_value_sort_cmp(
 
 /// Collects values and natural-sort keys from one eval array.
 pub(in crate::interpreter) fn eval_array_natural_sort_entries(
-    array: RuntimeCellHandle,
-    case_insensitive: bool,
+    array: RuntimeCellHandle, case_insensitive: bool, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalArraySortEntry>, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut entries = Vec::with_capacity(len);
     let mut expects_numeric = None;
-
-    for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, source_key)?;
-        let sort_key = eval_array_natural_sort_key(value, case_insensitive, values)?;
-        let is_numeric = matches!(sort_key, EvalArraySortKey::Numeric(_));
+    owners::collect(array, context, values, |_, value, values| {
+        let key = eval_array_natural_sort_key(value, case_insensitive, values)?;
+        let numeric = matches!(key, EvalArraySortKey::Numeric(_));
         match expects_numeric {
-            Some(expected) if expected != is_numeric => return Err(EvalStatus::RuntimeFatal),
-            Some(_) => {}
-            None => expects_numeric = Some(is_numeric),
+            Some(expected) if expected != numeric => return Err(EvalStatus::RuntimeFatal),
+            Some(_) => {},
+            None => expects_numeric = Some(numeric),
         }
-        entries.push(EvalArraySortEntry {
-            sort_key,
-            source_key,
-            value,
-        });
-    }
-
-    Ok(entries)
+        Ok(key)
+    })
 }
 
 /// Collects values and comparable key-sort keys from one eval array.
 pub(in crate::interpreter) fn eval_array_key_sort_entries(
-    array: RuntimeCellHandle,
+    array: RuntimeCellHandle, context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<EvalArraySortEntry>, EvalStatus> {
-    let len = values.array_len(array)?;
-    let mut entries = Vec::with_capacity(len);
-
-    for position in 0..len {
-        let source_key = values.array_iter_key(array, position)?;
-        let value = values.array_get(array, source_key)?;
-        let sort_key = eval_array_sort_key(source_key, values)?;
-        entries.push(EvalArraySortEntry {
-            sort_key,
-            source_key,
-            value,
-        });
-    }
-
-    Ok(entries)
+    owners::collect(array, context, values, |key, _, values| eval_array_sort_key(key, values))
 }
 
 /// Converts one scalar eval value into a natural-sort key.
@@ -490,7 +433,7 @@ pub(in crate::interpreter) fn eval_array_sort_declared_call(
     let (array, target, flags) =
         eval_array_sort_direct_args(name, args, context, scope, values)?;
 
-    let replacement = eval_array_sort_replacement(name, array, flags, values)?;
+    let replacement = eval_array_sort_replacement(name, array, flags, context, values)?;
     let result = values.bool_value(true)?;
     eval_write_direct_ref_target(&target, replacement, context, values, None)?;
     Ok(result)

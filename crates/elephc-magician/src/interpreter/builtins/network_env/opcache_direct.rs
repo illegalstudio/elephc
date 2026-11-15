@@ -74,7 +74,7 @@ pub(in crate::interpreter) fn eval_opcache_direct_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |arguments, context, scope, values| {
+    with_eval_builtin_call_arguments(name, args, context, scope, values, |arguments, context, scope, values| {
         eval_opcache_call_with_evaluated_args(
             name, parameters, &arguments, Some(scope), context, values,
         )

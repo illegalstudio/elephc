@@ -60,6 +60,24 @@ pub(in crate::interpreter) fn eval_builtin_flock(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    if context.semantic_profile().contains(elephc_semantics::StrictFeature::Coercions) {
+        return with_eval_builtin_call_arguments("flock", args, context, scope, values,
+            |arguments, context, _, values| {
+                let (bound, _) = bind_evaluated_ref_builtin_args(&["stream", "operation", "would_block"], &arguments, false)?;
+                let stream = required_evaluated_ref_arg(&bound, 0)?;
+                let operation = required_evaluated_ref_arg(&bound, 1)?;
+                let (success, blocked) = eval_flock_result(stream.value, operation.value, context, values)?;
+                if let Some(output) = optional_evaluated_ref_arg(&bound, 2) {
+                    if let Some(target) = &output.ref_target {
+                        let value = values.bool_value(blocked)?;
+                        eval_write_direct_ref_target(target, value, context, values, Some(ScopeCellOwnership::Owned))?;
+                    } else {
+                        values.warning("flock(): Argument #3 ($would_block) must be passed by reference, value given")?;
+                    }
+                }
+                values.bool_value(success)
+            });
+    }
     let (stream, operation, would_block_target) =
         eval_flock_direct_args(args, context, scope, values)?;
     let (success, would_block) = eval_flock_result(stream, operation, context, values)?;

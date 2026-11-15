@@ -42,7 +42,7 @@ pub(in crate::interpreter) fn eval_builtin_pcntl_call(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    with_eval_call_arguments(args, context, scope, values, |evaluated, context, _, values| {
+    with_eval_builtin_call_arguments(name, args, context, scope, values, |evaluated, context, _, values| {
         let bound = eval_pcntl_bind_args(name, &evaluated)?;
         eval_pcntl_bound_result(name, &bound, PcntlCallMode::Direct, context, values)
     })
