@@ -5,6 +5,8 @@
 //! - The AST-to-EIR unit test module.
 //!
 //! Key details:
+//! - Fixtures declare `Closure` parameters, which keep the descriptor ABI these tests pin; a
+//!   declared `callable` keeps the PHP value it receives instead (`PhpType::DeclaredCallable`).
 //! - By-value owners are visible to unwinding before later arguments execute.
 //! - By-reference places are never replaced by detached evaluation temporaries.
 
@@ -472,7 +474,7 @@ fn by_reference_argument_before_spread_is_not_detached_on_all_targets() {
 
     let source = r#"<?php
 function spreadAfterRef(): int { return 1; }
-function exerciseByRefSpread(callable $callback, string &$text): void {
+function exerciseByRefSpread(Closure $callback, string &$text): void {
     $callback($text, ...[spreadAfterRef()]);
 }
 "#;
@@ -597,7 +599,7 @@ class MixedArgumentSource {
     public mixed $text = "owned";
 }
 function takeNamedString(int $later, string $text): void { echo $later; }
-function takeNamedCallable(int $later, callable $callback): void { echo $later; }
+function takeNamedCallable(int $later, Closure $callback): void { echo $later; }
 function exerciseMixedNamed(MixedArgumentSource $source, int $choice, string $code): void {
     $callback = $choice > 0 ? evaluationCallbackFirst(...) : evaluationCallbackSecond(...);
     eval($code);
@@ -857,7 +859,7 @@ fn descriptor_argument_containers_cover_throwing_and_growing_sources_on_all_targ
     let source = r#"<?php
 function descriptorArgument(): mixed { return "owned"; }
 function descriptorSpread() { return [1, 2, 3, 4]; }
-function exerciseDescriptorOwners(callable $callback): void {
+function exerciseDescriptorOwners(Closure $callback): void {
     $callback(descriptorArgument());
     $callback(descriptorArgument(), ...descriptorSpread());
 }
@@ -975,7 +977,7 @@ fn descriptor_sole_boxed_spread_normalizes_one_container_on_all_targets() {
 
     let source = r#"<?php
 function boxedDescriptorArguments(): array { return ["right" => 2, "left" => 1]; }
-function invokeBoxedDescriptorSpread(callable $callback): mixed {
+function invokeBoxedDescriptorSpread(Closure $callback): mixed {
     return $callback(...boxedDescriptorArguments());
 }
 "#;

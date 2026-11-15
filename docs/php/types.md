@@ -458,19 +458,23 @@ echo coerceHere(true);      // compile error — this call lives in a strict fil
 
 ### Callable strings
 
-PHP accepts a function-name string wherever a `callable` is declared and resolves it when the call runs. elephc resolves callables statically, so a callable string binds when it is a compile-time constant:
+A declared `callable` is a constraint, as in PHP: the parameter (or a `callable` return) keeps the value the caller passed, whether it is a function name, a `"Class::method"` string, a callable array, an invokable object or a Closure. `gettype()`, `var_dump()`, `is_string()` and `ctype_*()` see that value, and invoking it resolves the target when the call runs:
 
 ```php
 function apply(callable $f, string $s) { return $f($s); }
 
-echo apply("strtoupper", "abc");        // ABC   — builtin name
-echo apply("my_helper", "abc");         //       — user function name
-echo apply("Formatter::wrap", "abc");   //       — "Class::method"
+echo apply("strtoupper", "abc");            // ABC
+echo apply("Formatter::wrap", "abc");       // "Class::method"
+echo apply([new Formatter(), "pad"], "abc"); // callable array
+$name = $argc > 1 ? "strtolower" : "strtoupper";
+echo apply($name, "abc");                   // runtime-selected name
 ```
 
-Names are matched case-insensitively and a leading `\` is allowed, matching PHP. A callable string that is only known at run time is rejected with `a callable string must be a compile-time constant here`; pass a first-class callable (`strtoupper(...)`), a closure, or a literal name instead. A constant string that names nothing is rejected too, where PHP throws `TypeError` when the call runs.
+Names are matched case-insensitively and a leading `\` is allowed, matching PHP. A literal name that names nothing is a compile error. A value that is not callable at run time raises PHP's `TypeError` (`apply(): Argument #1 ($f) must be of type callable, array given`) when it reaches the parameter, without PHP's trailing `called in FILE on line N`.
 
-Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are still rejected at a `callable` parameter, and because elephc maps the `Closure` type hint onto the same internal callable type, a `Closure` parameter also accepts a callable string where PHP requires an actual `Closure`.
+A runtime-selected name reaches user functions and the builtins with a runtime wrapper; a builtin named only at run time without one stops with `Argument must be a valid callback`. A name written as a literal at a `callable` argument always works.
+
+Because elephc maps the `Closure` type hint onto its callable descriptor type, a `Closure` parameter still accepts a callable string or array where PHP requires an actual `Closure`.
 
 ### Known incompatibilities with PHP
 

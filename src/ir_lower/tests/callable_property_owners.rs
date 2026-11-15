@@ -5,6 +5,8 @@
 //! - The AST-to-EIR test module.
 //!
 //! Key details:
+//! - Fixtures declare `Closure` parameters, which keep the descriptor ABI these tests pin; a
+//!   declared `callable` keeps the PHP value it receives instead (`PhpType::DeclaredCallable`).
 //! - Temporary descriptors need explicit retirement; borrowed parameters remain owned by callers.
 
 use crate::codegen::platform::Target;
@@ -21,7 +23,7 @@ class PropertyCallableOwner {
     public function install(int $number): void {
         $this->callback = static fn(): int => $number;
     }
-    public function borrow(callable $callback): void {
+    public function borrow(Closure $callback): void {
         $this->callback = $callback;
     }
 }

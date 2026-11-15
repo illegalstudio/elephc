@@ -5,6 +5,8 @@
 //! - The AST-to-EIR unit test module.
 //!
 //! Key details:
+//! - Fixtures declare `Closure` parameters, which keep the descriptor ABI these tests pin; a
+//!   declared `callable` keeps the PHP value it receives instead (`PhpType::DeclaredCallable`).
 //! - Backend-created boxes are not EIR local owners and need their own cleanup records.
 //! - String loads from widened slots retire copies without consuming concrete local borrows.
 
@@ -134,7 +136,7 @@ fn merged_callable_parameters_have_owned_descriptor_storage(target: &str) {
     let source = r#"<?php
 function callableFirst(): int { return 1; }
 function callableSecond(): int { return 2; }
-function consumeMergedCallback(callable $callback, int $suffix): int { return $callback() + $suffix; }
+function consumeMergedCallback(Closure $callback, int $suffix): int { return $callback() + $suffix; }
 function invokeMergedCallback(int $choice, string $code): void {
     $callback = $choice > 0 ? callableFirst(...) : callableSecond(...);
     eval($code);
@@ -451,7 +453,7 @@ fn the_normalizer_dispatch_branches_survive_any_distance() {
     let source = r#"<?php
 class FarBranchInvokable { public function __invoke(): void { echo "called"; } }
 class FarBranchTarget { public function run(): void { echo "ran"; } }
-function farBranchConsume(callable $callback): void { $callback(); }
+function farBranchConsume(Closure $callback): void { $callback(); }
 function farBranchDispatch(mixed $target, mixed $callback): void { $target($callback); }
 farBranchDispatch(farBranchConsume(...), new FarBranchInvokable());
 farBranchDispatch(farBranchConsume(...), [new FarBranchTarget(), 'run']);
@@ -503,7 +505,7 @@ farBranchDispatch(farBranchConsume(...), [new FarBranchTarget(), 'run']);
 fn callable_argument_normalizer_is_emitted_once_on_all_targets() {
     let source = r#"<?php
 class CallableArgumentObject { public function __invoke(): void { echo "called"; } }
-function consumeCallableArgument(callable $callback): void { $callback(); }
+function consumeCallableArgument(Closure $callback): void { $callback(); }
 function dispatchCallableArgument(mixed $target, mixed $callback): void {
     $target($callback);
     $target(callback: $callback);
@@ -563,16 +565,16 @@ dispatchCallableArgument(consumeCallableArgument(...), new CallableArgumentObjec
 fn user_callable_argument_owners_are_unwind_visible_on_all_targets() {
     use crate::ir::Op;
     let source = r#"<?php
-function runOwnedCallback(callable $callback): void { $callback(); }
-function runStringCallback(callable $callback): string { return $callback(); }
-function preserveCallback(callable $callback): callable { return $callback; }
+function runOwnedCallback(Closure $callback): void { $callback(); }
+function runStringCallback(Closure $callback): string { return $callback(); }
+function preserveCallback(Closure $callback): Closure { return $callback; }
 function callbackOwnerCaller(int $seed): void {
     runOwnedCallback(function() use ($seed): void { echo $seed; });
 }
 function callbackStringCaller(int $seed): string {
     return runStringCallback(function() use ($seed): string { return (string) $seed; });
 }
-function callbackAliasCaller(int $seed): callable {
+function callbackAliasCaller(int $seed): Closure {
     return preserveCallback(function() use ($seed): void { echo $seed; });
 }
 callbackOwnerCaller($argc);
@@ -629,14 +631,14 @@ $callback();
 fn owned_shadow_arguments_have_unwind_roots_with_unknown_results_on_all_targets() {
     use crate::ir::{Op, ValueDef};
     let source = r#"<?php
-function invokeShadowTarget(callable $target, array $arguments): mixed {
+function invokeShadowTarget(Closure $target, array $arguments): mixed {
     return call_user_func_array($target, $arguments);
 }
-function shadowArgumentCaller(callable $target): mixed {
+function shadowArgumentCaller(Closure $target): mixed {
     return invokeShadowTarget($target, [["value" => "kept"]]);
 }
-function retainLaterCallback(array $items, callable $callback): callable { return $callback; }
-function laterCallbackCaller(int $seed): callable {
+function retainLaterCallback(array $items, Closure $callback): Closure { return $callback; }
+function laterCallbackCaller(int $seed): Closure {
     return retainLaterCallback([$seed], function() use ($seed): void { echo $seed; });
 }
 function countShadowArgument(array $value): int { return count($value); }

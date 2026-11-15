@@ -659,7 +659,7 @@ fn type_tag(ty: &PhpType) -> u64 {
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
-        PhpType::Mixed | PhpType::Union(_) => 7,
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) => 7,
         PhpType::Void => 8,
         PhpType::Resource(_) => 9,
         PhpType::Callable => 10,

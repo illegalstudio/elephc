@@ -88,7 +88,10 @@ fn spl_callback_filter_iterator_methods() -> Vec<ClassMethod> {
             "__construct",
             vec![
                 param("iterator", named_type("Iterator")),
-                param("callback", named_type("callable")),
+                // The callback is stored as a descriptor (`$callback` is patched to
+                // `Callable`), so the constructor binds it through the descriptor-typed
+                // `Closure` slot rather than a value-preserving declared `callable`.
+                param("callback", named_type("Closure")),
             ],
             Some(TypeExpr::Void),
             callback_filter_construct_body(),

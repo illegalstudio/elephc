@@ -80,6 +80,7 @@ pub(super) fn populate_metadata(module: &mut Module, program: &Program, check_re
     module.packed_layouts.names = sorted_keys(&check_result.packed_classes);
     module.extern_globals = check_result.extern_globals.clone();
     module.callable_param_sigs = check_result.callable_param_sigs.clone();
+    module.declared_callable_names = check_result.declared_callable_names.clone();
     module.extern_decls = check_result
         .extern_functions
         .values()

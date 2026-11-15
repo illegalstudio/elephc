@@ -8,18 +8,26 @@
 //! - Original normalized argument cells do not own their newly created adapter descriptors.
 //! - A private head slot and native cleanup record survive partial staging and suspended calls.
 //! - Nodes detach before protected descriptor retirement; no PHP throw crosses the Rust caller.
+//! - A node is `[next, owner, kind]`: kind 0 owns a callable descriptor, kind 1 owns the boxed
+//!   `Mixed` cell a declared-`callable` parameter receives (see `keep_mixed`).
 
 use super::*;
 use crate::codegen_support::{platform::Arch, try_handlers::TRY_HANDLER_SLOT_SIZE};
 
 const KEEP: &str = "__elephc_eval_callable_argument_keep";
+const KEEP_MIXED: &str = "__elephc_eval_callable_argument_keep_mixed";
+/// Owner node layout: next node, owned pointer, owner kind.
+const NODE_BYTES: i64 = 24;
+const KIND_DESCRIPTOR: i64 = 0;
+const KIND_MIXED: i64 = 1;
 const RELEASE: &str = "__elephc_eval_callable_arguments_release";
 const VISITOR: &str = "__elephc_eval_callable_argument_frame_owners";
 const ARM_HEAD: usize = 24;
 
 /// Emits shared C-ABI adoption and bounded drain entries independently of candidate tables.
 pub(super) fn emit(emitter: &mut Emitter) {
-    emit_keep(emitter);
+    emit_keep(emitter, KEEP, KIND_DESCRIPTOR, "__elephc_eval_callable_argument_keep_done");
+    emit_keep(emitter, KEEP_MIXED, KIND_MIXED, "__elephc_eval_callable_argument_keep_mixed_done");
     emit_release(emitter);
     emit_visitor(emitter);
 }
@@ -53,20 +61,20 @@ fn emit_visitor(emitter: &mut Emitter) {
     abi::emit_return(emitter);
 }
 
-/// Adopts a managed descriptor in a private native node, returning the same borrowed descriptor.
-fn emit_keep(emitter: &mut Emitter) {
+/// Adopts a managed owner of `kind` in a private native node, returning the same borrowed
+/// pointer.
+fn emit_keep(emitter: &mut Emitter, label: &str, kind: i64, done: &str) {
     let result = abi::int_result_reg(emitter);
     let node = abi::secondary_scratch_reg(emitter);
     let head = abi::tertiary_scratch_reg(emitter);
-    let done = "__elephc_eval_callable_argument_keep_done";
-    emitter.label_global(KEEP);
+    emitter.label_global(label);
     abi::emit_frame_prologue(emitter, 48);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
     abi::emit_reg_move(emitter, result, abi::int_arg_reg_name(emitter.target, 1));
     abi::emit_call_label(emitter, "__rt_gc_candidate_live");
     abi::emit_branch_if_int_result_zero(emitter, done);
-    abi::emit_load_int_immediate(emitter, result, 16);
+    abi::emit_load_int_immediate(emitter, result, NODE_BYTES);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     abi::emit_reg_move(emitter, node, result);
     abi::load_at_offset(emitter, head, 8);
@@ -74,6 +82,8 @@ fn emit_keep(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, result, node, 0);
     abi::load_at_offset(emitter, result, 16);
     abi::emit_store_to_address(emitter, result, node, 8);
+    abi::emit_load_int_immediate(emitter, result, kind);
+    abi::emit_store_to_address(emitter, result, node, 16);
     abi::emit_store_to_address(emitter, node, head, 0);
     emitter.label(done);
     abi::load_at_offset(emitter, result, 16);
@@ -88,6 +98,8 @@ fn emit_release(emitter: &mut Emitter) {
     let next = abi::tertiary_scratch_reg(emitter);
     let again = "__elephc_eval_callable_arguments_release_next";
     let done = "__elephc_eval_callable_arguments_release_done";
+    let mixed = "__elephc_eval_callable_arguments_release_mixed";
+    let selected = "__elephc_eval_callable_arguments_release_selected";
     emitter.label_global(RELEASE);
     abi::emit_frame_prologue(emitter, 48);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 8);
@@ -100,8 +112,16 @@ fn emit_release(emitter: &mut Emitter) {
     abi::emit_store_to_address(emitter, next, head, 0);
     abi::emit_load_from_address(emitter, next, result, 8);
     abi::store_at_offset(emitter, next, 16);
+    abi::emit_load_from_address(emitter, next, result, 16);
+    abi::store_at_offset(emitter, next, 32);
     abi::emit_call_label(emitter, "__rt_heap_free");
+    abi::load_at_offset(emitter, result, 32);
+    abi::emit_branch_if_int_result_nonzero(emitter, mixed);
     abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), "__rt_callable_descriptor_release");
+    abi::emit_jump(emitter, selected);
+    emitter.label(mixed);
+    abi::emit_symbol_address(emitter, abi::int_arg_reg_name(emitter.target, 0), "__rt_decref_mixed");
+    emitter.label(selected);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), 16);
     abi::emit_call_label(emitter, "__rt_cleanup_preserve_exception");
     abi::load_at_offset(emitter, next, 24);
@@ -146,6 +166,17 @@ pub(in crate::codegen) fn keep(emitter: &mut Emitter, x86_context_offset: usize)
     abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), abi::int_result_reg(emitter));
     head_address(emitter, abi::int_arg_reg_name(emitter.target, 0), x86_context_offset);
     abi::emit_call_label(emitter, KEEP);
+}
+
+/// Transfers a freshly boxed `Mixed` cell into the current bridge's owner collection.
+///
+/// A declared-`callable` parameter stores a boxed value, so the descriptor a cast selected for
+/// an eval callback is boxed and that cell must live until the native call returns, unwinds
+/// or its suspended frame retires, exactly like the descriptor itself.
+pub(in crate::codegen) fn keep_mixed(emitter: &mut Emitter, x86_context_offset: usize) {
+    abi::emit_reg_move(emitter, abi::int_arg_reg_name(emitter.target, 1), abi::int_result_reg(emitter));
+    head_address(emitter, abi::int_arg_reg_name(emitter.target, 0), x86_context_offset);
+    abi::emit_call_label(emitter, KEEP_MIXED);
 }
 
 /// Completes normal, failed-preparation and caught-throw exits before returning through Rust.

@@ -64,6 +64,7 @@ impl Checker {
             callable_sigs: HashMap::new(),
             callable_param_names: HashSet::new(),
             callable_param_sigs: HashMap::new(),
+            declared_callable_names: std::collections::BTreeSet::new(),
             strict_types: false,
             internal_callback_binding: false,
             param_specialization_seen: HashSet::new(),

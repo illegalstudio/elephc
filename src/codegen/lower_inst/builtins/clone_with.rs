@@ -532,7 +532,7 @@ fn static_type_name(ty: &PhpType) -> &str {
         PhpType::Resource(_) | PhpType::Buffer(_) | PhpType::Pointer(_) => "resource",
         PhpType::Callable => "Closure",
         PhpType::Iterable => "object",
-        PhpType::Mixed | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::Narrow(_) => "mixed",
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) | PhpType::TaggedScalar | PhpType::Narrow(_) => "mixed",
     }
 }
 

@@ -20,7 +20,7 @@ pub(crate) fn php_type_name(php_type: &PhpType) -> String {
         PhpType::False => "false".to_string(),
         PhpType::Void | PhpType::Never => "null".to_string(),
         PhpType::Mixed => "mixed".to_string(),
-        PhpType::Callable => "callable".to_string(),
+        PhpType::Callable | PhpType::DeclaredCallable => "callable".to_string(),
         PhpType::Array(_) | PhpType::AssocArray { .. } => "array".to_string(),
         PhpType::Iterable => "Traversable|array".to_string(),
         PhpType::Object(class_name) if class_name.is_empty() => "object".to_string(),

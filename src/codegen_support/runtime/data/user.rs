@@ -1446,7 +1446,7 @@ pub(crate) fn emit_runtime_data_user(
                     PhpType::Array(_) => 4,
                     PhpType::AssocArray { .. } => 5,
                     PhpType::Object(_) => 6,
-                    PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
+                    PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) | PhpType::Iterable => 7,
                     PhpType::Resource(_) => 9,
                     PhpType::TaggedScalar => {
                         unreachable!("nullable scalar properties use the boxed Mixed representation")
@@ -1506,7 +1506,7 @@ pub(crate) fn emit_runtime_data_user(
                         PhpType::Array(_) => 4,
                         PhpType::AssocArray { .. } => 5,
                         PhpType::Object(_) => 6,
-                        PhpType::Mixed => 7,
+                        PhpType::Mixed | PhpType::DeclaredCallable => 7,
                         PhpType::Union(_) => 7,
                         PhpType::Iterable => 7,
                         PhpType::Resource(_) => 9,

@@ -45,7 +45,7 @@ pub(crate) fn runtime_value_tag(ty: &PhpType) -> u8 {
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
-        PhpType::Mixed => 7,
+        PhpType::Mixed | PhpType::DeclaredCallable => 7,
         PhpType::Union(_) => 7,
         PhpType::Iterable => 7,
         PhpType::Void => 8,
@@ -118,7 +118,7 @@ pub(crate) fn emit_box_current_value_as_mixed(emitter: &mut Emitter, ty: &PhpTyp
         return;
     }
     match &ty.codegen_repr() {
-        PhpType::Mixed | PhpType::Union(_) => {}
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) => {}
         PhpType::Iterable => emit_box_dynamic_container_as_mixed(emitter, 4),
         PhpType::Array(element) if element.codegen_repr() == PhpType::Mixed => {
             emit_box_dynamic_container_as_mixed(emitter, 3);

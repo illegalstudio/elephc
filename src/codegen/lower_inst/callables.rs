@@ -851,6 +851,13 @@ fn runtime_string_descriptor_cases_at_arity(
         candidate_names,
         strict_php,
     ));
+    let covered: std::collections::HashSet<String> =
+        cases.iter().filter_map(|case| case.php_name.as_deref().map(php_symbol_key)).collect();
+    cases.extend(
+        super::callable_descriptors::declared_callable_name_cases(ctx, candidate_names, strict_php)?
+            .into_iter()
+            .filter(|case| case.php_name.as_deref().is_some_and(|name| !covered.contains(name))),
+    );
     cases.extend(
         runtime_static_method_descriptor_cases(ctx, candidate_names)
             .into_iter()
@@ -1129,6 +1136,7 @@ fn emit_runtime_string_descriptor_value_impl(
 
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(callable, ptr_reg, len_reg)?;
+    emit_strip_callable_name_separator(ctx, ptr_reg, len_reg);
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
     let done_label = ctx.next_label(&format!("{}_runtime_string_descriptor_done", op_name));
@@ -1198,6 +1206,7 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction(&format!("mov {}, rdi", ptr_reg));              // move the unboxed string pointer into the canonical string result register
     }
+    emit_strip_callable_name_separator(ctx, ptr_reg, len_reg);
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
 
     let done_label = ctx.next_label(&format!("{}_mixed_string_descriptor_done", op_name));
@@ -1236,6 +1245,32 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx.emitter.label(&done_label);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     Ok(())
+}
+
+/// Drops one leading `\` from the callable name in `ptr_reg`/`len_reg`: a callable string is
+/// always fully qualified, so PHP resolves `"\\strtolower"` exactly like `"strtolower"`.
+fn emit_strip_callable_name_separator(ctx: &mut FunctionContext<'_>, ptr_reg: &str, len_reg: &str) {
+    let done = ctx.next_label("callable_name_unqualified");
+    // -- skip the global namespace separator of a fully qualified callable name --
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {len_reg}, {done}"));         // an empty name has no separator to drop
+            ctx.emitter.instruction(&format!("ldrb w9, [{ptr_reg}]"));          // read the first byte of the callable name
+            ctx.emitter.instruction("cmp w9, #92");                             // is it the global namespace separator?
+            ctx.emitter.instruction(&format!("b.ne {done}"));                   // keep names without a leading separator unchanged
+            ctx.emitter.instruction(&format!("add {ptr_reg}, {ptr_reg}, #1"));  // skip the leading separator
+            ctx.emitter.instruction(&format!("sub {len_reg}, {len_reg}, #1"));  // shorten the name by the skipped separator
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {len_reg}, {len_reg}"));     // an empty name has no separator to drop
+            ctx.emitter.instruction(&format!("je {done}"));                     // keep the empty name unchanged
+            ctx.emitter.instruction(&format!("cmp BYTE PTR [{ptr_reg}], 92"));  // is the first byte the global namespace separator?
+            ctx.emitter.instruction(&format!("jne {done}"));                    // keep names without a leading separator unchanged
+            ctx.emitter.instruction(&format!("add {ptr_reg}, 1"));              // skip the leading separator
+            ctx.emitter.instruction(&format!("sub {len_reg}, 1"));              // shorten the name by the skipped separator
+        }
+    }
+    ctx.emitter.label(&done);
 }
 
 /// Lowers `call_user_func_array($object, $args)` through an `__invoke` descriptor.

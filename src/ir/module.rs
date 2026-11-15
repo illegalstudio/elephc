@@ -122,6 +122,10 @@ pub struct Module {
     pub data: DataPool,
     pub extern_decls: Vec<ExternDecl>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Function names written as string literals where a declared `callable` keeps the
+    /// string. Runtime string dispatch must reach each of them, including builtins it would
+    /// not resolve from an arbitrary runtime name.
+    pub declared_callable_names: std::collections::BTreeSet<String>,
     pub class_table: ClassTable,
     pub enum_table: EnumTable,
     pub interface_table: InterfaceTable,
@@ -170,6 +174,38 @@ pub struct Module {
 }
 
 impl Module {
+    /// Replaces the checker-only `DeclaredCallable` type by its `Mixed` storage everywhere
+    /// codegen reads PHP types: function parameters, returns, locals, values and instruction
+    /// results, plus extern declarations.
+    ///
+    /// EIR lowering is the last stage that distinguishes a declared callable from `mixed`.
+    pub fn erase_declared_callable_types(&mut self) {
+        let erase = |ty: &mut PhpType| *ty = ty.erase_declared_callable();
+        for function in self
+            .functions
+            .iter_mut()
+            .chain(self.class_methods.iter_mut())
+            .chain(self.closures.iter_mut())
+            .chain(self.fiber_wrappers.iter_mut())
+            .chain(self.callback_wrappers.iter_mut())
+            .chain(self.extern_callback_trampolines.iter_mut())
+            .chain(self.runtime_callable_invokers.iter_mut())
+        {
+            erase(&mut function.return_php_type);
+            function.params.iter_mut().for_each(|param| erase(&mut param.php_type));
+            function.locals.iter_mut().for_each(|local| erase(&mut local.php_type));
+            function.values.iter_mut().for_each(|value| erase(&mut value.php_type));
+            function
+                .instructions
+                .iter_mut()
+                .for_each(|inst| erase(&mut inst.result_php_type));
+        }
+        for decl in &mut self.extern_decls {
+            erase(&mut decl.return_php_type);
+            decl.params.iter_mut().for_each(|param| erase(&mut param.php_type));
+        }
+    }
+
     /// Creates an empty module for the given target.
     pub fn new(target: Target) -> Self {
         Self {
@@ -189,6 +225,7 @@ impl Module {
             data: DataPool::default(),
             extern_decls: Vec::new(),
             callable_param_sigs: HashMap::new(),
+            declared_callable_names: std::collections::BTreeSet::new(),
             class_table: ClassTable::default(),
             enum_table: EnumTable::default(),
             interface_table: InterfaceTable::default(),

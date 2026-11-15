@@ -141,7 +141,7 @@ impl ExceptionFlowAnalysis {
                     thrown.combined(self.php_type_string_conversion_throws(member))
                 },
             ),
-            PhpType::Mixed
+            PhpType::Mixed | PhpType::DeclaredCallable
             | PhpType::Float
             | PhpType::Iterable
             | PhpType::Callable

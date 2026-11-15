@@ -647,7 +647,7 @@ impl Checker {
         callable_return_sigs: &[FunctionSig],
         callable_array_return_sigs: &[FunctionSig],
     ) {
-        let callable_sig = (return_type == &PhpType::Callable)
+        let callable_sig = return_type.is_callable_like()
             .then(|| matching_callable_sig(callable_return_sigs))
             .flatten();
         let callable_array_sig = is_callable_array_return_type(return_type)

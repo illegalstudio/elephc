@@ -173,7 +173,7 @@ fn is_destructor_free(php_type: &PhpType) -> bool {
         PhpType::AssocArray { value, .. } => is_destructor_free(value),
         PhpType::Union(members) => members.iter().all(is_destructor_free),
         PhpType::Iterable
-        | PhpType::Mixed
+        | PhpType::Mixed | PhpType::DeclaredCallable
         | PhpType::Buffer(_)
         | PhpType::Callable
         | PhpType::Object(_)

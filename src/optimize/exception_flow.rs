@@ -123,8 +123,12 @@ fn declared_object_reference_can_throw(signature: &FunctionSig) -> bool {
     // `?array &$v`) or of a union of them checks a boxed (`mixed`) argument at the call
     // boundary and raises `TypeError` there (the EIR reference-argument guards), so it can
     // throw too.
+    //
+    // A by-value `callable` parameter keeps the PHP value it received and checks it on entry
+    // (`must be of type callable, T given`), so it can throw as well.
     signature.params.iter().enumerate().any(|(index, (_, ty))| {
         matches!(ty.codegen_repr(), PhpType::Object(_))
+            || ty.declares_callable()
             || (signature.ref_params.get(index).copied().unwrap_or(false)
                 && by_ref_param_checks_boxed_argument(signature, index, ty))
     })

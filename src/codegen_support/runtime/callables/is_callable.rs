@@ -44,6 +44,14 @@ fn emit_string_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: is_callable_string ---");
     emitter.label_global("__rt_is_callable_string");
 
+    // -- a callable string is fully qualified, so one leading backslash is not part of the name --
+    emitter.instruction("cbz x1, __rt_is_callable_string_unqualified");         // an empty name has no namespace separator to drop
+    emitter.instruction("ldrb w9, [x0]");                                       // read the first byte of the candidate name
+    emitter.instruction("cmp w9, #92");                                         // is it the global namespace separator '\\'?
+    emitter.instruction("b.ne __rt_is_callable_string_unqualified");            // keep names without a leading separator unchanged
+    emitter.instruction("add x0, x0, #1");                                      // skip the leading separator, as PHP resolves "\\name" like "name"
+    emitter.instruction("sub x1, x1, #1");                                      // shorten the candidate name by the skipped separator
+    emitter.label("__rt_is_callable_string_unqualified");
     emitter.instruction("sub sp, sp, #80");                                     // reserve lookup frame for string inputs and table cursor state
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save caller frame pointer and return address around string comparisons
     emitter.instruction("add x29, sp, #64");                                    // establish this helper's frame pointer
@@ -645,6 +653,14 @@ fn emit_string_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: is_callable_string ---");
     emitter.label_global("__rt_is_callable_string");
 
+    // -- a callable string is fully qualified, so one leading backslash is not part of the name --
+    emitter.instruction("test rsi, rsi");                                       // an empty name has no namespace separator to drop
+    emitter.instruction("je __rt_is_callable_string_unqualified_x86_64");       // keep the empty name unchanged
+    emitter.instruction("cmp BYTE PTR [rdi], 92");                              // is the first byte the global namespace separator '\\'?
+    emitter.instruction("jne __rt_is_callable_string_unqualified_x86_64");      // keep names without a leading separator unchanged
+    emitter.instruction("add rdi, 1");                                          // skip the leading separator, as PHP resolves "\\name" like "name"
+    emitter.instruction("sub rsi, 1");                                          // shorten the candidate name by the skipped separator
+    emitter.label("__rt_is_callable_string_unqualified_x86_64");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer before table scans
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base for saved string and table cursor
     emitter.instruction("sub rsp, 48");                                         // reserve slots for string pointer, length, table pointer, count, index, and entry pointer

@@ -207,7 +207,15 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     if let Some(value) = lower_bound_closure_immediate_call(ctx, callee, args, expr) {
         return value;
     }
+    // A pending binding describes the expression lowered last. Only a callee that can itself
+    // produce one (a closure literal or a rebinding call) may hand it to this call; a binding
+    // left by an earlier statement or by a closure passed as an argument inside the callee
+    // (`keep(fn () => 1)()`, `describe(fn ...); keep("x")("y")`) must not select the target.
+    ctx.clear_pending_static_callable_result();
     let lowered_callee = lower_expr(ctx, callee);
+    if !callee_may_publish_static_binding(callee) {
+        ctx.clear_pending_static_callable_result();
+    }
     // An immediately-invoked closure literal (`(fn &() => …)()`) registers its static
     // callable binding while lowering. Call it directly through the static-callable path
     // (as `$f()` does) so the closure body's signature — including a by-reference return —
@@ -242,6 +250,17 @@ pub(super) fn lower_expr_call(ctx: &mut LoweringContext<'_, '_>, callee: &Expr, 
     let mut lowered_callee = root_descriptor_callback(ctx, lowered_callee, result_type, expr.span);
     let arg_container = lower_untyped_descriptor_invoker_arg_container_for_callable(ctx, &mut lowered_callee, args, expr.span);
     emit_callable_descriptor_invoke(ctx, lowered_callee, arg_container, expr.span)
+}
+
+/// Returns whether lowering `callee` itself can publish the static binding of its result: a
+/// closure literal, or a `Closure::bind` / `->bindTo()` rebinding of one.
+fn callee_may_publish_static_binding(callee: &Expr) -> bool {
+    match &callee.kind {
+        ExprKind::Closure { .. } => true,
+        ExprKind::StaticMethodCall { method, .. } => php_symbol_key(method) == "bind",
+        ExprKind::MethodCall { method, .. } => php_symbol_key(method) == "bindto",
+        _ => false,
+    }
 }
 
 /// Recognizes the parser's internal `call_user_func([$object, $method], ...)`

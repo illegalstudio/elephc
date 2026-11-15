@@ -934,7 +934,7 @@ impl Checker {
         };
         let Some(sig) = self.resolve_fiber_callable_sig(callback, env)? else {
             let callback_ty = self.infer_type(callback, env)?;
-            if callback_ty == PhpType::Callable
+            if callback_ty.is_callable_like()
                 || callback_ty == PhpType::Str
                 || crate::types::checker::builtins::runtime_callable_array_type(&callback_ty)
             {

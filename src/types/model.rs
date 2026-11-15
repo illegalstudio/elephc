@@ -40,6 +40,14 @@ pub enum PhpType {
     /// widths in their field metadata instead (`PackedFieldInfo::width`).
     Narrow(ScalarWidth),
     Callable,
+    /// A value declared `callable` (a parameter, return or local fed from one).
+    ///
+    /// PHP's `callable` is a constraint, not a value kind: the bound value stays the string,
+    /// array, invokable object or Closure the caller passed. Storage is therefore a boxed
+    /// `Mixed` cell (`codegen_repr()`), while the checker still treats the value as callable
+    /// and EIR lowering materializes a `Callable` descriptor only where the value is invoked
+    /// or handed to a descriptor-typed slot.
+    DeclaredCallable,
     Object(String),
     Packed(String),
     Pointer(Option<String>), // None = opaque ptr, Some("Class") = typed ptr<Class>
@@ -62,6 +70,7 @@ impl std::fmt::Debug for PhpType {
             Self::False => f.write_str("False"), Self::Void => f.write_str("Void"),
             Self::Never => f.write_str("Never"), Self::Iterable => f.write_str("Iterable"),
             Self::Mixed => f.write_str("Mixed"), Self::Callable => f.write_str("Callable"),
+            Self::DeclaredCallable => f.write_str("DeclaredCallable"),
             Self::TaggedScalar => f.write_str("TaggedScalar"),
             Self::Array(inner) => f.debug_tuple("Array").field(inner).finish(),
             Self::AssocArray { key, value } => f.debug_struct("AssocArray").field("key", key).field("value", value).finish(),
@@ -100,6 +109,41 @@ impl PhpType {
     /// Returns whether an array slot can safely hold a managed live reference for `array_push`.
     pub(crate) fn supports_live_array_push_place(&self) -> bool {
         self.is_php_array() || self.codegen_repr() == Self::Mixed
+    }
+
+    /// Returns whether a value of this type can be invoked as a PHP callable: a Closure
+    /// descriptor (`Callable`) or a value declared `callable` (`DeclaredCallable`).
+    pub(crate) fn is_callable_like(&self) -> bool {
+        matches!(self, Self::Callable | Self::DeclaredCallable)
+    }
+
+    /// Returns whether this declared parameter type is `callable`, `?callable` or a union
+    /// with `callable`: a by-value binding of it keeps the PHP value and checks it on entry.
+    pub(crate) fn declares_callable(&self) -> bool {
+        match self {
+            Self::DeclaredCallable => true,
+            Self::Union(members) => members.contains(&Self::DeclaredCallable),
+            _ => false,
+        }
+    }
+
+    /// Replaces every `DeclaredCallable` (also inside unions and containers) by `Mixed`.
+    ///
+    /// The distinction only matters to the checker and EIR lowering, which materialize a
+    /// descriptor where a declared callable is invoked. Codegen sees the boxed storage.
+    pub(crate) fn erase_declared_callable(&self) -> PhpType {
+        match self {
+            Self::DeclaredCallable => Self::Mixed,
+            Self::Array(inner) => Self::Array(Box::new(inner.erase_declared_callable())),
+            Self::AssocArray { key, value } => Self::AssocArray {
+                key: Box::new(key.erase_declared_callable()),
+                value: Box::new(value.erase_declared_callable()),
+            },
+            Self::Union(members) => {
+                Self::Union(members.iter().map(Self::erase_declared_callable).collect())
+            }
+            other => other.clone(),
+        }
     }
 
     /// Returns the type a packed field or buffer element of this storage type reads as.
@@ -143,7 +187,11 @@ impl PhpType {
     /// skipped for them.
     pub fn null_property_default_required(&self) -> bool {
         match self {
-            PhpType::Void | PhpType::Mixed | PhpType::TaggedScalar | PhpType::Object(_) => true,
+            PhpType::Void
+            | PhpType::Mixed
+            | PhpType::DeclaredCallable
+            | PhpType::TaggedScalar
+            | PhpType::Object(_) => true,
             PhpType::Union(members) => members.iter().any(|member| matches!(member, PhpType::Void)),
             PhpType::Int
             | PhpType::Float
@@ -179,6 +227,7 @@ impl PhpType {
             PhpType::Buffer(_) => 8,         // pointer to buffer header
             PhpType::Narrow(_) => 8,         // never a value; its element reads as a word
             PhpType::Callable => 8,          // callable descriptor address
+            PhpType::DeclaredCallable => 8,  // boxed Mixed cell holding the PHP callable value
             PhpType::Object(_) => 8,         // pointer to heap
             PhpType::Packed(_) => 8,         // metadata-only nominal type, usually accessed by pointer
             PhpType::Pointer(_) => 8,        // 64-bit address
@@ -204,6 +253,7 @@ impl PhpType {
             PhpType::Buffer(_) => 1,
             PhpType::Narrow(_) => 1,
             PhpType::Callable => 1,
+            PhpType::DeclaredCallable => 1,
             PhpType::Object(_) => 1,
             PhpType::Packed(_) => 1,
             PhpType::Pointer(_) => 1,
@@ -234,6 +284,7 @@ impl PhpType {
             self,
             PhpType::Iterable
                 | PhpType::Mixed
+                | PhpType::DeclaredCallable
                 | PhpType::Array(_)
                 | PhpType::AssocArray { .. }
                 | PhpType::Object(_)
@@ -256,7 +307,7 @@ impl PhpType {
             PhpType::Union(members) if nullable_pointer_union_member(members).is_some() => {
                 nullable_pointer_union_member(members).expect("checked above")
             }
-            PhpType::Union(_) => PhpType::Mixed,
+            PhpType::Union(_) | PhpType::DeclaredCallable => PhpType::Mixed,
             PhpType::False => PhpType::Bool,
             PhpType::Resource(_) => PhpType::Int,
             PhpType::Never => PhpType::Void, // never should not be materialized; fallback to void sentinel
@@ -603,7 +654,7 @@ impl fmt::Display for PhpType {
             PhpType::AssocArray { key, value } => write!(f, "array<{}, {}>", key, value),
             PhpType::Buffer(inner) => write!(f, "buffer<{}>", inner),
             PhpType::Narrow(width) => write!(f, "{}", width.name()),
-            PhpType::Callable => write!(f, "callable"),
+            PhpType::Callable | PhpType::DeclaredCallable => write!(f, "callable"),
             // An EMPTY class name is the `object` type hint: any object, no particular class.
             // Rendering it as the empty string produced "expects , got int".
             PhpType::Object(name) if name.is_empty() => write!(f, "object"),

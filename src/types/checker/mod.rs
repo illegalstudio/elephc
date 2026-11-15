@@ -136,6 +136,10 @@ pub(crate) struct Checker {
     /// Tracks callable signatures inferred for user-function callable parameters,
     /// keyed by (function_name, param_name).
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Function names written as string literals where a declared `callable` keeps the
+    /// string. Runtime string dispatch must reach each of them, including builtins it would
+    /// not resolve from an arbitrary runtime name.
+    pub declared_callable_names: std::collections::BTreeSet<String>,
     /// Whether the statement currently being checked was written in a file that opened with
     /// `declare(strict_types=1)`.
     ///
@@ -1635,6 +1639,7 @@ fn check_types_on_compiler_stack(
         function_attribute_names,
         function_attribute_args,
         callable_param_sigs: checker.callable_param_sigs,
+        declared_callable_names: checker.declared_callable_names,
         return_alias_summaries,
         callable_return_sigs: checker.callable_return_sigs,
         callable_array_return_sigs: checker.callable_array_return_sigs,

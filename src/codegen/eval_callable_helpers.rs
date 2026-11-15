@@ -36,7 +36,10 @@ use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 mod tests;
 mod shared_cast;
 pub(super) mod argument_owners;
-pub(super) use shared_cast::{emit_aarch64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg};
+pub(super) use shared_cast::{
+    emit_aarch64_cast_eval_callable_arg, emit_aarch64_cast_eval_declared_callable_arg,
+    emit_x86_64_cast_eval_callable_arg, emit_x86_64_cast_eval_declared_callable_arg,
+};
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
 const MIXED_METHOD_TAG_OFFSET: usize = 0;

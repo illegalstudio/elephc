@@ -156,6 +156,8 @@ pub(super) fn lower_builtin_call_args(
 ) -> Vec<crate::ir::ValueId> {
     let rewritten = builtin_string_callbacks_as_first_class(sig, args);
     let args = rewritten.as_deref().unwrap_or(args);
+    let normalized = declared_callable_callbacks_as_descriptors(ctx, sig, args);
+    let args = normalized.as_deref().unwrap_or(args);
     let operands = borrowed_string_args::try_lower(ctx, name, sig, args)
         .unwrap_or_else(|| lower_planned_builtin_call_args(ctx, name, sig, args));
     let canonical = php_symbol_key(name.trim_start_matches('\\'));
@@ -192,6 +194,65 @@ fn validate_array_chunk_element_layout(
         crate::ir_lower::diagnostics::refuse(span,
             "array_chunk() on indexed string arrays is not supported in AOT mode");
     }
+}
+
+/// Wraps a declared-`callable` value at a builtin callback position in
+/// `__elephc_normalize_callable()`.
+///
+/// A declared callable is stored as the PHP value the caller passed (see
+/// `declared_callables`), while the builtin callback runtimes take a descriptor whose signature
+/// gives the callback result its static type. Normalizing at the call keeps that contract; the
+/// stored value itself is unchanged. Spreads are left alone, as in
+/// `builtin_string_callbacks_as_first_class`.
+fn declared_callable_callbacks_as_descriptors(
+    ctx: &LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Option<Vec<Expr>> {
+    let sig = sig?;
+    if args.iter().any(is_spread_arg) {
+        return None;
+    }
+    let is_callable_param = |index: usize| {
+        sig.params.get(index).is_some_and(|(name, ty)| {
+            name.trim_start_matches('$') == "callback" || ty.codegen_repr() == PhpType::Callable
+        })
+    };
+    let mut changed = false;
+    let rewritten = args
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            let (position, value) = match &arg.kind {
+                ExprKind::NamedArg { name, value } => (
+                    sig.params.iter().position(|(param, _)| param.trim_start_matches('$') == name),
+                    value.as_ref(),
+                ),
+                _ => (Some(index), arg),
+            };
+            if !position.is_some_and(is_callable_param)
+                || !super::declared_callables::expr_is_declared_callable(ctx, value)
+            {
+                return arg.clone();
+            }
+            changed = true;
+            let normalized = Expr::new(
+                ExprKind::FunctionCall {
+                    name: crate::names::Name::unqualified("__elephc_normalize_callable"),
+                    args: vec![value.clone()],
+                },
+                value.span,
+            );
+            match &arg.kind {
+                ExprKind::NamedArg { name, .. } => Expr::new(
+                    ExprKind::NamedArg { name: name.clone(), value: Box::new(normalized) },
+                    arg.span,
+                ),
+                _ => normalized,
+            }
+        })
+        .collect();
+    changed.then_some(rewritten)
 }
 
 /// Lowers a string literal naming a BUILTIN, at a `callable` parameter, as that builtin's

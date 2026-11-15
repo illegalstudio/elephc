@@ -135,6 +135,7 @@ fn dummy_check_result() -> CheckResult {
         function_attribute_names: HashMap::new(),
         function_attribute_args: HashMap::new(),
         callable_param_sigs: HashMap::new(),
+        declared_callable_names: Default::default(),
         return_alias_summaries: Default::default(),
         callable_return_sigs: HashMap::new(),
         callable_array_return_sigs: HashMap::new(),

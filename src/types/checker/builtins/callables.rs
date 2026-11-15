@@ -1746,7 +1746,7 @@ pub(crate) fn check_call_user_func_array(
         checker.record_unresolved_callee_argument_aliases(&args[1..]);
         return Ok(PhpType::Mixed);
     }
-    if matches!(callback_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_))
+    if matches!(callback_ty, PhpType::Callable | PhpType::DeclaredCallable | PhpType::Mixed | PhpType::Union(_))
         && call_user_func_array_arg_container_is_supported(&arg_array_ty)
     {
         // A Mixed/Union callback is validated and dispatched at runtime by tag
@@ -1970,7 +1970,7 @@ pub(crate) fn check_call_user_func(
         }
         return Ok(PhpType::Mixed);
     }
-    if matches!(callback_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_)) {
+    if matches!(callback_ty, PhpType::Callable | PhpType::DeclaredCallable | PhpType::Mixed | PhpType::Union(_)) {
         // A Mixed/Union callback — e.g. a callable stored in an untyped property
         // and read back boxed — is validated at runtime: the `Op::ExprCall`
         // lowering unboxes it and dispatches by tag (string name, closure, or

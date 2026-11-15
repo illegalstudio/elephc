@@ -75,7 +75,7 @@ impl Checker {
                 | PhpType::Resource(_)
                 | PhpType::Pointer(_)
                 | PhpType::Buffer(_)
-                | PhpType::Callable => {
+                | PhpType::Callable | PhpType::DeclaredCallable => {
                     int_regs += 1;
                 }
                 PhpType::Void

@@ -66,6 +66,9 @@ impl Checker {
             return Ok(());
         }
 
+        if !by_ref && *expected == PhpType::DeclaredCallable {
+            return self.require_declared_callable_arg(expected, actual, arg, env, context, owner);
+        }
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
         }
@@ -231,6 +234,60 @@ impl Checker {
     /// Records the signature a bound callable-name string gives a declared `callable`
     /// parameter, so the callee resolves `$f(...)` exactly as it does for a first-class
     /// callable argument.
+    /// Validates one argument bound to a declared `callable` parameter.
+    ///
+    /// The value is stored as PHP passed it, so no argument is rewritten. A literal function or
+    /// `Class::method` name and a statically resolvable callable array are still resolved
+    /// here: an unknown name is a compile error, and a known target registers its signature
+    /// so invocations of the parameter keep their static result type. Every other string,
+    /// array, object or boxed value is left to PHP's runtime callable check.
+    fn require_declared_callable_arg(
+        &mut self,
+        expected: &PhpType,
+        actual: &PhpType,
+        arg: &Expr,
+        env: &TypeEnv,
+        context: &str,
+        owner: Option<(&str, &str)>,
+    ) -> Result<(), CompileError> {
+        let target = match (actual.codegen_repr(), &arg.kind) {
+            (PhpType::Str, crate::parser::ast::ExprKind::StringLiteral(name)) => {
+                match crate::types::param_binding::callable_target_from_name(name) {
+                    Some(target) => Some(target),
+                    None => {
+                        return Err(Self::param_binding_error(
+                            expected,
+                            actual,
+                            arg,
+                            context,
+                            &format!("\"{}\" is not a valid callable name", name.escape_debug()),
+                        ))
+                    }
+                }
+            }
+            (PhpType::Array(_) | PhpType::AssocArray { .. }, _) => {
+                self.callable_array_param_target(arg, env)?
+            }
+            _ => None,
+        };
+        if let Some(target) = target {
+            let sig = self
+                .resolve_first_class_callable_sig(&target, arg.span, env)
+                .map_err(|err| {
+                    Self::param_binding_error(expected, actual, arg, context, err.message.as_str())
+                })?;
+            self.register_bound_callable_param_sig(owner, sig);
+            if let crate::parser::ast::CallableTarget::Function(name) = &target {
+                self.declared_callable_names.insert(name.as_str().to_string());
+            }
+            return Ok(());
+        }
+        if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
+            return Ok(());
+        }
+        self.require_compatible_arg_type(expected, actual, arg.span, context)
+    }
+
     fn register_bound_callable_param_sig(
         &mut self,
         owner: Option<(&str, &str)>,

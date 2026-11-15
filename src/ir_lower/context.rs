@@ -6414,7 +6414,7 @@ pub(crate) fn type_expr_to_php_type(type_expr: &TypeExpr) -> PhpType {
 fn named_type_expr_to_php_type(name: &str) -> PhpType {
     match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
         "array" => PhpType::php_array(),
-        "callable" => PhpType::Callable,
+        "callable" => PhpType::DeclaredCallable,
         "closure" => PhpType::Callable,
         "mixed" => PhpType::Mixed,
         "null" | "void" => PhpType::Void,

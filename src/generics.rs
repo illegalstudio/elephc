@@ -256,7 +256,7 @@ pub fn type_expr_for_php_type(ty: &PhpType) -> Option<TypeExpr> {
         PhpType::Never => TypeExpr::Never,
         PhpType::Iterable => TypeExpr::Iterable,
         PhpType::Mixed => TypeExpr::Named(Name::unqualified("mixed")),
-        PhpType::Callable => TypeExpr::Named(Name::unqualified("callable")),
+        PhpType::Callable | PhpType::DeclaredCallable => TypeExpr::Named(Name::unqualified("callable")),
         PhpType::Object(name) if crate::parser::ast::is_c_width_type_name(name) => {
             TypeExpr::Named(Name::from_parts(crate::names::NameKind::FullyQualified, vec![name.clone()]))
         }

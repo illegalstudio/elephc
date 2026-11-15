@@ -134,6 +134,10 @@ pub struct CheckResult {
     pub function_attribute_names: HashMap<String, Vec<String>>,
     pub function_attribute_args: HashMap<String, Vec<Option<Vec<AttrArgEntry>>>>,
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Function names written as string literals where a declared `callable` keeps the
+    /// string. Runtime string dispatch must reach each of them, including builtins it would
+    /// not resolve from an arbitrary runtime name.
+    pub declared_callable_names: std::collections::BTreeSet<String>,
     /// Proven return-to-parameter storage aliases for source-declared callables.
     pub(crate) return_alias_summaries: ReturnAliasSummaries,
     #[allow(dead_code)]

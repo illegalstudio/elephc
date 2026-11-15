@@ -9,8 +9,9 @@
 //!
 //! Key details:
 //! - Every expected value is verbatim `LC_ALL=C php` 8.4.20 stdout.
-//! - elephc resolves callables statically, so only a compile-time-known string binds; the
-//!   rejected shapes are pinned in `tests/error_tests/callables.rs`.
+//! - A declared `callable` keeps the string itself; a literal name is still resolved at compile
+//!   time (an unknown one is refused), and runtime-selected names are covered by
+//!   `declared_callable_values.rs`.
 
 use crate::support::*;
 

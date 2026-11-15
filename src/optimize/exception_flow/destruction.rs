@@ -154,7 +154,7 @@ impl ExceptionFlowAnalysis {
     pub(super) fn type_destruction_throws(&self, php_type: &PhpType) -> ThrownTypes {
         match php_type {
             PhpType::Object(_)
-            | PhpType::Mixed
+            | PhpType::Mixed | PhpType::DeclaredCallable
             | PhpType::Iterable
             | PhpType::Callable
             | PhpType::Resource(_) => self.any_destructor_throws(),
