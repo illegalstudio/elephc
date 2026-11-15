@@ -395,6 +395,12 @@ impl Checker {
                     if let Some(sig) = class_info.methods.get("__get") {
                         return Ok(sig.return_type.clone());
                     }
+                    // `isset()`, `empty()` and `??` fetch in php's silent mode, which answers an
+                    // inaccessible name as absent instead of raising. The runtime class may still
+                    // hold a dynamic property of that name, so the value is not known to be null.
+                    if self.null_probe_depth > 0 {
+                        return Ok(PhpType::Mixed);
+                    }
                     return Err(CompileError::new(
                         expr.span,
                         &format!(

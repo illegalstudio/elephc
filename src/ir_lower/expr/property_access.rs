@@ -1848,6 +1848,28 @@ pub(super) fn property_name_is_dynamic_in_scope(
     ) == crate::types::PropertyNameResolution::Dynamic
 }
 
+/// Returns whether php REFUSES `property` on `class_name` from this scope (a private or protected
+/// slot the scope may not reach).
+///
+/// A value read of such a name never reaches lowering, because the checker rejects it, but a
+/// silent probe (`??`) does: php answers it as absent, which the ordinary named read cannot do,
+/// since it addresses the slot directly.
+pub(super) fn property_name_is_inaccessible_in_scope(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    matches!(
+        crate::types::resolve_property_name(
+            ctx.classes,
+            class_name.trim_start_matches('\\'),
+            property,
+            ctx.current_class.as_deref(),
+        ),
+        crate::types::PropertyNameResolution::Inaccessible(_)
+    )
+}
+
 /// Returns whether a RUNTIME name on `class_name` can miss every slot the backend will dispatch.
 ///
 /// A name this scope resolves to a dynamic property answers from the per-instance hash, and one

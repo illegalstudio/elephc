@@ -76,6 +76,38 @@ echo $d->readN();
     assert_eq!(out, "bool(true)\nstring(4) \"dflt\"\n7");
 }
 
+/// The same silent probes over a LITERAL name: `$d->n ?? ...`, `isset($d->n)` and `empty($d->n)` on
+/// a private or protected property this scope cannot reach answer as absent, from global scope,
+/// from an unrelated class and from a subclass reading its parent's private. The checker refused
+/// these at compile time ("Cannot access private property") where php compiles them and answers
+/// the default.
+#[test]
+fn test_silent_probes_of_an_inaccessible_literal_name_compile_and_answer_absent() {
+    let out = compile_and_run(
+        r#"<?php
+class Base {
+    private $priv = 'r';
+    protected $prot = 'q';
+    public function own($o) { return $o->priv ?? 'none'; }
+}
+class Kid extends Base {
+    public function viaKid($o) {
+        return [$o->priv ?? 'none', isset($o->priv) ? 'set' : 'unset', empty($o->priv) ? 'E' : 'N', $o->prot ?? 'none'];
+    }
+}
+class Stranger {
+    public function look($o) { return [$o->priv ?? 'none', $o->prot ?? 'none', isset($o->prot) ? 'set' : 'unset']; }
+}
+$b = new Base();
+echo implode(',', (new Kid())->viaKid($b)), "\n";
+echo implode(',', (new Stranger())->look($b)), "\n";
+echo $b->priv ?? 'dflt', ',', isset($b->prot) ? 'set' : 'unset', ',', empty($b->priv) ? 'E' : 'N', "\n";
+echo $b->own($b), "\n";
+"#,
+    );
+    assert_eq!(out, "none,unset,E,q\nnone,none,unset\ndflt,unset,E\nr\n");
+}
+
 /// Verifies a strict ancestor's PRIVATE name is a DYNAMIC property from the child scope and from
 /// global scope, by runtime name and by plain name alike.
 ///

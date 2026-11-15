@@ -184,7 +184,12 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // this scope may not reach answers the DEFAULT rather than raising, and a name that was
         // never created answers it without an `Undefined property` warning. A receiver whose
         // class is only known at run time needs the runtime-name form to carry that mode.
-        let needs_probe = property_probe_needs_runtime_name_form(ctx, object);
+        // A name the receiver's class refuses from this scope is also probed that way: the named
+        // read addresses the slot directly and would hand back the private value php hides.
+        let needs_probe = property_probe_needs_runtime_name_form(ctx, object)
+            || super::native_isset::isset_object_expr_class(ctx, object).is_some_and(|(class, _)| {
+                super::property_access::property_name_is_inaccessible_in_scope(ctx, &class, property)
+            });
         let object = lower_member_receiver(ctx, object, value);
         if property_can_be_uninitialized(ctx, object.value, property)
             || union_hook_probe_class(ctx, object.value, property).is_some() {
