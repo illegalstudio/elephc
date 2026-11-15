@@ -10,8 +10,8 @@
 //! - Both instance shapes fetch the property with `PropGetForWrite` and remove in place, with no
 //!   acquired copy in flight and no `PropSet` after the removal: the removed value's destructor
 //!   may throw or write the property again.
-//! - A packed-list property and an untyped static array are refused, naming the declared `array`
-//!   type as the fix.
+//! - A packed-list property (instance or static) is refused, naming the declared `array` type as
+//!   the fix; an untyped static hash removes the key and stores the hash back.
 
 use crate::codegen::platform::Target;
 use crate::ir::{Function, Op};
@@ -193,24 +193,59 @@ $l->drop(1);
     assert_eq!(error.span.line, 4, "the refusal names the unset line");
 }
 
-/// An untyped static array property has no separated-cell path, so its element removal is
-/// refused with the declared-`array` fix.
+/// An untyped static PACKED list would have to become a hash, so its element removal is refused
+/// at its line with the declared-`array` fix, as for an instance property.
 #[test]
-fn untyped_static_array_element_unset_is_refused() {
+fn untyped_static_packed_list_element_unset_is_refused() {
     let error = refusal(
         r#"<?php
+class Cache {
+    public static $list = [10, 20, 30];
+    public static function drop(int $i): void { unset(self::$list[$i]); }
+}
+Cache::drop(1);
+"#,
+    );
+    assert!(
+        error.message.contains("static property `$list` needs hash storage")
+            && error.message.contains("Declare the property `array`"),
+        "{}",
+        error.message
+    );
+    assert_eq!(error.span.line, 4, "the refusal names the unset line");
+}
+
+/// An untyped static hash property is no refusal: the key is removed and the hash stored back
+/// (Laravel's `Queue\Worker::popUsing()`), on every target.
+#[test]
+fn untyped_static_array_element_unset_lowers_on_every_target() {
+    let source = r#"<?php
 class Cache {
     public static $untyped = ["a" => "x", "b" => "y"];
     public static function forget(string $k): void { unset(self::$untyped[$k]); }
 }
 Cache::forget("a");
-"#,
-    );
-    assert!(
-        error.message.contains("an element of static property `$untyped`")
-            && error.message.contains("declared `array`"),
-        "{}",
-        error.message
-    );
-    assert_eq!(error.span.line, 4, "the refusal names the unset line");
+"#;
+    for name in TARGETS {
+        let module = super::lower_source_at_for_target(
+            source,
+            Path::new("main.php"),
+            Path::new("."),
+            Target::parse(name).unwrap(),
+        );
+        let function = module
+            .class_methods
+            .iter()
+            .find(|function| function.name == "Cache::forget")
+            .unwrap_or_else(|| panic!("{name}: Cache::forget was not lowered"));
+        let ops = ops(function);
+        let removal = ops.iter().position(|op| *op == Op::HashUnset);
+        let store = ops.iter().position(|op| *op == Op::StoreStaticProperty);
+        assert!(
+            matches!((removal, store), (Some(removal), Some(store)) if removal < store),
+            "{name}: the key is removed, then the slot stored back: {ops:?}"
+        );
+        crate::codegen::generate_user_asm_from_ir(&module, false, false)
+            .unwrap_or_else(|error| panic!("{name}: {error:?}"));
+    }
 }

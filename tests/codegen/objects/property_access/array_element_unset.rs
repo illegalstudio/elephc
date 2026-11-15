@@ -10,8 +10,8 @@
 //! - Expected output was produced by php 8.5 on the same source.
 //! - A declared `array` property, an associative property and a boxed `Mixed` property lower
 //!   directly; an `ArrayAccess` property dispatches to `offsetUnset()` after the key (also when
-//!   the object sits in a boxed `mixed` cell), and a readonly array property throws. The refusals of a packed-list property and an untyped
-//!   static array are EIR lowering diagnostics, pinned in
+//!   the object sits in a boxed `mixed` cell), and a readonly array property throws. The refusal of a packed-list property
+//!   is an EIR lowering diagnostic, pinned in
 //!   `src/ir_lower/tests/property_element_unset.rs`.
 
 use super::*;
@@ -695,4 +695,69 @@ echo "survived\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "unset:1.5\nunset:2.5\nunset:1.5\nsurvived\n");
     assert!(!out.stderr.contains("Deprecated"), "{}", out.stderr);
+}
+
+/// An element of an UNTYPED static hash property is removed like a declared one, through
+/// `self::` and `static::`, for string and integer keys and a missing key, and a copy taken
+/// before the removal keeps every element. Laravel's `Queue\Worker::popUsing()` does
+/// `unset(static::$popCallbacks[$workerName])` on `protected static $popCallbacks = [];`, which
+/// was refused at compile time.
+#[test]
+fn test_unset_untyped_static_array_property_element() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Worker
+{
+    protected static $popCallbacks = [];
+    protected static $ids = [10 => "p", 20 => "q", 30 => "r"];
+    protected static $names = ["a" => "x", "b" => "y", "c" => "z"];
+    public static function popUsing($workerName, $callback)
+    {
+        if (is_null($callback)) {
+            unset(static::$popCallbacks[$workerName]);
+        } else {
+            static::$popCallbacks[$workerName] = $callback;
+        }
+    }
+    public static function dump(): void
+    {
+        echo implode(",", array_keys(static::$popCallbacks)), "\n";
+        foreach (static::$popCallbacks as $name => $cb) {
+            echo $name, "=", $cb("x"), "\n";
+        }
+    }
+    public static function dropName(string $k): array
+    {
+        $before = self::$names;
+        unset(self::$names[$k]);
+        echo count($before), count(self::$names), "\n";
+        return self::$names;
+    }
+    public static function drop(int $i): array
+    {
+        $before = self::$ids;
+        unset(self::$ids[$i]);
+        echo count($before), count(self::$ids), "\n";
+        return self::$ids;
+    }
+}
+for ($i = 0; $i < 3; $i++) {
+    Worker::popUsing("a$i", fn ($q) => "A$q");
+    Worker::popUsing("b$i", fn ($q) => "B$q");
+    Worker::popUsing("b$i", null);
+    Worker::popUsing("zz", null);
+}
+Worker::dump();
+echo json_encode(Worker::dropName("b")), "\n";
+echo json_encode(Worker::dropName("q")), "\n";
+var_dump(Worker::drop(20));
+var_dump(Worker::drop(50));
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "a0,a1,a2\na0=Ax\na1=Ax\na2=Ax\n32\n{\"a\":\"x\",\"c\":\"z\"}\n22\n{\"a\":\"x\",\"c\":\"z\"}\n32\narray(2) {\n  [10]=>\n  string(1) \"p\"\n  [30]=>\n  string(1) \"r\"\n}\n22\narray(2) {\n  [10]=>\n  string(1) \"p\"\n  [30]=>\n  string(1) \"r\"\n}\n"
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }

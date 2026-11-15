@@ -144,12 +144,10 @@ pub(super) fn unset_array_access_static_php_array_receiver<'e>(
 /// Explains why `unset()` of a property ARRAY ELEMENT has no lowering, for the shapes that are
 /// refused on purpose rather than simply not implemented.
 ///
-/// Both refusals name the declared `array` type as the fix, because that is the representation
-/// that can hold the key hole `unset()` leaves:
-///
-/// - a packed indexed `array<T>` object property (an untyped property whose default is a list)
-///   would have to become a hash, which retypes a slot every method of the class reads;
-/// - an untyped static array property has no separated-cell write path to remove through.
+/// The refusal names the declared `array` type as the fix, because that is the representation
+/// that can hold the key hole `unset()` leaves: a packed indexed `array<T>` object or static
+/// property (an untyped property whose default is a list) would have to become a hash, which
+/// retypes a slot every method of the class reads. An untyped static hash is removed from.
 ///
 /// Recorded as a source diagnostic so the user sees the line, not the backend's generic
 /// unsupported-shape message.
@@ -173,20 +171,21 @@ pub(super) fn unset_property_element_refusal(ctx: &LoweringContext<'_, '_>, arg:
                  [...];`), whose storage can hold sparse keys"
             ))
         }
+        // An untyped static HASH property is no refusal: `lower_unset_gradual_static_property_element`
+        // removes the key and stores the hash back. Laravel's `Queue\Worker::popUsing()` does
+        // `unset(static::$popCallbacks[$workerName])`. A packed list would have to become a hash,
+        // which retypes the slot every reader of the class sees, as for an instance property.
         ExprKind::StaticPropertyAccess { receiver, property } => {
             let property_ty = crate::ir_lower::stmt::static_property_type(ctx, receiver, property)?;
-            if property_ty.is_php_array()
-                || !matches!(
-                    property_ty.codegen_repr(),
-                    PhpType::Array(_) | PhpType::AssocArray { .. }
-                )
-            {
+            if property_ty.is_php_array() || !matches!(property_ty.codegen_repr(), PhpType::Array(_)) {
                 return None;
             }
             Some(format!(
-                "Unsupported unset(): an element of static property `${property}` can be removed \
-                 only when the property is declared `array` (for example `public static array \
-                 ${property} = [...];`)"
+                "Unsupported unset(): removing an element of static property `${property}` needs \
+                 hash storage, because PHP's unset() leaves a key hole without renumbering, but \
+                 this untyped property holds a packed list. Declare the property `array` (for \
+                 example `public static array ${property} = [...];`), whose storage can hold \
+                 sparse keys"
             ))
         }
         _ => None,
