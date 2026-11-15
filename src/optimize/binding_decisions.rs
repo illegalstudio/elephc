@@ -76,7 +76,8 @@ pub fn install_scalar_guard_arg_sites(sites: HashSet<Span>) -> ScalarGuardArgSit
 /// scalar parameter, so it can throw `TypeError` before the callee's body runs.
 ///
 /// The checker records the bound argument's own span; a named argument is matched through
-/// its value, and a spread through the unpacked expression.
+/// its value, and a spread through the unpacked expression and, for a static array literal,
+/// through each element it expands to (`f(...['s' => $v])` binds `$v` itself).
 pub(crate) fn call_has_scalar_guard_arg(args: &[crate::parser::ast::Expr]) -> bool {
     use crate::parser::ast::ExprKind;
     ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| {
@@ -84,8 +85,22 @@ pub(crate) fn call_has_scalar_guard_arg(args: &[crate::parser::ast::Expr]) -> bo
         !sites.is_empty()
             && args.iter().any(|arg| {
                 sites.contains(&arg.span)
-                    || matches!(&arg.kind, ExprKind::NamedArg { value, .. } | ExprKind::Spread(value)
-                        if sites.contains(&value.span))
+                    || match &arg.kind {
+                        ExprKind::NamedArg { value, .. } => sites.contains(&value.span),
+                        ExprKind::Spread(value) => {
+                            sites.contains(&value.span)
+                                || match &value.kind {
+                                    ExprKind::ArrayLiteral(items) => {
+                                        items.iter().any(|item| sites.contains(&item.span))
+                                    }
+                                    ExprKind::ArrayLiteralAssoc(pairs) => {
+                                        pairs.iter().any(|(_, item)| sites.contains(&item.span))
+                                    }
+                                    _ => false,
+                                }
+                        }
+                        _ => false,
+                    }
             })
     })
 }

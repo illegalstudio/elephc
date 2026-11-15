@@ -185,3 +185,31 @@ echo $closure(box("ok")), " ", $arrow(box(1)), "\n";
     );
     assert_eq!(out, "{closure:F:6}(): Argument #1 ($x) must be of type string, null given, called in F on line 8\n{closure:F:7}(): Argument #1 ($i) must be of type int, null given, called in F on line 9\nnamed(): Argument #1 ($s) must be of type string, null given, called in F on line 10\nc:ok 2\n");
 }
+
+/// An unused call to a pure callee keeps its check when the guarded value reaches the
+/// parameter through a static associative spread or a named argument: the optimizer must not
+/// delete the call or prune the `catch (TypeError)` around it.
+#[test]
+fn test_spread_and_named_guarded_calls_to_pure_function_are_not_eliminated() {
+    let out = compile_and_run(
+        r#"<?php
+function pure(string $s): int { return 1; }
+function box(mixed $v): mixed { return $v; }
+$v = box(null);
+try {
+    pure(...['s' => $v]);
+    echo "not reached\n";
+} catch (TypeError $e) {
+    echo "caught: ", str_replace(__FILE__, "F", $e->getMessage()), "\n";
+}
+try {
+    pure(s: $v);
+    echo "not reached\n";
+} catch (TypeError $e) {
+    echo "caught: ", str_replace(__FILE__, "F", $e->getMessage()), "\n";
+}
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "caught: pure(): Argument #1 ($s) must be of type string, null given, called in F on line 6\ncaught: pure(): Argument #1 ($s) must be of type string, null given, called in F on line 12\nend\n");
+}
