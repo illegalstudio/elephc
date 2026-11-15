@@ -1780,7 +1780,9 @@ fn emit_fn_marker(
         let _ = write!(marker, " id={function_id}");
     }
     let _ = write!(marker, " kind={kind}");
-    if let Some(class) = lexical_class.filter(|class| !class.is_empty()) {
+    // Only the debugger consumes the lexical class; emitting it in ordinary builds would make
+    // two identical generic instantiation bodies differ by class name and veto the body fold.
+    if let (Some(_), Some(class)) = (function_id, lexical_class.filter(|class| !class.is_empty())) {
         let _ = write!(marker, " class_hex={}", hex_encode(class.as_bytes()));
     }
     if !flags.is_empty() {
