@@ -127,11 +127,12 @@ pub(crate) const CUT_SEARCH_BYTES: usize = 16 << 20;
 fn cut_near(body: &str, target: usize, section_at: &impl Fn(usize) -> Sect) -> Option<usize> {
     let bytes = body.as_bytes();
     let target = target.min(bytes.len());
-    let legal = |position: usize, line: &str| {
+    let mut short_references = ShortReferenceCursor::new(body);
+    let mut legal = |position: usize, line: &str, forward: bool| {
         opens_cuttable_label(line)
             && section_at(position) == Sect::Text
             && cannot_fall_into(body, position)
-            && !short_reference_straddles(body, introduction_start(body, position))
+            && !short_references.straddles(introduction_start(body, position), forward)
     };
     let limit = target.saturating_add(CUT_SEARCH_BYTES).min(bytes.len());
     // Forward, from the first line beginning at or after `target`.
@@ -141,7 +142,7 @@ fn cut_near(body: &str, target: usize, section_at: &impl Fn(usize) -> Sect) -> O
     };
     while position < limit {
         let end = memchr::memchr(b'\n', &bytes[position..]).map_or(bytes.len(), |at| position + at);
-        if legal(position, &body[position..end]) {
+        if legal(position, &body[position..end], true) {
             return Some(introduction_start(body, position));
         }
         position = end + 1;
@@ -155,7 +156,7 @@ fn cut_near(body: &str, target: usize, section_at: &impl Fn(usize) -> Sect) -> O
         if start < floor || start == 0 {
             break;
         }
-        if legal(start, line) {
+        if legal(start, line, false) {
             return Some(introduction_start(body, start));
         }
     }
@@ -167,73 +168,143 @@ fn cut_near(body: &str, target: usize, section_at: &impl Fn(usize) -> Sect) -> O
 /// source into an inverse branch over an unconditional one. A margin above that.
 const SHORT_REACH_BYTES: usize = 1 << 20;
 
-/// Whether a cut at `cut` would separate a short-range reference from its target: a conditional
-/// branch, `cbz`/`cbnz`, `tbz`/`tbnz` or `adr` on one side naming a label defined on the other,
-/// or a numeric `1f`/`1b` whose nearest definition lies across the cut.
+/// How many candidate-cut bytes one [`ShortReferences`] scan answers for. Each scan reads this
+/// span plus [`SHORT_REACH_BYTES`] on either side, so a search that rejects every candidate reads
+/// the listing about twice over instead of once per candidate.
+const SHORT_INDEX_SPAN: usize = 2 * SHORT_REACH_BYTES;
+
+#[cfg(test)]
+thread_local! {
+    /// Source bytes read by [`ShortReferences::scan`], for the linear-cost regression test.
+    static SHORT_SCAN_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Every short-range reference pair in a window, as the span of source it ties together, so the
+/// pairs a cut separates are found by a binary search instead of a rescan per candidate.
 ///
-/// Only the window within [`SHORT_REACH_BYTES`] of the cut is read: a pair can be no farther
-/// apart. These references have no Mach-O relocation, so the pair must stay in one object; a
-/// shared helper reached by `b.eq` from many functions is the case that makes it more than
-/// "within one function". What the window misses (an unrelaxed numeric branch farther away) is
-/// still refused when its slice is assembled.
-fn short_reference_straddles(body: &str, cut: usize) -> bool {
-    let start = cut.saturating_sub(SHORT_REACH_BYTES);
-    let start = if start == 0 { 0 } else { body[start..].find('\n').map_or(body.len(), |at| start + at + 1) };
-    let end = cut.saturating_add(SHORT_REACH_BYTES).min(body.len());
-    let mut defined_before: HashSet<&str> = HashSet::default();
-    let mut defined_after: HashSet<&str> = HashSet::default();
-    // (target, referenced before the cut)
-    let mut references: Vec<(&str, bool)> = Vec::new();
-    // Numeric labels: (digits, position, is a definition, direction for a reference).
-    let mut numeric: Vec<(&str, usize, Option<u8>)> = Vec::new();
-    let mut position = start;
-    while position < end {
-        let line_end = body[position..].find('\n').map_or(body.len(), |at| position + at);
-        let line = body[position..line_end].trim_ascii();
-        let before = position < cut;
-        if let Some(name) = line.strip_suffix(':') {
-            if !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()) {
-                numeric.push((name, position, None));
-            } else if before {
-                defined_before.insert(name);
-            } else {
-                defined_after.insert(name);
+/// A pair is a conditional branch, `cbz`/`cbnz`, `tbz`/`tbnz` or `adr` and the label it names, or
+/// a numeric `1f`/`1b` and its nearest definition in that direction. These have no Mach-O
+/// relocation, so the pair must stay in one object: a cut at `c` separates the pair spanning
+/// `lo..=hi` when `lo < c <= hi`. A shared helper reached by `b.eq` from many functions is the
+/// case that makes this more than "within one function".
+struct ShortReferences {
+    /// The cuts this scan answers for: every pair a cut in it separates lies in the window read.
+    valid: std::ops::RangeInclusive<usize>,
+    /// Pair spans sorted by `lo`.
+    los: Vec<usize>,
+    /// `max_hi[i]`: the largest `hi` among the first `i + 1` spans.
+    max_hi: Vec<usize>,
+}
+
+impl ShortReferences {
+    /// Reads the window within [`SHORT_REACH_BYTES`] of the cuts `from..=to`: a pair can be no
+    /// farther apart. What it misses (an unrelaxed numeric branch farther away) is still refused
+    /// when its slice is assembled.
+    fn scan(body: &str, from: usize, to: usize) -> Self {
+        let start = from.saturating_sub(SHORT_REACH_BYTES);
+        let start = if start == 0 { 0 } else { body[start..].find('\n').map_or(body.len(), |at| start + at + 1) };
+        let end = to.saturating_add(SHORT_REACH_BYTES).min(body.len());
+        #[cfg(test)]
+        SHORT_SCAN_BYTES.with(|bytes| bytes.set(bytes.get() + end.saturating_sub(start)));
+        let mut defined: HashMap<&str, Vec<usize>> = HashMap::default();
+        let mut references: Vec<(&str, usize)> = Vec::new();
+        // Numeric definitions by digits, ascending; references as (digits, position, direction).
+        let mut numeric_defined: HashMap<&str, Vec<usize>> = HashMap::default();
+        let mut numeric_references: Vec<(&str, usize, u8)> = Vec::new();
+        let mut position = start;
+        while position < end {
+            let line_end = body[position..].find('\n').map_or(body.len(), |at| position + at);
+            let line = body[position..line_end].trim_ascii();
+            if let Some(name) = line.strip_suffix(':') {
+                if !name.is_empty() && name.bytes().all(|byte| byte.is_ascii_digit()) {
+                    numeric_defined.entry(name).or_default().push(position);
+                } else {
+                    defined.entry(name).or_default().push(position);
+                }
+            } else if let Some(target) = short_branch_target(line) {
+                if target.len() > 1
+                    && target[..target.len() - 1].bytes().all(|byte| byte.is_ascii_digit())
+                    && matches!(target.as_bytes()[target.len() - 1], b'f' | b'b')
+                {
+                    numeric_references.push((&target[..target.len() - 1], position, target.as_bytes()[target.len() - 1]));
+                } else {
+                    references.push((target, position));
+                }
+            } else if let Some(target) = unconditional_numeric_target(line) {
+                numeric_references.push((&target[..target.len() - 1], position, target.as_bytes()[target.len() - 1]));
             }
-        } else if let Some(target) = short_branch_target(line) {
-            if target.len() > 1
-                && target[..target.len() - 1].bytes().all(|byte| byte.is_ascii_digit())
-                && matches!(target.as_bytes()[target.len() - 1], b'f' | b'b')
-            {
-                numeric.push((&target[..target.len() - 1], position, Some(target.as_bytes()[target.len() - 1])));
-            } else {
-                references.push((target, before));
-            }
-        } else if let Some(target) = unconditional_numeric_target(line) {
-            numeric.push((&target[..target.len() - 1], position, Some(target.as_bytes()[target.len() - 1])));
+            position = line_end + 1;
         }
-        position = line_end + 1;
-    }
-    if references.iter().any(|(target, before)| {
-        if *before { defined_after.contains(target) } else { defined_before.contains(target) }
-    }) {
-        return true;
-    }
-    // A numeric reference resolves to its nearest definition in its direction.
-    numeric.iter().any(|&(digits, at, direction)| match direction {
-        Some(b'f') if at < cut => numeric
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for (target, at) in references {
+            for &definition in defined.get(target).into_iter().flatten() {
+                spans.push((at.min(definition), at.max(definition)));
+            }
+        }
+        // A numeric reference resolves to its nearest definition in its direction.
+        for (digits, at, direction) in numeric_references {
+            let Some(definitions) = numeric_defined.get(digits) else { continue };
+            let after = definitions.partition_point(|&definition| definition <= at);
+            let definition = match direction {
+                b'f' => definitions.get(after).copied(),
+                _ => definitions[..after].iter().rev().find(|&&definition| definition < at).copied(),
+            };
+            if let Some(definition) = definition {
+                spans.push((at.min(definition), at.max(definition)));
+            }
+        }
+        spans.sort_unstable();
+        let los = spans.iter().map(|&(lo, _)| lo).collect();
+        let max_hi = spans
             .iter()
-            .filter(|(name, def_at, kind)| kind.is_none() && *name == digits && *def_at > at)
-            .map(|(_, def_at, _)| *def_at)
-            .min()
-            .is_some_and(|target| target >= cut),
-        Some(b'b') if at >= cut => numeric
-            .iter()
-            .filter(|(name, def_at, kind)| kind.is_none() && *name == digits && *def_at < at)
-            .map(|(_, def_at, _)| *def_at)
-            .max()
-            .is_some_and(|target| target < cut),
-        _ => false,
-    })
+            .scan(0usize, |highest, &(_, hi)| {
+                *highest = (*highest).max(hi);
+                Some(*highest)
+            })
+            .collect();
+        Self { valid: from..=to, los, max_hi }
+    }
+
+    /// Whether a cut at `cut` would separate a pair. `cut` must lie in the scanned range.
+    fn straddles(&self, cut: usize) -> bool {
+        debug_assert!(self.valid.contains(&cut));
+        match self.los.partition_point(|&lo| lo < cut) {
+            0 => false,
+            spans => self.max_hi[spans - 1] >= cut,
+        }
+    }
+}
+
+/// [`ShortReferences`] for one cut search, rescanned only when a candidate leaves the range the
+/// current scan answers for: forward searches scan ahead of the candidate, backward ones behind.
+struct ShortReferenceCursor<'a> {
+    body: &'a str,
+    index: Option<ShortReferences>,
+}
+
+impl<'a> ShortReferenceCursor<'a> {
+    fn new(body: &'a str) -> Self {
+        Self { body, index: None }
+    }
+
+    fn straddles(&mut self, cut: usize, forward: bool) -> bool {
+        if !self.index.as_ref().is_some_and(|index| index.valid.contains(&cut)) {
+            let (from, to) = if forward {
+                (cut, cut.saturating_add(SHORT_INDEX_SPAN))
+            } else {
+                (cut.saturating_sub(SHORT_INDEX_SPAN), cut)
+            };
+            self.index = Some(ShortReferences::scan(self.body, from, to));
+        }
+        self.index.as_ref().expect("scanned above").straddles(cut)
+    }
+}
+
+/// Whether a cut at `cut` would separate a short-range reference from its target (see
+/// [`ShortReferences`]), reading only the window around it.
+#[cfg(test)]
+fn short_reference_straddles(body: &str, cut: usize) -> bool {
+    ShortReferences::scan(body, cut, cut).straddles(cut)
 }
 
 /// The label a short-range branch or `adr` names, if the trimmed line is one.
@@ -591,6 +662,49 @@ mod tests {
         // The window check itself, on a cut that would split the helper from its callers.
         let helper = text.find(".p2align 2\n.globl _shared").unwrap();
         assert!(short_reference_straddles(&text, helper));
+    }
+
+    /// A search that rejects every candidate reads the listing a bounded number of times, not
+    /// once per candidate: every function here reaches the next one with `b.eq`, so no cut is
+    /// legal. Rescanning the 2 MB window per candidate made the REPL host's cold build take
+    /// minutes. The index answers like the per-cut window check.
+    #[test]
+    fn rejecting_every_candidate_reads_the_listing_a_bounded_number_of_times() {
+        let mut text = String::new();
+        let mut index = 0;
+        while text.len() < 5 << 20 {
+            text.push_str(&format!(
+                ".p2align 2\n.globl _f{index}\n_f{index}:\n    cmp x0, #1\n    b.eq _f{}\n    ret\n",
+                index + 1
+            ));
+            index += 1;
+        }
+        text.push_str(&format!(".p2align 2\n.globl _f{index}\n_f{index}:\n    ret\n"));
+        SHORT_SCAN_BYTES.with(|bytes| bytes.set(0));
+        assert!(plan_listing(&text, 3).is_none(), "every cut splits a b.eq from its target");
+        let scanned = SHORT_SCAN_BYTES.with(|bytes| bytes.get());
+        assert!(
+            scanned <= 6 * text.len(),
+            "scanned {scanned} bytes for a {} byte listing",
+            text.len()
+        );
+
+        // The index and the per-cut window agree on every candidate near a mixed region.
+        let mut mixed = String::new();
+        for index in 0..400 {
+            mixed.push_str(&format!(".p2align 2\n_g{index}:\n    cmp x0, #1\n"));
+            match index % 4 {
+                0 => mixed.push_str(&format!("    b.eq _g{}\n", index + 2)),
+                1 => mixed.push_str("    cbz x0, 1f\n    ret\n1:\n"),
+                2 => mixed.push_str("2:\n    nop\n    b 2b\n"),
+                _ => {}
+            }
+            mixed.push_str("    ret\n");
+        }
+        let index = ShortReferences::scan(&mixed, 0, mixed.len());
+        for (position, _) in mixed.match_indices(".p2align") {
+            assert_eq!(index.straddles(position), short_reference_straddles(&mixed, position), "at {position}");
+        }
     }
 
     /// A slice that still holds a short branch to a label it does not define is refused when
