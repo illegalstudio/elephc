@@ -714,7 +714,7 @@ pub(crate) fn lower_is_a_relation(
     {
         if matches!(
             ctx.value_php_type(object)?,
-            PhpType::Str | PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)
+            PhpType::Str | PhpType::Object(_) | PhpType::Callable | PhpType::Mixed | PhpType::Union(_)
         ) {
             return class_string_relation::lower_runtime_target(ctx, inst, object, target, exclude_self);
         }

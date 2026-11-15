@@ -10,7 +10,10 @@
 //! - A versioned query follows dynamic inheritance through the compiled positive candidates.
 //! - A runtime target name (`is_a($name, $name, true)`) dispatches the subject over every
 //!   compiled class and interface, then compares the target with that subject's ancestors.
-//!   An object subject dispatches on its runtime class id the same way.
+//!   An object subject dispatches on its runtime class id the same way; a closure (a callable,
+//!   or a Mixed with runtime tag 10) is a `Closure` and has no other ancestor.
+//! - A runtime target holding a NUL byte never reaches the eval bridge, which splits its
+//!   candidate list at NUL bytes.
 
 use super::*;
 
@@ -189,6 +192,7 @@ fn emit_runtime_target(
         .collect::<std::collections::BTreeMap<_, _>>();
     let string_dispatch = ctx.next_label("class_relation_string_subject");
     let object_dispatch = ctx.next_label("class_relation_object_subject");
+    let closure_subject = ctx.next_label("class_relation_closure_subject");
     let matched = ctx.next_label("class_relation_match");
     let unknown = ctx.next_label("class_relation_unknown_name");
     let unrelated = ctx.next_label("class_relation_unrelated");
@@ -219,6 +223,7 @@ fn emit_runtime_target(
             emit_object_class_id(ctx, &unrelated);
             abi::emit_jump(ctx.emitter, &object_dispatch);
         }
+        PhpType::Callable => abi::emit_jump(ctx.emitter, &closure_subject),
         _ => {
             ctx.load_value_to_reg(subject, result)?;
             abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
@@ -227,6 +232,8 @@ fn emit_runtime_target(
                 Arch::AArch64 => {
                     ctx.emitter.instruction("cmp x0, #6");                      // runtime tag 6 means the subject is an object
                     ctx.emitter.instruction(&format!("b.eq {object_label}"));   // match an object subject by its class id
+                    ctx.emitter.instruction("cmp x0, #10");                     // runtime tag 10 means the subject is a Closure
+                    ctx.emitter.instruction(&format!("b.eq {closure_subject}")); // match a closure against Closure's ancestors
                     ctx.emitter.instruction("cmp x0, #1");                      // runtime tag 1 means the subject is a class name
                     ctx.emitter.instruction(&format!("b.ne {unrelated}"));      // any other value names no class
                     ctx.emitter.instruction("str x1, [sp, #0]");                // save the unboxed subject name pointer
@@ -238,6 +245,8 @@ fn emit_runtime_target(
                 Arch::X86_64 => {
                     ctx.emitter.instruction("cmp rax, 6");                      // runtime tag 6 means the subject is an object
                     ctx.emitter.instruction(&format!("je {object_label}"));     // match an object subject by its class id
+                    ctx.emitter.instruction("cmp rax, 10");                     // runtime tag 10 means the subject is a Closure
+                    ctx.emitter.instruction(&format!("je {closure_subject}"));  // match a closure against Closure's ancestors
                     ctx.emitter.instruction("cmp rax, 1");                      // runtime tag 1 means the subject is a class name
                     ctx.emitter.instruction(&format!("jne {unrelated}"));       // any other value names no class
                     ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");        // save the unboxed subject name pointer
@@ -250,6 +259,21 @@ fn emit_runtime_target(
             emit_object_class_id(ctx, &unrelated);
             abi::emit_jump(ctx.emitter, &object_dispatch);
         }
+    }
+
+    // -- closure subject: a callable value is a Closure, final and implementing nothing, so its
+    // only ancestor is Closure itself, which is_subclass_of() excludes --
+    ctx.emitter.label(&closure_subject);
+    if exclude_self {
+        abi::emit_jump(ctx.emitter, &unrelated);
+    } else {
+        if literal_flag.is_none() {
+            abi::emit_load_int_immediate(ctx.emitter, result, 1);
+            abi::emit_store_to_sp(ctx.emitter, result, 16);
+        }
+        emit_match(ctx, 24, "Closure", &matched);
+        emit_match(ctx, 24, "\\Closure", &matched);
+        abi::emit_jump(ctx.emitter, &unrelated);
     }
 
     // -- object subject: the runtime class id selects the ancestor list --
@@ -303,6 +327,9 @@ fn emit_runtime_target(
 
     ctx.emitter.label(&unknown);
     if ctx.module.required_runtime_features.eval_bridge {
+        // The bridge splits its candidate list at NUL bytes, so a target holding one would be
+        // read as several names. No class name holds a NUL byte: such a target names no class.
+        emit_branch_if_slot_string_has_nul(ctx, 24, &unrelated);
         // Only an eval-declared class can still answer. The bridge treats its first candidate
         // as the target, so the runtime target name is the whole candidate list.
         for index in 0..2 {
@@ -328,6 +355,37 @@ fn emit_runtime_target(
     ctx.emitter.label(&done);
     abi::emit_release_temporary_stack(ctx.emitter, 48);
     store_if_result(ctx, inst)
+}
+
+/// Branches to `found` when the string saved at `slot` (pointer, then length) holds a NUL byte.
+fn emit_branch_if_slot_string_has_nul(ctx: &mut FunctionContext<'_>, slot: usize, found: &str) {
+    let scan = ctx.next_label("class_relation_nul_scan");
+    let clean = ctx.next_label("class_relation_nul_free");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("ldr x9, [sp, #{slot}]"));         // load the string pointer to scan
+            ctx.emitter.instruction(&format!("ldr x10, [sp, #{}]", slot + 8));  // load the count of bytes left to scan
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction(&format!("cbz x10, {clean}"));              // every byte scanned: the string holds no NUL
+            ctx.emitter.instruction("ldrb w11, [x9], #1");                      // read the next byte and advance the pointer
+            ctx.emitter.instruction(&format!("cbz w11, {found}"));              // a NUL byte: report it
+            ctx.emitter.instruction("sub x10, x10, #1");                        // one byte fewer left to scan
+            ctx.emitter.instruction(&format!("b {scan}"));                      // scan the next byte
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {slot}]")); // load the string pointer to scan
+            ctx.emitter.instruction(&format!("mov r11, QWORD PTR [rsp + {}]", slot + 8)); // load the count of bytes left to scan
+            ctx.emitter.label(&scan);
+            ctx.emitter.instruction("test r11, r11");                           // are any bytes left to scan?
+            ctx.emitter.instruction(&format!("jz {clean}"));                    // every byte scanned: the string holds no NUL
+            ctx.emitter.instruction("cmp BYTE PTR [r10], 0");                   // is the next byte NUL?
+            ctx.emitter.instruction(&format!("je {found}"));                    // a NUL byte: report it
+            ctx.emitter.instruction("inc r10");                                 // advance to the next byte
+            ctx.emitter.instruction("dec r11");                                 // one byte fewer left to scan
+            ctx.emitter.instruction(&format!("jmp {scan}"));                    // scan the next byte
+        }
+    }
+    ctx.emitter.label(&clean);
 }
 
 /// Saves the class id of the object in the result register to the frame's slot 40, branching

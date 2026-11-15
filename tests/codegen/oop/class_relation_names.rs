@@ -377,3 +377,48 @@ echo is_a('Dyn', $n, true) ? "y" : "n", is_subclass_of('Dyn', $n) ? "y" : "n", i
     );
     assert_eq!(out, ["yyyyyyyy\n", "nnnynyyn\n", "yynyyyyy\n"]);
 }
+
+/// A closure is an instance of `Closure`, whether held as a callable or boxed in a Mixed, so a
+/// runtime `Closure` target (any case, backslash-rooted or not) matches it. `Closure` is final
+/// and implements nothing, so `is_subclass_of()` and every other target answer `false`.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_closure_subject_runtime_target() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+function probe(mixed $v, string $t): string {
+    return (is_a($v, $t) ? "y" : "n") . (is_subclass_of($v, $t) ? "y" : "n") . (is_a($v, $t, true) ? "y" : "n");
+}
+function typed(callable $f, string $t): string { return (is_a($f, $t) ? "y" : "n") . (is_subclass_of($f, $t) ? "y" : "n"); }
+$t = $argv[1] ?? "Closure";
+$c = function () { return 1; };
+$a = fn() => 2;
+echo probe($c, $t), " ", probe($a, $t), " ", probe(strlen(...), $t), " ", typed($c, $t), " ", is_a($c, $t) ? "y" : "n", "\n";
+"#,
+        &[&[], &["closure"], &["\\Closure"], &["Other"], &["stdClass"]],
+    );
+    let closure = "yny yny yny yn y\n";
+    let other = "nnn nnn nnn nn n\n";
+    assert_eq!(out, [closure, closure, closure, other, other]);
+}
+
+/// A runtime target holding a NUL byte names no class, even with eval in the program, whose
+/// bridge reads its candidate list as NUL-separated names. A closure subject still matches
+/// `Closure` there. Expected output measured with php 8.5.12.
+#[test]
+fn test_is_a_runtime_target_with_nul_byte_and_eval_classes() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+eval('class Dyn extends Foo {}');
+$nul = chr($argc > 9 ? 1 : 0);
+$t = $argv[1] ?? "Dyn";
+$m = $argc > 9 ? 1 : fn() => 0;
+echo is_a('Dyn', $t, true) ? "y" : "n", is_a('Dyn', "Ghost" . $nul . $t, true) ? "y" : "n", is_a('Dyn', $t . $nul, true) ? "y" : "n";
+echo is_subclass_of('Dyn', $t . $nul . "Ghost") ? "y" : "n", is_a('Dyn', $nul . $t, true) ? "y" : "n";
+echo " ", is_a($m, $argv[2] ?? "Closure") ? "y" : "n", "\n";
+"#,
+        &[&[], &["Foo", "closure"], &["Foo", "Foo"]],
+    );
+    assert_eq!(out, ["ynnnn y\n", "ynnnn y\n", "ynnnn n\n"]);
+}
