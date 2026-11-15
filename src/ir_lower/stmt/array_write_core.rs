@@ -287,8 +287,15 @@ fn lower_array_assign_from_value(
         lower_boxed_array_set(ctx, array_value, index, value, span, key_already_diagnosed);
         return;
     }
-    let (mut index_value, mut value_value, mut index_pins) =
-        lower_write_key_and_value(ctx, index, value);
+    // Final frame storage may make this earlier local view own a retained array.
+    // Keep that lease visible while an index or checked RHS can throw before publication.
+    let mut pending = [array_value];
+    let ((mut index_value, mut value_value, mut index_pins), mut receiver_pins) =
+        crate::ir_lower::expr::lower_with_pending_owners(ctx, &mut pending, span,
+            |ctx| lower_write_key_and_value(ctx, index, value));
+    let array_value = pending[0];
+    receiver_pins.append(&mut index_pins);
+    index_pins = receiver_pins;
     // `??=` borrows its result temp: the slot keeps the reference and hands it to the
     // expression consumer, so the container write must retain its own owner instead of
     // adopting the temp (which would leave a dangling hash entry after the merge releases it).

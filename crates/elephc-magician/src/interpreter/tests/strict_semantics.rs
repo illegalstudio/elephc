@@ -29,9 +29,9 @@ fn strict_profile_dynamic_code_blocks_nested_eval_and_include() {
 /// An external host cannot execute with a profile whose guarantees are still unimplemented.
 #[test]
 fn strict_profile_pending_guarantees_cannot_execute_through_interpreter_api() {
-    let program = crate::parser::parse_fragment_with_semantics(b"echo 'must not execute';", SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)).unwrap();
+    let program = crate::parser::parse_fragment_with_semantics(b"echo 'must not execute';", SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
     let mut context = ElephcEvalContext::new();
-    context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true)).unwrap();
+    context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Casts, true)).unwrap();
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     assert_eq!(execute_program_with_context(&mut context, &program, &mut scope, &mut values),
@@ -418,4 +418,20 @@ fn strict_numeric_diagnostics_staged_walker_vm_preserves_operand_order() {
             }
         }
     }
+}
+
+/// The public interpreter entry admits Overflow and preserves a failed update's original owner.
+#[test]
+fn strict_overflow_public_interpreter_entry_contains_failure() {
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Overflow, true);
+    let source = b"$value = 9223372036854775807; try { $value++; } catch (ArithmeticError $error) { echo 'A'; } return $value;";
+    let program = crate::parser::parse_fragment_with_semantics(source, profile).unwrap();
+    let mut context = ElephcEvalContext::new(); context.install_semantic_profile(profile).unwrap();
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps { fixed_profile: Some(profile), ..Default::default() };
+    let result = execute_program_with_context(&mut context, &program, &mut scope, &mut values).unwrap();
+    assert_eq!(values.output, "A"); assert_eq!(values.get(result), FakeValue::Int(i64::MAX));
+    values.release(result).unwrap();
+    for value in scope.drain_owned_cells() { values.release(value).unwrap(); }
+    for owners in values.cell_owners.values() { assert_eq!(*owners, 0); }
 }

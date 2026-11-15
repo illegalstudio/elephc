@@ -1,5 +1,5 @@
 <?php
-// Compile with: elephc --strict-dynamic-code --strict-bools --strict-arithmetic examples/strict-semantics/main.php
+// Compile with: elephc --strict-dynamic-code --strict-bools --strict-arithmetic --strict-overflow examples/strict-semantics/main.php
 // Literal source is verified and compiled ahead of time.
 eval('echo "Verified at compilation", PHP_EOL;');
 
@@ -51,4 +51,10 @@ try {
     numericTotal('2', 3);
 } catch (TypeError $error) {
     echo "Arithmetic requires numeric values", PHP_EOL;
+}
+
+try {
+    numericTotal(PHP_INT_MAX, 1);
+} catch (ArithmeticError $error) {
+    echo "Integer overflow was rejected", PHP_EOL;
 }

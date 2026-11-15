@@ -28,3 +28,12 @@ fn test_repl_strict_arithmetic_public_profile_and_recovery() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "FT");
 }
+
+/// The public overflow host keeps a failed update's original value available after recovery.
+#[test]
+fn test_repl_strict_overflow_public_profile_and_recovery() {
+    let fixture = Fixture::new();
+    let output = fixture.run("try { $value = PHP_INT_MAX; $value++; } catch (ArithmeticError $error) { echo 'A'; }\necho $value === PHP_INT_MAX ? 'K' : 'X';\n", &["--strict-overflow"]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "AK");
+}

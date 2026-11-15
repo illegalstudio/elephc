@@ -135,6 +135,7 @@ mod scalar_load_owners;
 mod buffer_lengths;
 mod branch_conditions;
 mod boxed_array_write_owners;
+mod array_write_pending_owners;
 mod boxed_array_reduce;
 mod boxed_array_aggregates;
 mod keyed_array_kernels;

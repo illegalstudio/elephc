@@ -46,7 +46,8 @@ features! {
 /// Features integrated across compiler and eval entry points in this development build.
 /// Existing local and OPcache contracts retain their current scope while stronger rules land.
 pub const INTEGRATED_FEATURE_BITS: u64 = StrictFeature::Locals.bit() | StrictFeature::Bools.bit()
-    | StrictFeature::DynamicCode.bit() | StrictFeature::Opcache.bit() | StrictFeature::Arithmetic.bit();
+    | StrictFeature::DynamicCode.bit() | StrictFeature::Opcache.bit() | StrictFeature::Arithmetic.bit()
+    | StrictFeature::Overflow.bit();
 
 /// User-facing metadata for one strict feature.
 #[derive(Clone, Copy, Debug)]

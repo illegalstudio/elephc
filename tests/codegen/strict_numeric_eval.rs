@@ -5,7 +5,7 @@
 //! - Focused native codegen integration tests.
 //!
 //! Key details:
-//! - Staged profiles stay unavailable at public compilation boundaries.
+//! - Direct ABI fixtures select profiles independently from public frontend admission.
 //! - Both optimizer settings must contain exceptions and retire each native owner.
 
 use crate::support::*;

@@ -42,6 +42,7 @@ mod strict_eval_modulo;
 mod strict_eval_intdiv;
 mod strict_division_modulo;
 mod strict_numeric_domains;
+mod strict_overflow_public;
 mod strict_integer_power;
 mod strict_unary_domains;
 mod strict_unary_ieee;

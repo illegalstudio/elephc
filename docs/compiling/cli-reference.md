@@ -605,11 +605,25 @@ An explicit `--no-strict-<feature>` overrides the umbrella in either argument
 order. Repeating an explicit feature option uses the last value.
 
 Integration is in progress. This build accepts the existing strict-locals and
-strict-opcache rules plus strict-dynamic-code, strict-bools and strict-arithmetic.
+strict-opcache rules plus strict-dynamic-code, strict-bools, strict-arithmetic and
+strict-overflow.
 Other registered guarantees,
 including the complete umbrella, fail explicitly until their enforcement is
 complete. Eval embedding entry points reject execution with those profiles too. The [implementation plan](https://github.com/illegalstudio/elephc/issues/2347)
 tracks the remaining work.
+
+### Strict integer overflow
+
+`--strict-overflow` checks integer literal spellings and integer addition,
+subtraction, multiplication, power, negation, updates and their numeric builtin
+counterparts. Proven overflowing source produces a compile diagnostic. A value
+that overflows during execution throws a catchable `ArithmeticError` before a
+failed assignment or reference write changes its destination.
+
+Explicit float literals and floating-point operations keep IEEE 754 behavior,
+including infinity. This option alone preserves PHP numeric coercions and negative
+integer power; combine it with `--strict-arithmetic` for the separate numeric
+operand and result-kind rules. The same checks apply inside eval and the REPL.
 
 ### Strict arithmetic
 

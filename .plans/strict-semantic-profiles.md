@@ -371,18 +371,18 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 78 (this commit), following `fed394dc1d`. Issue:
+Verified through step 79 (this commit), following `c694b9c796`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
 commit for every verified step and no partial delivery. Do not expose unfinished
 flags as successful no-ops. The public integrated mask still contains only
-Locals, Bools, DynamicCode, Opcache and Arithmetic. Existing Locals behavior remains available
+Locals, Bools, DynamicCode, Opcache, Arithmetic and Overflow. Existing Locals behavior remains available
 but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 78.
+This progress ledger condenses verified implementation through step 79.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -988,6 +988,25 @@ builtin/site/EIR audits, assembly comments, PHP syntax and diff hygiene pass.
 Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
 679 eval).
 
+### Public overflow admission and destination ownership
+
+- Overflow is available independently of Arithmetic across public CLI, interpreter
+  and REPL entry points. Source evidence rejects proven literal/arithmetic overflow
+  before folding; dynamic integer failures throw ArithmeticError before mutation.
+  IEEE floating behavior, weak parameter binding and permissive controls remain
+  independent. Native, opaque/cached eval, callable numeric builtins and updates
+  agree with both EIR optimizer settings.
+- A captured array destination now keeps its unwind lease across index/RHS
+  evaluation. Later opaque eval can widen final frame storage to Mixed, making an
+  earlier array view owning. Without this guard, a caught checked RHS leaked the
+  captured array. The regression also covers an ordinary throwing RHS without any
+  strict profile, and all five targets validate and emit the protected graph.
+- Public overflow source/native tests, four native profile/optimizer combinations,
+  the independent arithmetic regression, no-profile RHS ownership, REPL recovery,
+  real interpreter entry and pending-capability gates pass. Check/test-target build,
+  compiler/exporter builds, example output with clean heap, builtin docs/audits,
+  assembly comments and diff hygiene pass.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1084,4 +1103,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 75 | `1514409912` | feat(strict): preserve runtime property reference names |
 | 76 | `0c94688cfc` | feat(strict): bind known dynamic property arguments |
 | 77 | `fed394dc1d` | feat(strict): canonicalize dynamic mixed property references |
-| 78 | this commit | feat(strict): enable the arithmetic semantic profile |
+| 78 | `c694b9c796` | feat(strict): enable the arithmetic semantic profile |
+| 79 | this commit | feat(strict): enable the overflow semantic profile |

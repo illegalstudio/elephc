@@ -78,7 +78,7 @@ mod tests {
     fn strict_profile_dynamic_code_ffi_cannot_execute_source() {
         use crate::ffi::execute::{__elephc_eval_execute, __elephc_eval_execute_with_deferred_catalog};
         let source = b"echo 'must not execute';";
-        for feature in [StrictFeature::DynamicCode, StrictFeature::Overflow] {
+        for feature in [StrictFeature::DynamicCode, StrictFeature::Casts] {
             let mut context = ElephcEvalContext::new();
             context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(feature, true)).unwrap();
             let mut scope = crate::scope::ElephcEvalScope::new();
