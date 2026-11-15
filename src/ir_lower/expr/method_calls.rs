@@ -237,6 +237,7 @@ pub(super) fn lower_method_call(
         .map(|class_name| format!("{class_name}::{dispatch_method}"))
         .unwrap_or_else(|| dispatch_method.to_string());
     let previous_description = ctx.call_description.replace(call_description);
+    let previous_call_site = ctx.call_site_span.replace(expr.span);
     let ref_place_rewrite = sig.as_ref().and_then(|signature| {
         super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
     });
@@ -245,6 +246,7 @@ pub(super) fn lower_method_call(
         .map_or(args, |rewrite| rewrite.args.as_slice());
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
+    ctx.call_site_span = previous_call_site;
     // php-src initializes the reflected class once the arguments are evaluated, whether the
     // static property exists or not.
     if op == Op::MethodCall

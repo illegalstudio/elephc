@@ -278,6 +278,7 @@ fn lower_method_call_with_binding(
         .map(|class_name| format!("{class_name}::{dispatch_method}"))
         .unwrap_or_else(|| dispatch_method.to_string());
     let previous_description = ctx.call_description.replace(call_description);
+    let previous_call_site = ctx.call_site_span.replace(expr.span);
     let ref_place_rewrite = if enum_args.is_none() {
         sig.as_ref().and_then(|signature| {
             super::ref_place_args::rewrite_typed_property_ref_args(ctx, signature, args)
@@ -291,6 +292,7 @@ fn lower_method_call_with_binding(
     let arg_values =
         enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), call_args));
     ctx.call_description = previous_description;
+    ctx.call_site_span = previous_call_site;
     let mut arg_values = arg_values;
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(

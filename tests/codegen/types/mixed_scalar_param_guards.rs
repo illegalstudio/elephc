@@ -213,3 +213,31 @@ echo "end\n";
     );
     assert_eq!(out, "caught: pure(): Argument #1 ($s) must be of type string, null given, called in F on line 6\ncaught: pure(): Argument #1 ($s) must be of type string, null given, called in F on line 12\nend\n");
 }
+
+/// PHP evaluates every argument before the callee checks a parameter type: a later argument's
+/// side effects run first, named arguments are checked in parameter order, and a call split
+/// over several lines reports the line where the call starts.
+#[test]
+fn test_parameter_check_runs_after_all_arguments_and_reports_the_call_line() {
+    let out = compile_and_run(
+        r#"<?php
+function t(string $s, int $i = 0): string { return $s . $i; }
+function k(int $a, string $b): string { return $a . $b; }
+function m(mixed $v): mixed { return $v; }
+function side(string $label): int { echo "side:$label\n"; return 1; }
+function show(TypeError $e): void { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+$n = m(null);
+try { echo t($n, side("a")), "\n"; } catch (TypeError $e) { show($e); }
+try { echo t(
+    $n,
+    side("b")
+), "\n"; } catch (TypeError $e) { show($e); }
+try { echo k(side("c"), $n), "\n"; } catch (TypeError $e) { show($e); }
+try { echo t(i: side("d"), s: $n), "\n"; } catch (TypeError $e) { show($e); }
+try { t($n); echo "not reached\n"; } catch (TypeError $e) { show($e); }
+echo t(m("ok"), side("e")), "\n";
+echo "end\n";
+"#,
+    );
+    assert_eq!(out, "side:a\nt(): Argument #1 ($s) must be of type string, null given, called in F on line 8\nside:b\nt(): Argument #1 ($s) must be of type string, null given, called in F on line 9\nside:c\nk(): Argument #2 ($b) must be of type string, null given, called in F on line 13\nside:d\nt(): Argument #1 ($s) must be of type string, null given, called in F on line 14\nt(): Argument #1 ($s) must be of type string, null given, called in F on line 15\nside:e\nok1\nend\n");
+}

@@ -148,7 +148,10 @@ pub(super) fn lower_positional_spread_args_with_signature(
         operands.push(tail.value);
     }
 
-    Some(coerce_operands_to_params(ctx, sig, operands))
+    Some({
+        let sources = vec![super::scalar_param_guards::GuardSource::Unrecorded; operands.len()];
+        coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), false)
+    })
 }
 
 /// Counts a staged unpack using its actual storage representation, not its PHP array hint.
