@@ -212,6 +212,30 @@ Worker::register(new Application());
     }
 }
 
+/// A buffer `handle()` leaves open is sent at the end of every request, the first one too. The
+/// bootstrap's own drain left `__rt_ob_flush_all`'s re-entry guard set, so the first request's
+/// drain did nothing and its output was discarded (`""`, then `2:ok`).
+#[test]
+fn web_application_first_request_sends_its_open_output_buffer() {
+    let fixture = Fixture(make_test_dir("web_application_first_ob"));
+    let binary = application(&fixture, r#"<?php
+class Application implements Elephc\Web\WorkerApplication {
+    private int $count = 0;
+    public function handle(Elephc\Web\Request $request): void {
+        $this->count++;
+        ob_start();
+        echo $this->count, ':ok';
+    }
+    public function shutdown(): void {}
+}
+Elephc\Web\Worker::register(new Application());
+"#);
+    let addr = format!("127.0.0.1:{}", free_port());
+    let _server = spawn_server(&binary, &addr, "1");
+    assert_eq!(body(&addr, "/"), "1:ok");
+    assert_eq!(body(&addr, "/"), "2:ok");
+}
+
 /// A planned recycle executes shutdown and a new PID runs a new bootstrap exactly once.
 #[test]
 fn web_application_recycle_bootstraps_new_worker() {

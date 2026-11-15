@@ -996,12 +996,18 @@ pub fn emit_ob_flush_all(emitter: &mut Emitter) {
     emitter.label("__rt_ob_flush_all_loop");
     abi::emit_symbol_address(emitter, "x9", "_ob_level");                       // materialize the address of the buffer-stack depth
     emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
-    emitter.instruction("cbz x10, __rt_ob_flush_all_done");                     // stack drained — done
+    emitter.instruction("cbz x10, __rt_ob_flush_all_drained");                  // stack drained — release the guard
     emitter.instruction("sub x0, x10, #1");                                     // drain the top slot next
     emitter.instruction(&format!("mov x1, #{}", OB_PHASE_FINAL));               // shutdown handler phase = FINAL
     emitter.instruction("mov x2, #1");                                          // emit the surviving bytes to the parent sink
     emitter.instruction("bl __rt_ob_process_and_write");                        // run the handler and flush the buffer
     emitter.instruction("b __rt_ob_flush_all_loop");                            // continue draining
+    // The guard only keeps a nested drain out while this one runs. Left set, it turned every
+    // later drain into a no-op: an `--web-lifecycle=application` worker drains once at the end
+    // of its bootstrap, so the first request's open buffers were discarded instead of sent.
+    emitter.label("__rt_ob_flush_all_drained");
+    abi::emit_symbol_address(emitter, "x9", "_ob_flushing");                    // materialize the re-entry guard address
+    emitter.instruction("str xzr, [x9]");                                       // the drain is over: a later one runs again
     emitter.label("__rt_ob_flush_all_done");
     emitter.instruction("ldp x29, x30, [sp], #16");                             // restore frame pointer and return address
     emitter.instruction("ret");                                                 // return to caller
@@ -1023,12 +1029,16 @@ fn emit_ob_flush_all_x86_64(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r9", "_ob_level");                       // materialize the address of the buffer-stack depth
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
     emitter.instruction("test r10, r10");                                       // is anything still buffered?
-    emitter.instruction("jz __rt_ob_flush_all_done_x86");                       // stack drained — done
+    emitter.instruction("jz __rt_ob_flush_all_drained_x86");                    // stack drained — release the guard
     emitter.instruction("lea rdi, [r10 - 1]");                                  // drain the top slot next
     emitter.instruction(&format!("mov esi, {}", OB_PHASE_FINAL));               // shutdown handler phase = FINAL
     emitter.instruction("mov edx, 1");                                          // emit the surviving bytes to the parent sink
     emitter.instruction("call __rt_ob_process_and_write");                      // run the handler and flush the buffer
     emitter.instruction("jmp __rt_ob_flush_all_loop_x86");                      // continue draining
+    // As on AArch64: the guard is released once this drain is over, so a later one runs.
+    emitter.label("__rt_ob_flush_all_drained_x86");
+    abi::emit_symbol_address(emitter, "r9", "_ob_flushing");                    // materialize the re-entry guard address
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // the drain is over: a later one runs again
     emitter.label("__rt_ob_flush_all_done_x86");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to caller
