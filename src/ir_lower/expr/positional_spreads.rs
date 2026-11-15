@@ -77,6 +77,12 @@ pub(super) fn lower_positional_spread_args_with_signature(
         );
     }
 
+    // Spread elements have no checker record of their own: leave a boxed element for the
+    // scalar-parameter check, which runs from its value after every element was read.
+    let previous_deferral = ctx.scalar_guard_deferral;
+    if !capture_values {
+        ctx.scalar_guard_deferral = Some((ctx.expression_depth, true));
+    }
     for param_idx in first_spread_param_idx..regular_param_count {
         let element_idx = param_idx - first_spread_param_idx;
         let default = sig.defaults.get(param_idx).and_then(|default| default.as_ref());
@@ -110,6 +116,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
         };
         operands.push(lower_arg_with_signature_options(ctx, sig, param_idx, &expr, capture_values));
     }
+    ctx.scalar_guard_deferral = previous_deferral;
 
     if sig.variadic.is_some() {
         let tail_offset = regular_param_count.saturating_sub(spread_idx);
@@ -150,7 +157,7 @@ pub(super) fn lower_positional_spread_args_with_signature(
 
     Some({
         let sources = vec![super::scalar_param_guards::GuardSource::Unrecorded; operands.len()];
-        coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), false)
+        coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), true)
     })
 }
 

@@ -1167,6 +1167,13 @@ impl Checker {
             let can_widen_by_ref_local = self.by_ref_argument_can_widen_local_to_mixed(arg)
                 || self.boxed_reference_promotion_pending(arg, span);
             if matches!(arg.kind, ExprKind::Spread(_)) {
+                // Spread elements bound to declared scalars are checked at run time from
+                // their values; record the spread so the call stays observable.
+                if (param_idx..regular_param_count).any(|index| {
+                    crate::types::param_binding::runtime_scalar_guard_param(sig, index).is_some()
+                }) {
+                    self.scalar_guard_arg_sites.insert(arg.span);
+                }
                 continue;
             }
             if param_idx < regular_param_count {

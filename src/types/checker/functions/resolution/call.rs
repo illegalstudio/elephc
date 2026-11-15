@@ -436,6 +436,11 @@ impl Checker {
                                 &format!("Function '{}' parameter ${}", name, decl.params[i]),
                             )?;
                         }
+                        // A spread element bound to a declared scalar is checked at run time
+                        // from its value; record the spread so the call stays observable.
+                        if matches!(declared_ty, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) {
+                            self.scalar_guard_arg_sites.insert(arg.span);
+                        }
                         param_types.push((decl.params[i].clone(), declared_ty));
                     } else if matches!(ty, PhpType::Never) {
                         let param_ty = decl
