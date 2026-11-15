@@ -1205,8 +1205,8 @@ line2:The quick|brown fox:4142:AB"#,
         ),
         (
             "ctype_strings",
-            "<?php echo ctype_alpha('Hello') ? '1' : '0'; echo ctype_alpha('Hello123') ? '1' : '0'; echo ctype_digit('12345') ? '1' : '0'; echo ctype_digit('123abc') ? '1' : '0'; echo ctype_alnum('Hello123') ? '1' : '0'; echo ctype_alnum('Hello 123') ? '1' : '0'; echo ctype_space(\" \\t\\n\") ? '1' : '0'; echo ctype_space('hello') ? '1' : '0';",
-            "10101010",
+            "<?php echo ctype_alpha('Hello') ? '1' : '0'; echo ctype_alpha('Hello123') ? '1' : '0'; echo ctype_digit('12345') ? '1' : '0'; echo ctype_digit('123abc') ? '1' : '0'; echo ctype_alnum('Hello123') ? '1' : '0'; echo ctype_alnum('Hello 123') ? '1' : '0'; echo ctype_space(\" \\t\\n\") ? '1' : '0'; echo ctype_space('hello') ? '1' : '0'; echo ctype_lower('abc') ? '1' : '0'; echo ctype_lower('abC') ? '1' : '0'; echo ctype_upper('ABC') ? '1' : '0'; echo ctype_upper('Ab') ? '1' : '0'; echo ctype_xdigit('aF') ? '1' : '0'; echo ctype_xdigit('g') ? '1' : '0'; echo ctype_cntrl(\"\\n\") ? '1' : '0'; echo ctype_cntrl('A') ? '1' : '0'; echo ctype_graph('A!') ? '1' : '0'; echo ctype_graph('A ') ? '1' : '0'; echo ctype_print('A ') ? '1' : '0'; echo ctype_print(\"A\\n\") ? '1' : '0'; echo ctype_punct('!') ? '1' : '0'; echo ctype_punct('a') ? '1' : '0';",
+            "1010101010101010101010",
         ),
         (
             "gettype_scalars",

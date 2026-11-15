@@ -195,7 +195,7 @@
       "total": 3181
     },
     "functions": {
-      "have": 1078,
+      "have": 1085,
       "total": 2169
     }
   },
@@ -616,8 +616,8 @@
       "docs": null,
       "extension": "ctype",
       "functions": {
-        "eval": 4,
-        "have": 4,
+        "eval": 11,
+        "have": 11,
         "total": 11
       },
       "name": "ctype",

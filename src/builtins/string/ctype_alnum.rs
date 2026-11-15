@@ -6,14 +6,12 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - No `check` hook is needed: `ctype_alnum` is a pure-data builtin whose return type
-//!   (`Bool`) is fully determined by its declaration. The registry derives the
-//!   return type from the `returns:` field without calling a check hook.
-
+//! - The shared `ctype_semantics()` descriptor keeps the declared `Bool` result and resolves
+//!   effects from the argument type: strings are pure, other values raise PHP's deprecation.
 
 builtin! {
     contract: "ctype_alnum",
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
+    semantics: crate::builtins::ctype::ctype_semantics(
         crate::ir::RuntimeFnId::CtypeAlnum,
     ),
 }

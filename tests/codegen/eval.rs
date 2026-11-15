@@ -7233,6 +7233,74 @@ echo ":"; echo function_exists("ctype_space");');
     assert_eq!(out, "A:D:N:S:empty:not-digit:not-space:1:1:1:1");
 }
 
+/// Verifies eval dispatch for the remaining ASCII `ctype_*` classes.
+#[test]
+fn test_eval_dispatches_remaining_ctype_builtin_calls() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo ctype_lower(text: "ab") ? "L" : "-";
+echo ctype_upper("AB") ? "U" : "-";
+echo ctype_xdigit("aF") ? "X" : "-";
+echo ctype_cntrl(chr(10)) ? "C" : "-";
+echo ctype_graph("a!") ? "G" : "-";
+echo ctype_print("a ") ? "P" : "-";
+echo ctype_punct("!") ? "!" : "-";
+echo ctype_lower("") ? "bad" : "empty";
+echo ctype_punct("a!") ? "bad" : "mix";
+echo ctype_xdigit("g") ? "bad" : "not-hex";
+echo ":";
+echo call_user_func("ctype_upper", "Ab") ? "bad" : "not-upper";
+echo ":";
+echo call_user_func_array("ctype_xdigit", ["text" => "0aF"]) ? "hex" : "bad";
+echo ":";
+echo function_exists("ctype_cntrl");
+echo function_exists("ctype_graph");
+echo function_exists("ctype_lower");
+echo function_exists("ctype_print");
+echo function_exists("ctype_punct");
+echo function_exists("ctype_upper");
+echo function_exists("ctype_xdigit");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "LUXCGP!emptymixnot-hex:not-upper:hex:1111111"
+    );
+}
+
+/// Verifies eval `ctype_*` calls classify ints as php-src does and deprecate non-strings.
+///
+/// The runtime-selected name inside eval also reaches the builtin. Only the diagnostic text is
+/// compared because eval reports its location differently from the host script.
+#[test]
+fn test_eval_ctype_non_string_arguments_follow_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('echo ctype_digit(53) ? "1" : "0", ctype_upper(-191) ? "1" : "0", ctype_digit(256) ? "1" : "0",
+    ctype_graph(-300) ? "1" : "0", ctype_digit(true) ? "1" : "0", ctype_digit(null) ? "1" : "0";
+$name = "ctype_alpha";
+echo $name("ab") ? "1" : "0", $name(66) ? "1" : "0";');
+"#,
+    );
+    assert!(out.success, "stderr: {}", out.stderr);
+    assert_eq!(out.stdout, "10110011");
+    let deprecation = |function: &str, type_name: &str| {
+        format!(
+            "Deprecated: {function}(): Argument of type {type_name} will be interpreted as string in the future"
+        )
+    };
+    let expected = [
+        deprecation("ctype_digit", "int"),
+        deprecation("ctype_upper", "int"),
+        deprecation("ctype_digit", "int"),
+        deprecation("ctype_graph", "int"),
+        deprecation("ctype_digit", "bool"),
+        deprecation("ctype_digit", "null"),
+        deprecation("ctype_alpha", "int"),
+    ];
+    assert_eq!(normalize_diagnostic_text(&out.stderr), expected.join("\n") + "\n");
+}
+
 /// Verifies eval `crc32()` returns PHP-compatible non-negative checksums.
 #[test]
 fn test_eval_dispatches_crc32_builtin_call() {

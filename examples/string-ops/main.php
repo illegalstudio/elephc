@@ -218,6 +218,15 @@ echo "quoted_printable_encode: " . quoted_printable_encode("caf\xC3\xA9 = 1\tuni
 echo "\n--- Validation ---\n";
 echo "ctype_alpha('abc'): " . (ctype_alpha("abc") ? "yes" : "no") . "\n";
 echo "ctype_digit('123'): " . (ctype_digit("123") ? "yes" : "no") . "\n";
+echo "ctype_alnum('a1'): " . (ctype_alnum("a1") ? "yes" : "no") . "\n";
+echo "ctype_lower('abc'): " . (ctype_lower("abc") ? "yes" : "no") . "\n";
+echo "ctype_upper('ABC'): " . (ctype_upper("ABC") ? "yes" : "no") . "\n";
+echo "ctype_xdigit('aF09'): " . (ctype_xdigit("aF09") ? "yes" : "no") . "\n";
+echo "ctype_space: " . (ctype_space(" \t\n") ? "yes" : "no") . "\n";
+echo "ctype_cntrl: " . (ctype_cntrl("\n\t") ? "yes" : "no") . "\n";
+echo "ctype_graph('Hi!'): " . (ctype_graph("Hi!") ? "yes" : "no") . "\n";
+echo "ctype_print: " . (ctype_print("Hi ") ? "yes" : "no") . "\n";
+echo "ctype_punct('!?'): " . (ctype_punct("!?") ? "yes" : "no") . "\n";
 
 // Parsing
 echo "\n--- Parsing ---\n";

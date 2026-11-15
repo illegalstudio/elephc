@@ -615,6 +615,112 @@ fn test_ctype_space_false() {
     assert_eq!(out, "");
 }
 
+/// Verifies the remaining ASCII `ctype_*` classes, including empty strings and range edges.
+///
+/// Case-insensitive and leading-backslash calls stay on the same predicates. Bytes above
+/// `0x7F`, including `0xFF` for every range-based class, fail every class, matching the C locale
+/// used by the original four functions.
+#[test]
+fn test_ctype_remaining_ascii_classes() {
+    let out = compile_and_run(
+        r#"<?php
+echo ctype_cntrl("\x00\x1f\x7f") ? "1" : "0";
+echo ctype_cntrl("\x00 ") ? "1" : "0";
+echo ctype_cntrl("") ? "1" : "0";
+echo ctype_cntrl(chr(31)) ? "1" : "0";
+echo ctype_cntrl(chr(32)) ? "1" : "0";
+echo ctype_cntrl(chr(127)) ? "1" : "0";
+echo ctype_cntrl(chr(126)) ? "1" : "0";
+echo ctype_cntrl(chr(128)) ? "1" : "0";
+echo ":";
+echo ctype_graph("Hello!") ? "1" : "0";
+echo ctype_graph("Hello ") ? "1" : "0";
+echo ctype_graph("") ? "1" : "0";
+echo ctype_graph(chr(33)) ? "1" : "0";
+echo ctype_graph(chr(32)) ? "1" : "0";
+echo ctype_graph(chr(126)) ? "1" : "0";
+echo ctype_graph(chr(127)) ? "1" : "0";
+echo ctype_graph(chr(128)) ? "1" : "0";
+echo ":";
+echo ctype_lower("abc") ? "1" : "0";
+echo ctype_lower("abC") ? "1" : "0";
+echo ctype_lower("") ? "1" : "0";
+echo ctype_lower("z9") ? "1" : "0";
+echo CTYPE_LOWER("xyz") ? "1" : "0";
+echo ctype_lower(chr(96)) ? "1" : "0";
+echo ctype_lower(chr(97)) ? "1" : "0";
+echo ctype_lower(chr(122)) ? "1" : "0";
+echo ctype_lower(chr(123)) ? "1" : "0";
+echo ":";
+echo ctype_print("Hello ") ? "1" : "0";
+echo ctype_print("Hello\n") ? "1" : "0";
+echo ctype_print("") ? "1" : "0";
+echo ctype_print(" ") ? "1" : "0";
+echo ctype_print(chr(31)) ? "1" : "0";
+echo ctype_print(chr(32)) ? "1" : "0";
+echo ctype_print(chr(126)) ? "1" : "0";
+echo ctype_print(chr(127)) ? "1" : "0";
+echo ":";
+$punct = "";
+for ($i = 33; $i <= 126; $i++) {
+    if (!ctype_alnum(chr($i))) { $punct .= chr($i); }
+}
+echo ctype_punct($punct) ? "1" : "0";
+echo ctype_punct($punct . "A") ? "1" : "0";
+echo ctype_punct(" ") ? "1" : "0";
+echo ctype_punct("") ? "1" : "0";
+echo ctype_punct(chr(47)) ? "1" : "0";
+echo ctype_punct(chr(48)) ? "1" : "0";
+echo ctype_punct(chr(58)) ? "1" : "0";
+echo ctype_punct(chr(64)) ? "1" : "0";
+echo ctype_punct(chr(65)) ? "1" : "0";
+echo ctype_punct(chr(91)) ? "1" : "0";
+echo ctype_punct(chr(96)) ? "1" : "0";
+echo ctype_punct(chr(97)) ? "1" : "0";
+echo ctype_punct(chr(123)) ? "1" : "0";
+echo ctype_punct(chr(126)) ? "1" : "0";
+echo ctype_punct(chr(127)) ? "1" : "0";
+echo ":";
+echo ctype_upper("ABC") ? "1" : "0";
+echo ctype_upper("AbC") ? "1" : "0";
+echo ctype_upper("") ? "1" : "0";
+echo \ctype_upper("Z") ? "1" : "0";
+echo ctype_upper(chr(64)) ? "1" : "0";
+echo ctype_upper(chr(65)) ? "1" : "0";
+echo ctype_upper(chr(90)) ? "1" : "0";
+echo ctype_upper(chr(91)) ? "1" : "0";
+echo ":";
+echo ctype_xdigit("0123456789abcdefABCDEF") ? "1" : "0";
+echo ctype_xdigit("0123456789abcdefg") ? "1" : "0";
+echo ctype_xdigit("") ? "1" : "0";
+echo ctype_xdigit("g") ? "1" : "0";
+echo ctype_xdigit("G") ? "1" : "0";
+echo ctype_xdigit(chr(47)) ? "1" : "0";
+echo ctype_xdigit(chr(48)) ? "1" : "0";
+echo ctype_xdigit(chr(57)) ? "1" : "0";
+echo ctype_xdigit(chr(58)) ? "1" : "0";
+echo ctype_xdigit(chr(64)) ? "1" : "0";
+echo ctype_xdigit(chr(65)) ? "1" : "0";
+echo ctype_xdigit(chr(70)) ? "1" : "0";
+echo ctype_xdigit(chr(71)) ? "1" : "0";
+echo ctype_xdigit(chr(96)) ? "1" : "0";
+echo ctype_xdigit(chr(97)) ? "1" : "0";
+echo ctype_xdigit(chr(102)) ? "1" : "0";
+echo ctype_xdigit(chr(103)) ? "1" : "0";
+echo ":";
+echo ctype_lower("\xff") ? "1" : "0";
+echo ctype_print("\xff") ? "1" : "0";
+echo ctype_punct("\xff") ? "1" : "0";
+echo ctype_upper("\xff") ? "1" : "0";
+echo ctype_xdigit("\xff") ? "1" : "0";
+"#,
+    );
+    assert_eq!(
+        out,
+        "10010100:10010100:100010110:10010110:100010110110110:10010110:10000011001100110:00000"
+    );
+}
+
 // --- sprintf / printf ---
 
 /// Verifies `sprintf()` with `%x` format produces lowercase hex output for decimal 255.

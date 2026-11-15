@@ -6,13 +6,13 @@ description: "Checks if all characters in the string are alphanumeric."
 ## ctype_alnum()
 
 ```php
-function ctype_alnum(string $text): bool
+function ctype_alnum(mixed $text): bool
 ```
 
 Checks if all characters in the string are alphanumeric.
 
 **Parameters**:
-- `$text` (`string`)
+- `$text` (`mixed`)
 
 **Returns**: `bool`
 

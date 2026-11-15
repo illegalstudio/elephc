@@ -524,8 +524,15 @@ pub enum RuntimeFnId {
     Crc32,
     CtypeAlnum,
     CtypeAlpha,
+    CtypeCntrl,
     CtypeDigit,
+    CtypeGraph,
+    CtypeLower,
+    CtypePrint,
+    CtypePunct,
     CtypeSpace,
+    CtypeUpper,
+    CtypeXdigit,
     /// Allocates a libcurl easy handle and boxes it as a resource-kind-6 Mixed cell.
     CurlEasyInit,
     /// Applies an integer-valued `curl_setopt()` option to an easy handle.
@@ -1515,8 +1522,15 @@ impl RuntimeFnId {
             RuntimeFnId::Crc32 |
             RuntimeFnId::CtypeAlnum |
             RuntimeFnId::CtypeAlpha |
+            RuntimeFnId::CtypeCntrl |
             RuntimeFnId::CtypeDigit |
+            RuntimeFnId::CtypeGraph |
+            RuntimeFnId::CtypeLower |
+            RuntimeFnId::CtypePrint |
+            RuntimeFnId::CtypePunct |
             RuntimeFnId::CtypeSpace |
+            RuntimeFnId::CtypeUpper |
+            RuntimeFnId::CtypeXdigit |
             RuntimeFnId::Bindec |
             RuntimeFnId::Decbin |
             RuntimeFnId::Dechex |
@@ -3667,8 +3681,15 @@ impl RuntimeFnId {
             RuntimeFnId::CurlVersion => "__elephc_curl_version",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",
+            RuntimeFnId::CtypeCntrl => "ctype_cntrl",
             RuntimeFnId::CtypeDigit => "ctype_digit",
+            RuntimeFnId::CtypeGraph => "ctype_graph",
+            RuntimeFnId::CtypeLower => "ctype_lower",
+            RuntimeFnId::CtypePrint => "ctype_print",
+            RuntimeFnId::CtypePunct => "ctype_punct",
             RuntimeFnId::CtypeSpace => "ctype_space",
+            RuntimeFnId::CtypeUpper => "ctype_upper",
+            RuntimeFnId::CtypeXdigit => "ctype_xdigit",
             RuntimeFnId::Explode => "explode",
             RuntimeFnId::GraphemeStrrev => "grapheme_strrev",
             RuntimeFnId::Gzcompress => "gzcompress",

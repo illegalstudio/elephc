@@ -38,6 +38,8 @@ mod implode_arguments;
 mod implode_boxed;
 #[path = "strings/encoding.rs"]
 mod encoding;
+#[path = "strings/ctype_arguments.rs"]
+mod ctype_arguments;
 #[path = "strings/inet.rs"]
 mod inet;
 #[path = "strings/iconv.rs"]

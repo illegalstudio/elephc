@@ -815,6 +815,95 @@ return function_exists("ctype_space");"#,
     assert_eq!(values.output, "A:D:N:S:empty:not-digit:not-space:111");
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval dispatch for the remaining ASCII `ctype_*` classes.
+#[test]
+fn execute_program_dispatches_remaining_ctype_builtins() {
+    let program = parse_fragment(
+        br#"echo ctype_lower(text: "ab") ? "L" : "-";
+echo ctype_upper("AB") ? "U" : "-";
+echo ctype_xdigit("aF") ? "X" : "-";
+echo ctype_cntrl(chr(10)) ? "C" : "-";
+echo ctype_graph("a!") ? "G" : "-";
+echo ctype_print("a ") ? "P" : "-";
+echo ctype_punct("!") ? "!" : "-";
+echo ctype_lower("") ? "bad" : "empty";
+echo ctype_punct("a!") ? "bad" : "mix";
+echo ctype_xdigit("g") ? "bad" : "not-hex";
+echo ":";
+echo call_user_func("ctype_upper", "Ab") ? "bad" : "not-upper";
+echo ":";
+echo call_user_func_array("ctype_xdigit", ["text" => "0aF"]) ? "hex" : "bad";
+echo ":";
+echo function_exists("ctype_cntrl");
+echo function_exists("ctype_graph");
+echo function_exists("ctype_lower");
+echo function_exists("ctype_print");
+echo function_exists("ctype_punct");
+echo function_exists("ctype_upper");
+return function_exists("ctype_xdigit");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "LUXCGP!emptymixnot-hex:not-upper:hex:111111");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
+/// Verifies eval `ctype_*` calls follow php-src for non-string `mixed` arguments.
+///
+/// Ints in 0..=255 and -128..=-1 are classified as one byte, other ints as their decimal
+/// string, and other values fail; every non-string argument raises the deprecation, which
+/// names a bool by its type rather than `true`/`false`. A runtime-selected name works too.
+#[test]
+fn execute_program_ctype_non_string_arguments_follow_php() {
+    let program = parse_fragment(
+        br#"echo ctype_digit(53) ? "1" : "0";
+echo ctype_upper(-191) ? "1" : "0";
+echo ctype_digit(256) ? "1" : "0";
+echo ctype_punct(256) ? "1" : "0";
+echo ctype_graph(-300) ? "1" : "0";
+echo ctype_digit(-300) ? "1" : "0";
+echo ctype_digit(true) ? "1" : "0";
+echo ctype_digit(1.0) ? "1" : "0";
+echo ctype_digit(null) ? "1" : "0";
+echo ctype_digit([]) ? "1" : "0";
+$name = "ctype_xdigit";
+return $name("aF");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1010100000");
+    let deprecation = |function: &str, type_name: &str| {
+        format!(
+            "Deprecated: {function}(): Argument of type {type_name} will be interpreted as string in the future\n"
+        )
+    };
+    assert_eq!(
+        values.warnings,
+        vec![
+            deprecation("ctype_digit", "int"),
+            deprecation("ctype_upper", "int"),
+            deprecation("ctype_digit", "int"),
+            deprecation("ctype_punct", "int"),
+            deprecation("ctype_graph", "int"),
+            deprecation("ctype_digit", "int"),
+            deprecation("ctype_digit", "bool"),
+            deprecation("ctype_digit", "float"),
+            deprecation("ctype_digit", "null"),
+            deprecation("ctype_digit", "array"),
+        ]
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `crc32()` returns PHP-compatible non-negative checksums.
 #[test]
 fn execute_program_dispatches_crc32_builtin() {

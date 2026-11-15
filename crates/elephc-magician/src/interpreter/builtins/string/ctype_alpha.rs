@@ -16,7 +16,7 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// Evaluates PHP `ctype_alpha(...)` over one eval string expression.
+/// Evaluates PHP `ctype_alpha(...)` over one eval argument expression.
 pub(in crate::interpreter) fn eval_builtin_ctype_alpha(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -26,10 +26,11 @@ pub(in crate::interpreter) fn eval_builtin_ctype_alpha(
     super::ctype_alnum::eval_builtin_ctype_named("ctype_alpha", args, context, scope, values)
 }
 
-/// Returns the PHP boolean result for `ctype_alpha(...)` from one evaluated value.
+/// Returns the PHP boolean result for `ctype_alpha(...)` from one evaluated value of any type.
 pub(in crate::interpreter) fn eval_ctype_alpha_result(
     value: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::ctype_alnum::eval_ctype_named_result("ctype_alpha", value, values)
+    super::ctype_alnum::eval_ctype_named_result("ctype_alpha", value, context, values)
 }

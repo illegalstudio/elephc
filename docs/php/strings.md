@@ -349,10 +349,21 @@ routing and web transport verification remain open.
 | `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
 | `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |
 | `gzinflate()` | `gzinflate(string $data): string\|false` | Decompress a raw DEFLATE string from `gzdeflate()` or the `zlib.deflate` stream filter; `false` on a zlib error |
-| `ctype_alpha()` | `ctype_alpha($str): bool` | All chars are A-Z/a-z |
-| `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
-| `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
-| `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
+| `ctype_alnum()` | `ctype_alnum(mixed $text): bool` | All bytes are ASCII alphanumeric (`A-Z`, `a-z`, `0-9`) |
+| `ctype_alpha()` | `ctype_alpha(mixed $text): bool` | All bytes are ASCII letters (`A-Z`, `a-z`) |
+| `ctype_cntrl()` | `ctype_cntrl(mixed $text): bool` | All bytes are ASCII controls (`0x00`-`0x1F` or `0x7F`) |
+| `ctype_digit()` | `ctype_digit(mixed $text): bool` | All bytes are ASCII digits (`0-9`) |
+| `ctype_graph()` | `ctype_graph(mixed $text): bool` | All bytes are visible ASCII (`0x21`-`0x7E`) |
+| `ctype_lower()` | `ctype_lower(mixed $text): bool` | All bytes are ASCII lowercase letters (`a-z`) |
+| `ctype_print()` | `ctype_print(mixed $text): bool` | All bytes are printable ASCII, including space (`0x20`-`0x7E`) |
+| `ctype_punct()` | `ctype_punct(mixed $text): bool` | All bytes are ASCII punctuation |
+| `ctype_space()` | `ctype_space(mixed $text): bool` | All bytes are ASCII whitespace (space, tab, LF, VT, FF, CR) |
+| `ctype_upper()` | `ctype_upper(mixed $text): bool` | All bytes are ASCII uppercase letters (`A-Z`) |
+| `ctype_xdigit()` | `ctype_xdigit(mixed $text): bool` | All bytes are ASCII hexadecimal digits (`0-9`, `A-F`, `a-f`) |
+
+An empty string is false for every `ctype_*` check. Classification uses the C locale, so bytes above `0x7F` are never members of these classes.
+
+As in PHP 8.1+, a non-string argument raises `Deprecated: ctype_x(): Argument of type T will be interpreted as string in the future`. An int from 0 to 255 is then classified as that single byte and an int from -128 to -1 as the byte `value + 256`; any other int is judged as its decimal string would be. Every other non-string value (bool, float, null, array, object, resource) returns `false`. The functions can also be called through runtime-selected callables such as `$name($text)`, `array_map()` and `call_user_func()`.
 
 `trim()`, `ltrim()`, and `rtrim()` expand PHP's `start..end` character ranges
 (for example `"a..z"`) using the same rules as `php_charmask()`: only an
