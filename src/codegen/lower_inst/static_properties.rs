@@ -151,7 +151,7 @@ pub(super) fn lower_store_static_property(
     ensure_static_property_type_supported(&slot.php_type, inst)?;
     let value_ty = ctx.value_php_type(value)?;
     ensure_static_property_value_supported(&slot, &value_ty, inst)?;
-    let release_previous = (ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+    let release_previous = (crate::types::checked_property_references(ctx.module.semantic_profile)
         && slot.storage_type.codegen_repr() == PhpType::Mixed)
         || !value_is_same_static_property_load(ctx, value, &slot)?;
     let transfer_owner = static_transfer_owner_offset(ctx, inst, &slot, &value_ty)?;
@@ -225,7 +225,7 @@ pub(super) fn lower_store_reflection_static_property(
     ensure_static_property_value_supported(&slot, &value_ty, inst)?;
     guard_static_object_store(ctx, value, &slot)?;
     load_static_property_store_value_to_result(ctx, value, &slot.storage_type)?;
-    let release_previous = (ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+    let release_previous = (crate::types::checked_property_references(ctx.module.semantic_profile)
         && slot.storage_type.codegen_repr() == PhpType::Mixed)
         || !value_is_same_static_property_load(ctx, value, &slot)?;
     let transfer_owner = static_transfer_owner_offset(ctx, inst, &slot, &value_ty)?;

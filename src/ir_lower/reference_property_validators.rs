@@ -34,7 +34,7 @@ fn supports_declaration(ty: &PhpType) -> bool {
 
 /// Selects validation when checked casts can expose owned instance or boxed static references.
 pub(crate) fn required_by_profile(module: &Module) -> bool {
-    module.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+    crate::types::checked_property_references(module.semantic_profile)
         && module.class_infos.values().any(|class| {
             class.properties.iter().enumerate().any(|(index, (_, ty))|
                 class.property_slot_owns_reference(index) && *ty != PhpType::Mixed

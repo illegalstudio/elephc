@@ -208,7 +208,7 @@ impl Checker {
     /// Gives reviewed writable property arguments managed cells before reference call lowering.
     pub(crate) fn promote_live_property_reference_argument(&mut self, arg: &Expr, env: &TypeEnv) -> Result<bool, CompileError> {
         if matches!(arg.kind, ExprKind::StaticPropertyAccess { .. })
-            && self.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+            && crate::types::checked_property_references(self.semantic_profile)
         {
             let ty = self.infer_type(arg, env)?;
             return Ok(crate::types::canonical_property_reference_payload(&ty).is_some());
@@ -229,7 +229,7 @@ impl Checker {
         };
         let info = &self.classes[&access_class];
         let Some((_, property_ty)) = info.properties.get(index) else { return Ok(false); };
-        let supported = *property_ty == PhpType::Mixed || (self.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+        let supported = *property_ty == PhpType::Mixed || (crate::types::checked_property_references(self.semantic_profile)
             && crate::types::canonical_property_reference_payload(property_ty).is_some());
         let borrowed_constructor = *property_ty != PhpType::Mixed
             && info.reference_properties.contains(property) && info.promoted_properties.contains(property)

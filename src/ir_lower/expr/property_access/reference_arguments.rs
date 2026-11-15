@@ -30,7 +30,7 @@ pub(crate) fn lower_runtime_reference_argument(
                     marker(ctx, alias, value, arg.span)
                 },
                 |ctx, object| {
-                    if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+                    if crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode) {
                         reference_place_dispatch::named(ctx, object, property, alias, arg)
                     } else { lower_property_get_without_native_dispatch(ctx, object, property, Op::PropGet, arg) }
                 })
@@ -45,7 +45,7 @@ pub(crate) fn lower_runtime_reference_argument(
                     marker(ctx, alias, value, arg.span)
                 },
                 |ctx, object| {
-                    if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+                    if crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode)
                         && matches!(array.kind, ExprKind::Variable(_)) {
                         bind_array_element_reference(ctx, alias, original, index, arg, arg.span);
                         lower_invoker_ref_arg_marker(ctx, alias, arg.span)

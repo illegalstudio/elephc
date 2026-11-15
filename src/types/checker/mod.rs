@@ -1763,8 +1763,8 @@ pub(crate) fn single_object_class_name(ty: &PhpType) -> Option<String> {
 fn apply_reference_property_promotions(checker: &mut Checker) {
     {
         let canonical_mixed_references = checker.program_contains_eval
-            || checker.semantic_profile.contains(elephc_semantics::StrictFeature::Casts);
-        let checked_scalar_references = checker.semantic_profile.contains(elephc_semantics::StrictFeature::Casts);
+            || crate::types::checked_property_references(checker.semantic_profile);
+        let checked_scalar_references = crate::types::checked_property_references(checker.semantic_profile);
         let classes = &checker.classes;
         let candidates = classes.iter().flat_map(|(name, info)| {
             info.properties.iter().enumerate().filter_map(move |(index, (property, ty))| {

@@ -371,3 +371,67 @@ gc_collect_cycles();
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Coercions alone preserves declaration kinds through aliases without enabling checked casts.
+#[test]
+fn test_strict_reference_exact_coercions_without_checked_casts_bundle() {
+    let source = include_str!("../fixtures/strict/reference_exact_coercions.php");
+    for casts in [false, true] {
+        let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+            .with(elephc_semantics::StrictFeature::Coercions, true)
+            .with(elephc_semantics::StrictFeature::Casts, casts);
+        let source = if casts { source.replace("(int)'junk'", "(int)'12'") } else { source.into() };
+        for optimize in [false, true] {
+            let output = StrictFixture::new(&source).capture_staged_eval_runtime(profile, optimize);
+            assert!(output.success, "casts={casts} opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+            assert_eq!(output.stdout, format!("Sdouble:1.5|Idouble:2.5|A1.5|integer:7|integer:8|3.5:4.5|{}",
+                if casts { 12 } else { 0 }), "casts={casts} opt={optimize}: {}", output.stderr);
+            assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"),
+                "casts={casts} opt={optimize}: {}", output.stderr);
+        }
+    }
+}
+
+/// Protected static setter statuses distinguish exact Coercions from PHP strict_types widening.
+#[test]
+fn test_strict_static_runtime_exact_coercion_status_bundle() {
+    let source = r#"<?php
+extern class ExactSetterOutput { public ptr $cell; }
+extern function __elephc_eval_value_static_property_set_v2(string $class, int $classLength,
+    string $property, int $propertyLength, ptr $value, string $scope, int $scopeLength, ptr $error): int;
+extern function __elephc_eval_value_int(int $value): ptr;
+extern function __elephc_eval_value_float(float $value): ptr;
+extern function __elephc_eval_value_release_v3(ptr $value, ptr $error): int;
+extern function malloc(int $size): ptr;
+extern function free(ptr $value): void;
+class ExactStaticSetter { public static float $number = 1.5; }
+$error = malloc(8); ptr_set($error, 0);
+$retired = malloc(8); ptr_set($retired, 0);
+$output = ptr_cast<ExactSetterOutput>($error);
+$input = __elephc_eval_value_int(7);
+echo __elephc_eval_value_static_property_set_v2('ExactStaticSetter', 17, 'number', 6, $input, '', 0, $error);
+echo ':', gettype(ExactStaticSetter::$number), ':', ExactStaticSetter::$number;
+if (ptr_get($error)) { __elephc_eval_value_release_v3($output->cell, $retired); ptr_set($error, 0); }
+__elephc_eval_value_release_v3($input, $retired);
+$input = __elephc_eval_value_float(3.5);
+echo '|', __elephc_eval_value_static_property_set_v2('ExactStaticSetter', 17, 'number', 6, $input, '', 0, $error);
+echo ':', ExactStaticSetter::$number;
+__elephc_eval_value_release_v3($input, $retired);
+free($error); free($retired);
+"#;
+    for coercions in [false, true] {
+        for casts in [false, true] {
+            let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+                .with(elephc_semantics::StrictFeature::Coercions, coercions)
+                .with(elephc_semantics::StrictFeature::Casts, casts);
+            for optimize in [false, true] {
+                let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+                assert!(output.success, "coercions={coercions} casts={casts} opt={optimize}: {} {} {}",
+                    output.status, output.stdout, output.stderr);
+                assert_eq!(output.stdout, if coercions { "2:double:1.5|1:3.5" } else { "1:double:7|1:3.5" },
+                    "coercions={coercions} casts={casts} opt={optimize}: {}", output.stderr);
+                assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
+            }
+        }
+    }
+}

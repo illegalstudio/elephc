@@ -337,3 +337,27 @@ fn strict_static_write_publication_all_targets() {
         assert!(assembly.contains("__rt_reference_publish_native_static"), "{name}");
     }
 }
+
+/// Exact Coercions independently selects managed declarations on every supported target.
+#[test]
+fn strict_reference_exact_coercions_eir_all_targets() {
+    let program = prepared(include_str!(concat!(env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/strict/reference_exact_coercions.php")));
+    let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
+    for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
+        let target = Target::parse(name).unwrap();
+        let checked = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
+        let class = &checked.classes["ExactReferenceValues"];
+        assert!(class.property_slot_owns_reference(class.visible_property_index("value").unwrap()), "{name}");
+        let module = crate::ir_lower::lower_program(&program, &checked, target, false).unwrap();
+        assert!(module.required_runtime_features.native_reference_validation, "{name}");
+        let assembly = crate::codegen::generate_user_asm_from_ir(&module, false, false).unwrap();
+        assert!(assembly.contains("__rt_reference_publish_native_static"), "{name}");
+        let validator = module.functions.iter().find(|function|
+            function.flags.is_native_reference_validator).unwrap();
+        let label = crate::names::function_symbol(&validator.name);
+        let body = assembly.split_once(&format!("{label}:\n")).unwrap().1
+            .split_once("@endfn").unwrap().0;
+        assert!(!body.contains("reference_validator_weak"), "{name}: exact membership ignores PHP strict_types");
+    }
+}

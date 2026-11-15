@@ -131,7 +131,7 @@ pub(super) fn lower_static_call_user_func(
             {
                 return None;
             }
-            if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+            if crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode)
                 && callable_descriptor_signature_for_expr(ctx, callback_arg)
                     .is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) {
                 // Flattening an array of values into a direct call invents writable caller

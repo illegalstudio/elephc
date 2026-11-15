@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 90 (this commit), following `a958aab372`. Issue:
+Verified through step 91 (this commit), following `aceb5004d3`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 90.
+This progress ledger condenses verified implementation through step 91.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -723,6 +723,33 @@ above are unchanged.
   real five-target assembly for the scoped setter and runtime publisher, compiler
   check/build, architecture inventory828, assembly comments and diff hygiene.
 
+### Exact declaration references under Coercions
+
+- A shared checked-property eligibility helper selects canonical declaration
+  storage for Casts or Coercions independently. Source references, static storage,
+  native metadata and scoped runtime setters consume that same decision.
+- Native declaration validators distinguish PHP strict_types widening from exact
+  Coercions membership. User declarations under Coercions reject int-to-float
+  changes regardless of the PHP caller bit, while unions preserve exact members.
+  Trusted implementation declarations retain their reviewed PHP behavior.
+- Prepared builtin reference argument graphs are selected independently from cast
+  domain checks. Coercions-only settype therefore writes the original checked
+  place but preserves permissive explicit conversion domains. Descriptor argument
+  selection and call_user_func value semantics use the shared reference policy.
+- Checked callable catalogs can materialize settype wrappers after source scans.
+  Profile-aware object-cast prelude injection reserves their declared dependencies
+  even without an explicit source settype or object cast; permissive usage-based
+  injection remains unchanged.
+- Staged fixtures cover scalar static/instance aliases, prepared settype, declared
+  unions, later direct writes and independent cast behavior. A direct versioned
+  static setter fixture covers all four Casts/Coercions combinations and contained
+  errors. All five-target selected-checker/EIR checks, both optimizer modes,
+  every Casts/Coercions combination, native producer/descriptor controls, compiler
+  check/build and the complete generated-builtin workflow pass. No generated docs
+  changed. The native module test helper links the exact reference archive from
+  Cargo JSON output inside its queued job. Public admission stays at six until
+  the remaining boundaries are done.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -831,4 +858,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 87 | `05382f8d22` | feat(strict): validate eval reference replacement before publication |
 | 88 | `4ecc79b427` | feat(strict): preserve concrete static conversion references |
 | 89 | `a958aab372` | feat(strict): validate static publication before initialization |
-| 90 | this commit | feat(strict): contain scoped runtime static property writes |
+| 90 | `aceb5004d3` | feat(strict): contain scoped runtime static property writes |
+| 91 | this commit | feat(strict): preserve exact declaration reference contracts |

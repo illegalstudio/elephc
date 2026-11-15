@@ -136,7 +136,7 @@ impl StrictFixture {
                 program = elephc::dom_html_prelude::inject_if_used(program, false, &mut inventory);
             }
             if options.gmp || options.xml || options.eval_bridge {
-                program = elephc::object_cast_prelude::inject_if_used(program, &mut inventory).unwrap();
+                program = elephc::object_cast_prelude::inject_with_semantics(program, &mut inventory, profile).unwrap();
                 program = elephc::func_args::desugar(program).unwrap();
             }
             program = elephc::name_resolver::resolve(program).unwrap();

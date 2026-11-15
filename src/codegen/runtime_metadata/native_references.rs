@@ -24,7 +24,7 @@ pub(in crate::codegen) fn descriptor_symbol(class_id: u64, slot: u32, is_static:
 pub(in crate::codegen) fn checked_boxed_static_descriptor(
     module: &Module, declaring_class: &str, property: &str,
 ) -> Option<String> {
-    if !module.semantic_profile.contains(elephc_semantics::StrictFeature::Casts) { return None; }
+    if !crate::types::checked_property_references(module.semantic_profile) { return None; }
     let class = module.class_infos.get(declaring_class)?;
     if class.is_internal || !class.declared_static_properties.contains(property) { return None; }
     let (index, (_, ty)) = class.static_properties.iter().enumerate()

@@ -78,13 +78,13 @@ pub(super) fn live_mixed_property_argument(
         return *expected == PhpType::Mixed && live_boxed_static_property(ctx, arg);
     }
     *expected == PhpType::Mixed && writable_property_argument_type(ctx, arg).is_some_and(|ty|
-        ty == PhpType::Mixed || (ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+        ty == PhpType::Mixed || (crate::types::checked_property_references(ctx.semantic_profile)
             && crate::types::canonical_property_reference_payload(&ty).is_some()))
 }
 
 /// Selects reviewed static declarations whose checked physical storage is boxed.
 pub(super) fn live_boxed_static_property(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
-    ctx.semantic_profile.contains(elephc_semantics::StrictFeature::Casts)
+    crate::types::checked_property_references(ctx.semantic_profile)
         && matches!(arg.kind, ExprKind::StaticPropertyAccess { .. })
         && static_place_type(ctx, arg).is_some_and(|ty|
             crate::types::canonical_property_reference_payload(&ty).is_some())

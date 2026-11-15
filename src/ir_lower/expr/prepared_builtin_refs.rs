@@ -17,7 +17,7 @@ pub(super) fn active(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
 
 /// Keeps invocation policy separate from the physical source of its argument expressions.
 fn active_at(ctx: &LoweringContext<'_, '_>, name: &str, source: crate::source::SourceMode) -> bool {
-    crate::semantics::conversions::checked_casts(ctx.semantic_profile, source)
+    crate::semantics::conversions::checked_references(ctx.semantic_profile, source)
         && crate::builtins::registry::lookup(name).is_some_and(|def| matches!(
             def.spec.semantics.callable, crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_))
             && def.params.iter().zip(&def.ref_params).any(|((_, ty), by_ref)| *by_ref && *ty == PhpType::Mixed))

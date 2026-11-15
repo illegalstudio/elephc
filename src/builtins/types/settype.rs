@@ -39,7 +39,7 @@ const fn semantics() -> crate::builtins::semantics::BuiltinSemantics {
 
 /// String conversion may invoke user code and mutate globals inside the checked value graph.
 fn effects(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> crate::ir::Effects {
-    if crate::semantics::conversions::checked_casts(input.semantic_profile, input.source_mode) {
+    if crate::semantics::conversions::checked_references(input.semantic_profile, input.source_mode) {
         crate::ir::Effects::php_conversion()
     } else { crate::ir::RuntimeFnId::Settype.effects() }
 }
@@ -48,7 +48,7 @@ fn effects(input: &crate::builtins::semantics::BuiltinSemanticInput<'_>) -> crat
 fn lower(ctx: &mut dyn crate::builtins::semantics::BuiltinLoweringContext,
     call: &crate::builtins::semantics::NormalizedBuiltinCall<'_>)
     -> Result<crate::builtins::semantics::LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
-    if crate::semantics::conversions::checked_casts(call.semantic_profile, call.source_mode)
+    if crate::semantics::conversions::checked_references(call.semantic_profile, call.source_mode)
         || ctx.uses_prepared_builtin_semantics() {
         return ctx.emit_settype_conversion(call.operand(0)?, call.operand(1)?, call.source_mode, call.span);
     }

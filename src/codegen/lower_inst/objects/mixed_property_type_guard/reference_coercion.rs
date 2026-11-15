@@ -5,7 +5,8 @@
 //! - The typed EIR ReferencePropertyCoerce operation in generated declaration callbacks.
 //!
 //! Key details:
-//! - Context bit zero carries assignment-site strictness, independently of declaration scope.
+//! - Context bit zero carries PHP strict_types, separate from exact semantic membership.
+//! - Coercions rejects scalar kind changes for user declarations, including int-to-float widening.
 //! - The original RHS is borrowed and every accepted result owns one boxed value.
 //! - Declaration metadata never depends on a live receiver or a borrowed Rust registry entry.
 
@@ -20,7 +21,16 @@ pub(in crate::codegen::lower_inst) fn lower(
     let mut slot = declaration_slot(ctx.module, class_id, index, is_static)?;
     let declared = slot.php_type.clone();
     let weak = declaration_actions(ctx, &slot)?;
-    let strict = strict_actions(&declared, &weak);
+    if ctx.module.semantic_profile.contains(elephc_semantics::StrictFeature::Coercions)
+        && ctx.module.class_infos.get(&slot.class_name).is_some_and(|class| !class.is_internal)
+    {
+        let exact = strict_actions(&declared, &weak, false);
+        slot.reference_declaration = Some(declared);
+        slot.php_type = PhpType::Mixed;
+        emit_candidate(ctx, expect_operand(inst, 1)?, &slot, &exact)?;
+        return store_if_result(ctx, inst);
+    }
+    let strict = strict_actions(&declared, &weak, true);
     // Candidate storage is uniformly boxed. Diagnostics retain the source declaration.
     slot.reference_declaration = Some(declared);
     slot.php_type = PhpType::Mixed;
@@ -108,8 +118,8 @@ fn declaration_actions(ctx: &FunctionContext<'_>, slot: &PropertySlot) -> Result
     Ok(actions)
 }
 
-/// Strict assignments preserve exact members and permit only PHP's int-to-float widening.
-fn strict_actions(declared: &PhpType, weak: &[TagAction]) -> Vec<TagAction> {
+/// Exact membership optionally retains PHP strict_types int-to-float widening.
+fn strict_actions(declared: &PhpType, weak: &[TagAction], allow_float_widening: bool) -> Vec<TagAction> {
     let members = match declared {
         PhpType::Union(members) => members.iter().flat_map(expand_union_member).collect(),
         other => expand_union_member(other),
@@ -123,7 +133,7 @@ fn strict_actions(declared: &PhpType, weak: &[TagAction]) -> Vec<TagAction> {
     });
     RUNTIME_TAGS.iter().zip(weak).map(|((tag, _), action)| {
         if exact(*tag) { return TagAction::Accept; }
-        if *tag == 0 && members.contains(&PhpType::Float) {
+        if allow_float_widening && *tag == 0 && members.contains(&PhpType::Float) {
             return TagAction::CoerceScalar {
                 target: PhpType::Float, require_numeric_string: false, fallback: None,
             };
@@ -159,13 +169,29 @@ mod tests {
     #[test]
     fn strict_reference_union_candidates_keep_exact_members_and_false() {
         let weak = actions_for(|_| TagAction::Accept);
-        let plans = strict_actions(&PhpType::Union(vec![PhpType::Int, PhpType::Float]), &weak);
+        let plans = strict_actions(&PhpType::Union(vec![PhpType::Int, PhpType::Float]), &weak, true);
         assert!(matches!(plans[0], TagAction::Accept));
         assert!(matches!(plans[1], TagAction::Reject));
-        let plans = strict_actions(&PhpType::Float, &weak);
+        let plans = strict_actions(&PhpType::Float, &weak, true);
         assert!(matches!(plans[0], TagAction::CoerceScalar { target: PhpType::Float, .. }));
         assert!(matches!(plans[3], TagAction::Reject));
-        let plans = strict_actions(&PhpType::Union(vec![PhpType::False, PhpType::Void]), &weak);
+        let plans = strict_actions(&PhpType::Union(vec![PhpType::False, PhpType::Void]), &weak, true);
+        assert!(matches!(plans[3], TagAction::FalseOrScalar(None)));
+        assert!(matches!(plans[7], TagAction::Accept));
+    }
+
+    /// Independent Coercions rejects widening while preserving explicit union alternatives.
+    #[test]
+    fn exact_reference_candidates_reject_php_scalar_widening() {
+        let weak = actions_for(|_| TagAction::Accept);
+        let plans = strict_actions(&PhpType::Float, &weak, false);
+        assert!(matches!(plans[0], TagAction::Reject));
+        assert!(matches!(plans[2], TagAction::Accept));
+        let plans = strict_actions(&PhpType::Union(vec![PhpType::Int, PhpType::Float]), &weak, false);
+        assert!(matches!(plans[0], TagAction::Accept));
+        assert!(matches!(plans[2], TagAction::Accept));
+        assert!(matches!(plans[1], TagAction::Reject));
+        let plans = strict_actions(&PhpType::Union(vec![PhpType::False, PhpType::Void]), &weak, false);
         assert!(matches!(plans[3], TagAction::FalseOrScalar(None)));
         assert!(matches!(plans[7], TagAction::Accept));
     }

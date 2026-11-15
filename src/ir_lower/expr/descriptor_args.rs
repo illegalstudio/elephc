@@ -190,7 +190,7 @@ pub(super) fn lower_named_descriptor_invoker_arg_container(
 pub(super) fn lower_value_invoker_argument(ctx: &mut LoweringContext<'_, '_>, argument: &Expr,
     native_references: bool) -> LoweredValue {
     let value = lower_expr(ctx, argument);
-    if !native_references && crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+    if !native_references && crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode) {
         ctx.box_value_as_mixed(value, PhpType::Mixed, Some(argument.span))
     } else { value }
 }
@@ -224,7 +224,7 @@ pub(super) fn lower_signature_invoker_ref_arg_marker(
     native_references: bool,
 ) -> Option<LoweredValue> {
     if !native_references
-        && crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+        && crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode) {
         // Explicit call_user_func* arguments carry values. A checked mutator must write
         // to its temporary argument cell instead of synthesizing a reference to the caller.
         return None;

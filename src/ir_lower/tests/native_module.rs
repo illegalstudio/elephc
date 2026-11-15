@@ -7,6 +7,7 @@
 //! Key details:
 //! - The enclosing Cargo test runs through the machine-wide build queue.
 //! - An owned directory removes both assembly inputs and the executable on success or panic.
+//! - Canonical reference modules link the exact static archive reported by Cargo.
 
 use std::{collections::HashMap, path::PathBuf, process::{Command, Output}};
 
@@ -46,8 +47,32 @@ pub(super) fn run(module: &crate::ir::Module) -> Output {
     std::fs::write(&user_path, generated.asm).unwrap(); std::fs::write(&runtime_path, runtime).unwrap();
     let mut compiler = Command::new("cc");
     if cfg!(target_os = "linux") { compiler.arg("-no-pie"); }
-    let linked = compiler.arg(&user_path).arg(&runtime_path).arg("-lm").arg("-o").arg(&executable)
+    compiler.arg(&user_path).arg(&runtime_path);
+    if features.native_reference_validation {
+        compiler.arg(reference_validation_archive());
+        if cfg!(target_os = "linux") { compiler.arg("-ldl"); }
+    }
+    let linked = compiler.arg("-lm").arg("-o").arg(&executable)
         .output().expect("link native module with host C toolchain");
     assert!(linked.status.success(), "native module link: {}", String::from_utf8_lossy(&linked.stderr));
     Command::new(&executable).current_dir(&directory.0).output().expect("run native module fixture")
+}
+
+/// Builds the host reference bridge once inside the enclosing machine-wide queued test job.
+fn reference_validation_archive() -> &'static std::path::Path {
+    static ARCHIVE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    ARCHIVE.get_or_init(|| {
+        let output = Command::new("cargo").args(["build", "-j4", "--package", "elephc-reference",
+            "--lib", "--message-format=json"])
+            .current_dir(env!("CARGO_MANIFEST_DIR")).output().expect("build native reference bridge");
+        assert!(output.status.success(), "reference bridge build: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).lines().filter_map(|line|
+            serde_json::from_str::<serde_json::Value>(line).ok()).find_map(|artifact| {
+                if artifact["reason"] != "compiler-artifact" || artifact["target"]["name"] != "elephc_reference" {
+                    return None;
+                }
+                artifact["filenames"].as_array()?.iter().filter_map(|file| file.as_str())
+                    .find(|file| file.ends_with(".a")).map(PathBuf::from)
+            }).expect("Cargo reports the reference static archive")
+    }).as_path()
 }

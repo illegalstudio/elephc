@@ -52,7 +52,7 @@ pub(super) fn prepare(
         let slot = ctx.ref_cell_owner_slot(&alias).expect("managed selection cell");
         register_owned_call_operand(ctx, slot, arg.span);
         callback.argument_aliases.push((alias.clone(), arg.span));
-        let ordinary = crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+        let ordinary = crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode)
             && (super::prepared_builtin_refs::managed_place(ctx, arg)
                 || super::prepared_builtin_refs::dynamic_place(arg))
             && !may_be_native_selection_reference_argument(ctx, arg);
@@ -97,7 +97,7 @@ pub(super) fn lower(
 /// Preserves native selection behavior and checks ordinary Mixed places only in checked profiles.
 fn needs_context(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     may_be_native_selection_reference_argument(ctx, arg)
-        || (crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+        || (crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode)
             && (super::prepared_builtin_refs::managed_place(ctx, arg)
                 || super::prepared_builtin_refs::dynamic_place(arg)))
 }

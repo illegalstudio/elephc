@@ -48,7 +48,8 @@ echo is_float($defaults['selected']) ? 'P' : 'X';
 fn program() -> crate::parser::ast::Program {
     let mut program = crate::parser::parse_with_mode(&crate::lexer::tokenize(TRUSTED).unwrap(), SourceMode::Internal).unwrap();
     program.extend(crate::parser::parse(&crate::lexer::tokenize(USER).unwrap()).unwrap());
-    program
+    let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+    crate::object_cast_prelude::inject_with_semantics(program, &mut inventory, profile()).unwrap()
 }
 
 /// Selects numeric guarantees independently of property initialization or inferred local contracts.
@@ -70,7 +71,11 @@ fn strict_property_producers_bind_declared_metadata_without_retyping_inferred_sl
         assert_eq!(value.producer_binding, Some(expected), "{name}");
         assert_eq!(value.source_profile.mode, SourceMode::Internal, "{name}");
     }
-    let crate::parser::ast::StmtKind::ClassDecl { properties, .. } = &program[3].kind else { panic!("class producer"); };
+    let properties = program.iter().find_map(|stmt| match &stmt.kind {
+        crate::parser::ast::StmtKind::ClassDecl { name, properties, .. }
+            if name.as_str() == "PropertyProducer" => Some(properties),
+        _ => None,
+    }).expect("original class producer");
     assert!(properties.iter().filter_map(|property| property.default.as_ref()).all(|value| value.producer_binding.is_none()));
 }
 

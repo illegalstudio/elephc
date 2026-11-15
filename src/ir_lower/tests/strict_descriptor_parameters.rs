@@ -43,6 +43,8 @@ try { descriptorSpread($variadic, ['named' => 1]); } catch (TypeError $error) { 
 fn checked(target: Target) -> (crate::parser::ast::Program, crate::types::CheckResult) {
     let program = crate::parser::parse(&crate::lexer::tokenize(SOURCE).unwrap()).unwrap();
     let profile = SemanticProfile::PERMISSIVE.with(StrictFeature::Coercions, true);
+    let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+    let program = crate::object_cast_prelude::inject_with_semantics(program, &mut inventory, profile).unwrap();
     let result = crate::types::checker::check_staged_semantics(&program, target, profile).unwrap();
     (program, result)
 }

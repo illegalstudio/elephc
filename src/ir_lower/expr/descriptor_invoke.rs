@@ -251,7 +251,7 @@ pub(super) fn signature_for_static_callable_binding(
             let prepared_reference = crate::builtins::registry::lookup(&name).is_some_and(|def|
                 def.ref_params.iter().any(|is_ref| *is_ref)
                     && matches!(def.spec.semantics.callable, crate::builtins::semantics::BuiltinCallablePolicy::Prepared(_)));
-            if prepared_reference && crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode) {
+            if prepared_reference && crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode) {
                 crate::types::first_class_callable_builtin_sig_with_semantics(&name, ctx.semantic_profile)
             } else { None }
         }
@@ -396,7 +396,7 @@ pub(super) fn call_user_func_should_use_descriptor(
     if has_named_or_spread {
         return true;
     }
-    if crate::semantics::conversions::checked_casts(ctx.semantic_profile, ctx.source_mode)
+    if crate::semantics::conversions::checked_references(ctx.semantic_profile, ctx.source_mode)
         && sig.is_some_and(|sig| sig.ref_params.iter().any(|is_ref| *is_ref)) {
         return true;
     }

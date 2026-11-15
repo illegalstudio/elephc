@@ -182,21 +182,33 @@ fn declared_helper(program: &[crate::parser::ast::Stmt]) -> Option<(&'static str
 /// Runs under `crate::compiler_stack::with_compiler_stack` (issue #1149): its usage scan walks the
 /// whole program, so an embedder calling it without the CLI driver's wrapper gets the same stack
 /// budget.
+#[allow(dead_code)] // Library compatibility entry; the compiler passes an explicit profile.
 pub fn inject_if_used(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Result<Program, CompileError> {
+    inject_with_semantics(program, inventory, elephc_semantics::SemanticProfile::PERMISSIVE)
+}
+
+/// Reserves conversion dependencies for checked callable catalogs materialized after frontend scans.
+pub fn inject_with_semantics(
+    program: Program,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+    profile: elephc_semantics::SemanticProfile,
+) -> Result<Program, CompileError> {
     crate::compiler_stack::with_compiler_stack(|| {
-        inject_if_used_on_compiler_stack(program, inventory)
+        inject_if_used_on_compiler_stack(program, inventory,
+            crate::types::checked_property_references(profile))
     })
 }
 
-/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+/// Shares explicit usage and checked late-callable dependencies on a compiler-sized stack.
 fn inject_if_used_on_compiler_stack(
     program: Program,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
+    checked_callables: bool,
 ) -> Result<Program, CompileError> {
-    if !program_uses_object_cast(&program) {
+    if !checked_callables && !program_uses_object_cast(&program) {
         return Ok(program);
     }
     if let Some((helper, span)) = declared_helper(&program) {
@@ -245,6 +257,21 @@ mod tests {
         assert!(program_uses_object_cast(&parsed(
             "<?php function f($v) { return (object) $v; }"
         )));
+    }
+
+    /// Late checked builtin wrappers retain object conversion without a source-level cast or call.
+    #[test]
+    fn checked_callable_catalogs_reserve_object_cast_dependencies() {
+        use elephc_semantics::{SemanticProfile, StrictFeature};
+        for feature in [None, Some(StrictFeature::Casts), Some(StrictFeature::Coercions)] {
+            let profile = feature.map_or(SemanticProfile::PERMISSIVE,
+                |feature| SemanticProfile::PERMISSIVE.with(feature, true));
+            let mut inventory = crate::optimize::reachability::PreludeInventory::new();
+            let program = inject_with_semantics(parsed("<?php echo 1;"), &mut inventory, profile).unwrap();
+            let helpers = program.iter().filter(|stmt| matches!(&stmt.kind,
+                StmtKind::FunctionDecl { name, .. } if name.as_str() == DYNAMIC_CAST_HELPER)).count();
+            assert_eq!(helpers, usize::from(feature.is_some()), "{feature:?}");
+        }
     }
 
     /// Prepared settype and runtime catalogs require conversion even without cast syntax.

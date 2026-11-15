@@ -10,12 +10,18 @@
 
 use super::{ClassInfo, PhpType};
 
+/// Selects managed declaration storage for independent checked conversion guarantees.
+pub(crate) fn checked_property_references(profile: elephc_semantics::SemanticProfile) -> bool {
+    profile.contains(elephc_semantics::StrictFeature::Casts)
+        || profile.contains(elephc_semantics::StrictFeature::Coercions)
+}
+
 /// Keeps declaration types intact while selecting boxed storage for checked static references.
 pub(crate) fn static_property_storage_type(
     class: &ClassInfo, property: &str, profile: elephc_semantics::SemanticProfile,
 ) -> Option<PhpType> {
     let (_, ty) = class.static_properties.iter().find(|(name, _)| name == property)?;
-    Some(if profile.contains(elephc_semantics::StrictFeature::Casts) && !class.is_internal
+    Some(if checked_property_references(profile) && !class.is_internal
         && class.declared_static_properties.contains(property)
         && canonical_property_reference_payload(ty).is_some()
     { PhpType::Mixed } else { ty.clone() })
@@ -79,8 +85,10 @@ mod tests {
         let profile = elephc_semantics::SemanticProfile::PERMISSIVE;
         for (name, original) in &class.static_properties {
             assert_eq!(static_property_storage_type(class, name, profile), Some(original.clone()));
-            assert_eq!(static_property_storage_type(class, name,
-                profile.with(elephc_semantics::StrictFeature::Casts, true)), Some(PhpType::Mixed));
+            for feature in [elephc_semantics::StrictFeature::Casts, elephc_semantics::StrictFeature::Coercions] {
+                assert_eq!(static_property_storage_type(class, name,
+                    profile.with(feature, true)), Some(PhpType::Mixed));
+            }
         }
         assert_eq!(class.static_properties[0].1, PhpType::Int);
     }

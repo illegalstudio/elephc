@@ -814,7 +814,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
 
     crate::progress::phase("object-cast-prelude");
     let phase_started = Instant::now();
-    let ast = match crate::object_cast_prelude::inject_if_used(ast, &mut prelude_inventory) {
+    let ast = match crate::object_cast_prelude::inject_with_semantics(ast, &mut prelude_inventory, semantic_profile) {
         Ok(injected) => injected,
         Err(e) => {
             crate::progress::clear();
