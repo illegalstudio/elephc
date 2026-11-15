@@ -118,9 +118,13 @@ pub fn project_computed_include(
 ) -> Option<String> {
     use crate::parser::ast::visit::{walk_nodes, Node};
     use crate::parser::ast::{ExprKind, StmtKind};
+    let pinned = condition_pinned_include_paths(program);
     let mut found = None;
     let mut consider = |path: &crate::parser::ast::Expr, span: crate::span::Span| {
-        if found.is_some() || crate::resolver::include_path_is_static(path) {
+        if found.is_some()
+            || crate::resolver::include_path_is_static(path)
+            || pinned.contains(&(path as *const crate::parser::ast::Expr as usize))
+        {
             return;
         }
         let source = span.source_path();
@@ -148,6 +152,78 @@ pub fn project_computed_include(
         }
     });
     found
+}
+
+/// The addresses of the include paths that are a variable the guarding `if` condition just bound
+/// to a static path.
+///
+/// Laravel's stock `public/index.php` reads
+/// `if (file_exists($maintenance = __DIR__.'/../storage/framework/maintenance.php')) { require
+/// $maintenance; }`: the include can only reach that one file, as a literal path would, so it is
+/// no computed include. Counted as one, it linked the interpreter into every Laravel web build.
+/// Only an include among the branch's own statements counts, and only while no earlier statement
+/// of the branch assigns the variable again.
+fn condition_pinned_include_paths(program: &[crate::parser::ast::Stmt]) -> std::collections::HashSet<usize> {
+    use crate::parser::ast::visit::{walk_expr_nodes, walk_stmts, Node};
+    use crate::parser::ast::{Expr, ExprKind, StmtKind};
+    let mut pinned = std::collections::HashSet::new();
+    walk_stmts(program, &mut |stmt| {
+        let StmtKind::If { condition, then_body, .. } = &stmt.kind else { return };
+        let mut bound: Vec<&str> = Vec::new();
+        walk_expr_nodes(condition, &mut |node| {
+            let Node::Expr(Expr { kind: ExprKind::Assignment { target, value, .. }, .. }) = node else {
+                return;
+            };
+            if let ExprKind::Variable(name) = &target.kind {
+                if crate::resolver::include_path_is_static(value) {
+                    bound.push(name.as_str());
+                }
+            }
+        });
+        if bound.is_empty() {
+            return;
+        }
+        for branch_stmt in then_body {
+            let path = match &branch_stmt.kind {
+                StmtKind::Include { path, .. } => Some(path),
+                StmtKind::ExprStmt(Expr { kind: ExprKind::FunctionCall { name, args }, .. })
+                    if name.as_str().trim_start_matches('\\') == crate::names::DYNAMIC_INCLUDE_FUNCTION =>
+                {
+                    args.first()
+                }
+                _ => None,
+            };
+            if let Some(path) = path {
+                if matches!(&path.kind, ExprKind::Variable(name) if bound.contains(&name.as_str())) {
+                    pinned.insert(path as *const Expr as usize);
+                }
+                continue;
+            }
+            // Any other statement that may write the variable ends its pin.
+            let mut writes = Vec::new();
+            walk_stmts(std::slice::from_ref(branch_stmt), &mut |inner| {
+                if let StmtKind::Assign { name, .. } = &inner.kind {
+                    writes.push(name.clone());
+                }
+            });
+            walk_nodes_assignment_targets(branch_stmt, &mut writes);
+            bound.retain(|name| !writes.iter().any(|written| written == name));
+        }
+    });
+    pinned
+}
+
+/// Pushes every variable an expression-position assignment inside `stmt` writes onto `writes`.
+fn walk_nodes_assignment_targets(stmt: &crate::parser::ast::Stmt, writes: &mut Vec<String>) {
+    use crate::parser::ast::visit::{walk_nodes, Node};
+    use crate::parser::ast::{Expr, ExprKind};
+    walk_nodes(std::slice::from_ref(stmt), &mut |node| {
+        if let Node::Expr(Expr { kind: ExprKind::Assignment { target, .. }, .. }) = node {
+            if let ExprKind::Variable(name) = &target.kind {
+                writes.push(name.clone());
+            }
+        }
+    });
 }
 
 /// Whether a site's source file lies under the directory of an `opcache.preload` script, whose
@@ -248,4 +324,40 @@ pub fn include_table(module: &crate::ir::Module) -> Vec<crate::ir::ClosedInclude
         kind: ClosedIncludeKind::Unit(function.to_string()),
     }));
     table
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_computed_include;
+
+    /// Parses a fixture program.
+    fn parse_php(source: &str) -> Vec<crate::parser::ast::Stmt> {
+        let tokens = crate::lexer::tokenize(source).expect("fixture must tokenize");
+        crate::parser::parse_internal(&tokens).expect("fixture must parse")
+    }
+
+    /// Laravel's `public/index.php` maintenance include reaches the one path its condition bound:
+    /// no computed include.
+    #[test]
+    fn include_of_a_path_the_condition_binds_is_not_computed() {
+        let program = parse_php(
+            "<?php\nif (file_exists($maintenance = '/app/storage/framework/maintenance.php')) {\n    require $maintenance;\n}\n",
+        );
+        assert_eq!(project_computed_include(&program, &[]), None);
+    }
+
+    /// The pin ends where the branch writes the variable again, and an include outside the branch
+    /// or of a variable the condition bound to a computed value stays computed.
+    #[test]
+    fn include_of_a_rebound_or_computed_variable_stays_computed() {
+        for source in [
+            "<?php\nif (file_exists($m = '/a.php')) {\n    $m = $argv[1];\n    require $m;\n}\n",
+            "<?php\nif (file_exists($m = '/a.php')) {\n    foo($m = $argv[1]);\n    require $m;\n}\n",
+            "<?php\nif (file_exists($m = '/a.php')) {\n}\nrequire $m;\n",
+            "<?php\nif (file_exists($m = $argv[1])) {\n    require $m;\n}\n",
+        ] {
+            let program = parse_php(source);
+            assert!(project_computed_include(&program, &[]).is_some(), "{source}");
+        }
+    }
 }

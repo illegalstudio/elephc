@@ -282,6 +282,24 @@ fn default_build_links_the_interpreter_for_the_projects_computed_include_only() 
     assert!(!links_interpreter(&dir), "a folded dirname() path keeps the build closed");
 }
 
+/// Laravel's stock `public/index.php` includes its maintenance file through a variable its `if`
+/// condition binds to a literal path: that include reaches one known file, so the build stays
+/// closed, and with the file absent the program runs as php runs it.
+#[test]
+fn default_build_stays_closed_for_an_include_of_a_path_the_condition_binds() {
+    let dir = make_test_dir("cw_condition_bound_include");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nif (file_exists($maintenance = __DIR__.'/../storage/framework/maintenance.php')) {\n    require $maintenance;\n}\necho \"ok\\n\";\n",
+    )
+    .unwrap();
+    let output = compile(&dir, &[]);
+    assert!(output.status.success(), "{}", text(&output.stderr));
+    assert!(!text(&output.stderr).contains("interpreter"), "{}", text(&output.stderr));
+    assert_eq!(text(&run(&dir).stdout), php_stdout(&dir));
+    assert!(!links_interpreter(&dir), "an include of a condition-bound literal path keeps the build closed");
+}
+
 /// The files beside the `opcache.preload` script are the framework's generated code, not the
 /// project's: Symfony's dumped container loads its factories with `require $this->containerDir.'/'.$file`, which the
 /// closed world answers from the units it compiled for the preload. Counted as the project's own
