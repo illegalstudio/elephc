@@ -40,6 +40,8 @@ pub mod docblock;
 pub mod func_args;
 /// Monomorphization support for generic function declarations.
 pub mod generics;
+/// Lowers `goto` and its labels into structured control flow right after parsing.
+pub mod goto_lowering;
 /// The program-wide set of names some body declares `global`, shared by the checker and lowering.
 pub(crate) mod global_decls;
 mod progress;

@@ -317,6 +317,8 @@ impl<'a> Compiler<'a> {
             EvalStmt::InterfaceDecl(_) => Err(CompileGap::new("InterfaceDecl")),
             EvalStmt::TraitDecl(_) => Err(CompileGap::new("TraitDecl")),
             EvalStmt::Foreach { .. } => Err(CompileGap::new("Foreach")),
+            EvalStmt::Goto(_) => Err(CompileGap::new("Goto")),
+            EvalStmt::Label(_) => Err(CompileGap::new("Label")),
             EvalStmt::Global { .. } => Err(CompileGap::new("Global")),
             EvalStmt::ReferenceAssign { .. } => Err(CompileGap::new("ReferenceAssign")),
             EvalStmt::PropertyReferenceBind { .. } => Err(CompileGap::new("PropertyReferenceBind")),

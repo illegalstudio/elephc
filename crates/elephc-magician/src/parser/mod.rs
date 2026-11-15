@@ -17,6 +17,7 @@ pub(crate) mod generics;
 mod docblocks;
 mod cursor;
 mod expressions;
+mod jumps;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod repl;
 pub(crate) mod state;

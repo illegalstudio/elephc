@@ -568,6 +568,8 @@ impl<'a> ConversionScan<'a> {
             // own locals, so it cannot convert one of ours.
             StmtKind::Break(_)
             | StmtKind::Continue(_)
+            | StmtKind::Goto(_)
+            | StmtKind::GotoLabel(_)
             | StmtKind::IncludeOnceMark { .. }
             | StmtKind::NamespaceDecl { .. }
             | StmtKind::UseDecl { .. }

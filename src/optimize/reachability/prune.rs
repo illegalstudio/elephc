@@ -120,6 +120,8 @@ fn prune_statement_children(statement: &mut Stmt, reachability: &Reachability) {
         | StmtKind::IncludeOnceMark { .. }
         | StmtKind::Throw(_)
         | StmtKind::Break(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_)
         | StmtKind::Continue(_)
         | StmtKind::ExprStmt(_)
         | StmtKind::NamespaceDecl { .. }

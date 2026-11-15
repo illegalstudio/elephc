@@ -69,10 +69,104 @@ fn execute_statement_sequence(
         if templates_registered && matches!(stmt, EvalStmt::GenericDecl(_)) { continue; }
         match execute_stmt(stmt, context, scope, values)? {
             EvalControl::None => {}
+            EvalControl::Goto(label) => {
+                return resume_statement_sequence(
+                    statements, templates_registered, label, context, scope, values,
+                );
+            }
             control => return Ok(control),
         }
     }
     Ok(EvalControl::None)
+}
+
+/// Executes `statements` starting at the label a jump is on its way to.
+///
+/// The caller has established that the list holds the label, by
+/// `EvalStmt::holds_jump_label`. Used to enter an `if` branch or a `try` body a jump lands in.
+pub(in crate::interpreter) fn execute_statements_from_label(
+    statements: &[EvalStmt],
+    label: String,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    resume_statement_sequence(statements, false, label, context, scope, values)
+}
+
+/// Completes a jump raised inside `statements`, or passes it up when the label is elsewhere.
+///
+/// This is the cold half of `execute_statement_sequence`. A statement list that holds the label
+/// resumes at it and then runs on in source order; a later jump raised from the resumed code is
+/// resolved the same way, so a backward jump loops here without growing the native stack. A
+/// list that does not hold the label ends, like a `break`, and the jump keeps travelling out:
+/// through loops, which stop iterating, and through `try` statements, which run `finally`.
+fn resume_statement_sequence(
+    statements: &[EvalStmt],
+    templates_registered: bool,
+    label: String,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    let mut pending = Some(label);
+    let mut index = 0;
+    loop {
+        if let Some(label) = &pending {
+            match crate::eval_ir::jump_label_position(statements, label) {
+                Some(target) => index = target,
+                None => return Ok(EvalControl::Goto(pending.take().expect("checked above"))),
+            }
+        }
+        let Some(stmt) = statements.get(index) else {
+            return Ok(EvalControl::None);
+        };
+        eval_pcntl_maybe_dispatch(context, values)?;
+        let control = match pending.take() {
+            Some(label) => execute_stmt_from_label(stmt, label, context, scope, values)?,
+            None if templates_registered && matches!(stmt, EvalStmt::GenericDecl(_)) => {
+                EvalControl::None
+            }
+            None => execute_stmt(stmt, context, scope, values)?,
+        };
+        match control {
+            EvalControl::None => index += 1,
+            EvalControl::Goto(label) => pending = Some(label),
+            control => return Ok(control),
+        }
+    }
+}
+
+/// Executes the statement a jump resumes at: the label itself, or the statement holding it.
+fn execute_stmt_from_label(
+    stmt: &EvalStmt,
+    label: String,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<EvalControl, EvalStatus> {
+    match stmt {
+        // The condition is not evaluated: the jump decides the branch.
+        EvalStmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let branch = if crate::eval_ir::sequence_holds_jump_label(then_branch, &label) {
+                then_branch
+            } else {
+                else_branch
+            };
+            execute_statements_from_label(branch, label, context, scope, values)
+        }
+        EvalStmt::Try {
+            body,
+            catches,
+            finally_body,
+        } => execute_try_stmt(body, catches, finally_body, Some(label), context, scope, values),
+        // The label itself: arriving completes the jump.
+        _ => Ok(EvalControl::None),
+    }
 }
 
 /// Executes one statement and returns `Some` only for eval `return`.
@@ -108,6 +202,9 @@ pub(in crate::interpreter) fn execute_stmt(
             Ok(EvalControl::None)
         }
         EvalStmt::Break => Ok(EvalControl::Break),
+        EvalStmt::Goto(label) => Ok(EvalControl::Goto(label.clone())),
+        // Reached in source order, a label does nothing.
+        EvalStmt::Label(_) => Ok(EvalControl::None),
         EvalStmt::Continue => Ok(EvalControl::Continue),
         EvalStmt::DoWhile { body, condition } => {
             execute_do_while_stmt(body, condition, context, scope, values)
@@ -335,7 +432,7 @@ pub(in crate::interpreter) fn execute_stmt(
             body,
             catches,
             finally_body,
-        } => execute_try_stmt(body, catches, finally_body, context, scope, values),
+        } => execute_try_stmt(body, catches, finally_body, None, context, scope, values),
         EvalStmt::UnsetArrayElement { array, index } => {
             eval_array_unset_element_stmt(array, index, context, scope, values)?;
             Ok(EvalControl::None)
@@ -358,6 +455,7 @@ pub(in crate::interpreter) fn execute_stmt(
                     EvalControl::Throw(result) => return Ok(EvalControl::Throw(result)),
                     EvalControl::ReturnVoid => return Ok(EvalControl::ReturnVoid),
                     EvalControl::Return(result) => return Ok(EvalControl::Return(result)),
+                    EvalControl::Goto(label) => return Ok(EvalControl::Goto(label)),
                 }
             }
             Ok(EvalControl::None)

@@ -136,7 +136,7 @@ fn eval_replay_include_segments(
                 context.set_pending_throw(value);
                 return Err(EvalStatus::UncaughtThrowable);
             }
-            EvalControl::Break | EvalControl::Continue => {
+            EvalControl::Break | EvalControl::Continue | EvalControl::Goto(_) => {
                 return Err(EvalStatus::UnsupportedConstruct);
             }
         }

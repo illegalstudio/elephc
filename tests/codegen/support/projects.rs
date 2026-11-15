@@ -334,6 +334,8 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &synthetic_main);
     let define_set = HashSet::new();
     let ast = elephc::conditional::apply(ast, &define_set);
+    let ast = elephc::goto_lowering::lower_program(ast, &synthetic_main.display().to_string())
+        .expect("goto lowering failed");
     let (autoload_registry, ast) = elephc::autoload::Registry::build(&dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
@@ -429,6 +431,8 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
     let define_set = HashSet::new();
     let ast = elephc::conditional::apply(ast, &define_set);
+    let ast = elephc::goto_lowering::lower_program(ast, &php_path.display().to_string())
+        .expect("goto lowering failed");
     let (resolved, included_files) =
         elephc::resolver::resolve_collecting_includes(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
@@ -524,6 +528,8 @@ fn compile_and_run_files_with_defines_per_argv(
     let ast = elephc::magic_constants::substitute_file_and_scope_constants(ast, &php_path);
     let define_set: HashSet<String> = defines.iter().map(|define| (*define).to_string()).collect();
     let ast = elephc::conditional::apply(ast, &define_set);
+    let ast = elephc::goto_lowering::lower_program(ast, &php_path.display().to_string())
+        .expect("goto lowering failed");
     let (autoload_registry, ast) = elephc::autoload::Registry::build(base_dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let (resolved, included_files) = elephc::resolver::resolve_collecting_includes_with_defines(
@@ -767,6 +773,8 @@ pub(crate) fn compile_files_fails_with_defines(
         let define_set: HashSet<String> =
             defines.iter().map(|define| (*define).to_string()).collect();
         let ast = elephc::conditional::apply(ast, &define_set);
+        let ast =
+            elephc::goto_lowering::lower_program(ast, &php_path.display().to_string())?;
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
         let resolved = elephc::autoload::collect_aliases(resolved).expect("alias collection failed");
         let resolved = elephc::name_resolver::resolve(resolved)?;

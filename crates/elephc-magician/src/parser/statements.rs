@@ -97,6 +97,20 @@ impl Parser {
                 self.expect_semicolon()?;
                 Ok(vec![EvalStmt::Continue])
             }
+            TokenKind::Ident(name) if ident_eq(name, "goto") => self.parse_goto_stmt(),
+            // `name:` at statement position is a jump label. Every other `name` `:` pair is
+            // inside an expression (a ternary, a named argument) or belongs to a keyword that
+            // its own parser consumes first (`case`, `default`, `else:`); reserved words are
+            // excluded so a misplaced one still reports its own error.
+            TokenKind::Ident(name)
+                if matches!(self.peek(), TokenKind::Colon) && !super::is_reserved_word(name) =>
+            {
+                let name = name.clone();
+                self.advance();
+                self.advance();
+                self.saw_jump = true;
+                Ok(vec![EvalStmt::Label(name)])
+            }
             TokenKind::Ident(name) if ident_eq(name, "do") => self.parse_do_while_stmt(),
             TokenKind::Ident(name) if ident_eq(name, "echo") => {
                 self.advance();

@@ -1148,7 +1148,11 @@ fn walk_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         | StmtKind::ExprStmt(expr)
         | StmtKind::Throw(expr)
         | StmtKind::Echo(expr) => walk_expr(expr, out),
-        StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_) => {}
+        StmtKind::Return(None)
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_) => {}
         // The declared name is a fresh local, not a use of an enclosing one, so only the
         // initializer contributes reads.
         StmtKind::StaticVar { init, .. } => walk_expr(init, out),
@@ -1915,7 +1919,11 @@ fn audit_stmt(stmt: &Stmt, out: &mut Vec<String>) {
         | StmtKind::ExprStmt(expr)
         | StmtKind::Throw(expr)
         | StmtKind::Echo(expr) => audit_expr(expr, out),
-        StmtKind::Return(None) | StmtKind::Break(_) | StmtKind::Continue(_) => {}
+        StmtKind::Return(None)
+        | StmtKind::Break(_)
+        | StmtKind::Continue(_)
+        | StmtKind::Goto(_)
+        | StmtKind::GotoLabel(_) => {}
         StmtKind::StaticVar { init, .. } => audit_expr(init, out),
         StmtKind::Assign { value, .. } | StmtKind::TypedAssign { value, .. } => {
             audit_expr(value, out)

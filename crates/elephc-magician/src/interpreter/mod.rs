@@ -171,7 +171,9 @@ pub fn execute_program_outcome_with_context(
             let result = if result.is_borrowed() { values.retain(result)? } else { result };
             Ok(EvalOutcome::Throwable(result))
         }
-        Ok(EvalControl::Break | EvalControl::Continue) => Err(EvalStatus::UnsupportedConstruct),
+        Ok(EvalControl::Break | EvalControl::Continue | EvalControl::Goto(_)) => {
+            Err(EvalStatus::UnsupportedConstruct)
+        }
         Err(EvalStatus::UncaughtThrowable) => context
             .take_pending_throw()
             .map(EvalOutcome::Throwable)

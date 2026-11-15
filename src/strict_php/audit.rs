@@ -248,7 +248,7 @@ fn audit_stmt(stmt: &Stmt, errors: &mut Vec<CompileError>) {
                 audit_stmts(body, errors);
             }
         }
-        StmtKind::Break(_) | StmtKind::Continue(_) => {}
+        StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Goto(_) | StmtKind::GotoLabel(_) => {}
         StmtKind::ExprStmt(expr) => audit_expr(expr, errors),
         StmtKind::NamespaceDecl { name: _ } => {}
         StmtKind::NamespaceBlock { name: _, body } => audit_stmts(body, errors),

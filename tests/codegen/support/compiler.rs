@@ -403,6 +403,10 @@ fn try_compile_source_to_asm_with_defines_repr_inner(
     // values, so the surface looked tested while nothing exercised it.
     let ast = elephc::docblock::apply(ast, source);
     let ast = elephc::conditional::apply(ast, defines);
+    // Also mirrors `source::finalize_physical_program`: `goto` is lowered per physical file,
+    // right after conditional compilation and before include resolution.
+    let ast = elephc::goto_lowering::lower_program(ast, &synthetic_main.display().to_string())
+        .expect("goto lowering failed");
     let (autoload_registry, ast) = elephc::autoload::Registry::build(dir, ast);
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");

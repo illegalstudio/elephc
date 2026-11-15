@@ -48,7 +48,9 @@ pub(in crate::interpreter) fn eval_declared_return_control_value(
             context.set_pending_throw(thrown);
             Err(EvalStatus::UncaughtThrowable)
         }
-        EvalControl::Break | EvalControl::Continue => Err(EvalStatus::UnsupportedConstruct),
+        EvalControl::Break | EvalControl::Continue | EvalControl::Goto(_) => {
+            Err(EvalStatus::UnsupportedConstruct)
+        }
     }
 }
 

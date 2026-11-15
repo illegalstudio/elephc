@@ -127,6 +127,7 @@ PHP source
   -> Parser
   -> Magic constants
   -> Conditional compilation
+  -> goto lowering
   -> Resolver / autoload
   -> NameResolver
   -> AST constant folding

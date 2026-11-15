@@ -466,6 +466,8 @@ impl Detector {
             StmtKind::Break(levels) => self.record_exit(*levels, false),
             StmtKind::Continue(levels) => self.record_exit(*levels, true),
             StmtKind::RefAssign { .. }
+            | StmtKind::Goto(_)
+            | StmtKind::GotoLabel(_)
             | StmtKind::IncludeOnceMark { .. }
             | StmtKind::NamespaceDecl { .. }
             | StmtKind::FunctionVariantGroup { .. }

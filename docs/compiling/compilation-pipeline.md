@@ -86,6 +86,9 @@ Physical source (.php or .lfc)
   in strict mode while its templates still drive compilation.
 - **conditional compilation** — `ifdef` branches are resolved using the symbols
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
+- **goto lowering**: each file's `goto` statements and labels are validated and
+  rewritten into loops and `continue`, so the passes below only ever see
+  structured control flow. Invalid jumps are reported here with PHP's wording.
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   mysqli, timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
