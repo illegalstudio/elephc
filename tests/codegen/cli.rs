@@ -3452,14 +3452,7 @@ fn test_cli_debug_dap_exception_filters_stop_caught_and_uncaught() {
     assert_eq!(status.code(), Some(255), "uncaught exception exit status");
     let output = client.program_output();
     assert!(output.contains("caught"), "caught handler output missing: {output}");
-    let mut report = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut report)
-            .expect("read exception adapter stderr");
-    }
+    let report = client.finish_adapter_stderr();
     assert!(
         report.contains("RuntimeException"),
         "uncaught Throwable report missing: {report}"
@@ -3536,14 +3529,7 @@ fn test_cli_debug_dap_exception_stops_in_destructor() {
     let status = client.child.wait().expect("wait for destructor adapter");
     assert_eq!(status.code(), Some(255), "uncaught destructor exit status");
     let output = client.program_output();
-    let mut report = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut report)
-            .expect("read destructor adapter stderr");
-    }
+    let report = client.finish_adapter_stderr();
     assert!(
         report.contains("RuntimeException") && report.contains("dtor"),
         "uncaught destructor report missing: {report}"
@@ -6806,7 +6792,12 @@ struct DapClient {
     child: std::process::Child,
     stdin: std::process::ChildStdin,
     stdout: std::io::BufReader<std::process::ChildStdout>,
-    stderr: std::process::ChildStderr,
+    /// Continuously drained adapter/debuggee stderr, so the child cannot block
+    /// on a full pipe and a stalled request can report what the child said.
+    stderr: std::sync::Arc<std::sync::Mutex<String>>,
+    /// Join handle for the stderr drain; joined once the adapter exits so the
+    /// tail of the pipe is visible to assertions.
+    stderr_thread: Option<std::thread::JoinHandle<()>>,
     seq: i64,
     output_stdout: String,
     output_stderr: String,
@@ -6824,15 +6815,64 @@ impl DapClient {
             .expect("spawn DAP adapter");
         let stdin = child.stdin.take().expect("DAP adapter stdin");
         let stdout = std::io::BufReader::new(child.stdout.take().expect("DAP adapter stdout"));
-        let stderr = child.stderr.take().expect("DAP adapter stderr");
+        let mut stderr_pipe = child.stderr.take().expect("DAP adapter stderr");
+        let stderr = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let sink = std::sync::Arc::clone(&stderr);
+        let stderr_thread = std::thread::spawn(move || {
+            use std::io::BufRead as _;
+            let mut reader = std::io::BufReader::new(&mut stderr_pipe);
+            let mut line = String::new();
+            while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                if let Ok(mut text) = sink.lock() {
+                    text.push_str(&line);
+                }
+                line.clear();
+            }
+        });
         Self {
             child,
             stdin,
             stdout,
             stderr,
+            stderr_thread: Some(stderr_thread),
             seq: 0,
             output_stdout: String::new(),
             output_stderr: String::new(),
+        }
+    }
+
+    /// Joins the stderr drain and returns everything the adapter wrote.
+    fn finish_adapter_stderr(&mut self) -> String {
+        if let Some(handle) = self.stderr_thread.take() {
+            let _ = handle.join();
+        }
+        self.adapter_stderr()
+    }
+
+    /// Returns the adapter/debuggee stderr drained so far.
+    fn adapter_stderr(&self) -> String {
+        self.stderr
+            .lock()
+            .map(|text| text.clone())
+            .unwrap_or_default()
+    }
+
+    /// Panics with the expected message, child status and adapter stderr when
+    /// no DAP message arrives, so a macOS-only stall names its exact step.
+    fn recv_expected(&mut self, expected: &str) -> serde_json::Value {
+        match self.recv_with_timeout(std::time::Duration::from_secs(120)) {
+            Some(message) => message,
+            None => {
+                let status = match self.child.try_wait() {
+                    Ok(Some(status)) => status.to_string(),
+                    Ok(None) => "still running".to_string(),
+                    Err(error) => format!("status error: {error}"),
+                };
+                panic!(
+                    "timed out waiting for {expected}; adapter {status}; stderr: {}",
+                    self.adapter_stderr()
+                );
+            }
         }
     }
 
@@ -6916,7 +6956,7 @@ impl DapClient {
         let seq = self.send("continue", None);
         assert_eq!(self.response(seq)["success"], true);
         loop {
-            let message = self.recv();
+            let message = self.recv_expected("the terminated event");
             if message["type"] == "event" && message["event"] == "terminated" {
                 break;
             }
@@ -6984,7 +7024,7 @@ impl DapClient {
 
     /// Reads the response for `request_seq`, failing on an unexpected message.
     fn response(&mut self, request_seq: i64) -> serde_json::Value {
-        let message = self.recv();
+        let message = self.recv_expected(&format!("the response to request {request_seq}"));
         assert_eq!(message["type"], "response", "{message}");
         assert_eq!(message["request_seq"], request_seq, "{message}");
         message
@@ -6992,7 +7032,7 @@ impl DapClient {
 
     /// Reads one named DAP event.
     fn event(&mut self, name: &str) -> serde_json::Value {
-        let message = self.recv();
+        let message = self.recv_expected(&format!("the '{name}' event"));
         assert_eq!(message["type"], "event", "{message}");
         assert_eq!(message["event"], name, "{message}");
         message
@@ -7919,14 +7959,7 @@ fn test_cli_debug_dap_streams_program_output() {
     assert!(stdout.contains("stdout-1"), "stdout missing: {stdout:?}");
     assert!(stdout.contains("stdout-2"), "stdout missing: {stdout:?}");
     assert!(stderr.contains("stderr-1"), "stderr missing: {stderr:?}");
-    let mut adapter_stderr = String::new();
-    {
-        use std::io::Read as _;
-        client
-            .stderr
-            .read_to_string(&mut adapter_stderr)
-            .expect("read adapter stderr");
-    }
+    let adapter_stderr = client.finish_adapter_stderr();
     assert!(
         !adapter_stderr.contains("stdout-1")
             && !adapter_stderr.contains("stdout-2")
