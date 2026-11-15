@@ -10,10 +10,11 @@
 //! - Also widens implicitly nullable parameters (`T $p = null`) and queues their PHP 8.4
 //!   deprecation, since this is the pass that knows each parameter's php-src owner name.
 
+use std::collections::HashMap;
 use std::path::Path;
 
-use crate::names::Name;
-use crate::parser::ast::{Expr, ExprKind, MagicConstant, Program, TypeExpr};
+use crate::names::{php_symbol_key, Name};
+use crate::parser::ast::{AttributeGroup, Expr, ExprKind, MagicConstant, Program, TypeExpr, UseItem, UseKind};
 use crate::span::Span;
 
 use super::walker::{walk_program, Pass};
@@ -53,6 +54,9 @@ struct Scope {
     function_stack: Vec<Option<String>>,
     closure_depth: usize,
     closure_names: Vec<String>,
+    /// Class `use` imports in effect, keyed by lowercased alias, as the name resolver keys them.
+    class_imports: HashMap<String, Name>,
+    class_imports_stack: Vec<HashMap<String, Name>>,
 }
 
 /// Holds the current scope state and the canonical file path being processed.
@@ -212,12 +216,15 @@ impl Pass for ScopePass {
     /// Pushes the current namespace onto the stack and sets the new namespace declaration.
     fn enter_namespace_decl(&mut self, name: &Option<Name>) {
         self.scope.namespace = Some(namespace_string(name));
+        self.scope.class_imports.clear();
     }
 
     /// Saves the current namespace on the stack and enters a new namespace block.
     fn enter_namespace_block(&mut self, name: &Option<Name>) {
         self.scope.namespace_stack.push(self.scope.namespace.clone());
         self.scope.namespace = Some(namespace_string(name));
+        let outer = std::mem::take(&mut self.scope.class_imports);
+        self.scope.class_imports_stack.push(outer);
     }
 
     /// Restores the previous namespace from the stack after leaving a namespace block.
@@ -225,6 +232,35 @@ impl Pass for ScopePass {
         if let Some(prev) = self.scope.namespace_stack.pop() {
             self.scope.namespace = prev;
         }
+        if let Some(outer) = self.scope.class_imports_stack.pop() {
+            self.scope.class_imports = outer;
+        }
+    }
+
+    /// Records class imports, so [`Pass::marks_export`] sees an attribute's imported identity.
+    fn observe_use_decl(&mut self, imports: &[UseItem]) {
+        for item in imports.iter().filter(|item| matches!(item.kind, UseKind::Class)) {
+            self.scope.class_imports.insert(php_symbol_key(&item.alias), item.name.clone());
+        }
+    }
+
+    /// Recognizes `#[Export]` the way `exports` does after name resolution: by the last segment
+    /// of the resolved name. Only an unqualified name can change its last segment while
+    /// resolving, through a class import (`use Foo\Marker as Export;` is not the attribute, and
+    /// `use Elephc\Export as Ex;` makes `#[Ex]` it); a qualified or fully qualified name keeps
+    /// its last segment.
+    fn marks_export(&self, attributes: &[AttributeGroup]) -> bool {
+        attributes.iter().flat_map(|group| &group.attributes).any(|attr| {
+            let name = match attr.name.last_segment() {
+                Some(alias) if attr.name.is_unqualified() => self
+                    .scope
+                    .class_imports
+                    .get(&php_symbol_key(alias))
+                    .unwrap_or(&attr.name),
+                _ => &attr.name,
+            };
+            name.parts.last().is_some_and(|seg| crate::exports::is_export_attribute_segment(seg))
+        })
     }
 
     /// Saves the current function on the stack and enters a new function scope.
@@ -296,17 +332,20 @@ mod tests {
     use super::*;
     use crate::parser::ast::StmtKind;
 
-    /// Parses `source` and returns the declared parameter types of its first function.
+    /// Parses `source` and returns the declared parameter types of its first top-level function.
     fn widened_param_types(source: &str) -> Vec<Option<TypeExpr>> {
         let tokens = crate::lexer::tokenize(source).expect("tokenize");
         let program = crate::parser::parse(&tokens).expect("parse");
         let program = substitute_scope_constants_with_file(program, Some("t.php".to_string()));
-        match &program[0].kind {
-            StmtKind::FunctionDecl { params, .. } => {
-                params.iter().map(|(_, ty, _, _)| ty.clone()).collect()
-            }
-            other => panic!("expected a function, got {other:?}"),
-        }
+        program
+            .iter()
+            .find_map(|stmt| match &stmt.kind {
+                StmtKind::FunctionDecl { params, .. } => {
+                    Some(params.iter().map(|(_, ty, _, _)| ty.clone()).collect())
+                }
+                _ => None,
+            })
+            .expect("a function declaration")
     }
 
     /// Verifies only a literal-null default on a type that rejects null is widened, a
@@ -356,5 +395,72 @@ mod tests {
             vec![Some(TypeExpr::Int), Some(TypeExpr::Nullable(Box::new(TypeExpr::Int)))]
         );
         assert_eq!(crate::errors::take_deferred_warnings().len(), 1);
+    }
+
+    /// Verifies the export check reads an attribute through the file's class imports, as name
+    /// resolution will: an alias of another class named `Export` is not the export attribute and
+    /// widens, while an alias of the export attribute keeps its declared type.
+    #[test]
+    fn export_check_resolves_attribute_class_imports() {
+        let _ = crate::errors::take_deferred_warnings();
+        let widened = Some(TypeExpr::Nullable(Box::new(TypeExpr::Str)));
+        let kept = Some(TypeExpr::Str);
+        for (source, expected) in [
+            ("<?php use Foo\\Marker as Export; #[Export] function f(string $x = null) {}", &widened),
+            ("<?php use Foo\\Marker as export; #[EXPORT] function f(string $x = null) {}", &widened),
+            ("<?php use Elephc\\Export as Ex; #[Ex] function f(string $x = null) {}", &kept),
+            ("<?php use Elephc\\Export; #[Export] function f(string $x = null) {}", &kept),
+            ("<?php use Foo\\Marker as Export; #[\\Export] function f(string $x = null) {}", &kept),
+            ("<?php use Foo\\Marker as Export; #[Elephc\\Export] function f(string $x = null) {}", &kept),
+            ("<?php use function Foo\\marker as Export; #[Export] function f(string $x = null) {}", &kept),
+        ] {
+            assert_eq!(&widened_param_types(source)[0], expected, "{source}");
+        }
+        let _ = crate::errors::take_deferred_warnings();
+    }
+
+    /// Verifies class imports end with their namespace: a later `namespace` statement or the end
+    /// of a namespace block forgets them, so `#[Export]` there is the attribute again.
+    #[test]
+    fn export_check_forgets_class_imports_with_their_namespace() {
+        let _ = crate::errors::take_deferred_warnings();
+        let function_param_types = |source: &str| -> Vec<Option<TypeExpr>> {
+            let tokens = crate::lexer::tokenize(source).expect("tokenize");
+            let program = crate::parser::parse(&tokens).expect("parse");
+            let mut types = Vec::new();
+            collect_function_param_types(
+                &substitute_scope_constants_with_file(program, Some("t.php".to_string())),
+                &mut types,
+            );
+            types
+        };
+        let widened = Some(TypeExpr::Nullable(Box::new(TypeExpr::Str)));
+        let kept = Some(TypeExpr::Str);
+        assert_eq!(
+            function_param_types(
+                "<?php namespace A; use Foo\\Marker as Export; #[Export] function f(string $x = null) {}\n\
+                 namespace B; #[Export] function g(string $x = null) {}"
+            ),
+            vec![widened.clone(), kept.clone()]
+        );
+        assert_eq!(
+            function_param_types(
+                "<?php namespace A { use Foo\\Marker as Export; #[Export] function f(string $x = null) {} }\n\
+                 namespace B { #[Export] function g(string $x = null) {} }"
+            ),
+            vec![widened, kept]
+        );
+        let _ = crate::errors::take_deferred_warnings();
+    }
+
+    /// Appends the first parameter type of every function declared in `program`, in order.
+    fn collect_function_param_types(program: &Program, types: &mut Vec<Option<TypeExpr>>) {
+        for stmt in program {
+            match &stmt.kind {
+                StmtKind::FunctionDecl { params, .. } => types.push(params[0].1.clone()),
+                StmtKind::NamespaceBlock { body, .. } => collect_function_param_types(body, types),
+                _ => {}
+            }
+        }
     }
 }

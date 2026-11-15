@@ -297,6 +297,13 @@ pub(crate) trait Pass {
         method
     }
 
+    /// Called for each `use` declaration, in source order, before the statements it governs.
+    fn observe_use_decl(&mut self, _imports: &[crate::parser::ast::UseItem]) {}
+    /// Returns whether a function declaration's attributes name the `#[Export]` attribute,
+    /// passed to [`Pass::transform_param_type`]. The default reads the names as written.
+    fn marks_export(&self, attributes: &[crate::parser::ast::AttributeGroup]) -> bool {
+        crate::exports::attributes_mark_export(attributes)
+    }
     /// Called when entering a `namespace` declaration (the `namespace Foo;` statement).
     fn enter_namespace_decl(&mut self, _name: &Option<Name>) {}
     /// Called when entering a namespace block scope.

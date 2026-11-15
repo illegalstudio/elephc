@@ -185,22 +185,18 @@ pub(crate) fn has_export_attribute(stmt: &Stmt) -> bool {
 }
 
 /// Returns `true` if a declaration's attribute groups include `#[Export]` (or
-/// `#[\Elephc\Export]`); shared with passes that see the attributes before the statement.
+/// `#[\Elephc\Export]`). Meant for names already resolved: before name resolution an alias
+/// (`use Foo\Marker as Export;`) still reads as `Export`.
 pub(crate) fn attributes_mark_export(attributes: &[crate::parser::ast::AttributeGroup]) -> bool {
-    for group in attributes {
-        for attr in &group.attributes {
-            if attr
-                .name
-                .parts
-                .last()
-                .map(|seg| seg == "Export")
-                .unwrap_or(false)
-            {
-                return true;
-            }
-        }
-    }
-    false
+    attributes
+        .iter()
+        .flat_map(|group| &group.attributes)
+        .any(|attr| attr.name.parts.last().is_some_and(|seg| is_export_attribute_segment(seg)))
+}
+
+/// Returns `true` if the last segment of a resolved attribute name marks an export.
+pub(crate) fn is_export_attribute_segment(segment: &str) -> bool {
+    segment == "Export"
 }
 
 /// Validates that every parameter and return type has a defined cdylib ABI.

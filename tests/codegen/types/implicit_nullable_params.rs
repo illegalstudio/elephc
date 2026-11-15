@@ -86,6 +86,21 @@ echo $ar(), " ", $ar("v"), "\n";
     );
 }
 
+/// Verifies an attribute imported under the alias `Export` is not the `#[Export]` attribute: its
+/// function widens like any other, as php 8.5 runs it.
+#[test]
+fn test_implicitly_nullable_param_with_attribute_aliased_as_export() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+use Foo\Marker as Export;
+#[Export] function f(string $x = null) { var_dump($x); }
+f(); f("v");
+"#,
+    );
+    assert_eq!(out, "NULL\nstring(1) \"v\"\n");
+}
+
 /// Verifies the compiler reports php 8.5's compile-time deprecation once per implicitly
 /// nullable parameter, naming the function, method or closure as php-src does, and stays
 /// silent for explicitly nullable, `mixed`, `T|null`, untyped and non-null defaults.

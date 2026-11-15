@@ -375,7 +375,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             body,
         } => {
             pass.enter_function(&name);
-            let exported = crate::exports::attributes_mark_export(&attributes);
+            let exported = pass.marks_export(&attributes);
             let new_params = params
                 .into_iter()
                 .map(|param| super::walk_param(param, pass, span, exported))
@@ -598,11 +598,14 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             required,
         },
         // Statements with no Expr children or only simple data:
+        StmtKind::UseDecl { imports } => {
+            pass.observe_use_decl(&imports);
+            StmtKind::UseDecl { imports }
+        }
         other @ (StmtKind::Break(_)
         | StmtKind::Continue(_)
         | StmtKind::Goto(_)
         | StmtKind::GotoLabel(_)
-        | StmtKind::UseDecl { .. }
         | StmtKind::Global { .. }
         | StmtKind::PackedClassDecl { .. }
         | StmtKind::ExternFunctionDecl { .. }
