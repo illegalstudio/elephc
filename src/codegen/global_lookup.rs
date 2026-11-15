@@ -46,12 +46,9 @@ pub(crate) fn emit_dynamic_global_lookup(
     data: &mut DataSection,
 ) {
     let mut entries = Vec::new();
+    let mut kinds = Vec::new();
     for name in &module.program_global_names {
         if module.extern_globals.contains_key(name) {
-            continue;
-        }
-        // Web superglobals use a native container representation, not the ordinary Mixed word.
-        if module.web && crate::superglobals::is_superglobal(name) {
             continue;
         }
         let symbol = crate::names::ir_global_symbol(name);
@@ -60,12 +57,17 @@ pub(crate) fn emit_dynamic_global_lookup(
         entries.push(DataWord::Symbol(label));
         entries.push(DataWord::U64(length as u64));
         entries.push(DataWord::Symbol(symbol));
+        // 0 = ordinary boxed Mixed cell, 1 = raw Hash pointer owned by a web superglobal.
+        kinds.push(DataWord::U64(u64::from(
+            module.web && crate::superglobals::is_superglobal(name),
+        )));
     }
     data.add_words_named(
         "_eir_global_lookup_count",
         vec![DataWord::U64((entries.len() / 3) as u64)],
     );
     data.add_words_named("_eir_global_lookup_entries", entries);
+    data.add_words_named("_eir_global_lookup_kinds", kinds);
     // Runtime-only global names live in a linked list of stable cells headed here. The static
     // table cannot grow, so a computed write misses it and creates one of these entries.
     data.add_comm("_eir_dynamic_globals".to_string(), 8);
@@ -110,15 +112,22 @@ fn emit_aarch64_helper(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, #1");                                      // advance to the next byte
     emitter.instruction("b __rt_global_lookup_bytes");                          // continue the byte comparison
     emitter.label("__rt_global_lookup_hit");
-    emitter.instruction("ldr x0, [x6, #16]");                                   // return the address of the global's Mixed word
+    emitter.instruction("ldr x0, [x6, #16]");                                   // return the address of the global's storage word
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_eir_global_lookup_kinds");
+    emitter.instruction("ldr x1, [x9, x5, lsl #3]");                            // return 0 for Mixed storage, 1 for a typed Hash slot
     emitter.instruction("ret");                                                 // return to the caller
     emitter.label("__rt_global_lookup_next");
     emitter.instruction("add x5, x5, #1");                                      // advance to the next table entry
     emitter.instruction("b __rt_global_lookup_loop");                           // keep searching
     emitter.label("__rt_global_lookup_miss");
+    emitter.instruction("stp x29, x30, [sp, #-16]!");                           // this helper owns no frame; save the continuation for the runtime call
+    emitter.instruction("mov x29, sp");                                         // keep the frame pointer chain valid across the call
     emitter.instruction("mov x0, x1");                                          // pass the requested name pointer to the runtime table
     emitter.instruction("mov x1, x2");                                          // pass the requested name length to the runtime table
-    emitter.instruction("b __rt_dynamic_global_lookup");                        // unknown static names may still exist at runtime
+    abi::emit_call_label(emitter, "__rt_dynamic_global_lookup");                // unknown static names may still exist at runtime
+    emitter.instruction("mov x1, #0");                                          // runtime-created globals are ordinary Mixed cells
+    emitter.instruction("ldp x29, x30, [sp], #16");                             // restore the caller frame and continuation
+    emitter.instruction("ret");                                                 // return to the caller
 }
 
 /// Emits the x86_64 dynamic-global lookup helper.
@@ -148,13 +157,19 @@ fn emit_x86_64_helper(emitter: &mut Emitter) {
     emitter.instruction("inc r10");                                             // advance to the next byte
     emitter.instruction("jmp __rt_global_lookup_bytes_x86");                    // continue the byte comparison
     emitter.label("__rt_global_lookup_hit_x86");
-    emitter.instruction("mov rax, QWORD PTR [r8 + 16]");                        // return the address of the global's Mixed word
+    emitter.instruction("mov rax, QWORD PTR [r8 + 16]");                        // return the address of the global's storage word
+    abi::emit_symbol_address(emitter, "r8", "_eir_global_lookup_kinds");
+    emitter.instruction("mov rdx, QWORD PTR [r8 + rdx * 8]");                   // return 0 for Mixed storage, 1 for a typed Hash slot
     emitter.instruction("ret");                                                 // return to the caller
     emitter.label("__rt_global_lookup_next_x86");
     emitter.instruction("inc rdx");                                             // advance to the next table entry
     emitter.instruction("jmp __rt_global_lookup_loop_x86");                     // keep searching
     emitter.label("__rt_global_lookup_miss_x86");
-    emitter.instruction("jmp __rt_dynamic_global_lookup");                      // unknown static names may still exist in the runtime table
+    emitter.instruction("sub rsp, 8");                                          // this helper owns no frame; realign the stack for the runtime call
+    abi::emit_call_label(emitter, "__rt_dynamic_global_lookup");                // unknown static names may still exist in the runtime table
+    emitter.instruction("add rsp, 8");                                          // restore the caller stack pointer
+    emitter.instruction("xor edx, edx");                                        // runtime-created globals are ordinary Mixed cells
+    emitter.instruction("ret");                                                 // return to the caller
 }
 
 
@@ -187,18 +202,32 @@ fn emit_aarch64_materialize(emitter: &mut Emitter) {
     emitter.instruction("madd x10, x22, x9, x21");                              // address the current table entry
     emitter.instruction("ldr x11, [x10, #16]");                                 // load the global storage cell address
     emitter.instruction("cbz x11, __rt_globals_materialize_next");              // skip an uninitialized slot
-    emitter.instruction("ldr x12, [x11]");                                      // load the global's boxed Mixed pointer
+    emitter.instruction("ldr x12, [x11]");                                      // load the global's value word
     emitter.instruction("cbz x12, __rt_globals_materialize_next");              // skip a global that was never stored
+    abi::emit_symbol_address(emitter, "x9", "_eir_global_lookup_kinds");
+    emitter.instruction("ldr x13, [x9, x22, lsl #3]");                          // 0 = Mixed cell, 1 = typed Hash slot
+    emitter.instruction("cbnz x13, __rt_globals_materialize_hash");             // box a typed superglobal hash for the snapshot
     emitter.instruction("mov x0, x12");                                         // retain the global's boxed value for the hash
     abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("mov x9, #24");                                         // reload the entry after the retain helper
     emitter.instruction("madd x10, x22, x9, x21");                              // address the current table entry again
     emitter.instruction("ldr x11, [x10, #16]");                                 // reload the global storage cell address
     emitter.instruction("ldr x12, [x11]");                                      // reload the boxed Mixed pointer
+    emitter.instruction("mov x3, x12");                                         // pass the owned boxed value
+    emitter.instruction("b __rt_globals_materialize_set");                      // add the Mixed entry to the snapshot
+    emitter.label("__rt_globals_materialize_hash");
+    emitter.instruction("mov x0, #5");                                          // runtime tag 5 = associative array
+    emitter.instruction("mov x1, x12");                                         // pass the typed superglobal's Hash pointer
+    emitter.instruction("mov x2, #0");                                          // heap payloads use one word
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // retain the hash and box it for the snapshot
+    emitter.instruction("str x0, [sp, #-16]!");                                 // preserve the box across the entry reload
+    emitter.instruction("mov x9, #24");                                         // reload the entry after the box helper
+    emitter.instruction("madd x10, x22, x9, x21");                              // address the current table entry again
+    emitter.instruction("ldr x3, [sp], #16");                                   // pass the boxed superglobal value
+    emitter.label("__rt_globals_materialize_set");
     emitter.instruction("mov x0, x19");                                         // pass the result hash
     emitter.instruction("ldr x1, [x10]");                                       // pass the name pointer
     emitter.instruction("ldr x2, [x10, #8]");                                   // pass the name byte length
-    emitter.instruction("mov x3, x12");                                         // pass the owned boxed value
     emitter.instruction("mov x4, #0");                                          // boxed Mixed values use one payload word
     emitter.instruction("mov x5, #7");                                          // the hash entry owns a boxed Mixed cell
     abi::emit_call_label(emitter, "__rt_hash_set");
@@ -265,19 +294,37 @@ fn emit_x86_64_materialize(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // load the global storage cell address
     emitter.instruction("test r11, r11");                                       // is the slot initialized?
     emitter.instruction("jz __rt_globals_materialize_next_x86");                // skip an uninitialized slot
-    emitter.instruction("mov rax, QWORD PTR [r11]");                            // load the global's boxed Mixed pointer
+    emitter.instruction("mov rax, QWORD PTR [r11]");                            // load the global's value word
     emitter.instruction("test rax, rax");                                       // was the global ever stored?
     emitter.instruction("jz __rt_globals_materialize_next_x86");                // skip a global that was never stored
+    abi::emit_symbol_address(emitter, "r8", "_eir_global_lookup_kinds");
+    emitter.instruction("mov r8, QWORD PTR [r8 + r15 * 8]");                    // 0 = Mixed cell, 1 = typed Hash slot
+    emitter.instruction("test r8, r8");                                         // is this a typed web-superglobal slot?
+    emitter.instruction("jnz __rt_globals_materialize_hash_x86");               // yes: box its hash for the snapshot
     abi::emit_call_label(emitter, "__rt_incref");
     emitter.instruction("mov r10, r15");                                        // reload the table cursor after the retain helper
     emitter.instruction("imul r10, 24");                                        // each entry is a 24-byte record
     emitter.instruction("add r10, r14");                                        // address the current table entry again
     emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // reload the global storage cell address
     emitter.instruction("mov rax, QWORD PTR [r11]");                            // reload the boxed Mixed pointer
+    emitter.instruction("mov rcx, rax");                                        // pass the owned boxed value
+    emitter.instruction("jmp __rt_globals_materialize_set_x86");                // add the Mixed entry to the snapshot
+    emitter.label("__rt_globals_materialize_hash_x86");
+    emitter.instruction("mov rdi, rax");                                        // pass the typed superglobal's Hash pointer
+    emitter.instruction("xor esi, esi");                                        // heap payloads use one word
+    emitter.instruction("mov eax, 5");                                          // runtime tag 5 = associative array
+    abi::emit_call_label(emitter, "__rt_mixed_from_value");                     // retain the hash and box it for the snapshot
+    emitter.instruction("sub rsp, 16");                                         // preserve the box across the entry reload
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // stash the boxed superglobal value
+    emitter.instruction("mov r10, r15");                                        // reload the table cursor after the box helper
+    emitter.instruction("imul r10, 24");                                        // each entry is a 24-byte record
+    emitter.instruction("add r10, r14");                                        // address the current table entry again
+    emitter.instruction("mov rcx, QWORD PTR [rsp]");                            // pass the boxed superglobal value
+    emitter.instruction("add rsp, 16");                                         // release the temporary box slot
+    emitter.label("__rt_globals_materialize_set_x86");
     emitter.instruction("mov rdi, r12");                                        // pass the result hash
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // pass the name pointer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // pass the name byte length
-    emitter.instruction("mov rcx, rax");                                        // pass the owned boxed value
     emitter.instruction("xor r8d, r8d");                                        // boxed Mixed values use one payload word
     emitter.instruction("mov r9d, 7");                                          // the hash entry owns a boxed Mixed cell
     abi::emit_call_label(emitter, "__rt_hash_set");
@@ -369,7 +416,7 @@ fn emit_aarch64_dynamic_helpers(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x19");                                         // static lookup expects the name pointer in x1
     emitter.instruction("mov x2, x20");                                         // and the name length in x2
     abi::emit_call_label(emitter, "__rt_global_lookup_dynamic");
-    emitter.instruction("cbnz x0, __rt_global_lookup_or_create_dynamic_done");  // static or existing runtime entry
+    emitter.instruction("cbnz x0, __rt_global_lookup_or_create_dynamic_restore"); // static or existing runtime entry keeps its kind in x1
     emitter.instruction("mov x0, #32");                                         // an entry is next/key pointer/key length/cell
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     emitter.instruction("mov x21, x0");                                         // x21 = new runtime entry
@@ -398,7 +445,8 @@ fn emit_aarch64_dynamic_helpers(emitter: &mut Emitter) {
     emitter.instruction("str x10, [x21, #0]");                                  // link the new entry before the old head
     emitter.instruction("str x21, [x9]");                                       // publish the new list head
     emitter.instruction("add x0, x21, #24");                                    // return the stable cell address
-    emitter.label("__rt_global_lookup_or_create_dynamic_done");
+    emitter.instruction("mov x1, #0");                                          // a runtime-created global is an ordinary Mixed cell
+    emitter.label("__rt_global_lookup_or_create_dynamic_restore");
     emitter.instruction("ldp x19, x20, [sp, #0]");                              // restore the name pointer and length
     emitter.instruction("ldp x21, x22, [sp, #16]");                             // restore the entry and name buffer
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and continuation
@@ -414,11 +462,20 @@ fn emit_aarch64_dynamic_helpers(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x0");                                          // and the name pointer in x1
     abi::emit_call_label(emitter, "__rt_global_lookup_dynamic");
     emitter.instruction("cbz x0, __rt_global_unset_dynamic_done");              // unknown name: nothing to remove
+    emitter.instruction("cmp x1, #1");                                          // did the match resolve to a typed Hash slot?
+    emitter.instruction("b.eq __rt_global_unset_dynamic_hash");                 // yes: release the superglobal hash
     emitter.instruction("ldr x9, [x0]");                                        // capture the previous Mixed owner
     emitter.instruction("str xzr, [x0]");                                       // clear the cell so the global reads as unset
     emitter.instruction("cbz x9, __rt_global_unset_dynamic_done");              // nothing to release when already unset
     emitter.instruction("mov x0, x9");                                          // pass the retired Mixed cell
     abi::emit_call_label(emitter, "__rt_decref_mixed");
+    emitter.instruction("b __rt_global_unset_dynamic_done");                    // the Mixed cell is retired
+    emitter.label("__rt_global_unset_dynamic_hash");
+    emitter.instruction("ldr x9, [x0]");                                        // capture the previous superglobal hash
+    emitter.instruction("str xzr, [x0]");                                       // clear the typed slot so the superglobal reads as unset
+    emitter.instruction("cbz x9, __rt_global_unset_dynamic_done");              // nothing to release when already unset
+    emitter.instruction("mov x0, x9");                                          // pass the retired hash
+    abi::emit_call_label(emitter, "__rt_decref_hash");
     emitter.label("__rt_global_unset_dynamic_done");
     emitter.instruction("ldr x30, [sp], #16");                                  // restore the caller continuation
     emitter.instruction("ret");                                                 // return to the caller
@@ -506,7 +563,7 @@ fn emit_x86_64_dynamic_helpers(emitter: &mut Emitter) {
     emitter.instruction("mov r13, rsi");                                        // keep the name length
     emitter.instruction("call __rt_global_lookup_dynamic");                     // reuse the static and runtime lookup
     emitter.instruction("test rax, rax");                                       // does the global already exist?
-    emitter.instruction("jnz __rt_global_lookup_or_create_dynamic_done_x86");   // return the existing cell
+    emitter.instruction("jnz __rt_global_lookup_or_create_dynamic_restore_x86"); // return the existing cell and its kind in rdx
     emitter.instruction("mov rax, 32");                                         // an entry is next/key pointer/key length/cell
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     emitter.instruction("mov r14, rax");                                        // r14 = new runtime entry
@@ -537,7 +594,8 @@ fn emit_x86_64_dynamic_helpers(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r14], r11");                            // link the new entry before the old head
     emitter.instruction("mov QWORD PTR [r10], r14");                            // publish the new list head
     emitter.instruction("lea rax, [r14 + 24]");                                 // return the stable cell address
-    emitter.label("__rt_global_lookup_or_create_dynamic_done_x86");
+    emitter.instruction("xor edx, edx");                                        // a runtime-created global is an ordinary Mixed cell
+    emitter.label("__rt_global_lookup_or_create_dynamic_restore_x86");
     emitter.instruction("pop r15");                                             // restore the copied-name buffer
     emitter.instruction("pop r14");                                             // restore the new entry
     emitter.instruction("pop r13");                                             // restore the name length
@@ -554,12 +612,22 @@ fn emit_x86_64_dynamic_helpers(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_global_lookup_dynamic");
     emitter.instruction("test rax, rax");                                       // unknown name: nothing to remove
     emitter.instruction("jz __rt_global_unset_dynamic_done_x86");               // return without touching the heap
+    emitter.instruction("cmp rdx, 1");                                          // did the match resolve to a typed Hash slot?
+    emitter.instruction("je __rt_global_unset_dynamic_hash_x86");               // yes: release the superglobal hash
     emitter.instruction("mov r10, rax");                                        // keep the target cell address
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // capture the previous Mixed owner
     emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the cell so the global reads as unset
     emitter.instruction("test rax, rax");                                       // nothing to release when already unset
     emitter.instruction("jz __rt_global_unset_dynamic_done_x86");               // return without touching the heap
     abi::emit_call_label(emitter, "__rt_decref_mixed");
+    emitter.instruction("jmp __rt_global_unset_dynamic_done_x86");              // the Mixed cell is retired
+    emitter.label("__rt_global_unset_dynamic_hash_x86");
+    emitter.instruction("mov r10, rax");                                        // keep the target typed-slot address
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // capture the previous superglobal hash
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the typed slot so the superglobal reads as unset
+    emitter.instruction("test rax, rax");                                       // nothing to release when already unset
+    emitter.instruction("jz __rt_global_unset_dynamic_done_x86");               // return without touching the heap
+    abi::emit_call_label(emitter, "__rt_decref_hash");
     emitter.label("__rt_global_unset_dynamic_done_x86");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller

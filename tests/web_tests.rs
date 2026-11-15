@@ -1325,6 +1325,70 @@ fn web_superglobal_visible_in_function() {
     assert!(resp.ends_with("DELETE"), "body: {:?}", resp);
 }
 
+/// A computed `$GLOBALS[$name]` resolves a web superglobal through its typed Hash slot.
+///
+/// The dynamic table marks superglobals with kind 1; a read boxes the hash for the caller, and
+/// an array write publishes a hash into the same slot `$_SERVER` statically reads. A list is
+/// converted to hash storage; a scalar is refused with a catchable TypeError because the request
+/// prelude and static accesses require an array.
+#[test]
+fn web_computed_globals_reads_and_writes_typed_superglobals() {
+    let dir = make_test_dir("web_computed_superglobal");
+    let src = r#"<?php
+$name = ($_SERVER['REQUEST_URI'] ?? '') === '/computed' ? '_SERVER' : '_GET';
+$copy = $GLOBALS[$name];
+echo is_array($copy) ? 'read' : 'bad';
+echo '|', $copy['REQUEST_URI'] ?? 'missing';
+$GLOBALS[$name] = ['injected' => 'yes'];
+echo '|', $_SERVER['injected'] ?? 'missing';
+$GLOBALS[$name] = [10, 20];
+echo '|', $_SERVER[1] ?? 'missing';
+$hash = ['from' => 'hash'];
+$GLOBALS[$name] = $hash;
+echo '|', $_SERVER['from'] ?? 'missing';
+echo '|', $hash['from'] ?? 'lost';
+$list = [7, 8];
+$GLOBALS[$name] = $list;
+echo '|', $_SERVER[1] ?? 'missing';
+$mixed = ['literal' => 'ok'];
+$GLOBALS['_SERVER'] = $mixed;
+echo '|', $_SERVER['literal'] ?? 'missing';
+$snapshot = $GLOBALS;
+echo '|', $snapshot['_SERVER']['literal'] ?? 'missing';
+try {
+    $GLOBALS[$name] = 5;
+    echo '|no-type';
+} catch (TypeError $error) {
+    echo '|type';
+}
+try {
+    $GLOBALS['_SERVER'] = 'literal-oops';
+    echo '|no-lit-type';
+} catch (TypeError $error) {
+    echo '|lit-type';
+}
+try {
+    $GLOBALS[$name] = 'dynamic-oops';
+    echo '|no-dyn-type';
+} catch (TypeError $error) {
+    echo '|dyn-type';
+}
+echo '|', is_array($_SERVER) ? 'array' : 'no';
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_request(&addr, "GET", "/computed", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with("read|/computed|yes|20|hash|hash|8|ok|ok|type|lit-type|dyn-type|array"),
+        "body: {:?}",
+        resp
+    );
+}
+
 /// Verifies a router storing an interface-typed handler survives repeated web requests.
 #[test]
 fn web_router_interface_handler_survives_repeated_requests() {
