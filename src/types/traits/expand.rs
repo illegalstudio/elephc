@@ -13,11 +13,11 @@ use std::collections::{HashMap, HashSet};
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
 use crate::parser::ast::{
-    ClassConst, ClassMethod, ClassProperty, TraitAdaptation, TraitUse, Visibility,
+    ClassConst, ClassProperty, TraitAdaptation, TraitUse, Visibility,
 };
 use crate::span::Span;
 
-use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo};
+use super::{ExpandedTrait, ImportedMethod, TraitDeclInfo, TraitMethod};
 use super::merge::{
     is_same_trait_method, merge_constants, merge_imported_constant_set,
     merge_imported_method_set, merge_methods, merge_properties, merge_property_into,
@@ -81,6 +81,7 @@ fn expand_trait(
     let mut methods = merge_methods(
         imported_methods,
         &trait_info.methods,
+        trait_name,
         trait_info.span,
         &format!("trait {}", trait_name),
     )?;
@@ -120,7 +121,7 @@ pub(super) fn resolve_trait_uses(
     stack: &mut Vec<String>,
     owner_label: &str,
     owner_span: Span,
-) -> Result<(Vec<ClassProperty>, Vec<ClassMethod>, Vec<ClassConst>), CompileError> {
+) -> Result<(Vec<ClassProperty>, Vec<TraitMethod>, Vec<ClassConst>), CompileError> {
     let mut all_properties = Vec::new();
     let mut all_methods: Vec<ImportedMethod> = Vec::new();
     let mut all_constants = Vec::new();
@@ -161,7 +162,7 @@ pub(super) fn resolve_trait_uses(
                     false,
                 )?;
             }
-            for method in methods {
+            for TraitMethod { origin, decl: method } in methods {
                 let method_key = php_symbol_key(&method.name);
                 if !candidates.contains_key(&method_key) {
                     method_order.push(method_key.clone());
@@ -171,6 +172,7 @@ pub(super) fn resolve_trait_uses(
                     .or_default()
                     .push(ImportedMethod {
                         source_trait: trait_name.to_string(),
+                        origin,
                         decl: method,
                     });
             }
@@ -263,6 +265,7 @@ pub(super) fn resolve_trait_uses(
                         }
                         alias_methods.push(ImportedMethod {
                             source_trait: selected_trait,
+                            origin: imported.origin.clone(),
                             decl: alias_decl,
                         });
                     } else if let Some(visibility) = visibility {
@@ -299,7 +302,10 @@ pub(super) fn resolve_trait_uses(
         )?;
     }
 
-    let all_methods = all_methods.into_iter().map(|imported| imported.decl).collect();
+    let all_methods = all_methods
+        .into_iter()
+        .map(|imported| TraitMethod { origin: imported.origin, decl: imported.decl })
+        .collect();
     Ok((all_properties, all_methods, all_constants))
 }
 
@@ -345,7 +351,10 @@ fn select_methods(
         for candidate in remaining {
             if !concrete
                 .iter()
-                .any(|kept| is_same_trait_method(&kept.decl, &candidate.decl))
+                .any(|kept| is_same_trait_method(
+                    (&kept.origin, &kept.decl),
+                    (&candidate.origin, &candidate.decl),
+                ))
             {
                 concrete.push(candidate);
             }
