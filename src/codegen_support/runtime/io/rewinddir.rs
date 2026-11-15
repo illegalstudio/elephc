@@ -27,6 +27,7 @@ pub fn emit_rewinddir(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #16");                                     // minimal frame for the libc call
     emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
     emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "x0", "__rt_rewinddir_done");
 
     // -- glob:// path takes precedence: probe _glob_handles[fd] first --
     abi::emit_symbol_address(emitter, "x9", "_glob_handles");
@@ -57,6 +58,7 @@ fn emit_rewinddir_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    abi::emit_branch_if_fd_table_index_out_of_range(emitter, "rdi", "__rt_rewinddir_done_x86");
 
     // -- glob:// path takes precedence: probe _glob_handles[fd] first --
     abi::emit_symbol_address(emitter, "r9", "_glob_handles");                   // base of the fd → glob_state pointer table

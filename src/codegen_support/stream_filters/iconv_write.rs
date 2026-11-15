@@ -240,7 +240,7 @@ fn emit_arm64<F>(
     emitter.instruction("cmn x0, #1");                                          // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("b.eq {}", skip_store));                       // iconv_open failed → attach no filter
     emitter.instruction("ldr x1, [sp, #0]");                                    // reload the file descriptor
-    emitter.instruction("cmp x1, #1024");                                       // is the descriptor inside the per-fd table range?
+    emitter.instruction(&format!("cmp x1, #{}", crate::codegen_support::runtime::FD_TABLE_SLOTS)); // is the descriptor inside the per-fd table range?
     emitter.instruction(&format!("b.lo {}", store_handle));                     // yes: record the iconv_t
     emitter.bl_c("iconv_close"); // descriptor out of range: release the just-opened iconv_t
     emitter.instruction(&format!("b {}", skip_store));                          // attach no filter for this descriptor
@@ -376,7 +376,7 @@ fn emit_x86_64<F>(
     emitter.instruction("cmp rax, -1");                                         // is the descriptor (iconv_t)-1?
     emitter.instruction(&format!("je {}", skip_store));                         // iconv_open failed → attach no filter
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the file descriptor
-    emitter.instruction("cmp rdi, 1024");                                       // is the descriptor inside the per-fd table range?
+    emitter.instruction(&format!("cmp rdi, {}", crate::codegen_support::runtime::FD_TABLE_SLOTS)); // is the descriptor inside the per-fd table range?
     emitter.instruction(&format!("jb {}", store_handle));                       // yes: record the iconv_t
     emitter.instruction("mov rdi, rax");                                        // descriptor out of range: pass the iconv_t
     emitter.instruction("call iconv_close");                                    // release the just-opened converter
@@ -465,8 +465,12 @@ mod tests {
             Target::new(Platform::Linux, Arch::X86_64),
         ] {
             let asm = assembly_for(target, 0);
-            let bound = if target.arch == Arch::X86_64 { "cmp rdi, 1024" } else { "cmp x1, #1024" };
-            assert!(asm.contains(bound), "{target:?}: {asm}");
+            let bound = if target.arch == Arch::X86_64 {
+                format!("cmp rdi, {}", crate::codegen_support::runtime::FD_TABLE_SLOTS)
+            } else {
+                format!("cmp x1, #{}", crate::codegen_support::runtime::FD_TABLE_SLOTS)
+            };
+            assert!(asm.contains(&bound), "{target:?}: {asm}");
             assert!(asm.contains("iconv_close"), "{target:?} must close an out-of-range converter");
         }
     }

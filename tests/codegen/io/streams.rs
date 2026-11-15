@@ -7553,6 +7553,49 @@ foreach ($files as $file) { fclose($file); }
     );
 }
 
+/// Descriptors above the side-table capacity keep raw I/O and fail feature registration.
+///
+/// The fixture skips itself when the host cannot open 4096 descriptors. At that point the
+/// feature tables (`_popen_files`, `_dir_handles`, `_zstream_handles`, the filter bytes) would
+/// be indexed past their 4096 entries without the shared bounds guard, so `popen()` and
+/// `opendir()` answer `false`, the zlib filter stays unattached, and the raw write/read round
+/// trip still returns the payload instead of corrupting adjacent runtime state.
+#[test]
+fn test_descriptors_above_the_side_table_capacity_stay_memory_safe() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$files = [];
+for ($i = 0; $i < 4096; $i++) {
+    $s = @fopen('/dev/null', 'r');
+    if ($s === false) { break; }
+    $files[] = $s;
+}
+if (count($files) < 4096) { echo "skip\n"; return; }
+$temp = @fopen('php://temp', 'r+');
+if ($temp === false) { echo "skip\n"; return; }
+var_dump(@popen('true', 'r') === false);
+var_dump(@opendir('/dev') === false);
+var_dump(stream_filter_append($temp, 'zlib.deflate', STREAM_FILTER_WRITE) === false);
+fwrite($temp, 'abc');
+rewind($temp);
+var_dump(fread($temp, 8));
+fclose($temp);
+foreach ($files as $file) { fclose($file); }
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "{}", out.stderr);
+    if out.stdout == "skip\n" {
+        return;
+    }
+    assert_eq!(
+        out.stdout,
+        "bool(true)\nbool(true)\nbool(false)\nstring(3) \"abc\"\ndone\n",
+        "{}",
+        out.stderr
+    );
+}
+
 /// A descriptor at or above `FD_SETSIZE` reports php-src's recompile warning once and
 /// makes `stream_select()` return false without waiting, like PHP.
 #[test]
