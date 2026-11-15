@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step 89 (this commit), following `4ecc79b427`. Issue:
+Verified through step 90 (this commit), following `a958aab372`. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step 89.
+This progress ledger condenses verified implementation through step 90.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -591,7 +591,7 @@ compiler build, architecture gate, assembly comment checks and diff hygiene.
    callbacks, descriptors, reflection and eval re-entry. Complete checked explicit
    casts with range/domain errors, exact strings and native object cast contracts.
    Original GMP and SimpleXML cast projections are now checked. Before Casts
-   admission, finish protected runtime static setters, host callbacks and the
+   admission, finish host callbacks and the
    temporary Reflection Stringable lifetime audit. Runtime gmp_intval range guards and broad
    object/interface consumers now share reviewed checked paths. Internal
    implementation helpers must not bypass public contracts.
@@ -702,6 +702,27 @@ above are unchanged.
   source values and explicit error release make the current publication probe's
   lifetimes intentional.
 
+### Protected scoped runtime static setters
+
+- Checked runtime static slots now select the same binding preparation and static
+  publisher as direct EIR writes. Their C adapter borrows the original RHS and
+  returns a boxed Throwable through an explicit output.
+- A versioned scoped setter captures the existing seven arguments plus a Throwable
+  output, preserving register/stack ABI placement. It calls the existing scoped
+  dispatcher inside native exception containment, then returns miss, success or
+  Throwable status to Magician. Legacy native callers keep their boolean entry.
+- RuntimeValueOps consumes the explicit status and schedules the returned Throwable
+  through ordinary interpreter catches. Scope and visibility still come from the
+  original dispatcher; declaration validation remains in the shared coordinator.
+- Direct versioned C ABI probes exercise conversion, rejection, initialization,
+  callback reentry and private scoped access under staged Casts. A real opaque
+  eval constructs its own Reflection receiver to verify the Rust Throwable path.
+  Reusing a native Reflection receiver after catch effects is an unreliable proxy:
+  a separate permissive baseline reproduces a silent no-op (taskcbfbae83).
+- Verified both new native fixtures with both optimizer settings and clean heaps,
+  real five-target assembly for the scoped setter and runtime publisher, compiler
+  check/build, architecture inventory828, assembly comments and diff hygiene.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -809,4 +830,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 86 | `9e2878062e` | feat(strict): share checked static reference exports |
 | 87 | `05382f8d22` | feat(strict): validate eval reference replacement before publication |
 | 88 | `4ecc79b427` | feat(strict): preserve concrete static conversion references |
-| 89 | this commit | feat(strict): validate static publication before initialization |
+| 89 | `a958aab372` | feat(strict): validate static publication before initialization |
+| 90 | this commit | feat(strict): contain scoped runtime static property writes |

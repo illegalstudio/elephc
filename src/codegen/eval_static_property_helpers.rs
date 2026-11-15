@@ -14,6 +14,7 @@
 //!   a real Mixed cell pointer.
 
 mod reference_getter;
+mod write_boundary;
 
 use std::collections::BTreeMap;
 
@@ -60,6 +61,7 @@ pub(super) fn emit_eval_static_property_helpers(
     emit_static_property_get_helper(module, emitter, data, &slots);
     emit_static_property_is_initialized_helper(module, emitter, data, &slots);
     emit_static_property_set_helper(module, emitter, data, &slots);
+    write_boundary::emit(module, emitter);
     reference_getter::emit(module, emitter, data, &slots);
 }
 
@@ -887,12 +889,7 @@ fn emit_aarch64_store_static_property_slot(
     slot: &EvalStaticPropertySlot,
     fail_label: &str,
 ) {
-    if static_property_storage_type(module, slot).codegen_repr() == PhpType::Mixed
-        && slot.ty.codegen_repr() != PhpType::Mixed
-    {
-        abi::emit_jump(emitter, fail_label);
-        return;
-    }
+    if write_boundary::emit_checked_slot(module, emitter, slot, fail_label) { return; }
     if slot.ty.is_php_array() {
         emitter.instruction("ldr x0, [sp, #32]");                               // borrow the boxed static-property assignment before PHP type validation
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
@@ -946,12 +943,7 @@ fn emit_x86_64_store_static_property_slot(
     slot: &EvalStaticPropertySlot,
     fail_label: &str,
 ) {
-    if static_property_storage_type(module, slot).codegen_repr() == PhpType::Mixed
-        && slot.ty.codegen_repr() != PhpType::Mixed
-    {
-        abi::emit_jump(emitter, fail_label);
-        return;
-    }
+    if write_boundary::emit_checked_slot(module, emitter, slot, fail_label) { return; }
     if slot.ty.is_php_array() {
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed static-property assignment before PHP type validation
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);

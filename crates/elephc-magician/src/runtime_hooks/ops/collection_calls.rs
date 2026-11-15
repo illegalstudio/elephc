@@ -385,8 +385,9 @@ macro_rules! impl_collection_call_ops {
         value: RuntimeCellHandle,
     ) -> Result<bool, EvalStatus> {
         let (scope_ptr, scope_len) = self.current_class_scope_abi();
-        let ok = unsafe {
-            __elephc_eval_value_static_property_set(
+        let mut thrown = std::ptr::null_mut();
+        let status = unsafe {
+            __elephc_eval_value_static_property_set_v2(
                 class_name.as_ptr(),
                 class_name.len() as u64,
                 property.as_ptr(),
@@ -394,9 +395,18 @@ macro_rules! impl_collection_call_ops {
                 value.as_ptr(),
                 scope_ptr,
                 scope_len,
+                &mut thrown,
             )
         };
-        Ok(ok != 0)
+        match status {
+            0 => Ok(false),
+            1 => Ok(true),
+            2 if !thrown.is_null() => {
+                self.schedule_pending_throw(RuntimeCellHandle::from_raw(thrown))?;
+                Err(EvalStatus::UncaughtThrowable)
+            }
+            _ => Err(EvalStatus::RuntimeFatal),
+        }
     }
 
     /// Reads an AOT class-like constant through the generated user helper.

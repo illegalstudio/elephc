@@ -329,3 +329,45 @@ fn test_strict_static_write_publication_and_initialization_bundle() {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Scoped native setters contain callbacks and preserve declaration initialization and ownership.
+#[test]
+fn test_strict_static_runtime_setter_publication_and_throwables_bundle() {
+    let declarations = include_str!("../fixtures/strict/static_write_publication.php")
+        .split("$reflection =").next().unwrap();
+    let source = format!("{}{}", declarations,
+        include_str!("../fixtures/strict/static_runtime_setter.php"));
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(&source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "1:double:7|2:E:7|U1:textDtext|2:EF|N:inner1:outerOouter|0:1:9",
+            "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
+/// Real eval returns native Stringable failures through Rust and ordinary PHP catches.
+#[test]
+fn test_eval_static_runtime_setter_throwing_stringable_bundle() {
+    let source = r#"<?php
+class EvalStaticSetterTarget { public static string $value = 'kept'; }
+class EvalStaticSetterFailure {
+    public function __toString(): string { throw new ValueError('refused'); }
+}
+$source = $argc > 0 ? '$r = new ReflectionClass("EvalStaticSetterTarget");
+$r->setStaticPropertyValue("value", new EvalStaticSetterFailure());' : '';
+try { eval($source); echo 'X'; }
+catch (ValueError $error) { echo 'caught:', EvalStaticSetterTarget::$value; }
+unset($error);
+gc_collect_cycles();
+"#;
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(
+            elephc_semantics::SemanticProfile::PERMISSIVE, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "caught:kept", "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}

@@ -236,7 +236,7 @@ unsafe extern "C" {
         scope_len: u64,
     ) -> u64;
     /// Writes a static property using the named class and visibility scope.
-    pub(super) fn __elephc_eval_value_static_property_set(
+    pub(super) fn __elephc_eval_value_static_property_set_v2(
         class_ptr: *const u8,
         class_len: u64,
         name_ptr: *const u8,
@@ -244,6 +244,7 @@ unsafe extern "C" {
         value: *mut RuntimeCell,
         scope_ptr: *const u8,
         scope_len: u64,
+        throwable: *mut *mut RuntimeCell,
     ) -> u64;
     /// Returns a class constant through the supplied visibility scope.
     pub(super) fn __elephc_eval_value_class_constant_get(

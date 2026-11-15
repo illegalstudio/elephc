@@ -91,6 +91,7 @@ mod tests {
                 let target = crate::codegen_support::platform::Target::parse(name).unwrap();
                 let mut emitter = Emitter::new(target);
                 emit(&mut emitter, selected);
+                super::super::static_write::emit(&mut emitter, selected);
                 if selected {
                     crate::codegen_support::runtime::reference_cells::emit_validation_publish(&mut emitter);
                     crate::codegen_support::runtime::reference_cells::emit_validation_commit(&mut emitter);
