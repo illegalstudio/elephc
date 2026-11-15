@@ -173,7 +173,8 @@ mod tests {
         // per-class `ReflectionClass` builder for `getDeclaringClass()`.
         // +1: `__elephc_eval_reflection_class_build`, its eval twin for the class names
         // eval-built member reflectors store.
-        assert_eq!(contracts().len(), 1278 + curl_surface);
+        // +7: the remaining `ctype_*` classes (cntrl, graph, lower, print, punct, upper, xdigit).
+        assert_eq!(contracts().len(), 1285 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }
