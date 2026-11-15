@@ -95,7 +95,10 @@ pub(crate) fn compute_debug_availability(
     let predecessors = super::cfg::predecessors(function);
     let block_count = function.blocks.len();
     let mut incoming = vec![full.clone(); block_count];
-    let mut outgoing = vec![zero.clone(); block_count];
+    // Optimistic initialization: an unprocessed back edge must not contribute an
+    // empty outgoing state, or a loop header would intersect its parameter state
+    // with zero on the first pass and never recover.
+    let mut outgoing = vec![full.clone(); block_count];
     if let Some(entry) = function.blocks.iter().position(|block| block.id == function.entry) {
         incoming[entry] = parameters.clone();
     }

@@ -309,6 +309,7 @@ impl Broker {
 }
 
 impl Drop for Broker {
+    /// Kills and reaps the broker, then stops its prefork server.
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();

@@ -183,3 +183,87 @@ fn dead_ranges_merge_consecutive_indices() {
     assert_eq!(format_dead_ranges(&[0]), "0");
     assert_eq!(format_dead_ranges(&[0, 1, 2, 4, 6, 7]), "0-2,4,6-7");
 }
+
+/// A loop header keeps parameters and locals that the body never rewrites:
+/// the optimistic back-edge state must not intersect the header down to zero.
+#[test]
+fn loop_headers_keep_locals_the_body_does_not_rewrite() {
+    let mut function = Function::new("loop".to_string(), IrType::I64, PhpType::Int);
+    let local;
+    let header_block;
+    let exit_block;
+    {
+        let mut builder = Builder::new(&mut function);
+        local = add_int_local(&mut builder, "seen");
+        let entry = builder.create_named_block("entry", vec![]);
+        let header = builder.create_named_block("header", vec![]);
+        let body = builder.create_named_block("body", vec![]);
+        let exit = builder.create_named_block("exit", vec![]);
+        header_block = header;
+        exit_block = exit;
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        builder.terminate(Terminator::Br { target: header, args: Vec::new() });
+        builder.position_at_end(header);
+        let header_condition = builder.emit_const_bool(true);
+        builder.terminate(Terminator::CondBr {
+            cond: header_condition,
+            then_target: body,
+            then_args: Vec::new(),
+            else_target: exit,
+            else_args: Vec::new(),
+        });
+        builder.position_at_end(body);
+        let value = builder.emit_const_i64(1);
+        builder.emit_store_local(local, value);
+        builder.terminate(Terminator::Br { target: header, args: Vec::new() });
+        builder.position_at_end(exit);
+        let exit_value = builder.emit_const_i64(0);
+        builder.terminate(Terminator::Return { value: Some(exit_value) });
+    }
+    let header_instruction =
+        function.blocks[header_block.as_raw() as usize].instructions[0];
+    let exit_instruction = function.blocks[exit_block.as_raw() as usize].instructions[0];
+    function.params.push(FunctionParam {
+        name: "n".to_string(),
+        ir_type: IrType::I64,
+        php_type: PhpType::Int,
+        by_ref: false,
+        variadic: false,
+    });
+    let availability = compute_debug_availability(
+        &function,
+        &[LocalSlotId::from_raw(0), local],
+    );
+    let parameter = availability.index_of(LocalSlotId::from_raw(0)).expect("parameter index");
+    let local_index = availability.index_of(local).expect("local index");
+    for (instruction, why) in [
+        (header_instruction, "loop header"),
+        (exit_instruction, "loop exit"),
+    ] {
+        let dead = availability.dead_indices(instruction);
+        assert!(!dead.contains(&parameter), "parameter dead at {why}: {dead:?}");
+    }
+    let dead = availability.dead_indices(header_instruction);
+    assert!(
+        !dead.contains(&local_index),
+        "the back edge defines the body local at the header: {dead:?}"
+    );
+}
+
+/// Optimized debug builds keep dead stores so a later stop cannot report the
+/// previous value through a stale frame slot.
+#[test]
+fn optimized_debug_builds_keep_dead_stores() {
+    use crate::codegen::platform::Target;
+    use crate::ir::Module;
+    let passes = |optimized| {
+        let mut module = Module::new(Target::detect_host());
+        module.debug_optimized = optimized;
+        crate::ir_passes::driver::default_passes(&module)
+            .into_iter()
+            .any(|pass| pass.name() == "dead-store")
+    };
+    assert!(passes(false), "ordinary builds run dead-store elimination");
+    assert!(!passes(true), "optimized debug builds must keep dead stores");
+}

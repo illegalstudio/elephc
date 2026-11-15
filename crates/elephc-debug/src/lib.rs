@@ -22,7 +22,8 @@
 //!   signal-safe document on a synchronous native crash. A normal exit writes
 //!   nothing.
 //! - The site hook blocks on stdin only while the program is paused; the
-//!   generated wrapper has already saved every caller-saved register.
+//!   generated wrapper has already saved every caller-saved integer and
+//!   floating-point register the EIR allocator can hold across a guard.
 //! - Current-frame locals are readable for scalar/string slots; arrays/objects
 //!   and ref-cell storage are reported without unsafe dereference until the
 //!   ownership-aware formatter lands.
@@ -125,6 +126,10 @@ static FREES_PTR: AtomicUsize = AtomicUsize::new(0);
 /// Source-site ids known to the metadata, indexed by site id. Branch and path
 /// counters share the hook id space but are not stack locations.
 static SOURCE_SITE_IDS: OnceLock<Vec<bool>> = OnceLock::new();
+/// Source `(source_id, line)` key for each site id, or 0 for branch/path counters.
+static SOURCE_SITE_LINES: OnceLock<Vec<u64>> = OnceLock::new();
+/// Whether `ELEPHC_DEBUG_SITES` tracing is active. Coverage counts line entries.
+static TRACING_SITES: AtomicBool = AtomicBool::new(false);
 /// Destination of the postmortem document, when armed.
 static POSTMORTEM_PATH: Mutex<Option<String>> = Mutex::new(None);
 /// Whether the postmortem document was already written for this process.
@@ -140,6 +145,8 @@ struct StackFrame {
     function_id: u32,
     frame: usize,
     last_site: Option<u32>,
+    /// Last source `(source_id, line)` key counted by coverage tracing.
+    last_line: Option<u64>,
     /// Index of this activation's event in `CALL_EVENTS`, when call capture is on.
     call_event: Option<usize>,
     /// Heap allocation counter read when this activation was pushed.
@@ -751,25 +758,24 @@ impl ExceptionFilters {
         class: Option<&str>,
         classes: &HashMap<u64, value::Class>,
     ) -> bool {
-        let (enabled, filtered, allowed) = if self.throw_all {
-            (true, self.throw_filtered, &self.throw_classes)
-        } else if caught {
-            (self.caught, self.caught_filtered, &self.caught_classes)
+        let class_matches = |allowed: &[String]| {
+            class.is_some_and(|class| {
+                allowed
+                    .iter()
+                    .any(|filter| exception_class_matches(filter, class, classes))
+            })
+        };
+        // `throw` and the caught/uncaught category are independent selections:
+        // a class-filtered `throw` must not hide an explicitly selected
+        // `uncaught`/`caught` exception of another class.
+        let throw_stop = self.throw_all
+            && (!self.throw_filtered || class_matches(&self.throw_classes));
+        let category_stop = if caught {
+            self.caught && (!self.caught_filtered || class_matches(&self.caught_classes))
         } else {
-            (self.uncaught, self.uncaught_filtered, &self.uncaught_classes)
+            self.uncaught && (!self.uncaught_filtered || class_matches(&self.uncaught_classes))
         };
-        if !enabled {
-            return false;
-        }
-        if !filtered {
-            return true;
-        }
-        let Some(class) = class else {
-            return false;
-        };
-        allowed
-            .iter()
-            .any(|filter| exception_class_matches(filter, class, classes))
+        throw_stop || category_stop
     }
 }
 
@@ -1626,6 +1632,16 @@ fn is_source_site(site_id: u32) -> bool {
         .unwrap_or(false)
 }
 
+/// Returns the source `(source_id, line)` key for `site_id`, or 0 for a
+/// branch/path counter.
+fn source_site_line(site_id: u32) -> u64 {
+    SOURCE_SITE_LINES
+        .get()
+        .and_then(|lines| lines.get(site_id as usize))
+        .copied()
+        .unwrap_or(0)
+}
+
 /// Async-signal-safe SIGUSR1 handler: only records the pause request.
 extern "C" fn handle_pause_signal(_: libc::c_int) {
     PAUSE_REQUESTED.store(true, Ordering::Relaxed);
@@ -1777,12 +1793,20 @@ pub extern "C" fn elephc_debug_boot(
         .map(|id| *id as usize + 1)
         .unwrap_or(0);
     let mut source_sites = vec![false; source_site_count];
-    for id in debugger.sites.keys() {
+    let mut source_lines = vec![0u64; source_site_count];
+    for (id, site) in &debugger.sites {
         if let Some(entry) = source_sites.get_mut(*id as usize) {
             *entry = true;
         }
+        if let Some(entry) = source_lines.get_mut(*id as usize) {
+            // Keep 0 reserved for "not a source site". A line 0 with source 0
+            // still gets a nonzero key by adding one to the composite.
+            *entry = ((site.source_id << 32) | site.line).max(1);
+        }
     }
     let _ = SOURCE_SITE_IDS.set(source_sites);
+    let _ = SOURCE_SITE_LINES.set(source_lines);
+    TRACING_SITES.store(tracing, Ordering::Relaxed);
     // Coroutine switches must save/restore their slice of the activation stack
     // or the consumer's frames read as callers of the fiber's next call (and
     // vice versa). Null slots keep a non-session debug run on the cheap path.
@@ -2466,6 +2490,12 @@ pub extern "C" fn elephc_debug_coroutine_finished_inner(fiber: usize) {
 /// Pushes one activation when a compiled PHP function is entered.
 #[no_mangle]
 pub extern "C" fn elephc_debug_enter_inner(function_id: u32, frame: usize) {
+    // Arbitrary eval runs user code while the stopped session holds `DEBUGGER`.
+    // Its enter/exit hooks must stay dormant like the site hooks, or the eval
+    // deadlocks on the debugger lock and pollutes call capture with its own calls.
+    if native_eval::executing() {
+        return;
+    }
     let calls = CALLS_ENABLED.load(Ordering::Relaxed);
     let (allocs_at_entry, frees_at_entry) = if calls {
         allocation_counters()
@@ -2477,6 +2507,7 @@ pub extern "C" fn elephc_debug_enter_inner(function_id: u32, frame: usize) {
             function_id,
             frame,
             last_site: None,
+            last_line: None,
             call_event: None,
             allocs_at_entry,
             frees_at_entry,
@@ -2524,6 +2555,9 @@ pub extern "C" fn elephc_debug_exit_inner(
     lo: u64,
     hi: u64,
 ) {
+    if native_eval::executing() {
+        return;
+    }
     if CALLS_ENABLED.load(Ordering::Relaxed) {
         if let Ok(guard) = DEBUGGER.lock() {
             if let Some(debugger) = guard.as_ref() {
@@ -2552,10 +2586,33 @@ pub extern "C" fn elephc_debug_site_inner(site_id: u32, frame: usize) {
         return;
     }
     LAST_FRAME.store(frame, Ordering::Relaxed);
-    if let Some(counter) = SITE_COUNTS.get(site_id as usize) {
-        let _ = counter.fetch_add(1, Ordering::Relaxed);
-    } else {
-        let _ = OVERFLOW.fetch_add(1, Ordering::Relaxed);
+    // Coverage counts line entries, not guards: a loop header has guards in its
+    // initializer, condition and update blocks, and two branches on one source
+    // line have one guard each. Only the first source guard reached after
+    // leaving the line counts, so summing per line yields execution entries.
+    let mut count_hit = true;
+    if TRACING_SITES.load(Ordering::Relaxed) {
+        let line = source_site_line(site_id);
+        if line != 0 {
+            count_hit = ACTIVATIONS.with(|stack| {
+                let mut stack = stack.borrow_mut();
+                match stack.last_mut() {
+                    Some(activation) => {
+                        let changed = activation.last_line != Some(line);
+                        activation.last_line = Some(line);
+                        changed
+                    }
+                    None => true,
+                }
+            });
+        }
+    }
+    if count_hit {
+        if let Some(counter) = SITE_COUNTS.get(site_id as usize) {
+            let _ = counter.fetch_add(1, Ordering::Relaxed);
+        } else {
+            let _ = OVERFLOW.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     // Postmortem-only runs do not open an interactive session, but the stack
@@ -2794,6 +2851,72 @@ mod tests {
         assert!(additive.should_stop_exception(true, Some("LogicException"), &classes));
         assert!(additive.should_stop_exception(false, Some("RuntimeException"), &classes));
         assert!(!additive.should_stop_exception(false, Some("LogicException"), &classes));
+
+        // A class-filtered `throw` must not hide an independently selected
+        // `uncaught` category for another exception class.
+        let mixed = ExceptionFilters::from_names(&["uncaught".to_string()])
+            .with_options(&[("throw".to_string(), Some("RuntimeException".to_string()))]);
+        assert!(mixed.should_stop_exception(false, Some("LogicException"), &classes));
+        assert!(mixed.should_stop_exception(false, Some("RuntimeException"), &classes));
+        assert!(mixed.should_stop_exception(true, Some("RuntimeException"), &classes));
+        assert!(!mixed.should_stop_exception(true, Some("LogicException"), &classes));
+    }
+
+    /// Verifies a wrapped ring returns its retained events oldest-to-newest,
+    /// dropping the startup events instead of the calls leading to a crash.
+    #[test]
+    fn call_ring_returns_the_newest_events_after_wrapping() {
+        let mut events = vec![
+            Some(serde_json::json!({"label": 3})),
+            Some(serde_json::json!({"label": 4})),
+            Some(serde_json::json!({"label": 2})),
+        ];
+        let ordered = take_call_events(&mut events, 5);
+        let labels: Vec<u64> = ordered
+            .iter()
+            .filter_map(|event| event["label"].as_u64())
+            .collect();
+        assert_eq!(labels, vec![2, 3, 4], "the two newest events survive in order");
+    }
+
+    /// Verifies a ring overwrite detaches the matching frame parked in a
+    /// suspended fiber, so its later return cannot attach to an unrelated event.
+    #[test]
+    fn call_ring_overwrite_detaches_parked_fiber_frames() {
+        let previous_limit = CALL_EVENTS_LIMIT.swap(1, Ordering::Relaxed);
+        if let Ok(mut events) = CALL_EVENTS.lock() {
+            events.clear();
+        }
+        CALL_EVENTS_TOTAL.store(0, Ordering::Relaxed);
+        CALL_EVENTS_DROPPED.store(0, Ordering::Relaxed);
+        FIBER_STACKS.with(|stacks| {
+            stacks.borrow_mut().insert(
+                7,
+                vec![StackFrame {
+                    function_id: 3,
+                    frame: 0x1000,
+                    last_site: None,
+                    last_line: None,
+                    call_event: Some(0),
+                    allocs_at_entry: 0,
+                    frees_at_entry: 0,
+                }],
+            );
+        });
+        assert_eq!(push_call_event(serde_json::json!({"kind": "enter"})), Some(0));
+        assert_eq!(push_call_event(serde_json::json!({"kind": "enter"})), Some(0));
+        FIBER_STACKS.with(|stacks| {
+            let stacks = stacks.borrow();
+            let frame = &stacks.get(&7).expect("parked fiber")[0];
+            assert_eq!(frame.call_event, None, "overwritten slot must detach");
+        });
+        FIBER_STACKS.with(|stacks| stacks.borrow_mut().clear());
+        if let Ok(mut events) = CALL_EVENTS.lock() {
+            events.clear();
+        }
+        CALL_EVENTS_TOTAL.store(0, Ordering::Relaxed);
+        CALL_EVENTS_DROPPED.store(0, Ordering::Relaxed);
+        CALL_EVENTS_LIMIT.store(previous_limit, Ordering::Relaxed);
     }
 
     /// Verifies include-variant symbols display as their PHP-level function names.

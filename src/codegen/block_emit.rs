@@ -147,6 +147,10 @@ fn emit_debug_eval_hooks(
     shared.debug_eval_hooks = Some(data.add_words(words));
 }
 
+/// Emits the whole module: runtime sections, wrappers, functions and entry.
+///
+/// The debug hook table and target-specific boxing helper are emitted first so
+/// ordinary builds never reference an eval symbol they do not link.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_module(
     module: &Module,
@@ -183,7 +187,11 @@ pub(super) fn emit_module(
         // emissions render PIC operands through a different emitter configuration, so a fold
         // decided on the plain text would gate an emission it did not measure. Folding is a
         // size optimization for executables; library builds keep every body.
-        && emit == Emit::Executable;
+        && emit == Emit::Executable
+        // A folded victim emits only a jump and loses its own enter hook, so a function
+        // breakpoint on that instantiation would verify but never stop. Debug builds keep
+        // every generic body; the class marker remains for eval's lexical scope.
+        && !debug_build;
     shared.counters = counters;
     shared.instrument = instrument;
     shared.debug_build = debug_build;

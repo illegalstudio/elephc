@@ -81,7 +81,11 @@ The trade-off is explicit:
   `--debug`, so stepping and breakpoints on surviving lines behave normally.
 - Every parameter enters the function available. A local becomes available only
   after a store that executes on every path to the current site; branch joins
-  intersect their incoming states. `unset()` makes it unavailable again.
+  intersect their incoming states, and loop headers keep locals the body never
+  rewrites. `unset()` makes it unavailable again.
+- Dead-store elimination is disabled in `--debug-optimized`: a removed write
+  would leave the frame slot holding the previous value, so a later watch would
+  report stale data instead of the current PHP value.
 
 `--debug` and `--debug-optimized` are mutually exclusive presets. Use
 `--debug-optimized` when the optimization difference matters more than a fully
@@ -298,7 +302,10 @@ printed URL opens a self-contained page with file/line breakpoints (conditions
 and hit counts included), caught/uncaught/throw exception filters with an
 optional class filter, function breakpoints, local/property data breakpoints,
 watch expressions, stack frames, locals, read-only expression evaluation,
-continue/next/step-in/step-out and program output. It binds
+continue/next/step-in/step-out, pause and program output. The page receives a
+fresh per-run token that every DAP request must carry, and requests with a
+foreign `Origin` are rejected, so another website cannot drive the loopback
+debugger. It binds
 loopback by default; expose `--serve` beyond loopback only when that control is
 intended. `--debug-ui` is a debugger surface, so it cannot be combined with
 profile exporters or `--live`/`--calls`/`--attach`. The monitor page uses the

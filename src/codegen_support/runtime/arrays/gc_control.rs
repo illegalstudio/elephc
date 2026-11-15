@@ -389,16 +389,17 @@ fn emit_gc_timing_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_microtime");                                   // read the common collector and free end time
     abi::emit_symbol_address(emitter, "x9", "_gc_collector_started");
     emitter.instruction("ldr d1, [x9]");                                        // load the collector phase start timestamp
-    emitter.instruction("fsub d1, d0, d1");                                     // calculate this collector pass duration
+    emitter.instruction("fsub d1, d0, d1");                                     // calculate this collector pass duration in seconds
+    emitter.instruction("fmov d3, d1");                                         // preserve the unscaled seconds value
     abi::emit_load_int_immediate(emitter, "x9", 1_000_000_000);                 // nanoseconds per second for the integer report
     emitter.instruction("scvtf d2, x9");                                        // convert the scale to a double
-    emitter.instruction("fmul d1, d1, d2");                                     // convert this pass duration to nanoseconds
-    emitter.instruction("fcvtzs x9, d1");                                       // truncate to an integer nanosecond count
+    emitter.instruction("fmul d3, d3, d2");                                     // convert this pass duration to nanoseconds
+    emitter.instruction("fcvtzs x9, d3");                                       // truncate to an integer nanosecond count
     abi::emit_symbol_address(emitter, "x10", "_gc_last_pass_duration_ns");
     emitter.instruction("str x9, [x10]");                                       // publish the last completed pass duration
     abi::emit_symbol_address(emitter, "x9", "_gc_collector_time");
     emitter.instruction("ldr d2, [x9]");                                        // load prior cumulative collector seconds
-    emitter.instruction("fadd d2, d2, d1");                                     // include this pass duration
+    emitter.instruction("fadd d2, d2, d1");                                     // include this pass duration in seconds
     emitter.instruction("str d2, [x9]");                                        // persist cumulative collector seconds
     abi::emit_symbol_address(emitter, "x9", "_gc_free_started");
     emitter.instruction("ldr d1, [x9]");                                        // load the graph-free phase start timestamp

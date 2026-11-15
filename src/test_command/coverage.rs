@@ -8,8 +8,10 @@
 //! Key details:
 //! - The debug runtime prints `elephc-debug-site: <id> <count>` at exit; this
 //!   module filters those lines from the program's stderr and aggregates counts.
-//! - Metadata sites are one logical guard per (function, source, line). Hits on a
-//!   line are summed across its sites, so split functions do not under-report.
+//! - The runtime counts line entries, not raw guard hits: only the first source
+//!   guard reached after leaving a line increments. Hits are therefore summed
+//!   across the sites of one function, which keeps branches that share a line
+//!   distinct without double-counting a loop header's several guards.
 //! - The synthesized `.elephc-test.lfc` entry is excluded: it always runs and
 //!   says nothing about the user's tests.
 //! - LCOV uses `DA:<line>,<hits>`; Cobertura uses one `<class>` per source file
@@ -128,9 +130,17 @@ fn path_is_under(path: &str, root: &str) -> bool {
     if path == root {
         return true;
     }
-    path.strip_prefix(root).is_some_and(|rest| {
-        rest.starts_with('/') || rest.starts_with('\\') || rest.starts_with(std::path::MAIN_SEPARATOR)
-    })
+    let Some(rest) = path.strip_prefix(root) else {
+        return false;
+    };
+    if rest.is_empty() {
+        return true;
+    }
+    // A root that already ends in a separator (`/`, `C:\`) is a boundary by itself.
+    if root.ends_with('/') || root.ends_with('\\') {
+        return true;
+    }
+    rest.starts_with('/') || rest.starts_with('\\') || rest.starts_with(std::path::MAIN_SEPARATOR)
 }
 
 /// One source file's line-hit counts, sorted by line.
@@ -371,7 +381,11 @@ pub(crate) fn collect(
             .or_default()
             .entry(function)
             .or_insert(0);
-        *entry = (*entry).max(hits);
+        // The runtime counts line entries per site: only the first source
+        // guard reached after leaving a line increments, so summing the sites
+        // of one function gives the true line-entry count. A `max` would drop
+        // executions when two branches share a source line.
+        *entry += hits;
     }
     let mut sources_out: Vec<SourceCoverage> = per_source
         .into_iter()
@@ -1199,6 +1213,30 @@ mod tests {
         assert!(text.contains("branches: 3/4 (75.0%)"), "{text}");
         assert!(text.contains("uncovered: 3"), "{text}");
         assert!(text.contains("lib.php: 1/1 (100.0%)"), "{text}");
+    }
+
+    /// Verifies a root filter ending in a separator includes or excludes the
+    /// whole tree instead of rejecting every path at the boundary check.
+    #[test]
+    fn filters_accept_filesystem_root_prefixes() {
+        let counts = HashMap::from([(1, 1), (2, 1), (4, 1)]);
+        let report = collect(
+            &metadata(),
+            &counts,
+            &CoverageFilters::new(vec![std::path::MAIN_SEPARATOR.to_string()], Vec::new()),
+        )
+        .expect("root include");
+        assert_eq!(report.sources.len(), 2, "the root includes every source");
+
+        let report = collect(
+            &metadata(),
+            &counts,
+            &CoverageFilters::new(Vec::new(), vec![std::path::MAIN_SEPARATOR.to_string()]),
+        );
+        assert!(
+            report.is_err(),
+            "excluding the root must remove every executable source"
+        );
     }
 
     /// Verifies include/exclude filters remove whole sources and their branches.

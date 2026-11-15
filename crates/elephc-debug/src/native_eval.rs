@@ -2,8 +2,8 @@
 //! Opt-in arbitrary PHP evaluation for a stopped debugger frame through the
 //! Magician eval bridge. The compiler publishes a function table with
 //! `--allow-eval`; this module materializes the frame locals into a fresh eval
-//! scope, executes the expression, renders the result, and releases every
-//! temporary.
+//! scope, executes the expression or statement list, renders the result, and
+//! releases every temporary.
 //!
 //! Called from:
 //! - `crate::dap::Debugger::dap_evaluate` as the fallback after the read-only
@@ -15,9 +15,10 @@
 //!   back into the native frame slot; containers, references and type-changing
 //!   assignments stay in the snapshot. Objects and functions still execute real
 //!   code and can have side effects; `--allow-eval` is an explicit opt-in.
-//! - Site, exception and `elephc_break` hooks are suppressed while eval runs, so
-//!   a user function called from the expression cannot re-enter the stopped
-//!   debugger and deadlock on its own mutex.
+//! - Site, exception, function enter/exit and `elephc_break` hooks are
+//!   suppressed while eval runs, so a user function called from the expression
+//!   cannot re-enter the stopped debugger, deadlock on its own mutex, or pollute
+//!   call capture with evaluation frames.
 //! - Locals the debug preset reports as `<optimized out>`, generated temporaries
 //!   and `#[\SensitiveParameter]` values are not imported.
 
@@ -218,20 +219,26 @@ pub(crate) fn evaluate(
         value_cell: std::ptr::null_mut(),
         error: std::ptr::null_mut(),
     };
-    // The debugger evaluates an expression, not a statement list. `return`
-    // makes PHP's implied result value observable and also accepts assignment
-    // expressions (`$x = 1`), which the statement parser would otherwise reject
-    // at end of input.
+    // `return` makes PHP's implied result value observable and also accepts
+    // assignment expressions (`$x = 1`), which the statement parser would
+    // otherwise reject at end of input. A top-level `;` means the input is a
+    // statement list: wrapping it would parse as `return $x = 1; $x = 2;` and
+    // silently skip everything after the first statement.
+    let statement_list = is_statement_list(expression);
     let expression_source = format!("return {expression};");
     let _executing = ExecutingGuard::new();
-    let mut status = unsafe {
-        (hooks.execute)(
-            context,
-            scope,
-            expression_source.as_ptr(),
-            expression_source.len() as u64,
-            &mut result,
-        )
+    let mut status = if statement_list {
+        1
+    } else {
+        unsafe {
+            (hooks.execute)(
+                context,
+                scope,
+                expression_source.as_ptr(),
+                expression_source.len() as u64,
+                &mut result,
+            )
+        }
     };
     // A statement list (`echo ...;`, `if (...) { ... }`) is not a valid
     // expression. Parse errors are safe to retry because no user code ran;
@@ -286,6 +293,40 @@ pub(crate) fn evaluate(
     } else {
         Err(text)
     }
+}
+
+/// Returns whether `source` is a statement list rather than one expression.
+///
+/// A single trailing semicolon is tolerated (`$x = 1;` stays an expression), but
+/// any other top-level `;` means the input must run as written. Quotes, escapes
+/// and nested brackets are tracked so `for (...; ...; ...)` inside a statement
+/// list is not mistaken for a top-level separator.
+fn is_statement_list(source: &str) -> bool {
+    let trimmed = source.trim_end();
+    let body = trimmed.strip_suffix(';').unwrap_or(trimmed);
+    let mut quote = None;
+    let mut escaped = false;
+    let mut depth = 0u32;
+    for ch in body.chars() {
+        if let Some(active) = quote {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == active {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '\'' | '"' => quote = Some(ch),
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            ';' if depth == 0 => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Writes type-compatible scalar assignments back into native frame slots.
@@ -445,4 +486,23 @@ impl Drop for ExecutingGuard {
 /// Returns whether generated site/exception/debug-break hooks must stay dormant.
 pub(crate) fn executing() -> bool {
     EVAL_EXECUTING.load(Ordering::Acquire)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_statement_list;
+
+    /// Verifies only a real top-level separator selects statement mode, so an
+    /// assignment list runs every statement while a lone expression keeps its
+    /// return value.
+    #[test]
+    fn detects_statement_lists_without_misreading_nested_separators() {
+        assert!(is_statement_list("$x = 1; $x = 2;"));
+        assert!(is_statement_list("$x = 1; $x = 2"));
+        assert!(is_statement_list("echo 'a;b'; echo 'c';"));
+        assert!(!is_statement_list("$x = 1;"));
+        assert!(!is_statement_list("strlen('a;b')"));
+        assert!(!is_statement_list("if (true) { $x = 1; }"));
+        assert!(!is_statement_list("$items[0] ?? 'x;y'"));
+    }
 }

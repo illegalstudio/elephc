@@ -2061,7 +2061,9 @@ This complements the peephole pass's per-block, value-equality store forwarding
 liveness-based and crosses block boundaries, so it removes a store of a
 *different* value whose result is never observed. Stores are neutralized to
 `nop`; a pure value left feeding a removed store is then cleaned up by dead
-instruction elimination on a later driver sweep.
+instruction elimination on a later driver sweep. `--debug-optimized` disables
+this pass: a removed write would leave the frame slot holding the previous value,
+so a debugger watch could observe stale data.
 
 ### Branch Simplification
 

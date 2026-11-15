@@ -281,9 +281,12 @@ fn debug_info_sections(
         out,
         "    .long Lelephc_debug_cu_end - Lelephc_debug_cu_start\nLelephc_debug_cu_start:\n    .short 4\n    .long {abbrev_offset}\n    .byte 8\n    .byte 1\n    .asciz \"elephc\"\n    .short 0x0002\n    .asciz \"{name}\"\n    .asciz \"{comp_dir}\"\n    .long {stmt_list}\n"
     );
+    // DW_FORM_ref4 offsets are relative to the FIRST byte of the compilation
+    // unit, which is the four-byte unit length. `cu_start` labels the byte
+    // after it, so every reference adds 4.
     if php_variables {
         out.push_str(
-            "Lelephc_debug_type_int:\n    .byte 4\n    .asciz \"int\"\n    .byte 0x05\n    .byte 8\nLelephc_debug_type_float:\n    .byte 4\n    .asciz \"float\"\n    .byte 0x04\n    .byte 8\nLelephc_debug_type_bool:\n    .byte 4\n    .asciz \"bool\"\n    .byte 0x02\n    .byte 8\nLelephc_debug_type_ptr:\n    .byte 4\n    .asciz \"ptr\"\n    .byte 0x01\n    .byte 8\nLelephc_debug_type_size:\n    .byte 4\n    .asciz \"size_t\"\n    .byte 0x07\n    .byte 8\nLelephc_debug_type_ref:\n    .byte 4\n    .asciz \"php_ref\"\n    .byte 0x01\n    .byte 8\nLelephc_debug_type_string:\n    .byte 5\n    .asciz \"php_string\"\n    .byte 16\n    .byte 6\n    .asciz \"ptr\"\n    .long Lelephc_debug_type_ptr - Lelephc_debug_cu_start\n    .byte 0\n    .byte 6\n    .asciz \"len\"\n    .long Lelephc_debug_type_size - Lelephc_debug_cu_start\n    .byte 8\n    .byte 0\n",
+            "Lelephc_debug_type_int:\n    .byte 4\n    .asciz \"int\"\n    .byte 0x05\n    .byte 8\nLelephc_debug_type_float:\n    .byte 4\n    .asciz \"float\"\n    .byte 0x04\n    .byte 8\nLelephc_debug_type_bool:\n    .byte 4\n    .asciz \"bool\"\n    .byte 0x02\n    .byte 8\nLelephc_debug_type_ptr:\n    .byte 4\n    .asciz \"ptr\"\n    .byte 0x01\n    .byte 8\nLelephc_debug_type_size:\n    .byte 4\n    .asciz \"size_t\"\n    .byte 0x07\n    .byte 8\nLelephc_debug_type_ref:\n    .byte 4\n    .asciz \"php_ref\"\n    .byte 0x01\n    .byte 8\nLelephc_debug_type_string:\n    .byte 5\n    .asciz \"php_string\"\n    .byte 16\n    .byte 6\n    .asciz \"ptr\"\n    .long Lelephc_debug_type_ptr - Lelephc_debug_cu_start + 4\n    .byte 0\n    .byte 6\n    .asciz \"len\"\n    .long Lelephc_debug_type_size - Lelephc_debug_cu_start + 4\n    .byte 8\n    .byte 0\n",
         );
     }
     let frame_base = match arch {
@@ -358,7 +361,7 @@ fn push_variable_die(out: &mut String, local: &LocalInfo) {
     location.extend(sleb128(-(local.frame_offset as i64)));
     let _ = write!(
         out,
-        "    .byte 3\n    .asciz \"{}\"\n    .long Lelephc_debug_type_{} - Lelephc_debug_cu_start\n    .byte {}\n    .byte ",
+        "    .byte 3\n    .asciz \"{}\"\n    .long Lelephc_debug_type_{} - Lelephc_debug_cu_start + 4\n    .byte {}\n    .byte ",
         escape_asm_string(&local.name),
         local.php_type,
         location.len()
@@ -599,11 +602,11 @@ _php_compute:
         assert!(x86.contains(".asciz \"php_string\""), "{x86}");
         assert!(x86.contains(".asciz \"php_ref\""), "{x86}");
         assert!(
-            x86.contains(".long Lelephc_debug_type_string - Lelephc_debug_cu_start"),
+            x86.contains(".long Lelephc_debug_type_string - Lelephc_debug_cu_start + 4"),
             "{x86}"
         );
         assert!(
-            x86.contains(".long Lelephc_debug_type_ref - Lelephc_debug_cu_start"),
+            x86.contains(".long Lelephc_debug_type_ref - Lelephc_debug_cu_start + 4"),
             "{x86}"
         );
         assert!(x86.contains("    .byte 0x76, 0x00"), "{x86}");

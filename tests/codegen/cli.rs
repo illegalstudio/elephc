@@ -213,7 +213,14 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
     use std::net::TcpStream;
     use std::time::{Duration, Instant};
 
-    fn http(addr: &str, method: &str, path: &str, body: Option<&str>) -> String {
+    /// Sends one raw HTTP request with extra headers and returns the body.
+    fn http_with_headers(
+        addr: &str,
+        method: &str,
+        path: &str,
+        body: Option<&str>,
+        headers: &[(&str, &str)],
+    ) -> String {
         let mut stream = TcpStream::connect(addr).expect("connect debug UI");
         stream
             .set_read_timeout(Some(Duration::from_secs(35)))
@@ -221,17 +228,32 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
         let body = body.unwrap_or("");
         write!(
             stream,
-            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Length: {}\r\n",
             body.len()
         )
         .expect("write debug UI request");
+        for (name, value) in headers {
+            write!(stream, "{name}: {value}\r\n").expect("write debug UI header");
+        }
+        write!(stream, "\r\n{body}").expect("write debug UI body");
         stream.flush().expect("flush debug UI request");
         let mut response = String::new();
-        stream.read_to_string(&mut response).expect("read debug UI response");
+        stream
+            .read_to_string(&mut response)
+            .unwrap_or_else(|error| panic!("read {method} {path}: {error}"));
         response
             .split_once("\r\n\r\n")
             .map(|(_, body)| body.to_string())
             .unwrap_or_default()
+    }
+
+    /// Sends one HTTP request, optionally authenticated with the page token.
+    fn http(addr: &str, method: &str, path: &str, body: Option<&str>, token: Option<&str>) -> String {
+        let mut headers = Vec::new();
+        if let Some(token) = token {
+            headers.push(("X-Elephc-Debug-Token", token));
+        }
+        http_with_headers(addr, method, path, body, &headers)
     }
 
     let dir = make_cli_test_dir("elephc_cli_monitor_debug_ui");
@@ -276,8 +298,60 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
         !address.is_empty(),
         "debug UI did not print its URL; stderr:\n{stderr_log}"
     );
-    let page = http(&address, "GET", "/", None);
+    let page = http(&address, "GET", "/", None, None);
     assert!(page.contains("<title>elephc monitor · debugger</title>"), "{page}");
+    let token = page
+        .split("const TOKEN = \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .filter(|token| token.len() == 64)
+        .unwrap_or_else(|| panic!("debug UI token missing: {page}"))
+        .to_string();
+    assert!(!page.contains("__ELEPHC_DEBUG_TOKEN__"), "{page}");
+
+    // A cross-site page cannot read the token; an unauthenticated request and a
+    // foreign Origin are both rejected before reaching the debuggee.
+    let probe = serde_json::json!({"seq":1,"type":"request","command":"initialize","arguments":{}})
+        .to_string();
+    let denied = http(&address, "POST", "/dap/request", Some(&probe), None);
+    assert!(
+        denied.contains("missing or invalid debugger token"),
+        "{denied}"
+    );
+    let denied = http_with_headers(
+        &address,
+        "POST",
+        "/dap/request",
+        Some(&probe),
+        &[
+            ("X-Elephc-Debug-Token", token.as_str()),
+            ("Origin", "https://evil.example"),
+        ],
+    );
+    assert!(denied.contains("forbidden origin"), "{denied}");
+    let denied = http_with_headers(
+        &address,
+        "POST",
+        "/dap/request",
+        Some(&probe),
+        &[
+            ("X-Elephc-Debug-Token", token.as_str()),
+            ("Host", "evil.example"),
+        ],
+    );
+    assert!(denied.contains("forbidden host"), "{denied}");
+    let origin = format!("http://{address}");
+    let allowed = http_with_headers(
+        &address,
+        "POST",
+        "/dap/request",
+        Some(&probe),
+        &[
+            ("X-Elephc-Debug-Token", token.as_str()),
+            ("Origin", origin.as_str()),
+        ],
+    );
+    assert!(allowed.contains("accepted"), "{allowed}");
     assert!(page.contains("/dap/events"), "{page}");
     for control in [
         "id=\"breakpoints\"",
@@ -287,9 +361,25 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
         "setFunctionBreakpoints",
         "setDataBreakpoints",
         "dataBreakpointInfo",
+        "X-Elephc-Debug-Token",
+        "case \"launch\":",
+        "{filterId: filter, condition}",
+        "if (stored) stored.condition",
+        "if (stored) stored.hitCondition",
+        "variablesReference: reference",
+        "renderVariableList(response.body.variables||[], children, false, variable.variablesReference)",
     ] {
         assert!(page.contains(control), "missing {control}: {page}");
     }
+    let initialized = page
+        .split("case \"initialized\":")
+        .nth(1)
+        .and_then(|rest| rest.split("break;").next())
+        .expect("initialized handler");
+    assert!(
+        !initialized.contains("request(\"configurationDone\""),
+        "configurationDone must wait for the launch response: {initialized}"
+    );
 
     let mut since = 0u64;
     let mut seq = 0i64;
@@ -301,6 +391,7 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
                 "GET",
                 &format!("/dap/events?since={since}"),
                 None,
+                Some(&token),
             );
             let data: serde_json::Value = serde_json::from_str(&body).expect("event JSON");
             *since = data["next"].as_u64().unwrap_or(*since);
@@ -319,7 +410,7 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
             "arguments": arguments,
         })
         .to_string();
-        let response = http(&address, "POST", "/dap/request", Some(&body));
+        let response = http(&address, "POST", "/dap/request", Some(&body), Some(&token));
         assert!(response.contains("accepted"), "{response}");
     };
 
@@ -426,6 +517,151 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
     assert_eq!(output.trim(), "5", "{output:?}");
     let status = guard.child.wait().expect("wait for debug UI child");
     assert!(status.success(), "debug UI child failed");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the browser debugger's Pause button interrupts a running loop by
+/// forwarding the DAP request as SIGUSR1 to the debuggee.
+#[test]
+fn test_cli_monitor_debug_ui_pause_interrupts_running_program() {
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    use std::net::TcpStream;
+    use std::time::{Duration, Instant};
+
+    /// Sends one HTTP request to the browser debugger, optionally authenticated.
+    fn http(addr: &str, method: &str, path: &str, body: Option<&str>, token: Option<&str>) -> String {
+        let mut stream = TcpStream::connect(addr).expect("connect pause UI");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(35)))
+            .expect("pause UI read timeout");
+        let body = body.unwrap_or("");
+        write!(
+            stream,
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Length: {}\r\n",
+            body.len()
+        )
+        .expect("write pause UI request");
+        if let Some(token) = token {
+            write!(stream, "X-Elephc-Debug-Token: {token}\r\n").expect("pause UI token");
+        }
+        write!(stream, "\r\n{body}").expect("write pause UI body");
+        stream.flush().expect("flush pause UI request");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read pause UI response");
+        response
+            .split_once("\r\n\r\n")
+            .map(|(_, body)| body.to_string())
+            .unwrap_or_default()
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_monitor_debug_ui_pause");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\n$sum = 0;\nfor ($i = 0; $i < 50000000; $i++) {\n    $sum = ($sum + 1) % 1000;\n}\necho $sum, \"\\n\";\n",
+    )
+    .expect("write pause UI fixture");
+    let mut child = elephc_cli_command(&dir)
+        .args(["monitor", "main.php", "--debug-ui", "--serve", "127.0.0.1:0"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn pause debug UI");
+    let stderr = child.stderr.take().expect("pause UI stderr");
+    let mut reader = BufReader::new(stderr);
+    let mut address = String::new();
+    for _ in 0..400 {
+        let mut line = String::new();
+        if reader.read_line(&mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        if let Some(start) = line.find("http://") {
+            let rest = &line[start + "http://".len()..];
+            let end = rest.find('/').unwrap_or(rest.len());
+            address = rest[..end].to_string();
+            break;
+        }
+    }
+    let mut guard = DebuggeeGuard { child };
+    assert!(!address.is_empty(), "pause UI did not print its URL");
+    let page = http(&address, "GET", "/", None, None);
+    let token = page
+        .split("const TOKEN = \"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("pause UI token")
+        .to_string();
+
+    let mut since = 0u64;
+    let mut seq = 0i64;
+    let poll = |since: &mut u64| -> Vec<serde_json::Value> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let body = http(
+                &address,
+                "GET",
+                &format!("/dap/events?since={since}"),
+                None,
+                Some(&token),
+            );
+            let data: serde_json::Value = serde_json::from_str(&body).expect("pause event JSON");
+            *since = data["next"].as_u64().unwrap_or(*since);
+            let events = data["events"].as_array().cloned().unwrap_or_default();
+            if !events.is_empty() || Instant::now() >= deadline {
+                return events;
+            }
+        }
+    };
+    let mut send = |command: &str, arguments: serde_json::Value| {
+        seq += 1;
+        let body = serde_json::json!({
+            "seq": seq,
+            "type": "request",
+            "command": command,
+            "arguments": arguments,
+        })
+        .to_string();
+        let response = http(&address, "POST", "/dap/request", Some(&body), Some(&token));
+        assert!(response.contains("accepted"), "{response}");
+    };
+
+    send(
+        "initialize",
+        serde_json::json!({"clientID":"monitor-pause","adapterID":"elephc","linesStartAt1":true,"columnsStartAt1":true}),
+    );
+    for _ in 0..100 {
+        if poll(&mut since)
+            .iter()
+            .any(|message| message["event"] == "initialized")
+        {
+            break;
+        }
+    }
+    send(
+        "launch",
+        serde_json::json!({"program":"main.php","stopOnEntry":false}),
+    );
+    send("configurationDone", serde_json::json!({}));
+    send("pause", serde_json::json!({"threadId":1}));
+
+    let mut paused = false;
+    for _ in 0..200 {
+        for message in poll(&mut since) {
+            if message["event"] == "stopped" {
+                assert_eq!(message["body"]["reason"], "pause", "{message}");
+                paused = true;
+            }
+        }
+        if paused {
+            break;
+        }
+    }
+    assert!(paused, "pause never stopped the browser debuggee");
+    // Disconnect ends the debuggee immediately; waiting for the busy loop to
+    // finish naturally would make this probe run for a minute in a debug build.
+    send("disconnect", serde_json::json!({}));
+    let status = guard.child.wait().expect("wait for pause UI child");
+    assert!(status.success(), "pause UI child failed");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -3116,6 +3352,85 @@ fn test_cli_debug_step_and_finish_follow_calls() {
     assert!(stderr.contains("Stopped at main.php:8:"), "{stderr}");
     assert!(stderr.contains("#0 compute at main.php:8"), "{stderr}");
 
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stepIn` enters a recursive call on the same function, file and
+/// line instead of treating the deeper frame as the position it started from.
+#[test]
+fn test_cli_debug_step_enters_a_recursive_call() {
+    let dir = make_cli_test_dir("elephc_cli_debug_recursive_step");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfunction recurse(int $n): int {\n    if ($n <= 0) { return 0; }\n    return recurse($n - 1) + 1;\n}\necho recurse(2), \"\\n\";\n",
+    )
+    .expect("write recursive step fixture");
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [{"line": 4}],
+        })),
+    );
+    assert_eq!(
+        client.response(seq)["body"]["breakpoints"][0]["verified"], true
+    );
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    let stopped = client.event("stopped");
+    assert_eq!(stopped["body"]["reason"], "breakpoint", "{stopped}");
+
+    let seq = client.send("stepIn", None);
+    assert_eq!(client.response(seq)["success"], true);
+    let stepped = client.event("stopped");
+    assert_eq!(stepped["body"]["reason"], "step", "{stepped}");
+    let seq = client.send("stackTrace", None);
+    let response = client.response(seq);
+    let frames = response["body"]["stackFrames"]
+        .as_array()
+        .expect("recursive stack");
+    assert!(
+        frames.len() >= 2
+            && frames[0]["name"].as_str().is_some_and(|name| name.contains("recurse"))
+            && frames[1]["name"].as_str().is_some_and(|name| name.contains("recurse")),
+        "the deeper recursive frame is missing: {response}"
+    );
+
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [],
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.continue_to_terminated();
+    let status = client.child.wait().expect("wait for recursive adapter");
+    assert!(status.success(), "recursive adapter failed");
+    assert!(
+        client.program_output().contains("2"),
+        "program output missing: {:?}",
+        client.program_output()
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -7214,7 +7529,9 @@ fn test_cli_debug_allow_eval_uses_class_scope_and_suppresses_hooks() {
     )
     .expect("write allow-eval class fixture");
     let mut client = DapClient::spawn(
-        elephc_cli_command(&dir).args(["debug", "--dap", "--allow-eval", "main.php"]),
+        elephc_cli_command(&dir)
+            .env("ELEPHC_DEBUG_CALLS", "none")
+            .args(["debug", "--dap", "--allow-eval", "main.php"]),
     );
     let seq = client.send(
         "initialize",
@@ -7232,6 +7549,15 @@ fn test_cli_debug_allow_eval_uses_class_scope_and_suppresses_hooks() {
         Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
     );
     assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setFunctionBreakpoints",
+        Some(serde_json::json!({
+            "breakpoints": [{"name": "Box::secret"}],
+        })),
+    );
+    assert_eq!(
+        client.response(seq)["body"]["breakpoints"][0]["verified"], true
+    );
     let seq = client.send(
         "setBreakpoints",
         Some(serde_json::json!({
@@ -7343,12 +7669,20 @@ fn test_cli_debug_allow_eval_closure_scope_and_statements() {
     assert_eq!(response["success"], true, "{response}");
     assert_eq!(response["body"]["result"], "NULL", "{response}");
 
+    // A statement list must execute every statement, not stop after the first
+    // one because the `return` wrapper happened to parse.
+    let response = client.evaluate(frame, "$x = 1; $x = 2;");
+    assert_eq!(response["success"], true, "{response}");
+    assert_eq!(response["body"]["result"], "NULL", "{response}");
+    let response = client.evaluate(frame, "$x");
+    assert_eq!(response["body"]["result"], "int(2)", "{response}");
+
     client.continue_to_terminated();
     let status = client.child.wait().expect("wait for closure adapter");
     assert!(status.success(), "closure adapter failed");
     assert!(
-        client.program_output().contains("10"),
-        "program output missing: {:?}",
+        client.program_output().contains("9"),
+        "the statement-list write-back missing: {:?}",
         client.program_output()
     );
     let _ = fs::remove_dir_all(&dir);
@@ -8213,6 +8547,39 @@ fn test_cli_debug_dap_path_mappings_source_and_loaded_sources() {
         .find(|source| source["path"].as_str() == Some(client_source.as_str()))
         .unwrap_or_else(|| panic!("missing mapped loaded source: {response}"));
     assert_eq!(loaded_source["sourceReference"], frame_reference, "{response}");
+
+    // A reference-only breakpoint must resolve to that one source instead of
+    // matching every source through an empty path.
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"sourceReference": frame_reference},
+            "breakpoints": [{"line": 2}],
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(
+        response["body"]["breakpoints"][0]["verified"], true,
+        "{response}"
+    );
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"sourceReference": 999_999},
+            "breakpoints": [{"line": 3}],
+        })),
+    );
+    let response = client.response(seq);
+    assert_eq!(
+        response["body"]["breakpoints"][0]["verified"], false,
+        "{response}"
+    );
+    assert!(
+        response["body"]["breakpoints"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("unknown source reference")),
+        "{response}"
+    );
 
     let seq = client.send(
         "source",

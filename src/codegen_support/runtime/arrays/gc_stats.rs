@@ -256,7 +256,7 @@ pub(crate) fn emit_gc_stats_report(emitter: &mut Emitter) {
             crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_gc_stats_run_dropped");
             emitter.instruction("mov r9, QWORD PTR [r9]");                      // load the overflow count
             emitter.instruction("test r9, r9");                                 // nothing to report when no run was dropped
-            emitter.instruction("jz __rt_gc_stats_report_done");
+            emitter.instruction("jz __rt_gc_stats_report_done");                // finish when no run was dropped
             write_literal(emitter, "_gc_stats_dropped_prefix");
             emitter.instruction("mov rax, r9");                                 // format the dropped-run count
             crate::codegen_support::abi::emit_call_label(emitter, "__rt_itoa");

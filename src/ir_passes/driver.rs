@@ -171,8 +171,8 @@ pub trait IrPass {
 /// collapsed by branch simplification, all converging through the fixed-point loop.
 /// Fresh numeric ownership transfer then runs separately, without restarting
 /// checked-integer sink discovery after removing assignment clone barriers.
-fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
-    vec![
+pub(crate) fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
+    let mut passes: Vec<Box<dyn IrPass>> = vec![
         Box::new(BorrowedReceiverRoots::new(module)),
         Box::new(IdentityArith),
         Box::new(Peephole),
@@ -231,12 +231,19 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
         Box::new(Cse),
         Box::new(Licm),
         Box::new(DeadInst),
-        Box::new(DeadStore),
-        Box::new(BranchSimplify),
-        Box::new(ConcatResetElim),
-        Box::new(ConcatResetHoist),
-        Box::new(FreshMixedTransfer),
-    ]
+    ];
+    // An optimized debug build must not delete a write the debugger can still
+    // observe: the frame slot would keep its previous value and a watch would
+    // lie. Keep dead stores in `--debug-optimized`; ordinary builds still drop
+    // them.
+    if !module.debug_optimized {
+        passes.push(Box::new(DeadStore));
+    }
+    passes.push(Box::new(BranchSimplify));
+    passes.push(Box::new(ConcatResetElim));
+    passes.push(Box::new(ConcatResetHoist));
+    passes.push(Box::new(FreshMixedTransfer));
+    passes
 }
 
 /// Returns the cheap scalar passes that tidy up after a pass introduces new locals.
@@ -244,8 +251,8 @@ fn default_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
 /// They promote the locals to SSA values, fold and forward them, and drop what is left
 /// dead. Every one is also a member of `default_passes`, so running them first changes how
 /// soon a function converges, not which passes it gets.
-fn scalar_cleanup_passes() -> Vec<Box<dyn IrPass>> {
-    vec![
+fn scalar_cleanup_passes(module: &Module) -> Vec<Box<dyn IrPass>> {
+    let mut passes: Vec<Box<dyn IrPass>> = vec![
         Box::new(IdentityArith),
         Box::new(Peephole),
         Box::new(Mem2Reg),
@@ -255,9 +262,12 @@ fn scalar_cleanup_passes() -> Vec<Box<dyn IrPass>> {
         Box::new(Cse),
         Box::new(Licm),
         Box::new(DeadInst),
-        Box::new(DeadStore),
-        Box::new(BranchSimplify),
-    ]
+    ];
+    if !module.debug_optimized {
+        passes.push(Box::new(DeadStore));
+    }
+    passes.push(Box::new(BranchSimplify));
+    passes
 }
 
 /// Runs the whole EIR optimization pipeline over the module to a module-level
@@ -319,7 +329,7 @@ pub fn optimize_module(module: &mut Module) {
     // converge first, so the whole list usually runs once, to confirm, instead of once per
     // cleanup round. Its analyses dominate the time on a large function.
     let lazy: Vec<Box<dyn IrPass>> = vec![Box::new(LazyBoxedAccumulator)];
-    let cleanup = scalar_cleanup_passes();
+    let cleanup = scalar_cleanup_passes(module);
     for_each_function(module, |function, data| {
         if !run_function_passes(function, &lazy, data) {
             return false;

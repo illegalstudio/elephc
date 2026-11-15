@@ -8,8 +8,10 @@
 //! - `crate::codegen::block_emit::emit_main_function()` for the dump.
 //!
 //! Key details:
-//! - The wrapper saves x0-x17/q0-q7/NZCV on AArch64 and
-//!   rax/rcx/rdx/rsi/rdi/r8-r11/xmm0-xmm15/flags on x86_64.
+//! - The wrapper saves x0-x17/v0-v7/v16-v31/NZCV on AArch64 and
+//!   rax/rcx/rdx/rsi/rdi/r8-r11/xmm0-xmm15/flags on x86_64. The register
+//!   allocator keeps live floats in d16-d23 across a guard, which is not an EIR
+//!   call, so the whole caller-saved FP range must survive the Rust hook.
 //! - It calls `elephc_debug_site_inner(site_id, fp)` from `crates/elephc-debug`.
 //! - The wrapper is emitted only for `--debug`; no normal build pays for it.
 
@@ -58,10 +60,11 @@ fn emit_aarch64_wrapper(emitter: &mut Emitter, label: &str, inner: &str) {
     emitter.raw("    .p2align 2");
     emitter.label_global(label);
     let mut asm = String::new();
+    // 0..144 integer x0-x17, 144..528 v0-v7/v16-v31, 536 NZCV, 544-byte frame.
     asm.push_str(
         "    stp x29, x30, [sp, #-16]!\n\
          \x20   mov x29, sp\n\
-         \x20   sub sp, sp, #288\n",
+         \x20   sub sp, sp, #544\n",
     );
     for pair in 0..9 {
         let first = pair * 2;
@@ -71,8 +74,9 @@ fn emit_aarch64_wrapper(emitter: &mut Emitter, label: &str, inner: &str) {
             first_step = pair * 16
         ));
     }
-    for pair in 0..4 {
-        let first = pair * 2;
+    // Save v0-v7 and the allocator's v16-v23 pool; v24-v31 complete the
+    // caller-saved range Rust may clobber.
+    for (pair, first) in [0usize, 2, 4, 6, 16, 18, 20, 22, 24, 26, 28, 30].into_iter().enumerate() {
         let second = first + 1;
         asm.push_str(&format!(
             "    stp q{first}, q{second}, [sp, #{offset}]\n",
@@ -81,15 +85,14 @@ fn emit_aarch64_wrapper(emitter: &mut Emitter, label: &str, inner: &str) {
     }
     asm.push_str(
         "    mrs x9, nzcv\n\
-         \x20   str x9, [sp, #280]\n",
+         \x20   str x9, [sp, #536]\n",
     );
     asm.push_str(&format!("    bl {inner}\n"));
     asm.push_str(
-        "    ldr x9, [sp, #280]\n\
+        "    ldr x9, [sp, #536]\n\
          \x20   msr nzcv, x9\n",
     );
-    for pair in (0..4).rev() {
-        let first = pair * 2;
+    for (pair, first) in [0usize, 2, 4, 6, 16, 18, 20, 22, 24, 26, 28, 30].into_iter().enumerate().rev() {
         let second = first + 1;
         asm.push_str(&format!(
             "    ldp q{first}, q{second}, [sp, #{offset}]\n",
@@ -105,7 +108,7 @@ fn emit_aarch64_wrapper(emitter: &mut Emitter, label: &str, inner: &str) {
         ));
     }
     asm.push_str(
-        "    add sp, sp, #288\n\
+        "    add sp, sp, #544\n\
          \x20   ldp x29, x30, [sp], #16\n\
          \x20   ret\n",
     );
@@ -173,7 +176,7 @@ fn emit_x86_64_wrapper(emitter: &mut Emitter, label: &str, inner: &str) {
 fn site_capacity_error(site_id: usize) -> Option<String> {
     (site_id >= MAX_SITES).then(|| {
         format!(
-            "debug site id {site_id} exceeds the fixed flag table ({MAX_SITES} entries);              split the program or build without --debug"
+            "debug site id {site_id} exceeds the fixed flag table ({MAX_SITES} entries); split the program or build without --debug"
         )
     })
 }
@@ -386,7 +389,11 @@ mod tests {
         assert!(asm.contains("stp x0, x1, [sp, #0]"), "{asm}");
         assert!(asm.contains("stp q0, q1, [sp, #144]"), "{asm}");
         assert!(asm.contains("stp q6, q7, [sp, #240]"), "{asm}");
+        assert!(asm.contains("stp q16, q17, [sp, #272]"), "{asm}");
+        assert!(asm.contains("stp q30, q31, [sp, #496]"), "{asm}");
+        assert!(asm.contains("sub sp, sp, #544"), "{asm}");
         assert!(asm.contains("mrs x9, nzcv"), "{asm}");
+        assert!(asm.contains("str x9, [sp, #536]"), "{asm}");
         assert!(asm.contains("bl elephc_debug_site_inner"), "{asm}");
         assert!(asm.contains("msr nzcv, x9"), "{asm}");
     }

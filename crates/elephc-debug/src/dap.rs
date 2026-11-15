@@ -192,16 +192,24 @@ fn map_path_prefix(path: &str, from: &str, to: &str) -> Option<String> {
         return None;
     }
     let rest = &path[from.len()..];
-    if !rest.is_empty() && !is_path_separator(rest.as_bytes()[0]) {
+    let from_ends_separator = from.ends_with('/') || from.ends_with('\\');
+    if !rest.is_empty() && !from_ends_separator && !is_path_separator(rest.as_bytes()[0]) {
         return None;
     }
     let mut mapped = to.to_string();
     let rest = rest.trim_start_matches(['/', '\\']);
     if !rest.is_empty() {
+        let separator = mapping_separator(to);
         if !mapped.ends_with('/') && !mapped.ends_with('\\') {
-            mapped.push(mapping_separator(to));
+            mapped.push(separator);
         }
-        mapped.push_str(rest);
+        mapped.extend(rest.chars().map(|ch| {
+            if is_path_separator(ch as u8) {
+                separator
+            } else {
+                ch
+            }
+        }));
     }
     Some(mapped)
 }
@@ -385,7 +393,7 @@ impl DapConnection {
         })
     }
 
-    /// Wraps an accepted loopback TCP stream into a framed DAP connection.
+    /// Wraps an accepted TCP stream into a framed DAP connection.
     pub(crate) fn from_tcp_stream(stream: TcpStream) -> std::io::Result<Self> {
         let reader = Box::new(BufReader::new(stream.try_clone()?));
         Ok(Self {
@@ -969,12 +977,48 @@ impl Debugger {
     /// Arms the sites requested by one DAP `setBreakpoints` request.
     fn dap_set_breakpoints(&mut self, request: &JsonValue) {
         let arguments = &request["arguments"];
-        let requested = arguments
-            .get("source")
-            .and_then(|source| source.get("path"))
+        let source = &arguments["source"];
+        let requested = source
+            .get("path")
             .and_then(JsonValue::as_str)
             .unwrap_or("");
-        let path = self.client_source_path(requested);
+        let reference = arguments
+            .get("sourceReference")
+            .and_then(JsonValue::as_i64)
+            .unwrap_or(0)
+            .max(
+                source
+                    .get("sourceReference")
+                    .and_then(JsonValue::as_i64)
+                    .unwrap_or(0),
+            );
+        let referenced = if reference > 0 {
+            u64::try_from(reference - 1)
+                .ok()
+                .filter(|id| self.sources.contains_key(id))
+        } else {
+            None
+        };
+        // A reference-only request must resolve to exactly one source. The old
+        // empty-path fallback matched every source and armed the line everywhere.
+        if (reference > 0 && referenced.is_none()) || (referenced.is_none() && requested.is_empty()) {
+            let results: Vec<JsonValue> = arguments
+                .get("breakpoints")
+                .and_then(JsonValue::as_array)
+                .map(|breakpoints| {
+                    breakpoints
+                        .iter()
+                        .map(|_| json!({"verified": false, "message": "unknown source reference"}))
+                        .collect()
+                })
+                .unwrap_or_default();
+            self.dap_respond(request, Some(json!({"breakpoints": results})));
+            return;
+        }
+        let path = match referenced {
+            Some(id) => self.sources.get(&id).cloned().unwrap_or_default(),
+            None => self.client_source_path(requested),
+        };
         let matching_sources: Vec<u64> = self
             .sources
             .iter()
@@ -2214,7 +2258,8 @@ fn remove_tcp_attach_files(key_path: &str) {
     let _ = std::fs::remove_file(format!("{key_path}.pid"));
 }
 
-/// Serves one loopback TCP attach endpoint with a mode-0600 key file.
+/// Serves one TCP attach endpoint (loopback unless the build opted in) with a
+/// mode-0600 key file.
 ///
 /// The runtime generates a fresh 32-byte key, writes it (and its actual
 /// `127.0.0.1:PORT` and pid) next to `key_path`, and accepts clients until one
@@ -2443,6 +2488,29 @@ fn source_matches(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies prefix mapping preserves the target's separator style and treats
+    /// a root that already ends in a separator as a valid boundary.
+    #[test]
+    fn path_mapping_normalizes_separators_and_root_prefixes() {
+        assert_eq!(
+            map_path_prefix("C:\\work\\app\\src\\lib.php", "C:\\work\\app", "/srv/app"),
+            Some("/srv/app/src/lib.php".to_string())
+        );
+        assert_eq!(
+            map_path_prefix("/srv/app/src/lib.php", "/srv/app", "C:\\work\\app"),
+            Some("C:\\work\\app\\src\\lib.php".to_string())
+        );
+        assert_eq!(
+            map_path_prefix("/project/src/File.php", "/", "/srv"),
+            Some("/srv/project/src/File.php".to_string())
+        );
+        assert_eq!(
+            map_path_prefix("/project/src/File.php", "/project/", "/srv"),
+            Some("/srv/src/File.php".to_string())
+        );
+        assert_eq!(map_path_prefix("/other/File.php", "/project", "/srv"), None);
+    }
 
     /// Verifies the attach listener writes its pid before accepting a client and
     /// removes both the pid file and the socket after the accept.

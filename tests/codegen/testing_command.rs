@@ -792,6 +792,40 @@ fn test_cli_test_coverage_writes_html() {
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies line hit counts are line-entry counts: branches that share one
+/// source line each contribute, while a loop header's several guards do not
+/// multiply its iterations.
+#[test]
+fn test_cli_test_coverage_counts_line_entries_not_guards() {
+    let dir = make_cli_test_dir("elephc_cli_test_line_entry_coverage");
+    fs::create_dir_all(dir.join("tests")).unwrap();
+    fs::write(
+        dir.join("tests/SharedLineTest.php"),
+        "<?php\nuse Elephc\\Testing\\TestCase;\nfinal class SharedLine {\n    public function pick(bool $flag): int {\n        if ($flag)\n            { $value = 1; } else { $value = 2; }\n        return $value;\n    }\n    public function loop(): int {\n        $sum = 0;\n        for ($i = 0; $i < 3; $i++)\n            $sum += $i;\n        return $sum;\n    }\n}\nfinal class SharedLineTest extends TestCase {\n    public function testEntries(): void {\n        $subject = new SharedLine();\n        $subject->pick(true);\n        $subject->pick(false);\n        $subject->loop();\n        $this->assertTrue(true);\n    }\n}\n",
+    )
+    .expect("write line-entry coverage fixture");
+
+    let (stdout, stderr, code) = run_test_command(
+        &dir,
+        &["--filter", "testEntries", "--coverage-format", "lcov"],
+    );
+    assert_eq!(code, 0, "{stdout}\n{stderr}");
+    let record = stdout
+        .split("end_of_record")
+        .find(|record| record.contains("SharedLineTest.php"))
+        .unwrap_or_else(|| panic!("SharedLineTest LCOV record missing: {stdout}"));
+    assert!(
+        record.contains("DA:6,2"),
+        "two branch bodies on line 6 must count two entries: {record}"
+    );
+    assert!(
+        record.contains("DA:11,4"),
+        "the loop header must count entries, not its three guards per iteration: {record}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// `--coverage-filter` and `--coverage-exclude` select whole sources, imply
 /// `--coverage`, and keep omitted files and their branches out of the report.
 #[test]

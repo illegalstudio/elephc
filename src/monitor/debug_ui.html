@@ -85,6 +85,9 @@ main{display:grid;grid-template-columns:220px minmax(0,1fr) 380px;grid-template-
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
+/// Per-run secret injected by the monitor; cross-origin pages cannot read it.
+const TOKEN = "__ELEPHC_DEBUG_TOKEN__";
+const AUTH_HEADERS = {"X-Elephc-Debug-Token": TOKEN};
 const esc = (text) => String(text).replace(/[&<>"]/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[ch]));
 const basename = (path) => { const parts = String(path || "").split("/"); return parts[parts.length - 1] || path || "<source>"; };
 const state = {
@@ -102,7 +105,7 @@ async function send(command, args, handler){
   const message = {seq, type:"request", command};
   if (args !== undefined) message.arguments = args;
   if (handler) state.pending.set(seq, handler);
-  const r = await fetch("/dap/request", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(message)});
+  const r = await fetch("/dap/request", {method:"POST", headers:{"Content-Type":"application/json", ...AUTH_HEADERS}, body:JSON.stringify(message)});
   if (!r.ok) { state.pending.delete(seq); log("request failed: "+command, "err"); }
   return seq;
 }
@@ -111,7 +114,7 @@ function request(command, args, handler){ send(command,args,handler).catch((e)=>
 async function poll(){
   while(true){
     try{
-      const r = await fetch("/dap/events?since="+state.since);
+      const r = await fetch("/dap/events?since="+state.since, {headers:AUTH_HEADERS});
       const data = await r.json();
       state.since = data.next;
       for (const message of data.events) handle(message);
@@ -128,8 +131,8 @@ function handleEvent(event){
   const body = event.body || {};
   switch(event.event){
     case "initialized":
-      sendExceptionFilters();
-      request("configurationDone", {});
+      // The launch response owns the next step; sending configurationDone here
+      // races it over independent HTTP connections and resumes before launch.
       break;
     case "stopped":
       state.stopped = true; status("stopped · "+(body.reason||"breakpoint"), true);
@@ -156,8 +159,12 @@ function handleResponse(response){
   const command = response.command, body = response.body || {};
   switch(command){
     case "initialize":
-      request("loadedSources", {});
       request("launch", {program:"", stopOnEntry:true});
+      break;
+    case "launch":
+      sendExceptionFilters();
+      request("loadedSources", {});
+      request("configurationDone", {});
       break;
     case "loadedSources":
       state.sources = (body.sources||[]).filter((source)=>source.path);
@@ -242,10 +249,11 @@ function renderBreakpoints(){
     const row = document.createElement("div"); row.className = "bp-row";
     const head = document.createElement("div"); head.className = "head";
     const where = document.createElement("span"); where.className = "where"; where.textContent = basename(entry.path)+":"+entry.line; where.title = entry.path;
+    const stored = state.breakpoints.get(entry.path)?.get(entry.line);
     const condition = document.createElement("input"); condition.placeholder = "condition"; condition.value = entry.condition || "";
-    condition.onchange = ()=>{ entry.condition = condition.value.trim(); sendBreakpoints(entry.path); };
+    condition.onchange = ()=>{ if (stored) stored.condition = condition.value.trim(); sendBreakpoints(entry.path); };
     const hits = document.createElement("input"); hits.placeholder = "hits"; hits.value = entry.hitCondition || ""; hits.style.flex = "0 0 54px";
-    hits.onchange = ()=>{ entry.hitCondition = hits.value.trim(); sendBreakpoints(entry.path); };
+    hits.onchange = ()=>{ if (stored) stored.hitCondition = hits.value.trim(); sendBreakpoints(entry.path); };
     const remove = document.createElement("button"); remove.className = "remove"; remove.textContent = "×"; remove.title = "remove breakpoint";
     remove.onclick = ()=>{ state.breakpoints.get(entry.path)?.delete(entry.line); renderBreakpoints(); renderCode(); sendBreakpoints(entry.path); };
     head.appendChild(where); head.appendChild(condition); head.appendChild(hits); head.appendChild(remove);
@@ -291,7 +299,7 @@ function sendExceptionFilters(){
   const filters = [];
   for (const name of ["uncaught","caught","throw"]) if ($("exc-"+name).checked) filters.push(name);
   const condition = $("exc-class").value.trim();
-  const filterOptions = condition ? filters.map((filter)=>({filter, condition})) : [];
+  const filterOptions = condition ? filters.map((filter)=>({filterId: filter, condition})) : [];
   request("setExceptionBreakpoints", {filters, filterOptions});
 }
 
@@ -405,16 +413,18 @@ function loadFrameSource(source){
   request("source", {source:{path:source.path, sourceReference:source.sourceReference||0}, sourceReference:source.sourceReference||0});
 }
 
-function renderVariableList(variables, container, topLevel){
+function renderVariableList(variables, container, topLevel, reference){
   if (!variables.length){ container.textContent = topLevel ? "no locals" : "(empty)"; return; }
   for (const variable of variables){
     const row = document.createElement("div"); row.className = "var";
     const name = document.createElement("span"); name.textContent = (variable.name||"")+" = ";
     const value = document.createElement("span"); value.className = "value"; value.textContent = variable.value||"";
     row.appendChild(name); row.appendChild(value);
-    if (topLevel && state.localsRef){
-      const watch = document.createElement("button"); watch.className = "remove"; watch.textContent = "watch"; watch.title = "break when this local is written";
-      watch.onclick = (event)=>{ event.stopPropagation(); request("dataBreakpointInfo", {variablesReference: state.localsRef, name: variable.name}, (response)=>applyDataBreakpointInfo(response, variable.name)); };
+    // Any watchable row carries the variablesReference that owns it: locals use
+    // the Locals reference, expanded properties use their object's reference.
+    if (reference){
+      const watch = document.createElement("button"); watch.className = "remove"; watch.textContent = "watch"; watch.title = "break when this value is written";
+      watch.onclick = (event)=>{ event.stopPropagation(); request("dataBreakpointInfo", {variablesReference: reference, name: variable.name}, (response)=>applyDataBreakpointInfo(response, variable.name)); };
       row.appendChild(watch);
     }
     if (variable.variablesReference){
@@ -423,7 +433,7 @@ function renderVariableList(variables, container, topLevel){
         if (children.style.display === "none"){
           children.style.display = "block";
           request("variables", {variablesReference: variable.variablesReference}, (response)=>{
-            if (response.success) renderVariableList(response.body.variables||[], children, false);
+            if (response.success) renderVariableList(response.body.variables||[], children, false, variable.variablesReference);
           });
         } else children.style.display = "none";
       };
@@ -434,7 +444,7 @@ function renderVariableList(variables, container, topLevel){
 }
 function renderVariables(variables){
   const panel = $("variables"); panel.innerHTML = "";
-  renderVariableList(variables, panel, true);
+  renderVariableList(variables, panel, true, state.localsRef);
 }
 
 function evaluateWatches(){

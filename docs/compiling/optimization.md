@@ -410,7 +410,9 @@ CFG-aware liveness over local slots (a `load_local` makes a slot live, a
 `store_local` kills it) so a dead store is dropped even when the overwrite is in a
 later block. Unlike the peephole's per-block, value-equality store drop, this pass
 is liveness-based and crosses block boundaries, so it removes a store of a
-*different* value whose result is never observed.
+*different* value whose result is never observed. The pass is skipped for
+`--debug-optimized` builds so a stopped debugger never reports the previous value
+through a frame slot whose write was deleted.
 
 It is restricted to non-refcounted scalar locals that are accessed only through
 plain `load_local`/`store_local` and never escape by reference. Refcounted slots

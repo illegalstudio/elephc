@@ -20,6 +20,10 @@ const MAX_LOGICAL_PATHS: usize = 128;
 /// Maximum leaves whose 2-bit fields fit one 64-bit path-state word.
 const MAX_PATH_LEAVES: usize = 31;
 
+/// Lowers one PHP condition to its true and false block edges.
+///
+/// In debug builds a logical condition also records every full short-circuit
+/// prefix path so coverage can attribute the evaluated leaves.
 pub(crate) fn lower_condition(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,

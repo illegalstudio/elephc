@@ -46,7 +46,7 @@ pub(crate) struct DebugCommand {
     pub(crate) allow_eval: bool,
     /// Optional DAP attach socket exposed by an already-running debug binary.
     pub(crate) attach: Option<String>,
-    /// Optional loopback TCP attach address exposed by a debug binary.
+    /// Optional TCP attach address exposed by a debug binary (loopback by default).
     pub(crate) attach_tcp: Option<String>,
     /// Mode-0600 key file for `--attach-tcp`.
     pub(crate) key: Option<String>,
@@ -125,7 +125,7 @@ model, not pool/request handler isolation.
 
 --attach-tcp connects to a debug binary started with
 ELEPHC_DEBUG_ATTACH_ADDR=127.0.0.1:PORT and ELEPHC_DEBUG_ATTACH_KEY=FILE. The
-runtime writes FILE (mode 0600) and FILE.addr (the actual loopback address),
+runtime writes FILE (mode 0600) and FILE.addr (the actual bound address),
 then proves the key with an HMAC challenge-response before speaking DAP. A
 wrong key is rejected and the runtime keeps waiting for the correct one. The
 existing --attach <socket> Unix path is unchanged.";
@@ -626,6 +626,8 @@ struct WebSession {
     pid: u32,
     /// Mode-0600 socket the worker is waiting on.
     socket: PathBuf,
+    /// Announcement file that advertised this worker.
+    announcement: PathBuf,
     /// Request method recorded in the announcement.
     method: String,
     /// Request path recorded in the announcement.
@@ -671,7 +673,9 @@ fn web_session_pid_alive(pid: u32) -> bool {
 ///
 /// Announcements are sorted newest first, so a stale file left in a reused
 /// `--web-dir` cannot win over the request that is waiting now. A missing
-/// socket or a dead worker removes the announcement and keeps looking.
+/// socket or a dead worker removes the announcement and keeps looking; the
+/// caller also drops a live-looking announcement whose socket refuses the
+/// connection and waits for the next request instead of killing the server.
 fn find_web_session(directory: &Path, command: &DebugCommand) -> Option<WebSession> {
     let entries = fs::read_dir(directory).ok()?;
     let mut candidates: Vec<(std::time::SystemTime, PathBuf)> = entries
@@ -728,6 +732,7 @@ fn find_web_session(directory: &Path, command: &DebugCommand) -> Option<WebSessi
         return Some(WebSession {
             pid,
             socket: PathBuf::from(socket),
+            announcement: path,
             method: method.to_string(),
             path: request_path.to_string(),
         });
@@ -907,9 +912,28 @@ fn run_web_dap(command: DebugCommand) -> i32 {
     );
 
     let deadline = Instant::now() + Duration::from_secs(120);
-    let session = loop {
+    let stream = loop {
         if let Some(session) = find_web_session(&directory, &command) {
-            break session;
+            match UnixStream::connect(&session.socket) {
+                Ok(stream) => {
+                    eprintln!(
+                        "elephc debug(web): attached to pid {} ({} {})",
+                        session.pid, session.method, session.path
+                    );
+                    break stream;
+                }
+                Err(error) => {
+                    // The worker died between announcing and accepting. Drop its
+                    // stale announcement and keep waiting for a live request
+                    // instead of killing the freshly launched server.
+                    eprintln!(
+                        "elephc debug(web): worker {} at '{}' is gone ({error}); waiting for another request",
+                        session.pid,
+                        session.socket.display()
+                    );
+                    let _ = fs::remove_file(&session.announcement);
+                }
+            }
         }
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -934,23 +958,6 @@ fn run_web_dap(command: DebugCommand) -> i32 {
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    let stream = match UnixStream::connect(&session.socket) {
-        Ok(stream) => stream,
-        Err(error) => {
-            eprintln!(
-                "elephc debug(web): cannot attach to worker {} at '{}': {error}",
-                session.pid,
-                session.socket.display()
-            );
-            let _ = child.kill();
-            let _ = child.wait();
-            return 1;
-        }
-    };
-    eprintln!(
-        "elephc debug(web): attached to pid {} ({} {})",
-        session.pid, session.method, session.path
-    );
     let status = proxy_dap(stream, None, None);
     eprintln!(
         "elephc debug(web): detached; server pid {} is still serving on {}",
@@ -1132,7 +1139,18 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     difference == 0
 }
 
-/// Connects to a loopback TCP attach endpoint and proves the mode-0600 key.
+/// Parses one TCP attach destination.
+///
+/// The client accepts any destination: a loopback listener is the default, and
+/// a debuggee built with `--allow-remote-debug` may bind a non-loopback address.
+/// The listener enforces the policy with the mandatory HMAC key handshake.
+fn parse_attach_address(address: &str) -> Result<SocketAddr, String> {
+    address
+        .parse()
+        .map_err(|_| format!("attach address '{address}' must be IP:PORT"))
+}
+
+/// Connects to a TCP attach endpoint and proves the mode-0600 key.
 fn run_attach_tcp(address: &str, key_path: &str) -> i32 {
     let key = match read_attach_key(key_path) {
         Ok(key) => key,
@@ -1141,17 +1159,13 @@ fn run_attach_tcp(address: &str, key_path: &str) -> i32 {
             return 1;
         }
     };
-    let addr: SocketAddr = match address.parse() {
+    let addr = match parse_attach_address(address) {
         Ok(addr) => addr,
-        Err(_) => {
-            eprintln!("elephc debug: attach address '{address}' must be IP:PORT");
+        Err(error) => {
+            eprintln!("elephc debug: {error}");
             return 1;
         }
     };
-    if !addr.ip().is_loopback() {
-        eprintln!("elephc debug: TCP attach is loopback-only; '{address}' is not loopback");
-        return 1;
-    }
     let pause_pid = std::fs::read_to_string(format!("{key_path}.pid"))
         .ok()
         .and_then(|text| text.trim().parse::<u32>().ok())
@@ -1575,11 +1589,31 @@ mod tests {
         let session = find_web_session(&dir, &command).expect("newest session");
         assert_eq!(session.socket, new_socket);
 
+        // A newer announcement whose worker already vanished must be removed and
+        // skipped instead of being selected ahead of the live request.
+        let dead_socket = dir.join("dead.sock");
+        fs::write(dir.join("session-dead.json"), announcement(&dead_socket))
+            .expect("dead announcement");
+        std::thread::sleep(Duration::from_millis(20));
+        let session = find_web_session(&dir, &command).expect("live session after stale");
+        assert_eq!(session.socket, new_socket);
+        assert!(!dir.join("session-dead.json").exists());
+
         clear_web_sessions(&dir);
         assert!(!dir.join("session-old.json").exists());
         assert!(!dir.join("session-new.json").exists());
         assert!(dir.join("server.pid").exists());
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Verifies the attach client accepts a non-loopback destination; the
+    /// listener's `--allow-remote-debug` build is the policy owner.
+    #[test]
+    fn tcp_attach_client_accepts_a_remote_destination() {
+        let address = parse_attach_address("203.0.113.10:41237").expect("remote attach address");
+        assert_eq!(address.port(), 41237);
+        assert!(!address.ip().is_loopback());
+        assert!(parse_attach_address("127.0.0.1").is_err());
     }
 
     /// Verifies the loopback TCP attach form parses its address and key, implies
