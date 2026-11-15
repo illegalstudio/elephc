@@ -206,8 +206,15 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     // A by-value object parameter can reject a `Class|false`/`Class|null` argument at
     // binding time. Name the callee here so that guard's TypeError uses PHP's
     // `take(): Argument #1 ...` spelling instead of the generic `call()` fallback.
-    let previous_description = is_user_function
-        .then(|| ctx.call_description.replace(canonical.to_string()));
+    // An extern's arguments clear any enclosing user call's name: its declared parameters
+    // bind through the C ABI and are never checked by the PHP scalar parameter guard.
+    let previous_description = if is_user_function {
+        Some(ctx.call_description.replace(canonical.to_string()))
+    } else if is_extern {
+        Some(ctx.call_description.take())
+    } else {
+        None
+    };
     let reference_property_guard_mark = ctx.reference_property_guards.len();
     begin_call_argument_evaluation(ctx);
     if is_user_function {

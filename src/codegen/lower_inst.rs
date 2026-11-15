@@ -52,6 +52,7 @@ mod implicit_int_cast;
 mod enums;
 pub(super) mod exceptions;
 mod mixed_narrowing;
+mod scalar_param_guard;
 mod numeric_payloads;
 mod numeric_comparisons;
 mod numeric_cast;
@@ -472,6 +473,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ReturnBoundaryMixedToInt => {
             mixed_narrowing::lower_return_boundary_mixed_to_int(ctx, &inst)
         }
+        Op::ScalarParamGuard => scalar_param_guard::lower_scalar_param_guard(ctx, &inst),
         Op::PropertyBoundaryCheckedToInt => {
             mixed_narrowing::lower_property_boundary_checked_to_int(ctx, &inst)
         }

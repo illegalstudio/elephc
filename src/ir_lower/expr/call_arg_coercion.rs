@@ -858,6 +858,9 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     if let Some(guarded) = guard_object_param_argument(ctx, sig, index, value, arg) {
         return guarded;
     }
+    // A boxed `mixed`/union value bound to a declared non-nullable scalar is checked before
+    // the conversion below would silently turn `null`, an array or an object into a scalar.
+    super::scalar_param_guards::guard_scalar_param(ctx, sig, index, value, Some(arg), arg.span);
     // A by-reference parameter must receive the caller's storage, not a converted temporary,
     // so declared-parameter scalar binding never applies to one. The checker keeps those on
     // the strict path for the same reason.
@@ -1195,12 +1198,30 @@ fn apply_scalar_param_cast(
 pub(super) fn coerce_operands_to_params(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
+    operands: Vec<crate::ir::ValueId>,
+) -> Vec<crate::ir::ValueId> {
+    coerce_operands_to_params_guarded(ctx, sig, operands, None)
+}
+
+/// Normalizes reordered operands and, given the call's source span, first checks each
+/// runtime-typed operand bound to a declared scalar parameter.
+///
+/// Pass a span only for operands that did not go through positional argument lowering
+/// (named arguments and associative spreads); positional ones were already checked there.
+pub(super) fn coerce_operands_to_params_guarded(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
     mut operands: Vec<crate::ir::ValueId>,
+    guard_span: Option<Span>,
 ) -> Vec<crate::ir::ValueId> {
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let limit = operands.len().min(regular_param_count);
+    let needs_guard = (0..limit)
+        .map(|index| guard_span.is_some()
+            && super::scalar_param_guards::guarded_scalar_param(ctx, sig, index, operands[index], None).is_some())
+        .collect::<Vec<_>>();
     let needs_coercion = (0..limit)
-        .map(|index| operand_needs_param_coercion(ctx, sig, &operands, index))
+        .map(|index| needs_guard[index] || operand_needs_param_coercion(ctx, sig, &operands, index))
         .collect::<Vec<_>>();
     if needs_coercion.iter().any(|needs_coercion| *needs_coercion) {
         // Source evaluation has completed, but any parameter conversion below can throw.
@@ -1223,6 +1244,10 @@ pub(super) fn coerce_operands_to_params(
             continue;
         };
         let value = operands[index];
+        if let (true, Some(span)) = (needs_guard[index], guard_span) {
+            let lowered = lowered_value_from_id(ctx, value);
+            super::scalar_param_guards::guard_scalar_param(ctx, sig, index, lowered, None, span);
+        }
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
         let param_ty = param_ty.codegen_repr();
         if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
@@ -1692,7 +1717,8 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         let operands = lower_named_args_with_signature_options(
             ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
         );
-        return coerce_operands_to_params(ctx, sig, operands);
+        let call_span = args.first().map(|arg| arg.span);
+        return coerce_operands_to_params_guarded(ctx, sig, operands, call_span);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(
         ctx, sig, args, None, capture_values, capture_output_index.as_ref(),
@@ -1706,7 +1732,8 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     };
     let args = static_spread_args.as_deref().unwrap_or(args);
     if let Some(operands) = lower_assoc_spread_only_args(ctx, sig, args) {
-        return coerce_operands_to_params(ctx, sig, operands);
+        let call_span = args.first().map(|arg| arg.span);
+        return coerce_operands_to_params_guarded(ctx, sig, operands, call_span);
     }
     if args.iter().any(is_spread_arg) {
         if capture_values {
