@@ -58,8 +58,19 @@ struct TraitDeclInfo {
 /// Stored in the expansion cache to avoid repeated work.
 struct ExpandedTrait {
     properties: Vec<ClassProperty>,
-    methods: Vec<ClassMethod>,
+    methods: Vec<TraitMethod>,
     constants: Vec<ClassConst>,
+}
+
+#[derive(Clone)]
+/// A method of an expanded trait with the trait that declares it.
+///
+/// `origin` names the declaring trait after generic instantiation (`Holder<int>` and
+/// `Holder<string>` are two traits), so two copies of one method reached along two `use`
+/// paths share it, while two instantiations of one generic method, which share a span, do not.
+struct TraitMethod {
+    origin: String,
+    decl: ClassMethod,
 }
 
 #[derive(Clone)]
@@ -67,6 +78,7 @@ struct ExpandedTrait {
 /// tracked for insteadof conflict resolution and visibility override resolution.
 struct ImportedMethod {
     source_trait: String,
+    origin: String,
     decl: ClassMethod,
 }
 
@@ -195,10 +207,11 @@ pub fn flatten_classes(
                 let merged_methods = match merge::merge_methods(
                     imported_methods,
                     methods,
+                    name,
                     stmt.span,
                     &format!("class {}", name),
                 ) {
-                    Ok(methods) => methods,
+                    Ok(methods) => methods.into_iter().map(|method| method.decl).collect(),
                     Err(error) => {
                         errors.extend(error.flatten());
                         continue;
@@ -280,10 +293,11 @@ pub fn flatten_classes(
                 let merged_methods = match merge::merge_methods(
                     imported_methods,
                     methods,
+                    name,
                     stmt.span,
                     &format!("enum {}", name),
                 ) {
-                    Ok(methods) => methods,
+                    Ok(methods) => methods.into_iter().map(|method| method.decl).collect(),
                     Err(error) => {
                         errors.extend(error.flatten());
                         continue;

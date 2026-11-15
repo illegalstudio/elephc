@@ -388,6 +388,24 @@ fn test_error_trait_requirement_void_return_must_match() {
     }
 }
 
+/// Two instantiations of one generic trait reached along two `use` paths are two traits, so
+/// their methods collide even when only a body mentions the type parameter, while one
+/// instantiation reached twice is one method (`tests/codegen/oop/traits.rs`).
+#[test]
+fn test_error_generic_trait_instantiations_reached_twice_collide() {
+    expect_error(
+        r#"<?php
+class P { public function n(): string { return "P"; } }
+class Q { public function n(): string { return "Q"; } }
+trait Make<T> { public function make(): string { $o = new T(); return $o->n(); } }
+trait A { use Make<P>; }
+trait B { use Make<Q>; }
+class C { use A, B; }
+"#,
+        "Trait method B::make has not been applied as C::make, because of collision with A::make",
+    );
+}
+
 /// Verifies that a class using two traits with a property of the same name but
 /// incompatible visibility reports "incompatible duplicate property".
 #[test]

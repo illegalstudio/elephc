@@ -460,3 +460,19 @@ echo (new Sibling())->show(), (new Privy())->show(), Statics::tagged(), (new Pic
     );
     assert_eq!(out, "<g><h>[s]<o>g<m><w0>\n");
 }
+
+/// One instantiation of a generic trait reached along two `use` paths is one method, as a
+/// plain shared trait is (`test_trait_method_shared_through_two_traits_is_not_a_collision`).
+#[test]
+fn test_generic_trait_instantiation_shared_through_two_traits() {
+    let out = compile_and_run(
+        r#"<?php
+trait Holder<T> { public function put(T $v): string { return "put " . $v; } }
+trait A { use Holder<int>; }
+trait B { use Holder<int>; }
+class C { use A, B; }
+echo (new C())->put(7), "\n";
+"#,
+    );
+    assert_eq!(out, "put 7\n");
+}
