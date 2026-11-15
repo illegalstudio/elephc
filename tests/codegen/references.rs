@@ -2164,3 +2164,20 @@ echo $f(new A(), ['n' => 5])->n, "\n";
     );
     assert_eq!(out, "5\n");
 }
+
+/// A superglobal passed by reference to a user function is written: it has no frame slot,
+/// so the argument used to be a copy of its storage and the write was lost (`$_GET` kept its
+/// keys). The callee now aliases the superglobal's shared cell. Output from php 8.5 `php -n`.
+#[test]
+fn test_superglobal_passed_by_reference_to_a_function_is_written() {
+    let out = compile_and_run(
+        r#"<?php
+function f(&$a) { $a = ["x" => 9]; }
+function g(array &$a) { $a["y"] = 8; }
+f($_GET); echo implode(",", array_keys($_GET)), "|";
+g($_POST); echo implode(",", array_keys($_POST)), "|";
+$_SERVER["zz"] = 1; f($_SERVER); echo implode(",", array_keys($_SERVER));
+"#,
+    );
+    assert_eq!(out, "x|y|x");
+}

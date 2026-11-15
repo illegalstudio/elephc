@@ -1811,7 +1811,21 @@ fn lower_global_storage_ref_arg(
     let ExprKind::Variable(name) = &arg.kind else {
         return None;
     };
-    if crate::superglobals::is_superglobal(name) || !ctx.local_uses_global_storage(name) {
+    if crate::superglobals::is_superglobal(name) {
+        if ctx.web {
+            // A `--web` superglobal's cell holds the bare hash, not the box a `mixed &$x`
+            // parameter reads: `lower_by_ref_call_through_temps` passes it through a temporary.
+            return None;
+        }
+        // A superglobal has no frame slot either: the argument was a copy of its storage, so
+        // `f($_GET)` and `rsort($_GET)` (through `__elephc_rsort_mixed(mixed &$array)`) wrote to
+        // the copy and `$_GET` kept its old value. Bind a hidden local to the superglobal's
+        // shared cell, as `$x = &$_GET` does.
+        let temp = crate::names::generated_local_name(&format!("superglobal_ref_arg_{name}"));
+        ctx.bind_superglobal_ref_alias(&temp, name, Some(arg.span));
+        return Some(ctx.load_local(&temp, Some(arg.span)).value);
+    }
+    if !ctx.local_uses_global_storage(name) {
         return None;
     }
     let temp = crate::names::generated_local_name(&format!("global_ref_arg_{name}"));

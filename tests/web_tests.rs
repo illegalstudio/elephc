@@ -4741,6 +4741,32 @@ echo count($c4), "|", count($_GET), "\n";
     assert!(r2.ends_with(expected), "second response body: {:?}", r2);
 }
 
+/// A request superglobal passed by reference is written: to a user function (`mixed &$a`,
+/// `array &$a`) and to `rsort()`, which a gradual array reaches through the
+/// `__elephc_rsort_mixed(mixed &$array)` prelude. The argument used to be a copy of the
+/// superglobal's storage, so every write was lost and `rsort($_GET)` left `a,b,c` in place.
+/// Body from php 8.5 `php -S`.
+#[test]
+fn web_superglobal_passed_by_reference_is_written() {
+    let dir = make_test_dir("web_superglobal_by_ref");
+    let src = r#"<?php
+function f(&$a) { $a = ["x" => 9]; }
+function g(array &$a) { $a["y"] = 8; }
+rsort($_GET); echo implode(",", array_keys($_GET)), "=", implode(",", $_GET), "|";
+f($_GET); echo implode(",", array_keys($_GET)), "|";
+g($_POST); echo implode(",", array_keys($_POST));
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?a=1&b=2&c=3");
+    let second = http_get(&addr, "/?a=1&b=2&c=3");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("0,1,2=3,2,1|x|y"), "first response: {first:?}");
+    assert!(second.ends_with("0,1,2=3,2,1|x|y"), "second response: {second:?}");
+}
+
 /// `array_push()` onto a request superglobal publishes the grown or split table without
 /// releasing the old one a second time (#1341).
 ///

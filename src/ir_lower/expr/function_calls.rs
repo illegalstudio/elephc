@@ -1623,7 +1623,23 @@ fn lower_by_ref_call_through_temps(
         })
         .map(|(index, _)| index)
         .collect();
-    if candidates.is_empty() {
+    // Under `--web` a request superglobal's shared cell holds the bare hash (see
+    // `lower_global_ref_cell`), which a `mixed &$x` parameter cannot alias: `f($_GET)` and
+    // `rsort($_GET)` (through `__elephc_rsort_mixed`) wrote to a copy. It is passed through a
+    // temporary and written back, like a nested place.
+    let superglobals: Vec<usize> = if ctx.web {
+        args.iter()
+            .enumerate()
+            .filter(|(index, arg)| {
+                signature.ref_params.get(*index).copied().unwrap_or(false)
+                    && matches!(&arg.kind, ExprKind::Variable(name) if crate::superglobals::is_superglobal(name))
+            })
+            .map(|(index, _)| index)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if candidates.is_empty() && superglobals.is_empty() {
         return None;
     }
     let snapshot = ctx.snapshot();
@@ -1633,7 +1649,7 @@ fn lower_by_ref_call_through_temps(
     } else {
         lower_builtin_call_args(ctx, name.as_str(), sig, args)
     };
-    let opaque: Vec<usize> = candidates
+    let mut opaque: Vec<usize> = candidates
         .into_iter()
         .filter(|index| {
             operands
@@ -1643,6 +1659,8 @@ fn lower_by_ref_call_through_temps(
         .collect();
     let _ = finish_call_argument_evaluation(ctx, &mut operands);
     ctx.restore(snapshot);
+    opaque.extend(superglobals);
+    opaque.sort_unstable();
     if opaque.is_empty() {
         return None;
     }
@@ -1680,6 +1698,15 @@ fn lower_by_ref_call_through_temps(
     );
     let result = lower_expr(ctx, &call);
     for (place, temp) in writebacks {
+        if let ExprKind::Variable(name) = &place.kind {
+            // A superglobal: a plain assignment publishes it.
+            let value = Expr::new(ExprKind::Variable(temp), place.span);
+            crate::ir_lower::stmt::lower_stmt(
+                ctx,
+                &Stmt::new(StmtKind::Assign { name: name.clone(), value }, span),
+            );
+            continue;
+        }
         if let Some(kind) = assignments::non_local_assignment_stmt_kind(
             &place,
             &Expr::new(ExprKind::Variable(temp), place.span),
