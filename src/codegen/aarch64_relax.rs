@@ -56,16 +56,30 @@ pub(super) fn conditional_branch_relaxations(
     // Sized up front: 2.6 million labels in a 1 GB listing (about one per 400 bytes) otherwise
     // rehash the table a dozen times as it grows.
     labels.reserve(pieces.iter().map(|piece| piece.len()).sum::<usize>() / 400);
+    // The first pass also notes every instruction that may be a branch, so the second pass
+    // reads those alone: on the Symfony demo they are 17 of 107 million lines, and splitting and
+    // classifying every line a second time was half of this function's cost.
+    let mut candidates: Vec<BranchCandidate> = Vec::new();
     let mut source_offset = 0usize;
     let mut instruction_index = 0usize;
     for line in pieces.iter().flat_map(|piece| lines_of(piece)) {
+        #[cfg(test)]
+        LINES_CLASSIFIED.with(|count| count.set(count.get() + 1));
         match classify(line) {
             Line::Label(label) => {
                 if is_symbol(label) {
                     labels.insert(label, (source_offset, instruction_index));
                 }
             }
-            Line::Instruction(_) => instruction_index += 1,
+            Line::Instruction(trimmed) => {
+                if may_be_branch(trimmed) {
+                    candidates.push(BranchCandidate {
+                        source_offset,
+                        instruction_index,
+                    });
+                }
+                instruction_index += 1;
+            }
             Line::Other => {}
         }
         source_offset += line.len();
@@ -73,11 +87,23 @@ pub(super) fn conditional_branch_relaxations(
 
     // Only the relaxed branches differ from the text; each becomes one edit covering its line.
     let mut edits = Vec::new();
-    source_offset = 0;
-    instruction_index = 0;
-    for line in pieces.iter().flat_map(|piece| lines_of(piece)) {
+    let mut piece_index = 0usize;
+    let mut piece_start = 0usize;
+    for candidate in candidates {
+        let source_offset = candidate.source_offset;
+        let instruction_index = candidate.instruction_index;
+        // Candidates are in text order, so the piece holding one is at or after the last's.
+        while piece_start + pieces[piece_index].len() <= source_offset {
+            piece_start += pieces[piece_index].len();
+            piece_index += 1;
+        }
+        let piece = pieces[piece_index];
+        let local = source_offset - piece_start;
+        let end = memchr::memchr(b'\n', &piece.as_bytes()[local..]).map_or(piece.len(), |at| local + at + 1);
+        let line = &piece[local..end];
+        #[cfg(test)]
+        LINES_CLASSIFIED.with(|count| count.set(count.get() + 1));
         let Line::Instruction(trimmed) = classify(line) else {
-            source_offset += line.len();
             continue;
         };
         if let Some(far) = far_unconditional_branch(trimmed, &labels, instruction_index) {
@@ -88,8 +114,6 @@ pub(super) fn conditional_branch_relaxations(
                 end: source_offset + line.len(),
                 replacement,
             });
-            source_offset += line.len();
-            instruction_index += 1;
             continue;
         }
         let expansion = maybe_conditional_branch(trimmed)
@@ -110,10 +134,33 @@ pub(super) fn conditional_branch_relaxations(
                 replacement,
             });
         }
-        source_offset += line.len();
-        instruction_index += 1;
     }
     edits
+}
+
+/// An instruction the first pass noted as a possible branch: where its line starts in the
+/// concatenated text, and its index among the instructions.
+struct BranchCandidate {
+    source_offset: usize,
+    instruction_index: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Lines `conditional_branch_relaxations` split off and classified, both passes together.
+    pub(super) static LINES_CLASSIFIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether a trimmed instruction may be one of the branches either check rewrites: `b`, `bl`,
+/// `b.<cond>`, `cbz`/`cbnz` or `tbz`/`tbnz`. Anything else is passed over by both, so the second
+/// pass need not see it.
+fn may_be_branch(trimmed: &str) -> bool {
+    let bytes = trimmed.as_bytes();
+    match bytes.first() {
+        Some(b'b') => matches!(bytes.get(1), Some(b' ' | b'\t' | b'.' | b'l')),
+        Some(b'c' | b't') => bytes.get(1) == Some(&b'b'),
+        _ => false,
+    }
 }
 
 /// One assembly line, classified without trimming lines that need no trimmed form.
@@ -445,6 +492,53 @@ mod tests {
             let started = std::time::Instant::now();
             let edits = conditional_branch_relaxations(&[&text], target);
             eprintln!("{} edits in {:.2}s", edits.len(), started.elapsed().as_secs_f64());
+        }
+    }
+
+    /// A listing with both relaxation kinds and plenty of plain lines, cut into pieces at every
+    /// `cut`-th line.
+    fn mixed_listing_pieces(cut: usize) -> (String, Vec<String>) {
+        let mut assembly = "    b.eq far_cond\n    cbz x0, near\n    bl far_call\nnear:\n    tbnz x4, #63, far_cond\n".to_string();
+        for index in 0..(CONDITIONAL_SOURCE_DISTANCE / 16 + 4) {
+            assembly.push_str(if index % 7 == 0 { "    ; comment\n" } else { "    add x0, x0, #1\n" });
+        }
+        assembly.push_str("far_cond:\n    b.ne near\n");
+        assembly.push_str(&"    nop\n".repeat(FAR_UNCONDITIONAL_CODE_DISTANCE / 4 + 2));
+        assembly.push_str("far_call:\n    ret\n");
+        let lines: Vec<&str> = lines_of(&assembly).collect();
+        let pieces = lines.chunks(cut).map(|chunk| chunk.concat()).collect();
+        (assembly, pieces)
+    }
+
+    /// The second pass reads only the possible branches the first one noted: every line is split
+    /// and classified once, and a branch once more, instead of every line twice.
+    #[test]
+    fn the_second_pass_reads_only_possible_branches() {
+        let (assembly, _) = mixed_listing_pieces(usize::MAX);
+        let lines = lines_of(&assembly).count();
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        LINES_CLASSIFIED.with(|count| count.set(0));
+        let edits = conditional_branch_relaxations(&[&assembly], target);
+        let classified = LINES_CLASSIFIED.with(|count| count.get());
+        assert_eq!(edits.len(), 4, "the far b.eq, tbnz, backward b.ne and bl are rewritten");
+        assert_eq!(classified, lines + 5, "{classified} classifications for {lines} lines and 5 branches");
+    }
+
+    /// Edits are the same whether the text arrives whole or cut into pieces, and their offsets
+    /// stay offsets into the concatenation.
+    #[test]
+    fn pieces_relax_like_the_whole_text() {
+        let target = Target::new(Platform::MacOS, Arch::AArch64);
+        let (assembly, _) = mixed_listing_pieces(usize::MAX);
+        let whole = conditional_branch_relaxations(&[&assembly], target);
+        for cut in [1, 3, 1000] {
+            let (_, pieces) = mixed_listing_pieces(cut);
+            let parts: Vec<&str> = pieces.iter().map(String::as_str).collect();
+            let split = conditional_branch_relaxations(&parts, target);
+            assert_eq!(split.len(), whole.len(), "cut {cut}");
+            for (left, right) in split.iter().zip(&whole) {
+                assert_eq!((left.start, left.end, &left.replacement), (right.start, right.end, &right.replacement), "cut {cut}");
+            }
         }
     }
 
