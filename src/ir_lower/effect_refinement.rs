@@ -74,6 +74,18 @@ struct RefinementContext<'a> {
     parameters: &'a HashMap<String, Vec<CallParameter>>,
     /// True when the runtime eval bridge can register subclasses absent from `classes`.
     has_dynamic_class_barrier: bool,
+    /// While a summary is computed, the callee keys it read from `summaries`.
+    reads: Option<&'a std::cell::RefCell<Vec<String>>>,
+}
+
+impl RefinementContext<'_> {
+    /// The fixed-point summary of `key`, noted as read when the caller is being summarized.
+    fn summary(&self, key: &str) -> Option<Effects> {
+        if let Some(reads) = self.reads {
+            reads.borrow_mut().push(key.to_string());
+        }
+        self.summaries.get(key).copied()
+    }
 }
 
 /// Caller-visible parameter facts needed to model backend call-boundary coercions.
@@ -86,52 +98,8 @@ struct CallParameter {
 pub(super) fn refine_module(module: &mut Module) {
     let has_dynamic_class_barrier = module.required_runtime_features.eval_bridge;
     let index = ClassIndex::new(&module.class_infos);
-    let mut summaries = call_targets(module)
-        .map(|function| (callable_key(&function.name), Effects::PURE))
-        .collect::<HashMap<_, _>>();
-    let parameters = call_targets(module)
-        .map(|function| {
-            let hidden_prefix = usize::from(function.flags.is_static);
-            let parameters = function
-                .params
-                .iter()
-                .skip(hidden_prefix)
-                .map(|parameter| CallParameter {
-                    php_type: parameter.php_type.clone(),
-                    by_ref: parameter.by_ref,
-                })
-                .collect();
-            (callable_key(&function.name), parameters)
-        })
-        .collect::<HashMap<_, _>>();
-
-    for iteration in 0..MAX_EFFECT_ITERATIONS {
-        let context = RefinementContext {
-            data: &module.data,
-            classes: &module.class_infos,
-            index: &index,
-            summaries: &summaries,
-            parameters: &parameters,
-            has_dynamic_class_barrier,
-        };
-        let next = call_targets(module)
-            .map(|function| {
-                (
-                    callable_key(&function.name),
-                    summarize_function(function, &context),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        if next == summaries {
-            summaries = next;
-            break;
-        }
-        summaries = next;
-        assert!(
-            iteration + 1 < MAX_EFFECT_ITERATIONS,
-            "EIR effect refinement did not converge after {MAX_EFFECT_ITERATIONS} iterations"
-        );
-    }
+    let parameters = call_parameters(module);
+    let summaries = fixed_point_summaries(module, &index, &parameters, has_dynamic_class_barrier, true);
 
     let data = &module.data;
     let classes = &module.class_infos;
@@ -142,6 +110,7 @@ pub(super) fn refine_module(module: &mut Module) {
         summaries: &summaries,
         parameters: &parameters,
         has_dynamic_class_barrier,
+        reads: None,
     };
     for function in &mut module.functions {
         refine_function(function, &context);
@@ -164,6 +133,94 @@ pub(super) fn refine_module(module: &mut Module) {
     for function in &mut module.runtime_callable_invokers {
         refine_function(function, &context);
     }
+}
+
+/// The caller-visible parameters of every callable body, by callable key.
+fn call_parameters(module: &Module) -> HashMap<String, Vec<CallParameter>> {
+    call_targets(module)
+        .map(|function| {
+            let hidden_prefix = usize::from(function.flags.is_static);
+            let parameters = function
+                .params
+                .iter()
+                .skip(hidden_prefix)
+                .map(|parameter| CallParameter {
+                    php_type: parameter.php_type.clone(),
+                    by_ref: parameter.by_ref,
+                })
+                .collect();
+            (callable_key(&function.name), parameters)
+        })
+        .collect::<HashMap<_, _>>()
+}
+
+/// The monotone fixed point of the callable summaries, by callable key.
+///
+/// A Jacobi iteration: each round summarizes bodies from the previous round's summaries. When
+/// `incremental`, a body none of whose callees' summaries changed last round keeps its summary,
+/// since it would read the same values and produce the same one. Most bodies settle in the first
+/// round, and summarizing them all again each round was most of this pass on Symfony. The full
+/// form is kept for the test that proves the two agree.
+fn fixed_point_summaries(
+    module: &Module,
+    index: &ClassIndex,
+    parameters: &HashMap<String, Vec<CallParameter>>,
+    has_dynamic_class_barrier: bool,
+    incremental: bool,
+) -> HashMap<String, Effects> {
+    let mut summaries = call_targets(module)
+        .map(|function| (callable_key(&function.name), Effects::PURE))
+        .collect::<HashMap<_, _>>();
+    let targets: Vec<&Function> = call_targets(module).collect();
+    let keys: Vec<String> = targets.iter().map(|function| callable_key(&function.name)).collect();
+    let mut values = vec![Effects::PURE; targets.len()];
+    let mut reads: Vec<Vec<String>> = vec![Vec::new(); targets.len()];
+    let mut changed: Option<crate::fast_hash::FastSet<String>> = None;
+    let recorder = std::cell::RefCell::new(Vec::new());
+    for iteration in 0..MAX_EFFECT_ITERATIONS {
+        let context = RefinementContext {
+            data: &module.data,
+            classes: &module.class_infos,
+            index,
+            summaries: &summaries,
+            parameters,
+            has_dynamic_class_barrier,
+            reads: Some(&recorder),
+        };
+        for (position, function) in targets.iter().enumerate() {
+            let stale = !incremental
+                || changed.as_ref().is_none_or(|changed| {
+                    reads[position].iter().any(|key| changed.contains(key))
+                });
+            if !stale {
+                continue;
+            }
+            #[cfg(test)]
+            EFFECT_SUMMARIES_COMPUTED.with(|count| count.set(count.get() + 1));
+            values[position] = summarize_function(function, &context);
+            reads[position] = std::mem::take(&mut *recorder.borrow_mut());
+        }
+        let next = keys
+            .iter()
+            .cloned()
+            .zip(values.iter().copied())
+            .collect::<HashMap<_, _>>();
+        let now_changed: crate::fast_hash::FastSet<String> = next
+            .iter()
+            .filter(|(key, value)| summaries.get(*key) != Some(*value))
+            .map(|(key, _)| key.clone())
+            .collect();
+        summaries = next;
+        if now_changed.is_empty() {
+            break;
+        }
+        changed = Some(now_changed);
+        assert!(
+            iteration + 1 < MAX_EFFECT_ITERATIONS,
+            "EIR effect refinement did not converge after {MAX_EFFECT_ITERATIONS} iterations"
+        );
+    }
+    summaries
 }
 
 /// Iterates every function-like EIR body a call can name, keyed by name in the summaries.
@@ -336,7 +393,7 @@ fn resolved_callable_effects(
     parameter_offset: usize,
     context: &RefinementContext<'_>,
 ) -> Option<Effects> {
-    let summary = context.summaries.get(target).copied()?;
+    let summary = context.summary(target)?;
     let parameters = context.parameters.get(target)?.get(parameter_offset..)?;
     Some(summary | call_argument_coercion_effects(function, instruction,
         parameters.iter().map(|parameter| (&parameter.php_type, parameter.by_ref))))
@@ -582,10 +639,7 @@ fn method_summary_for_class(
     let class = context.classes.get(runtime_class)?;
     let method_key = php_symbol_key(method);
     let implementation = class.method_impl_classes.get(&method_key)?;
-    context
-        .summaries
-        .get(&callable_key(&format!("{implementation}::{method_key}")))
-        .copied()
+    context.summary(&callable_key(&format!("{implementation}::{method_key}")))
 }
 
 /// Expands an object or nullable-object type to all concrete checked runtime classes.
@@ -655,9 +709,56 @@ fn callable_key(name: &str) -> String {
 }
 
 #[cfg(test)]
+thread_local! {
+    /// Callable summaries the effect fixed point computed, on this thread.
+    pub(crate) static EFFECT_SUMMARIES_COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir::PropertyFetchMode;
+
+    /// A throw at the end of a call chain reaches its head one round at a time, so the fixed
+    /// point takes as many rounds as the chain is long. Only the bodies whose callees' summaries
+    /// changed are summarized again: the program's other bodies are summarized once, not once
+    /// per round. The final effects are those of the full iteration: the chain's head may throw
+    /// and a pure body stays pure.
+    #[test]
+    fn effect_rounds_resummarize_only_bodies_whose_callees_changed() {
+        let mut source = String::from("<?php\n");
+        for index in 0..40 {
+            source.push_str(&format!("function pure{index}(int $x): int {{ return $x + {index}; }}\n"));
+        }
+        source.push_str("function link8(int $x): int { if ($x > 100) { throw new \\Exception('far'); } return $x; }\n");
+        for index in (1..8).rev() {
+            source.push_str(&format!("function link{index}(int $x): int {{ return link{}($x) + 1; }}\n", index + 1));
+        }
+        source.push_str("$n = 0;\nfor ($i = 0; $i < 3; $i++) { $n += link1($i)");
+        for index in 0..40 {
+            source.push_str(&format!(" + pure{index}($i)"));
+        }
+        source.push_str("; }\necho $n, \"\\n\";\n");
+        EFFECT_SUMMARIES_COMPUTED.with(|count| count.set(0));
+        let module = crate::ir_lower::tests::lower_source_at_for_target(
+            &source,
+            &std::env::temp_dir().join("effect_rounds.php"),
+            &std::env::temp_dir(),
+            crate::codegen::platform::Target::parse("macos-aarch64").expect("target"),
+        );
+        let computed = EFFECT_SUMMARIES_COMPUTED.with(|count| count.get());
+        let bodies = call_targets(&module).count();
+        assert!(bodies >= 48, "{bodies} bodies");
+        // Eight rounds of the chain; summarizing everything each round is at least 8 x 48.
+        assert!(computed < 2 * bodies, "{computed} summaries for {bodies} bodies");
+        // The incremental rounds reach exactly the full iteration's fixed point.
+        let index = ClassIndex::new(&module.class_infos);
+        let parameters = call_parameters(&module);
+        let incremental = fixed_point_summaries(&module, &index, &parameters, false, true);
+        let full = fixed_point_summaries(&module, &index, &parameters, false, false);
+        assert_eq!(incremental, full);
+        assert!(full.get("link1").is_some_and(|effects| effects.contains(Effects::MAY_THROW)));
+    }
 
     /// Builds a `DynamicPropGet` carrying one fetch mode, or no immediate at all.
     fn dynamic_prop_get(mode: Option<PropertyFetchMode>) -> crate::ir::Instruction {
@@ -804,6 +905,7 @@ mod tests {
             summaries: &summaries,
             parameters: &parameters,
             has_dynamic_class_barrier: false,
+            reads: None,
         };
         for mode in [PropertyFetchMode::Read, PropertyFetchMode::Probe] {
             let mut instruction = dynamic_prop_get(Some(mode));
@@ -849,7 +951,8 @@ mod tests {
             let parameters = HashMap::default();
             let index = ClassIndex::new(&classes);
             let context = RefinementContext { data: &data, classes: &classes, index: &index,
-                summaries: &summaries, parameters: &parameters, has_dynamic_class_barrier: false };
+                summaries: &summaries, parameters: &parameters, has_dynamic_class_barrier: false,
+                reads: None };
             let store = function.instructions.iter().find(|inst| inst.op == Op::PropSet).unwrap();
             let effects = refined_instruction_effects(&function, store, &context);
             assert_eq!(effects, if php_type == PhpType::Mixed { Op::PropSet.default_effects() }
