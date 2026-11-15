@@ -2003,6 +2003,128 @@ greet();
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies an unoptimized `--debug` build publishes scalar PHP locals as
+/// frame-relative DWARF variables that `readelf` can decode: names, base types
+/// and `DW_OP_fbreg` locations. Rich values stay DAP-only.
+#[test]
+fn test_cli_debug_dwarf_exposes_scalar_php_locals() {
+    /// Reports whether an external tool cannot be invoked for its version probe.
+    fn tool_missing(tool: &str) -> bool {
+        std::process::Command::new(tool)
+            .arg("--version")
+            .output()
+            .is_err()
+    }
+    if tool_missing("readelf") {
+        eprintln!("skipping: binutils readelf not available");
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_debug_dwarf_variables");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function scalars(int $n, float $f, bool $b): int {
+    $mask = $n & 1;
+    $half = $f;
+    $flag = $b;
+    $name = "x";
+    return $mask + (int)$half + (int)$flag + strlen($name);
+}
+echo scalars(3, 2.0, true), "\n";
+"#,
+    )
+    .expect("write DWARF variable fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["--debug", "main.php"])
+        .output()
+        .expect("compile DWARF variable fixture");
+    assert!(
+        output.status.success(),
+        "elephc --debug failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let binary = dir.join("main");
+    let run = std::process::Command::new(&binary)
+        .output()
+        .expect("run DWARF variable fixture");
+    assert!(run.status.success(), "fixture failed: {:?}", run.status);
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "5");
+
+    let dumped = std::process::Command::new("readelf")
+        .arg("--debug-dump=info")
+        .arg(&binary)
+        .output()
+        .expect("run readelf --debug-dump=info");
+    assert!(
+        dumped.status.success(),
+        "readelf failed: {}",
+        String::from_utf8_lossy(&dumped.stderr)
+    );
+    let info = String::from_utf8_lossy(&dumped.stdout);
+    assert!(info.contains("DW_TAG_variable"), "{info}");
+    assert!(info.contains("DW_TAG_base_type"), "{info}");
+    let start = info
+        .find("DW_AT_name        : scalars")
+        .unwrap_or_else(|| panic!("scalars subprogram missing:\n{info}"));
+    let rest = &info[start..];
+    let end = rest.find("\n <1>").unwrap_or(rest.len());
+    let function_info = &rest[..end];
+    for name in ["n", "f", "b", "mask", "half", "flag"] {
+        assert!(
+            function_info
+                .lines()
+                .any(|line| line.contains("DW_AT_name") && line.trim_end().ends_with(&format!(": {name}"))),
+            "missing scalar ${name}:\n{function_info}"
+        );
+    }
+    assert!(
+        !function_info
+            .lines()
+            .any(|line| line.contains("DW_AT_name") && line.trim_end().ends_with(": name")),
+        "string local leaked into DWARF as a scalar:\n{function_info}"
+    );
+    assert!(function_info.contains("DW_AT_frame_base"), "{function_info}");
+    assert!(function_info.contains("DW_OP_breg"), "{function_info}");
+    assert!(function_info.contains("DW_AT_location"), "{function_info}");
+    assert!(function_info.contains("DW_OP_fbreg"), "{function_info}");
+    // The base-type DIEs precede the subprograms in the compile unit.
+    assert!(info.contains("DW_AT_encoding    : 5"), "{info}");
+    assert!(info.contains("DW_AT_encoding    : 4"), "{info}");
+    assert!(info.contains("DW_AT_encoding    : 2"), "{info}");
+
+    // The optimized preset keeps line/subprogram info but omits variable DIEs:
+    // its slots may no longer hold the PHP value (DAP reports <optimized out>).
+    let optimized = elephc_cli_command(&dir)
+        .args(["--debug-optimized", "--no-ir-opt", "main.php"])
+        .output()
+        .expect("compile optimized DWARF fixture");
+    assert!(
+        optimized.status.success(),
+        "elephc --debug-optimized failed: {}",
+        String::from_utf8_lossy(&optimized.stderr)
+    );
+    let dumped = std::process::Command::new("readelf")
+        .arg("--debug-dump=info")
+        .arg(&binary)
+        .output()
+        .expect("run readelf on optimized binary");
+    let info = String::from_utf8_lossy(&dumped.stdout);
+    let start = info
+        .find("DW_AT_name        : scalars")
+        .unwrap_or_else(|| panic!("optimized scalars subprogram missing:\n{info}"));
+    let rest = &info[start..];
+    let end = rest.find("\n <1>").unwrap_or(rest.len());
+    assert!(
+        !rest[..end].contains("DW_TAG_variable"),
+        "optimized debug build emitted variable DIEs:\n{}",
+        &rest[..end]
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `--debug-info` survives a source path that carries assembler string
 /// metacharacters. A `\` used to be spliced into `.file`/`.asciz` unescaped, so
 /// the assembler rejected the module outright; combined with `"` it terminated

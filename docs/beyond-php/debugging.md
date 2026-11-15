@@ -217,6 +217,29 @@ dap.configurations.php = {
 `scripts/smoke-nvim-dap.sh` runs the same real session under headless Neovim and
 checks the breakpoint, stack frame, local, one `next` step and normal exit.
 
+### lldb and gdb
+
+`--debug` keeps DWARF line information and also publishes scalar PHP locals
+(`int`, `float`, `bool`) as `DW_TAG_variable` children of each subprogram. The
+location is frame-relative (`DW_OP_fbreg` from the `x29`/`rbp` frame base), so a
+native debugger can print them directly:
+
+```bash
+elephc --debug app.php
+lldb ./app
+(lldb) breakpoint set --file app.php --line 12
+(lldb) run
+(lldb) frame variable n f b
+```
+
+Strings, arrays, objects, references and `mixed` values are deliberately not
+described by DWARF: their native slots are multi-word or reference-cell
+encodings, and showing a raw pointer would be misleading. Use the terminal
+client or DAP for those. `--debug-optimized` omits variable DIEs because the
+optimizer may have removed the slot; the DAP/terminal clients report
+`<optimized out>` from the debug metadata instead. `--debug-info` alone keeps its
+previous scope: line tables and subprograms, but no PHP variable DIEs.
+
 ## Browser debugger in `monitor`
 
 `elephc monitor` can host an interactive debugger instead of a profile export:

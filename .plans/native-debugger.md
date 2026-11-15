@@ -554,10 +554,13 @@ extend that capture:
 
 ### 9. Native / lldb mode (later)
 
-Once the metadata exists, `--debug-info` can also emit `DW_TAG_variable` entries
-for locals and a source file table. That gives lldb/gdb PHP variable names and
-included-file line numbers for native crash analysis. This is Option A as a
-companion, not a replacement for the in-process agent.
+The source file table already exists. `--debug` now also emits
+`DW_TAG_variable` entries for scalar PHP locals (`int`, `float`, `bool`) with
+frame-relative `DW_OP_fbreg` locations, so lldb/gdb can print them during native
+crash analysis. Strings, arrays, objects, references and `mixed` values stay in
+the in-process DAP metadata, and `--debug-optimized` omits variable DIEs because
+their slots may be gone. This is Option A as a companion, not a replacement for
+the in-process agent.
 
 ## Targets
 

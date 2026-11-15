@@ -273,7 +273,13 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     timings.record_since("debug-metadata", phase_started);
 
     let user_asm = if emit_debug_info {
-        debug_info::inject_line_directives(&generated_user_asm.asm, filename, target.platform)
+        debug_info::inject_line_directives(
+            &generated_user_asm.asm,
+            filename,
+            target.platform,
+            target.arch,
+            debug_build && !debug_optimized,
+        )
     } else {
         generated_user_asm.asm
     };
