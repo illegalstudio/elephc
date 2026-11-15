@@ -1088,7 +1088,8 @@ fn named_helper_scope_groups_are_built_once_per_name() {
 }
 
 /// `count` classes with public instance methods, one with a protected one, and runtime
-/// callable-array calls from eight class scopes.
+/// callable-array calls from eight class scopes, the first of which extends the protected one's
+/// class (the only scope that can reach it).
 fn callable_array_scopes_over_public_methods(count: usize) -> String {
     let mut source = String::from("<?php\n");
     for index in 0..count {
@@ -1097,8 +1098,9 @@ fn callable_array_scopes_over_public_methods(count: usize) -> String {
     source.push_str("class Guarded { protected function hidden(int $x): int { return -$x; } public function open(int $x): int { return $x; } }\n");
     let mut calls = String::new();
     for scope in 0..8 {
+        let extends = if scope == 0 { " extends Guarded" } else { "" };
         source.push_str(&format!(
-            "class S{scope} {{ public function run($o, $m) {{ return call_user_func([$o, $m], {scope}); }} }}\n"
+            "class S{scope}{extends} {{ public function run($o, $m) {{ return call_user_func([$o, $m], {scope}); }} }}\n"
         ));
         calls.push_str(&format!("$n += (new S{scope}())->run($argc > 1 ? new P0() : new Guarded(), $argc > 2 ? 'p0' : 'open');\n"));
     }
@@ -1114,13 +1116,16 @@ fn instance_reach_checks(source: &str) -> u64 {
 }
 
 /// A public method is a candidate in every scope: each scope asks only about the protected and
-/// private ones, so the per-scope work does not grow with the program's public methods.
+/// private ones, so the per-scope work does not grow with the program's public methods. Nor is a
+/// scope asked about a method of a class it is not related to: only `S0`, which extends
+/// `Guarded`, checks `Guarded::hidden()`, where all eight scopes used to.
 #[test]
 fn callable_array_scopes_check_only_non_public_methods() {
     let small = instance_reach_checks(&callable_array_scopes_over_public_methods(10));
     let large = instance_reach_checks(&callable_array_scopes_over_public_methods(120));
     assert!(small > 0, "the fixture no longer checks a non-public method per scope");
     assert_eq!(small, large, "per-scope checks grew with the public methods: {small} vs {large}");
+    assert!(small <= 2, "{small} checks: unrelated scopes asked about Guarded::hidden()");
 }
 
 /// Every `class_exists()` site, constant or run-time name, reads one candidate list built once

@@ -3881,19 +3881,36 @@ fn build_runtime_array_instance_method_targets(
     // one: each scope asked every target of the base its class and visibility again (~3,600
     // samples of a sampled one-core Symfony demo console build).
     let split = ctx.shared.instance_target_split(|| instance_target_split(ctx, &base));
-    let reachable = base
-        .iter()
-        .zip(split.public.iter())
-        .filter(|(_, public)| !**public)
-        .filter(|(target, _)| {
+    // Only the targets whose class is this scope or related to it can be reached: each scope
+    // asked every non-public target of the program (about 800 samples of a sampled one-core
+    // Symfony demo build), now it reads those its related classes index.
+    let reachable = reachable_non_public_targets(ctx, &split)
+        .into_iter()
+        .filter(|&position| {
             #[cfg(test)]
             INSTANCE_REACH_CHECKS.with(|count| count.set(count.get() + 1));
+            let target = &base[position];
             ctx.module.class_infos.get(&*target.class_name).is_some_and(|class_info| {
                 instance_method_reachable_here(ctx, class_info, &target.method_name, &target.impl_class)
             })
         })
-        .map(|(target, _)| std::sync::Arc::as_ptr(&target.sig) as usize)
+        .map(|position| std::sync::Arc::as_ptr(&base[position].sig) as usize)
         .collect::<crate::fast_hash::FastSet<usize>>();
+    #[cfg(test)]
+    {
+        let scanned = base
+            .iter()
+            .zip(split.public.iter())
+            .filter(|(_, public)| !**public)
+            .filter(|(target, _)| {
+                ctx.module.class_infos.get(&*target.class_name).is_some_and(|class_info| {
+                    instance_method_reachable_here(ctx, class_info, &target.method_name, &target.impl_class)
+                })
+            })
+            .map(|(target, _)| std::sync::Arc::as_ptr(&target.sig) as usize)
+            .collect::<crate::fast_hash::FastSet<usize>>();
+        assert_eq!(reachable, scanned, "the related-class index missed or added a target");
+    }
     // A scope reaching no protected or private method and shadowing none sees exactly the
     // public candidates: one shared list, which also shares its lookup tables downstream.
     if reachable.is_empty() && shadowed.is_empty() && overrides.is_empty() {
@@ -3929,6 +3946,46 @@ fn build_runtime_array_instance_method_targets(
 pub(in crate::codegen) struct InstanceTargetSplit {
     public: Vec<bool>,
     public_only: std::sync::Arc<Vec<RuntimeArrayInstanceMethodTarget>>,
+    /// Every non-public base target with a visibility, by base position.
+    non_public: Vec<usize>,
+    /// Class name -> the non-public targets a scope must be that class, or related to it, to
+    /// reach: keyed by the implementing class and, for a protected method, by its root too.
+    non_public_by_class: crate::fast_hash::FastMap<String, Vec<usize>>,
+    /// Module class -> every module class whose parent chain reaches it.
+    descendants: crate::fast_hash::FastMap<String, Vec<String>>,
+}
+
+/// A superset of the non-public base targets this body's scope reaches, by base position:
+/// those of the scope itself, its ancestors and its descendants, the only classes
+/// `instance_method_reachable_here` can answer yes for (a reflection or closure-factory scope
+/// reaches every one).
+fn reachable_non_public_targets(ctx: &FunctionContext<'_>, split: &InstanceTargetSplit) -> Vec<usize> {
+    let Some(scope) = ctx.function.lexical_class.as_deref() else {
+        return Vec::new();
+    };
+    let scope = scope.trim_start_matches('\\');
+    if matches!(scope, "ReflectionMethod" | "ReflectionProperty")
+        || scope == crate::closure_from_callable_prelude::CLOSURE_FACTORY_CLASS
+    {
+        return split.non_public.clone();
+    }
+    let ancestors = ctx.shared.class_ancestors(|| module_class_ancestors(ctx.module));
+    let mut positions = Vec::new();
+    let mut take = |class: &str| {
+        if let Some(found) = split.non_public_by_class.get(class) {
+            positions.extend_from_slice(found);
+        }
+    };
+    take(scope);
+    for ancestor in ancestors.get(scope).into_iter().flatten() {
+        take(ancestor);
+    }
+    for descendant in split.descendants.get(scope).into_iter().flatten() {
+        take(descendant);
+    }
+    positions.sort_unstable();
+    positions.dedup();
+    positions
 }
 
 /// Flags which base targets are public: reachable from any scope, exactly as
@@ -3952,7 +4009,45 @@ fn instance_target_split(
         .filter(|(_, public)| **public)
         .map(|(target, _)| target.clone())
         .collect();
-    InstanceTargetSplit { public, public_only: std::sync::Arc::new(public_only) }
+    let mut non_public = Vec::new();
+    let mut non_public_by_class: crate::fast_hash::FastMap<String, Vec<usize>> = Default::default();
+    for (position, target) in base.iter().enumerate() {
+        let visibility = ctx
+            .module
+            .class_infos
+            .get(&*target.class_name)
+            .and_then(|class_info| class_info.method_visibilities.get(&*target.method_name));
+        let Some(visibility) = visibility else {
+            continue;
+        };
+        if matches!(visibility, Visibility::Public) {
+            continue;
+        }
+        non_public.push(position);
+        let implementing = target.impl_class.trim_start_matches('\\');
+        non_public_by_class.entry(implementing.to_string()).or_default().push(position);
+        if matches!(visibility, Visibility::Protected) {
+            let root = protected_method_root(ctx, &target.impl_class, &target.method_name)
+                .trim_start_matches('\\');
+            if root != implementing {
+                non_public_by_class.entry(root.to_string()).or_default().push(position);
+            }
+        }
+    }
+    let ancestors = ctx.shared.class_ancestors(|| module_class_ancestors(ctx.module));
+    let mut descendants: crate::fast_hash::FastMap<String, Vec<String>> = Default::default();
+    for (class_name, chain) in ancestors {
+        for ancestor in chain {
+            descendants.entry(ancestor.clone()).or_default().push(class_name.clone());
+        }
+    }
+    InstanceTargetSplit {
+        public,
+        public_only: std::sync::Arc::new(public_only),
+        non_public,
+        non_public_by_class,
+        descendants,
+    }
 }
 
 /// Every emitted instance method of the module as a descriptor candidate, sorted by class then
