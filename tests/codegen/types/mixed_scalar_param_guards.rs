@@ -315,3 +315,22 @@ echo $total, " ", $sum, "\n";
     );
     assert_eq!(out, "700000 175000\n");
 }
+
+/// An integer-form string binds to `int` exactly across the whole int range (no rounding
+/// through a double): `"9007199254740993"` stays odd and `"9223372036854775807"` binds as
+/// `PHP_INT_MAX`, while one past it throws and float-form strings keep their deprecation.
+#[test]
+fn test_integer_strings_bind_to_int_exactly() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $no, string $msg): bool { echo "[diag] ", $msg, "\n"; return true; });
+function ti(int $i): string { return (string) $i; }
+function m(mixed $v): mixed { return $v; }
+function show(TypeError $e): void { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+foreach (["9007199254740993", "9223372036854775807", "-9223372036854775808", " 9223372036854775807 ", "9223372036854775808", "-9223372036854775809", "1e3", "1.5", "007", "+5", "-0"] as $s) {
+    try { echo var_export($s, true), " => ", ti(m($s)), "\n"; } catch (TypeError $e) { show($e); }
+}
+"#,
+    );
+    assert_eq!(out, "'9007199254740993' => 9007199254740993\n'9223372036854775807' => 9223372036854775807\n'-9223372036854775808' => -9223372036854775808\n' 9223372036854775807 ' => 9223372036854775807\n'9223372036854775808' => ti(): Argument #1 ($i) must be of type int, string given, called in F on line 7\n'-9223372036854775809' => -9223372036854775808\n'1e3' => 1000\n'1.5' => [diag] Implicit conversion from float-string \"1.5\" to int loses precision\n1\n'007' => 7\n'+5' => 5\n'-0' => 0\n");
+}
