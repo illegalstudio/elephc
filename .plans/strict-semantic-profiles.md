@@ -1143,6 +1143,21 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
   Physical scalar static layouts and remaining eval/reference boundaries still
   precede public Casts admission.
 
+### Checked boxed static exports
+
+- A shared descriptor selector now owns checked boxed static eligibility for both
+  ordinary references and eval's C ABI. Inherited access selects the physical
+  declaration, including its immutable constraint descriptor.
+- Checked exports bind the managed static cell before retaining its canonical
+  wrapper. Multiple exported handles share identity and observe subsequent native
+  conversions and stores. Visibility and uninitialized-property misses remain
+  guarded before promotion. The permissive export path retains its existing ABI.
+- Five-target emitter coverage and native exports verify identity, inherited
+  Mixed/union constraints, aliases, rejected conversion, visibility, missing
+  initialization and independent handle retirement in both optimizer modes with
+  clean heaps. This completes boxed export selection; eval writes and concrete
+  static layouts remain part of the ongoing Casts integration.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1246,4 +1261,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 82 | `e2b20ae08a` | feat(strict): preserve object property conversion references |
 | 83 | `15faacbb39` | feat(strict): preserve array property conversion references |
 | 84 | `3ca4036dd5` | feat(strict): preserve iterable property conversion references |
-| 85 | this commit | feat(strict): preserve boxed static conversion references |
+| 85 | `82c96130e7` | feat(strict): preserve boxed static conversion references |
+| 86 | this commit | feat(strict): share checked static reference exports |

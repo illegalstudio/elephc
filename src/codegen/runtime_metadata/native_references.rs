@@ -20,6 +20,20 @@ pub(in crate::codegen) fn descriptor_symbol(class_id: u64, slot: u32, is_static:
     format!("_native_reference_declaration_{class_id}_{slot}_{storage}")
 }
 
+/// Shares checked static-reference eligibility between source selection and eval exports.
+pub(in crate::codegen) fn checked_boxed_static_descriptor(
+    module: &Module, declaring_class: &str, property: &str,
+) -> Option<String> {
+    if !module.semantic_profile.contains(elephc_semantics::StrictFeature::Casts) { return None; }
+    let class = module.class_infos.get(declaring_class)?;
+    if class.is_internal || !class.declared_static_properties.contains(property) { return None; }
+    let (index, (_, ty)) = class.static_properties.iter().enumerate()
+        .find(|(_, (name, _))| name == property)?;
+    (crate::types::canonical_property_reference_payload(ty)
+        == Some(crate::types::CanonicalReferencePayload::Boxed))
+        .then(|| descriptor_symbol(class.class_id, index as u32, true))
+}
+
 /// Emits only selected native callback metadata, rejecting entries with a PHP argument ABI.
 pub(in crate::codegen) fn emit_native_reference_metadata(module: &Module) -> Result<String> {
     if !module.required_runtime_features.native_reference_validation { return Ok(String::new()); }

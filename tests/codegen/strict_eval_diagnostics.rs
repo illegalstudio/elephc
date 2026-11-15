@@ -251,3 +251,17 @@ fn test_strict_settype_static_boxed_property_contracts_bundle() {
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }
+
+/// Eval exports share the native static binding while retaining independent wrapper owners.
+#[test]
+fn test_strict_static_reference_exports_preserve_identity_and_constraints_bundle() {
+    let source = include_str!("../fixtures/strict/static_reference_exports.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "I:7:1:7:19:19:8:R8:guarded", "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
