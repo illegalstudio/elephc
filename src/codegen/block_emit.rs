@@ -101,7 +101,11 @@ fn emit_debug_eval_hooks(
         "    .p2align 2"
     });
     emitter.label_global("__elephc_debug_box_mixed");
-    let box_mixed = target.extern_symbol("__rt_mixed_from_value");
+    // Runtime helpers are declared with their raw assembly names; only C/staticlib
+    // exports use the target's external-symbol prefix. Applying `extern_symbol`
+    // here produced `___rt_mixed_from_value` on Mach-O while the runtime emitted
+    // `__rt_mixed_from_value`.
+    let box_mixed = "__rt_mixed_from_value";
     match target.arch {
         Arch::AArch64 => {
             emitter.instruction(&format!("b {box_mixed}"));                     // box the three ABI arguments as one Mixed cell
@@ -114,6 +118,8 @@ fn emit_debug_eval_hooks(
         }
     }
     let mut words = vec![DataWord::U64(1)];
+    // C/staticlib exports (`elephc_magician`) need the target's external-symbol
+    // prefix (`_` on Mach-O).
     for symbol in [
         "__elephc_eval_scope_new",
         "__elephc_eval_scope_free_v2",
@@ -124,11 +130,17 @@ fn emit_debug_eval_hooks(
         "__elephc_debug_eval_render",
         "__elephc_eval_context_push_class_scope",
         "__elephc_eval_context_pop_class_scope",
+    ] {
+        words.push(DataWord::Symbol(target.extern_symbol(symbol)));
+    }
+    // Generated helpers and runtime routines are defined in emitted assembly
+    // with their raw names; prefixing them again broke Mach-O linking.
+    for symbol in [
         "__elephc_eval_register_inventory",
         "__elephc_debug_box_mixed",
         "__rt_decref_any",
     ] {
-        words.push(DataWord::Symbol(target.extern_symbol(symbol)));
+        words.push(DataWord::Symbol(symbol.to_string()));
     }
     shared.debug_eval_hooks = Some(data.add_words(words));
 }
