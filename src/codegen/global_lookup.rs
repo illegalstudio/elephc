@@ -47,7 +47,18 @@ pub(crate) fn emit_dynamic_global_lookup(
 ) {
     let mut entries = Vec::new();
     let mut kinds = Vec::new();
-    for name in &module.program_global_names {
+    // A web request prelude populates every request superglobal, whether or not the program
+    // names it. Seed them so a computed `$GLOBALS[$name]` sees the populated Hash instead of
+    // creating an unrelated runtime entry for a superglobal name the source never spells.
+    let mut names: Vec<String> = module.program_global_names.iter().cloned().collect();
+    if module.web {
+        for superglobal in crate::superglobals::SUPERGLOBALS {
+            if !names.iter().any(|name| name == superglobal) {
+                names.push((*superglobal).to_string());
+            }
+        }
+    }
+    for name in &names {
         if module.extern_globals.contains_key(name) {
             continue;
         }

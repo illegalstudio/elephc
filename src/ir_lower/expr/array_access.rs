@@ -187,15 +187,20 @@ pub(super) fn lower_array_access_with_missing_warning(
     if let ExprKind::Variable(name) = &array.kind {
         if name == "GLOBALS" {
             if let ExprKind::StringLiteral(key) = &index.kind {
-                let data = ctx.intern_global_name(key);
-                return ctx.emit_value(
-                    Op::LoadGlobal,
-                    Vec::new(),
-                    Some(Immediate::GlobalName(data)),
-                    PhpType::Mixed,
-                    Op::LoadGlobal.default_effects(),
-                    Some(expr.span),
-                );
+                // Under `--web` a request superglobal holds a typed Hash pointer, while this
+                // static load declares a Mixed result; taking the dynamic read instead boxes the
+                // Hash into an owned Mixed value the caller can index and release.
+                if !(ctx.web && crate::superglobals::is_superglobal(key)) {
+                    let data = ctx.intern_global_name(key);
+                    return ctx.emit_value(
+                        Op::LoadGlobal,
+                        Vec::new(),
+                        Some(Immediate::GlobalName(data)),
+                        PhpType::Mixed,
+                        Op::LoadGlobal.default_effects(),
+                        Some(expr.span),
+                    );
+                }
             }
             return lower_dynamic_global_load(ctx, index, expr, warn_on_missing);
         }

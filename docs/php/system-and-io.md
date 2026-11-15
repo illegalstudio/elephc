@@ -178,13 +178,15 @@ Known `$GLOBALS` limits:
   stay local, and `$GLOBALS['x']` remains unset, matching PHP. A conditional
   `unset($GLOBALS['x'])` is not path-detached yet and still clears the shared cell;
   keep that shape out of code that relies on the alias surviving.
-- Under `--web`, a computed `$GLOBALS[$name]` lookup can resolve a request
-  superglobal's typed Hash slot. A read boxes the hash, and an array write (literal
-  or computed) publishes a hash into the same slot `$_SERVER`/`$_GET` statically
-  read; a list value is converted to hash storage. Assigning a non-array value to a
-  superglobal throws a catchable `TypeError`, because the request prelude and the
-  static superglobal accesses require an array; PHP would replace the superglobal
-  with that value instead.
+- Under `--web`, a `$GLOBALS` lookup — literal or computed — resolves a request
+  superglobal's typed Hash slot. Every request superglobal is reachable this way
+  even when the source never spells its name, a read boxes the Hash into an owned
+  array copy (so `$GLOBALS['_SERVER']['REQUEST_URI']` works), and an array write
+  publishes a hash into the same slot `$_SERVER`/`$_GET` statically read; a list
+  value is converted to hash storage. Assigning a non-array value to a superglobal
+  throws a catchable `TypeError`, because the request prelude and the static
+  superglobal accesses require an array; PHP would replace the superglobal with
+  that value instead.
 - Runtime-created global entries are released at process shutdown. A `--web` worker
   drains them at the request boundary, so a name created in one request is not
   visible to the next.

@@ -1336,8 +1336,14 @@ fn web_computed_globals_reads_and_writes_typed_superglobals() {
     let dir = make_test_dir("web_computed_superglobal");
     let src = r#"<?php
 $name = ($_SERVER['REQUEST_URI'] ?? '') === '/computed' ? '_SERVER' : '_GET';
+// `_GET` is never spelled statically here, yet the request prelude populates it.
+$unnamed = $GLOBALS['_GET'];
+echo is_array($unnamed) ? 'seeded' : 'missing';
+$literal = $GLOBALS['_SERVER'];
+echo '|', is_array($literal) ? ($literal['REQUEST_URI'] ?? 'no-uri') : 'literal-bad';
+echo '|', $GLOBALS['_SERVER']['REQUEST_URI'] ?? 'no-chain';
 $copy = $GLOBALS[$name];
-echo is_array($copy) ? 'read' : 'bad';
+echo '|', is_array($copy) ? 'read' : 'bad';
 echo '|', $copy['REQUEST_URI'] ?? 'missing';
 $GLOBALS[$name] = ['injected' => 'yes'];
 echo '|', $_SERVER['injected'] ?? 'missing';
@@ -1355,6 +1361,8 @@ $GLOBALS['_SERVER'] = $mixed;
 echo '|', $_SERVER['literal'] ?? 'missing';
 $snapshot = $GLOBALS;
 echo '|', $snapshot['_SERVER']['literal'] ?? 'missing';
+// The snapshot carries request superglobals the source never names.
+echo '|', is_array($snapshot['_GET'] ?? null) ? 'snap-get' : 'no-snap-get';
 try {
     $GLOBALS[$name] = 5;
     echo '|no-type';
@@ -1383,7 +1391,9 @@ echo '|', is_array($_SERVER) ? 'array' : 'no';
     let _ = child.kill();
     let _ = child.wait();
     assert!(
-        resp.ends_with("read|/computed|yes|20|hash|hash|8|ok|ok|type|lit-type|dyn-type|array"),
+        resp.ends_with(
+            "seeded|/computed|/computed|read|/computed|yes|20|hash|hash|8|ok|ok|snap-get|type|lit-type|dyn-type|array"
+        ),
         "body: {:?}",
         resp
     );
