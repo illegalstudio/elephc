@@ -48,7 +48,7 @@ pub fn emit_store(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             // store tagged scalar tag word
         }
         PhpType::Iterable
-        | PhpType::Mixed
+        | PhpType::Mixed | PhpType::DeclaredCallable
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
@@ -196,7 +196,7 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
             // load tagged scalar tag word
         }
         PhpType::Iterable
-        | PhpType::Mixed
+        | PhpType::Mixed | PhpType::DeclaredCallable
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
@@ -447,7 +447,7 @@ pub fn emit_write_stdout(emitter: &mut Emitter, ty: &PhpType) {
             emit_call_label(emitter, "__rt_ptoa");
             emit_write_current_string_stdout(emitter);
         }
-        PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) => {
             emit_call_label(emitter, "__rt_mixed_write_stdout");
         }
         PhpType::Iterable => {

@@ -116,7 +116,7 @@ pub(super) fn accepts_type(ty: &PhpType, value: &Expr, span: Span) -> Option<Exp
             value: Box::new(value.clone()),
             target: InstanceOfTarget::Name(Name::unqualified("Traversable")),
         }, span)),
-        PhpType::Callable => predicate("is_callable"),
+        PhpType::Callable | PhpType::DeclaredCallable => predicate("is_callable"),
         PhpType::Array(_) | PhpType::AssocArray { .. } => predicate("is_array"),
         PhpType::Object(class) if class.is_empty() || class.eq_ignore_ascii_case("object") =>
             predicate("is_object"),

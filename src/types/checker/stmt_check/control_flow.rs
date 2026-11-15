@@ -1252,7 +1252,7 @@ impl Checker {
         source_array: &Expr,
         value_ty: &PhpType,
     ) {
-        if value_ty != &PhpType::Callable {
+        if !value_ty.is_callable_like() {
             self.clear_foreach_callable_metadata(dest);
             return;
         }

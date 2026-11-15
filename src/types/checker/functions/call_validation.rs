@@ -653,6 +653,21 @@ impl Checker {
                 PhpType::resource_types_compatible(expected, actual)
             }
             (PhpType::Callable, PhpType::Callable) => true,
+            // A declared `callable` keeps the value PHP passed: a Closure, a function or
+            // `Class::method` string, a callable array, or an invokable object. Whether it is
+            // actually callable is PHP's runtime check; literal names are still resolved where
+            // the binding happens (`require_declared_callable_arg`).
+            (
+                PhpType::DeclaredCallable,
+                PhpType::Callable
+                | PhpType::Mixed
+                | PhpType::Str
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_),
+            ) => true,
+            // A Closure slot materializes a descriptor from the declared value when it is used.
+            (PhpType::Callable, PhpType::DeclaredCallable) => true,
             _ => false,
         }
     }

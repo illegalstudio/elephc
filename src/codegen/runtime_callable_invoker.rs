@@ -1899,7 +1899,7 @@ fn store_pushed_value_to_ref_cell(emitter: &mut Emitter, cell_reg: &str, val_ty:
             abi::emit_store_to_address(emitter, ptr_reg, cell_reg, 0);
             abi::emit_store_to_address(emitter, len_reg, cell_reg, 8);
         }
-        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) | PhpType::Iterable => {
             abi::emit_pop_reg(emitter, temp_reg);
             abi::emit_store_to_address(emitter, temp_reg, cell_reg, 0);
             abi::emit_load_int_immediate(emitter, temp_reg, 7);
@@ -2840,6 +2840,10 @@ fn coerce_current_value_to_target(
         tagged_args::coerce(emitter, ctx, source_ty);
         return (PhpType::TaggedScalar, false);
     }
+    if source_repr == PhpType::Mixed && target_ty == Some(&PhpType::DeclaredCallable) {
+        emit_owned_declared_callable_argument(emitter, ctx);
+        return (PhpType::Mixed, true);
+    }
     if source_repr != PhpType::Callable
         && target_ty.is_some_and(|target| target.codegen_repr() == PhpType::Callable)
     {
@@ -2873,6 +2877,33 @@ fn coerce_current_value_to_target(
     }
 
     (pushed_ty, boxed_to_mixed)
+}
+
+/// Passes the current boxed argument to a declared-`callable` parameter with an owner of its own.
+///
+/// A natively callable value keeps its PHP value (one extra reference). A value native code
+/// cannot resolve by itself, such as the name of a function declared inside `eval()`, is
+/// normalized to a descriptor (which consults eval) and boxed, so the callee's entry check and
+/// invocation see a callable. Both arms leave one owner for the invoker's argument cleanup.
+fn emit_owned_declared_callable_argument(emitter: &mut Emitter, ctx: &mut InvokerEmitContext) {
+    let native = ctx.next_label("declared_callable_native_arg");
+    let done = ctx.next_label("declared_callable_arg_ready");
+    let result = abi::int_result_reg(emitter);
+    // -- keep a natively callable value, convert an eval-only callback --
+    abi::emit_push_reg(emitter, result);
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("mov rdi, rax");                                    // pass the boxed argument to the runtime callable probe
+    }
+    abi::emit_call_label(emitter, "__rt_is_callable_mixed");
+    abi::emit_branch_if_int_result_nonzero(emitter, &native);
+    abi::emit_pop_reg(emitter, result);
+    owned_value_args::normalize_callable(emitter, ctx, &PhpType::Mixed);
+    crate::codegen::emit_box_current_owned_value_as_mixed(emitter, &PhpType::Callable);
+    abi::emit_jump(emitter, &done);
+    emitter.label(&native);
+    abi::emit_pop_reg(emitter, result);
+    abi::emit_incref_if_refcounted(emitter, &PhpType::Mixed);
+    emitter.label(&done);
 }
 
 /// Unboxes the current Mixed argument into an OWNED hash for a declared `array<K, V>` parameter.

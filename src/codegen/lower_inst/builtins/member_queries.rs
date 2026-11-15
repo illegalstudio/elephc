@@ -176,7 +176,7 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
             ctx.load_value_to_result(value)?;
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_object");
         }
-        PhpType::Mixed | PhpType::Union(_) => {
+        PhpType::Mixed | PhpType::DeclaredCallable | PhpType::Union(_) => {
             ctx.load_value_to_result(value)?;
             emit_is_callable_pointer_lookup(ctx, "__rt_is_callable_mixed");
         }

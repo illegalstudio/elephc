@@ -114,6 +114,7 @@ pub(super) fn lower_pipe_runtime_call(
     let value = lower_expr(ctx, value);
     let result_staging = prepublish_call_result(ctx, &result_type, expr.span);
     let callable = lower_expr(ctx, callable);
+    let callable = super::declared_callables::normalize_declared_callable(ctx, callable, expr.span);
     let (callable, callable_owner) = root_owned_call_operand(ctx, callable, expr.span);
     let result = emit_descriptor_invoker_value(
         ctx,
@@ -140,6 +141,10 @@ pub(super) fn pipe_runtime_result_type(
         ExprKind::Variable(name) => ctx
             .static_callable_local(name)
             .map(|target| static_callable_return_type(ctx, &target))
+            .or_else(|| {
+                ctx.callable_param_signature(name)
+                    .map(|sig| sig.return_type.erase_declared_callable())
+            })
             .unwrap_or_else(|| fallback_expr_type(expr)),
         _ => fallback_expr_type(expr),
     }

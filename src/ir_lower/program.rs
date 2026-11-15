@@ -202,6 +202,7 @@ fn lower_on_compiler_stack(
     if let Some(error) = super::diagnostics::take_first() {
         return Err(LoweringError::Unsupported(error));
     }
+    module.erase_declared_callable_types();
     validate_module(&module).map_err(|error| super::validation_context::describe(&module, error))?;
     Ok(module)
 }

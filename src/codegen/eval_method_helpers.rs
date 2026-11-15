@@ -2190,6 +2190,12 @@ fn emit_aarch64_cast_eval_arg(
         emitter.instruction("ldr x0, [x29, #-16]");                             // borrow the boxed argument before checking its PHP array constraint
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
     }
+    if *param_ty == PhpType::DeclaredCallable {
+        super::eval_callable_helpers::emit_aarch64_cast_eval_declared_callable_arg(
+            module, emitter, data, callable_support, label_prefix, fail_label,
+        );
+        return;
+    }
     match param_ty.codegen_repr() {
         PhpType::Int | PhpType::Pointer(_) => {
             emitter.instruction("ldr x0, [x29, #-16]");                         // reload the boxed eval argument for integer coercion
@@ -2369,6 +2375,13 @@ fn emit_x86_64_cast_eval_arg(
     if param_ty.is_php_array() {
         emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                   // borrow the boxed argument before checking its PHP array constraint
         super::eval_argument_helpers::emit_require_php_array(emitter, fail_label);
+    }
+    if *param_ty == PhpType::DeclaredCallable {
+        super::eval_callable_helpers::emit_x86_64_cast_eval_declared_callable_arg(
+            module, emitter, data, callable_support, label_prefix, fail_label,
+            context_frame_offset,
+        );
+        return;
     }
     match param_ty.codegen_repr() {
         PhpType::Int | PhpType::Pointer(_) => {

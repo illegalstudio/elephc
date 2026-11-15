@@ -138,7 +138,7 @@ pub fn emit_store_incoming_param(
         }
         PhpType::Void | PhpType::Never => {}
         PhpType::Iterable
-        | PhpType::Mixed
+        | PhpType::Mixed | PhpType::DeclaredCallable
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }

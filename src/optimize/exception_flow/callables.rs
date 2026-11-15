@@ -146,7 +146,9 @@ fn params_have_object_reference(
 ) -> bool {
     params.iter().any(|(_, hint, _, by_ref)| {
         hint.as_ref().is_some_and(|hint| {
-            type_hint_is_class(hint) || (*by_ref && type_hint_mentions_array(hint))
+            type_hint_is_class(hint)
+                || (*by_ref && type_hint_mentions_array(hint))
+                || (!*by_ref && type_hint_mentions_callable(hint))
         })
     })
 }
@@ -158,6 +160,17 @@ fn type_hint_mentions_array(hint: &TypeExpr) -> bool {
         TypeExpr::Named(name) => name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("array"),
         TypeExpr::Nullable(inner) => type_hint_mentions_array(inner),
         TypeExpr::Union(members) => members.iter().any(type_hint_mentions_array),
+        _ => false,
+    }
+}
+
+/// Returns whether a declared parameter hint is, or contains, the `callable` type, whose
+/// by-value binding is checked on entry.
+fn type_hint_mentions_callable(hint: &TypeExpr) -> bool {
+    match hint {
+        TypeExpr::Named(name) => name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("callable"),
+        TypeExpr::Nullable(inner) => type_hint_mentions_callable(inner),
+        TypeExpr::Union(members) => members.iter().any(type_hint_mentions_callable),
         _ => false,
     }
 }

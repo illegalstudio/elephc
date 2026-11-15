@@ -128,7 +128,7 @@ pub fn emit_push_result_value(emitter: &mut Emitter, ty: &PhpType) {
         | PhpType::Int
         | PhpType::Resource(_)
         | PhpType::Iterable
-        | PhpType::Mixed
+        | PhpType::Mixed | PhpType::DeclaredCallable
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }

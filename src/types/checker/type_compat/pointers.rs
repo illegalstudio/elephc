@@ -243,7 +243,7 @@ impl Checker {
                 match name_str.to_ascii_lowercase().as_str() {
                     "string" => Ok(PhpType::Str),
                     "mixed" => Ok(PhpType::Mixed),
-                    "callable" => Ok(PhpType::Callable),
+                    "callable" => Ok(PhpType::DeclaredCallable),
                     "closure" => Ok(PhpType::Callable),
                     "object" => Ok(PhpType::Object(String::new())),
                     "void" | "null" => Ok(PhpType::Void),

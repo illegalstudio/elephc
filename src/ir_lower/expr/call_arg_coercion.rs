@@ -665,6 +665,12 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
     }
+    if param_ty == PhpType::Callable
+        && !sig.ref_params.get(index).copied().unwrap_or(false)
+        && ctx.builder.value_php_type(value.value) == PhpType::DeclaredCallable
+    {
+        return super::declared_callables::normalize_declared_callable(ctx, value, arg.span);
+    }
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
     if param_ty == PhpType::Callable
         && !sig.ref_params.get(index).copied().unwrap_or(false)
@@ -1039,7 +1045,11 @@ pub(super) fn coerce_operands_to_params(
             && matches!(operand_ty, PhpType::Mixed | PhpType::Union(_))
         {
             let lowered = LoweredValue { value, ir_type: ctx.builder.value_type(value) };
-            let coerced = unbox_callable_param_storage(ctx, lowered, None);
+            let coerced = if ctx.builder.value_php_type(value) == PhpType::DeclaredCallable {
+                super::declared_callables::normalize_declared_callable(ctx, lowered, Span::dummy())
+            } else {
+                unbox_callable_param_storage(ctx, lowered, None)
+            };
             operands[index] =
                 root_evaluated_call_argument(ctx, coerced, Span::dummy()).value;
         } else if param_ty == PhpType::Iterable

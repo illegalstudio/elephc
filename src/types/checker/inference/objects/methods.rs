@@ -112,7 +112,7 @@ impl Checker {
         // `$this` and returns a new closure; `call` binds `$this` and invokes the
         // closure in one step, returning its result. `$scope` is accepted and
         // ignored (visibility is resolved at compile time).
-        if matches!(obj_ty, PhpType::Callable) {
+        if obj_ty.is_callable_like() {
             match php_symbol_key(method).as_str() {
                 "bindto" => {
                     for arg in args {

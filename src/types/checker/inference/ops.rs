@@ -633,7 +633,7 @@ impl Checker {
         let var_ty = env.get(var).cloned().ok_or_else(|| {
             CompileError::new(expr.span, &format!("Undefined variable: ${}", var))
         })?;
-        if var_ty != PhpType::Callable {
+        if !var_ty.is_callable_like() {
             if matches!(var_ty.codegen_repr(), PhpType::Str | PhpType::Mixed) {
                 // A boxed array read can carry any runtime callable shape.
                 // The callee is only known at runtime, but PHP rejects
@@ -874,7 +874,7 @@ impl Checker {
         }
         let nullable_callable =
             Self::is_nullable_callable_from_nullsafe_chain(callee, &callee_ty);
-        if callee_ty != PhpType::Callable && !nullable_callable {
+        if !callee_ty.is_callable_like() && !nullable_callable {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
@@ -1409,7 +1409,7 @@ impl Checker {
 
         // The RHS must be a callable.
         let callable_ty = self.infer_type(callable, env)?;
-        if callable_ty != PhpType::Callable {
+        if !callable_ty.is_callable_like() {
             return Err(CompileError::new(
                 expr.span,
                 &format!(
@@ -1610,7 +1610,7 @@ impl Checker {
         let PhpType::Union(members) = callee_ty else {
             return false;
         };
-        members.iter().any(|member| *member == PhpType::Callable)
+        members.iter().any(PhpType::is_callable_like)
             && members.iter().any(|member| *member == PhpType::Void)
             && expr_contains_nullsafe_member(callee)
     }

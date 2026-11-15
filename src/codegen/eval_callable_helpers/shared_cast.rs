@@ -78,6 +78,38 @@ pub(in crate::codegen) fn emit_x86_64_cast_eval_callable_arg(
     super::argument_owners::keep(emitter, context_frame_offset);
 }
 
+/// Casts an eval callback for a native declared-`callable` parameter on ARM64.
+///
+/// The parameter stores a boxed value, so the descriptor the ordinary cast selected (and the
+/// bridge already owns) is boxed into a fresh `Mixed` cell that the bridge owns as well.
+pub(in crate::codegen) fn emit_aarch64_cast_eval_declared_callable_arg(
+    module: &Module, emitter: &mut Emitter, data: &mut DataSection,
+    support: &EvalCallableDescriptorSupport, label_prefix: &str, fail_label: &str,
+) {
+    emit_aarch64_cast_eval_callable_arg(module, emitter, data, support, label_prefix, fail_label);
+    crate::codegen::emit_box_current_value_as_mixed(
+        emitter,
+        &crate::types::PhpType::Callable,
+    );
+    super::argument_owners::keep_mixed(emitter, 64);
+}
+
+/// Casts an eval callback for a native declared-`callable` parameter on x86_64.
+pub(in crate::codegen) fn emit_x86_64_cast_eval_declared_callable_arg(
+    module: &Module, emitter: &mut Emitter, data: &mut DataSection,
+    support: &EvalCallableDescriptorSupport, label_prefix: &str, fail_label: &str,
+    context_frame_offset: usize,
+) {
+    emit_x86_64_cast_eval_callable_arg(
+        module, emitter, data, support, label_prefix, fail_label, context_frame_offset,
+    );
+    crate::codegen::emit_box_current_value_as_mixed(
+        emitter,
+        &crate::types::PhpType::Callable,
+    );
+    super::argument_owners::keep_mixed(emitter, context_frame_offset);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

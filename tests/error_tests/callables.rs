@@ -893,16 +893,6 @@ fn test_error_call_user_func_rejects_an_unknown_literal_without_eval() {
     );
 }
 
-/// Verifies a callable string that is only known at run time is rejected with a named
-/// diagnostic instead of being bound to storage the callee could not invoke.
-#[test]
-fn test_error_callable_parameter_rejects_runtime_string() {
-    expect_error(
-        "<?php function apply(callable $f, string $s) { return $f($s); } $n = $argc > 0 ? \"strtoupper\" : \"strtolower\"; echo apply($n, \"a\");",
-        "a callable string must be a compile-time constant here",
-    );
-}
-
 /// Verifies that a callable ARRAY local satisfies a declared `callable` parameter.
 ///
 /// `[$object, "method"]` keeps ordinary two-element array storage, so its inferred type is not
@@ -913,44 +903,6 @@ fn test_error_callable_parameter_rejects_runtime_string() {
 fn test_callable_parameter_accepts_a_callable_array_local() {
     expect_no_error(
         "<?php class Joiner { public function join(string $left, string $right): string { return $left . $right; } } function apply(callable $f, string $a, string $b): string { return $f($a, $b); } $callback = [new Joiner(), \"join\"]; echo apply($callback, \"x\", \"y\");",
-    );
-}
-
-/// Verifies the narrowness of that acceptance: an ordinary array with no callable-target
-/// metadata is still rejected, so array storage did not become universally callable.
-#[test]
-fn test_error_callable_parameter_rejects_a_plain_array() {
-    expect_error(
-        "<?php function apply(callable $f): mixed { return $f(); } $values = [1, 2]; echo apply($values);",
-        "expects callable",
-    );
-}
-
-/// Verifies that a two-element array whose first entry is not an object stays rejected: the
-/// shape alone must not stand in for a resolved target.
-#[test]
-fn test_error_callable_parameter_rejects_an_unresolved_pair() {
-    expect_error(
-        "<?php function apply(callable $f): mixed { return $f(); } $pair = [1, \"join\"]; echo apply($pair);",
-        "expects callable",
-    );
-}
-
-/// Callable-array facts from different reachable branches must not leak past the join.
-#[test]
-fn test_error_callable_array_target_is_cleared_when_branches_disagree() {
-    expect_error(
-        "<?php class BranchCallable { public static function left(): int { return 1; } public static function right(): int { return 2; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { if ($value > 0) { $callback = [BranchCallable::class, 'left']; } else { $callback = [BranchCallable::class, 'right']; } return consume($callback); } echo choose($argc);",
-        "expects callable",
-    );
-}
-
-/// An elseif path starts from the prior condition's false-path facts, not its true body.
-#[test]
-fn test_error_elseif_does_not_inherit_callable_target_from_prior_body() {
-    expect_error(
-        "<?php class ElseifCallable { public static function base(): int { return 0; } public static function changed(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $callback = [ElseifCallable::class, 'base']; if ($value === 1) { $callback = [ElseifCallable::class, 'changed']; } elseif ($value === 2) { $marker = 2; } else { $marker = 3; } return consume($callback); } echo choose($argc);",
-        "expects callable",
     );
 }
 
@@ -978,41 +930,12 @@ fn test_branch_copies_of_one_instance_callable_array_can_join() {
     );
 }
 
-/// Equal instance-target syntax in separate arms does not identify one captured receiver.
-#[test]
-fn test_error_branch_local_instance_callable_arrays_do_not_merge_by_syntax() {
-    expect_error(
-        "<?php class BranchInstanceCallable { public function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } function choose(int $value): int { $receiver = new BranchInstanceCallable(); if ($value > 0) { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } else { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } return consume($callback); } echo choose($argc);",
-        "expects callable",
-    );
-}
-
-/// Dynamic unpacking cannot turn nested PHP callable arrays into descriptor values.
-#[test]
-fn test_error_callable_parameter_spread_rejects_callable_array_elements() {
-    expect_error(
-        "<?php class SpreadCallable { public static function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } $callbacks = [[SpreadCallable::class, 'hit']]; echo consume(...$callbacks);",
-        "must contain Callable descriptors",
-    );
-}
-
 /// Dynamic unpacking keeps working when the source already stores descriptor values.
 #[test]
 fn test_callable_parameter_spread_accepts_descriptor_elements() {
     expect_no_error(
         "<?php class SpreadCallable { public static function hit(): int { return 1; } } function consume(callable $callback): int { return $callback(); } $callbacks = [SpreadCallable::hit(...)]; echo consume(...$callbacks);",
     );
-}
-
-/// A direct Mixed argument is not a descriptor projection and stays outside Callable unboxing.
-#[test]
-fn test_error_direct_mixed_argument_does_not_gain_descriptor_unboxing() {
-    for source in [
-        "<?php function consume(callable $callback): int { return $callback(); } function forward(mixed $value): int { return consume($value); } echo forward(null);",
-        "<?php function consume(callable $callback): int { return $callback(); } function forward(callable $dispatch, mixed $value): int { return $dispatch($value); } echo forward(consume(...), null);",
-    ] {
-        expect_error(source, "parameter $callback expects callable, got mixed");
-    }
 }
 
 /// A spread cannot synthesize the lvalue identity required by a by-reference Callable parameter.
@@ -1177,4 +1100,61 @@ fn test_source_variadic_override_rejects_hidden_argc_abi_mismatch() {
         "<?php class Base { public function countIt(int $first = 0, ...$rest): int { return count($rest); } } class Child extends Base { public function countIt(int $first = 0, ...$rest): int { return func_num_args(); } } echo (new Child())->countIt();",
         "the inherited signature cannot be widened to collect surplus arguments",
     );
+}
+
+/// Callable-array facts from different reachable branches must not leak past the join.
+/// The fixture declares `Closure`, which keeps the descriptor boundary these flow facts feed; a
+/// declared `callable` keeps the PHP value and checks it at run time instead.
+#[test]
+fn test_error_callable_array_target_is_cleared_when_branches_disagree() {
+    expect_error(
+        "<?php class BranchCallable { public static function left(): int { return 1; } public static function right(): int { return 2; } } function consume(Closure $callback): int { return $callback(); } function choose(int $value): int { if ($value > 0) { $callback = [BranchCallable::class, 'left']; } else { $callback = [BranchCallable::class, 'right']; } return consume($callback); } echo choose($argc);",
+        "expects callable",
+    );
+}
+
+/// An elseif path starts from the prior condition's false-path facts, not its true body.
+/// The fixture declares `Closure`, which keeps the descriptor boundary these flow facts feed; a
+/// declared `callable` keeps the PHP value and checks it at run time instead.
+#[test]
+fn test_error_elseif_does_not_inherit_callable_target_from_prior_body() {
+    expect_error(
+        "<?php class ElseifCallable { public static function base(): int { return 0; } public static function changed(): int { return 1; } } function consume(Closure $callback): int { return $callback(); } function choose(int $value): int { $callback = [ElseifCallable::class, 'base']; if ($value === 1) { $callback = [ElseifCallable::class, 'changed']; } elseif ($value === 2) { $marker = 2; } else { $marker = 3; } return consume($callback); } echo choose($argc);",
+        "expects callable",
+    );
+}
+
+/// Equal instance-target syntax in separate arms does not identify one captured receiver.
+/// The fixture declares `Closure`, which keeps the descriptor boundary these flow facts feed; a
+/// declared `callable` keeps the PHP value and checks it at run time instead.
+#[test]
+fn test_error_branch_local_instance_callable_arrays_do_not_merge_by_syntax() {
+    expect_error(
+        "<?php class BranchInstanceCallable { public function hit(): int { return 1; } } function consume(Closure $callback): int { return $callback(); } function choose(int $value): int { $receiver = new BranchInstanceCallable(); if ($value > 0) { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } else { $receiver = new BranchInstanceCallable(); $callback = [$receiver, 'hit']; } return consume($callback); } echo choose($argc);",
+        "expects callable",
+    );
+}
+
+/// Dynamic unpacking cannot turn nested PHP callable arrays into descriptor values.
+/// The fixture declares `Closure`, which keeps the descriptor boundary these flow facts feed; a
+/// declared `callable` keeps the PHP value and checks it at run time instead.
+#[test]
+fn test_error_callable_parameter_spread_rejects_callable_array_elements() {
+    expect_error(
+        "<?php class SpreadCallable { public static function hit(): int { return 1; } } function consume(Closure $callback): int { return $callback(); } $callbacks = [[SpreadCallable::class, 'hit']]; echo consume(...$callbacks);",
+        "must contain Callable descriptors",
+    );
+}
+
+/// A direct Mixed argument is not a descriptor projection and stays outside Callable unboxing.
+/// The fixture declares `Closure`, which keeps the descriptor boundary these flow facts feed; a
+/// declared `callable` keeps the PHP value and checks it at run time instead.
+#[test]
+fn test_error_direct_mixed_argument_does_not_gain_descriptor_unboxing() {
+    for source in [
+        "<?php function consume(Closure $callback): int { return $callback(); } function forward(mixed $value): int { return consume($value); } echo forward(null);",
+        "<?php function consume(Closure $callback): int { return $callback(); } function forward(Closure $dispatch, mixed $value): int { return $dispatch($value); } echo forward(consume(...), null);",
+    ] {
+        expect_error(source, "parameter $callback expects callable, got mixed");
+    }
 }

@@ -38,6 +38,7 @@ use array_merge_values::lower_array_value_for_merge;
 mod nullsafe_chain;
 mod ref_place_args;
 mod boxed_user_sort;
+pub(crate) mod declared_callables;
 mod scalar_literals;
 mod local_values;
 use local_values::lower_local_value;

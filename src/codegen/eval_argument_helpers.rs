@@ -20,7 +20,9 @@ use crate::types::PhpType;
 /// A `?ptr<T>` keeps its union too: its ABI form is the pointer word either way, and boxing it
 /// needs the null member so address 0 reaches eval as PHP null.
 pub(super) fn bridge_storage_type(ty: &PhpType) -> PhpType {
-    if ty.is_php_array() || crate::types::is_nullable_pointer_type(ty) {
+    // A declared `callable` keeps its identity so the bridge converts eval callbacks the
+    // native callee cannot resolve by name (see `cast_eval_declared_callable_arg`).
+    if ty.is_php_array() || crate::types::is_nullable_pointer_type(ty) || *ty == PhpType::DeclaredCallable {
         ty.clone()
     } else {
         ty.codegen_repr()

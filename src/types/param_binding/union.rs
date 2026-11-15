@@ -131,7 +131,7 @@ fn exact_member(ty: &PhpType, value: &Expr) -> Option<Expr> {
         }, value.span),
         PhpType::Void => call("is_null", value),
         PhpType::Array(_) | PhpType::AssocArray { .. } => call("is_array", value),
-        PhpType::Callable => call("is_callable", value),
+        PhpType::Callable | PhpType::DeclaredCallable => call("is_callable", value),
         PhpType::Iterable => either(call("is_array", value), instance_of("Traversable", value), value.span),
         PhpType::Object(class) if class.is_empty() || class.eq_ignore_ascii_case("object") => call("is_object", value),
         PhpType::Object(class) => instance_of(class, value),
