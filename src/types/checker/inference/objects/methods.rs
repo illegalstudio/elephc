@@ -112,6 +112,16 @@ impl Checker {
         // `$this` and returns a new closure; `call` binds `$this` and invokes the
         // closure in one step, returning its result. `$scope` is accepted and
         // ignored (visibility is resolved at compile time).
+        // A declared `callable` may hold an invokable object with its own `bindTo()` / `call()`,
+        // so those methods are dispatched at run time and their result is untyped.
+        if obj_ty == PhpType::DeclaredCallable
+            && matches!(php_symbol_key(method).as_str(), "bindto" | "call")
+        {
+            for arg in args {
+                self.infer_type(arg, env)?;
+            }
+            return Ok(PhpType::Mixed);
+        }
         if obj_ty.is_callable_like() {
             match php_symbol_key(method).as_str() {
                 "bindto" => {

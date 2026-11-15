@@ -228,6 +228,59 @@ pub(crate) fn reference_parameter_needs_entry_guard(ty: &PhpType) -> bool {
     }))
 }
 
+/// Checks every element a `callable ...$name` variadic collected, on entry to the callee, raising
+/// php's `f(): Argument #N must be of type callable, T given` `TypeError` for the first element
+/// that is not callable. `first_position` is the 1-based argument number of the first element.
+pub(crate) fn guard_declared_callable_variadic_entry(
+    ctx: &mut LoweringContext<'_, '_>,
+    function: &str,
+    first_position: usize,
+    name: &str,
+) {
+    let span = Span::synthetic();
+    let key = ctx.declare_hidden_temp(PhpType::Mixed);
+    let value = ctx.declare_hidden_temp(PhpType::Mixed);
+    let variable = |local: &str| Expr::new(ExprKind::Variable(local.to_string()), span);
+    let literal = |text: String| Expr::new(ExprKind::StringLiteral(text), span);
+    let element = variable(&value);
+    let argument = Expr::new(ExprKind::Ternary {
+        condition: Box::new(predicate("is_int", &variable(&key), span)),
+        then_expr: Box::new(Expr::new(ExprKind::BinaryOp {
+            left: Box::new(variable(&key)),
+            op: BinOp::Add,
+            right: Box::new(Expr::new(ExprKind::IntLiteral(first_position as i64), span)),
+        }, span)),
+        else_expr: Box::new(variable(&key)),
+    }, span);
+    let message = concat(
+        literal(format!("{function}(): Argument #")),
+        concat(argument, concat(
+            literal(" must be of type callable, ".to_string()),
+            concat(runtime_debug_type(&element, span), literal(" given".to_string()), span),
+            span,
+        ), span),
+        span,
+    );
+    let exception = Expr::new(ExprKind::NewObject {
+        class_name: Name::unqualified("TypeError"),
+        args: vec![message],
+    }, span);
+    let check = Stmt::new(StmtKind::If {
+        condition: Expr::new(ExprKind::Not(Box::new(predicate("is_callable", &element, span))), span),
+        then_body: vec![Stmt::new(StmtKind::Throw(exception), span)],
+        elseif_clauses: Vec::new(),
+        else_body: None,
+    }, span);
+    let guard = Stmt::new(StmtKind::Foreach {
+        array: variable(name),
+        key_var: Some(key),
+        value_var: value,
+        value_by_ref: false,
+        body: vec![check],
+    }, span);
+    crate::ir_lower::stmt::lower_stmt(ctx, &guard);
+}
+
 /// Checks a by-reference parameter's value against its declared union on entry to the callee,
 /// after every argument was evaluated (php's `RECV` order), raising php's
 /// `f(): Argument #N ($name) must be of type T, U given` `TypeError` for anything else.

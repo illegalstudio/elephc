@@ -118,3 +118,56 @@ echo maybe(null), " ", maybe("strlen"), "\n";
          null set\n"
     );
 }
+
+/// Verifies `bindTo()` / `call()` on a declared `callable` act on a Closure only.
+///
+/// An invokable object runs its own `bindTo()` / `call()`, a string raises PHP's
+/// `Call to a member function bindTo() on string`, and a Closure is still rebound. These
+/// used to unbox any value as a Closure descriptor and rebind it.
+#[test]
+fn test_declared_callable_closure_methods_need_a_closure() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public function __invoke() {} public function bindTo(): string { return "user"; } public function call(): string { return "usercall"; } }
+function bt(callable $c): mixed { return $c->bindTo(null); }
+function cl(callable $c): mixed { return $c->call(new stdClass()); }
+echo bt(new C()), " ", cl(new C()), "\n";
+try { bt("strlen"); } catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$b = bt(function () { return isset($this) ? "this" : "none"; });
+echo $b(), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "user usercall\nError: Call to a member function bindTo() on string\nnone\n"
+    );
+}
+
+/// Verifies by-reference and variadic `callable` parameters check their values on entry, and
+/// that a union with a coercible scalar (`int|callable`) still takes its members.
+#[test]
+fn test_declared_callable_reference_and_variadic_parameters_check_values() {
+    let out = compile_and_run(
+        r#"<?php
+function r(callable &$c): void { echo "ok\n"; }
+$x = $argc > 0 ? "nope" : [1];
+try { r($x); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$y = $argc > 0 ? "strlen" : [1];
+r($y);
+function v(callable ...$xs): int { return count($xs); }
+$nope = $argc > 0 ? "nope" : "strlen";
+try { v("strlen", $nope); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+$pair = $argc > 0 ? [1, 2] : [];
+try { v($pair); } catch (TypeError $e) { echo $e->getMessage(), "\n"; }
+echo v("strlen", fn() => 1), "\n";
+function u(int|callable $v): string { return is_int($v) ? "int" : gettype($v); }
+echo u(5), " ", u(fn() => 1), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "r(): Argument #1 ($c) must be of type callable, string given\nok\n\
+         v(): Argument #2 must be of type callable, string given\n\
+         v(): Argument #1 must be of type callable, array given\n2\nint object\n"
+    );
+}
