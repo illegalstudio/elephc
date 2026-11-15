@@ -246,8 +246,23 @@ pub(crate) fn nearest_autoload_manifest_root(entry_dir: &Path) -> Option<PathBuf
     let absolute_entry_dir = absolute_entry_dir(entry_dir);
     absolute_entry_dir
         .ancestors()
-        .find(|candidate| !autoload_manifest_paths(candidate).is_empty())
+        .find(|candidate| {
+            !autoload_manifest_paths(candidate).is_empty() || is_installed_composer_root(candidate)
+        })
         .map(Path::to_path_buf)
+}
+
+/// Whether `dir` is an installed Composer project whose own `composer.json` declares no autoload
+/// section: a script that only `require`s packages (`{"require": {...}}`) still loads
+/// `vendor/autoload.php`, which requires every package's eager `files` and maps its classes.
+/// Without a root, the closed world knew neither, and `symfony/polyfill-mbstring/bootstrap.php`
+/// died at run time on php's failed-open.
+fn is_installed_composer_root(dir: &Path) -> bool {
+    dir.join("composer.json").is_file()
+        && super::composer_files::vendor_dir(dir)
+            .join("composer")
+            .join("autoload_real.php")
+            .is_file()
 }
 
 /// Returns `entry_dir` as an absolute path, so a lexical ancestor walk sees the real directories.
@@ -837,6 +852,30 @@ mod tests {
         let root = dir.canonicalize().unwrap();
         let index = AutoloadIndex::from_project_root(&root);
         assert_eq!(index.production_classes(&root), vec!["App\\Model\\Cell".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Verifies an installed Composer project whose root `composer.json` only `require`s packages
+    /// is still the root: its packages' eager `files` are read from Composer's generated list.
+    #[test]
+    fn installed_composer_root_without_autoload_section_reads_eager_files() {
+        let dir = manifest_test_dir();
+        let package = dir.join("vendor/acme/poly");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::create_dir_all(dir.join("vendor/composer")).unwrap();
+        std::fs::write(dir.join("composer.json"), r#"{"require":{"acme/poly":"*"}}"#).unwrap();
+        std::fs::write(dir.join("vendor/composer/autoload_real.php"), "<?php\n").unwrap();
+        std::fs::write(
+            dir.join("vendor/composer/autoload_files.php"),
+            "<?php\n$vendorDir = dirname(__DIR__);\nreturn array('x' => $vendorDir . '/acme/poly/bootstrap.php');\n",
+        )
+        .unwrap();
+        std::fs::write(package.join("bootstrap.php"), "<?php\n").unwrap();
+
+        let root = dir.canonicalize().unwrap();
+        assert_eq!(super::nearest_autoload_manifest_root(&root), Some(root.clone()));
+        let index = AutoloadIndex::from_project_root(&root);
+        assert_eq!(index.files(), [root.join("vendor/acme/poly/bootstrap.php")]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
