@@ -1681,8 +1681,11 @@ pub(super) fn coerce_operands_to_params_guarded(
                 continue;
             }
             if deferred_positional[index] && param_ty.codegen_repr() == PhpType::Str {
-                // The same owned conversion argument lowering would have made.
-                operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+                // The same owned conversion argument lowering would have made. It carries the
+                // call's span: a conversion that can warn publishes its span as the current
+                // line, and a span-less one would publish line 0 over the caller's site (a
+                // compiler-generated span is not published at all).
+                operands[index] = coerce_to_string_at_span(ctx, lowered, Some(guard_span)).value;
                 continue;
             }
         }
