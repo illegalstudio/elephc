@@ -135,12 +135,16 @@ impl Pass for ScopePass {
     /// A by-reference parameter keeps its declared type and only gets the deprecation: a `?T`
     /// reference parameter needs nullable storage in every caller variable, so widening it
     /// would refuse `int &$r = null` called with an `int` local, which compiles today.
+    ///
+    /// An `#[Export]` function also keeps its declared type: its signature is the host-visible
+    /// contract, so `--emit phpext` still rejects the implicit form and asks for an explicit `?T`.
     fn transform_param_type(
         &mut self,
         name: &str,
         ty: TypeExpr,
         default: Option<&Expr>,
         by_ref: bool,
+        exported: bool,
         span: Span,
     ) -> TypeExpr {
         if !default.is_some_and(|default| matches!(default.kind, ExprKind::Null)) {
@@ -158,7 +162,7 @@ impl Pass for ScopePass {
                 name
             ),
         ));
-        if by_ref {
+        if by_ref || exported {
             ty
         } else {
             widened
@@ -339,5 +343,18 @@ mod tests {
                 format!("f(): Implicitly marking parameter $g {suffix}"),
             ]
         );
+    }
+
+    /// Verifies an `#[Export]` function keeps its declared type, so the PHP export validator
+    /// still rejects the implicit form, while the deprecation is still queued.
+    #[test]
+    fn keeps_declared_type_on_exported_function_params() {
+        let _ = crate::errors::take_deferred_warnings();
+        let types = widened_param_types("<?php #[Export] function f(int $a = null, ?int $b = null) {}");
+        assert_eq!(
+            types,
+            vec![Some(TypeExpr::Int), Some(TypeExpr::Nullable(Box::new(TypeExpr::Int)))]
+        );
+        assert_eq!(crate::errors::take_deferred_warnings().len(), 1);
     }
 }

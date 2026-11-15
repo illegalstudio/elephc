@@ -375,9 +375,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
             body,
         } => {
             pass.enter_function(&name);
+            let exported = crate::exports::attributes_mark_export(&attributes);
             let new_params = params
                 .into_iter()
-                .map(|param| super::walk_param(param, pass, span))
+                .map(|param| super::walk_param(param, pass, span, exported))
                 .collect();
             let walked_body = walk_program(body, pass);
             let new_body = pass.transform_scope_body(walked_body);

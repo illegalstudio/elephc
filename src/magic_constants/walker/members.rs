@@ -76,7 +76,7 @@ pub(in crate::magic_constants) fn walk_class_method<P: Pass>(
     let new_params = method
         .params
         .into_iter()
-        .map(|param| super::walk_param(param, pass, span))
+        .map(|param| super::walk_param(param, pass, span, false))
         .collect();
     let walked_body = walk_program(method.body, pass);
     let new_body = pass.transform_scope_body(walked_body);

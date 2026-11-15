@@ -181,7 +181,13 @@ pub fn public_c_name(php_name: &str) -> String {
 /// attribute. The match is on the last segment of the attribute name so both
 /// the bare and fully-qualified spellings are accepted.
 pub(crate) fn has_export_attribute(stmt: &Stmt) -> bool {
-    for group in &stmt.attributes {
+    attributes_mark_export(&stmt.attributes)
+}
+
+/// Returns `true` if a declaration's attribute groups include `#[Export]` (or
+/// `#[\Elephc\Export]`); shared with passes that see the attributes before the statement.
+pub(crate) fn attributes_mark_export(attributes: &[crate::parser::ast::AttributeGroup]) -> bool {
+    for group in attributes {
         for attr in &group.attributes {
             if attr
                 .name

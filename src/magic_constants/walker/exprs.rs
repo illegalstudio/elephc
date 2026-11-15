@@ -157,7 +157,7 @@ pub(super) fn walk_expr<P: Pass>(expr: Expr, pass: &mut P) -> Expr {
             pass.enter_closure(span);
             let new_params = params
                 .into_iter()
-                .map(|param| super::walk_param(param, pass, span))
+                .map(|param| super::walk_param(param, pass, span, false))
                 .collect();
             let walked_body = walk_program(body, pass);
             let new_body = pass.transform_scope_body(walked_body);
