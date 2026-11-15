@@ -12,7 +12,8 @@
 //!   interface constants (inherited ones included), global `const` declarations and predefined
 //!   constants, then the optimizer's PHP-equivalent constant folding. That folder only joins
 //!   string literals, so a concatenation with an int operand is joined here, bottom-up, and the
-//!   enclosing operators are folded again (`('n' . C::ONE) === 'n1' ? 'yes' : 'no'`).
+//!   enclosing operators and array reads are folded again (`('n' . C::ONE) === 'n1' ? 'yes' :
+//!   'no'`, `['n' . C::ONE][0]`).
 //! - A value that does not fold to an int or string literal is left to the caller, which reports
 //!   the existing diagnostic. The enum's own constants (`self::X`) are not built yet at this point.
 
@@ -51,7 +52,8 @@ pub(super) fn fold_backing_value(
 
 /// Joins the `.` concatenations of int and string literals that the shared folder leaves alone
 /// (an int converts to its decimal string, as in PHP), children first, then refolds each operator
-/// so a comparison or ternary around a joined concatenation folds too.
+/// so a comparison, ternary or array read around a joined concatenation folds too
+/// (`['n' . C::ONE][0]`).
 fn join_int_concats(expr: &mut Expr) {
     match &mut expr.kind {
         ExprKind::BinaryOp { left, right, .. } => {
@@ -69,6 +71,15 @@ fn join_int_concats(expr: &mut Expr) {
         }
         ExprKind::Negate(value) | ExprKind::Not(value) | ExprKind::BitNot(value)
         | ExprKind::Cast { expr: value, .. } => join_int_concats(value),
+        ExprKind::ArrayAccess { array, index } => {
+            join_int_concats(array);
+            join_int_concats(index);
+        }
+        ExprKind::ArrayLiteral(items) => items.iter_mut().for_each(join_int_concats),
+        ExprKind::ArrayLiteralAssoc(items) => items.iter_mut().for_each(|(key, value)| {
+            join_int_concats(key);
+            join_int_concats(value);
+        }),
         _ => return,
     }
     if let ExprKind::BinaryOp { left, op: BinOp::Concat, right } = &expr.kind {
