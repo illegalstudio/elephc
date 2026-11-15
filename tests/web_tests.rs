@@ -3302,7 +3302,7 @@ fn web_sigterm_shuts_down_cleanly() {
 #[test]
 fn web_worker_respawns_after_crash() {
     let dir = make_test_dir("web_respawn");
-    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { exit(1); } echo \"alive\";";
+    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { posix_kill(getmypid(), 9); } echo \"alive\";";
     let bin = compile_web(&dir, src, "app");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
@@ -3324,13 +3324,38 @@ fn web_worker_respawns_after_crash() {
     assert!(served, "worker was not respawned after a crash");
 }
 
+/// `exit()` ends the request, not the worker or handler process, in every isolation mode: the
+/// output before it is sent with a 200 and the next request is served, as `php -S` answers
+/// `echo "a;"; exit(1); echo "b";` with 200 `a;`.
+#[test]
+fn web_exit_ends_the_request_in_every_isolation_mode() {
+    let src = "<?php echo \"a;\"; if (($_SERVER['REQUEST_URI'] ?? '') === '/exit') { exit(1); } echo \"b\";";
+    for mode in ["worker", "pool", "request"] {
+        let dir = make_test_dir(&format!("web_exit_request_{mode}"));
+        let bin = match mode {
+            "worker" => compile_web(&dir, src, "app"),
+            _ => compile_isolated_web(&dir, src, "app", mode),
+        };
+        let addr = format!("127.0.0.1:{}", free_port());
+        let mut child = spawn_server(&bin, &addr, "1");
+        let exited = http_request(&addr, "GET", "/exit", &[], "");
+        let next = http_request(&addr, "GET", "/", &[], "");
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(exited.starts_with("HTTP/1.1 200"), "{mode}: {exited:?}");
+        assert_eq!(raw_response_body(&exited), "a;", "{mode}");
+        assert_eq!(raw_response_body(&next), "a;b", "{mode}");
+    }
+}
+
 /// Verifies an isolated handler crash yields a bounded HTTP 500 and does not
-/// poison the worker's ability to serve the following request.
+/// poison the worker's ability to serve the following request. The crash is a SIGKILL of the
+/// handler process: `exit(1)` ends the request as php does (200, empty body) and kills nothing.
 #[test]
 fn web_handler_crash_returns_500_and_next_request_survives() {
     for mode in ["pool", "request"] {
         let dir = make_test_dir(&format!("web_handler_crash_500_{mode}"));
-        let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { exit(1); } echo \"alive\";";
+        let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { posix_kill(getmypid(), 9); } echo \"alive\";";
         let bin = compile_isolated_web(&dir, src, "app", mode);
         let port = free_port();
         let addr = format!("127.0.0.1:{port}");
