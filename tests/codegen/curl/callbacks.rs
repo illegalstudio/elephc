@@ -704,14 +704,12 @@ fn curl_multi_exec_re_raises_a_callback_exception() {
 /// same handles three times instead of once must therefore leak no more than running
 /// them once.
 ///
-/// TWO PRE-EXISTING LEAKS ARE DELIBERATELY NOT ASSERTED AWAY HERE, because neither is
-/// reachable only through curl and neither is this task's to fix — both reproduce with
-/// no curl call in the program (measured with `--gc-stats`):
-///   * `__elephc_normalize_callable($closure)` leaks one block per call: the retain it
-///     takes on an already-owned descriptor is never released. `Pdo\Sqlite`'s
-///     `createFunction`/`createCollation`/`createAggregate`/`setAuthorizer` decompose
-///     callables through the identical two-line sequence and leak the same block. That
-///     is the "one block per installed callable" this test tolerates.
+/// `__elephc_normalize_callable($closure)` used to leak one block per installed callable
+/// (its retain on an already-owned descriptor was never released); its owned result is now
+/// moved into the prelude's local, so the installed callables balance.
+///
+/// ONE PRE-EXISTING LEAK IS DELIBERATELY NOT ASSERTED AWAY HERE, because it is not
+/// reachable only through curl and reproduces with no curl call in the program:
 ///   * The descriptor invoker leaks the boxed arguments it materializes into DECLARED
 ///     parameters. `ob_start(function (string $b, int $p): string {{ … }})` leaks four
 ///     blocks per flush and `array_map(function (string $s): string {{ … }}, $xs)` leaks
@@ -760,9 +758,9 @@ fn curl_callbacks_do_not_leak_per_transfer() {
          3 transfers leaked {thrice_leaked})"
     );
     assert_eq!(
-        once_leaked, 3,
-        "expected exactly one leaked block per installed callable (the pre-existing \
-         __elephc_normalize_callable retain), got {once_leaked} for three handles"
+        once_leaked, 0,
+        "installed callables must balance (the normalized descriptor is owned once), got \
+         {once_leaked} leaked blocks for three handles"
     );
 }
 
@@ -1033,18 +1031,15 @@ fn curl_callback_throw_clears_a_previous_transfers_error_state() {
 /// REVIEW FIX (Important 6) — PINS A KNOWN LIMITATION, NOT A GUARANTEE.
 ///
 /// A callback that captures its own `CurlHandle` closes a reference cycle
-/// (`CurlHandle -> __elephc_callbacks -> Closure -> $ch`). elephc is refcount-only with no
-/// cycle collector, so the handle is never freed and its libcurl session lives until the
-/// process exits. php-src has the identical cycle and survives it only because Zend has a
-/// cycle collector.
+/// (`CurlHandle -> __elephc_callbacks -> Closure -> $ch`). The targeted cycle collector
+/// reclaims that island once the last outside reference drops, like Zend's collector
+/// reclaims it in php-src, so capturing the handle must leak no more than not capturing it.
 ///
-/// The non-capturing shape is balanced apart from the one pre-existing
-/// `__elephc_normalize_callable` block per installed callable, so the DIFFERENCE between
-/// the two programs is the cycle's cost. UPDATE THIS TEST WHEN A CYCLE COLLECTOR LANDS:
-/// the capturing program should then leak no more than the non-capturing one.
+/// This used to leak the whole libcurl session: the extra `__elephc_normalize_callable`
+/// retain was an outside reference that kept the cycle rooted.
 #[test]
-fn curl_callback_capturing_its_own_handle_leaks_the_session() {
-    if skip_without_curl_native("curl_callback_capturing_its_own_handle_leaks_the_session") {
+fn curl_callback_capturing_its_own_handle_is_collected() {
+    if skip_without_curl_native("curl_callback_capturing_its_own_handle_is_collected") {
         return;
     }
     let server = LocalHttpServer::spawn_hello();
@@ -1088,16 +1083,10 @@ fn curl_callback_capturing_its_own_handle_leaks_the_session() {
     let (cap_allocs, cap_frees) = parse_gc_stats(&capturing.stderr);
     let cap_leaked = cap_allocs as i64 - cap_frees as i64;
 
-    // No exact number is asserted for the non-capturing shape: it carries pre-existing
-    // per-callable and by-ref-capture leaks that are not this task's and would make the
-    // pin a tripwire for unrelated work. The COMPARISON is the limitation being recorded.
-    assert!(
-        cap_leaked > plain_leaked,
-        "capturing $ch is expected to leak the whole libcurl session today (elephc is \
-         refcount-only, with no cycle collector): capturing leaked {cap_leaked}, \
-         non-capturing leaked {plain_leaked}. If this now fails because the two are \
-         equal, a cycle collector landed — delete this test and the limitation note at \
-         the callback-rooting site in src/curl_prelude.rs."
+    assert_eq!(
+        cap_leaked, plain_leaked,
+        "capturing $ch must not leak the libcurl session: capturing leaked {cap_leaked}, \
+         non-capturing leaked {plain_leaked}"
     );
 }
 
