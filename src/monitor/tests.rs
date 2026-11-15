@@ -2256,11 +2256,17 @@ fn debug_ui_parses_and_guards_profile_modes() {
     let served = parse_monitor_args(&[
         "app.php".to_string(),
         "--debug-ui".to_string(),
+        "--allow-eval".to_string(),
         "--serve".to_string(),
         "127.0.0.1:9000".to_string(),
     ])
-    .expect("--debug-ui --serve parses");
+    .expect("--debug-ui --allow-eval --serve parses");
+    assert!(served.allow_eval);
     assert_eq!(served.serve.as_deref(), Some("127.0.0.1:9000"));
+    assert!(
+        parse_monitor_args(&["app.php".to_string(), "--allow-eval".to_string()]).is_err(),
+        "--allow-eval requires --debug-ui"
+    );
     for extra in [
         vec!["--live"],
         vec!["--calls"],

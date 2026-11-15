@@ -176,8 +176,9 @@ stepping, stack and locals, the same sessions over DAP in VS Code and Neovim,
 read-only value inspection, `elephc_break()`/`elephc_dump()`, call-value capture
 through `elephc monitor --calls`, and coverage through `elephc test --coverage`.
 `--debug-optimized` keeps the same metadata and guards while allowing
-optimization, reporting optimized-away locals as `<optimized out>`. No xdebug
-extension or VM is involved. See
+optimization, reporting optimized-away locals as `<optimized out>`.
+`--allow-eval` is the explicit opt-in for arbitrary PHP evaluation through
+Magician at a stop. No xdebug extension or VM is involved. See
 [Debugging](docs/beyond-php/debugging.md) and the runnable
 [debugger example](examples/debugger/main.php).
 

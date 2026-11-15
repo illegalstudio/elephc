@@ -74,6 +74,8 @@ pub(crate) struct MonitorCommand {
     pub cachegrind_out: Option<String>,
     /// Serve the interactive browser debugger for a launched debug build.
     pub debug_ui: bool,
+    /// Compile the browser debugger's source with `--allow-eval`.
+    pub allow_eval: bool,
     /// Explicit performance-budget file; without it, the nearest `.elephc`
     /// above the profiled source is picked up automatically.
     pub assert_file: Option<String>,
@@ -83,7 +85,7 @@ pub(crate) struct MonitorCommand {
 pub(crate) const MONITOR_USAGE: &str = "Usage: elephc monitor <program|source.php> [--live] [--duration <seconds>] [--out <file.speedscope.json>]
        elephc monitor <program|source.php> [--pprof <file.pb.gz>] [--dot <file.dot>] [--html <file.html>]
                       [--cachegrind <file.cachegrind>]
-       elephc monitor <program|source.php> --debug-ui [--serve <host:port>]
+       elephc monitor <program|source.php> --debug-ui [--allow-eval] [--serve <host:port>]
        elephc monitor <program|source.php> [--trace <f.json>] [--assert <spec>]... [--assert-file <file>]
        elephc monitor <program|source.php> --live --html <file.html> [--serve <host:port>]
        elephc monitor <program|source.php> [--baseline <prior.json>] [--fail-on-regression <points>]
@@ -164,9 +166,11 @@ service targets; a sampled view has no call counts to export.
 
 --debug-ui compiles a source with --debug (or launches a debug binary) and
 serves a self-contained browser debugger at --serve (default 127.0.0.1:0):
-breakpoints, stack frames, locals, continue/step and console output. It is a
-debugger surface, not a profile export; combine it with the profiling paths only
-by running them separately.
+breakpoints, stack frames, locals, continue/step and console output.
+--allow-eval additionally links Magician so the page's evaluate field can run
+arbitrary PHP against a snapshot of the stopped frame. It is a debugger surface,
+not a profile export; combine it with the profiling paths only by running them
+separately.
 
 --pprof writes the capture as a gzip pprof profile. --dot writes a Graphviz call
 graph (`dot -Tsvg`); --html writes a self-contained, interactive call graph (one
@@ -253,6 +257,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
     let mut calls_out = None;
     let mut cachegrind_out = None;
     let mut debug_ui = false;
+    let mut allow_eval = false;
     let mut assert_file = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -312,6 +317,9 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
             }
             "--debug-ui" => {
                 debug_ui = true;
+            }
+            "--allow-eval" => {
+                allow_eval = true;
             }
             "--cachegrind" => {
                 cachegrind_out = Some(
@@ -396,6 +404,9 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         (Some(target), None) => target.clone(),
         (None, Some(_)) => String::new(),
     };
+    if allow_eval && !debug_ui {
+        return Err("--allow-eval requires --debug-ui: it enables arbitrary evaluation in the browser debugger".to_string());
+    }
     if debug_ui {
         if target.is_empty()
             || remote_target(&target).is_some()
@@ -514,6 +525,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         calls_out,
         cachegrind_out,
         debug_ui,
+        allow_eval,
         assert_file,
     })
 }

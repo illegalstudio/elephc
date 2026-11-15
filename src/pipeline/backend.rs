@@ -50,6 +50,7 @@ pub(super) struct BackendInputs<'a> {
     pub(super) emit_debug_info: bool,
     pub(super) debug_build: bool,
     pub(super) debug_optimized: bool,
+    pub(super) allow_eval: bool,
     pub(super) keep_symbols: bool,
     pub(super) output_paths: &'a OutputPaths,
     pub(super) emit_source_map: bool,
@@ -102,6 +103,7 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
         emit_debug_info,
         debug_build,
         debug_optimized,
+        allow_eval,
         keep_symbols,
         output_paths,
         emit_source_map,
@@ -259,7 +261,12 @@ pub(super) fn emit_and_link(inputs: BackendInputs<'_>) {
     crate::progress::phase("debug-metadata");
     let phase_started = Instant::now();
     let metadata_json = if debug_build {
-        match debug_metadata::build(&generated_user_asm.asm, Path::new(filename), debug_optimized) {
+        match debug_metadata::build(
+            &generated_user_asm.asm,
+            Path::new(filename),
+            debug_optimized,
+            allow_eval,
+        ) {
             Ok(json) => Some(json),
             Err(err) => {
                 crate::progress::clear();

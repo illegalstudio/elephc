@@ -456,8 +456,12 @@ Format values in the agent, not in generated code:
 - Page large arrays/objects; never walk a cycle without a visited set on the
   agent side.
 - `evaluate` v1 is read-only: locals, property reads, array indices, `count`,
-  simple arithmetic. Arbitrary PHP evaluation is a separate opt-in through
-  Magician (`--allow-eval`) and never on by default.
+  simple arithmetic. Arbitrary PHP evaluation is implemented as a separate
+  opt-in through Magician (`--allow-eval`): the debugger materializes a snapshot
+  of the selected frame's locals into a fresh eval scope, executes, renders the
+  result and does not write assignments back. Debug stops are suppressed while
+  eval runs. It is never on by default and requires an unoptimized or optimized
+  debug preset.
 
 ### 5. Stack and stepping
 

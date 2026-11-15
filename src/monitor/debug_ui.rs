@@ -33,7 +33,7 @@ const POLL_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Runs one `monitor --debug-ui` session.
 pub(crate) fn run(cmd: &MonitorCommand) -> i32 {
-    let binary = match debug_binary(&cmd.target) {
+    let binary = match debug_binary(&cmd.target, cmd.allow_eval) {
         Ok(binary) => binary,
         Err(error) => {
             eprintln!("elephc monitor: {error}");
@@ -130,7 +130,7 @@ pub(crate) fn run(cmd: &MonitorCommand) -> i32 {
 }
 
 /// Compiles a `.php` source with `--debug`, or returns an existing binary path.
-fn debug_binary(target: &str) -> Result<PathBuf, String> {
+fn debug_binary(target: &str, allow_eval: bool) -> Result<PathBuf, String> {
     let source = Path::new(target);
     if source.extension().and_then(|extension| extension.to_str()) != Some("php") {
         let binary = super::spawnable_path(target);
@@ -141,8 +141,13 @@ fn debug_binary(target: &str) -> Result<PathBuf, String> {
     }
     let compiler = std::env::current_exe()
         .map_err(|error| format!("cannot locate the compiler: {error}"))?;
-    let status = Command::new(compiler)
-        .args(["--debug", target])
+    let mut command = Command::new(compiler);
+    command.arg("--debug");
+    if allow_eval {
+        command.arg("--allow-eval");
+    }
+    let status = command
+        .arg(target)
         .status()
         .map_err(|error| format!("cannot compile '{target}': {error}"))?;
     if !status.success() {

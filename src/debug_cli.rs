@@ -42,6 +42,8 @@ pub(crate) struct DebugCommand {
     pub(crate) dap: bool,
     /// Compile a source with `--debug-optimized` instead of `--debug`.
     pub(crate) optimized: bool,
+    /// Compile a source with `--allow-eval`, enabling arbitrary debugger eval.
+    pub(crate) allow_eval: bool,
     /// Optional DAP attach socket exposed by an already-running debug binary.
     pub(crate) attach: Option<String>,
     /// Optional loopback TCP attach address exposed by a debug binary.
@@ -74,7 +76,7 @@ pub(crate) struct DebugCommand {
 }
 
 /// Usage text for `elephc debug`.
-pub(crate) const HELP: &str = "Usage: elephc debug <source.php|source.lfc|binary> [--break FILE:LINE] [--dap] [--optimized] [--postmortem FILE]
+pub(crate) const HELP: &str = "Usage: elephc debug <source.php|source.lfc|binary> [--break FILE:LINE] [--dap] [--optimized] [--allow-eval] [--postmortem FILE]
        elephc debug <source.php|source.lfc|binary> --web --listen HOST:PORT
            [--route PATH|PREFIX*] [--method METHOD] [--header NAME:VALUE]
            [--workers N] [--handler-concurrency N] [--web-dir DIR]
@@ -86,9 +88,11 @@ pub(crate) const HELP: &str = "Usage: elephc debug <source.php|source.lfc|binary
 Builds a source with --debug, then starts the interactive runtime session.
 Without --break the program stops at its first executed site. --optimized builds
 the source with --debug-optimized instead: line and exception guards remain, but
-optimized locals report <optimized out> rather than a stale value. Commands in the
-session: continue|c, next|n, step|s, finish|f, bt, frame <index>, locals,
-p <name>, help, quit|q.
+optimized locals report <optimized out> rather than a stale value. --allow-eval
+links Magician and lets DAP `evaluate` and the terminal `eval <expr>` command run
+arbitrary PHP against a snapshot of the stopped frame; assignments do not write
+back into native locals. Commands in the session: continue|c, next|n, step|s,
+finish|f, bt, frame <index>, locals, p <name>, eval <expr>, help, quit|q.
 
 --postmortem FILE writes a bounded JSON postmortem (PHP stack, recent calls and
 exception fields) when the program exits with an uncaught exception, plus a
@@ -132,6 +136,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<DebugCommand, String> {
     let mut break_at = None;
     let mut dap = false;
     let mut optimized = false;
+    let mut allow_eval = false;
     let mut attach = None;
     let mut attach_tcp = None;
     let mut key = None;
@@ -167,6 +172,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<DebugCommand, String> {
             }
             "--dap" => dap = true,
             "--optimized" => optimized = true,
+            "--allow-eval" => allow_eval = true,
             "--web" => {
                 web = true;
                 dap = true;
@@ -302,6 +308,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<DebugCommand, String> {
             || attach.is_some()
             || dap
             || optimized
+            || allow_eval
             || break_at.is_some()
             || postmortem.is_some()
             || web
@@ -400,6 +407,7 @@ pub(crate) fn parse_args(args: &[String]) -> Result<DebugCommand, String> {
         break_at,
         dap,
         optimized,
+        allow_eval,
         attach,
         attach_tcp,
         key,
@@ -446,8 +454,12 @@ pub(crate) fn run(command: DebugCommand) -> i32 {
                 return 1;
             }
         };
-        let status = Command::new(compiler)
-            .arg(if command.optimized { "--debug-optimized" } else { "--debug" })
+        let mut compile = Command::new(compiler);
+        compile.arg(if command.optimized { "--debug-optimized" } else { "--debug" });
+        if command.allow_eval {
+            compile.arg("--allow-eval");
+        }
+        let status = compile
             .arg(&command.target)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
@@ -740,6 +752,7 @@ fn compile_debug_web_source(
     target: &str,
     isolation: Option<&str>,
     optimized: bool,
+    allow_eval: bool,
 ) -> Result<PathBuf, String> {
     let compiler = std::env::current_exe()
         .map_err(|error| format!("elephc debug: cannot locate the compiler: {error}"))?;
@@ -747,6 +760,9 @@ fn compile_debug_web_source(
     command
         .arg(if optimized { "--debug-optimized" } else { "--debug" })
         .arg("--web");
+    if allow_eval {
+        command.arg("--allow-eval");
+    }
     if let Some(isolation) = isolation {
         command.arg(format!("--web-isolation={isolation}"));
     }
@@ -782,6 +798,7 @@ fn run_web_dap(command: DebugCommand) -> i32 {
             &command.target,
             command.web_isolation.as_deref(),
             command.optimized,
+            command.allow_eval,
         ) {
             Ok(binary) => binary,
             Err(error) => {
@@ -948,7 +965,7 @@ fn run_web_dap(command: DebugCommand) -> i32 {
 fn run_dap(command: DebugCommand) -> i32 {
     let source = Path::new(&command.target);
     let binary = if is_source(source) {
-        match compile_debug_source(&command.target, command.optimized) {
+        match compile_debug_source(&command.target, command.optimized, command.allow_eval) {
             Ok(binary) => binary,
             Err(error) => {
                 eprintln!("{error}");
@@ -1383,11 +1400,15 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// Builds one source with `--debug` and captures compiler output so the DAP
 /// stream on stdout stays protocol-only.
-fn compile_debug_source(target: &str, optimized: bool) -> Result<PathBuf, String> {
+fn compile_debug_source(target: &str, optimized: bool, allow_eval: bool) -> Result<PathBuf, String> {
     let compiler = std::env::current_exe()
         .map_err(|error| format!("elephc debug: cannot locate the compiler: {error}"))?;
-    let output = Command::new(compiler)
-        .arg(if optimized { "--debug-optimized" } else { "--debug" })
+    let mut command = Command::new(compiler);
+    command.arg(if optimized { "--debug-optimized" } else { "--debug" });
+    if allow_eval {
+        command.arg("--allow-eval");
+    }
+    let output = command
         .arg(target)
         .output()
         .map_err(|error| format!("elephc debug: failed to compile '{target}': {error}"))?;
@@ -1676,9 +1697,11 @@ mod tests {
             "main.php".to_string(),
             "--dap".to_string(),
             "--optimized".to_string(),
+            "--allow-eval".to_string(),
         ])
         .expect("--optimized parses for a source");
         assert!(command.optimized);
+        assert!(command.allow_eval, "--allow-eval parses as a source compile flag");
         assert!(
             parse_args(&[
                 "--attach".to_string(),

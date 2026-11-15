@@ -162,8 +162,14 @@ struct LocalMeta {
 /// `source_path` is the entry file named on the CLI; it is always source id 0.
 /// `optimized` records the `--debug-optimized` preset so a client knows that a
 /// missing local value means the slot was optimized away, not that the debug
-/// metadata is stale.
-pub(crate) fn build(asm: &str, source_path: &Path, optimized: bool) -> Result<String, String> {
+/// metadata is stale. `allow_eval` records that the debugger eval hook table and
+/// Magician bridge are present.
+pub(crate) fn build(
+    asm: &str,
+    source_path: &Path,
+    optimized: bool,
+    allow_eval: bool,
+) -> Result<String, String> {
     let root_path = source_path.display().to_string();
     let root = source_file(0, root_path.clone(), true);
     let mut sources: BTreeMap<usize, SourceFile> = BTreeMap::new();
@@ -551,6 +557,7 @@ pub(crate) fn build(asm: &str, source_path: &Path, optimized: bool) -> Result<St
         &locals,
         &classes,
         optimized,
+        allow_eval,
     )
 }
 
@@ -638,6 +645,7 @@ fn render_json(
     locals: &[LocalMeta],
     classes: &[ClassMeta],
     optimized: bool,
+    allow_eval: bool,
 ) -> Result<String, String> {
     let source_values: Vec<serde_json::Value> = sources
         .values()
@@ -833,6 +841,7 @@ fn render_json(
         "format": "elephc-debug-metadata",
         "version": 1,
         "optimized": optimized,
+        "allow_eval": allow_eval,
         "source": source_path.display().to_string(),
         "source_sha256": sources.get(&0).and_then(|source| source.sha256.as_ref()),
         "sources": source_values,
@@ -950,7 +959,7 @@ _main:
     /// markers, including path alias deduplication and parameter extraction.
     #[test]
     fn builds_sources_functions_sites_and_locals() {
-        let json = build(ASM, Path::new("main.php"), false).unwrap();
+        let json = build(ASM, Path::new("main.php"), false, false).unwrap();
         assert!(json.contains("\"format\": \"elephc-debug-metadata\""), "{json}");
         assert!(json.contains("\"version\": 1"), "{json}");
         assert!(json.contains("\"optimized\": false"), "{json}");
@@ -999,8 +1008,10 @@ _main:
     /// that a missing local value is deliberate.
     #[test]
     fn publishes_the_optimized_preset() {
-        let json = build(ASM, Path::new("main.php"), true).unwrap();
+        let json = build(ASM, Path::new("main.php"), true, false).unwrap();
         assert!(json.contains("\"optimized\": true"), "{json}");
+        let json = build(ASM, Path::new("main.php"), false, true).unwrap();
+        assert!(json.contains("\"allow_eval\": true"), "{json}");
     }
 
     /// Verifies the embedded JSON gets a target-aware section/symbol and the

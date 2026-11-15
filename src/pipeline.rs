@@ -149,6 +149,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         emit_debug_info,
         debug_build,
         debug_optimized,
+        allow_eval,
         keep_symbols,
         regalloc_linear,
         ir_opt,
@@ -1179,6 +1180,13 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     };
     ir_module.web_application = web_application;
     ir_module.debug_optimized = debug_optimized;
+    ir_module.allow_eval = allow_eval;
+    if allow_eval {
+        // Linking the Magician archive alone is not enough: the eval runtime
+        // surface, catalog inventory helper and native wrappers are gated behind
+        // this feature bit.
+        ir_module.required_runtime_features.eval_bridge = true;
+    }
     crate::phpext::class_helpers::lower(&mut ir_module, &exported_classes);
     ir_module.included_files = opcache_manifest
         .iter()
@@ -1246,6 +1254,7 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
         emit_debug_info,
         debug_build,
         debug_optimized,
+        allow_eval,
         keep_symbols,
         output_paths: &output_paths,
         emit_source_map,

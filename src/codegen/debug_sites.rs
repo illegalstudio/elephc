@@ -253,6 +253,29 @@ pub(super) fn emit_boot_call(ctx: &mut FunctionContext<'_>, web_master: bool) {
     abi::emit_load_int_immediate(ctx.emitter, web_arg, i64::from(web_master));
     let boot = target.extern_symbol("elephc_debug_boot");
     abi::emit_call_label(ctx.emitter, &boot);
+    if let Some(hooks) = ctx.shared.debug_eval_hooks.clone() {
+        let hooks_arg = abi::int_arg_reg_name(target, 0);
+        abi::emit_symbol_address(ctx.emitter, hooks_arg, &hooks);
+        let setter = target.extern_symbol("elephc_debug_set_eval_hooks");
+        abi::emit_call_label(ctx.emitter, &setter);
+        // The debugger creates its own eval context, so the process-wide PHP
+        // profile and strict-PHP mode must be installed before the first
+        // expression runs rather than by a user `eval()` call site.
+        let strict = target.extern_symbol("__elephc_eval_set_strict_php");
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(target, 0),
+            i64::from(crate::strict_php::is_enabled()),
+        );
+        abi::emit_call_label(ctx.emitter, &strict);
+        let version = target.extern_symbol("__elephc_eval_set_php_version_id");
+        abi::emit_load_int_immediate(
+            ctx.emitter,
+            abi::int_arg_reg_name(target, 0),
+            i64::from(crate::codegen::compile_php_version().version_id()),
+        );
+        abi::emit_call_label(ctx.emitter, &version);
+    }
 }
 
 /// Emits the function-enter hook for the current activation.

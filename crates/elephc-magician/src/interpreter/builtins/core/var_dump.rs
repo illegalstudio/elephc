@@ -35,6 +35,32 @@ pub(in crate::interpreter) fn eval_builtin_var_dump(
     eval_builtin_call("var_dump", &arguments, context, scope, values)
 }
 
+/// Renders one already materialized value as PHP-style debug text for the native debugger.
+///
+/// The caller owns `value` and releases it after this returns; this helper only
+/// reads through the shared runtime-value operations.
+#[cfg(not(test))]
+pub(crate) fn eval_var_dump_render_value(
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Vec<u8>, EvalStatus> {
+    let mut output = Vec::new();
+    let mut arrays_seen = Vec::new();
+    let mut objects_seen = Vec::new();
+    eval_var_dump_append_value(
+        value,
+        context,
+        values,
+        0,
+        false,
+        &mut arrays_seen,
+        &mut objects_seen,
+        &mut output,
+    )?;
+    Ok(output)
+}
+
 /// Emits already materialized values using PHP-style `var_dump()` debug formatting.
 pub(in crate::interpreter) fn eval_var_dump_result(
     values_to_dump: &[RuntimeCellHandle],

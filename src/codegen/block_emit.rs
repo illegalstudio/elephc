@@ -82,6 +82,57 @@ pub(super) fn module_hosts_php_ext(module: &Module) -> bool {
 /// C-callable `_elephc_web_handler` and the real entry becomes a stub that calls
 /// the bridge entry selected by `web_isolation`. When false the normal
 /// exit-based main is emitted unchanged.
+/// Emits the debugger eval hook table and its one target-specific boxing wrapper.
+///
+/// The debug runtime calls through this table instead of referencing Magician
+/// symbols directly, so a debug binary built without `--allow-eval` never has an
+/// unresolved eval dependency. The boxing wrapper gives `__rt_mixed_from_value`
+/// a normal `(tag, lo, hi)` C ABI on both supported architectures.
+fn emit_debug_eval_hooks(
+    _module: &Module,
+    emitter: &mut Emitter,
+    data: &mut DataSection,
+    shared: &mut SharedCodegenState,
+) {
+    let target = emitter.target;
+    emitter.raw(if target.arch == Arch::X86_64 {
+        "    .p2align 4"
+    } else {
+        "    .p2align 2"
+    });
+    emitter.label_global("__elephc_debug_box_mixed");
+    let box_mixed = target.extern_symbol("__rt_mixed_from_value");
+    match target.arch {
+        Arch::AArch64 => {
+            emitter.instruction(&format!("b {box_mixed}"));                     // box the three ABI arguments as one Mixed cell
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, rdi");                                // first C argument = runtime value tag
+            emitter.instruction("mov rdi, rsi");                                // second C argument = low payload word
+            emitter.instruction("mov rsi, rdx");                                // third C argument = high payload word
+            emitter.instruction(&format!("jmp {box_mixed}"));                   // box with the runtime's x86_64 mixed_from_value ABI
+        }
+    }
+    let mut words = vec![DataWord::U64(1)];
+    for symbol in [
+        "__elephc_eval_scope_new",
+        "__elephc_eval_scope_free_v2",
+        "__elephc_eval_scope_set_v2",
+        "__elephc_eval_context_new_with_native_catalog",
+        "__elephc_eval_context_free_v2",
+        "__elephc_eval_execute",
+        "__elephc_debug_eval_render",
+        "__elephc_eval_context_push_class_scope",
+        "__elephc_eval_context_pop_class_scope",
+        "__elephc_eval_register_inventory",
+        "__elephc_debug_box_mixed",
+        "__rt_decref_any",
+    ] {
+        words.push(DataWord::Symbol(target.extern_symbol(symbol)));
+    }
+    shared.debug_eval_hooks = Some(data.add_words(words));
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_module(
     module: &Module,
@@ -123,6 +174,9 @@ pub(super) fn emit_module(
     shared.instrument = instrument;
     shared.debug_build = debug_build;
     shared.debug_optimized = module.debug_optimized;
+    if module.allow_eval {
+        emit_debug_eval_hooks(module, emitter, data, &mut shared);
+    }
     emit_source_file_markers(module, emitter, &mut shared);
     if debug_build {
         emit_debug_class_markers(module, emitter);

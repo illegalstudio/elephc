@@ -91,6 +91,9 @@ pub(crate) struct SharedCodegenState {
     /// `--debug-optimized`: publish per-site local availability so a slot that
     /// no longer holds its PHP value is reported as `<optimized out>`.
     pub(super) debug_optimized: bool,
+    /// `--allow-eval`: label of the generated debugger eval hook table, handed
+    /// to the debug runtime by the main prologue.
+    pub(super) debug_eval_hooks: Option<String>,
     /// Next compiler-assigned debug site id.
     pub(super) next_debug_site: usize,
     /// Next compiler-assigned debug function id.

@@ -2378,6 +2378,7 @@ mod tests {
             frame_offset: 8,
             php_type: "int".to_string(),
             storage: "ref_cell".to_string(),
+            kind: "php_local".to_string(),
             state_offset: None,
             param: Some(0),
             sensitive: false,

@@ -101,6 +101,7 @@ The terminal client supports:
 | `frame N` | select frame `N` for `locals` and `p` (`0` is innermost) |
 | `locals` | print every named local in the selected frame |
 | `p <name>` | print one local (`$` optional) |
+| `eval <expr>` | evaluate arbitrary PHP with `--allow-eval` (see below) |
 | `quit`, `q` | terminate the debuggee |
 
 DAP adds line, conditional, hit-count, function and local/object write data
@@ -112,11 +113,13 @@ compiler-recorded files for clients that cannot read the server filesystem. A
 source hash is checked before a breakpoint is armed; a stale `.edbg.json` is
 rejected rather than silently binding to different code.
 
-DAP `evaluate` is read-only and supports locals, object properties, array/hash
-entries, `count()`/`strlen()`/`gettype()`, scalar predicates, arithmetic and
-comparisons. It refuses assignments, user/method calls, magic accessors and
-`ArrayAccess`; `setVariable` is not advertised. Program stdout/stderr appear as
-DAP `output` events in launch and attach sessions.
+DAP `evaluate` is read-only by default and supports locals, object properties,
+array/hash entries, `count()`/`strlen()`/`gettype()`, scalar predicates,
+arithmetic and comparisons. It refuses assignments, user/method calls, magic
+accessors and `ArrayAccess`; `setVariable` is not advertised. With
+`--allow-eval`, expressions the read-only parser rejects fall back to Magician
+(see below). Program stdout/stderr appear as DAP `output` events in launch and
+attach sessions.
 
 A stop is attributed to the caller's source line. The elephc-native source
 helpers are transparent frames, so `bt` and DAP `stackTrace` do not show
@@ -125,7 +128,8 @@ helpers are transparent frames, so `bt` and DAP `stackTrace` do not show
 ## Values
 
 Inspection is borrowed: the debugger never increfs, decrefs, triggers copy-on-write,
-releases a temporary or runs user code. It renders:
+releases a temporary or runs user code. (Arbitrary eval with `--allow-eval` is the
+explicit exception described above.) It renders:
 
 - scalars and escaped strings;
 - indexed arrays, associative hashes and reference cells;
@@ -144,6 +148,43 @@ snapshot is shown, never an interpreted method call.
 Data breakpoints watch frame locals, declared object properties and dynamic
 property hash entries. A virtual property has no backing slot and is refused as a
 watch target.
+
+## Arbitrary evaluation with `--allow-eval`
+
+The default evaluator is read-only. `--allow-eval` is an explicit opt-in for the
+terminal and DAP debuggers:
+
+```bash
+elephc debug --allow-eval app.php --break app.php:42
+(elephc) eval strlen($name) + $n
+```
+
+It links the Magician eval bridge. DAP `evaluate` first tries the read-only
+parser; when that rejects an expression it falls back to Magician, and the
+terminal `eval <expr>` command uses it directly. `--allow-eval` requires
+`--debug` or `--debug-optimized`, and is refused for iOS compile-only builds.
+
+- The input is an expression, not a statement list: `$x = 42`, `strlen($name)`
+  and `$this->refresh()` work; `echo ...` and multiple `;`-separated statements
+  do not.
+- The selected frame's locals are imported as a snapshot: scalars, strings,
+  arrays, objects and `$this`. Generated temporaries, `<optimized out>` slots
+  and `#[\SensitiveParameter]` values are not imported.
+- Method frames push their class scope, so private methods and properties are
+  visible to eval. Closure frames do not have a class scope.
+- Assignments are evaluated in the eval scope and returned, but do not write back
+  into native frame locals. Objects and functions still execute real code, so
+  property mutation, I/O and exceptions have their normal side effects. This is
+  not a sandbox.
+- Breakpoints, exception stops and `elephc_break()` are suppressed while the
+  expression runs, so a function called from eval cannot re-enter the stopped
+  debugger and deadlock.
+- Program globals and `global` aliases are not imported in this version; locals,
+  compiled functions, classes and constants are.
+- Errors render as `Class: message`. A parse/unsupported-construct failure
+  reports the eval status.
+- A DAP client with eval access can execute arbitrary code in the debuggee. Keep
+  the debugger loopback unless that control is intended.
 
 ## Source helpers
 
@@ -246,6 +287,7 @@ previous scope: line tables and subprograms, but no PHP variable DIEs.
 
 ```bash
 elephc monitor app.php --debug-ui --serve 127.0.0.1:8080
+elephc monitor app.php --debug-ui --allow-eval --serve 127.0.0.1:8080
 ```
 
 The source is compiled with `--debug` (a bare debug binary works too), and the
@@ -254,7 +296,9 @@ frames, locals, read-only expression evaluation, continue/next/step-in/step-out
 and program output. It binds
 loopback by default; expose `--serve` beyond loopback only when that control is
 intended. `--debug-ui` is a debugger surface, so it cannot be combined with
-profile exporters or `--live`/`--calls`/`--attach`.
+profile exporters or `--live`/`--calls`/`--attach`. The monitor page uses the
+same DAP evaluate path, so a prebuilt debug binary compiled with `--allow-eval`
+gets the arbitrary-evaluation fallback in the browser as well.
 
 ## Loopback attach with a key
 

@@ -241,7 +241,14 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
     )
     .expect("write monitor debug UI fixture");
     let mut child = elephc_cli_command(&dir)
-        .args(["monitor", "main.php", "--debug-ui", "--serve", "127.0.0.1:0"])
+        .args([
+            "monitor",
+            "main.php",
+            "--debug-ui",
+            "--allow-eval",
+            "--serve",
+            "127.0.0.1:0",
+        ])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -365,6 +372,24 @@ fn test_cli_monitor_debug_ui_serves_dap_bridge() {
     }
     let evaluation = evaluation.expect("evaluate response");
     assert_eq!(evaluation["body"]["result"], "int(3)", "{evaluation}");
+    send(
+        "evaluate",
+        serde_json::json!({"expression":"add(2, 3)","frameId":frame}),
+    );
+    let mut arbitrary = None;
+    for _ in 0..100 {
+        for message in poll(&mut since) {
+            if message["command"] == "evaluate" {
+                arbitrary = Some(message);
+            }
+        }
+        if arbitrary.is_some() {
+            break;
+        }
+    }
+    let arbitrary = arbitrary.expect("arbitrary evaluate response");
+    assert_eq!(arbitrary["success"], true, "{arbitrary}");
+    assert_eq!(arbitrary["body"]["result"], "int(5)", "{arbitrary}");
     send("continue", serde_json::json!({"threadId":1}));
     let mut output = String::new();
     let mut terminated = false;
@@ -2990,6 +3015,47 @@ fn test_cli_debug_command_pauses_inspects_and_continues() {
     assert!(stderr.contains("b int(3)"), "{stderr}");
     assert!(stderr.contains("Stopped at main.php:5:"), "{stderr}");
     assert!(stderr.contains("#0 combine at main.php:5"), "{stderr}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the terminal `eval` command routes through Magician when the source
+/// was compiled with `--allow-eval`, including an assignment that stays in the
+/// snapshot.
+#[test]
+fn test_cli_debug_allow_eval_terminal_command() {
+    let dir = make_cli_test_dir("elephc_cli_debug_allow_eval_terminal");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfunction double(int $n): int {\n    return $n * 2;\n}\nfunction probe(int $n): int {\n    $x = 5;\n    return $x + $n;\n}\necho probe(1), \"\\n\";\n",
+    )
+    .expect("write terminal allow-eval fixture");
+    use std::io::Write as _;
+    let mut child = elephc_cli_command(&dir)
+        .args(["debug", "--allow-eval", "main.php", "--break", "main.php:7"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn terminal allow-eval debug");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"eval double($x)\neval $x = 42\neval $x\nc\n")
+        .expect("write terminal eval commands");
+    let output = child.wait_with_output().expect("wait for terminal allow-eval");
+    assert!(
+        output.status.success(),
+        "terminal allow-eval failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).ends_with("6\n"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Stopped at main.php:7:"), "{stderr}");
+    assert!(stderr.contains("int(10)"), "{stderr}");
+    assert!(stderr.contains("int(42)"), "{stderr}");
+    assert!(stderr.contains("int(5)"), "{stderr}");
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -6886,6 +6952,207 @@ fn test_cli_debug_and_debug_optimized_are_mutually_exclusive() {
         stderr.contains("different debug presets"),
         "missing conflict diagnostic: {stderr}"
     );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--allow-eval` links Magician and lets DAP evaluate arbitrary PHP
+/// against a snapshot of the stopped frame: user functions, builtins, strings,
+/// array values, assignment expressions and errors. Assignments do not write
+/// back into native locals.
+#[test]
+fn test_cli_debug_allow_eval_runs_magician_expressions() {
+    let dir = make_cli_test_dir("elephc_cli_debug_allow_eval");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nfunction double(int $n): int {\n    return $n * 2;\n}\nfunction probe(int $n): int {\n    $x = 5;\n    $name = \"abc\";\n    $items = [1, 2, 3];\n    $total = 0;\n    foreach ($items as $item) {\n        $total += $item;\n    }\n    return $x + $total + strlen($name) + $n;\n}\necho probe(1), \"\\n\";\n",
+    )
+    .expect("write allow-eval fixture");
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "--allow-eval", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [{"line": 13}],
+        })),
+    );
+    assert_eq!(
+        client.response(seq)["body"]["breakpoints"][0]["verified"], true
+    );
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    let stopped = client.event("stopped");
+    assert_eq!(stopped["body"]["reason"], "breakpoint", "{stopped}");
+    let seq = client.send("stackTrace", None);
+    let response = client.response(seq);
+    let frame = response["body"]["stackFrames"][0]["id"]
+        .as_i64()
+        .expect("allow-eval frame id");
+
+    for (expression, expected) in [
+        ("double($x)", "int(10)"),
+        ("array_sum($items)", "int(6)"),
+        ("strtoupper($name)", "string(3) \"ABC\""),
+        ("$x = 42", "int(42)"),
+    ] {
+        let response = client.evaluate(frame, expression);
+        assert_eq!(response["success"], true, "{expression}: {response}");
+        assert_eq!(response["body"]["result"], expected, "{expression}: {response}");
+    }
+    let response = client.evaluate(frame, "$x");
+    assert_eq!(response["body"]["result"], "int(5)", "{response}");
+    let response = client.evaluate(frame, "missing_func()");
+    assert_eq!(response["success"], false, "{response}");
+    assert!(
+        response["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Magician eval")),
+        "{response}"
+    );
+
+    client.continue_to_terminated();
+    let status = client.child.wait().expect("wait for allow-eval adapter");
+    assert!(status.success(), "allow-eval adapter failed");
+    assert!(
+        client.program_output().contains("15"),
+        "program output missing: {:?}",
+        client.program_output()
+    );
+    let metadata: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("main.edbg.json")).expect("read allow-eval metadata"),
+    )
+    .expect("parse allow-eval metadata");
+    assert_eq!(metadata["allow_eval"], true, "{metadata}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies arbitrary eval pushes the method's class scope (private methods and
+/// `$this` work) and suppresses breakpoints inside code called by the evaluated
+/// expression, so eval cannot re-enter the debugger while it is stopped.
+#[test]
+fn test_cli_debug_allow_eval_uses_class_scope_and_suppresses_hooks() {
+    use std::time::Duration;
+
+    let dir = make_cli_test_dir("elephc_cli_debug_allow_eval_scope");
+    fs::write(
+        dir.join("main.php"),
+        "<?php\nclass Box {\n    private int $v;\n    public function __construct(int $v) { $this->v = $v; }\n    private function secret(): int { return 7; }\n    public function probe(int $n): int {\n        $x = 3;\n        return $this->v + $x + $n;\n    }\n}\necho (new Box(10))->probe(1), \"\\n\";\n",
+    )
+    .expect("write allow-eval class fixture");
+    let mut client = DapClient::spawn(
+        elephc_cli_command(&dir).args(["debug", "--dap", "--allow-eval", "main.php"]),
+    );
+    let seq = client.send(
+        "initialize",
+        Some(serde_json::json!({
+            "clientID": "test",
+            "adapterID": "elephc",
+            "linesStartAt1": true,
+            "columnsStartAt1": true,
+        })),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("initialized");
+    let seq = client.send(
+        "launch",
+        Some(serde_json::json!({"program": "main.php", "stopOnEntry": false})),
+    );
+    assert_eq!(client.response(seq)["success"], true);
+    let seq = client.send(
+        "setBreakpoints",
+        Some(serde_json::json!({
+            "source": {"path": "main.php"},
+            "breakpoints": [{"line": 8}, {"line": 5}],
+        })),
+    );
+    assert_eq!(
+        client.response(seq)["body"]["breakpoints"][0]["verified"], true
+    );
+    let seq = client.send("configurationDone", None);
+    assert_eq!(client.response(seq)["success"], true);
+    client.event("stopped");
+    let seq = client.send("stackTrace", None);
+    let response = client.response(seq);
+    let frame = response["body"]["stackFrames"][0]["id"]
+        .as_i64()
+        .expect("allow-eval class frame id");
+
+    let seq = client.send(
+        "evaluate",
+        Some(serde_json::json!({
+            "expression": "$this->secret()",
+            "frameId": frame,
+        })),
+    );
+    let response = client
+        .recv_with_timeout(Duration::from_secs(10))
+        .expect("eval response did not arrive; site hooks were not suppressed");
+    assert_eq!(response["type"], "response", "{response}");
+    assert_eq!(response["request_seq"], seq, "{response}");
+    assert_eq!(response["success"], true, "{response}");
+    assert_eq!(response["body"]["result"], "int(7)", "{response}");
+
+    let response = client.evaluate(frame, "get_class($this)");
+    assert_eq!(response["success"], true, "{response}");
+    assert_eq!(response["body"]["result"], "string(3) \"Box\"", "{response}");
+
+    client.continue_to_terminated();
+    let status = client.child.wait().expect("wait for allow-eval class adapter");
+    assert!(status.success(), "allow-eval class adapter failed");
+    assert!(
+        client.program_output().contains("14"),
+        "program output missing: {:?}",
+        client.program_output()
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// `--allow-eval` is a debug-runtime opt-in; compiling without a debug preset
+/// must fail instead of silently linking the interpreter into a release build.
+#[test]
+fn test_cli_debug_allow_eval_requires_debug_preset() {
+    let dir = make_cli_test_dir("elephc_cli_debug_allow_eval_gate");
+    fs::write(dir.join("main.php"), "<?php echo 1, \"\\n\";\n")
+        .expect("write allow-eval gate fixture");
+    let output = elephc_cli_command(&dir)
+        .args(["--allow-eval", "main.php"])
+        .output()
+        .expect("run allow-eval gate");
+    assert!(!output.status.success(), "--allow-eval compiled without --debug");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("requires --debug"), "{stderr}");
+
+    let ios = elephc_cli_command(&dir)
+        .args([
+            "--debug",
+            "--allow-eval",
+            "--target",
+            "ios-arm64",
+            "--emit-asm",
+            "main.php",
+        ])
+        .output()
+        .expect("run allow-eval iOS gate");
+    assert!(!ios.status.success(), "--allow-eval accepted iOS");
+    let stderr = String::from_utf8_lossy(&ios.stderr);
+    assert!(stderr.contains("not supported for iOS"), "{stderr}");
     let _ = fs::remove_dir_all(&dir);
 }
 

@@ -1955,7 +1955,26 @@ impl Debugger {
                     })),
                 );
             }
-            Err(message) => self.dap_respond_error(request, &message),
+            Err(message) => {
+                if !self.allow_eval {
+                    self.dap_respond_error(request, &message);
+                    return;
+                }
+                match super::native_eval::evaluate(self, frame, expression) {
+                    Ok(result) => self.dap_respond(
+                        request,
+                        Some(json!({
+                            "result": result,
+                            "type": "mixed",
+                            "variablesReference": 0,
+                        })),
+                    ),
+                    Err(error) => self.dap_respond_error(
+                        request,
+                        &format!("{message}; Magician eval: {error}"),
+                    ),
+                }
+            }
         }
     }
 

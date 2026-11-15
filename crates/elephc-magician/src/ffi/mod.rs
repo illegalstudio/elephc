@@ -11,6 +11,8 @@
 
 #[cfg(not(test))]
 pub mod callables;
+#[cfg(not(test))]
+pub mod debug_eval;
 pub(crate) mod array_references;
 #[cfg(not(test))]
 mod mbstring_array_references;
@@ -46,6 +48,8 @@ pub(crate) mod util;
 
 #[cfg(not(test))]
 pub use callables::*;
+#[cfg(not(test))]
+pub use debug_eval::*;
 pub use context::*;
 pub use declared_symbols::*;
 pub use execute::*;

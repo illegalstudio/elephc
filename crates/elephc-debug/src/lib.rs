@@ -44,6 +44,7 @@ use serde::Deserialize;
 mod condition;
 mod crash_postmortem;
 mod dap;
+mod native_eval;
 mod dap_output;
 mod eval;
 mod value;
@@ -295,6 +296,9 @@ fn close_open_trace_segments() {
 
 /// Records one explicit `elephc_dump` snapshot or writes it to stderr.
 fn record_capture_dump(value: usize, label: Option<&str>, to: &str) {
+    if native_eval::executing() {
+        return;
+    }
     let capture = CALLS_ENABLED.load(Ordering::Relaxed);
     let invalid = !matches!(to, "auto" | "stderr" | "terminal" | "html");
     let to_stderr = matches!(to, "stderr")
@@ -378,7 +382,7 @@ fn record_capture_dump(value: usize, label: Option<&str>, to: &str) {
 /// Stops at the caller's current source site when an interactive/DAP debugger is
 /// attached; a no-op outside a debug session.
 fn record_debug_break() {
-    if !INTERACTIVE.load(Ordering::Relaxed) {
+    if native_eval::executing() || !INTERACTIVE.load(Ordering::Relaxed) {
         return;
     }
     let Ok(mut guard) = DEBUGGER.lock() else {
@@ -546,6 +550,9 @@ struct Metadata {
     /// `--debug-optimized`: locals may be absent from their frame slot.
     #[serde(default)]
     optimized: bool,
+    /// `--allow-eval`: the eval hook table and Magician bridge are present.
+    #[serde(default)]
+    allow_eval: bool,
 }
 
 #[derive(Deserialize)]
@@ -584,6 +591,9 @@ struct Local {
     frame_offset: usize,
     php_type: String,
     storage: String,
+    /// Metadata role (`php_local`, `static_local`, `ref_cell`, ...).
+    #[serde(default)]
+    kind: String,
     state_offset: Option<usize>,
     /// Parameter index when this local is a function parameter.
     #[serde(default)]
@@ -837,6 +847,8 @@ struct Debugger {
     next_fiber_thread: i64,
     /// `--debug-optimized`: report slots that no longer hold their value.
     optimized: bool,
+    /// `--allow-eval`: arbitrary Magician evaluation is enabled.
+    allow_eval: bool,
 }
 
 impl Debugger {
@@ -879,6 +891,7 @@ impl Debugger {
             .map(|class| (class.id, class))
             .collect();
         let optimized = metadata.optimized;
+        let allow_eval = metadata.allow_eval;
         Ok(Self {
             sources,
             source_hashes,
@@ -908,6 +921,7 @@ impl Debugger {
             thread_fibers: HashMap::new(),
             next_fiber_thread: 2,
             optimized,
+            allow_eval,
         })
     }
 
@@ -1417,7 +1431,7 @@ impl Debugger {
                 "h" | "help" => {
                     eprintln!(
                         "commands: continue|c, next|n, step|s, finish|f, bt, locals,\n\
-                         p <name>, quit|q"
+                         p <name>, eval <expr>, quit|q"
                     );
                 }
                 "bt" | "stack" => self.print_stack(),
@@ -1437,6 +1451,9 @@ impl Debugger {
                 other if other.starts_with("p ") => {
                     let name = other[2..].trim().trim_start_matches('$');
                     self.print_local(name);
+                }
+                other if other.starts_with("eval ") => {
+                    self.print_eval(other[5..].trim());
                 }
                 other => eprintln!("unknown command '{other}' (try help)"),
             }
@@ -1473,6 +1490,18 @@ impl Debugger {
             return;
         };
         self.print_one_local(local, frame.frame, frame.last_site);
+    }
+
+    /// Evaluates an opt-in arbitrary PHP expression in the selected activation.
+    fn print_eval(&self, expression: &str) {
+        let Some(frame) = self.selected_activation() else {
+            eprintln!("no active frame");
+            return;
+        };
+        match native_eval::evaluate(self, frame, expression) {
+            Ok(text) => eprintln!("{text}"),
+            Err(error) => eprintln!("eval: {error}"),
+        }
     }
 
     /// Returns whether `local` has no valid frame value at `site`.
@@ -2311,6 +2340,9 @@ fn write_postmortem(throwable: usize) {
 /// Debugger hook called by the throw helper before choosing a handler.
 #[no_mangle]
 pub extern "C" fn elephc_debug_exception_inner(caught: u32, throwable: usize) {
+    if native_eval::executing() {
+        return;
+    }
     let calls = CALLS_ENABLED.load(Ordering::Relaxed);
     let exception_breaks = EXCEPTION_BREAKS_ACTIVE.load(Ordering::Relaxed);
     if calls || exception_breaks {
@@ -2502,6 +2534,9 @@ pub extern "C" fn elephc_debug_exit_inner(
 /// call, so a pause may inspect/read the stopped frame.
 #[no_mangle]
 pub extern "C" fn elephc_debug_site_inner(site_id: u32, frame: usize) {
+    if native_eval::executing() {
+        return;
+    }
     LAST_FRAME.store(frame, Ordering::Relaxed);
     if let Some(counter) = SITE_COUNTS.get(site_id as usize) {
         let _ = counter.fetch_add(1, Ordering::Relaxed);

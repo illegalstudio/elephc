@@ -187,6 +187,8 @@ Diagnostics:
   --debug                 Debug build preset: DWARF, symbols, no EIR/AST optimization
   --debug-optimized       Debug preset that keeps metadata/guards and allows optimization;
                           optimized-out locals are reported as <optimized out>
+  --allow-eval            Debug-only: enable arbitrary Magician evaluation in the
+                          terminal/DAP debugger (links the eval bridge)
   --debug-info            Embed DWARF line info for debuggers
   --keep-symbols          Keep the symbol table (stripped by default; for profilers)
 
@@ -238,6 +240,9 @@ pub(crate) struct CliConfig {
     /// and EIR optimizations. Locals whose slot no longer holds the PHP value
     /// are reported as `<optimized out>`.
     pub(crate) debug_optimized: bool,
+    /// Debug-only: link the Magician eval bridge and publish the debugger eval
+    /// hook table, enabling arbitrary expression evaluation at a stop.
+    pub(crate) allow_eval: bool,
     /// Keep the symbol table in the linked executable; it is stripped by default.
     pub(crate) keep_symbols: bool,
     pub(crate) regalloc_linear: bool,
@@ -404,6 +409,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut emit_debug_info = false;
     let mut debug_build = false;
     let mut debug_optimized = false;
+    let mut allow_eval = false;
     let mut keep_symbols = false;
     let mut filename_arg = None;
     let mut target = Target::detect_host();
@@ -524,6 +530,8 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             debug_build = true;
         } else if arg == "--debug-optimized" {
             debug_optimized = true;
+        } else if arg == "--allow-eval" {
+            allow_eval = true;
         } else if arg == "--debug-info" {
             emit_debug_info = true;
         } else if arg == "--keep-symbols" {
@@ -688,6 +696,12 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
     if debug_optimized {
         debug_build = true;
     }
+    if allow_eval && !debug_build {
+        fail("--allow-eval requires --debug or --debug-optimized: the eval hooks live in the debug runtime");
+    }
+    if allow_eval && target.is_ios() {
+        fail("--allow-eval is not supported for iOS: interactive debug builds are compile-only");
+    }
     if debug_build {
         // An iOS library is the documented compile-only form: it carries metadata
         // and dormant guards for a host app, but cannot start a debug session.
@@ -703,6 +717,12 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
             ir_opt = false;
         }
         with_crates.insert("debug".to_string());
+        if allow_eval {
+            // Force the Magician archive into the link; the generated hook table
+            // references its eval ABI directly, and the runtime feature below
+            // emits the catalog/inventory surface.
+            with_crates.insert("eval".to_string());
+        }
     }
     if web && emit_asm {
         fail("--web cannot be combined with --emit-asm");
@@ -755,6 +775,7 @@ pub(crate) fn parse_compile_args(args: &[String]) -> CliConfig {
         emit_debug_info,
         debug_build,
         debug_optimized,
+        allow_eval,
         keep_symbols,
         regalloc_linear,
         ir_opt,
@@ -1214,6 +1235,18 @@ mod tests {
         assert!(
             optimized.with_crates.contains("debug"),
             "--debug-optimized must still link the debug runtime"
+        );
+
+        let evaluated = compile_config(&[
+            "elephc".to_string(),
+            "--debug".to_string(),
+            "--allow-eval".to_string(),
+            "app.php".to_string(),
+        ]);
+        assert!(evaluated.allow_eval, "--allow-eval must record the opt-in");
+        assert!(
+            evaluated.with_crates.contains("eval"),
+            "--allow-eval must force the Magician bridge"
         );
 
         let info = compile_config(&[

@@ -277,9 +277,11 @@ Value formatting:
 - report uninitialized locals as `undefined`, not zero.
 
 `evaluate` v1 is a read-only subset: locals, property reads, array indices,
-`count`, simple arithmetic. Arbitrary PHP evaluation is a separate opt-in
-through Magician (`--allow-eval`), debug builds only, and is not part of the v1
-MVP.
+`count`, simple arithmetic. Arbitrary PHP evaluation is implemented as a
+separate opt-in through Magician (`--allow-eval`), debug builds only. The
+debugger snapshots the selected frame's locals into a fresh eval scope, pushes
+the method class scope, executes and renders the result; assignments stay in the
+snapshot and debug stops are suppressed while eval runs.
 
 ## D8. Target matrix
 
