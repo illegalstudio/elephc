@@ -140,6 +140,26 @@ fn probe_detects_fileinfo_in_autoloaded_classes() {
     }
 }
 
+/// `$_REQUEST` observers in Composer-loaded classes retain request population.
+#[test]
+fn probe_detects_web_request_observers_in_autoloaded_classes() {
+    let project = ProbeProject::new();
+    let defines = std::collections::HashSet::new();
+    for (body, observes) in [
+        (r"return $_REQUEST['q'] ?? 'MISSING';", true),
+        (r"return $GLOBALS['_REQUEST']['q'] ?? 'MISSING';", true),
+        (r"return $_ENV['PATH'] ?? 'MISSING';", false),
+        (r"return $_GET['q'] ?? 'MISSING';", false),
+    ] {
+        fs::write(project.0.join("src/Probe.php"), format!(
+            "<?php namespace App; class Probe {{ public function read() {{ {body} }} }}",
+        )).unwrap();
+        let (registry, program) = Registry::build(&project.0, parse("<?php new App\\Probe();"));
+        let groups = autoloaded_prelude_groups(&program, &project.0, &registry, &defines);
+        assert_eq!(groups.contains("web_request"), observes, "{body}");
+    }
+}
+
 /// Random, BcMath, GMP, and DateTimeZone::listIdentifiers in an autoloaded method
 /// are the only uses that must turn those preludes on.
 #[test]

@@ -36,6 +36,14 @@ type RequestHook = extern "C" fn(
 /// Signature of the runtime's session teardown.
 type EndHook = extern "C" fn();
 
+/// Returns whether this process carries a route-selected debug hook.
+///
+/// The worker checks this before materializing headers for the hook; the common
+/// production path allocates nothing.
+pub(crate) fn active() -> bool {
+    unsafe { core::ptr::addr_of!(elephc_debug_web_request_fn).read() != 0 }
+}
+
 /// Offers one request to the debug route hook, if this binary carries one.
 pub(crate) fn request_begin(method: &str, path: &str, headers: &[(String, String)]) {
     let hook = unsafe { core::ptr::addr_of!(elephc_debug_web_request_fn).read() };

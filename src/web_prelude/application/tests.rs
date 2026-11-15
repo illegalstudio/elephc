@@ -16,6 +16,7 @@ mod parameters;
 fn application_request_usage(
     source: &str,
     autoload_observes_environment: bool,
+    autoload_observes_request: bool,
 ) -> crate::prelude_prune::usage::Usage {
     let tokens = crate::lexer::tokenize(source).expect("fixture tokenizes");
     let program = crate::parser::parse(&tokens)
@@ -23,12 +24,24 @@ fn application_request_usage(
     let injected = inject_with_autoload_usage(
         program, PhpVersion::Php85, &[], &mut Default::default(), None,
         autoload_observes_environment,
+        autoload_observes_request,
     );
     let body = injected.iter().find_map(|statement| match &statement.kind {
         StmtKind::FunctionDecl { name, body, .. } if name == "__elephc_web_prepare_request" => Some(body),
         _ => None,
     }).expect("application request helper");
     crate::prelude_prune::usage::collect(body)
+}
+
+/// An autoloaded `$_REQUEST` observer keeps request population even when the
+/// entry program never spells the superglobal.
+#[test]
+fn application_request_demand_honours_autoload_observer() {
+    let usage = application_request_usage("<?php echo 'ok';", false, true);
+    assert!(
+        usage.variables.contains("_REQUEST") || usage.storage_variables.contains("_REQUEST"),
+        "autoloaded request observer must retain $_REQUEST population"
+    );
 }
 
 /// Unobserved request environments skip enumeration while retaining the empty session scratch array.
@@ -42,7 +55,7 @@ fn application_environment_demand_omits_unobserved_values() {
         "<?php $fn = fn() => 'ok'; echo $fn();",
         "<?php session_set_cookie_params(['path' => '/']); session_start();",
     ] {
-        let usage = application_request_usage(source, false);
+        let usage = application_request_usage(source, false, false);
         assert!(!usage.references("elephc_web_env_count"), "{source}");
         assert!(usage.storage_variables.contains("_ENV"), "{source}");
     }
@@ -61,7 +74,7 @@ fn application_environment_demand_keeps_observable_values() {
         "<?php eval($code);",
         "<?php function invoke(string $fn) { $fn(); } invoke($callback);",
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
@@ -79,7 +92,7 @@ fn application_environment_demand_ignores_unreferenced_callbacks() {
         "<?php function unused() { other($fn); } function other(callable $callback) { unused(); $callback(); } echo 'ok';",
         "<?php interface Resource { public function close(): void; } class Host implements Resource { public function close(): void {} public function unused() { self::dispatch($fn); } private static function dispatch(callable $callback) { $callback(); } } echo 'ok';",
     ] {
-        assert!(!application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(!application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
@@ -119,7 +132,7 @@ fn application_environment_demand_preserves_referenced_callbacks() {
         "<?php class Config { public function map(callable $callback) { $callback(); } } $config?->$method($callback);",
         "<?php extern function invoke_native(callable $callback): void; function helper(callable $callback) { $callback(); } invoke_native($target);",
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
@@ -160,10 +173,10 @@ function helper(mixed ...$values): int {{
     $prefix = 'ev'; $fn = $prefix . 'al'; $fn('echo $_ENV["PATH"];'); return 0;
 }}
 {call};"#);
-        assert!(application_request_usage(&source, false).references("elephc_web_env_count"), "{call}");
+        assert!(application_request_usage(&source, false, false).references("elephc_web_env_count"), "{call}");
     }
     assert!(application_request_usage(
-        "<?php $dispatch = 'compact'; $dispatch('_ENV');", false,
+        "<?php $dispatch = 'compact'; $dispatch('_ENV');", false, false,
     ).references("elephc_web_env_count"));
 }
 
@@ -175,11 +188,11 @@ fn application_environment_demand_keeps_escaped_callable_names() {
         r#"<?php class C { public static function méthode(callable $callback) { $callback(); } } $fn = "C::m\xc3\xa9thode"; $fn($source);"#,
         r#"<?php class C { public function méthode(callable $callback) { $callback(); } } $fn = [$object, "m\xc3\xa9thode"]; $fn($source);"#,
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
     let source = format!(r#"<?php function target{suffix}(callable $callback) {{ $callback(); }}
 $fn = "target\u{{e000}}"; $fn($source);"#, suffix = '\u{e000}');
-    assert!(application_request_usage(&source, false).references("elephc_web_env_count"));
+    assert!(application_request_usage(&source, false, false).references("elephc_web_env_count"));
 }
 
 /// Native callback constructors follow aliases and keep unread string/array targets conservative.
@@ -192,7 +205,7 @@ fn application_environment_demand_keeps_native_callback_constructors() {
         "<?php use RecursiveCallbackFilterIterator as Filter; function helper(callable $callback) { $callback(); } new Filter($iterator, callback: 'hel' . 'per');",
         "<?php class Handler { public function test() { $prefix = 'ev'; $fn = $prefix . 'al'; $fn($source); } } new CallbackFilterIterator($iterator, [new Handler(), 'te' . 'st']);",
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
     for source in [
         "<?php function unused(callable $callback) { $callback(); } new Fiber('strlen');",
@@ -200,7 +213,7 @@ fn application_environment_demand_keeps_native_callback_constructors() {
         "<?php function unused(callable $callback) { $callback(); } $fn = 'array_any'; echo 'ok';",
         "<?php function unused(callable $callback) { $callback(); } $fn = 'strlen'; $fn('array_any');",
     ] {
-        assert!(!application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(!application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
@@ -224,7 +237,7 @@ fn application_environment_demand_keeps_native_constructor_paths() {
         let source = if construction.starts_with("namespace") {
             format!("<?php namespace {{ {helper} }} {construction}")
         } else { format!("<?php {helper} {construction}") };
-        assert!(application_request_usage(&source, false).references("elephc_web_env_count"), "{construction}");
+        assert!(application_request_usage(&source, false, false).references("elephc_web_env_count"), "{construction}");
     }
     for construction in [
         "new CallbackFilterIterator($iterator, 'strlen');",
@@ -235,7 +248,7 @@ fn application_environment_demand_keeps_native_constructor_paths() {
         "class Filter extends CallbackFilterIterator { public static function make($iterator) { return new parent($iterator, 'strlen'); } } Filter::make($iterator);",
     ] {
         let source = format!("<?php function unused(callable $callback) {{ $callback(); }} {construction}");
-        assert!(!application_request_usage(&source, false).references("elephc_web_env_count"), "{construction}");
+        assert!(!application_request_usage(&source, false, false).references("elephc_web_env_count"), "{construction}");
     }
     for source in [
         "<?php new Fiber($callback);",
@@ -243,10 +256,10 @@ fn application_environment_demand_keeps_native_constructor_paths() {
         "<?php new CallbackFilterIterator($iterator, $callback);",
         "<?php new $class($callback);",
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
     assert!(!application_request_usage(
-        "<?php class Data { public function __construct(string $label) {} } new Data('ok'); function_exists($name);", false,
+        "<?php class Data { public function __construct(string $label) {} } new Data('ok'); function_exists($name);", false, false,
     ).references("elephc_web_env_count"));
 }
 
@@ -263,10 +276,10 @@ class Handler {{ public function test(): void {{
     $prefix = 'ev'; $exec = $prefix . 'al'; $exec('echo $_ENV["PATH"];');
 }} }}
 {dispatch}"#);
-        assert!(application_request_usage(&source, false).references("elephc_web_env_count"), "{dispatch}");
+        assert!(application_request_usage(&source, false, false).references("elephc_web_env_count"), "{dispatch}");
     }
     assert!(!application_request_usage(
-        "<?php function unused(mixed ...$fn) {} $fn = 'strlen'; $fn('ok');", false,
+        "<?php function unused(mixed ...$fn) {} $fn = 'strlen'; $fn('ok');", false, false,
     ).references("elephc_web_env_count"));
 }
 
@@ -278,14 +291,14 @@ fn application_environment_demand_keeps_explicit_generic_calls() {
         "<?php namespace App; function dispatch<T>(callable $callback, T $value) { $callback($value); } dispatch<App\\Value>($source, $value);",
         "<?php class C { public function dispatch<T>(callable $callback, T $value) { $callback($value); } } $object = new C(); $object->dispatch<int>($source, 1);",
     ] {
-        assert!(application_request_usage(source, false).references("elephc_web_env_count"), "{source}");
+        assert!(application_request_usage(source, false, false).references("elephc_web_env_count"), "{source}");
     }
 }
 
 /// Autoload probe demand retains population even when the entry program has no observer.
 #[test]
 fn application_environment_demand_keeps_autoloaded_values() {
-    assert!(application_request_usage("<?php echo 'ok';", true).references("elephc_web_env_count"));
+    assert!(application_request_usage("<?php echo 'ok';", true, false).references("elephc_web_env_count"));
 }
 
 /// A 2 MiB embedder thread can inject a deeply nested program and return it to its owner.
