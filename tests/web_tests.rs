@@ -4053,6 +4053,64 @@ fn web_namespaced_program_serves() {
     assert!(resp.ends_with("hi ada"), "namespaced --web program: {:?}", resp);
 }
 
+/// An uncaught Throwable goes to the handler `set_exception_handler()` registered, as `php -S`
+/// does: the response stands (200) with what the handler printed. Without a handler it is
+/// still the catch-all's 500, and the worker serves the next request either way. Bodies from
+/// php 8.5 `php -S`.
+#[test]
+fn web_uncaught_exception_reaches_the_registered_exception_handler() {
+    let dir = make_test_dir("web_exc_handler");
+    let src = "<?php \
+        if (($_GET['h'] ?? '') === '1') { set_exception_handler(function ($e) { echo 'handled:', $e->getMessage(); }); } \
+        echo 'before;'; \
+        if (($_GET['t'] ?? '') === '1') { throw new Exception('boom'); } \
+        echo 'ok';";
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let handled = http_request(&addr, "GET", "/?t=1&h=1", &[], "");
+    let bare = http_request(&addr, "GET", "/?t=1", &[], "");
+    let after = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(handled.starts_with("HTTP/1.1 200"), "a handled exception keeps the status: {handled:?}");
+    assert_eq!(raw_response_body(&handled), "before;handled:boom");
+    assert!(bare.starts_with("HTTP/1.1 500"), "no handler: {bare:?}");
+    assert_eq!(raw_response_body(&after), "before;ok");
+}
+
+/// A namespaced program gets the same catch-all, wrapped run by run where the code stands: the
+/// worker survives an uncaught Throwable (it used to `exit`, losing the response), the handler
+/// receives it, and the statements after the throw, in a later namespace block too, do not
+/// run. Bodies from php 8.5 `php -S`.
+#[test]
+fn web_namespaced_uncaught_exception_keeps_the_worker_and_ends_the_script() {
+    let dir = make_test_dir("web_ns_exc");
+    let src = "<?php \
+        namespace App { \
+            class Boom { public static function go(): void { throw new \\LogicException('boom'); } } \
+            if (($_GET['h'] ?? '') === '1') { set_exception_handler(function ($e) { echo 'handled:', get_class($e), ':', $e->getMessage(); }); } \
+            echo 'a;'; \
+            if (($_GET['t'] ?? '') === '1') { Boom::go(); } \
+        } \
+        namespace Other { echo 'b'; }";
+    let bin = compile_web(&dir, src, "app");
+    let addr = format!("127.0.0.1:{}", free_port());
+    let mut child = spawn_server(&bin, &addr, "1");
+    let plain = http_request(&addr, "GET", "/", &[], "");
+    let bare = http_request(&addr, "GET", "/?t=1", &[], "");
+    let handled = http_request(&addr, "GET", "/?t=1&h=1", &[], "");
+    let after = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_eq!(raw_response_body(&plain), "a;b");
+    assert!(bare.starts_with("HTTP/1.1 500"), "no handler: {bare:?}");
+    assert_eq!(raw_response_body(&bare), "a;");
+    assert!(handled.starts_with("HTTP/1.1 200"), "a handled exception keeps the status: {handled:?}");
+    assert_eq!(raw_response_body(&handled), "a;handled:LogicException:boom");
+    assert_eq!(raw_response_body(&after), "a;b", "the worker serves the next request");
+}
+
 /// Verifies the OPcache `opcache_get_status()` prelude function under `--web`, where the
 /// cache is enabled (`opcache.enable` default). Spot-checks the enabled status array:
 /// `opcache_enabled` true; the class-B memory invariant (used + free + wasted ==

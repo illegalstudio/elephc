@@ -25,7 +25,8 @@ use std::path::Path;
 
 use crate::parser::ast::{BinOp, Program, Stmt, StmtKind};
 use crate::synthetic_class::{
-    e_binop, e_call, e_const, e_int, e_static_prop, s_assign, s_expr, s_if, s_try,
+    e_binop, e_bool, e_call, e_closure_call, e_const, e_int, e_not, e_null,
+    e_static_prop, e_var, s_assign, s_expr, s_if, s_try,
 };
 
 use crate::prelude_prune::usage;
@@ -101,34 +102,123 @@ pub(crate) fn web_wrap_stmt() -> Stmt {
     crate::synthetic_class::internal_declarations(|| {
         vec![s_try(
             vec![s_assign("__elephc_wrap", e_int(0))],
-            vec![(
-                vec!["\\Throwable"],
-                Some("__elephc_exc"),
-                vec![s_expr(e_call(
-                    "elephc_web_handle_uncaught_exception",
-                    vec![],
-                ))],
-            )],
-            Some(vec![
-                s_expr(e_call(crate::names::SHUTDOWN_RUN_FUNCTION, vec![])),
-                s_if(
-                    e_binop(
-                        e_binop(
-                            e_call("elephc_web_session_get_status", vec![]),
-                            BinOp::StrictEq,
-                            e_const("PHP_SESSION_ACTIVE"),
-                        ),
-                        BinOp::And,
-                        e_static_prop("__ElephcSessionState", "shutdown"),
-                    ),
-                    vec![s_expr(e_call("session_write_close", vec![]))],
-                    vec![],
-                    None,
-                ),
-            ]),
+            vec![(vec!["\\Throwable"], Some("__elephc_exc"), uncaught_dispatch())],
+            Some(request_end()),
         )]
     })
-    .remove(0)
+    .into_iter()
+    .next()
+    .expect("the wrapper is one statement")
+}
+
+/// What the catch-all does with an uncaught Throwable, as PHP does at the end of a script: a
+/// handler registered with `set_exception_handler()` receives it and the response stands
+/// (`php -S` answers 200 with whatever the handler printed); with none, or when the handler
+/// throws in turn, the response becomes a 500 (`elephc_web_handle_uncaught_exception`).
+///
+/// Names are spelled fully qualified because the namespaced wrap places this inside the
+/// program's own namespaces.
+fn uncaught_dispatch() -> Vec<Stmt> {
+    let fail = || s_expr(e_call("\\elephc_web_handle_uncaught_exception", vec![]));
+    vec![
+        s_assign("__elephc_exc_handler", e_call("\\set_exception_handler", vec![e_null()])),
+        s_if(
+            e_binop(e_var("__elephc_exc_handler"), BinOp::StrictNotEq, e_null()),
+            vec![s_try(
+                vec![s_expr(e_closure_call("__elephc_exc_handler", vec![e_var("__elephc_exc")]))],
+                vec![(vec!["\\Throwable"], Some("__elephc_exc"), vec![fail()])],
+                None,
+            )],
+            vec![],
+            Some(vec![fail()]),
+        ),
+    ]
+}
+
+/// What runs once the handler body is done, on the success and the exception path alike: the
+/// `register_shutdown_function()` drain, then an active session's write-close.
+fn request_end() -> Vec<Stmt> {
+    vec![
+        s_expr(e_call(&format!("\\{}", crate::names::SHUTDOWN_RUN_FUNCTION), vec![])),
+        s_if(
+            e_binop(
+                e_binop(
+                    e_call("\\elephc_web_session_get_status", vec![]),
+                    BinOp::StrictEq,
+                    e_const("\\PHP_SESSION_ACTIVE"),
+                ),
+                BinOp::And,
+                e_static_prop("\\__ElephcSessionState", "shutdown"),
+            ),
+            vec![s_expr(e_call("\\session_write_close", vec![]))],
+            vec![],
+            None,
+        ),
+    ]
+}
+
+/// The catch-all for a namespaced program, which cannot be hoisted the way a flat one is: a
+/// `namespace X;` or `namespace X { … }` scopes the declarations after it, so moving them out of
+/// their place would leave them in the wrong namespace. Instead every run of executable
+/// statements is wrapped where it stands, in its own namespace. A run after an uncaught
+/// Throwable is skipped (PHP ends the script there), and the request end runs once, last.
+fn wrap_namespaced_program(program: Program) -> Program {
+    crate::synthetic_class::internal_declarations(|| {
+        // The web prelude's own statements already precede the program's first `namespace`.
+        let mut wrapped = vec![s_assign(ABORTED_FLAG, e_bool(false))];
+        wrapped.extend(wrap_runs_in_place(program));
+        wrapped.extend(request_end());
+        wrapped
+    })
+}
+
+/// Set once an uncaught Throwable has been dispatched, so the later runs are skipped.
+const ABORTED_FLAG: &str = "__elephc_aborted";
+
+/// Wraps each maximal run of executable statements of `body` in a guarded catch-all `try`,
+/// leaving declarations, imports and namespace statements in place.
+fn wrap_runs_in_place(body: Program) -> Program {
+    let mut out = Vec::with_capacity(body.len());
+    let mut run: Program = Vec::new();
+    let flush = |out: &mut Program, run: &mut Program| {
+        if run.is_empty() {
+            return;
+        }
+        let mut catch_body = vec![s_assign(ABORTED_FLAG, e_bool(true))];
+        catch_body.extend(uncaught_dispatch());
+        out.push(s_if(
+            e_not(e_var(ABORTED_FLAG)),
+            vec![s_try(std::mem::take(run), vec![(vec!["\\Throwable"], Some("__elephc_exc"), catch_body)], None)],
+            vec![],
+            None,
+        ));
+    };
+    for mut stmt in body {
+        match &mut stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } => {
+                flush(&mut out, &mut run);
+                *body = wrap_runs_in_place(std::mem::take(body));
+                out.push(stmt);
+            }
+            kind if is_hoistable_decl(kind)
+                || matches!(
+                    kind,
+                    StmtKind::NamespaceDecl { .. }
+                        | StmtKind::UseDecl { .. }
+                        | StmtKind::ConstDecl { .. }
+                        | StmtKind::FunctionVariantGroup { .. }
+                        | StmtKind::FunctionVariantMark { .. }
+                        | StmtKind::ClassLikeActivate { .. }
+                ) =>
+            {
+                flush(&mut out, &mut run);
+                out.push(stmt);
+            }
+            _ => run.push(stmt),
+        }
+    }
+    flush(&mut out, &mut run);
+    out
 }
 
 /// The synthetic function the `--web` entry stub calls before it starts serving.
@@ -325,17 +415,18 @@ fn inject_if_web_on_compiler_stack(
     // The catch-all try wrap below reorders the top level (declarations hoisted
     // out, executables wrapped). That reordering is unsafe across namespace
     // boundaries: a `namespace X;` / `namespace X { … }` would be separated from
-    // the declarations it scopes, leaving them in the wrong namespace. For
-    // namespaced programs with application-defined classes skip the wrap
-    // entirely — such programs do their own error handling — and keep B1's
-    // uncaught-exception → 500 net only for flat, non-namespaced programs.
+    // the declarations it scopes, leaving them in the wrong namespace. A
+    // namespaced program has each run of executable statements wrapped where it
+    // stands instead. Skipping the wrap left an uncaught Throwable to the
+    // process-level path, which ends in `exit`: the response was lost and the
+    // worker died.
     if combined.iter().any(|s| {
         matches!(
             s.kind,
             StmtKind::NamespaceDecl { .. } | StmtKind::NamespaceBlock { .. }
         )
     }) {
-        return combined;
+        return wrap_namespaced_program(combined);
     }
 
     // Partition the top level: hoistable declarations (functions, classes, externs)
