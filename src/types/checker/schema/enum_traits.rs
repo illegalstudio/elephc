@@ -1,12 +1,17 @@
 //! Purpose:
-//! Validates abstract trait method requirements against an enum's final implementations.
+//! Validates abstract trait method requirements against an enum's or a class's final
+//! implementations.
 //!
 //! Called from:
 //! - `crate::types::checker::driver::check_types_impl()` after enum schema construction.
 //!
 //! Key details:
 //! - Local methods win trait composition but must not erase abstract requirements.
-//! - Nested trait requirements bind relative types to the consuming enum.
+//! - Nested trait requirements bind relative types to the consuming enum or class.
+//! - For a class, flattening drops a requirement that another trait's method or the class's own
+//!   method satisfies; that method must still be compatible with it, as PHP checks
+//!   (`Declaration of C::foo() must be compatible with T::foo()`). Visibility is not compared:
+//!   PHP 8.5 lets a private method satisfy an abstract public trait method.
 
 use std::collections::{HashMap, HashSet};
 
@@ -48,6 +53,93 @@ pub(crate) fn validate_enum_trait_requirements(
                 }
             }
         }
+    }
+    Ok(())
+}
+
+/// Checks every recursively imported abstract trait method of each class against the concrete
+/// method the class ended up with: its own method or another trait's. A requirement still
+/// abstract after flattening (left to a subclass, or satisfied by an inherited method) has no
+/// such method and is not checked here.
+pub(crate) fn validate_class_trait_requirements(
+    checker: &Checker,
+    program: &Program,
+    classes: &[FlattenedClass],
+) -> Vec<CompileError> {
+    let mut errors = Vec::new();
+    if classes.iter().all(|class| class.used_traits.is_empty()) {
+        return errors;
+    }
+    let mut traits = HashMap::new();
+    collect_trait_members(program, &mut traits);
+    let mut class_uses = HashMap::new();
+    collect_class_trait_uses(program, &mut class_uses);
+    for class in classes.iter().filter(|class| !class.used_traits.is_empty()) {
+        let Some(uses) = class_uses.get(class.name.as_str()) else { continue };
+        for required in adapted_requirements(uses, &traits, &mut HashSet::new()) {
+            let Some(actual) = class.methods.iter().find(|method| {
+                !method.is_abstract && method.is_static == required.is_static
+                    && php_symbol_key(&method.name) == php_symbol_key(&required.name)
+            }) else { continue };
+            if let Err(error) = validate_class_requirement(checker, class, &required, actual) {
+                errors.extend(error.flatten());
+                break;
+            }
+        }
+    }
+    errors
+}
+
+/// Indexes each class declaration's trait uses by class name, through namespace blocks.
+fn collect_class_trait_uses<'a>(program: &'a [crate::parser::ast::Stmt], uses: &mut HashMap<&'a str, &'a [TraitUse]>) {
+    for stmt in program {
+        match &stmt.kind {
+            StmtKind::ClassDecl { name, trait_uses, .. } if !trait_uses.is_empty() => {
+                uses.insert(name.as_str(), trait_uses.as_slice());
+            }
+            StmtKind::NamespaceBlock { body, .. } => collect_class_trait_uses(body, uses),
+            _ => {}
+        }
+    }
+}
+
+/// Applies PHP's prototype check to the method that satisfies one abstract trait method: the
+/// parameters may only widen, a by-reference return stays by reference, and a declared return
+/// type must be honoured. Visibility is not compared (see the module notes).
+fn validate_class_requirement(
+    checker: &Checker,
+    class: &FlattenedClass,
+    required: &ClassMethod,
+    actual: &ClassMethod,
+) -> Result<(), CompileError> {
+    let mut required = required.clone();
+    required.substitute_relative_class_types(&class.name, class.extends.as_deref());
+    let required_sig = build_method_sig(checker, &required, &class.name)?;
+    let actual_sig = build_method_sig(checker, actual, &class.name)?;
+    validate_abstract_trait_signature(
+        checker, actual.span, &class.name, &actual.name, &actual_sig, &required_sig,
+    )?;
+    if required_sig.by_ref_return && !actual_sig.by_ref_return {
+        return Err(CompileError::new(actual.span, &format!(
+            "Cannot remove by-reference return when implementing trait method: {}::{}",
+            class.name, actual.name,
+        )));
+    }
+    let late_static_compatible = late_static_return_compatible(
+        checker, required.return_type.as_ref().filter(|hint| hint.contains_late_static()),
+        actual.return_type.as_ref(), &actual_sig.return_type, &class.name, actual.span,
+    )?;
+    if required_sig.declared_return
+        && !matches!(actual_sig.return_type, PhpType::Never)
+        && (!actual_sig.declared_return
+            || !late_static_compatible.unwrap_or_else(|| {
+                strict_type_accepts(checker, &required_sig.return_type, &actual_sig.return_type, false)
+            }))
+    {
+        return Err(CompileError::new(actual.span, &format!(
+            "Cannot change return type when implementing trait method: {}::{}",
+            class.name, actual.name,
+        )));
     }
     Ok(())
 }

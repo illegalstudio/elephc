@@ -59,7 +59,7 @@ fn test_error_instanceof_parent_requires_parent_class() {
 }
 
 /// Verifies that a class using two traits with conflicting method names (both `foo`)
-/// reports "ambiguous trait method" when no `insteadof` resolution is provided.
+/// reports PHP's collision error when no `insteadof` resolution is provided.
 #[test]
 fn test_error_trait_method_conflict_requires_insteadof() {
     expect_error(
@@ -68,7 +68,60 @@ trait A { public function foo() { return 1; } }
 trait B { public function foo() { return 2; } }
 class C { use A, B; }
 "#,
-        "ambiguous trait method 'foo'",
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
+    );
+}
+
+/// Two traits that reach one trait method are not a collision (see the codegen tests), but the
+/// collision rule still compares the method's origin: a trait that overrides the shared method,
+/// a copy whose visibility `as` changed, or an alias that meets another trait's method of that
+/// name still collides, with php 8.5.12's message.
+#[test]
+fn test_error_trait_method_collision_compares_origin() {
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return "T"; } }
+trait A { use T; public function foo() { return "A"; } }
+trait B { use T; }
+class C { use A, B; }
+"#,
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
+    );
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return "T"; } }
+trait A { use T { foo as protected; } }
+trait B { use T; }
+class C { use A, B; }
+"#,
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
+    );
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return "T"; } }
+trait A { use T; }
+trait B { use T; }
+class C { use A, B { A::foo as protected; } }
+"#,
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
+    );
+    expect_error(
+        r#"<?php
+trait T { public function foo() { return "T"; } }
+trait A { use T { foo as bar; } }
+trait B { public function bar() { return "B"; } }
+class C { use A, B; }
+"#,
+        "Trait method B::bar has not been applied as C::bar, because of collision with A::bar",
+    );
+    expect_error(
+        r#"<?php
+namespace N;
+trait T { public function foo() { return "T"; } }
+trait A { public function foo() { return "A"; } }
+class C { use T, A; }
+"#,
+        "Trait method N\\A::foo has not been applied as N\\C::foo, because of collision with N\\T::foo",
     );
 }
 
@@ -170,7 +223,7 @@ trait A { public function foo() { return 1; } }
 trait B { public function foo() { return 2; } }
 class C { use A; use B; }
 "#,
-        "imports duplicate trait method 'foo'",
+        "Trait method B::foo has not been applied as C::foo, because of collision with A::foo",
     );
 }
 
@@ -235,6 +288,67 @@ fn test_error_trait_requirement_merge_needs_a_compatible_signature() {
     ] {
         expect_error(source, "with a signature that differs from the abstract trait method it implements");
     }
+}
+
+/// The method that satisfies an abstract trait method, whether another trait's or the class's
+/// own, must be compatible with it, as php 8.5.12 checks (`Declaration of C::foo(string $x): int
+/// must be compatible with X::foo(int $x): string`).
+#[test]
+fn test_error_trait_requirement_signature_must_be_compatible() {
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(int $x): string; }
+trait Y { public function foo(string $x): int { return 1; } }
+class C { use X, Y; }
+"#,
+        "Cannot narrow parameter $x when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(int $x): string; }
+trait Y { public function foo(string $x): int { return 1; } }
+class C { use Y; use X; }
+"#,
+        "Cannot narrow parameter $x when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(int $a, int $b): string; }
+trait Y { public function foo(int $a): string { return "y"; } }
+class C { use X, Y; }
+"#,
+        "Incompatible parameter shape when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(): string; }
+trait Y { public function foo(): int { return 1; } }
+class C { use X; use Y; }
+"#,
+        "Cannot change return type when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function &foo(): array; }
+trait Y { public function foo(): array { return []; } }
+class C { use X, Y; }
+"#,
+        "Cannot remove by-reference return when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(int $x): string; }
+class C { use X; public function foo(string $x): int { return 1; } }
+"#,
+        "Cannot narrow parameter $x when implementing trait method: C::foo",
+    );
+    expect_error(
+        r#"<?php
+trait X { abstract public function foo(): string; }
+class C { use X; public function foo() { return "c"; } }
+"#,
+        "Cannot change return type when implementing trait method: C::foo",
+    );
 }
 
 /// Verifies that a class using two traits with a property of the same name but
