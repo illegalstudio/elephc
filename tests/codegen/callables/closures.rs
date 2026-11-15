@@ -2644,3 +2644,27 @@ echo implode(",", array_map(fn($s) => str_pad($s, 3, "*"), ["a", "bb"])), "\n";
     );
     assert_eq!(out, "a**,bb*\n");
 }
+
+/// Regression test for #2284: a trailing comma in a closure's `use` list (PHP 8.0+), on one line
+/// or spread over several, keeps every capture and the by-reference flag of `&$b,`: the closure
+/// writes 10 through `$b` and returns the by-value `$a`, so the caller sees "110|7".
+#[test]
+fn test_closure_use_list_trailing_comma() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 100;
+$b = 0;
+$f = function () use (
+    $a,
+    &$b,
+): int {
+    $b = 10;
+    return $a;
+};
+$c = 7;
+$g = static function () use ($c,) { return $c; };
+echo $f() + $b, "|", $g();
+"#,
+    );
+    assert_eq!(out, "110|7");
+}

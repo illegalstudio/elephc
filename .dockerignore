@@ -1,0 +1,10 @@
+# Keep the Docker build context small: the compiler is built from source, but
+# local target directories, worktrees, and git metadata are not inputs.
+target
+.git
+.claude
+.trail
+.beads
+examples/*/main
+examples/*/*.s
+examples/*/*.o

@@ -273,9 +273,80 @@ These manual measurements have different scopes (including parse/deserialize or
 compile/link time). They do not join the process-execution histories or run in
 the trend CI job.
 
+## HTTP server (`--web`)
+
+The process suites above time short-lived programs. A `--web` binary is a
+long-running prefork HTTP server, so it has its own bash runner and is **not**
+part of the historical dashboard. The rest of `benchmark/` remains Python; the
+two web scripts are bash so the long-running-server path needs no Python
+runtime:
+
+```bash
+./benchmark/web/run.sh
+./benchmark/web/run.sh --workers 4 --threads 4 --connections 100 --duration 10s
+./benchmark/web/run.sh --isolation pool --workers 8 --threads 4 --connections 32
+./benchmark/web/run.sh --workers 8 --clients 3 --threads 4 --connections 200
+./benchmark/web/run.sh --workers 1 --cpu
+./benchmark/web/run.sh --no-build --compiler target/release/elephc \
+  --json web-results.json --markdown web-results.md
+./benchmark/web/run.sh --k6 vus --k6 constant
+```
+
+The default fixture, `benchmark/web/hello.php`, is the minimal handler from the
+[FrankenPHP vs PHP-FPM article](https://vulovic.me/frankenphp-vs-php-fpm-benchmarks-surprises-and-one-clear-winner-173231cb1ad5):
+one `echo` and one `$_SERVER['SERVER_SOFTWARE']` read. The runner compiles it
+with `--web`, starts the server on an ephemeral port, warms up with `wrk`, then
+takes repeated measurements and reports the median. `--clients N` starts N
+concurrent `wrk` processes and reports aggregate throughput (useful for proving
+whether one load generator is the bottleneck); `--cpu` samples the server
+master and workers (`ps -o utime,stime` on macOS, `/proc` on Linux) and reports
+server CPU per request, which stays meaningful when the host is busy;
+`--php-baseline` measures the same fixture under `php -S` (single process, not
+PHP-FPM), and `--k6` runs the article's 100-VU and 5,000 req/s shapes.
+`--isolation` selects the compiled `--web-isolation` mode: `worker` is the
+fastest in-process path but a blocking PHP handler pins a keep-alive connection
+to one worker; `pool` and `request` move PHP behind the handler broker and are
+the relevant modes for concurrent real workloads.
+
+`wrk` is required. `--k6` requires `k6` and `jq`; `--php-baseline` requires
+`php`. Results depend heavily on host load: run on an otherwise idle machine,
+and keep the worker count and load-generator shape identical across
+comparisons. The JSON result records the load average, platform, compiler
+version, and every raw round.
+
+To compare the origin with an already-running Nginx + PHP-FPM reference, use
+the separate comparison client:
+
+```bash
+./benchmark/web/fpm_compare.sh \
+  --elephc-url http://127.0.0.1:8080/ \
+  --fpm-url http://127.0.0.1:8081/ \
+  --threads 4 --connections 100 --duration 10s --repeat 3
+```
+
+Both URLs must serve the same fixture. The comparison runner measures
+keep-alive throughput/latency with `wrk` and a sequential new-connection path
+with a fresh TCP connection per request (`curl`); it does not start or configure
+either server. It alternates the two endpoints between repeats to reduce
+load-drift bias, and its JSON output keeps every raw round. `jq` is required for
+the comparison report. A run with non-2xx responses, socket errors, or failed
+new connections is invalid: the runner writes the reports for diagnosis and
+then exits non-zero, so a saturated or misconfigured endpoint cannot be
+published as a benchmark result.
+
+Use a quiet machine: a busy shared host can make high-concurrency FPM numbers
+unusable even when the Elephc side remains stable. On macOS,
+`kern.ipc.somaxconn` (128 by default) caps PHP-FPM's accept queue. A
+400-connection FPM run then returns `Connection refused`, which the runner now
+rejects; raise the limit for the run or compare at a concurrency at or below
+it. The c=64 reference used PHP-FPM `pm=static`, `pm.max_children=64`, and
+`listen.backlog=65535`, with Nginx `worker_processes 8`,
+`fastcgi_keep_conn on`, and an upstream `keepalive 64`.
+
 ## Tooling checks
 
 ```bash
+bash benchmark/tests/test_web_bash.sh
 python3 -B -m unittest discover -s benchmark/tests -v
 python3 -B benchmark/report.py
 git diff --check

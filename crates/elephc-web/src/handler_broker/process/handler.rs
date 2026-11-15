@@ -13,7 +13,7 @@
 use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 
-use crate::handler_ipc;
+use crate::handler_ipc::{self, HandlerRequest};
 use crate::probe_route;
 use crate::request_state::{self, RequestMeta};
 
@@ -46,33 +46,61 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
     // process that has to tag its samples, adopt an ask, and open an exact
     // slice. None of it happened in the isolated modes, which is why
     // `--web-isolation=pool|request` reported nothing at all.
-    let probe_route_label = probe_route::route_label(&request.method, &request.path);
-    let req_traceparent = request
-        .headers
+    let HandlerRequest {
+        method,
+        uri,
+        path,
+        query,
+        headers,
+        body,
+        remote_addr,
+        remote_port,
+        server_addr,
+        server_port,
+        protocol,
+        request_scheme,
+        https,
+    } = request;
+    let probe_route_label = if probe_route::active() {
+        probe_route::route_label(&method, &path)
+    } else {
+        String::new()
+    };
+    let traceparent = headers
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case("traceparent"))
         .map(|(_, v)| v.clone());
     // Signed, not merely present — the same authenticity check the default
     // worker applies, so a header captured from a log stops working within
     // minutes and an invented one never does.
-    let profile_this = request
-        .headers
+    let profile_this = headers
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case("x-elephc-query"))
         .is_some_and(|(_, value)| probe_route::query_is_authentic(value));
+    request_state::set_server_addr(&server_addr, server_port);
     request_state::set_request(
-        request.method,
-        request.uri,
-        request.path,
-        request.query,
-        request.headers,
-        request.body,
+        request_state::cstring(method.as_bytes()),
+        request_state::cstring(uri.as_bytes()),
+        request_state::cstring(path.as_bytes()),
+        request_state::cstring(query.as_bytes()),
+        headers
+            .into_iter()
+            .map(|(name, value)| {
+                (
+                    request_state::cstring(name.as_bytes()),
+                    request_state::cstring(value.as_bytes()),
+                )
+            })
+            .collect(),
+        body,
         RequestMeta {
-            remote_addr: request.remote_addr,
-            remote_port: request.remote_port,
-            server_addr: request.server_addr,
-            server_port: request.server_port,
-            protocol: request.protocol,
+            remote_addr: request_state::cstring(remote_addr.as_bytes()),
+            remote_port,
+            server_port,
+            request_scheme: (request_scheme != "http")
+                .then(|| request_state::cstring(request_scheme.as_bytes())),
+            https,
+            protocol: request_state::cstring(protocol.as_bytes()),
         },
     );
     request_state::begin_response_stream(stream.as_raw_fd());
@@ -87,7 +115,7 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
     // second way into the request path. Before the trace, because this call is
     // what decides whether the request is profiled at all.
     probe_route::profile_request_kind(if profile_this { 1 } else { 2 });
-    probe_route::trace_begin(req_traceparent.as_deref(), &probe_route_label);
+    probe_route::trace_begin(traceparent.as_deref(), &probe_route_label);
     let seconds = MAX_EXEC_SECS.load(std::sync::atomic::Ordering::Relaxed);
     if seconds > 0 {
         libc::alarm(seconds);

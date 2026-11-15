@@ -1,17 +1,20 @@
 //! Purpose:
-//! Per-worker HTTP serving: build a SO_REUSEPORT listening socket, run a tokio
-//! current-thread runtime, and dispatch each request to the PHP handler.
+//! Per-worker HTTP serving: take the worker listening socket (shared on Apple,
+//! per-worker `SO_REUSEPORT` on Linux, or the inherited Unix listener), run a
+//! tokio current-thread runtime, and dispatch each request to the PHP handler.
 //!
 //! Called from:
-//! - `crate::server::elephc_web_run` in each forked child process.
+//! - `crate::server::spawn_worker` in each forked child process.
 //!
 //! Key details:
 //! - current-thread runtime + a blocking handler() call means PHP never runs on
 //!   two threads in one worker; concurrency comes from the N forked workers.
-//! - SO_REUSEPORT lets every worker bind the same port; the kernel balances.
+//! - Linux uses one `SO_REUSEPORT` socket per worker; Apple targets accept on
+//!   inherited duplicates of the master socket; Unix sockets use the inherited
+//!   listener on every target.
 
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::ffi::CString;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -21,28 +24,13 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use socket2::{Domain, Protocol, Socket, Type};
-use tokio::net::TcpListener;
 use tokio::sync::watch;
 
+use crate::forwarded::{self, TrustedProxies};
+use crate::listener::{ListenSource, Listener};
 use crate::probe_route;
 use crate::request_state;
 use crate::session::upload_progress;
-
-/// Pending-connection backlog for each worker's listening socket.
-const LISTEN_BACKLOG: i32 = 1024;
-
-/// Builds a listening std::net::TcpListener with SO_REUSEPORT set, bound to `addr`.
-fn reuseport_listener(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
-    let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
-    let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
-    sock.set_reuse_address(true)?;
-    sock.set_reuse_port(true)?;
-    sock.set_nonblocking(true)?;
-    sock.bind(&addr.into())?;
-    sock.listen(LISTEN_BACKLOG)?;
-    Ok(sock.into())
-}
 
 /// Number of requests this worker has served, used by `--max-requests` recycling.
 /// Process-local (each forked worker has its own copy starting at 0).
@@ -50,6 +38,35 @@ static SERVED: AtomicUsize = AtomicUsize::new(0);
 
 /// Application workers stop accepting and drain connections when a termination signal arrives.
 static APPLICATION_STOP: AtomicBool = AtomicBool::new(false);
+
+/// Legacy/isolated workers stop accepting and drain when a termination signal arrives.
+static WORKER_STOP: AtomicBool = AtomicBool::new(false);
+
+/// Records a stop request using only async-signal-safe operations.
+extern "C" fn worker_shutdown_signal(_: libc::c_int) {
+    WORKER_STOP.store(true, Ordering::Relaxed);
+}
+
+/// Installs the drain-on-SIGTERM handler for legacy and isolated workers.
+///
+/// The handler is registered with the process context so a PHP `pcntl_fork`
+/// child resets it to the default disposition instead of swallowing SIGTERM.
+pub(crate) fn install_worker_shutdown() {
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = worker_shutdown_signal as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        elephc_process_context::__elephc_process_register_worker_handler(action.sa_sigaction);
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
+        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+    }
+}
+
+/// Reports whether the worker received SIGTERM/SIGINT.
+pub(crate) fn worker_stop_requested() -> bool {
+    WORKER_STOP.load(Ordering::Relaxed)
+}
 
 /// Records a stop request using only async-signal-safe operations.
 extern "C" fn application_shutdown_signal(_: libc::c_int) {
@@ -79,8 +96,13 @@ pub(crate) fn with_application_signals_blocked<T>(callback: impl FnOnce() -> T) 
 
 /// Records one completed handler and broadcasts a graceful recycle at the quota.
 fn record_completed_request(max_requests: usize, recycle: &watch::Sender<bool>) {
+    // Unbounded recycling is the default; do not pay an atomic read-modify-write
+    // per request when the counter cannot trigger anything.
+    if max_requests == 0 {
+        return;
+    }
     let served = SERVED.fetch_add(1, Ordering::Relaxed) + 1;
-    if max_requests > 0 && served >= max_requests {
+    if served >= max_requests {
         let _ = recycle.send(true);
     }
 }
@@ -119,9 +141,9 @@ fn install_exec_timeout_handler() {
     }
 }
 
-/// Per-worker serving configuration (all `Copy`, so it survives `fork` and moves
-/// into the connection tasks freely).
-#[derive(Clone, Copy)]
+/// Per-worker serving configuration. It is cloned into each connection task
+/// because the trusted-proxy allowlist owns a shared allocation.
+#[derive(Clone)]
 pub struct WorkerConfig {
     /// Max request body in bytes; `0` = unlimited (over-limit → HTTP 413).
     pub max_body: usize,
@@ -141,22 +163,24 @@ pub struct WorkerConfig {
     /// connection lifetime, and enough such connections exhaust a worker's descriptors and
     /// task slots (issue #887).
     pub body_read_secs: u64,
+    /// Peers allowed to supply Forwarded / X-Forwarded-* headers.
+    pub trusted_proxies: TrustedProxies,
 }
 
 /// Minimum response size (bytes) worth gzip-compressing; below this the framing
 /// overhead outweighs the savings.
 const GZIP_MIN_LEN: usize = 256;
 
-/// Serves HTTP on `listen` (host:port) in this worker process. Builds a
-/// current-thread tokio runtime and loops accepting connections, serving each
-/// with the PHP handler per `WorkerConfig`.
-pub fn serve(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
-    serve_inner::<false>(listen, handler, cfg);
+/// Serves HTTP on `source` in this worker process. Builds a current-thread
+/// tokio runtime and loops accepting connections, serving each with the PHP
+/// handler per `WorkerConfig`.
+pub fn serve(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) {
+    serve_inner::<false>(source, handler, cfg);
 }
 
 /// Serves with cooperative signal draining for a bootstrapped application worker.
-pub(crate) fn serve_application(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
-    serve_inner::<true>(listen, handler, cfg);
+pub(crate) fn serve_application(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) {
+    serve_inner::<true>(source, handler, cfg);
 }
 
 /// Polls application shutdown without constructing timers in the legacy specialization.
@@ -166,7 +190,7 @@ async fn application_tick<const APPLICATION: bool>() {
 }
 
 /// Shares HTTP transport while compiling application-only signal checks out of the default path.
-fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), cfg: WorkerConfig) {
+fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C" fn(), cfg: WorkerConfig) {
     let WorkerConfig {
         max_body,
         max_requests,
@@ -174,30 +198,27 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
         max_exec_secs,
         gzip,
         body_read_secs,
+        trusted_proxies,
     } = cfg;
     if max_exec_secs > 0 {
         MAX_EXEC_SECS.store(max_exec_secs, Ordering::Relaxed);
         install_exec_timeout_handler();
+    }
+    if !APPLICATION {
+        install_worker_shutdown();
     }
     // Re-arm the sampling probe in this worker: the fork disarmed the inherited
     // timer (so exec'd children cannot die from the default SIGPROF action), and
     // a worker keeps running elephc code, so it must sample again. No-op unless
     // the binary was built --probe.
     probe_route::rearm();
-    let addr: SocketAddr = match listen.parse() {
-        Ok(a) => a,
-        Err(_) => {
-            eprintln!("elephc-web: invalid --listen address {:?}", listen);
-            std::process::exit(1);
-        }
+    let (server_addr, server_port) = match &source {
+        ListenSource::Tcp(addr) => (addr.ip().to_string(), addr.port()),
+        #[cfg(target_vendor = "apple")]
+        ListenSource::TcpPassed(_, addr, _) => (addr.ip().to_string(), addr.port()),
+        ListenSource::Unix(_) => (String::new(), 0),
     };
-    let std_listener = match reuseport_listener(addr) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("elephc-web: failed to bind {}: {}", addr, e);
-            std::process::exit(1);
-        }
-    };
+    request_state::set_server_addr(&server_addr, server_port);
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -209,14 +230,15 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
     // only the async request/response I/O of different connections interleaves.
     let local = tokio::task::LocalSet::new();
     local.block_on(&rt, async move {
-        let listener = match TcpListener::from_std(std_listener) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("elephc-web: failed to register listener: {}", e);
+        let mut listener = match Listener::bind(source) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!("elephc-web: failed to bind listener: {error}");
                 std::process::exit(1);
             }
         };
         let (recycle, mut recycle_requested) = watch::channel(false);
+        let mut shutdown_tick = tokio::time::interval(Duration::from_millis(50));
         let mut connections = Vec::new();
         loop {
             connections.retain(|connection: &tokio::task::JoinHandle<_>| {
@@ -241,54 +263,162 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     }
                     continue;
                 }
+                _ = shutdown_tick.tick(), if !APPLICATION => {
+                    if worker_stop_requested() {
+                        let _ = recycle.send(true);
+                        break;
+                    }
+                    continue;
+                }
                 accepted = listener.accept() => accepted,
             };
-            // The accept future and quota notification can become ready in the same poll.
-            if APPLICATION && (APPLICATION_STOP.load(Ordering::Relaxed) || *recycle_requested.borrow()) {
-                drop(accepted);
-                break;
+            // The accept future and quota notification can become ready in the
+            // same poll. Serve the connection that was already accepted instead
+            // of resetting it; a recycle must not drop a queued client.
+            let stopping =
+                APPLICATION && (APPLICATION_STOP.load(Ordering::Relaxed) || *recycle_requested.borrow());
+            if stopping {
+                let _ = recycle.send(true);
             }
             let (stream, peer) = match accepted {
-                Ok(pair) => pair,
+                Ok(Some(pair)) => pair,
+                // The master owns the descriptor channel. EOF means it is gone,
+                // so this worker has no listener and must not spin.
+                Ok(None) => break,
                 Err(_) => continue,
             };
+            // Small response writes must leave immediately. Without TCP_NODELAY the
+            // Nagle/delayed-ACK interaction stalls a keep-alive response for tens of
+            // milliseconds, which dominates the request under load.
+            let _ = stream.set_nodelay(true);
             let io = TokioIo::new(stream);
             let request_recycle = recycle.clone();
+            let trusted = trusted_proxies.clone();
             let mut connection_recycle = recycle.subscribe();
+            let served = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let served_request = served.clone();
             connections.push(tokio::task::spawn_local(async move {
                 let connection = http1::Builder::new()
                     .timer(TokioTimer::new())
                     .header_read_timeout(Duration::from_secs(30))
                     .serve_connection(io, service_fn(move |req: Request<hyper::body::Incoming>| {
                         let request_recycle = request_recycle.clone();
+                        let served_request = served_request.clone();
+                        let trusted = trusted.clone();
                         async move {
+                    // A request has started: a recycle may now let hyper
+                    // finish this response and close instead of resetting it.
+                    served_request.store(true, Ordering::Relaxed);
                     // Seed session deployment config before upload-progress body
                     // draining. The PHP prelude repeats this reset immediately
                     // before the handler, so both phases see identical values and
                     // no request can inherit the prior request's session settings.
                     unsafe { crate::session::elephc_web_session_reset() };
-                    let started = Instant::now();
-                    let method = req.method().as_str().to_string();
-                    let uri = req.uri().to_string();
-                    let path = req.uri().path().to_string();
-                    let query = req.uri().query().unwrap_or("").to_string();
-                    let protocol = format!("{:?}", req.version());
+                    // Only the access log needs the request clock. Reading it on
+                    // every request costs a `mach_absolute_time`/vDSO call even
+                    // when no log line will be written.
+                    let started = access_log.then(Instant::now);
+                    // Capture the request head once, as NUL-terminated strings the
+                    // prelude getters can hand to PHP. `cstring` allocates once per
+                    // value; the old `String` + `replace` + `CString` chain allocated
+                    // three times.
+                    let method = request_state::cstring(req.method().as_str().as_bytes());
+                    let uri = request_state::cstring_display(req.uri());
+                    let path = request_state::cstring(req.uri().path().as_bytes());
+                    let query_text = req.uri().query().unwrap_or("").to_string();
+                    let query = request_state::cstring(query_text.as_bytes());
+                    let protocol = request_state::cstring(http_protocol(req.version()).as_bytes());
+                    // `HeaderMap` lookups are hash-based and case-insensitive, and
+                    // allocate only when the header is present. The old code
+                    // materialized every header as two `String`s and then scanned the
+                    // vector three more times.
+                    let header = |name: &str| {
+                        req.headers()
+                            .get(name)
+                            .and_then(|value| value.to_str().ok())
+                            .map(str::to_owned)
+                    };
+                    let content_type = header("content-type");
+                    let content_length = header("content-length");
+                    // Upload progress only needs the Cookie header for a
+                    // multipart/form-data body; materialize it only for that
+                    // rare shape.
+                    let req_cookie = if content_type.as_deref().is_some_and(|value| {
+                        contains_ascii_case_insensitive(value.as_bytes(), b"multipart/form-data")
+                    }) {
+                        header("cookie")
+                    } else {
+                        None
+                    };
+                    let req_traceparent = if probe_route::trace_available() {
+                        header("traceparent")
+                    } else {
+                        None
+                    };
+                    let profile_header = if probe_route::query_available() {
+                        header("x-elephc-query")
+                    } else {
+                        None
+                    };
+                    // Signed, not merely present: the value is
+                    // `t=<unix seconds>,v=<hmac>` over the build key, so a header
+                    // captured from a log stops working within minutes and one
+                    // invented from scratch never does.
+                    let profile_this = profile_header
+                        .as_deref()
+                        .is_some_and(probe_route::query_is_authentic);
                     // Captured for the optional access log (method/path are moved into set_request).
-                    let log_method_path = if access_log { Some((method.clone(), path.clone())) } else { None };
+                    let log_method_path = if access_log {
+                        Some((
+                            method.to_string_lossy().into_owned(),
+                            path.to_string_lossy().into_owned(),
+                        ))
+                    } else {
+                        None
+                    };
                     // The route label the sampling probe stamps onto samples taken
                     // during this request (no-op unless the binary was built --probe).
                     // Shaped, not raw: the probe's route table is fixed at 256 with
                     // no eviction, and raw paths spend it on identifiers.
-                    let probe_route = probe_route::route_label(&method, &path);
+                    let probe_route = if probe_route::active() {
+                        probe_route::route_label(
+                            &method.to_string_lossy(),
+                            &path.to_string_lossy(),
+                        )
+                    } else {
+                        String::new()
+                    };
                     let accepts_gzip = gzip
                         && req.headers().get(hyper::header::ACCEPT_ENCODING).is_some_and(|v| {
-                            v.to_str().map(|s| s.to_ascii_lowercase().contains("gzip")).unwrap_or(false)
+                            contains_ascii_case_insensitive(v.as_bytes(), b"gzip")
                         });
-                    let headers: Vec<(String, String)> = req
+                    let headers: Vec<(CString, CString)> = req
                         .headers()
                         .iter()
-                        .map(|(n, v)| (n.as_str().to_string(), String::from_utf8_lossy(v.as_bytes()).into_owned()))
+                        .map(|(n, v)| {
+                            (
+                                request_state::cstring(n.as_str().as_bytes()),
+                                request_state::cstring(v.as_bytes()),
+                            )
+                        })
                         .collect();
+                    // Avoid materializing a second header list on the common
+                    // path where no proxy is trusted.
+                    let forwarded = if trusted.is_empty() {
+                        None
+                    } else {
+                        let forwarded_headers: Vec<(String, String)> = req
+                            .headers()
+                            .iter()
+                            .map(|(name, value)| {
+                                (
+                                    name.as_str().to_string(),
+                                    String::from_utf8_lossy(value.as_bytes()).into_owned(),
+                                )
+                            })
+                            .collect();
+                        Some(forwarded::apply(&peer, &forwarded_headers, &trusted))
+                    };
                     // The body must be fully collected (async) BEFORE the blocking handler
                     // runs, since handler() cannot yield on the current-thread runtime.
                     // Collect with a size cap (0 = unlimited); an over-limit body
@@ -303,84 +433,91 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     // stalled plain body, a size-limited one, and a tracked multipart upload
                     // are all ways to hold a connection open forever otherwise (issue #887).
                     // Expiry answers 408 and does not keep the connection alive.
-                    let collect_body = async {
-                        if let Some(mut tracker) = upload_progress::begin(&headers, &query) {
-                            drain_with_progress(req.into_body(), max_body, &mut tracker).await
-                        } else if max_body == 0 {
-                            req.into_body().collect().await.map(|c| c.to_bytes().to_vec()).map_err(|_| ())
+                    // A request without Content-Length or Transfer-Encoding has
+                    // no body (RFC 9112 §6.3). Short-circuit before building the
+                    // body future and its read deadline: this is every GET and
+                    // HEAD served by a healthy keep-alive client.
+                    let request_has_body = request_declares_body(req.headers());
+                    let body = if request_has_body {
+                        let collect_body = async {
+                            if let Some(mut tracker) = upload_progress::begin(
+                                content_type.as_deref(),
+                                req_cookie.as_deref(),
+                                content_length.as_deref(),
+                                &query_text,
+                            ) {
+                                drain_with_progress(req.into_body(), max_body, &mut tracker).await
+                            } else if max_body == 0 {
+                                req.into_body()
+                                    .collect()
+                                    .await
+                                    .map(|c| c.to_bytes().to_vec())
+                                    .map_err(|_| ())
+                            } else {
+                                Limited::new(req.into_body(), max_body)
+                                    .collect()
+                                    .await
+                                    .map(|c| c.to_bytes().to_vec())
+                                    .map_err(|_| ())
+                            }
+                        };
+                        let collected = if body_read_secs == 0 {
+                            Ok(collect_body.await)
                         } else {
-                            Limited::new(req.into_body(), max_body)
-                                .collect()
+                            tokio::time::timeout(Duration::from_secs(body_read_secs), collect_body)
                                 .await
-                                .map(|c| c.to_bytes().to_vec())
                                 .map_err(|_| ())
+                        };
+                        match collected {
+                            Ok(Ok(b)) => b,
+                            Err(()) => {
+                                let resp = Response::builder()
+                                    .status(408)
+                                    .header(hyper::header::CONNECTION, "close")
+                                    .body(Full::new(Bytes::from_static(b"Request Timeout")))
+                                    .unwrap_or_else(|_| {
+                                        Response::new(Full::new(Bytes::from_static(b"")))
+                                    });
+                                return Ok::<_, Infallible>(resp);
+                            }
+                            Ok(Err(_)) => {
+                                let resp = Response::builder()
+                                    .status(413)
+                                    .body(Full::new(Bytes::from_static(b"Payload Too Large")))
+                                    .unwrap_or_else(|_| {
+                                        Response::new(Full::new(Bytes::from_static(b"")))
+                                    });
+                                return Ok::<_, Infallible>(resp);
+                            }
                         }
-                    };
-                    let collected = if body_read_secs == 0 {
-                        Ok(collect_body.await)
                     } else {
-                        tokio::time::timeout(Duration::from_secs(body_read_secs), collect_body)
-                            .await
-                            .map_err(|_| ())
+                        Vec::new()
                     };
-                    let body = match collected {
-                        Ok(Ok(b)) => b,
-                        Err(()) => {
-                            let resp = Response::builder()
-                                .status(408)
-                                .header(hyper::header::CONNECTION, "close")
-                                .body(Full::new(Bytes::from_static(b"Request Timeout")))
-                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
-                            return Ok::<_, Infallible>(resp);
-                        }
-                        Ok(Err(_)) => {
-                            let resp = Response::builder()
-                                .status(413)
-                                .body(Full::new(Bytes::from_static(b"Payload Too Large")))
-                                .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
-                            return Ok::<_, Infallible>(resp);
-                        }
+                    let remote_addr = match &forwarded {
+                        Some(facts) => request_state::cstring(facts.remote_addr.as_bytes()),
+                        None => peer
+                            .remote_ip()
+                            .map(request_state::ip_cstring)
+                            .unwrap_or_default(),
                     };
+                    let request_scheme = forwarded.as_ref().and_then(|facts| {
+                        (facts.request_scheme != "http")
+                            .then(|| request_state::cstring(facts.request_scheme.as_bytes()))
+                    });
                     let meta = request_state::RequestMeta {
-                        remote_addr: peer.ip().to_string(),
-                        remote_port: peer.port(),
-                        server_addr: addr.ip().to_string(),
-                        server_port: addr.port(),
+                        remote_addr,
+                        remote_port: forwarded
+                            .as_ref()
+                            .map(|facts| facts.remote_port)
+                            .unwrap_or_else(|| peer.remote_port()),
+                        server_port: forwarded
+                            .as_ref()
+                            .map(|facts| facts.server_port)
+                            .unwrap_or_else(|| peer.server_port()),
+                        request_scheme,
+                        https: forwarded.as_ref().is_some_and(|facts| facts.https),
                         protocol,
                     };
-                    // Capture the request Cookie/Host before `headers` is moved into
-                    // set_request; they gate/steer optional `session.use_trans_sid`
-                    // URL rewriting (Cookie → is the SID already client-held?, Host →
-                    // same-origin matching). The rewrite itself stays gated by session
-                    // config, so the default path only pays these two small lookups.
-                    let req_cookie = headers
-                        .iter()
-                        .find(|(n, _)| n.eq_ignore_ascii_case("cookie"))
-                        .map(|(_, v)| v.clone());
-                    let req_host = headers
-                        .iter()
-                        .find(|(n, _)| n.eq_ignore_ascii_case("host"))
-                        .map(|(_, v)| v.clone());
-                    // Distributed profiling: continue the caller's trace when it
-                    // sent a W3C `traceparent`, else start one. Read before
-                    // `headers` is moved into set_request, like Cookie/Host.
-                    let req_traceparent = headers
-                        .iter()
-                        .find(|(n, _)| n.eq_ignore_ascii_case("traceparent"))
-                        .map(|(_, v)| v.clone());
-                    // Opt in per request, the way a profiler you can leave in
-                    // production has to work: the caller asks, and only that
-                    // request pays. Absent the header the hooks stay as the
-                    // environment left them, so `--web --instrument` without
-                    // `ELEPHC_INSTR_OFF` keeps profiling every request.
-                    // Signed, not merely present: the value is
-                    // `t=<unix seconds>,v=<hmac>` over the build key, so a header
-                    // captured from a log stops working within minutes and one
-                    // invented from scratch never does.
-                    let profile_this = headers
-                        .iter()
-                        .find(|(n, _)| n.eq_ignore_ascii_case("x-elephc-query"))
-                        .is_some_and(|(_, value)| probe_route::query_is_authentic(value));
                     request_state::set_request(method, uri, path, query, headers, body, meta);
                     probe_route::set(&probe_route);
                     // A signed header authorizes this request outright; without
@@ -412,8 +549,6 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     // `session.use_trans_sid` is active (no-op otherwise). Runs on the
                     // plaintext body, before the gzip decision below.
                     let resp_body = crate::trans_sid::maybe_rewrite_response(
-                        req_cookie.as_deref(),
-                        req_host.as_deref(),
                         &mut resp_headers,
                         resp_body,
                     );
@@ -443,17 +578,24 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     if do_gzip {
                         builder = builder.header("content-encoding", "gzip");
                     }
-                    let response = builder
+                    let mut response = builder
                         .body(Full::new(Bytes::from(resp_body)))
                         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b""))));
+                    if *request_recycle.borrow() {
+                        response.headers_mut().insert(
+                            hyper::header::CONNECTION,
+                            hyper::header::HeaderValue::from_static("close"),
+                        );
+                    }
+                    served_request.store(true, Ordering::Relaxed);
                     if let Some((m, p)) = log_method_path {
                         eprintln!(
                             "{} \"{} {}\" {} {}ms",
-                            peer.ip(),
+                            peer.log_peer(),
                             m,
                             p,
                             status,
-                            started.elapsed().as_millis()
+                            started.map(|start| start.elapsed().as_millis()).unwrap_or_default()
                         );
                     }
                     record_completed_request(max_requests, &request_recycle);
@@ -464,18 +606,64 @@ fn serve_inner<const APPLICATION: bool>(listen: &str, handler: extern "C" fn(), 
                     _ = &mut connection => {}
                     changed = connection_recycle.changed() => {
                         if changed.is_ok() && *connection_recycle.borrow() {
-                            connection.as_mut().graceful_shutdown();
+                            // Close after the current response. Before the
+                            // first request, let the service answer it with
+                            // `Connection: close` instead of resetting it.
+                            if served.load(Ordering::Relaxed) {
+                                connection.as_mut().graceful_shutdown();
+                            }
                             let _ = connection.await;
                         }
                     }
                 }
             }));
+            if stopping {
+                break;
+            }
         }
         drop(listener);
         for connection in connections {
             let _ = connection.await;
         }
     });
+}
+
+/// Returns whether an HTTP/1 request declares a body.
+///
+/// RFC 9112 §6.3: without `Content-Length` or `Transfer-Encoding`, the request
+/// has no body. This is the fast path for every GET and HEAD served by a healthy
+/// keep-alive client; it lets the worker skip constructing the body future and
+/// its read deadline entirely. A `Content-Length: 0` also declares an empty body.
+pub(crate) fn request_declares_body(headers: &hyper::HeaderMap) -> bool {
+    headers
+        .get(hyper::header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.trim() != "0")
+        || headers.contains_key(hyper::header::TRANSFER_ENCODING)
+}
+
+/// Returns whether `haystack` contains `needle`, ignoring ASCII case.
+///
+/// Used for the `Accept-Encoding` token check so a keep-alive request does not
+/// allocate a lowercased copy of the header just to look for `gzip`.
+fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return false;
+    }
+    haystack
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+/// Returns the PHP-facing protocol string for a Hyper version.
+fn http_protocol(version: hyper::Version) -> &'static str {
+    match version {
+        hyper::Version::HTTP_09 => "HTTP/0.9",
+        hyper::Version::HTTP_10 => "HTTP/1.0",
+        hyper::Version::HTTP_2 => "HTTP/2.0",
+        hyper::Version::HTTP_3 => "HTTP/3.0",
+        _ => "HTTP/1.1",
+    }
 }
 
 /// gzip-compresses `data`, returning the compressed bytes, or `None` if encoding
@@ -535,4 +723,49 @@ fn run_handler(handler: extern "C" fn()) -> Vec<u8> {
         unsafe { libc::alarm(0); }
     }
     request_state::take_body()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `Accept-Encoding` probe is case-insensitive and allocation-free.
+    #[test]
+    fn gzip_token_check_ignores_case() {
+        assert!(contains_ascii_case_insensitive(b"gzip, deflate", b"gzip"));
+        assert!(contains_ascii_case_insensitive(b"br, GZip", b"gzip"));
+        assert!(!contains_ascii_case_insensitive(b"br, deflate", b"gzip"));
+        assert!(!contains_ascii_case_insensitive(b"", b"gzip"));
+    }
+
+    /// Body presence follows HTTP/1 framing, not the method name.
+    #[test]
+    fn body_presence_follows_framing_headers() {
+        let mut headers = hyper::HeaderMap::new();
+        assert!(!request_declares_body(&headers));
+        headers.insert(
+            hyper::header::CONTENT_LENGTH,
+            hyper::header::HeaderValue::from_static("0"),
+        );
+        assert!(!request_declares_body(&headers));
+        headers.insert(
+            hyper::header::CONTENT_LENGTH,
+            hyper::header::HeaderValue::from_static("5"),
+        );
+        assert!(request_declares_body(&headers));
+        let mut chunked = hyper::HeaderMap::new();
+        chunked.insert(
+            hyper::header::TRANSFER_ENCODING,
+            hyper::header::HeaderValue::from_static("chunked"),
+        );
+        assert!(request_declares_body(&chunked));
+    }
+
+    /// The PHP-facing protocol string covers every Hyper version the server can see.
+    #[test]
+    fn protocol_names_match_http_versions() {
+        assert_eq!(http_protocol(hyper::Version::HTTP_10), "HTTP/1.0");
+        assert_eq!(http_protocol(hyper::Version::HTTP_11), "HTTP/1.1");
+        assert_eq!(http_protocol(hyper::Version::HTTP_2), "HTTP/2.0");
+    }
 }
