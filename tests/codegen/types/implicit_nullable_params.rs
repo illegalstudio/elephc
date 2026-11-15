@@ -121,3 +121,22 @@ var_dump(f(), (new C())->m());
     );
     assert!(stderr.contains("main.php:3:1]: App\\f()"), "{}", stderr);
 }
+
+/// Verifies an included file's deprecation is reported once per declaration, as php 8.5 does,
+/// although the resolver parses the file twice (discovery, then expansion) under two source
+/// identities.
+#[test]
+fn test_implicitly_nullable_param_in_included_file_reports_once() {
+    let dir = make_cli_test_dir("elephc_cli_test_implicit_nullable_include");
+    fs::write(dir.join("lib.php"), "<?php\nfunction f(int $x = null) { return $x; }\n").unwrap();
+    let main = dir.join("main.php");
+    fs::write(&main, "<?php\ninclude \"lib.php\";\nvar_dump(f());\n").unwrap();
+    let output = elephc_cli_command(&dir).arg("--check").arg(&main).output().unwrap();
+    let _ = fs::remove_dir_all(&dir);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(output.status.success(), "{}", stderr);
+    let deprecations: Vec<&str> =
+        stderr.lines().filter(|line| line.starts_with("deprecated[")).collect();
+    assert_eq!(deprecations.len(), 1, "{}", stderr);
+    assert!(deprecations[0].contains("lib.php:2:1]: f(): Implicitly marking parameter $x"), "{}", stderr);
+}

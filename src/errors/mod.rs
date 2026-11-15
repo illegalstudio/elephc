@@ -143,14 +143,23 @@ pub fn defer_warning(warning: CompileWarning) {
 
 /// Takes every queued warning in the order raised, once each.
 ///
-/// The resolver may prepare an included file more than once, so a repeat of the same message
-/// at the same span is dropped.
+/// The resolver parses an included file once for discovery and once for expansion, and each
+/// parse lexes it under a fresh source identity, so the span alone differs between the two.
+/// A repeat is therefore keyed on the file's canonical path (the identity when no path was
+/// registered), line, column and message, and dropped.
 pub fn take_deferred_warnings() -> Vec<CompileWarning> {
     let queued = DEFERRED_WARNINGS.with(|warnings| std::mem::take(&mut *warnings.borrow_mut()));
     let mut seen = std::collections::HashSet::new();
     queued
         .into_iter()
-        .filter(|warning| seen.insert((warning.span, warning.message.clone())))
+        .filter(|warning| {
+            let origin = match warning.span.source_path() {
+                Some(path) => Ok(std::fs::canonicalize(&path)
+                    .unwrap_or_else(|_| std::path::PathBuf::from(path))),
+                None => Err(warning.span.source_id()),
+            };
+            seen.insert((origin, warning.span.line, warning.span.col, warning.message.clone()))
+        })
         .collect()
 }
 
