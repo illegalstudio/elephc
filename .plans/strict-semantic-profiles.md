@@ -1101,6 +1101,30 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
 - Public admission remains the six completed features. Raw Iterable, static and
   remaining eval/reference boundaries continue before Casts admission.
 
+### Iterable property references and raw property metadata
+
+- Extend canonical reference classification and promotion to raw Iterable cells.
+  The existing dynamic-container boxer preserves arrays, hashes and Traversable
+  objects rather than interpreting their descriptor seven as an existing box.
+- Raw property metadata has a distinct layout marker, ITERABLE_PROPERTY_TAG (13).
+  A shared leaf reader preserves the payload address and initialization marker,
+  guards absent/uninitialized pointers, and maps heap kinds 2/3/4 to value tags
+  4/5/6. Canonical boxed children bypass this adapter. JSON now uses the same
+  complete property reader as projection, dump and serialization.
+- Hydration transfers the raw container payload through its ordinary typed writer
+  and finisher; previous Iterable container owners use uniform release.
+- Native strict and no-profile fixtures cover initial JSON, object projection,
+  serialize/unserialize, arrays, hashes, Traversable replacements, live aliases,
+  rejected stdClass replacement and uninitialized properties. Current focused
+  checks pass with both optimizer settings and clean heaps. Shared JSON, borrowed
+  constructor, nullable-int and uninitialized-reference controls also pass. The
+  all-five-target EIR/JSON checks, eight typed promotion helpers and raw reader
+  real assembly, declaration classifier, hydration ownership checks, cargo check
+  --tests/build, architecture828, PHP syntax, assembly comments and diff hygiene
+  complete this step.
+- Static and remaining eval/reference integration continue before public Casts
+  admission. The public integrated mask remains the six completed features.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1202,4 +1226,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 80 | `63b866b2a7` | feat(strict): preserve scalar property conversion references |
 | 81 | `94e873a4c5` | feat(strict): preserve nullable property reference contracts |
 | 82 | `e2b20ae08a` | feat(strict): preserve object property conversion references |
-| 83 | this commit | feat(strict): preserve array property conversion references |
+| 83 | `15faacbb39` | feat(strict): preserve array property conversion references |
+| 84 | this commit | feat(strict): preserve iterable property conversion references |

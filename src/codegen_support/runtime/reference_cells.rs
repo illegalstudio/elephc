@@ -21,6 +21,7 @@ mod property_unset;
 mod mixed_payload;
 mod mixed_symbol;
 mod property_payload;
+mod iterable_payload;
 mod canonical;
 mod canonical_promotion;
 pub(crate) use canonical_promotion::promotion_entry;
@@ -46,6 +47,7 @@ pub(crate) use property_unset::emit_owned_property_unset;
 pub(crate) use mixed_payload::follow_mixed_reference_slot;
 pub(crate) use mixed_symbol::publish_mixed_symbol;
 pub(crate) use property_payload::resolve as resolve_property_payload;
+pub(crate) use iterable_payload::resolve as resolve_iterable_property_payload;
 
 /// Byte length of `_unmanaged_reference_escape_msg`, kept beside the data that defines it.
 const UNMANAGED_REFERENCE_ESCAPE_MSG_LEN: i64 = 73;

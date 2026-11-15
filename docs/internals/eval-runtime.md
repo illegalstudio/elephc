@@ -27,13 +27,15 @@ Native reads probe a managed reference's canonical wrapper before using its lega
 payload layout. The current boxed child supplies the PHP tag for the requested
 logical view, including a Mixed read after eval changes a typed parameter's value.
 Raw and headerless references continue to load through their original physical ABI.
-Checked-cast lowering also gives eligible scalar, object, array, nullable and union
-user properties owned managed cells. The shared `types/reference_layout` classifier
+Checked-cast lowering also gives eligible scalar, object, array, iterable, nullable
+and union user properties owned managed cells. The shared `types/reference_layout` classifier
 distinguishes their logical contracts from boxed or inline nullable-int payloads.
 Selecting an integer, float, boolean, string, object or concrete array reference
 transfers its raw payload into a canonical child while preserving the cell address
 and collector flags. Generic PHP array declarations may instead use a boxed
 array/hash union; their canonical child preserves the actual container kind.
+Raw Iterable promotion classifies array/hash/Traversable heap kinds before boxing,
+so the shared descriptor number seven does not imply an existing Mixed box.
 Nullable-int promotion copies both the raw value and its runtime tag before boxing.
 The module explicitly selects native reference validation and declaration callbacks;
 conversion writeback validates the original candidate against the live property
@@ -49,6 +51,11 @@ resolved child address differs from the native cell before sharing a constrained
 boxed union; raw unions keep the existing promotion gate. Generic mutation receiver
 reloads use the same canonical reader as explicit EIR reference reads. Ordinary
 value copies remain detached when a referenced array changes through copy-on-write.
+Raw Iterable property rows use `ITERABLE_PROPERTY_TAG` (13). The shared leaf
+reader maps their concrete heap kind to a value tag while preserving the property
+address and initialization marker; canonical children bypass this raw adapter.
+JSON uses the same reader, and unserialize transfers and releases the raw
+container owner through its ordinary typed-property paths.
 This machinery supports staged cast integration; it does not
 admit the unfinished cast profile at public entry points.
 An owning `LoadRefCellValue` copies a typed parameter's current value into Mixed:

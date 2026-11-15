@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::platform::Target;
-use crate::codegen_support::sentinels::{CANONICAL_PROPERTY_PAYLOAD_FLAG, JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, TAGGED_SCALAR_PROPERTY_TAG};
+use crate::codegen_support::sentinels::{CANONICAL_PROPERTY_PAYLOAD_FLAG, JSON_DECLARED_PROPERTY_FLAG, JSON_REFERENCE_PROPERTY_FLAG, SERPROP_FALSE_ONLY_BIT, SERPROP_REFERENCE_PROPERTY_FLAG, SERPROP_MIXED_REFERENCE_PROPERTY_FLAG, TAGGED_SCALAR_PROPERTY_TAG, ITERABLE_PROPERTY_TAG};
 use crate::codegen_support::source_method_adapters::{self, MethodAbiPlan, MethodKind};
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
@@ -1446,7 +1446,8 @@ pub(crate) fn emit_runtime_data_user(
                     PhpType::Array(_) => 4,
                     PhpType::AssocArray { .. } => 5,
                     PhpType::Object(_) => 6,
-                    PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => 7,
+                    PhpType::Mixed | PhpType::Union(_) => 7,
+                    PhpType::Iterable => ITERABLE_PROPERTY_TAG,
                     PhpType::Resource(_) => 9,
                     PhpType::TaggedScalar => {
                         unreachable!("nullable scalar properties use the boxed Mixed representation")
@@ -4470,6 +4471,7 @@ fn serialized_property_payload_tag(prop_ty: &PhpType) -> u64 {
         PhpType::Array(_) => 4,
         PhpType::AssocArray { .. } => 5,
         PhpType::Object(_) => 6,
+        PhpType::Iterable => ITERABLE_PROPERTY_TAG,
         PhpType::Callable => 10,
         _ => 7,
     }

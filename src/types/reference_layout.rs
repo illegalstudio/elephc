@@ -6,7 +6,7 @@
 //!
 //! Key details:
 //! - Logical nullable and union contracts remain distinct from their physical payload layout.
-//! - Raw iterable containers, pointers and borrowed storage require separate protocols.
+//! - Iterable payloads preserve their concrete container kind; pointers and borrowed storage stay separate.
 
 use super::PhpType;
 
@@ -21,6 +21,7 @@ pub(crate) enum CanonicalReferencePayload {
     NullableInt,
     Object,
     Array,
+    Iterable,
 }
 
 /// Selects reviewed declaration layouts without inferring indirection from pointer size.
@@ -35,6 +36,7 @@ pub(crate) fn canonical_property_reference_payload(ty: &PhpType) -> Option<Canon
         PhpType::TaggedScalar => CanonicalReferencePayload::NullableInt,
         PhpType::Object(_) => CanonicalReferencePayload::Object,
         PhpType::Array(_) | PhpType::AssocArray { .. } => CanonicalReferencePayload::Array,
+        PhpType::Iterable => CanonicalReferencePayload::Iterable,
         _ => return None,
     })
 }
@@ -44,7 +46,7 @@ fn declaration_contract(ty: &PhpType) -> bool {
     match ty {
         PhpType::Mixed | PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False
         | PhpType::Str | PhpType::Void | PhpType::Object(_) | PhpType::Array(_)
-        | PhpType::AssocArray { .. } => true,
+        | PhpType::AssocArray { .. } | PhpType::Iterable => true,
         PhpType::Union(members) => !members.is_empty() && members.iter().all(declaration_contract),
         _ => false,
     }
@@ -69,8 +71,8 @@ mod tests {
             Some(CanonicalReferencePayload::Object));
         assert_eq!(canonical_property_reference_payload(&PhpType::Array(Box::new(PhpType::Int))),
             Some(CanonicalReferencePayload::Array));
-        for ty in [PhpType::Iterable, PhpType::Pointer(None)] {
-            assert_eq!(canonical_property_reference_payload(&ty), None, "{ty:?}");
-        }
+        assert_eq!(canonical_property_reference_payload(&PhpType::Iterable),
+            Some(CanonicalReferencePayload::Iterable));
+        assert_eq!(canonical_property_reference_payload(&PhpType::Pointer(None)), None);
     }
 }

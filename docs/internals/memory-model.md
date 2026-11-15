@@ -638,6 +638,16 @@ reloads use the same canonical-aware reader as EIR reference loads. Referenced
 arrays can therefore split their container during mutation while aliases and
 projected references continue to follow the stable wrapper child; ordinary value
 copies keep their previous container.
+Raw Iterable property rows use the layout marker `ITERABLE_PROPERTY_TAG` (13),
+which is separate from boxed runtime value tags and GC descriptor numbers. A leaf
+reader checks the original initialization marker and absent payload sentinels,
+then maps array/hash/object heap kinds 2/3/4 to runtime value tags 4/5/6. It preserves
+the payload address and caller's initialization marker without runtime calls or
+extra scratch registers. A canonical child has already become boxed tag 7 and
+bypasses this raw adapter. JSON, projection, dump, print and serialization share
+this distinction. Hydration stores a raw Iterable payload and uniformly releases
+a previous container owner; its parsed box retains the existing ownership finisher.
+
 A separated canonical cell contains a new persistent wrapper. Its descriptor
 remains `7`, so flattening the wrapper into a scalar value box would violate the
 physical shape required by scalar readers.

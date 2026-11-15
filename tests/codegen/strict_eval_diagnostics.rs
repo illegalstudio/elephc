@@ -191,3 +191,49 @@ echo implode(',', $values), '|', implode(',', $copy), '|', implode(',', $box->va
             "{optimization}: {}", String::from_utf8_lossy(&output.stderr));
     }
 }
+
+/// Iterable reference conversions retain their array or Traversable contract and live aliases.
+#[test]
+fn test_strict_settype_iterable_property_contracts_bundle() {
+    let source = include_str!("../fixtures/strict/settype_iterable_properties.php");
+    let profile = elephc_semantics::SemanticProfile::PERMISSIVE
+        .with(elephc_semantics::StrictFeature::Casts, true);
+    let expected = format!("{}1,2|T1,2|I3|ArrayIterator|next|next|5|0|R5",
+        r#"{"values":[1,2],"optional":null}|"#.repeat(3));
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, expected, "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
+/// Raw Iterable metadata renders and hydrates real CLI properties without semantic flags.
+#[test]
+fn test_raw_iterable_property_metadata_without_strict_bundle() {
+    let source = r#"<?php
+class PlainIterableProperty { public iterable $values = [1, 2]; public iterable $missing; }
+$box = new PlainIterableProperty();
+$projection = (array)$box;
+echo json_encode($box), '|', json_encode($projection), '|';
+$copy = unserialize(serialize($box));
+echo json_encode($copy), '|';
+$box->values = new ArrayIterator([3]);
+$projection = (array)$box;
+echo get_class($projection['values']);
+class BorrowedIterableProperty {
+    public function __construct(public iterable &$values) {}
+}
+function rawIterablePropertyValues(): iterable { return [4]; }
+$source = rawIterablePropertyValues();
+$borrowed = new BorrowedIterableProperty($source);
+echo '|', json_encode($borrowed), '|', json_encode((array)$borrowed);
+"#;
+    let expected = format!(r#"{}ArrayIterator|{{"values":[4]}}|{{"values":[4]}}"#, r#"{"values":[1,2]}|"#.repeat(3));
+    for optimization in ["--ir-opt=off", "--ir-opt=on"] {
+        let output = StrictFixture::new(source).capture(&[optimization, "--heap-debug"]);
+        assert_eq!(String::from_utf8_lossy(&output.stdout), expected, "{optimization}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("HEAP DEBUG: leak summary: clean"),
+            "{optimization}: {}", String::from_utf8_lossy(&output.stderr));
+    }
+}

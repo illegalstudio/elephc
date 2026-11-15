@@ -12,7 +12,7 @@
 //!   later `R:`/`r:` slot keeps addressing live storage.
 //! - The helper takes a borrowed box and consumes it in every path.
 
-use crate::codegen_support::sentinels::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
+use crate::codegen_support::sentinels::{ITERABLE_PROPERTY_TAG, UNINITIALIZED_TYPED_PROPERTY_SENTINEL};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the target-specific post-store ownership finisher.
@@ -107,6 +107,8 @@ fn emit_release_previous_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_unser_release_prev_prop_done");              // a fresh reference cell has no previous owner
     emitter.instruction("cmp x1, #1");                                          // is the previous value an owned string?
     emitter.instruction("b.eq __rt_unser_release_prev_prop_any");               // strings release through the uniform dispatcher
+    emitter.instruction(&format!("cmp x1, #{ITERABLE_PROPERTY_TAG}"));          // raw Iterable properties own a concrete container pointer
+    emitter.instruction("b.eq __rt_unser_release_prev_prop_any");               // arrays, hashes and Traversable objects use the uniform release
     emitter.instruction("cmp x1, #4");                                          // is the previous value below the container range?
     emitter.instruction("b.lo __rt_unser_release_prev_prop_done");              // scalar slots own no heap payload
     emitter.instruction("cmp x1, #6");                                          // does the previous value stay inside the container range?
@@ -148,6 +150,8 @@ fn emit_release_previous_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_unser_release_prev_prop_done_x");              // a fresh reference cell has no previous owner
     emitter.instruction("cmp rsi, 1");                                          // is the previous value an owned string?
     emitter.instruction("je __rt_unser_release_prev_prop_any_x");               // strings release through the uniform dispatcher
+    emitter.instruction(&format!("cmp rsi, {ITERABLE_PROPERTY_TAG}"));          // raw Iterable properties own a concrete container pointer
+    emitter.instruction("je __rt_unser_release_prev_prop_any_x");               // arrays, hashes and Traversable objects use the uniform release
     emitter.instruction("cmp rsi, 4");                                          // is the previous value below the container range?
     emitter.instruction("jb __rt_unser_release_prev_prop_done_x");              // scalar slots own no heap payload
     emitter.instruction("cmp rsi, 6");                                          // does the previous value stay inside the container range?

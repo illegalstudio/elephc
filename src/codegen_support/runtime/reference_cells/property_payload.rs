@@ -43,6 +43,7 @@ pub(crate) fn resolve(
             emitter.instruction(&format!("and {tag}, 255"));                    // keep storage flags out of value dispatch
         }
     }
+    super::resolve_iterable_property_payload(emitter, address, tag, marker, prefix);
 }
 
 #[cfg(test)]
