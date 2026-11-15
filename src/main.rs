@@ -75,7 +75,11 @@ mod progress;
 mod resolver;
 mod repl;
 mod runtime_cache;
+mod debug_cli;
 mod debug_info;
+mod debug_metadata;
+mod debug_projection;
+mod debug_prelude;
 mod source;
 mod source_map;
 mod span;
@@ -134,6 +138,7 @@ fn main_inner() {
             emit_ini_override_warnings(&config);
             pipeline::compile(config);
         }
+        cli::Command::Debug(command) => std::process::exit(debug_cli::run(command)),
         cli::Command::Native(command) => run_native(command),
         cli::Command::PhpExt(command) => run_php_ext(command),
         cli::Command::Monitor(command) => std::process::exit(monitor::run(command)),

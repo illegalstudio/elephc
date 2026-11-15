@@ -165,6 +165,15 @@ pub struct Module {
     pub web: bool,
     /// The web entry bootstraps a retained application after fork rather than per request.
     pub web_application: bool,
+    /// The build keeps debug metadata and site guards while allowing optimization.
+    /// Codegen publishes per-site local availability so the debugger can report
+    /// `<optimized out>` instead of reading a stale or uninitialized slot.
+    pub debug_optimized: bool,
+    /// The debugger may evaluate arbitrary Magician fragments against a snapshot
+    /// of the stopped frame. Codegen emits the hook table and eval wrappers.
+    pub allow_eval: bool,
+    /// The TCP attach listener may bind a non-loopback address when a key is set.
+    pub allow_remote_debug: bool,
     /// Generated `clone()` property-override applicators, sorted by class id then scope id.
     pub clone_override_applicators: Vec<CloneOverrideApplicator>,
 }
@@ -220,6 +229,9 @@ impl Module {
             required_runtime_features: RuntimeFeatures::none(),
             web: false,
             web_application: false,
+            debug_optimized: false,
+            allow_eval: false,
+            allow_remote_debug: false,
             clone_override_applicators: Vec::new(),
         }
     }

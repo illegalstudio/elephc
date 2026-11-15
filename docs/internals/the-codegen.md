@@ -460,7 +460,10 @@ large bodies (generated helpers and dispatch code such as an eval-heavy
 program's top level) skip them to keep
 compile time flat; block layout still removes their jumps to the next block. Overflow code
 moved to the cold tail repeats its instruction's `@src` marker, so debug line
-info and source maps keep pointing at the originating PHP statement.
+info and source maps keep pointing at the originating PHP statement. Physical
+sources are announced once with `@file id=<source_id> path_hex=<hex>`, and
+`@src`/`@fn` carry that source id so included files do not collapse into the
+entry file.
 
 `examples/machine-peepholes/main.php` shows a fused loop test, an out-of-line
 overflow path, and strength-reduced multiplies.

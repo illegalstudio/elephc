@@ -46,6 +46,8 @@ mod tokenizer;
 pub(super) use array::*;
 pub(super) use class_metadata::*;
 pub(super) use core::*;
+#[cfg(not(test))]
+pub(crate) use core::debug_eval_render_value;
 #[cfg(feature = "curl")]
 pub(super) use curl::*;
 pub(super) use fileinfo::*;

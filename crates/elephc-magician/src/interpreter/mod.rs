@@ -41,6 +41,8 @@ mod return_type_compat;
 mod return_values;
 mod runtime_ops;
 pub(crate) use runtime_ops::{EVAL_TAG_BOOL, EVAL_TAG_FLOAT, EVAL_TAG_INT, EVAL_TAG_NULL, EVAL_TAG_STRING};
+#[cfg(not(test))]
+pub(crate) use builtins::debug_eval_render_value;
 mod scope_cells;
 mod persistent_references;
 mod superglobals;

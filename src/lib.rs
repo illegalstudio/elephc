@@ -18,6 +18,12 @@ pub mod builtin_metadata;
 pub mod builtins;
 /// Canonical EIR-consuming assembly backend and public codegen helpers.
 pub mod codegen;
+// The binary pipeline injects these helpers; the library test build only needs
+// their declarations for the builtin-parity gate.
+#[cfg(test)]
+#[allow(dead_code)]
+mod debug_prelude;
+mod debug_projection;
 /// Shared target/runtime support used by the EIR backend.
 #[doc(hidden)]
 pub mod codegen_support;

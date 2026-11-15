@@ -64,6 +64,18 @@ pub(crate) struct MonitorCommand {
     /// Log files of `--web --instrument` services to stitch into one
     /// distributed trace (repeatable). Each file is one service's stderr.
     pub stitch: Vec<String>,
+    /// Capture function-call argument and return values from a launched --debug build.
+    pub calls: bool,
+    /// How much of each call's argument/return value to capture.
+    pub calls_mode: CallCaptureMode,
+    /// Write the raw call events as one JSON object per line.
+    pub calls_out: Option<String>,
+    /// Xdebug-compatible cachegrind export path for an exact capture.
+    pub cachegrind_out: Option<String>,
+    /// Serve the interactive browser debugger for a launched debug build.
+    pub debug_ui: bool,
+    /// Compile the browser debugger's source with `--allow-eval`.
+    pub allow_eval: bool,
     /// Explicit performance-budget file; without it, the nearest `.elephc`
     /// above the profiled source is picked up automatically.
     pub assert_file: Option<String>,
@@ -72,9 +84,13 @@ pub(crate) struct MonitorCommand {
 /// Usage text for `elephc monitor`, printed on parameter errors and `--help`.
 pub(crate) const MONITOR_USAGE: &str = "Usage: elephc monitor <program|source.php> [--live] [--duration <seconds>] [--out <file.speedscope.json>]
        elephc monitor <program|source.php> [--pprof <file.pb.gz>] [--dot <file.dot>] [--html <file.html>]
+                      [--cachegrind <file.cachegrind>]
+       elephc monitor <program|source.php> --debug-ui [--allow-eval] [--serve <host:port>]
        elephc monitor <program|source.php> [--trace <f.json>] [--assert <spec>]... [--assert-file <file>]
        elephc monitor <program|source.php> --live --html <file.html> [--serve <host:port>]
        elephc monitor <program|source.php> [--baseline <prior.json>] [--fail-on-regression <points>]
+       elephc monitor <program|source.php> --calls[=none|types|scalars|full] [--exact]
+                      [--calls-out <file.jsonl>] [--html <file.html>]
        elephc monitor <host:port|http://host|https://host> [--key <file>] [--out <f.json>] [--html <f.html>]
        elephc monitor --stitch <serviceA.log> --stitch <serviceB.log> ... [--html <f.html>]
                       [--otlp <http://collector:4318>] [--prometheus <file.prom>]
@@ -124,6 +140,38 @@ Both report sampled CPU stacks without calls, allocation/retained counts,
 SQL/file-I/O counts or wait. Only launched --live of a --web binary carries
 route tags; --attach has none. Everything else works on Linux and macOS alike.
 
+--calls captures the PHP-formatted argument and return values of every call in a
+launched --debug build, in execution order. --calls=none keeps only function/depth
+events, =types records argument/return types without values, =scalars records full
+scalar values while arrays/objects keep their summary, and =full (the default)
+includes bounded nested array/object children. A .php source is compiled with
+--debug; a binary must carry the debug metadata sidecar and, for --html, the
+monitoring marker. This reads the callee frame at entry and its result at exit
+and is conceptually separate from the exact --with-monitoring profile: it
+answers 'what was passed and returned?' rather than 'how long did it take?'.
+The same calls-mode build carries both answers, and the unified --html page shows
+them side by side. The capture is bounded; the text table
+prints after the program exits, --calls-out writes the raw events as JSONL, and
+--html writes one self-contained page with Profile, Calls, Dumps and Trace
+segments tabs. Calls mode always carries the exact --with-monitoring capture:
+one run prints the exact per-function profile before the call values, and --trace
+still writes the Chrome/Perfetto timeline. Run --exact without --calls for the
+profile-only HTML page.
+
+--cachegrind writes an Xdebug-compatible cachegrind profile from an exact launch
+capture: function self time, call counts and per-edge inclusive time in
+nanoseconds, readable by KCachegrind, QCachegrind and Webgrind. It needs the
+instrumented exact capture, so it is refused with --calls, --live, --attach and
+service targets; a sampled view has no call counts to export.
+
+--debug-ui compiles a source with --debug (or launches a debug binary) and
+serves a self-contained browser debugger at --serve (default 127.0.0.1:0):
+breakpoints, stack frames, locals, continue/step and console output.
+--allow-eval additionally links Magician so the page's evaluate field can run
+arbitrary PHP against a snapshot of the stopped frame. It is a debugger surface,
+not a profile export; combine it with the profiling paths only by running them
+separately.
+
 --pprof writes the capture as a gzip pprof profile. --dot writes a Graphviz call
 graph (`dot -Tsvg`); --html writes a self-contained, interactive call graph (one
 node per function, caller->callee edges, hover metrics, search, zoom) that opens
@@ -139,7 +187,8 @@ navigable — a timeline scrubber, a follow-latest toggle, and a diff-vs-previou
 mode that lights up functions that grew hotter. Opened as a file it auto-reloads;
 served over http it updates in place (no flicker). --serve <host:port> runs a
 tiny HTTP server for exactly that (bind a loopback address unless you mean to
-expose the profile).
+expose the profile). In --calls mode --html instead writes the static call-tree
+panel described above; it does not start a server.
 
 --trace <file.json> writes a Chrome/Perfetto timeline, openable at
 ui.perfetto.dev. The report prints recommendations, and --assert
@@ -203,6 +252,12 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
     let mut asserts: Vec<String> = Vec::new();
     let mut save = None;
     let mut stitch: Vec<String> = Vec::new();
+    let mut calls = false;
+    let mut calls_mode = CallCaptureMode::Full;
+    let mut calls_out = None;
+    let mut cachegrind_out = None;
+    let mut debug_ui = false;
+    let mut allow_eval = false;
     let mut assert_file = None;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -212,6 +267,29 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
                 process::exit(0);
             }
             "--live" => live = true,
+            "--calls" => {
+                calls = true;
+                calls_mode = CallCaptureMode::Full;
+            }
+            "--calls-out" => {
+                calls_out = Some(
+                    it.next()
+                        .ok_or("--calls-out needs a JSONL file path")?
+                        .clone(),
+                );
+                calls = true;
+            }
+            value if value.starts_with("--calls-out=") => {
+                calls_out = Some(value["--calls-out=".len()..].to_string());
+                calls = true;
+            }
+            value if value.starts_with("--calls=") => {
+                let mode = &value["--calls=".len()..];
+                calls_mode = CallCaptureMode::parse(mode).ok_or_else(|| {
+                    format!("--calls expects none, types, scalars or full, got '{mode}'")
+                })?;
+                calls = true;
+            }
             "--attach" => {
                 let value = it.next().ok_or("--attach needs a pid")?;
                 attach_pid = Some(
@@ -236,6 +314,22 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
             }
             "--baseline" => {
                 baseline = Some(it.next().ok_or("--baseline needs a file path")?.clone());
+            }
+            "--debug-ui" => {
+                debug_ui = true;
+            }
+            "--allow-eval" => {
+                allow_eval = true;
+            }
+            "--cachegrind" => {
+                cachegrind_out = Some(
+                    it.next()
+                        .ok_or("--cachegrind needs a file path")?
+                        .clone(),
+                );
+            }
+            value if value.starts_with("--cachegrind=") => {
+                cachegrind_out = Some(value["--cachegrind=".len()..].to_string());
             }
             "--prometheus" => {
                 prom_out = Some(it.next().ok_or("--prometheus needs a file path")?.clone());
@@ -310,8 +404,72 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         (Some(target), None) => target.clone(),
         (None, Some(_)) => String::new(),
     };
-    if serve.is_some() && (!live || html_out.is_none()) {
+    if allow_eval && !debug_ui {
+        return Err("--allow-eval requires --debug-ui: it enables arbitrary evaluation in the browser debugger".to_string());
+    }
+    if debug_ui {
+        if target.is_empty()
+            || remote_target(&target).is_some()
+            || is_socket_path(&target)
+        {
+            return Err("--debug-ui needs a local source or debug binary".to_string());
+        }
+        if live || calls || attach_pid.is_some() || !stitch.is_empty() || exact {
+            return Err(
+                "--debug-ui cannot be combined with --live, --calls, --attach, --exact or --stitch"
+                    .to_string(),
+            );
+        }
+        let unsupported: Vec<&str> = [
+            ("--out", out.is_some()),
+            ("--pprof", pprof_out.is_some()),
+            ("--dot", dot_out.is_some()),
+            ("--html", html_out.is_some()),
+            ("--cachegrind", cachegrind_out.is_some()),
+            ("--trace", trace.is_some()),
+            ("--assert", !asserts.is_empty()),
+            ("--assert-file", assert_file.is_some()),
+            ("--baseline", baseline.is_some()),
+            ("--fail-on-regression", fail_on_regression.is_some()),
+            ("--save", save.is_some()),
+            ("--prometheus", prom_out.is_some()),
+            ("--otlp", otlp.is_some()),
+        ]
+        .iter()
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| *name)
+        .collect();
+        if !unsupported.is_empty() {
+            return Err(format!(
+                "--debug-ui cannot be combined with {}: the browser debugger owns the run",
+                unsupported.join(", ")
+            ));
+        }
+    }
+    if serve.is_some() && !debug_ui && (!live || html_out.is_none()) {
         return Err("--serve requires --live and --html (it serves the live graph)".to_string());
+    }
+    if calls && !stitch.is_empty() {
+        return Err("--calls and --stitch are different capture modes".to_string());
+    }
+    if cachegrind_out.is_some() {
+        let unsupported: Vec<&str> = [
+            ("--calls", calls),
+            ("--live", live),
+            ("--attach", attach_pid.is_some()),
+            ("--stitch", !stitch.is_empty()),
+        ]
+        .iter()
+        .filter(|(_, given)| *given)
+        .map(|(name, _)| *name)
+        .collect();
+        if !unsupported.is_empty() {
+            return Err(format!(
+                "--cachegrind needs a one-shot exact capture; it cannot be combined with {}. \
+                 Point monitor at a --with-monitoring program and drop the other mode.",
+                unsupported.join(", ")
+            ));
+        }
     }
     // The exporters read the sampled capture, and `--exact` against a service
     // returns the per-function table only. This used to warn and exit 0, which
@@ -322,6 +480,7 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
             ("--pprof", pprof_out.is_some()),
             ("--dot", dot_out.is_some()),
             ("--html", html_out.is_some()),
+            ("--cachegrind", cachegrind_out.is_some()),
         ]
         .iter()
         .filter(|(_, given)| *given)
@@ -361,6 +520,12 @@ pub(crate) fn parse_monitor_args(args: &[String]) -> Result<MonitorCommand, Stri
         asserts,
         save,
         stitch,
+        calls,
+        calls_mode,
+        calls_out,
+        cachegrind_out,
+        debug_ui,
+        allow_eval,
         assert_file,
     })
 }

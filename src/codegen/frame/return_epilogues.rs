@@ -44,6 +44,9 @@ pub(super) fn emit(
     ctx.return_epilogues.insert(key, label.clone());
     ctx.emitter.label(&label);
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot, runtime_return_slot);
+    if ctx.shared.debug_build {
+        crate::codegen::debug_sites::emit_exit_call(ctx);
+    }
     for local in &ctx.function.locals {
         if local.kind == LocalKind::ReturnRefCell {
             let offset = ctx.local_offset(local.id).expect("return cell owner has frame storage");

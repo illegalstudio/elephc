@@ -396,13 +396,14 @@ mod tests {
         //
         // None of the eleven is callable from eval'd code. Nor are the four internal aliases
         // the extension-hosting prelude calls (`__elephc_ptr_get`, `__elephc_zval_*`).
-        // Also includes the SimpleXML allocation and diagnostic adapters, and
-        // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
-        // only compiled reflector getters call.
-        assert_eq!(eval_internal, 138);
+        // Also includes the SimpleXML allocation and diagnostic adapters,
+        // `__elephc_reflection_class_build` and its eval twin
+        // `__elephc_eval_reflection_class_build`, which only compiled/eval
+        // reflector getters call, and the internal capture-event helper.
+        assert_eq!(eval_internal, 139);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
-        assert_eq!(eval_pending, 381);
+        assert_eq!(eval_pending, 385);
         // The shared mbstring catalog adds sixty-four registry contracts, including
         // its internal INI helper, to the prior compiler registry surface; the eleven
         // `__elephc_opcache_rt_*` runtime script-cache helpers rolled through above add the rest.
@@ -410,13 +411,15 @@ mod tests {
         // `ptr_write_f64`) and `buffer_ptr` are ordinary registry builtins on both backends.
         // The tokenizer location helper is a typed ordinary registry operation.
         // Five native heap metric operations use the ordinary AOT registry, and so do the four
-        // internal aliases the extension-hosting prelude calls.
+        // internal aliases the extension-hosting prelude calls, and the internal
+        // capture-event helper.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries, and the
-        // compiled and eval `ReflectionClass` builder calls two more.
-        assert_eq!(aot_registry, 828);
+        // compiled and eval `ReflectionClass` builder calls two more, and the
+        // internal capture-event helper one.
+        assert_eq!(aot_registry, 829);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
-        assert_eq!(aot_external, 450 + curl_surface);
+        assert_eq!(aot_external, 454 + curl_surface);
     }
 
     /// Verifies representative exceptional routes are attached to their contracts.
@@ -469,8 +472,9 @@ mod tests {
         // Includes the four float pointer builtins and `buffer_ptr`, which eval runs through
         // interpreter adapters, plus the GMP and SimpleXML forwarding homes.
         assert_eq!(interpreter_adapter, 664 + curl_surface);
-        // Internal compiler surfaces and pending eval bindings remain unavailable.
-        assert_eq!(unsupported, 519);
+        // Internal compiler surfaces and pending eval bindings remain unavailable, including
+        // the internal capture-event helper and the four debug source helpers.
+        assert_eq!(unsupported, 524);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

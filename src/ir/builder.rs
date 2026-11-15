@@ -472,6 +472,18 @@ impl<'f> Builder<'f> {
         self.current
     }
 
+    /// Records one source-level branch site and returns its function-local index.
+    pub fn record_branch_site(&mut self, site: crate::ir::function::BranchSite) -> usize {
+        let index = self.func.branch_sites.len();
+        self.func.branch_sites.push(site);
+        index
+    }
+
+    /// Records one logical or switch path group in the function being built.
+    pub fn record_path_site(&mut self, site: crate::ir::PathSite) {
+        self.func.path_sites.push(site);
+    }
+
     /// Clones the entire function body so a speculative lowering can be undone exactly.
     ///
     /// A length-truncation rollback would be unsound: the function tables are append-only for

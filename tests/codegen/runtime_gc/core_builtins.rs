@@ -897,13 +897,14 @@ unset($node);
 gc_collect_cycles();
 $after = gc_status();
 echo $before["roots"] > 0 ? "roots" : "bad"; echo ":";
-echo $after["application_time"] >= 0.0 ? "app" : "bad"; echo ":";
+echo $after["application_time"] > 0.0 ? "app" : "bad"; echo ":";
 echo $after["collector_time"] > 0.0 ? "collector" : "bad"; echo ":";
+echo $after["collector_time"] < 5.0 ? "scaled" : "bad"; echo ":";
 echo $after["destructor_time"] > 0.0 ? "destructor" : "bad"; echo ":";
 echo $after["free_time"] > 0.0 ? "free" : "bad";
 "#,
     );
-    assert_eq!(out, "roots:app:collector:destructor:free");
+    assert_eq!(out, "roots:app:collector:scaled:destructor:free");
 }
 
 /// Verifies cache reclamation drains small bins once and leaves reusable heap state valid.

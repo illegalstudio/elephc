@@ -599,6 +599,13 @@ pub(crate) fn run_instrument(cmd: &MonitorCommand) -> i32 {
         return 1;
     }
     print!("{}", instrument_table(&graph));
+    if let Some(path) = &cmd.cachegrind_out {
+        if let Err(error) = write_cachegrind(path, &graph, &cmd.target) {
+            eprintln!("elephc monitor: {error}");
+            return 1;
+        }
+        println!("wrote {path}");
+    }
     let title = cmd.target.trim_end_matches(".php").to_string();
     // The exact capture carries no per-line data, but it can still show the
     // file: every measured function, located, with its cost.

@@ -392,6 +392,25 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                         && req.headers().get(hyper::header::ACCEPT_ENCODING).is_some_and(|v| {
                             contains_ascii_case_insensitive(v.as_bytes(), b"gzip")
                         });
+                    let debug_request = if crate::debug_bridge::active() {
+                        let headers: Vec<(String, String)> = req
+                            .headers()
+                            .iter()
+                            .map(|(n, v)| {
+                                (
+                                    n.as_str().to_string(),
+                                    String::from_utf8_lossy(v.as_bytes()).into_owned(),
+                                )
+                            })
+                            .collect();
+                        Some((
+                            req.method().as_str().to_string(),
+                            req.uri().path().to_string(),
+                            headers,
+                        ))
+                    } else {
+                        None
+                    };
                     let headers: Vec<(CString, CString)> = req
                         .headers()
                         .iter()
@@ -504,6 +523,9 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                         (facts.request_scheme != "http")
                             .then(|| request_state::cstring(facts.request_scheme.as_bytes()))
                     });
+                    if let Some((method, path, headers)) = debug_request {
+                        crate::debug_bridge::request_begin(&method, &path, &headers);
+                    }
                     let meta = request_state::RequestMeta {
                         remote_addr,
                         remote_port: forwarded
@@ -538,6 +560,10 @@ fn serve_inner<const APPLICATION: bool>(source: ListenSource, handler: extern "C
                     } else {
                         run_handler(handler)
                     };
+                    // A debug web session belongs to one request only. Tearing it
+                    // down here resumes the handler after a client disconnect and
+                    // leaves the worker's next request unchanged.
+                    crate::debug_bridge::request_end();
                     // Unconditional and idempotent: a request that started no
                     // slice ends none, and consecutive profiled requests stay
                     // separate captures.

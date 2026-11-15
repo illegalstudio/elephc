@@ -40,6 +40,7 @@ mod count_hoist_test;
 mod cse_test;
 mod dead_inst_test;
 mod dead_store_test;
+mod debug_availability_test;
 mod dominance_test;
 mod driver_test;
 mod fresh_mixed_transfer_test;

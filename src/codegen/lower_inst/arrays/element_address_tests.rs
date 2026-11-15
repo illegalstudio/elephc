@@ -22,7 +22,7 @@ fn spilled_element_address_operands_preserve_the_array_base_on_every_target() {
         for element in [PhpType::Int, PhpType::Str] {
             let module = large_frame_element_address_module(target, element);
             let asm = generate_user_asm_from_ir_with_options(
-                &module, false, false, Instrumentation::Off, false, false, false,
+                &module, false, false, Instrumentation::Off, false, false, false, false,
                 Emit::Executable, &Default::default(), false, false, WebIsolation::Worker,
             ).unwrap_or_else(|error| panic!("{name}: {error:?}"));
             if target.arch == Arch::AArch64 {

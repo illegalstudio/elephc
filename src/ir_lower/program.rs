@@ -86,9 +86,12 @@ pub(crate) fn lower(
     target: Target,
     source_path: Option<&Path>,
     web: bool,
+    debug_build: bool,
 ) -> Result<Module, LoweringError> {
-    crate::compiler_stack::with_compiler_stack(|| {
-        lower_on_compiler_stack(program, check_result, target, source_path, web)
+    crate::ir_lower::with_debug_build(debug_build, || {
+        crate::compiler_stack::with_compiler_stack(|| {
+            lower_on_compiler_stack(program, check_result, target, source_path, web)
+        })
     })
 }
 

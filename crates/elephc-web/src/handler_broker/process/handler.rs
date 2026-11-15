@@ -78,6 +78,10 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
         .find(|(n, _)| n.eq_ignore_ascii_case("x-elephc-query"))
         .is_some_and(|(_, value)| probe_route::query_is_authentic(value));
     request_state::set_server_addr(&server_addr, server_port);
+    // PHP runs in this handler child, so this is where a route-selected debug
+    // session must be created and accepted. The worker/broker stay async; only
+    // this child blocks while the DAP broker connects to its advertised socket.
+    crate::debug_bridge::request_begin(&method, &path, &headers);
     request_state::set_request(
         request_state::cstring(method.as_bytes()),
         request_state::cstring(uri.as_bytes()),
@@ -124,6 +128,10 @@ pub(super) unsafe fn execute_handler_request(handler: extern "C" fn(), mut strea
     if seconds > 0 {
         libc::alarm(0);
     }
+    // End the request-scoped debug session before the probe cleanup: a pool
+    // child serves many requests, and an armed site/INTERACTIVE flag left behind
+    // would make the next request think it still owns a DAP client.
+    crate::debug_bridge::request_end();
     // Unconditional and idempotent, as in the default worker: a request that
     // started no slice ends none, and consecutive profiled requests stay
     // separate captures. A pool child serves many requests, so leaving a slice

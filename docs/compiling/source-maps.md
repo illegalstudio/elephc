@@ -1,6 +1,6 @@
 ---
 title: "Source maps"
-description: "The version 2 JSON source-map schema emitted by --source-map for debugger, profiler, and disassembly tooling."
+description: "The version 3 JSON source-map schema emitted by --source-map for debugger, profiler, and disassembly tooling."
 sidebar:
   order: 7
 ---
@@ -19,29 +19,33 @@ For standard debugger/profiler integration without custom tooling, see
 [`--debug-info`](output-and-diagnostics.md#--debug-info), which embeds DWARF
 line directives in the assembly itself; the two flags compose.
 
-## Schema (version 2)
+## Schema (version 3)
 
 ```json
 {
   "format": "elephc-source-map",
-  "version": 2,
+  "version": 3,
   "source": "hello.php",
   "source_sha256": "86e64f19…",
   "asm": "hello.s",
+  "sources": [
+    {"id": 0, "path": "hello.php", "sha256": "86e64f19…", "entry": true},
+    {"id": 7, "path": "src/Helpers.php", "sha256": "d1e2…", "entry": false}
+  ],
   "functions": [
-    {"name": "add", "symbol": "_fn_add", "asm_start": 1, "asm_end": 105, "synthetic": false},
-    {"name": "main", "symbol": "_main", "asm_start": 4985, "asm_end": 5162, "synthetic": false}
+    {"name": "add", "symbol": "_fn_add", "asm_start": 1, "asm_end": 105, "synthetic": false, "source_id": 0},
+    {"name": "main", "symbol": "_main", "asm_start": 4985, "asm_end": 5162, "synthetic": false, "source_id": 0}
   ],
   "labels": [
     {"name": "_fn_add", "asm_line": 6, "function": 0, "block": null},
     {"name": "_eir_add_entry_0", "asm_line": 23, "function": 0, "block": "entry"}
   ],
   "mappings": [
-    {"asm_line": 47, "php_line": 4, "php_col": 15, "php_end_line": 4, "php_end_col": 19,
+    {"asm_line": 47, "source_id": 0, "php_line": 4, "php_col": 15, "php_end_line": 4, "php_end_col": 19,
      "op": "ichecked_add", "origin": null, "function": 0}
   ],
   "lines": [
-    {"php_line": 4, "asm_ranges": [[34, 105]]}
+    {"source_id": 0, "php_line": 4, "asm_ranges": [[34, 105]]}
   ]
 }
 ```
@@ -51,10 +55,23 @@ line directives in the assembly itself; the two flags compose.
 | Field | Type | Meaning |
 |-------|------|---------|
 | `format` | string | Always `"elephc-source-map"`. |
-| `version` | integer | Schema version; currently `2`. |
+| `version` | integer | Schema version; currently `3`. |
 | `source` | string | Path of the compiled `.php` or `.lfc` entry file, as passed to the CLI. |
 | `source_sha256` | string \| null | Lowercase-hex SHA-256 of the entry source at compile time, so tools can detect a stale map; `null` if the file could not be re-read. |
 | `asm` | string | Path of the assembly file the map describes. |
+| `sources` | array | Every physical source used by the program, including the entry file and included/autoloaded files. |
+
+### `sources`
+
+One entry per physical source. Source ids come from the compiler's span
+identity; the entry file is always `0`.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `id` | integer | Source id used by `functions[].source_id`, `mappings[].source_id` and `lines[].source_id`. |
+| `path` | string | Physical path of the source. |
+| `sha256` | string \| null | Lowercase-hex SHA-256 of the source at compile time, or `null` if it could not be read. |
+| `entry` | boolean | `true` for the entry file passed on the command line. |
 
 ### `functions`
 
@@ -66,6 +83,7 @@ One entry per emitted function body, in assembly order.
 | `symbol` | string | Assembly entry symbol (`_fn_add`, `_method_Foo_bar`, `_main`). |
 | `asm_start` / `asm_end` | integer | 1-based inclusive line range in the `.s` file. |
 | `synthetic` | boolean | `true` for compiler-generated bodies with no user-written PHP source: property-default init thunks and builtin class methods (Reflection, SPL, DateTime) linked into the user assembly. Tools that only care about user code can filter on this. |
+| `source_id` | integer \| null | Source id of the function's first real instruction span, or `null` for synthetic bodies. |
 
 ### `labels`
 
@@ -89,6 +107,7 @@ marker comment line, and the instruction's assembly follows it.
 | Field | Type | Meaning |
 |-------|------|---------|
 | `asm_line` | integer | 1-based line of the mapping marker in the `.s` file. |
+| `source_id` | integer \| null | Source id of the mapped instruction. `null` only for legacy markers without a `file=` token. |
 | `php_line` / `php_col` | integer | 1-based user-source position (the expression's anchor: its operator or first token). The stable field name also applies to LFC. |
 | `php_end_line` / `php_end_col` | integer \| null | Exclusive end of the mapped expression (the character after it). `null` when the extent is unknown. |
 | `op` | string \| null | EIR opcode spelling (e.g. `ichecked_add`, `call`), or `null` when unknown. |
@@ -97,14 +116,16 @@ marker comment line, and the instruction's assembly follows it.
 
 ### `lines`
 
-The inverse index for breakpoint-style lookups: for each PHP line with at least
-one mapping, the assembly line ranges implementing it, sorted by `php_line`.
-A mapping's range extends to the next mapping in the same function (or the
+The inverse index for breakpoint-style lookups: for each `(source_id, php_line)`
+pair with at least one mapping, the assembly line ranges implementing it. A
+mapping's range extends to the next mapping in the same function (or the
 function's end); overlapping and adjacent ranges are merged. A PHP line inlined
-into several functions gets one range per copy.
+into several functions gets one range per copy. Two files with the same line
+number stay distinct.
 
 | Field | Type | Meaning |
 |-------|------|---------|
+| `source_id` | integer | Source id of the line, indexing `sources`. |
 | `php_line` | integer | 1-based user-source line. The stable field name also applies to LFC. |
 | `asm_ranges` | array of `[start, end]` | 1-based inclusive assembly line ranges. |
 
@@ -112,8 +133,9 @@ into several functions gets one range per copy.
 
 - `format` plus integer `version` identify the schema. Consumers should reject
   documents whose `format` differs and treat a higher `version` as a new schema.
-- Within version 2, fields are only added, never removed or renamed. Consumers
-  must ignore unknown fields.
+- Within version 3, fields are only added, never removed or renamed. Consumers
+  must ignore unknown fields. Version 2 consumers must treat version 3 as a new
+  schema because `lines` is now keyed by `(source_id, php_line)`.
 - All `asm_line` / `asm_start` / `asm_end` values are 1-based lines in the file
   named by `asm`.
 
@@ -123,8 +145,11 @@ The map is derived from comment markers codegen leaves in the assembly, so the
 `.s` file is self-describing too. Marker values are space-separated `key=value`
 tokens:
 
-- `@fn name=<php_name> symbol=<entry_symbol> [synthetic=1]` …
+- `@file id=<source_id> path_hex=<hex>` announces one physical source path.
+  The path is hex-encoded UTF-8 so spaces, quotes and newlines cannot break the
+  space-separated marker grammar. The entry file is `id=0`.
+- `@fn name=<php_name> symbol=<entry_symbol> [file=<source_id>] [synthetic=1]` …
   `@endfn name=<php_name>` bracket each emitted function.
 - `@block name=<eir_block>` names the EIR basic block of the next label line.
-- `@src line=<L> col=<C> [end=<EL>:<EC>] [op=<opcode>] [origin=<pass>]`
+- `@src [file=<source_id>] line=<L> col=<C> [end=<EL>:<EC>] [op=<opcode>] [origin=<pass>]`
   precedes the assembly of one EIR instruction.

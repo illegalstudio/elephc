@@ -19,12 +19,18 @@ use crate::support::*;
 /// (null repr, compile profile, linked extensions), so a fixture compiled in-process can observe a
 /// previous test's settings. The CLI is isolated and deterministic.
 fn compile_cli_to_asm(tag: &str, source: &str) -> String {
+    compile_cli_to_asm_with_args(tag, source, &[])
+}
+
+/// Compiles one source to assembly with extra compiler flags.
+fn compile_cli_to_asm_with_args(tag: &str, source: &str, flags: &[&str]) -> String {
     let dir = std::env::temp_dir().join(format!("elephc_asm_{tag}_{}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
     let php = dir.join("main.php");
     fs::write(&php, source).unwrap();
     let output = elephc_cli_command(&dir)
+        .args(flags)
         .arg("--emit-asm")
         .arg(&php)
         .output()
@@ -2508,6 +2514,72 @@ echo get_class($u), "|", get_class($o);
     assert!(
         one_is_thunk_of_the_other(&user_asm, &user, &order),
         "a concrete T-slot write must merge to one body (user={has_user}, order={has_order})"
+    );
+}
+
+/// A debug build keeps one body per generic instantiation even when the bodies
+/// are otherwise identical: a folded method becomes a jump to the survivor and
+/// loses its own enter hook, so a function breakpoint on the folded method would
+/// verify but never stop.
+#[test]
+fn test_shape_merge_keeps_generic_method_bodies_in_debug_builds() {
+    let source = r#"<?php
+class Box<T> {
+    public function __construct(private T $value) {}
+    public function set(T $value): void { $this->value = $value; }
+}
+class User {}
+class Order {}
+$u = new Box(new User());
+$u->set(new User());
+$o = new Box(new Order());
+$o->set(new Order());
+echo get_class($u), "|", get_class($o);
+"#;
+    assert_eq!(compile_and_run(source), "Box<User>|Box<Order>");
+
+    let asm = compile_cli_to_asm_with_args("write-debug", source, &["--debug"]);
+    let key = elephc::names::php_symbol_key("set");
+    let user = elephc::names::method_symbol("Box<User>", &key);
+    let order = elephc::names::method_symbol("Box<Order>", &key);
+    assert!(
+        asm.contains(&format!("{user}:")),
+        "the Box<User> set body must stay in a debug build"
+    );
+    assert!(
+        asm.contains(&format!("{order}:")),
+        "the Box<Order> set body must stay in a debug build"
+    );
+    assert!(
+        !one_is_thunk_of_the_other(&asm, &user, &order),
+        "a debug build must not fold one generic body into a jump thunk"
+    );
+}
+
+/// The explicit debug-fold gate also covers a generic method on a non-generic
+/// class, where both instantiations share the same lexical class marker.
+#[test]
+fn test_shape_merge_keeps_generic_method_variants_in_debug_builds() {
+    let source = r#"<?php
+class Plain {
+    public function identity<T>(T $value): T { return $value; }
+}
+class User {}
+class Order {}
+$plain = new Plain();
+echo get_class($plain->identity(new User())), "|", get_class($plain->identity(new Order()));
+"#;
+    assert_eq!(compile_and_run(source), "User|Order");
+
+    let asm = compile_cli_to_asm_with_args("method-debug", source, &["--debug"]);
+    // Type-argument symbols lowercase their concrete class name.
+    let user = "_method___Plain___identity_x3c_user_x3e_".to_string();
+    let order = "_method___Plain___identity_x3c_order_x3e_".to_string();
+    assert!(asm.contains(&format!("{user}:")), "missing {user}: asm");
+    assert!(asm.contains(&format!("{order}:")), "missing {order}: asm");
+    assert!(
+        !one_is_thunk_of_the_other(&asm, &user, &order),
+        "a debug build must keep both generic method variants"
     );
 }
 

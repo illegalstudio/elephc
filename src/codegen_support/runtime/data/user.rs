@@ -4131,7 +4131,9 @@ fn physical_property_slot_metadata<'a>(
 /// longer the end of the road: `runtime_debug_info_entry` registers those methods in
 /// `_class_debuginfo_ptrs` and the walkers call them at run time. The fold remains the
 /// fast path for projections, and the only path for compiler-internal classes.
-fn var_dump_debug_info_projection(class_info: &ClassInfo) -> Option<Vec<(String, String)>> {
+pub(crate) fn var_dump_debug_info_projection(
+    class_info: &ClassInfo,
+) -> Option<Vec<(String, String)>> {
     use crate::parser::ast::{ExprKind, StmtKind};
 
     let method = class_info

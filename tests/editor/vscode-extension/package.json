@@ -1,0 +1,39 @@
+{
+  "name": "elephc-debug-smoke",
+  "displayName": "elephc debug smoke",
+  "publisher": "elephc",
+  "version": "0.0.1",
+  "engines": { "vscode": "^1.80.0" },
+  "activationEvents": ["onDebug", "onDebugResolve:elephc"],
+  "main": "./extension.js",
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "elephc",
+        "label": "elephc",
+        "languages": ["php"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": { "type": "string", "description": "PHP source or debug binary" },
+              "stopOnEntry": { "type": "boolean", "default": false }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "elephc",
+            "request": "launch",
+            "name": "Debug PHP with elephc",
+            "program": "${workspaceFolder}/main.php",
+            "stopOnEntry": false
+          }
+        ],
+        "configurationSnippets": [],
+        "program": "./adapter.js",
+        "runtime": "node"
+      }
+    ]
+  }
+}

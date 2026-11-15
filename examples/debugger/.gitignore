@@ -1,0 +1,7 @@
+*.s
+*.o
+*.edbg.json
+main
+calls.jsonl
+calls.html
+report.html

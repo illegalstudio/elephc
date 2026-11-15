@@ -11,7 +11,10 @@
 //! - Generator suspension remains an explicit unsupported Phase 04 path.
 
 use crate::codegen::platform::Arch;
-use crate::ir::{BlockId, CmpPredicate, DataId, IrType, Op, SwitchCase, Terminator, ValueId};
+use crate::ir::{
+    BlockId, BranchSite, BranchSiteKind, CmpPredicate, DataId, IrType, Op, SwitchCase,
+    Terminator, ValueId,
+};
 use crate::types::PhpType;
 
 use crate::codegen::abi;
@@ -22,9 +25,13 @@ use super::return_ownership;
 use super::{CodegenIrError, Result};
 
 /// Lowers one EIR terminator.
+///
+/// `block_id` identifies the function-local block whose terminator this is; a
+/// source-level conditional branch site recorded for that block gets two edge
+/// guards and an `@branch` metadata marker.
 pub(super) fn lower_terminator(
     ctx: &mut FunctionContext<'_>,
-    source: BlockId,
+    block_id: BlockId,
     term: &Terminator,
 ) -> Result<()> {
     match term {
@@ -108,7 +115,20 @@ pub(super) fn lower_terminator(
             Ok(())
         }
         Terminator::Br { target, args } => {
-            lower_branch(ctx, source, *target, args, "br")?;
+            // A logical path terminal owns the branch: the hidden state word
+            // selects exactly one full-prefix counter before the edge is taken.
+            if lower_path_terminal_dispatch(ctx, block_id, *target, args)? {
+                return Ok(());
+            }
+            if ctx.shared.debug_build {
+                if let Some((index, edge)) = dynamic_switch_default_site(ctx, block_id) {
+                    let edge_count = branch_edge_count(&ctx.function.branch_sites[index])
+                        .expect("dynamic switch branch has a known edge count");
+                    let sites = branch_sites(ctx, index, edge_count);
+                    super::debug_sites::emit_site_call(ctx, sites[edge] as usize)?;
+                }
+            }
+            lower_branch(ctx, block_id, *target, args, "br")?;
             Ok(())
         }
         Terminator::CondBr {
@@ -118,6 +138,28 @@ pub(super) fn lower_terminator(
             else_target,
             else_args,
         } => {
+            // Branch coverage: a conditional leaf gets two edge guards; a
+            // dynamic-switch case check gets only a match-edge guard and its
+            // default branch gets the last switch edge. Compiler-internal
+            // CondBrs (guards, null checks, cleanup) match none of these sites.
+            let conditional_guards = if ctx.shared.debug_build {
+                conditional_branch_site(ctx, block_id).map(|index| {
+                    let sites = branch_sites(ctx, index, 2);
+                    (sites[0], sites[1])
+                })
+            } else {
+                None
+            };
+            let dynamic_case_site = if ctx.shared.debug_build && conditional_guards.is_none() {
+                dynamic_switch_case_site(ctx, block_id).map(|(index, edge)| {
+                    let edge_count = branch_edge_count(&ctx.function.branch_sites[index])
+                        .expect("dynamic switch branch has a known edge count");
+                    let sites = branch_sites(ctx, index, edge_count);
+                    sites[edge]
+                })
+            } else {
+                None
+            };
             let condition = if let Some((arith, _)) = ctx.machine_layout.fused_overflow {
                 BranchCondition::Overflow {
                     kind: super::lower_inst::emit_fused_overflow(ctx, arith)?,
@@ -125,24 +167,24 @@ pub(super) fn lower_terminator(
                 }
             } else {
                 match ctx.machine_layout.fused_compare {
-                Some(compare) => match ctx.function.instruction(compare).map(|inst| inst.op) {
-                    Some(Op::ICmp) => BranchCondition::IntegerFlags(
-                        super::lower_inst::emit_fused_int_compare(ctx, compare)?,
-                    ),
-                    Some(Op::FCmp) => BranchCondition::FloatFlags {
-                        predicate: super::lower_inst::emit_fused_float_compare(ctx, compare)?,
-                        inverted: false,
+                    Some(compare) => match ctx.function.instruction(compare).map(|inst| inst.op) {
+                        Some(Op::ICmp) => BranchCondition::IntegerFlags(
+                            super::lower_inst::emit_fused_int_compare(ctx, compare)?,
+                        ),
+                        Some(Op::FCmp) => BranchCondition::FloatFlags {
+                            predicate: super::lower_inst::emit_fused_float_compare(ctx, compare)?,
+                            inverted: false,
+                        },
+                        _ => {
+                            return Err(CodegenIrError::invalid_module(
+                                "fused compare must be an integer or float compare",
+                            ));
+                        }
                     },
-                    _ => {
-                        return Err(CodegenIrError::invalid_module(
-                            "fused compare must be an integer or float compare",
-                        ));
+                    None => {
+                        ctx.load_value_to_result(*cond)?;
+                        BranchCondition::ResultNonzero
                     }
-                },
-                None => {
-                    ctx.load_value_to_result(*cond)?;
-                    BranchCondition::ResultNonzero
-                }
                 }
             };
             validate_block_args(ctx, *then_target, then_args, "cond_br then")?;
@@ -151,20 +193,43 @@ pub(super) fn lower_terminator(
             let else_label = ctx.block_label_for_id(*else_target)?;
             let then_edge = edge_label(ctx, then_args, &then_label, "cond_then_args");
             let else_edge = edge_label(ctx, else_args, &else_label, "cond_else_args");
-            // Edge-copy stubs are emitted right after the branch, so only a stub-free
-            // `cond_br` can fall through into the block laid out next.
-            let fallthrough = if then_args.is_empty() && else_args.is_empty() {
-                ctx.fallthrough_label()
+            if let Some((then_site, else_site)) = conditional_guards {
+                let then_guard = ctx.next_label("branch_then");
+                let else_guard = ctx.next_label("branch_else");
+                emit_conditional_jump(ctx, condition, &then_guard)?;
+                abi::emit_jump(ctx.emitter, &else_guard);
+                ctx.emitter.label(&then_guard);
+                super::debug_sites::emit_site_call(ctx, then_site as usize)?;
+                abi::emit_jump(ctx.emitter, &then_edge);
+                ctx.emitter.label(&else_guard);
+                super::debug_sites::emit_site_call(ctx, else_site as usize)?;
+                abi::emit_jump(ctx.emitter, &else_edge);
+            } else if let Some(case_site) = dynamic_case_site {
+                let then_guard = ctx.next_label("branch_case");
+                let else_guard = ctx.next_label("branch_case_else");
+                emit_conditional_jump(ctx, condition, &then_guard)?;
+                abi::emit_jump(ctx.emitter, &else_guard);
+                ctx.emitter.label(&then_guard);
+                super::debug_sites::emit_site_call(ctx, case_site as usize)?;
+                abi::emit_jump(ctx.emitter, &then_edge);
+                ctx.emitter.label(&else_guard);
+                abi::emit_jump(ctx.emitter, &else_edge);
             } else {
-                None
-            };
-            if fallthrough.as_deref() == Some(then_label.as_str()) {
-                // The then-block is laid out next: branch away only on the inverted condition.
-                emit_conditional_jump(ctx, condition.inverted(), &else_edge)?;
-            } else {
-                emit_conditional_jump(ctx, condition, &then_edge)?;
-                if fallthrough.as_deref() != Some(else_label.as_str()) {
-                    abi::emit_jump(ctx.emitter, &else_edge);
+                // Edge-copy stubs are emitted right after the branch, so only a stub-free
+                // `cond_br` can fall through into the block laid out next.
+                let fallthrough = if then_args.is_empty() && else_args.is_empty() {
+                    ctx.fallthrough_label()
+                } else {
+                    None
+                };
+                if fallthrough.as_deref() == Some(then_label.as_str()) {
+                    // The then-block is laid out next: branch away only on the inverted condition.
+                    emit_conditional_jump(ctx, condition.inverted(), &else_edge)?;
+                } else {
+                    emit_conditional_jump(ctx, condition, &then_edge)?;
+                    if fallthrough.as_deref() != Some(else_label.as_str()) {
+                        abi::emit_jump(ctx.emitter, &else_edge);
+                    }
                 }
             }
             emit_edge_args(ctx, &then_edge, *then_target, then_args, "cond_br then")?;
@@ -176,7 +241,7 @@ pub(super) fn lower_terminator(
             cases,
             default,
             default_args,
-        } => lower_switch(ctx, *scrutinee, cases, *default, default_args),
+        } => lower_switch(ctx, block_id, *scrutinee, cases, *default, default_args),
         Terminator::Throw { value } => lower_throw_value(ctx, *value),
         Terminator::Fatal { message } => lower_fatal(ctx, *message),
         Terminator::GeneratorSuspend { .. } => {
@@ -494,9 +559,253 @@ fn lower_fatal(ctx: &mut FunctionContext<'_>, message: DataId) -> Result<()> {
     Ok(())
 }
 
+/// Returns the branch-site index for a conditional in `block`.
+fn conditional_branch_site(ctx: &FunctionContext<'_>, block: BlockId) -> Option<usize> {
+    ctx.function.branch_sites.iter().position(|site| {
+        matches!(
+            &site.kind,
+            BranchSiteKind::Conditional { block: candidate } if *candidate == block
+        )
+    })
+}
+
+/// Returns the branch-site index and case-edge index for a dynamic-switch check.
+fn dynamic_switch_case_site(
+    ctx: &FunctionContext<'_>,
+    block: BlockId,
+) -> Option<(usize, usize)> {
+    ctx.function.branch_sites.iter().enumerate().find_map(|(index, site)| {
+        let BranchSiteKind::DynamicSwitch { case_blocks, .. } = &site.kind else {
+            return None;
+        };
+        case_blocks
+            .iter()
+            .position(|candidate| *candidate == block)
+            .map(|edge| (index, edge))
+    })
+}
+
+/// Returns the branch-site index and default-edge index for a dynamic-switch fallthrough.
+fn dynamic_switch_default_site(
+    ctx: &FunctionContext<'_>,
+    block: BlockId,
+) -> Option<(usize, usize)> {
+    ctx.function.branch_sites.iter().enumerate().find_map(|(index, site)| {
+        let BranchSiteKind::DynamicSwitch {
+            case_blocks,
+            default_block,
+        } = &site.kind
+        else {
+            return None;
+        };
+        (*default_block == block).then_some((index, case_blocks.len()))
+    })
+}
+
+/// Returns the branch-site index for a static-switch dispatch block.
+fn static_switch_site(ctx: &FunctionContext<'_>, block: BlockId) -> Option<usize> {
+    ctx.function.branch_sites.iter().position(|site| {
+        matches!(
+            &site.kind,
+            BranchSiteKind::StaticSwitch { block: candidate } if *candidate == block
+        )
+    })
+}
+
+/// Returns the number of source edges for a non-static branch site.
+fn branch_edge_count(site: &BranchSite) -> Option<usize> {
+    match &site.kind {
+        BranchSiteKind::Conditional { .. } => Some(2),
+        BranchSiteKind::StaticSwitch { .. } => None,
+        BranchSiteKind::DynamicSwitch { case_blocks, .. } => Some(case_blocks.len() + 1),
+    }
+}
+
+/// Allocates one debug site per source edge and emits the `@branch` marker once.
+fn branch_sites(
+    ctx: &mut FunctionContext<'_>,
+    site_index: usize,
+    edge_count: usize,
+) -> Vec<u32> {
+    if let Some(sites) = ctx.branch_site_ids[site_index].as_ref() {
+        return sites.clone();
+    }
+    let branch = ctx.function.branch_sites[site_index].clone();
+    let sites: Vec<u32> = (0..edge_count)
+        .map(|_| ctx.shared.next_debug_site() as u32)
+        .collect();
+    let span = branch.span;
+    if let BranchSiteKind::Conditional { .. } = branch.kind {
+        ctx.emitter.comment(&format!(
+            "@branch source={} line={} col={} kind=conditional then_site={} else_site={} edges={}",
+            span.source_id(),
+            span.line,
+            span.col,
+            sites[0],
+            sites[1],
+            join_sites(&sites)
+        ));
+    } else {
+        ctx.emitter.comment(&format!(
+            "@branch source={} line={} col={} kind=switch edges={}",
+            span.source_id(),
+            span.line,
+            span.col,
+            join_sites(&sites)
+        ));
+    }
+    ctx.branch_site_ids[site_index] = Some(sites.clone());
+    sites
+}
+
+/// Emits the `@pathgroup`/`@path` metadata markers for logical and switch paths.
+///
+/// A logical group owns one dedicated counter per full prefix route, because two
+/// prefixes can terminate on the same leaf edge; a switch group instead reuses
+/// the branch edge counters. The markers are emitted after all blocks so every
+/// switch branch site has its final site ids.
+pub(super) fn emit_path_markers(ctx: &mut FunctionContext<'_>) {
+    if !ctx.shared.debug_build {
+        return;
+    }
+    let path_sites = ctx.function.path_sites.clone();
+    for (index, path_site) in path_sites.iter().enumerate() {
+        let kind = match path_site.kind {
+            crate::ir::PathSiteKind::Logical => "logical",
+            crate::ir::PathSiteKind::Switch => "switch",
+        };
+        let span = path_site.span;
+        ctx.emitter.comment(&format!(
+            "@pathgroup source={} line={} col={} kind={kind} truncated={}",
+            span.source_id(),
+            span.line,
+            span.col,
+            u8::from(path_site.truncated)
+        ));
+        let sites: Vec<u32> = match path_site.kind {
+            crate::ir::PathSiteKind::Logical => path_site_counters(ctx, index),
+            crate::ir::PathSiteKind::Switch => {
+                let Some(branch_site) = path_site.switch_branch_site else {
+                    continue;
+                };
+                branch_sites(ctx, branch_site, path_site.paths.len())
+            }
+        };
+        for (descriptor, site) in path_site.paths.iter().zip(sites) {
+            ctx.emitter.comment(&format!(
+                "@path source={} line={} col={} kind={kind} site={site} label={}",
+                span.source_id(),
+                span.line,
+                span.col,
+                descriptor.label
+            ));
+        }
+    }
+}
+
+/// Returns the dedicated counter ids for one logical path group, allocating once.
+fn path_site_counters(ctx: &mut FunctionContext<'_>, site_index: usize) -> Vec<u32> {
+    if let Some(sites) = ctx.path_site_ids[site_index].as_ref() {
+        return sites.clone();
+    }
+    let count = ctx.function.path_sites[site_index].paths.len();
+    let sites: Vec<u32> = (0..count)
+        .map(|_| ctx.shared.next_debug_site() as u32)
+        .collect();
+    ctx.path_site_ids[site_index] = Some(sites.clone());
+    sites
+}
+
+/// Returns one logical path terminal for `block`, if the block owns one.
+fn logical_path_terminal(
+    ctx: &FunctionContext<'_>,
+    block: BlockId,
+) -> Option<(usize, crate::ir::PathTerminal)> {
+    ctx.function
+        .path_sites
+        .iter()
+        .enumerate()
+        .find_map(|(index, site)| {
+            (site.kind == crate::ir::PathSiteKind::Logical)
+                .then(|| site.terminals.iter().find(|terminal| terminal.block == block))
+                .flatten()
+                .map(|terminal| (index, terminal.clone()))
+        })
+}
+
+/// Lowers a logical path terminal's state-mask dispatch, returning whether one ran.
+fn lower_path_terminal_dispatch(
+    ctx: &mut FunctionContext<'_>,
+    block_id: BlockId,
+    target: BlockId,
+    args: &[ValueId],
+) -> Result<bool> {
+    if !ctx.shared.debug_build {
+        return Ok(false);
+    }
+    let Some((site_index, terminal)) = logical_path_terminal(ctx, block_id) else {
+        return Ok(false);
+    };
+    let Some(state_slot) = ctx.function.path_sites[site_index].state_local else {
+        return Ok(false);
+    };
+    let sites = path_site_counters(ctx, site_index);
+    let target_label = ctx.block_label_for_id(target)?;
+    let edge = if args.is_empty() {
+        target_label.clone()
+    } else {
+        edge_label(ctx, args, &target_label, "path_terminal_args")
+    };
+    ctx.load_local_to_result(state_slot)?;
+    let state_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let mask_reg = abi::secondary_scratch_reg(ctx.emitter);
+    for path_index in &terminal.paths {
+        let Some(descriptor) = ctx.function.path_sites[site_index].paths.get(*path_index) else {
+            continue;
+        };
+        let Some(site) = sites.get(*path_index) else {
+            continue;
+        };
+        let next = ctx.next_label("path_next");
+        let matched = ctx.next_label("path_match");
+        abi::emit_load_int_immediate(ctx.emitter, mask_reg, descriptor.mask as i64);
+        ctx.emitter.instruction(                                                // compare this route's state mask with the live path state
+            &format!("cmp {}, {}", state_reg, mask_reg)
+        );
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => ctx.emitter.instruction(&format!("b.ne {}", next)), // not this full-prefix route
+            Arch::X86_64 => ctx.emitter.instruction(&format!("jne {}", next)),  // not this full-prefix route
+        }
+        ctx.emitter.label(&matched);
+        super::debug_sites::emit_site_call(ctx, *site as usize)?;
+        abi::emit_jump(ctx.emitter, &edge);
+        ctx.emitter.label(&next);
+    }
+    // A truncated plan can leave a state the recorded masks do not describe; the
+    // branch must still be taken, so an unmatched state follows the edge without
+    // crediting any full path.
+    abi::emit_jump(ctx.emitter, &edge);
+    if !args.is_empty() {
+        ctx.emitter.label(&edge);
+        materialize_block_args(ctx, target, args, "path terminal")?;
+        abi::emit_jump(ctx.emitter, &target_label);
+    }
+    Ok(true)
+}
+
+/// Formats site ids for one `@branch` marker.
+fn join_sites(sites: &[u32]) -> String {
+    sites
+        .iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Lowers an integer switch by comparing the scrutinee against each case value in source order.
 fn lower_switch(
     ctx: &mut FunctionContext<'_>,
+    block_id: BlockId,
     scrutinee: ValueId,
     cases: &[SwitchCase],
     default: BlockId,
@@ -506,27 +815,42 @@ fn lower_switch(
     for case in cases {
         validate_block_args(ctx, case.target, &case.args, "switch case")?;
     }
+    // A static switch has one source edge per case label plus one default edge.
+    let branch_edges = if ctx.shared.debug_build {
+        static_switch_site(ctx, block_id)
+            .map(|index| branch_sites(ctx, index, cases.len() + 1))
+    } else {
+        None
+    };
     ctx.load_value_to_result(scrutinee)?;
     let result_reg = abi::int_result_reg(ctx.emitter);
     let case_reg = abi::secondary_scratch_reg(ctx.emitter);
     let mut case_edges = Vec::new();
-    for case in cases {
+    let mut case_guards = Vec::new();
+    for (case_index, case) in cases.iter().enumerate() {
         let target_label = ctx.block_label_for_id(case.target)?;
         let branch_label = edge_label(ctx, &case.args, &target_label, "switch_case_args");
+        let guard_label = branch_edges
+            .as_ref()
+            .map(|_| ctx.next_label("branch_switch_case"));
         abi::emit_load_int_immediate(ctx.emitter, case_reg, case.value);
+        let match_label = guard_label.as_deref().unwrap_or(&branch_label);
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
                 ctx.emitter.instruction(                                        // compare switch scrutinee with the case value
                     &format!("cmp {}, {}", result_reg, case_reg)
                 );
-                ctx.emitter.instruction(&format!("b.eq {}", branch_label));     // branch to the matching switch case
+                ctx.emitter.instruction(&format!("b.eq {}", match_label));      // branch to the matching switch case
             }
             Arch::X86_64 => {
                 ctx.emitter.instruction(                                        // compare switch scrutinee with the case value
                     &format!("cmp {}, {}", result_reg, case_reg)
                 );
-                ctx.emitter.instruction(&format!("je {}", branch_label));       // branch to the matching switch case
+                ctx.emitter.instruction(&format!("je {}", match_label));        // branch to the matching switch case
             }
+        }
+        if let (Some(guard_label), Some(sites)) = (guard_label, branch_edges.as_ref()) {
+            case_guards.push((guard_label, branch_label.clone(), sites[case_index]));
         }
         if !case.args.is_empty() {
             case_edges.push((branch_label, case.target, case.args.clone()));
@@ -534,7 +858,20 @@ fn lower_switch(
     }
     let default_label = ctx.block_label_for_id(default)?;
     let default_edge = edge_label(ctx, default_args, &default_label, "switch_default_args");
-    abi::emit_jump(ctx.emitter, &default_edge);
+    if let Some(sites) = branch_edges.as_ref() {
+        let default_guard = ctx.next_label("branch_switch_default");
+        abi::emit_jump(ctx.emitter, &default_guard);
+        for (guard_label, branch_label, site) in case_guards {
+            ctx.emitter.label(&guard_label);
+            super::debug_sites::emit_site_call(ctx, site as usize)?;
+            abi::emit_jump(ctx.emitter, &branch_label);
+        }
+        ctx.emitter.label(&default_guard);
+        super::debug_sites::emit_site_call(ctx, sites[cases.len()] as usize)?;
+        abi::emit_jump(ctx.emitter, &default_edge);
+    } else {
+        abi::emit_jump(ctx.emitter, &default_edge);
+    }
     emit_edge_args(ctx, &default_edge, default, default_args, "switch default")?;
     for (label, target, args) in case_edges {
         emit_edge_args(ctx, &label, target, &args, "switch case")?;

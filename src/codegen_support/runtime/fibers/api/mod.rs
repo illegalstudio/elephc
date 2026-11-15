@@ -9,7 +9,7 @@
 //! - API helpers must preserve Fiber state transitions and delegate target-specific assembly to focused emitters.
 
 mod arm64;
-mod common;
+pub(super) mod common;
 mod x86_64;
 
 use crate::codegen_support::emit::Emitter;

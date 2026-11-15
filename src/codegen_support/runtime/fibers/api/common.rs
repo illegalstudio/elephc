@@ -34,6 +34,34 @@ pub(super) fn emit_box_null_mixed(emitter: &mut Emitter) {
     }
 }
 
+/// Emits a nullable debugger coroutine hook with the fiber pointer as its only
+/// argument.
+///
+/// `fiber_reg` is the callee-saved register holding the fiber object. The Rust
+/// hook follows the ABI and preserves it; the emitter only has to keep the hook
+/// address clear of the argument move. `skip` must be unique per call site.
+pub(crate) fn emit_debug_coroutine_hook(
+    emitter: &mut Emitter,
+    slot_name: &str,
+    skip: &str,
+    fiber_reg: &str,
+) {
+    let slot = emitter.target.extern_symbol(slot_name);
+    if emitter.target.arch == Arch::X86_64 {
+        abi::emit_load_symbol_to_reg(emitter, "rax", &slot, 0);
+        emitter.instruction("test rax, rax");                                   // is the debugger's coroutine hook installed?
+        emitter.instruction(&format!("jz {skip}"));                             // no debug session: skip the hook
+        emitter.instruction(&format!("mov rdi, {fiber_reg}"));                  // arg 0: the coroutine/fiber pointer
+        emitter.instruction("call rax");                                        // update the activation stack around the switch
+    } else {
+        abi::emit_load_symbol_to_reg(emitter, "x9", &slot, 0);
+        emitter.instruction(&format!("cbz x9, {skip}"));                        // no debug session: skip the hook
+        emitter.instruction(&format!("mov x0, {fiber_reg}"));                   // arg 0: the coroutine/fiber pointer
+        emitter.instruction("blr x9");                                          // update the activation stack around the switch
+    }
+    emitter.label(skip);
+}
+
 /// Emits the `--instrument` unpark hook: puts this coroutine's activations back
 /// on the profiler's stack before control leaves without returning.
 ///

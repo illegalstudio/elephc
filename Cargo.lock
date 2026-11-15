@@ -907,6 +907,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "elephc-debug"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "elephc-fileinfo"
 version = "0.1.0"
 

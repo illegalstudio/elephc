@@ -103,6 +103,8 @@ pub(in crate::interpreter) use ob_list_handlers::*;
 pub(in crate::interpreter) use ob_start::*;
 pub(in crate::interpreter) use print_r::*;
 pub(in crate::interpreter) use var_dump::*;
+#[cfg(not(test))]
+pub(crate) use var_dump::eval_var_dump_render_value as debug_eval_render_value;
 pub(in crate::interpreter) use zend_version::*;
 
 /// Dispatches direct expression-level calls for core builtins.

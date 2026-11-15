@@ -1,6 +1,7 @@
 //! Purpose:
 //! Writes a capture out in the formats other tools read: Speedscope JSON, pprof,
-//! Graphviz DOT, and the self-contained HTML call graph.
+//! Graphviz DOT, the self-contained HTML call graph, and Xdebug-compatible
+//! cachegrind profiles.
 //!
 //! Called from:
 //! - `local::run` and `sampled::run`, after a capture is rendered.
@@ -47,6 +48,60 @@ pub(crate) fn write_graph_exports(
         println!("wrote {path}");
     }
     Ok(())
+}
+
+/// Writes an Xdebug-compatible cachegrind profile from one exact call graph.
+///
+/// Times are nanoseconds, matching Xdebug 3's cachegrind output. Exact captures
+/// time whole calls rather than lines, so each function is recorded at line 1
+/// with its self time, and every measured call edge records its count and the
+/// callee time attributed to that edge. `summary` is the root inclusive time.
+pub(crate) fn write_cachegrind(
+    path: &str,
+    graph: &crate::call_graph::CallGraph,
+    target: &str,
+) -> Result<(), String> {
+    let file = if target.is_empty() { "<program>" } else { target };
+    let mut out = String::new();
+    out.push_str("version: 1\n");
+    out.push_str("creator: elephc monitor\n");
+    out.push_str(&format!("cmd: {}\n", cachegrind_name(file)));
+    out.push_str("part: 1\n");
+    out.push_str("positions: line\n");
+    out.push_str("events: Time\n\n");
+    for (index, node) in graph.nodes.iter().enumerate() {
+        out.push_str(&format!(
+            "fl={}\nfn={}\n1 {}\n",
+            cachegrind_name(file),
+            cachegrind_name(&node.name),
+            node.exclusive
+        ));
+        for edge in graph.edges.iter().filter(|edge| edge.from == index) {
+            let Some(callee) = graph.nodes.get(edge.to) else {
+                continue;
+            };
+            out.push_str(&format!(
+                "cfl={}\ncfn={}\ncalls={} 1\n1 {}\n",
+                cachegrind_name(file),
+                cachegrind_name(&callee.name),
+                edge.count.unwrap_or(1),
+                edge.weight
+            ));
+        }
+        out.push('\n');
+    }
+    out.push_str(&format!("summary: {}\n", graph.total));
+    std::fs::write(path, out).map_err(|error| format!("cannot write {path}: {error}"))
+}
+
+/// Makes one cachegrind text field safe for a line-oriented file.
+fn cachegrind_name(name: &str) -> String {
+    let name = name.replace(['\n', '\r'], " ");
+    if name.is_empty() {
+        "<anonymous>".to_string()
+    } else {
+        name
+    }
 }
 
 /// Live-mode graph export: append this window's call graph to a rolling ring of

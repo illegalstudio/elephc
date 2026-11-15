@@ -1,0 +1,19 @@
+[package]
+name = "elephc-debug"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Per-site debug hook and minimal interactive runtime agent for programs compiled with --debug"
+publish = false
+
+# C-callable staticlib linked into debug programs. The codegen side emits a
+# register-preserving wrapper around `elephc_debug_site_inner`; this crate owns
+# the counters, site flags, metadata reader and the initial stdin session.
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+libc = "0.2"

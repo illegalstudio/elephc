@@ -42,6 +42,7 @@ pub(crate) mod clone_with;
 pub(crate) mod ctype;
 pub(crate) mod curl;
 pub(crate) mod debug;
+pub(crate) mod debug_events;
 pub(super) mod eval;
 /// Installing the compiled OPcache configuration is a STARTUP concern rather than an eval
 /// one, so `crate::codegen::frame` reaches it from the prologue. Re-exported here because

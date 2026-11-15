@@ -190,6 +190,10 @@ fn render_macos_command(
         OsString::from(sdk.version),
     ]);
 
+    for symbol in plan.undefined_symbols() {
+        args.push(OsString::from("-u"));
+        args.push(OsString::from(symbol));
+    }
     append_search_paths(&mut args, plan);
     if plan.needs_default_macos_library_paths() {
         for path in homebrew_paths {
@@ -243,6 +247,9 @@ fn render_linux_command(
     ]);
     if matches!(emit, Emit::Executable) && matches!(plan.linux_mode(), LinuxLinkMode::Static) {
         args.push(OsString::from("-static"));
+    }
+    for symbol in plan.undefined_symbols() {
+        args.push(OsString::from(format!("-Wl,-u,{symbol}")));
     }
     let has_link_inputs = has_link_inputs(plan);
     if has_link_inputs {
@@ -423,6 +430,33 @@ mod tests {
     fn linux_executable_still_collects_unreachable_sections() {
         let args = render_linux(&LinkPlan::new());
         assert!(args.iter().any(|arg| arg == "-Wl,--gc-sections"));
+    }
+
+    /// Verifies the macOS renderer marks the debug-metadata symbol as a root too.
+    #[test]
+    fn macos_debug_metadata_symbol_is_a_linker_root() {
+        let mut plan = LinkPlan::new();
+        plan.retain_undefined_symbol("_elephc_debug_metadata");
+        let args = render_macos(&plan);
+        assert!(
+            args.windows(2).any(|window| {
+                window[0] == "-u" && window[1] == "_elephc_debug_metadata"
+            }),
+            "missing macOS linker root: {args:?}"
+        );
+    }
+
+    /// Verifies a debug-metadata symbol is passed as a Linux linker root so
+    /// `--gc-sections` cannot discard the embedded table.
+    #[test]
+    fn linux_debug_metadata_symbol_is_a_linker_root() {
+        let mut plan = LinkPlan::new();
+        plan.retain_undefined_symbol("elephc_debug_metadata");
+        let args = render_linux(&plan);
+        assert!(
+            args.iter().any(|arg| arg == "-Wl,-u,elephc_debug_metadata"),
+            "missing linker root: {args:?}"
+        );
     }
 
     /// Renders one macOS executable command with injected SDK and Homebrew paths.

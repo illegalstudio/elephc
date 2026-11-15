@@ -1,15 +1,18 @@
 //! Purpose:
-//! Writes the v2 JSON source map for generated assembly when requested by the CLI.
-//! Captures function ranges (`@fn`/`@endfn`), EIR block labels (`@block`), and
-//! instruction mappings (`@src`) emitted by codegen into a stable machine-readable
-//! schema, plus a PHP-line → assembly-range inverse index and a source checksum.
+//! Writes the v3 JSON source map for generated assembly when requested by the CLI.
+//! Captures physical sources (`@file`), function ranges (`@fn`/`@endfn`), EIR
+//! block labels (`@block`), and instruction mappings (`@src`) emitted by codegen
+//! into a stable machine-readable schema, plus a per-source PHP-line →
+//! assembly-range inverse index and source checksums.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` after user assembly generation.
 //!
 //! Key details:
 //! - The schema contract is documented in `docs/compiling/source-maps.md`:
-//!   within version 2 fields are only added, never removed or renamed.
+//!   within version 3 fields are only added, never removed or renamed; version 2
+//!   consumers must treat version 3 as a new schema because the line index is
+//!   keyed by `(source_id, php_line)`.
 //! - JSON escaping is kept local so source paths and generated snippets remain valid map data.
 
 use std::fs;
@@ -24,6 +27,7 @@ struct FunctionRange {
     asm_start: usize,
     asm_end: Option<usize>,
     synthetic: bool,
+    source_id: Option<usize>,
 }
 
 /// One assembly label line inside a function region. `block` carries the EIR
@@ -40,6 +44,7 @@ struct LabelEntry {
 /// require their keys, `function` requires an enclosing `@fn` region.
 struct MappingEntry {
     asm_line: usize,
+    source_id: Option<usize>,
     php_line: usize,
     php_col: usize,
     php_end_line: Option<usize>,
@@ -49,7 +54,16 @@ struct MappingEntry {
     function: Option<usize>,
 }
 
-/// Builds the v2 source map for `asm` and writes it to `output_path`.
+/// One physical source announced by an `@file` marker. `sha256` is computed
+/// when the path can be read; `entry` marks the compile unit's entry file.
+struct SourceEntry {
+    id: usize,
+    path: String,
+    sha256: Option<String>,
+    entry: bool,
+}
+
+/// Builds the v3 source map for `asm` and writes it to `output_path`.
 ///
 /// `asm` is the full generated assembly text, `source_path` the original PHP
 /// file (also read back to compute the `source_sha256` checksum), and
@@ -69,15 +83,17 @@ pub fn write_source_map(
         .map_err(|err| format!("failed to write source map '{}': {}", output_path.display(), err))
 }
 
-/// Parses codegen markers out of the assembly text and renders the v2 JSON map.
+/// Parses codegen markers out of the assembly text and renders the v3 JSON map.
 ///
 /// Recognized markers (comment-prefix agnostic, matched by substring; values
 /// are space-separated `key=value` tokens):
-/// - `@fn name=<php_name> symbol=<entry_symbol> [synthetic=1]` opens a function
-///   region; `@endfn` closes it (an unterminated region closes at the last line);
+/// - `@file id=<source_id> path_hex=<hex>` announces a physical source path;
+/// - `@fn name=<php_name> symbol=<entry_symbol> [file=<source_id>] [synthetic=1]`
+///   opens a function region; `@endfn` closes it (an unterminated region closes
+///   at the last line);
 /// - `@block name=<eir_block>` names the EIR basic block of the next label line;
-/// - `@src line=<L> col=<C> [end=<EL>:<EC>] [op=<opcode>] [origin=<pass>]`
-///   maps the assembly emitted for one EIR instruction.
+/// - `@src [file=<source_id>] line=<L> col=<C> [end=<EL>:<EC>] [op=<opcode>]
+///   [origin=<pass>]` maps the assembly emitted for one EIR instruction.
 ///
 /// Label lines (`<ident>:` at column 0) inside a function region are recorded
 /// as label entries; labels outside any region (runtime glue, data) are skipped.
@@ -87,6 +103,27 @@ fn build_source_map(
     asm_path: &Path,
     source_sha256: Option<&str>,
 ) -> Result<String, String> {
+    let mut sources: std::collections::BTreeMap<usize, SourceEntry> =
+        std::collections::BTreeMap::new();
+    let root_path = source_path.display().to_string();
+    sources.insert(
+        0,
+        SourceEntry {
+            id: 0,
+            path: root_path.clone(),
+            sha256: source_sha256.map(str::to_string),
+            entry: true,
+        },
+    );
+    // The same physical file can be parsed under more than one span identity
+    // (include variants, autoload probes). Keep one `sources` entry and map
+    // every alias to its canonical id.
+    let mut source_aliases: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
+    source_aliases.insert(0, 0);
+    let mut path_ids: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    path_ids.insert(root_path, 0);
     let mut functions: Vec<FunctionRange> = Vec::new();
     let mut labels: Vec<LabelEntry> = Vec::new();
     let mut mappings: Vec<MappingEntry> = Vec::new();
@@ -97,6 +134,30 @@ fn build_source_map(
     for (idx, line) in asm.lines().enumerate() {
         let asm_line = idx + 1;
         last_line = asm_line;
+
+        if let Some(marker) = line.split("@file ").nth(1) {
+            let source_id = parse_marker_number(marker, "id")?;
+            let path_hex = marker_value(marker, "path_hex").ok_or_else(|| {
+                format!("invalid source-map file marker '{}'", line.trim())
+            })?;
+            let path = decode_hex_path(path_hex).ok_or_else(|| {
+                format!("invalid source-map file path '{}'", line.trim())
+            })?;
+            let canonical_id = if let Some(existing) = path_ids.get(&path).copied() {
+                existing
+            } else {
+                sources.entry(source_id).or_insert_with(|| SourceEntry {
+                    id: source_id,
+                    sha256: fs::read(&path).ok().map(|bytes| sha256_hex(&bytes)),
+                    path: path.clone(),
+                    entry: false,
+                });
+                path_ids.insert(path, source_id);
+                source_id
+            };
+            source_aliases.insert(source_id, canonical_id);
+            continue;
+        }
 
         if let Some(marker) = line.split("@fn ").nth(1) {
             let name = marker_value(marker, "name").ok_or_else(|| {
@@ -115,6 +176,10 @@ fn build_source_map(
                 asm_start: asm_line,
                 asm_end: None,
                 synthetic: marker_value(marker, "synthetic") == Some("1"),
+                source_id: canonical_source_id(
+                    optional_marker_number(marker, "file")?,
+                    &source_aliases,
+                ),
             });
             pending_block = None;
             continue;
@@ -153,6 +218,10 @@ fn build_source_map(
             };
             mappings.push(MappingEntry {
                 asm_line,
+                source_id: canonical_source_id(
+                    optional_marker_number(marker, "file")?,
+                    &source_aliases,
+                ),
                 php_line,
                 php_col,
                 php_end_line,
@@ -184,6 +253,7 @@ fn build_source_map(
         source_path,
         asm_path,
         source_sha256,
+        &sources,
         &functions,
         &labels,
         &mappings,
@@ -196,6 +266,38 @@ fn marker_value<'a>(marker: &'a str, key: &str) -> Option<&'a str> {
     marker
         .split_whitespace()
         .find_map(|token| token.strip_prefix(key)?.strip_prefix('='))
+}
+
+/// Maps a marker file id to the canonical source id for its physical path.
+fn canonical_source_id(
+    source_id: Option<usize>,
+    aliases: &std::collections::HashMap<usize, usize>,
+) -> Option<usize> {
+    source_id.map(|source_id| aliases.get(&source_id).copied().unwrap_or(source_id))
+}
+
+/// Parses an optional numeric `key=value` token, returning `None` when the key
+/// is absent. A present but malformed value is a map-generation error.
+fn optional_marker_number(marker: &str, key: &str) -> Result<Option<usize>, String> {
+    match marker_value(marker, key) {
+        Some(value) => value.parse::<usize>().map(Some).map_err(|err| {
+            format!("invalid source-map {} marker '{}': {}", key, value, err)
+        }),
+        None => Ok(None),
+    }
+}
+
+/// Decodes the hex-encoded path payload of an `@file` marker.
+pub(crate) fn decode_hex_path(hex: &str) -> Option<String> {
+    if hex.len() % 2 != 0 {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    for pair in hex.as_bytes().chunks_exact(2) {
+        let text = std::str::from_utf8(pair).ok()?;
+        bytes.push(u8::from_str_radix(text, 16).ok()?);
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Parses a required numeric `key=value` token from a `@src` marker tail.
@@ -225,6 +327,7 @@ fn label_line_name(line: &str) -> Option<&str> {
 
 /// One PHP source line's inverse index: the assembly line ranges implementing it.
 struct LineRanges {
+    source_id: usize,
     php_line: usize,
     asm_ranges: Vec<(usize, usize)>,
 }
@@ -235,8 +338,10 @@ struct LineRanges {
 /// mapping in the same function (or the function's end when it is the last one).
 /// Ranges for the same PHP line are merged when overlapping or adjacent.
 fn build_line_index(functions: &[FunctionRange], mappings: &[MappingEntry]) -> Vec<LineRanges> {
-    let mut ranges: Vec<(usize, usize, usize)> = Vec::new(); // (php_line, start, end)
+    // (source_id, php_line, start, end)
+    let mut ranges: Vec<(usize, usize, usize, usize)> = Vec::new();
     for (idx, mapping) in mappings.iter().enumerate() {
+        let source_id = mapping.source_id.unwrap_or(0);
         let end = mappings
             .get(idx + 1)
             .filter(|next| next.function == mapping.function)
@@ -249,16 +354,20 @@ fn build_line_index(functions: &[FunctionRange], mappings: &[MappingEntry]) -> V
             })
             .unwrap_or(mapping.asm_line)
             .max(mapping.asm_line);
-        ranges.push((mapping.php_line, mapping.asm_line, end));
+        ranges.push((source_id, mapping.php_line, mapping.asm_line, end));
     }
     ranges.sort();
 
     let mut lines: Vec<LineRanges> = Vec::new();
-    for (php_line, start, end) in ranges {
-        let entry = match lines.iter_mut().find(|entry| entry.php_line == php_line) {
+    for (source_id, php_line, start, end) in ranges {
+        let entry = match lines
+            .iter_mut()
+            .find(|entry| entry.source_id == source_id && entry.php_line == php_line)
+        {
             Some(entry) => entry,
             None => {
                 lines.push(LineRanges {
+                    source_id,
                     php_line,
                     asm_ranges: Vec::new(),
                 });
@@ -270,15 +379,16 @@ fn build_line_index(functions: &[FunctionRange], mappings: &[MappingEntry]) -> V
             _ => entry.asm_ranges.push((start, end)),
         }
     }
-    lines.sort_by_key(|entry| entry.php_line);
+    lines.sort_by_key(|entry| (entry.source_id, entry.php_line));
     lines
 }
 
-/// Renders the parsed entries as the v2 JSON document.
+/// Renders the parsed entries as the v3 JSON document.
 fn render_json(
     source_path: &Path,
     asm_path: &Path,
     source_sha256: Option<&str>,
+    sources: &std::collections::BTreeMap<usize, SourceEntry>,
     functions: &[FunctionRange],
     labels: &[LabelEntry],
     mappings: &[MappingEntry],
@@ -286,7 +396,7 @@ fn render_json(
     let mut json = String::new();
     json.push_str("{\n");
     json.push_str("  \"format\": \"elephc-source-map\",\n");
-    json.push_str("  \"version\": 2,\n");
+    json.push_str("  \"version\": 3,\n");
     json.push_str(&format!(
         "  \"source\": \"{}\",\n",
         escape_json(&source_path.display().to_string())
@@ -303,15 +413,37 @@ fn render_json(
         escape_json(&asm_path.display().to_string())
     ));
 
+    json.push_str("  \"sources\": [\n");
+    for (idx, source) in sources.values().enumerate() {
+        let sha = match &source.sha256 {
+            Some(hash) => format!("\"{}\"", escape_json(hash)),
+            None => "null".to_string(),
+        };
+        json.push_str(&format!(
+            "    {{\"id\": {}, \"path\": \"{}\", \"sha256\": {}, \"entry\": {}}}",
+            source.id,
+            escape_json(&source.path),
+            sha,
+            source.entry
+        ));
+        push_separator(&mut json, idx, sources.len());
+    }
+    json.push_str("  ],\n");
+
     json.push_str("  \"functions\": [\n");
     for (idx, function) in functions.iter().enumerate() {
+        let source_id = match function.source_id {
+            Some(source_id) => source_id.to_string(),
+            None => "null".to_string(),
+        };
         json.push_str(&format!(
-            "    {{\"name\": \"{}\", \"symbol\": \"{}\", \"asm_start\": {}, \"asm_end\": {}, \"synthetic\": {}}}",
+            "    {{\"name\": \"{}\", \"symbol\": \"{}\", \"asm_start\": {}, \"asm_end\": {}, \"synthetic\": {}, \"source_id\": {}}}",
             escape_json(&function.name),
             escape_json(&function.symbol),
             function.asm_start,
             function.asm_end.unwrap_or(function.asm_start),
-            function.synthetic
+            function.synthetic,
+            source_id
         ));
         push_separator(&mut json, idx, functions.len());
     }
@@ -347,15 +479,20 @@ fn render_json(
             Some(function) => function.to_string(),
             None => "null".to_string(),
         };
+        let source_id = match mapping.source_id {
+            Some(source_id) => source_id.to_string(),
+            None => "null".to_string(),
+        };
         let optional_number = |value: Option<usize>| match value {
             Some(value) => value.to_string(),
             None => "null".to_string(),
         };
         json.push_str(&format!(
-            "    {{\"asm_line\": {}, \"php_line\": {}, \"php_col\": {}, \
+            "    {{\"asm_line\": {}, \"source_id\": {}, \"php_line\": {}, \"php_col\": {}, \
              \"php_end_line\": {}, \"php_end_col\": {}, \
              \"op\": {}, \"origin\": {}, \"function\": {}}}",
             mapping.asm_line,
+            source_id,
             mapping.php_line,
             mapping.php_col,
             optional_number(mapping.php_end_line),
@@ -378,8 +515,8 @@ fn render_json(
             .collect::<Vec<_>>()
             .join(", ");
         json.push_str(&format!(
-            "    {{\"php_line\": {}, \"asm_ranges\": [{}]}}",
-            entry.php_line, ranges
+            "    {{\"source_id\": {}, \"php_line\": {}, \"asm_ranges\": [{}]}}",
+            entry.source_id, entry.php_line, ranges
         ));
         push_separator(&mut json, idx, lines.len());
     }
@@ -400,7 +537,7 @@ fn push_separator(json: &mut String, idx: usize, len: usize) {
 /// characters are escaped so the result is valid JSON text (RFC 8259 §7). All control
 /// characters below 0x20 are escaped — `\b`/`\f`/`\n`/`\r`/`\t` use their short forms,
 /// any other control char uses a `\u00XX` sequence.
-fn escape_json(value: &str) -> String {
+pub(crate) fn escape_json(value: &str) -> String {
     let mut out = String::new();
     for ch in value.chars() {
         match ch {
@@ -421,7 +558,7 @@ fn escape_json(value: &str) -> String {
 /// Computes the lowercase-hex SHA-256 digest of `bytes` (FIPS 180-4).
 /// Implemented locally so the compiler needs no cryptography dependency for
 /// a simple integrity checksum.
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     const K: [u32; 64] = [
         0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
         0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
@@ -498,19 +635,20 @@ fn sha256_hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
-    /// Synthetic assembly exercising every v2 marker: a function region with a
+    /// Synthetic assembly exercising every v3 marker: a function region with a
     /// block-tagged label, an op/end-tagged mapping, an origin-tagged mapping,
     /// a synthetic function, and a bare v1-style mapping outside any region.
     const SAMPLE_ASM: &str = "\
-    # @src line=9 col=2
+    # @file id=0 path_hex=612e706870
+    # @src file=0 line=9 col=2
     mov x0, #1
-    # @fn name=foo symbol=_php_foo
+    # @fn name=foo symbol=_php_foo file=0
 _php_foo:
-    # @src line=3 col=5 end=3:12 op=store_local
+    # @src file=0 line=3 col=5 end=3:12 op=store_local
     str x0, [sp]
     # @block name=loop_body
 Lbb_loop_body_1:
-    # @src line=4 col=9 op=const_i64 origin=const_fold
+    # @src file=0 line=4 col=9 op=const_i64 origin=const_fold
     mov x1, #7
     ret
     # @endfn name=foo
@@ -520,15 +658,19 @@ _class_propinit_0:
     # @endfn name=_class_propinit_0
 ";
 
-    /// Verifies the v2 envelope: format name without a version suffix, integer
+    /// Verifies the v3 envelope: format name without a version suffix, integer
     /// schema version, both paths, and the source checksum (null when unknown).
     #[test]
-    fn v2_envelope_has_format_version_and_paths() {
+    fn v3_envelope_has_format_version_and_paths() {
         let json = build_source_map(SAMPLE_ASM, Path::new("a.php"), Path::new("a.s"), Some("ab12"))
             .unwrap();
         assert!(json.contains("\"format\": \"elephc-source-map\""), "{json}");
-        assert!(json.contains("\"version\": 2"), "{json}");
+        assert!(json.contains("\"version\": 3"), "{json}");
         assert!(json.contains("\"source\": \"a.php\""), "{json}");
+        assert!(
+            json.contains("{\"id\": 0, \"path\": \"a.php\", \"sha256\": \"ab12\", \"entry\": true}"),
+            "{json}"
+        );
         assert!(json.contains("\"asm\": \"a.s\""), "{json}");
         assert!(json.contains("\"source_sha256\": \"ab12\""), "{json}");
 
@@ -540,20 +682,20 @@ _class_propinit_0:
     /// Verifies `@fn`/`@endfn` markers become functions entries with the PHP
     /// name, entry symbol, 1-based line range, and synthetic flag.
     #[test]
-    fn v2_records_function_ranges() {
+    fn v3_records_function_ranges() {
         let json =
             build_source_map(SAMPLE_ASM, Path::new("a.php"), Path::new("a.s"), None).unwrap();
         assert!(
             json.contains(
-                "{\"name\": \"foo\", \"symbol\": \"_php_foo\", \"asm_start\": 3, \
-                 \"asm_end\": 12, \"synthetic\": false}"
+                "{\"name\": \"foo\", \"symbol\": \"_php_foo\", \"asm_start\": 4, \
+                 \"asm_end\": 13, \"synthetic\": false, \"source_id\": 0}"
             ),
             "{json}"
         );
         assert!(
             json.contains(
                 "{\"name\": \"_class_propinit_0\", \"symbol\": \"_class_propinit_0\", \
-                 \"asm_start\": 13, \"asm_end\": 16, \"synthetic\": true}"
+                 \"asm_start\": 14, \"asm_end\": 17, \"synthetic\": true, \"source_id\": null}"
             ),
             "{json}"
         );
@@ -562,18 +704,18 @@ _class_propinit_0:
     /// Verifies labels inside a function range are recorded with their owning
     /// function index and the EIR block name from a preceding `@block` marker.
     #[test]
-    fn v2_records_labels_with_block_names() {
+    fn v3_records_labels_with_block_names() {
         let json =
             build_source_map(SAMPLE_ASM, Path::new("a.php"), Path::new("a.s"), None).unwrap();
         assert!(
             json.contains(
-                "{\"name\": \"_php_foo\", \"asm_line\": 4, \"function\": 0, \"block\": null}"
+                "{\"name\": \"_php_foo\", \"asm_line\": 5, \"function\": 0, \"block\": null}"
             ),
             "{json}"
         );
         assert!(
             json.contains(
-                "{\"name\": \"Lbb_loop_body_1\", \"asm_line\": 8, \"function\": 0, \
+                "{\"name\": \"Lbb_loop_body_1\", \"asm_line\": 9, \"function\": 0, \
                  \"block\": \"loop_body\"}"
             ),
             "{json}"
@@ -583,12 +725,12 @@ _class_propinit_0:
     /// Verifies `@src` mappings carry the end position, opcode, origin, and
     /// owning function when present, and null placeholders when absent.
     #[test]
-    fn v2_records_mappings_with_all_fields() {
+    fn v3_records_mappings_with_all_fields() {
         let json =
             build_source_map(SAMPLE_ASM, Path::new("a.php"), Path::new("a.s"), None).unwrap();
         assert!(
             json.contains(
-                "{\"asm_line\": 5, \"php_line\": 3, \"php_col\": 5, \
+                "{\"asm_line\": 6, \"source_id\": 0, \"php_line\": 3, \"php_col\": 5, \
                  \"php_end_line\": 3, \"php_end_col\": 12, \
                  \"op\": \"store_local\", \"origin\": null, \"function\": 0}"
             ),
@@ -596,7 +738,7 @@ _class_propinit_0:
         );
         assert!(
             json.contains(
-                "{\"asm_line\": 9, \"php_line\": 4, \"php_col\": 9, \
+                "{\"asm_line\": 10, \"source_id\": 0, \"php_line\": 4, \"php_col\": 9, \
                  \"php_end_line\": null, \"php_end_col\": null, \
                  \"op\": \"const_i64\", \"origin\": \"const_fold\", \"function\": 0}"
             ),
@@ -604,7 +746,7 @@ _class_propinit_0:
         );
         assert!(
             json.contains(
-                "{\"asm_line\": 1, \"php_line\": 9, \"php_col\": 2, \
+                "{\"asm_line\": 2, \"source_id\": 0, \"php_line\": 9, \"php_col\": 2, \
                  \"php_end_line\": null, \"php_end_col\": null, \
                  \"op\": null, \"origin\": null, \"function\": null}"
             ),
@@ -616,19 +758,86 @@ _class_propinit_0:
     /// implementing it: a mapping extends to the next mapping in the same
     /// function, and the last mapping extends to the function end.
     #[test]
-    fn v2_builds_php_line_inverse_index() {
+    fn v3_builds_php_line_inverse_index() {
         let json =
             build_source_map(SAMPLE_ASM, Path::new("a.php"), Path::new("a.s"), None).unwrap();
         assert!(
-            json.contains("{\"php_line\": 3, \"asm_ranges\": [[5, 8]]}"),
+            json.contains("{\"source_id\": 0, \"php_line\": 3, \"asm_ranges\": [[6, 9]]}"),
             "{json}"
         );
         assert!(
-            json.contains("{\"php_line\": 4, \"asm_ranges\": [[9, 12]]}"),
+            json.contains("{\"source_id\": 0, \"php_line\": 4, \"asm_ranges\": [[10, 13]]}"),
             "{json}"
         );
         assert!(
-            json.contains("{\"php_line\": 9, \"asm_ranges\": [[1, 1]]}"),
+            json.contains("{\"source_id\": 0, \"php_line\": 9, \"asm_ranges\": [[2, 2]]}"),
+            "{json}"
+        );
+    }
+
+    /// Verifies an included source is a separate `sources` entry and its
+    /// mappings/line index carry the included source id instead of the entry id.
+    #[test]
+    fn v3_keeps_included_sources_distinct() {
+        let asm = "\
+    # @file id=0 path_hex=6d61696e2e706870
+    # @file id=7 path_hex=6c69622e706870
+    # @fn name=bar symbol=_php_bar file=7
+_php_bar:
+    # @src file=7 line=9 col=3
+    ret
+    # @endfn name=bar
+";
+        let json = build_source_map(asm, Path::new("main.php"), Path::new("a.s"), None).unwrap();
+        assert!(
+            json.contains(
+                "{\"id\": 7, \"path\": \"lib.php\", \"sha256\": null, \"entry\": false}"
+            ),
+            "{json}"
+        );
+        assert!(
+            json.contains(
+                "{\"asm_line\": 5, \"source_id\": 7, \"php_line\": 9, \"php_col\": 3, \
+                 \"php_end_line\": null, \"php_end_col\": null, \
+                 \"op\": null, \"origin\": null, \"function\": 0}"
+            ),
+            "{json}"
+        );
+        assert!(
+            json.contains("{\"source_id\": 7, \"php_line\": 9, \"asm_ranges\": [[5, 7]]}"),
+            "{json}"
+        );
+    }
+
+    /// Verifies two span identities naming the same physical path collapse to
+    /// one `sources` entry; their function/mapping ids alias the canonical id.
+    #[test]
+    fn v3_merges_alias_source_ids_by_path() {
+        let asm = "\
+    # @file id=0 path_hex=6d61696e2e706870
+    # @file id=7 path_hex=6c69622e706870
+    # @file id=8 path_hex=6c69622e706870
+    # @fn name=baz symbol=_php_baz file=8
+_php_baz:
+    # @src file=8 line=10 col=1
+    ret
+    # @endfn name=baz
+";
+        let json = build_source_map(asm, Path::new("main.php"), Path::new("a.s"), None).unwrap();
+        assert_eq!(json.matches("\"path\": \"lib.php\"").count(), 1, "{json}");
+        assert!(
+            json.contains(
+                "{\"name\": \"baz\", \"symbol\": \"_php_baz\", \"asm_start\": 4, \
+                 \"asm_end\": 8, \"synthetic\": false, \"source_id\": 7}"
+            ),
+            "{json}"
+        );
+        assert!(
+            json.contains(
+                "{\"asm_line\": 6, \"source_id\": 7, \"php_line\": 10, \"php_col\": 1, \
+                 \"php_end_line\": null, \"php_end_col\": null, \
+                 \"op\": null, \"origin\": null, \"function\": 0}"
+            ),
             "{json}"
         );
     }
@@ -636,7 +845,7 @@ _class_propinit_0:
     /// Verifies a malformed `@src` line number still fails map generation with
     /// a descriptive error, as in v1.
     #[test]
-    fn v2_rejects_malformed_src_marker() {
+    fn v3_rejects_malformed_src_marker() {
         let err = build_source_map(
             "# @src line=x col=1\n",
             Path::new("a.php"),
@@ -650,13 +859,13 @@ _class_propinit_0:
     /// Verifies an unterminated function region is closed at the last assembly
     /// line instead of being dropped.
     #[test]
-    fn v2_closes_unterminated_function_at_eof() {
+    fn v3_closes_unterminated_function_at_eof() {
         let asm = "# @fn name=main symbol=_main\n_main:\n    ret\n";
         let json = build_source_map(asm, Path::new("a.php"), Path::new("a.s"), None).unwrap();
         assert!(
             json.contains(
                 "{\"name\": \"main\", \"symbol\": \"_main\", \"asm_start\": 1, \
-                 \"asm_end\": 3, \"synthetic\": false}"
+                 \"asm_end\": 3, \"synthetic\": false, \"source_id\": null}"
             ),
             "{json}"
         );

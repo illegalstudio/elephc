@@ -70,6 +70,63 @@ pub(super) fn lower_switch(
     } else {
         lower_dynamic_switch_dispatch(ctx, subject, live_subject, cases)
     };
+    if span.source_path().is_some() && span.line > 0 {
+        if let Some((dispatch_block, case_count)) = dispatch.static_coverage {
+            let branch_site = ctx.builder.record_branch_site(crate::ir::BranchSite {
+                span,
+                kind: crate::ir::BranchSiteKind::StaticSwitch {
+                    block: dispatch_block,
+                },
+            });
+            let paths = (0..=case_count)
+                .map(|edge| crate::ir::PathDescriptor {
+                    mask: 0,
+                    label: if edge < case_count {
+                        format!("case{edge}")
+                    } else {
+                        "default".to_string()
+                    },
+                })
+                .collect();
+            ctx.builder.record_path_site(crate::ir::PathSite {
+                span,
+                kind: crate::ir::PathSiteKind::Switch,
+                state_local: None,
+                switch_branch_site: Some(branch_site),
+                paths,
+                terminals: Vec::new(),
+                truncated: false,
+            });
+        } else if let Some((case_blocks, default_block)) = &dispatch.dynamic_coverage {
+            let case_count = case_blocks.len();
+            let branch_site = ctx.builder.record_branch_site(crate::ir::BranchSite {
+                span,
+                kind: crate::ir::BranchSiteKind::DynamicSwitch {
+                    case_blocks: case_blocks.clone(),
+                    default_block: *default_block,
+                },
+            });
+            let paths = (0..=case_count)
+                .map(|edge| crate::ir::PathDescriptor {
+                    mask: 0,
+                    label: if edge < case_count {
+                        format!("case{edge}")
+                    } else {
+                        "default".to_string()
+                    },
+                })
+                .collect();
+            ctx.builder.record_path_site(crate::ir::PathSite {
+                span,
+                kind: crate::ir::PathSiteKind::Switch,
+                state_local: None,
+                switch_branch_site: Some(branch_site),
+                paths,
+                terminals: Vec::new(),
+                truncated: false,
+            });
+        }
+    }
     if let Some(owner) = owner {
         // Every dispatch edge ends in its own unterminated block, so the rooted subject is
         // retired there before the edge enters (or is joined into) its body.
@@ -92,6 +149,10 @@ pub(super) fn lower_switch(
 pub(super) struct SwitchDispatch {
     cases: Vec<Vec<IfArmExit>>,
     default: IfArmExit,
+    /// Static integer dispatch block and case count, for coverage metadata.
+    static_coverage: Option<(BlockId, usize)>,
+    /// Dynamic switch per-label check blocks and the default check block.
+    dynamic_coverage: Option<(Vec<BlockId>, BlockId)>,
 }
 
 /// Records the dispatch edge that reaches the unterminated block `tail`, with the current facts.
@@ -139,6 +200,10 @@ pub(super) fn lower_static_switch_dispatch(
             });
         }
     }
+    let dispatch_block = ctx
+        .builder
+        .insertion_block()
+        .expect("static switch dispatch is emitted in a block");
     ctx.builder.terminate(Terminator::Switch {
         scrutinee: subject.value,
         cases: switch_cases,
@@ -152,6 +217,8 @@ pub(super) fn lower_static_switch_dispatch(
             .map(|block| vec![switch_dispatch_edge(ctx, *block)])
             .collect(),
         default: switch_dispatch_edge(ctx, default_block),
+        static_coverage: Some((dispatch_block, blocks.len())),
+        dynamic_coverage: None,
     }
 }
 
@@ -170,6 +237,7 @@ pub(super) fn lower_dynamic_switch_dispatch(
     cases: &[(Vec<Expr>, Vec<Stmt>)],
 ) -> SwitchDispatch {
     let mut case_edges = Vec::with_capacity(cases.len());
+    let mut check_blocks = Vec::new();
     for (case_exprs, _) in cases {
         let mut edges = Vec::with_capacity(case_exprs.len());
         for case_expr in case_exprs {
@@ -232,6 +300,11 @@ pub(super) fn lower_dynamic_switch_dispatch(
                     else_target: miss_block,
                     else_args: Vec::new(),
                 });
+                check_blocks.push(
+                    ctx.builder
+                        .insertion_block()
+                        .expect("dynamic switch case check is emitted in a block"),
+                );
                 edges.push(switch_dispatch_edge(ctx, matched_block));
                 ctx.builder.position_at_end(miss_block);
                 continue;
@@ -299,6 +372,11 @@ pub(super) fn lower_dynamic_switch_dispatch(
                 // and keeps it when widening makes the reload an owning conversion.
                 crate::ir_lower::ownership::release_if_owned(ctx, subject, Some(case_expr.span));
             }
+            check_blocks.push(
+                ctx.builder
+                    .insertion_block()
+                    .expect("dynamic switch case check is emitted in a block"),
+            );
             let matched_block = ctx.builder.create_named_block("switch.matched", Vec::new());
             let miss_block = ctx.builder.create_named_block("switch.next", Vec::new());
             ctx.builder.terminate(Terminator::CondBr {
@@ -314,12 +392,18 @@ pub(super) fn lower_dynamic_switch_dispatch(
         case_edges.push(edges);
     }
     let default_block = ctx.builder.create_named_block("switch.default", Vec::new());
+    let default_check_block = ctx
+        .builder
+        .insertion_block()
+        .expect("dynamic switch default check is emitted in a block");
     branch_to(ctx, default_block);
     let default = switch_dispatch_edge(ctx, default_block);
     ctx.clear_static_callable_locals();
     SwitchDispatch {
         cases: case_edges,
         default,
+        static_coverage: None,
+        dynamic_coverage: Some((check_blocks, default_check_block)),
     }
 }
 

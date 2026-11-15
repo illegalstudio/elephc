@@ -79,7 +79,9 @@ run. See [The Runtime](../internals/the-runtime.md) for what those routines are.
 | [Targets and cross-compilation](targets.md) | The supported target matrix and `--target` |
 | [Native dependencies](native-dependencies.md) | `elephc native`, project manifests/locks, verified artifacts, cache identity, and toolchain selection |
 | [Optimization and codegen controls](optimization.md) | `--regalloc`, `--ir-opt`, `--null-repr`, and what they do |
-| [Output formats and diagnostics](output-and-diagnostics.md) | `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--gc-stats`, `--heap-debug` |
+| [Output formats and diagnostics](output-and-diagnostics.md) | `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--debug`, `--debug-info`, `--gc-stats`, `--heap-debug` |
+| [Debug metadata](debug-metadata.md) | `--debug` v1 sources/functions/sites/locals, `.edbg.json` sidecar and embedded table; `test --coverage` line guard joins |
+| [DAP adapter](dap.md) | `elephc debug --dap`: launch, breakpoints, stackTrace/scopes/variables, evaluate and stepping |
 | [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md) | `--link`, `--link-path`, `--framework`, `--heap-size`, `--define` |
 
 For the internals behind these phases, see

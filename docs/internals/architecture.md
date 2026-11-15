@@ -382,7 +382,7 @@ src/
 ├── prelude_prune.rs           Pre-name-resolution usage scan feeding the class gates and superglobal seeding
 ├── prelude_prune/             Shared exhaustive AST walk over expressions, statements, and declarations
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
-├── debug_info.rs              DWARF debug-info injection for `--debug-info` (lldb/gdb source mapping)
+├── debug_info.rs              DWARF injection for `--debug-info`/`--debug` (line tables, subprograms, scalar PHP locals)
 ├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling
 ├── name_resolver/             Namespace/use resolution to canonical names

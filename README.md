@@ -170,6 +170,18 @@ every profile carries a W3C Trace Context identity, so it joins whatever
 distributed trace its caller already belongs to. See
 [Profiling](docs/beyond-php/profiling.md).
 
+When the question is *what is the program doing* rather than *how long did it
+take*, build with `--debug` and use the native debugger: terminal breakpoints,
+stepping, stack and locals, the same sessions over DAP in VS Code and Neovim,
+read-only value inspection, `elephc_break()`/`elephc_dump()`, call-value capture
+through `elephc monitor --calls`, and coverage through `elephc test --coverage`.
+`--debug-optimized` keeps the same metadata and guards while allowing
+optimization, reporting optimized-away locals as `<optimized out>`.
+`--allow-eval` is the explicit opt-in for arbitrary PHP evaluation through
+Magician at a stop. No xdebug extension or VM is involved. See
+[Debugging](docs/beyond-php/debugging.md) and the runnable
+[debugger example](examples/debugger/main.php).
+
 The compiler is experimental and evolving. Not everything PHP supports is implemented, and you will find bugs. But as the DOOM showcase demonstrates, you can build real, non-trivial programs with it today.
 
 If you want to contribute, you're welcome. Mi casa es tu casa.

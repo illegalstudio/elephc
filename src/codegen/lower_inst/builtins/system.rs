@@ -728,6 +728,11 @@ pub(super) fn lower_exit(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
             abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
             crate::codegen::frame::emit_instr_terminate(ctx);
         }
+        // `test --coverage` exits through this path: publish the site counters
+        // before the process disappears. A normal debug build makes this a no-op.
+        if ctx.shared.debug_build {
+            crate::codegen::debug_sites::emit_dump_call(ctx);
+        }
         abi::emit_exit(ctx.emitter, 0);
         return Ok(());
     };
@@ -934,6 +939,9 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
         (Platform::MacOS, Arch::AArch64) | (Platform::Linux, Arch::AArch64) => {
             ctx.emitter.instruction("mov x19, x0");                             // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("bl __rt_ob_flush_all");                    // drain still-active output buffers to stdout before terminating
+            if ctx.shared.debug_build {
+                crate::codegen::debug_sites::emit_dump_call(ctx);
+            }
             abi::emit_exit_hook(ctx.emitter);
             crate::codegen::frame::emit_instr_terminate(ctx);
             ctx.emitter.instruction("mov x0, x19");                             // restore the exit code into the syscall argument register
@@ -943,6 +951,9 @@ fn emit_dynamic_exit(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rbx, rax");                            // stash the exit code in a callee-saved register (this path never returns)
             ctx.emitter.instruction("and rsp, -16");                            // realign the stack for the flush call (this path never returns)
             ctx.emitter.instruction("call __rt_ob_flush_all");                  // drain still-active output buffers to stdout before terminating
+            if ctx.shared.debug_build {
+                crate::codegen::debug_sites::emit_dump_call(ctx);
+            }
             abi::emit_exit_hook(ctx.emitter);
             crate::codegen::frame::emit_instr_terminate(ctx);
             ctx.emitter.instruction("mov rdi, rbx");                            // move the computed exit code into the SysV first-argument register

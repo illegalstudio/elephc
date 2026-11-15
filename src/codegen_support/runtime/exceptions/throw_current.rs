@@ -62,6 +62,35 @@ fn emit_instr_throw_hook(emitter: &mut Emitter) {
     emitter.label(skip);
 }
 
+/// Calls the nullable debugger exception hook with `(caught, throwable)`.
+///
+/// The handler top is already loaded into `handler_reg`; a non-zero value means
+/// the exception will be caught. The slot is null unless a DAP session installed
+/// it, so an ordinary binary pays one load and a branch only on a throw.
+fn emit_debug_exception_hook(emitter: &mut Emitter, handler_reg: &str) {
+    let slot = emitter.target.extern_symbol("elephc_debug_exception_fn");
+    let skip = "__rt_throw_current_no_debug_exception";
+    if emitter.target.arch == Arch::X86_64 {
+        abi::emit_load_symbol_to_reg(emitter, "rax", &slot, 0);
+        emitter.instruction("test rax, rax");                                   // is the debugger exception hook installed?
+        emitter.instruction(&format!("jz {skip}"));                             // no debug session: skip the hook entirely
+        emitter.instruction("xor edi, edi");                                    // default caught flag = false
+        emitter.instruction(&format!("test {handler_reg}, {handler_reg}"));     // will a handler receive this throw?
+        emitter.instruction("setne dil");                                       // caught = handler top != null
+        abi::emit_load_symbol_to_reg(emitter, "rsi", "_exc_value", 0);          // arg 1: the active Throwable pointer
+        emitter.instruction("call rax");                                        // notify the debugger before unwinding
+    } else {
+        abi::emit_load_symbol_to_reg(emitter, "x9", &slot, 0);
+        emitter.instruction(&format!("cbz x9, {skip}"));                        // no debug session: skip the hook entirely
+        emitter.instruction("mov x10, x9");                                     // keep the hook address clear of the symbol loads below
+        emitter.instruction(&format!("cmp {handler_reg}, #0"));                 // will a handler receive this throw?
+        emitter.instruction("cset x0, ne");                                     // caught = handler top != null
+        abi::emit_load_symbol_to_reg(emitter, "x1", "_exc_value", 0);           // arg 1: the active Throwable pointer
+        emitter.instruction("blr x10");                                         // notify the debugger before unwinding
+    }
+    emitter.label(skip);
+}
+
 /// Emits the runtime helper that throws the exception in the current slot.
 ///
 /// x86_64 takes its own path: the two architectures differ in which register
@@ -91,6 +120,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_throw_current_no_debuginfo");                // a newer handler (a `try` inside the method) catches it as usual
     emitter.instruction("b __rt_report_debuginfo_exception");                   // PHP: `Warning: Uncaught ...` then `__debuginfo() must return an array`
     emitter.label("__rt_throw_current_no_debuginfo");
+    emit_debug_exception_hook(emitter, "x19");
     emitter.instruction("cbz x19, __rt_throw_current_uncaught");                // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("bl __rt_pcntl_abort_dispatch");                        // restore PCNTL mask/guard state before a handler exception longjmps
     emitter.instruction("ldr x0, [x19, #8]");                                   // x0 = activation record that should survive this catch
@@ -132,6 +162,7 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, r11");                                        // did the exception escape the __debugInfo() call without a newer handler?
     emitter.instruction("je __rt_report_debuginfo_exception");                  // PHP: `Warning: Uncaught ...` then `__debuginfo() must return an array`
     emitter.label("__rt_throw_current_no_debuginfo");
+    emit_debug_exception_hook(emitter, "r12");
     emitter.instruction("test r12, r12");                                       // is there an active exception handler to receive this throw?
     emitter.instruction("jz __rt_throw_current_uncaught");                      // fall back to a fatal uncaught-exception path when no handler exists
     emitter.instruction("call __rt_pcntl_abort_dispatch");                      // restore PCNTL mask/guard state before a handler exception longjmps
@@ -377,5 +408,41 @@ mod tests {
         let saves = asm.find("stp x19, x20").expect("aarch64 saves x19/x20");
         let hook = asm.find("blr x10").expect("aarch64 calls the hook");
         assert!(hook > saves, "the hook runs before the registers are saved:\n{asm}");
+    }
+}
+
+#[cfg(test)]
+mod debugger_hook_tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Emits the throw helper for one target.
+    fn emitted(platform: Platform, arch: Arch) -> String {
+        let mut emitter = Emitter::new(Target::new(platform, arch));
+        emit_throw_current(&mut emitter);
+        emitter.output()
+    }
+
+    /// The unwinder calls the nullable debugger slot before deciding catch vs uncaught.
+    #[test]
+    fn the_unwinder_notifies_the_debugger_through_a_nullable_slot() {
+        for (platform, arch) in [
+            (Platform::MacOS, Arch::AArch64),
+            (Platform::Linux, Arch::AArch64),
+            (Platform::Linux, Arch::X86_64),
+        ] {
+            let target = Target::new(platform, arch);
+            let asm = emitted(platform, arch);
+            let slot = target.extern_symbol("elephc_debug_exception_fn");
+            assert!(
+                asm.contains(&slot),
+                "{platform:?}/{arch:?} never reads the debugger slot:\n{asm}"
+            );
+            let guarded = asm.contains("cbz x9, __rt_throw_current_no_debug_exception")
+                || asm.contains("jz __rt_throw_current_no_debug_exception");
+            assert!(guarded, "{platform:?}/{arch:?} calls the hook unguarded:\n{asm}");
+            let indirect = asm.contains("blr x10") || asm.contains("call rax");
+            assert!(indirect, "{platform:?}/{arch:?} does not call through the slot:\n{asm}");
+        }
     }
 }

@@ -63,6 +63,7 @@ pub(super) fn lower_gc_control(
     })?;
     match op {
         crate::ir::GcControlOp::Collect => {
+            abi::emit_store_imm_to_symbol(ctx.emitter, "_gc_run_explicit", 0, 1);
             abi::emit_call_label(ctx.emitter, "__rt_gc_collect_cycles_explicit");
         }
         crate::ir::GcControlOp::Disable => {
