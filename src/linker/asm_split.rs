@@ -34,7 +34,7 @@ use crate::codegen::Emit;
 /// is a private external reference with no definition. It is therefore stripped
 /// from the body and re-emitted per slice over exactly the symbols that slice
 /// defines.
-const VISIBILITY_FOOTER_MARKER: &str =
+pub(super) const VISIBILITY_FOOTER_MARKER: &str =
     "// -- internal symbols are local to the cdylib public ABI --";
 
 /// Prefix given to an assembler temporary that must become a real symbol because
@@ -49,7 +49,7 @@ const VISIBILITY_FOOTER_MARKER: &str =
 /// EVERY slice and publish it `.private_extern` in the defining one. The prefix
 /// is deliberately unlike anything the emitter mints, so the rename cannot
 /// collide, and greppable, so a symbolicated profile explains itself.
-const PROMOTED_PREFIX: &str = "_elephc_xslice_";
+pub(super) const PROMOTED_PREFIX: &str = "_elephc_xslice_";
 
 /// Result of one collected split (tests only; production renders a `SplitPlan` slice by slice).
 #[cfg(test)]
@@ -863,15 +863,15 @@ fn label_first_bytes(names: &[&str]) -> [bool; 256] {
     starts
 }
 
-/// The reference pass over lines `range`: widens, per label, the lowest and highest line that
-/// references it in `touched`, and adds the hard intervals (conditional branches, numeric locals)
-/// the range opens to `hard`.
 #[cfg(test)]
 thread_local! {
     /// Lines `scan_references` tokenized looking for label references, on this thread.
     static TOKENIZED_LINES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// The reference pass over lines `range`: widens, per label, the lowest and highest line that
+/// references it in `touched`, and adds the hard intervals (conditional branches, numeric locals)
+/// the range opens to `hard`.
 #[allow(clippy::too_many_arguments)]
 fn scan_references(
     lines: &Lines<'_>,

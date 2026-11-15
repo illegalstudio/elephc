@@ -21,6 +21,7 @@
 //!   object `as` itself produced, so the linker sees the same platform and versions.
 
 mod encode;
+pub(crate) mod listing;
 
 use crate::fast_hash::{FastMap as HashMap, FastSet as HashSet};
 
@@ -442,8 +443,17 @@ pub(crate) fn assemble(text: &str) -> Result<Vec<u8>> {
 /// names mapped through `names`: the object [`assemble`] would build from the parts joined and
 /// renamed, without a copy of them.
 pub(crate) fn assemble_parts<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Vec<u8>> {
-    let (layout, sections, relocs) = assemble_one_pass(parts, names)?;
-    write_object(&layout, sections, relocs)
+    let assembled = assemble_one_pass(parts, names)?;
+    write_object(&assembled.layout, assembled.sections, assembled.relocs)
+}
+
+/// One assembled slice before it is written: its labels and attributes, its section bytes, the
+/// relocations it needs, and the section it ended in.
+struct Assembled<'a> {
+    layout: Layout<'a>,
+    sections: [Vec<u8>; 2],
+    relocs: Vec<PendingReloc<'a>>,
+    final_sect: Sect,
 }
 
 /// A branch to a label the single pass had not reached yet; resolved once every label is placed.
@@ -478,10 +488,7 @@ struct DeferredDifference<'a> {
 /// operand -- is noted and resolved after the pass; everything else needs no layout. The result
 /// is byte for byte the two-pass one (`one_pass_matches_two_pass`), relocations included and in
 /// the same order.
-fn assemble_one_pass<'a>(
-    parts: &[&'a str],
-    names: Names<'a>,
-) -> Result<(Layout<'a>, [Vec<u8>; 2], Vec<PendingReloc<'a>>)> {
+fn assemble_one_pass<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Assembled<'a>> {
     let source_len: usize = parts.iter().map(|part| part.len()).sum();
     let mut layout = Layout {
         text_align: 2,
@@ -724,7 +731,12 @@ fn assemble_one_pass<'a>(
     }
     relocs.sort_by_key(|(index, position, _)| (*index, *position));
     layout.sizes = [sections[0].len() as u64, sections[1].len() as u64];
-    Ok((layout, sections, relocs.into_iter().map(|(_, _, reloc)| reloc).collect()))
+    Ok(Assembled {
+        layout,
+        sections,
+        relocs: relocs.into_iter().map(|(_, _, reloc)| reloc).collect(),
+        final_sect: sect,
+    })
 }
 
 /// Whether a data operand is spelled `A - B`, the form `label_difference` folds.

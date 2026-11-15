@@ -410,6 +410,14 @@ pub(crate) fn assemble_parallel(
     };
 
     let parts = slice_parts(jobs, source.len());
+    // The in-tree assembler cuts and joins the listing itself, without `asm_split` reading every
+    // line of it first; anything it does not handle falls through to the analysed split below.
+    if inhouse_enabled(target) && direct_enabled() && listing_enabled() {
+        if let Some(assembled) = assemble_listing_inhouse(target, source, jobs, &slice_obj) {
+            drop(mapped);
+            return assembled;
+        }
+    }
     let plan_started = std::time::Instant::now();
     let Some(mut plan) = asm_split::plan_split(
         source,
@@ -642,6 +650,117 @@ fn trace_enabled() -> bool {
 
 /// Whether the in-tree assembler reads each slice straight from the `.s` (the default) rather
 /// than from a rendered copy; `ELEPHC_ASM_DIRECT=0` keeps the rendered copy, for comparison.
+/// Whether the in-tree assembler cuts the listing itself (`inhouse::listing`).
+/// `ELEPHC_ASM_LISTING=0` keeps the analysed split (`asm_split`) for every listing.
+fn listing_enabled() -> bool {
+    !matches!(std::env::var("ELEPHC_ASM_LISTING").as_deref(), Ok("0") | Ok("off"))
+}
+
+/// Assembles `source` into slice objects with the in-tree assembler cutting and joining it
+/// itself (`inhouse::listing`), or `None` to fall back to the analysed split.
+///
+/// Slices are budgeted below [`MAX_SLICE_SOURCE_BYTES`] including the window a cut may move by.
+/// The object cache is keyed by the whole listing: an unchanged rebuild reuses every slice, and a
+/// changed one reassembles them all (the balanced split's cuts move with any change as well).
+fn assemble_listing_inhouse(
+    target: Target,
+    source: &str,
+    jobs: usize,
+    slice_obj: &dyn Fn(usize) -> PathBuf,
+) -> Option<AssembledObjects> {
+    let started = std::time::Instant::now();
+    let budget = MAX_SLICE_SOURCE_BYTES - 2 * inhouse::listing::CUT_SEARCH_BYTES;
+    let parts = jobs.max(source.len().div_ceil(budget));
+    let plan = inhouse::listing::plan_listing(source, parts)?;
+    let count = plan.slices();
+    let objects: Vec<PathBuf> = (0..count).map(slice_obj).collect();
+    let keys: Option<Vec<u64>> = asm_cache::is_enabled().then(|| {
+        let identity = asm_cache::assembler_identity(&assembler_command(target));
+        let seed = asm_cache::extend_slice_key(asm_cache::slice_key_seed(&identity), b"inhouse-listing\n");
+        let whole = asm_cache::extend_slice_key(seed, source.as_bytes());
+        (0..count)
+            .map(|index| asm_cache::extend_slice_key(whole, format!("{index}/{count}").as_bytes()))
+            .collect()
+    });
+    if let Some(keys) = &keys {
+        if keys.iter().zip(&objects).all(|(key, path)| asm_cache::reuse(*key, path)) {
+            return Some(AssembledObjects {
+                objects,
+                note: Some(format!("Assembler: {count} slices (in-tree, self-cut), {count} reused from cache")),
+            });
+        }
+    }
+    let mut slices = Vec::with_capacity(count);
+    for (index, outcome) in run_slice_workers(count, jobs, |index| inhouse::listing::assemble_slice(&plan, index))
+        .into_iter()
+        .enumerate()
+    {
+        match outcome {
+            Ok(Ok(slice)) => slices.push(slice),
+            Ok(Err(inhouse::Unsupported(reason))) => {
+                if trace_enabled() {
+                    eprintln!("asm-trace listing fallback, slice {index}: {reason}");
+                }
+                return None;
+            }
+            Err(_) => {
+                if trace_enabled() {
+                    eprintln!("asm-trace listing fallback, slice {index} panicked");
+                }
+                return None;
+            }
+        }
+    }
+    let (joined, summary) = match inhouse::listing::join_slices(&plan, slices) {
+        Ok(joined) => joined,
+        Err(inhouse::Unsupported(reason)) => {
+            if trace_enabled() {
+                eprintln!("asm-trace listing fallback, join: {reason}");
+            }
+            return None;
+        }
+    };
+    let joined: Vec<std::sync::Mutex<Option<inhouse::listing::ListingSlice<'_>>>> =
+        joined.into_iter().map(|slice| std::sync::Mutex::new(Some(slice))).collect();
+    let written = run_slice_workers(count, jobs, |index| -> std::result::Result<(), String> {
+        let slice = joined[index].lock().map_err(|_| "slice mutex poisoned".to_string())?.take();
+        let slice = slice.ok_or_else(|| "slice taken twice".to_string())?;
+        let object = inhouse::listing::write_slice(slice).map_err(|inhouse::Unsupported(reason)| reason)?;
+        // `reuse` may have left a hard link into the cache at this name: never write through it.
+        let _ = std::fs::remove_file(&objects[index]);
+        std::fs::write(&objects[index], object).map_err(|error| error.to_string())
+    });
+    for (index, outcome) in written.into_iter().enumerate() {
+        if !matches!(outcome, Ok(Ok(()))) {
+            if trace_enabled() {
+                eprintln!("asm-trace listing fallback, writing slice {index} failed");
+            }
+            for path in &objects {
+                let _ = std::fs::remove_file(path);
+            }
+            return None;
+        }
+    }
+    if let Some(keys) = &keys {
+        for (key, path) in keys.iter().zip(&objects) {
+            asm_cache::publish(*key, path);
+        }
+        asm_cache::prune(keys);
+    }
+    if trace_enabled() {
+        eprintln!("asm-trace listing: {count} slices in {:.2}s", started.elapsed().as_secs_f64());
+    }
+    Some(AssembledObjects {
+        objects,
+        note: Some(format!(
+            "Assembler: {count} slices, {} workers (in-tree, self-cut; {} temporaries promoted, {} locals published)",
+            jobs.min(count),
+            summary.promoted,
+            summary.published
+        )),
+    })
+}
+
 fn direct_enabled() -> bool {
     !matches!(std::env::var("ELEPHC_ASM_DIRECT").as_deref(), Ok("0") | Ok("off"))
 }
