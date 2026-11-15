@@ -34,6 +34,10 @@ struct ClassIndex {
     concrete_descendants: crate::fast_hash::FastMap<String, Vec<String>>,
     /// Folded class key -> the class table's spelling.
     by_symbol_key: crate::fast_hash::FastMap<String, String>,
+    /// Each class name as it appears in a parent chain -> every class, abstract ones included,
+    /// whose chain reaches it (the class itself included), in the class table's iteration order.
+    /// A `static::` call unions these; each such call walked every class's chain per round.
+    subclasses: crate::fast_hash::FastMap<String, Vec<String>>,
 }
 
 impl ClassIndex {
@@ -42,8 +46,25 @@ impl ClassIndex {
         let mut concrete_descendants: crate::fast_hash::FastMap<String, Vec<String>> =
             crate::fast_hash::FastMap::default();
         let mut by_symbol_key = crate::fast_hash::FastMap::default();
+        let mut subclasses: crate::fast_hash::FastMap<String, Vec<String>> =
+            crate::fast_hash::FastMap::default();
         for (candidate, class) in classes {
             by_symbol_key.entry(php_symbol_key(candidate)).or_insert_with(|| candidate.clone());
+            // The walk `static_calls::class_is_same_or_subclass` made per call: the chain from the
+            // class itself, cut where it loops.
+            let mut current = Some(candidate.as_str());
+            let mut hops = 0usize;
+            while let Some(class_name) = current {
+                let entry = subclasses.entry(class_name.to_string()).or_default();
+                if entry.last() != Some(candidate) {
+                    entry.push(candidate.clone());
+                }
+                hops += 1;
+                if hops > classes.len() {
+                    break;
+                }
+                current = classes.get(class_name).and_then(|class| class.parent.as_deref());
+            }
             if class.is_abstract {
                 continue;
             }
@@ -61,7 +82,7 @@ impl ClassIndex {
                 current = classes.get(class_name).and_then(|class| class.parent.as_deref());
             }
         }
-        Self { concrete_descendants, by_symbol_key }
+        Self { concrete_descendants, by_symbol_key, subclasses }
     }
 }
 
@@ -718,6 +739,48 @@ thread_local! {
 mod tests {
     use super::*;
     use crate::ir::PropertyFetchMode;
+
+    /// A `static::` call unions the implementations of its class and every subclass, abstract
+    /// ones included. The index lists exactly the classes the per-call parent-chain walk accepted,
+    /// in table order, and a call visits only those: 30 unrelated classes add no candidate.
+    #[test]
+    fn static_calls_visit_only_their_hierarchy() {
+        let mut source = String::from(
+            "<?php\nabstract class Shape { public static function make(): static { return new static(); } public static function build(): int { return static::sides(); } public static function sides(): int { return 0; } }\n\
+             class Square extends Shape { public static function sides(): int { return 4; } }\n\
+             abstract class Polygon extends Shape {}\n\
+             class Hexagon extends Polygon { public static function sides(): int { if (PHP_INT_SIZE < 0) { throw new \\Exception('x'); } return 6; } }\n",
+        );
+        for index in 0..30 {
+            source.push_str(&format!("class Other{index} {{ public static function sides(): int {{ return {index}; }} }}\n"));
+        }
+        source.push_str("echo Square::build(), Hexagon::build(), Other3::sides(), \"\\n\";\n");
+        static_calls::STATIC_CALL_CANDIDATES.with(|count| count.set(0));
+        static_calls::STATIC_CALL_CHAIN_WALKS.with(|count| count.set(0));
+        let module = crate::ir_lower::tests::lower_source_at_for_target(
+            &source,
+            &std::env::temp_dir().join("static_calls.php"),
+            &std::env::temp_dir(),
+            crate::codegen::platform::Target::parse("macos-aarch64").expect("target"),
+        );
+        let visited = static_calls::STATIC_CALL_CANDIDATES.with(|count| count.get());
+        let walks = static_calls::STATIC_CALL_CHAIN_WALKS.with(|count| count.get());
+        assert_eq!(walks, 0, "static:: calls walked {walks} parent chains instead of reading the index");
+        assert!(visited > 0, "the fixture no longer reaches a static:: call");
+        // Shape, Square, Polygon and Hexagon, per summary of `build` across the rounds.
+        assert_eq!(visited % 4, 0, "{visited} candidates visited");
+        assert!(visited <= 4 * MAX_EFFECT_ITERATIONS, "{visited} candidates visited");
+        let index = ClassIndex::new(&module.class_infos);
+        for base in module.class_infos.keys() {
+            let walked = module
+                .class_infos
+                .keys()
+                .filter(|candidate| static_calls::class_is_same_or_subclass(&module.class_infos, candidate, base))
+                .collect::<Vec<_>>();
+            let indexed = index.subclasses.get(base.as_str()).map(|list| list.iter().collect::<Vec<_>>()).unwrap_or_default();
+            assert_eq!(indexed, walked, "subclasses of {base}");
+        }
+    }
 
     /// A throw at the end of a call chain reaches its head one round at a time, so the fixed
     /// point takes as many rounds as the chain is long. Only the bodies whose callees' summaries

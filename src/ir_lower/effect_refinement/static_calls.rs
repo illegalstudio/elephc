@@ -49,8 +49,11 @@ pub(super) fn static_call_effects(
 
     let mut effects = Effects::PURE;
     let mut found = false;
-    for (candidate, class) in context.classes {
-        if !class_is_same_or_subclass(context.classes, candidate, class_name) { continue; }
+    let candidates = context.index.subclasses.get(class_name.as_str()).map(Vec::as_slice).unwrap_or(&[]);
+    for candidate in candidates {
+        #[cfg(test)]
+        STATIC_CALL_CANDIDATES.with(|count| count.set(count.get() + 1));
+        let Some(class) = context.classes.get(candidate) else { continue; };
         // Calling an abstract class can select its abstract slot instead of any child body.
         // Keep this failure observable even when every concrete override is pure.
         if class.abstract_static_methods.contains(&method_key) {
@@ -101,15 +104,24 @@ fn implementation_effects(
     resolved_callable_effects(function, instruction, &target, parameter_offset, context)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Classes `static::` calls considered as late-static candidates, on this thread.
+    pub(super) static STATIC_CALL_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Parent-chain walks `class_is_same_or_subclass` made, on this thread.
+    pub(super) static STATIC_CALL_CHAIN_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Returns whether `candidate` is `base` or inherits from it through its parent chain.
 ///
-/// Unlike the refinement's concrete-descendant index this also visits abstract classes,
-/// whose abstract static slots must stay observable to a `static::` call.
-fn class_is_same_or_subclass(
+/// The per-call walk `ClassIndex::subclasses` replaced; kept to check the index against it.
+#[cfg(test)]
+pub(super) fn class_is_same_or_subclass(
     classes: &crate::fast_hash::FastMap<String, crate::types::ClassInfo>,
     candidate: &str,
     base: &str,
 ) -> bool {
+    STATIC_CALL_CHAIN_WALKS.with(|count| count.set(count.get() + 1));
     let mut current = Some(candidate);
     let mut hops = 0usize;
     while let Some(class_name) = current {
