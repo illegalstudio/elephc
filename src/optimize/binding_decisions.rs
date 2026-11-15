@@ -79,30 +79,37 @@ pub fn install_scalar_guard_arg_sites(sites: HashSet<Span>) -> ScalarGuardArgSit
 /// its value, and a spread through the unpacked expression and, for a static array literal,
 /// through each element it expands to (`f(...['s' => $v])` binds `$v` itself).
 pub(crate) fn call_has_scalar_guard_arg(args: &[crate::parser::ast::Expr]) -> bool {
+    ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| call_args_hit_scalar_guard_sites(args, &slot.borrow()))
+}
+
+/// Matches call arguments against an explicit set of runtime-guarded argument spans, as
+/// `call_has_scalar_guard_arg` does against the installed one. The checker passes the spans it
+/// has recorded so far: the installed set only exists after type checking.
+pub(crate) fn call_args_hit_scalar_guard_sites(
+    args: &[crate::parser::ast::Expr],
+    sites: &HashSet<Span>,
+) -> bool {
     use crate::parser::ast::ExprKind;
-    ACTIVE_SCALAR_GUARD_ARG_SITES.with(|slot| {
-        let sites = slot.borrow();
-        !sites.is_empty()
-            && args.iter().any(|arg| {
-                sites.contains(&arg.span)
-                    || match &arg.kind {
-                        ExprKind::NamedArg { value, .. } => sites.contains(&value.span),
-                        ExprKind::Spread(value) => {
-                            sites.contains(&value.span)
-                                || match &value.kind {
-                                    ExprKind::ArrayLiteral(items) => {
-                                        items.iter().any(|item| sites.contains(&item.span))
-                                    }
-                                    ExprKind::ArrayLiteralAssoc(pairs) => {
-                                        pairs.iter().any(|(_, item)| sites.contains(&item.span))
-                                    }
-                                    _ => false,
+    !sites.is_empty()
+        && args.iter().any(|arg| {
+            sites.contains(&arg.span)
+                || match &arg.kind {
+                    ExprKind::NamedArg { value, .. } => sites.contains(&value.span),
+                    ExprKind::Spread(value) => {
+                        sites.contains(&value.span)
+                            || match &value.kind {
+                                ExprKind::ArrayLiteral(items) => {
+                                    items.iter().any(|item| sites.contains(&item.span))
                                 }
-                        }
-                        _ => false,
+                                ExprKind::ArrayLiteralAssoc(pairs) => {
+                                    pairs.iter().any(|(_, item)| sites.contains(&item.span))
+                                }
+                                _ => false,
+                            }
                     }
-            })
-    })
+                    _ => false,
+                }
+        })
 }
 
 /// Installs checker-proven buffer reads for one constant-propagation run.

@@ -108,7 +108,8 @@ impl Checker {
     pub(super) fn record_operation_exception_flow(&mut self, expr: &Expr, env: &TypeEnv) {
         if self.finally_flow_frames.is_empty() || matches!(expr.kind, ExprKind::Throw(_)) { return; }
         let Some(analysis) = &self.exception_analysis else { return; };
-        let thrown = analysis.operation_throws(expr, self.current_class.as_deref());
+        let thrown = analysis.operation_throws(expr, self.current_class.as_deref())
+            .with_scalar_guard_sites(expr, &self.scalar_guard_arg_sites);
         self.record_exception_flow(thrown, env);
     }
 

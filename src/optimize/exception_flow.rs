@@ -925,17 +925,7 @@ impl ExceptionFlowAnalysis {
         class_context: Option<&ExceptionClassContext>, include_operands: bool,
     ) -> ThrownTypes {
         let thrown = self.operation_throws_at_boundary(expr, bindings, class_context, include_operands);
-        let args = match &expr.kind {
-            ExprKind::FunctionCall { args, .. }
-            | ExprKind::ClosureCall { args, .. }
-            | ExprKind::ExprCall { args, .. }
-            | ExprKind::MethodCall { args, .. }
-            | ExprKind::NullsafeMethodCall { args, .. }
-            | ExprKind::StaticMethodCall { args, .. }
-            | ExprKind::NewObject { args, .. } => args.as_slice(),
-            _ => &[],
-        };
-        if super::binding_decisions::call_has_scalar_guard_arg(args) {
+        if super::binding_decisions::call_has_scalar_guard_arg(call_args(expr)) {
             thrown.combined(ThrownTypes::exact("TypeError"))
         } else {
             thrown
@@ -1674,4 +1664,18 @@ fn reads_reporting_constant(expr: &Expr) -> bool {
             };
     });
     found
+}
+
+/// The argument list of a call expression, empty for any other expression.
+pub(super) fn call_args(expr: &Expr) -> &[Expr] {
+    match &expr.kind {
+        ExprKind::FunctionCall { args, .. }
+        | ExprKind::ClosureCall { args, .. }
+        | ExprKind::ExprCall { args, .. }
+        | ExprKind::MethodCall { args, .. }
+        | ExprKind::NullsafeMethodCall { args, .. }
+        | ExprKind::StaticMethodCall { args, .. }
+        | ExprKind::NewObject { args, .. } => args.as_slice(),
+        _ => &[],
+    }
 }
