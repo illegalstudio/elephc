@@ -10,8 +10,8 @@
 //! - Both instance shapes fetch the property with `PropGetForWrite` and remove in place, with no
 //!   acquired copy in flight and no `PropSet` after the removal: the removed value's destructor
 //!   may throw or write the property again.
-//! - A packed-list property (instance or static) is refused, naming the declared `array` type as
-//!   the fix; an untyped static hash removes the key and stores the hash back.
+//! - A packed-list instance property is refused, naming the declared `array` type as the fix; an
+//!   untyped static hash removes the key and stores it back; a static packed list is left to the backend.
 
 use crate::codegen::platform::Target;
 use crate::ir::{Function, Op};
@@ -193,11 +193,13 @@ $l->drop(1);
     assert_eq!(error.span.line, 4, "the refusal names the unset line");
 }
 
-/// An untyped static PACKED list would have to become a hash, so its element removal is refused
-/// at its line with the declared-`array` fix, as for an instance property.
+/// An untyped static PACKED list has no element-removal lowering, but it is no source refusal:
+/// lowering succeeds and the backend's unsupported-shape error is what remains, which the
+/// pipeline turns into a deferral of a vendor class file instead of a failed build (Laravel's
+/// `HasTimestamps::$ignoreTimestampsOn`).
 #[test]
-fn untyped_static_packed_list_element_unset_is_refused() {
-    let error = refusal(
+fn untyped_static_packed_list_element_unset_is_left_to_the_backend() {
+    let module = super::try_lower_source_at_for_target(
         r#"<?php
 class Cache {
     public static $list = [10, 20, 30];
@@ -205,14 +207,14 @@ class Cache {
 }
 Cache::drop(1);
 "#,
-    );
-    assert!(
-        error.message.contains("static property `$list` needs hash storage")
-            && error.message.contains("Declare the property `array`"),
-        "{}",
-        error.message
-    );
-    assert_eq!(error.span.line, 4, "the refusal names the unset line");
+        Path::new("main.php"),
+        Path::new("."),
+        Target::detect_host(),
+    )
+    .unwrap_or_else(|error| panic!("lowering must not refuse the source: {error:?}"));
+    let error = crate::codegen::generate_user_asm_from_ir(&module, false, false)
+        .expect_err("the backend has no packed static element removal");
+    assert!(format!("{error:?}").contains("store_static_property"), "{error:?}");
 }
 
 /// An untyped static hash property is no refusal: the key is removed and the hash stored back
