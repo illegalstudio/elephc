@@ -923,7 +923,7 @@ fn scan_references(
                 }
                 if let Some(&id) = ids.get(token) {
                     if *takes_address
-                        .get_or_insert_with(|| line.contains("@PAGE") || line.contains("@GOTPAGE"))
+                        .get_or_insert_with(|| takes_page_address(line))
                     {
                         address_taken.push(id as u32);
                     }
@@ -1114,6 +1114,12 @@ fn is_identifier_byte(byte: u8) -> bool {
 /// (src/codegen/aarch64_relax.rs:74-126) recognises, because those are exactly
 /// the instructions whose target `as` requires to be assembler-local.
 fn conditional_branch_target(line: &str) -> Option<&str> {
+    // Every qualifying mnemonic starts `b.`, `cb` or `tb`; `bl`, `b`, `cmp`, `csel`, `tst` and
+    // the like are turned away before the Unicode-aware split below.
+    let bytes = line.as_bytes();
+    if !(bytes.starts_with(b"b.") || bytes.starts_with(b"cb") || bytes.starts_with(b"tb")) {
+        return None;
+    }
     let (mnemonic, operands) = line.split_once(char::is_whitespace)?;
     let conditional =
         mnemonic.starts_with("b.") || matches!(mnemonic, "cbz" | "cbnz" | "tbz" | "tbnz");
@@ -1124,9 +1130,25 @@ fn conditional_branch_target(line: &str) -> Option<&str> {
     is_label_name(target).then_some(target)
 }
 
+/// Whether a line takes a page address (`@PAGE`, `@PAGEOFF`, `@GOTPAGE`, `@GOTPAGEOFF`): an `@`
+/// followed by `PAGE` or `GOTPAGE`, found by one `memchr` instead of two substring searches.
+fn takes_page_address(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    memchr::memchr_iter(b'@', bytes).any(|at| {
+        let rest = &bytes[at + 1..];
+        rest.starts_with(b"PAGE") || rest.starts_with(b"GOTPAGE")
+    })
+}
+
 /// Returns `(position, b'b' | b'f')` for every numeric local reference on a line.
 fn numeric_references(line: &str) -> Vec<(&str, u8)> {
     let bytes = line.as_bytes();
+    // A reference ends in a digit followed by `b` or `f`. Most `b`/`f` bytes of a listing sit in
+    // mnemonics and registers (`ldrb`, `sub`, `bl`), after a letter: when none follows a digit
+    // the line holds no reference, and the per-byte walk below is skipped.
+    if !memchr::memchr2_iter(b'b', b'f', bytes).any(|at| at > 0 && bytes[at - 1].is_ascii_digit()) {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     let mut index = 0;
     while index < bytes.len() {
@@ -1633,6 +1655,65 @@ mod tests {
         (tokenized, spans, hard)
     }
 
+    /// The fast gates answer exactly as the full scans they guard: numeric references, page-address
+    /// operands and conditional-branch targets, over lines of every shape the listing holds.
+    #[test]
+    fn line_gates_answer_like_the_full_scans() {
+        fn numeric_reference_scan(line: &str) -> Vec<(&str, u8)> {
+            let bytes = line.as_bytes();
+            let mut out = Vec::new();
+            let mut index = 0;
+            while index < bytes.len() {
+                if !bytes[index].is_ascii_digit() || (index > 0 && is_identifier_byte(bytes[index - 1])) {
+                    index += 1;
+                    continue;
+                }
+                let start = index;
+                while index < bytes.len() && bytes[index].is_ascii_digit() {
+                    index += 1;
+                }
+                let direction = match bytes.get(index).copied() {
+                    Some(b'b') => b'b',
+                    Some(b'f') => b'f',
+                    _ => continue,
+                };
+                if bytes.get(index + 1).copied().is_some_and(is_identifier_byte) {
+                    continue;
+                }
+                out.push((&line[start..index], direction));
+                index += 1;
+            }
+            out
+        }
+        fn conditional_scan(line: &str) -> Option<&str> {
+            let (mnemonic, operands) = line.split_once(char::is_whitespace)?;
+            let conditional =
+                mnemonic.starts_with("b.") || matches!(mnemonic, "cbz" | "cbnz" | "tbz" | "tbnz");
+            if !conditional {
+                return None;
+            }
+            let target = operands.rsplit(',').next()?.trim();
+            is_label_name(target).then_some(target)
+        }
+        let lines = [
+            "b.ne 1b", "cbz x3, 2f", "b 3f", "bl 12f", "ldrb w0, [x1, #1]", "sub x0, x0, #1",
+            "b.eq L_done", "cbnz w2, Lx", "tbz x4, #63, Ltarget", "tbnz x0, #0, 4b", "bl _fn",
+            "cmp x0, #6", "csel x0, x1, x2, eq", "tst x0, #1", "b.ne", "cbzx x0, L1",
+            "adrp x9, _counter@PAGE", "add x9, x9, _counter@PAGEOFF", "ldr x0, [x9, _c@GOTPAGEOFF]",
+            "adrp x0, _x@GOTPAGE", "mov x0, #0x1f", ".quad 0x00ff", "mov x0, #12", "x1b 2b", "1f",
+            "b 10fb", "ret", ".ascii \"a@PAGE\"", "str x0, [sp, #-16]!", "movk x0, #0xbeef, lsl #16",
+        ];
+        for line in lines {
+            assert_eq!(numeric_references(line), numeric_reference_scan(line), "{line}");
+            assert_eq!(
+                takes_page_address(line),
+                line.contains("@PAGE") || line.contains("@GOTPAGE"),
+                "{line}"
+            );
+            assert_eq!(conditional_branch_target(line), conditional_scan(line), "{line}");
+        }
+    }
+
     /// A line holding no byte any label starts with names no label and is not tokenized: plain
     /// instructions were split into identifiers one byte at a time, the top self-time frame of the
     /// Symfony assembling phase. The references the scan finds are those of the full tokenizing.
@@ -1685,6 +1766,20 @@ mod tests {
     }
 
     /// See the module note: times `plan_split` and the slice rendering over a real listing.
+    #[test]
+    #[ignore]
+    /// Runs only `plan_split` on a real listing, once, for an instruction count of the plan alone:
+    /// `ELEPHC_PLAN_BENCH=<file.s>`, the test binary run under `/usr/bin/time -l`.
+    fn plan_bench() {
+        let Ok(path) = std::env::var("ELEPHC_PLAN_BENCH") else {
+            return;
+        };
+        let text = std::fs::read_to_string(path).expect("listing");
+        let started = std::time::Instant::now();
+        let plan = plan_split(&text, 6, "L", false).expect("a legal cut");
+        eprintln!("plan {:.2}s, {} slices", started.elapsed().as_secs_f64(), plan.slices());
+    }
+
     #[test]
     #[ignore]
     fn split_bench() {
