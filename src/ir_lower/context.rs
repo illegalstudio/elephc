@@ -418,6 +418,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// ordinary constructor calls nested in the forwarded arguments on the calling file's
     /// own `strict_types` mode.
     pub(crate) reflected_invoke_call_span: Option<Span>,
+    /// Source span of the call whose arguments are being lowered, beside `call_description`.
+    /// A runtime parameter `TypeError` reports this call's line, as PHP's "called in".
+    pub(crate) call_site_span: Option<Span>,
+    /// `(expression depth, unrecorded)` while positional arguments of a guarded call are
+    /// lowered: scalar-parameter checks wait for parameter-order normalization.
+    pub(crate) scalar_guard_deferral: Option<(usize, bool)>,
     /// Staging published by the enclosing reference assignment, if one is being lowered.
     ///
     /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
@@ -892,6 +898,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             pointer_reference_bindings: Vec::new(),
             call_description: None,
             reflected_invoke_call_span: None,
+            call_site_span: None,
+            scalar_guard_deferral: None,
             source_path,
             closure_display_names: HashMap::new(),
         }

@@ -68,8 +68,10 @@ pub(super) fn lower_static_callable_call(
             let reference_property_guard_mark = ctx.reference_property_guards.len();
             begin_call_argument_evaluation(ctx);
             let previous_description = ctx.call_description.replace(function_name.clone());
+            let previous_call_site = ctx.call_site_span.replace(expr.span);
             let mut operands = lower_args_with_signature(ctx, sig.as_ref(), callback_args);
             ctx.call_description = previous_description;
+            ctx.call_site_span = previous_call_site;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut operands);
             let roots = root_user_call_operands(
                 ctx, &mut operands, sig.as_ref(), &return_alias, &php_type, expr.span,
@@ -205,8 +207,10 @@ pub(super) fn lower_static_callable_call(
                     .then(|| ctx.builder.function().display_name.clone()).flatten())
                 .unwrap_or_else(|| "{closure}".to_string());
             let previous_description = ctx.call_description.replace(label);
+            let previous_call_site = ctx.call_site_span.replace(expr.span);
             let mut arg_values = lower_args_with_signature(ctx, Some(&signature), callback_args);
             ctx.call_description = previous_description;
+            ctx.call_site_span = previous_call_site;
             let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
             let roots = root_user_call_operands(
                 ctx, &mut arg_values, Some(&signature), &return_alias, &php_type, expr.span,

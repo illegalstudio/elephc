@@ -162,8 +162,10 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
                 ref_place_args::rewrite_direct_function_property_ref_args(ctx, signature, args)
             {
                 let previous = ctx.call_description.replace(canonical.to_string());
+                let previous_call_site = ctx.call_site_span.replace(expr.span);
                 let result = lower_function_call(ctx, name, &rewrite.args, expr);
                 ctx.call_description = previous;
+                ctx.call_site_span = previous_call_site;
                 ref_place_args::finish_ref_place_rewrite(ctx, rewrite, expr.span);
                 return result;
             }
@@ -208,6 +210,7 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     // `take(): Argument #1 ...` spelling instead of the generic `call()` fallback.
     // An extern's arguments clear any enclosing user call's name: its declared parameters
     // bind through the C ABI and are never checked by the PHP scalar parameter guard.
+    let previous_call_site = ctx.call_site_span.replace(expr.span);
     let previous_description = if is_user_function {
         Some(ctx.call_description.replace(canonical.to_string()))
     } else if is_extern {
@@ -262,6 +265,7 @@ fn lower_function_call_unviewed(ctx: &mut LoweringContext<'_, '_>, name: &Name, 
     if let Some(previous) = previous_description {
         ctx.call_description = previous;
     }
+    ctx.call_site_span = previous_call_site;
     let php_type = if is_extern || is_user_function {
         call_return_type(ctx, canonical, &operands)
     } else if let Some(php_type) =

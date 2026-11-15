@@ -154,7 +154,10 @@ pub(super) fn lower_boxed_spread_args(
         };
         retire_slot(ctx, &source, span);
     }
-    Some(if preserve_values { operands } else { coerce_boxed_operands_to_params(ctx, sig, operands, span) })
+    Some(if preserve_values { operands } else { {
+        let sources = vec![super::scalar_param_guards::GuardSource::Unrecorded; operands.len()];
+        coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), false)
+    } })
 }
 
 /// Returns true for an unpack source that is a keyed literal carrying a nested `...$source`.

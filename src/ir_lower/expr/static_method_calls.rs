@@ -187,8 +187,10 @@ pub(super) fn lower_static_method_call_bound(
     let previous_description = ctx
         .call_description
         .replace(format!("{callee_description}::{dispatch_method}"));
+    let previous_call_site = ctx.call_site_span.replace(expr.span);
     let operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
     ctx.call_description = previous_description;
+    ctx.call_site_span = previous_call_site;
     let mut operands =
         coerce_int_backed_enum_string_argument(ctx, receiver, dispatch_method, operands, expr);
     // `from()`/`tryFrom()` initialize a backed enum: the constants php-src has not evaluated

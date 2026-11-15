@@ -913,7 +913,26 @@ pub(crate) fn coerce_scalar_arg_to_param_storage(
     }
     // A boxed `mixed`/union value bound to a declared non-nullable scalar is checked before
     // the conversion below would silently turn `null`, an array or an object into a scalar.
-    super::scalar_param_guards::guard_scalar_param(ctx, sig, index, value, Some(arg), arg.span);
+    // Positional calls leave it boxed here and check it once every argument was evaluated.
+    let by_reference = sig.ref_params.get(index).copied().unwrap_or(false);
+    if !by_reference {
+        if let Some(source) = super::scalar_param_guards::deferred_guard_source(ctx, arg) {
+            if super::scalar_param_guards::guarded_scalar_param(ctx, sig, index, value.value, source)
+                .is_some()
+            {
+                return value;
+            }
+        } else if let Some(converted) = super::scalar_param_guards::guard_scalar_param(
+            ctx,
+            sig,
+            index,
+            value,
+            super::scalar_param_guards::GuardSource::Recorded(arg.span),
+            arg.span,
+        ) {
+            return converted;
+        }
+    }
     // A by-reference parameter must receive the caller's storage, not a converted temporary,
     // so declared-parameter scalar binding never applies to one. The checker keeps those on
     // the strict path for the same reason.
@@ -1580,71 +1599,43 @@ pub(super) fn coerce_operands_to_params(
     sig: &FunctionSig,
     operands: Vec<crate::ir::ValueId>,
 ) -> Vec<crate::ir::ValueId> {
-    coerce_operands_to_params_guarded(ctx, sig, operands, None)
+    coerce_operands_to_params_guarded(ctx, sig, operands, None, false)
 }
 
-/// Normalizes reordered operands and, given the call's source span, first checks each
-/// runtime-typed operand bound to a declared scalar parameter.
+/// Normalizes reordered operands and first checks each runtime-typed operand bound to a
+/// declared scalar parameter, in parameter order and after every argument was evaluated.
 ///
-/// Pass a span only for operands that did not go through positional argument lowering
-/// (named arguments and associative spreads); positional ones were already checked there.
+/// `sources` says, per parameter, how to decide whether its operand needs the check; `None`
+/// keeps the previous behaviour of callers that never guard.
 pub(super) fn coerce_operands_to_params_guarded(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     mut operands: Vec<crate::ir::ValueId>,
-    guard_span: Option<Span>,
+    sources: Option<&[super::scalar_param_guards::GuardSource]>,
+    positional: bool,
 ) -> Vec<crate::ir::ValueId> {
-    coerce_operands_to_params_with_checks(ctx, sig, operands, &[])
-}
-
-/// Normalizes operands bound from boxed unpack slots (`lower_boxed_spread_args`).
-///
-/// Every slot holds a `mixed` box whatever its source was, so each declared class-like
-/// parameter gets the runtime class check the other call paths defer for `mixed` sources.
-pub(super) fn coerce_boxed_operands_to_params(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    operands: Vec<crate::ir::ValueId>,
-    span: Span,
-) -> Vec<crate::ir::ValueId> {
-    let regular_param_count = crate::types::call_args::regular_param_count(sig);
-    let object_checks = (0..operands.len().min(regular_param_count))
-        .filter(|index| !sig.ref_params.get(*index).copied().unwrap_or(false)
-            && sig.declared_params.get(*index).copied().unwrap_or(false)
-            && sig.params.get(*index).is_some_and(|(_, ty)|
-                crate::types::object_boundary::declared_object_boundary(ty).is_some()))
-        .map(|index| DeferredObjectParamCheck { index, span, reference_local: None, callable: false })
-        .collect::<Vec<_>>();
-    coerce_operands_to_params_with_checks(ctx, sig, operands, &object_checks)
-}
-
-/// Normalizes a call's operands and runs the class-like parameter checks its argument
-/// evaluation deferred (`DeferredObjectParamChecks`), in parameter order, after every argument
-/// was evaluated.
-fn coerce_operands_to_params_with_checks(
-    ctx: &mut LoweringContext<'_, '_>,
-    sig: &FunctionSig,
-    mut operands: Vec<crate::ir::ValueId>,
-    object_checks: &[DeferredObjectParamCheck],
-) -> Vec<crate::ir::ValueId> {
-    let object_check = |index: usize| object_checks.iter()
-        .find(|check| check.index == index && !check.callable).map(|check| check.span);
-    let callable_check = |index: usize| object_checks.iter()
-        .find(|check| check.index == index && check.callable).map(|check| check.span);
-    // A declared `callable` is checked on callee entry; the caller checks it here only to keep
-    // parameter order with another parameter it checks itself.
-    let check_callables = object_checks.iter().any(|check| !check.callable);
-    let reference_check = |index: usize| object_checks.iter()
-        .find(|check| check.index == index)
-        .and_then(|check| check.reference_local.clone().map(|local| (local, check.span)));
+    use super::scalar_param_guards::GuardSource;
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let limit = operands.len().min(regular_param_count);
+    let guard_span = ctx.call_site_span.unwrap_or_else(Span::dummy);
     let needs_guard = (0..limit)
-        .map(|index| guard_span.is_some()
-            && super::scalar_param_guards::guarded_scalar_param(ctx, sig, index, operands[index], None).is_some())
+        .map(|index| {
+            let source = sources.map_or(GuardSource::Skip, |sources| {
+                sources.get(index).copied().unwrap_or(GuardSource::Skip)
+            });
+            super::scalar_param_guards::guarded_scalar_param(ctx, sig, index, operands[index], source)
+                .map(|_| source)
+        })
+        .collect::<Vec<_>>();
+    // A positional operand whose check was deferred here keeps the argument-time contract:
+    // its conversion runs without first publishing every operand, exactly as when it was
+    // converted while its argument was lowered, so a guarded call costs no extra roots.
+    let deferred_positional = (0..limit)
+        .map(|index| positional && needs_guard[index].is_some())
         .collect::<Vec<_>>();
     let needs_coercion = (0..limit)
-        .map(|index| needs_guard[index] || operand_needs_param_coercion(ctx, sig, &operands, index))
+        .map(|index| !deferred_positional[index]
+            && (needs_guard[index].is_some() || operand_needs_param_coercion(ctx, sig, &operands, index)))
         .collect::<Vec<_>>();
     if needs_coercion.iter().any(|needs_coercion| *needs_coercion) {
         // Source evaluation has completed, but any parameter conversion below can throw.
@@ -1679,9 +1670,21 @@ fn coerce_operands_to_params_with_checks(
             continue;
         };
         let value = operands[index];
-        if let (true, Some(span)) = (needs_guard[index], guard_span) {
+        if let Some(source) = needs_guard[index] {
             let lowered = lowered_value_from_id(ctx, value);
-            super::scalar_param_guards::guard_scalar_param(ctx, sig, index, lowered, None, span);
+            if let Some(converted) = super::scalar_param_guards::guard_scalar_param(
+                ctx, sig, index, lowered, source, guard_span,
+            ) {
+                // The guard already produced the `int`/`float` PHP binds; the boxed source
+                // stays owned by its published root and retires with the call's operands.
+                operands[index] = converted.value;
+                continue;
+            }
+            if deferred_positional[index] && param_ty.codegen_repr() == PhpType::Str {
+                // The same owned conversion argument lowering would have made.
+                operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+                continue;
+            }
         }
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
         let param_ty = param_ty.codegen_repr();
@@ -2153,8 +2156,8 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         let operands = lower_named_args_with_signature_options(
             ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
         );
-        let call_span = args.first().map(|arg| arg.span);
-        return coerce_operands_to_params_guarded(ctx, sig, operands, call_span);
+        let sources = vec![super::scalar_param_guards::GuardSource::Unrecorded; operands.len()];
+        return coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), false);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(
         ctx, sig, args, None, capture_values, capture_output_index.as_ref(),
@@ -2168,8 +2171,8 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     };
     let args = static_spread_args.as_deref().unwrap_or(args);
     if let Some(operands) = lower_assoc_spread_only_args(ctx, sig, args) {
-        let call_span = args.first().map(|arg| arg.span);
-        return coerce_operands_to_params_guarded(ctx, sig, operands, call_span);
+        let sources = vec![super::scalar_param_guards::GuardSource::Unrecorded; operands.len()];
+        return coerce_operands_to_params_guarded(ctx, sig, operands, Some(&sources), false);
     }
     if args.iter().any(is_spread_arg) {
         if capture_values {
@@ -2190,7 +2193,41 @@ pub(super) fn lower_args_with_signature_options_for_capture(
     } else {
         args.len()
     };
-    begin_deferred_object_param_checks(ctx);
+    // Statically expanded spread elements have no checker record of their own.
+    let expanded_spread = static_spread_args.is_some();
+    let guard_sources = (0..regular_param_count)
+        .map(|index| match args.get(index) {
+            Some(_) if expanded_spread => super::scalar_param_guards::GuardSource::Unrecorded,
+            Some(arg) => super::scalar_param_guards::GuardSource::Recorded(arg.span),
+            None => super::scalar_param_guards::GuardSource::Skip,
+        })
+        .collect::<Vec<_>>();
+    // Check scalar parameters after every argument was evaluated, as PHP does at the callee.
+    let previous_deferral = ctx.scalar_guard_deferral;
+    if !capture_values {
+        ctx.scalar_guard_deferral = Some((ctx.expression_depth, expanded_spread));
+    }
+    let operands = lower_positional_operands(
+        ctx, sig, args, trim_trailing_defaults, capture_values, capture_output_index,
+        regular_param_count, fixed_arg_count,
+    );
+    ctx.scalar_guard_deferral = previous_deferral;
+    let sources = (!capture_values).then_some(guard_sources.as_slice());
+    coerce_operands_to_params_guarded(ctx, sig, operands, sources, true)
+}
+
+/// Lowers fixed positional arguments in source order, then defaults and the variadic tail.
+#[allow(clippy::too_many_arguments)]
+fn lower_positional_operands(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+    trim_trailing_defaults: bool,
+    capture_values: bool,
+    capture_output_index: Option<(usize, PhpType)>,
+    regular_param_count: usize,
+    fixed_arg_count: usize,
+) -> Vec<crate::ir::ValueId> {
     if sig.variadic.is_none() && fixed_arg_count >= regular_param_count {
         let operands = args
             .iter()
@@ -2211,8 +2248,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
                 }
             })
             .collect();
-        let object_checks = finish_deferred_object_param_checks(ctx);
-        return coerce_operands_to_params_with_checks(ctx, sig, operands, &object_checks);
+        return operands;
     }
     let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count]
         .iter()
@@ -2256,8 +2292,7 @@ pub(super) fn lower_args_with_signature_options_for_capture(
         }
         operands.push(lower_variadic_tail_array(ctx, sig, tail, args.len()).value);
     }
-    let object_checks = finish_deferred_object_param_checks(ctx);
-    coerce_operands_to_params_with_checks(ctx, sig, operands, &object_checks)
+    operands
 }
 
 /// Returns the declaring class and declared type of `property` on `class_name`.
