@@ -317,6 +317,7 @@ pub(crate) use array_access::{
     lower_by_ref_foreach_element_source,
 };
 pub(crate) use array_access_types::type_satisfies_array_access_for_ir;
+pub(in crate::ir_lower) use array_access_types::program_operator_classes;
 pub(crate) use assignments::lower_null_coalesce_update_stmt;
 pub(crate) use assignments::lower_null_coalesce_update_stmt_to;
 pub(crate) use weak_map_places::lower_weak_map_incdec_stmt;

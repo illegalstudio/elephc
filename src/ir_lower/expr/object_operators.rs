@@ -52,18 +52,13 @@ pub(crate) fn lower_dynamic_object_binary(
     }
     #[cfg(test)]
     crate::types::object_operators::OPERATOR_PLAN_WALKS.with(|walks| walks.set(walks.get() + 1));
-    let mut class_names: Vec<&String> = ctx
-        .classes
-        .keys()
-        .filter(|name| elephc_builtin_contract::is_operator_class_name(name))
-        .collect();
-    class_names.sort();
+    let class_names = super::program_operator_classes(ctx);
     let plans: Vec<_> = class_names
         .iter()
         .filter_map(|name| {
             crate::types::object_operators::binary_plan(
                 op,
-                &PhpType::Object((*name).clone()),
+                &PhpType::Object(name.clone()),
                 &PhpType::Mixed,
             )
         })
@@ -274,12 +269,7 @@ pub(super) fn lower_object_cast(
     }
     #[cfg(test)]
     crate::types::object_operators::OPERATOR_PLAN_WALKS.with(|walks| walks.set(walks.get() + 1));
-    let mut class_names: Vec<&String> = ctx
-        .classes
-        .keys()
-        .filter(|name| elephc_builtin_contract::is_operator_class_name(name))
-        .collect();
-    class_names.sort();
+    let class_names = super::program_operator_classes(ctx);
     let classes: Vec<_> = class_names
         .iter()
         .filter_map(|name| elephc_builtin_contract::lookup_class(name))

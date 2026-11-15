@@ -851,7 +851,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Whether a declared class has internal operator handlers, so an object operand may run one.
     pub(crate) fn program_has_operator_classes(&self) -> bool {
         *self.operator_classes
-            .get_or_init(|| crate::types::object_operators::names_an_operator_class(self.classes.keys()))
+            .get_or_init(|| !super::expr::program_operator_classes(self).is_empty())
     }
 
     /// Creates a lowering context over one function builder and shared module data.

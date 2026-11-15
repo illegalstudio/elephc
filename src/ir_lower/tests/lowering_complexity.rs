@@ -180,6 +180,38 @@ fn mixed_operands_do_not_walk_the_class_table_without_operator_classes() {
     assert_eq!(walks, 0, "operator lowering walked the class table {walks} times");
 }
 
+/// `count` functions of untyped operators in a program that declares an operator class.
+fn many_mixed_operator_bodies_with_an_operator_class(count: usize) -> String {
+    let mut source = String::from("<?php\n");
+    for index in 0..count {
+        source.push_str(&format!(
+            "function f{index}($a, $b) {{ $n = $a / ($b + {index}); if ($a < $b) {{ $n++; }} return $n + ($a == $b ? 1 : 0); }}\n"
+        ));
+    }
+    source.push_str("$big = new BcMath\\Number('2');\necho $big, \"\\n\";\n");
+    for index in 0..count {
+        source.push_str(&format!("echo f{index}($argc, $argc + 1), \"\\n\";\n"));
+    }
+    source
+}
+
+/// A program that has an operator class (`BcMath\Number`) lists them once: every untyped
+/// operator filtered and sorted the whole class table again, and every body scanned it to learn
+/// whether there was one.
+#[test]
+fn operator_classes_are_listed_once_per_program() {
+    use crate::ir_lower::expr::array_access_types::CLASS_TABLE_WALKS;
+    let walks = |source: &str| {
+        CLASS_TABLE_WALKS.with(|walks| walks.set(0));
+        let _module = lower_source(source);
+        CLASS_TABLE_WALKS.with(|walks| walks.get())
+    };
+    let small = walks(&many_mixed_operator_bodies_with_an_operator_class(2));
+    let large = walks(&many_mixed_operator_bodies_with_an_operator_class(32));
+    assert!(small > 0, "the fixture no longer lists the operator classes");
+    assert_eq!(small, large, "class table walks grew with the bodies: {small} vs {large}");
+}
+
 /// `count` classes, each writing a runtime-named property on `$this`: every class is a receiver
 /// family the dynamic-storage pass resolves.
 fn many_runtime_named_writers(count: usize) -> String {

@@ -61,6 +61,34 @@ struct ClassTableFacts {
     implementors: crate::fast_hash::FastMap<String, crate::fast_hash::FastSet<String>>,
     /// Whether a class the program declared itself implements `ArrayAccess`.
     declares_array_access: Option<bool>,
+    /// The program's classes with internal operator handlers, sorted by name.
+    operator_classes: Option<std::rc::Rc<Vec<String>>>,
+}
+
+/// The program's classes with internal operator handlers (`GMP`, `BcMath\Number`, ...), sorted.
+///
+/// Asked by every binary, comparison and cast operation on a `Mixed` or object operand. Each
+/// asking filtered and sorted the whole class table again, and the per-body answer to whether
+/// there is any such class scanned it once per body: about 400 samples of a sampled one-core
+/// Symfony demo build.
+pub(in crate::ir_lower) fn program_operator_classes(ctx: &LoweringContext<'_, '_>) -> std::rc::Rc<Vec<String>> {
+    with_class_table_facts(ctx, |facts| {
+        facts
+            .operator_classes
+            .get_or_insert_with(|| {
+                #[cfg(test)]
+                CLASS_TABLE_WALKS.with(|walks| walks.set(walks.get() + 1));
+                let mut names: Vec<String> = ctx
+                    .classes
+                    .keys()
+                    .filter(|name| elephc_builtin_contract::is_operator_class_name(name))
+                    .cloned()
+                    .collect();
+                names.sort();
+                std::rc::Rc::new(names)
+            })
+            .clone()
+    })
 }
 
 thread_local! {
