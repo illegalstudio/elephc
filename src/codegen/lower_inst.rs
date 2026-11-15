@@ -95,6 +95,7 @@ mod exception_instructions;
 mod fiber_methods;
 mod generator_instructions;
 mod globals_constants;
+mod typed_superglobals;
 mod instruction_helpers;
 mod local_loads;
 pub(in crate::codegen) mod local_stores;
