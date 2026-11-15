@@ -338,7 +338,7 @@ fn run_server(
     // The master keeps it open for the whole run so a respawned worker inherits the same socket.
     let shared = if crate::shared_listener::workers_share_one_listener() {
         match args.listen.parse::<std::net::SocketAddr>() {
-            Ok(addr) => match crate::shared_listener::bind_shared(addr) {
+            Ok(addr) => match crate::shared_listener::bind_shared(addr, application.is_none()) {
                 Ok(listener) => Some(listener),
                 Err(e) => {
                     eprintln!("elephc-web: failed to bind {}: {}", args.listen, e);

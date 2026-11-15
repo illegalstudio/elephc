@@ -37,23 +37,35 @@ pub(crate) const fn workers_share_one_listener() -> bool {
 /// Left blocking and WITHOUT `FD_CLOEXEC`: the workers arrive by `fork()` with no `exec()`, so
 /// the descriptor has to survive the fork, and each worker re-marks it non-blocking when it
 /// adopts it into its own reactor.
-pub(crate) fn bind_shared(addr: SocketAddr) -> std::io::Result<std::net::TcpListener> {
+///
+/// `listen_now` is false for an application lifecycle: the socket is then only bound, and the
+/// first worker whose bootstrap succeeded starts listening when it adopts it. A listening
+/// socket has the kernel complete connections into its backlog with nobody accepting, so a
+/// bootstrap that failed after a while had already "accepted" its clients.
+pub(crate) fn bind_shared(addr: SocketAddr, listen_now: bool) -> std::io::Result<std::net::TcpListener> {
     let domain = if addr.is_ipv6() { Domain::IPV6 } else { Domain::IPV4 };
     let sock = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
     sock.set_reuse_address(true)?;
     sock.bind(&addr.into())?;
-    sock.listen(LISTEN_BACKLOG)?;
+    if listen_now {
+        sock.listen(LISTEN_BACKLOG)?;
+    }
     Ok(sock.into())
 }
 
-/// Adopts the inherited listening descriptor inside a forked worker.
+/// Adopts the inherited socket inside a forked worker, which is ready to accept.
 ///
 /// # Safety
-/// `fd` must be a listening socket descriptor this process owns, which is the case for a
+/// `fd` must be a bound socket descriptor this process owns, which is the case for a
 /// descriptor inherited across `fork()` from the master that created it and keeps it open.
 pub(crate) unsafe fn adopt(fd: std::os::fd::RawFd) -> std::io::Result<std::net::TcpListener> {
     use std::os::fd::FromRawFd;
 
+    // An application master only bound the socket (see `bind_shared`); the worker listens once
+    // its bootstrap is through. On a socket already listening this only restates the backlog.
+    if unsafe { libc::listen(fd, LISTEN_BACKLOG) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     // Each worker drives the descriptor from its own tokio reactor, which requires non-blocking
     // mode. The flag lives on the shared open file description, so every worker setting it is
     // idempotent rather than conflicting.
