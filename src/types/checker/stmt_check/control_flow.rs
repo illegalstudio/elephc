@@ -613,6 +613,9 @@ impl Checker {
                 // branch diverged, or a call inside it purged the narrowing).
                 let mut join_key: Option<String> = None;
                 let mut then_exit_ty: Option<PhpType> = None;
+                // Set when the single guard tested a local that is exactly `null` for being
+                // null: its other branch cannot happen, so it contributes nothing to the join.
+                let mut else_unreachable = false;
                 let single_clause = clauses.len() == 1;
                 let mut callable_target_exits = Vec::new();
                 let mut callable_target_version_exits = Vec::new();
@@ -665,12 +668,26 @@ impl Checker {
                                             matches!((member, ty), (PhpType::Int, PhpType::Int)
                                                 | (PhpType::Object(_), PhpType::Object(_)))
                                                 && self.type_contains_values(member, ty)))));
-                        if (Self::narrowed_place_key_is_property(&guard.var) || nullable_initialized_local)
+                        // `$x = null; if ($x === null) { $x = new S(); }`: the local is exactly
+                        // `null` before the test, so the test holds and the branch initializes
+                        // it. The union form above is the same idiom over `?S`; here the
+                        // complement is empty rather than `S`, and the `else` path is dead.
+                        let exact_null_initialized_local = !Self::narrowed_place_key_is_property(&guard.var)
+                            && guard.then_ty == PhpType::Void
+                            && saved.iter().any(|(name, original)| name == &guard.var
+                                && matches!(original, Some(PhpType::Void)))
+                            && branch_exit.is_some_and(|ty|
+                                *ty == PhpType::Int || (matches!(ty, PhpType::Object(_))
+                                    && self.local_flow_read_is_stable(&guard.var)));
+                        if (Self::narrowed_place_key_is_property(&guard.var)
+                            || nullable_initialized_local
+                            || exact_null_initialized_local)
                             && !self.body_cannot_fall_through(body)
                             && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
                         {
                             join_key = Some(guard.var.clone());
                             then_exit_ty = branch_exit.cloned();
+                            else_unreachable = exact_null_initialized_local;
                         }
                     }
                     if !self.body_cannot_fall_through(body) {
@@ -728,7 +745,7 @@ impl Checker {
                 self.callable_array_targets = joined_targets;
                 self.callable_array_target_versions = joined_target_versions;
                 if let Some(key) = &join_key {
-                    if else_falls_through {
+                    if else_falls_through && !else_unreachable {
                         else_exit_ty = Some(env.get(key).cloned());
                     }
                 }

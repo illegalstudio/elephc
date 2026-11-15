@@ -686,6 +686,46 @@ fn test_narrow_after_never_call_before_unreachable_code() {
     assert_eq!(out, "a=b");
 }
 
+/// Verifies the lazy-initialization idiom on a local that is exactly `null` before the guard:
+/// the `=== null` test holds, the branch assigns the object (or the int), and the path where
+/// the local is not null cannot happen — so after the `if` the local is the assigned type, in a
+/// function body and at top level. The last case is the control: a branch that assigns nothing
+/// leaves the local `null`. Every expectation is the host PHP 8.5 output (elephc-vp4a).
+#[test]
+fn test_exactly_null_local_initialized_on_its_null_arm_narrows() {
+    let out = compile_and_run(
+        r#"<?php
+class Conn { public int $n = 0; }
+
+function conn(): Conn {
+    $c = null;
+    if ($c === null) {
+        $c = new Conn();
+    }
+    $c->n++;
+    return $c;
+}
+
+function counter(): int {
+    $n = null;
+    if ($n === null) { $n = 40; }
+    return $n + 2;
+}
+
+$top = null;
+if ($top === null) { $top = new Conn(); }
+$top->n = 5;
+
+$untouched = null;
+if ($untouched === null) { echo "n"; }
+
+echo conn()->n, " ", counter(), " ", $top->n, " ";
+var_dump($untouched);
+"#,
+    );
+    assert_eq!(out, "n1 42 5 NULL\n");
+}
+
 /// Verifies the classic singleton: a nullable static property narrowed by an `=== null` guard
 /// whose then-branch assigns it is non-null on both merge paths, so the `: S` return checks.
 #[test]
