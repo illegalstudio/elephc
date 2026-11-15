@@ -610,6 +610,10 @@ pub(crate) struct Checker {
     /// Names declared `static` in the current body. Their storage outlives the call, so the
     /// binding is never killable.
     pub static_local_names: HashSet<String>,
+    /// Locals of the current body written only by `new C(...)` of one class, with that class
+    /// (see `loop_storage::single_class_written_locals`). Per-body, filled by the mixed-storage
+    /// scan.
+    pub single_class_written_locals: HashMap<String, String>,
     /// Every parameter name of the current body (empty at top level). The storage-only numeric
     /// re-bind skips these: backtrace frames read a parameter's argument value from the FIRST
     /// slot of that name, so splitting a parameter's binding would report a stale argument.
@@ -810,6 +814,7 @@ pub(crate) struct SavedLocalBindingScope {
     boxed_ref_aliased: HashSet<String>,
     boxed_ref_invalidations: Vec<HashSet<String>>,
     statics: HashSet<String>,
+    single_class_written: HashMap<String, String>,
     parameters: HashSet<String>,
     boxed_parameters: HashSet<String>,
     typed: HashMap<String, PhpType>,
@@ -1034,6 +1039,7 @@ impl Checker {
                 &mut self.conditional_boxed_ref_invalidations,
             ),
             statics: std::mem::take(&mut self.static_local_names),
+            single_class_written: std::mem::take(&mut self.single_class_written_locals),
             parameters: std::mem::take(&mut self.local_parameter_names),
             boxed_parameters: std::mem::take(&mut self.boxed_parameter_locals),
             typed: std::mem::take(&mut self.typed_local_names),
@@ -1078,6 +1084,7 @@ impl Checker {
         self.boxed_ref_aliased_locals = saved.boxed_ref_aliased;
         self.conditional_boxed_ref_invalidations = saved.boxed_ref_invalidations;
         self.static_local_names = saved.statics;
+        self.single_class_written_locals = saved.single_class_written;
         self.local_parameter_names = saved.parameters;
         self.boxed_parameter_locals = saved.boxed_parameters;
         self.typed_local_names = saved.typed;

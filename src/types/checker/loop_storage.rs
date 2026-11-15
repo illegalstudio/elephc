@@ -775,6 +775,40 @@ pub(crate) fn loop_assigned_local_names(
         .collect()
 }
 
+/// Returns, for each local of `body` written only by `new C(...)` of one class, that class.
+///
+/// A `static $c = null;` lazily initialized by `if ($c === null) { $c = new C(); }` keeps its
+/// value across calls, so a later call takes the `else` path with `$c` already set. The join
+/// after the guard is still `C` on both paths when nothing in the function ever gives `$c`
+/// anything but a `C`: once set, it stays a `C`, whatever runs in between — a recursive call of
+/// the same function included. Any other write (a `null`, an `unset`, an increment, a `foreach`
+/// or `list()` target, a reference, an `eval` or `extract` in the body) leaves the name out.
+pub(super) fn single_class_written_locals(body: &[Stmt]) -> std::collections::HashMap<String, String> {
+    let mut writes = LoopWrites::default();
+    collect_value_assignments(body, &mut writes);
+    if writes.unbind_all {
+        return std::collections::HashMap::new();
+    }
+    let mut classes: std::collections::HashMap<&str, Option<&str>> = std::collections::HashMap::new();
+    for (name, value) in &writes.values {
+        let class = match value {
+            AssignedValue::Expr(Expr { kind: ExprKind::NewObject { class_name, .. }, .. }) => {
+                Some(class_name.as_str())
+            }
+            _ => None,
+        };
+        let entry = classes.entry(name).or_insert(class);
+        if !matches!((*entry, class), (Some(seen), Some(new)) if seen.eq_ignore_ascii_case(new)) {
+            *entry = None;
+        }
+    }
+    classes
+        .into_iter()
+        .filter(|(name, _)| !writes.unbound.contains(name) && !writes.references.contains(name))
+        .filter_map(|(name, class)| Some((name.to_string(), class?.to_string())))
+        .collect()
+}
+
 /// Collects local assignments from every statement in source traversal order.
 fn collect_value_assignments<'a>(
     statements: &'a [Stmt],

@@ -672,13 +672,16 @@ impl Checker {
                         // `null` before the test, so the test holds and the branch initializes
                         // it. The union form above is the same idiom over `?S`; here the
                         // complement is empty rather than `S`, and the `else` path is dead.
+                        // A `static` local's `else` path does run — a later call finds it set —
+                        // but with an `S` when every write the function makes to it is `new S`.
                         let exact_null_initialized_local = !Self::narrowed_place_key_is_property(&guard.var)
                             && guard.then_ty == PhpType::Void
                             && saved.iter().any(|(name, original)| name == &guard.var
                                 && matches!(original, Some(PhpType::Void)))
                             && branch_exit.is_some_and(|ty|
                                 *ty == PhpType::Int || (matches!(ty, PhpType::Object(_))
-                                    && self.local_flow_read_is_stable(&guard.var)));
+                                    && (self.local_flow_read_is_stable(&guard.var)
+                                        || self.static_local_keeps_class(&guard.var, ty))));
                         if (Self::narrowed_place_key_is_property(&guard.var)
                             || nullable_initialized_local
                             || exact_null_initialized_local)

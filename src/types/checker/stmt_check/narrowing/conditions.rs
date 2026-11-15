@@ -60,13 +60,36 @@ impl Checker {
 
     /// Separates reference volatility from a local's boxed physical representation.
     pub(in crate::types::checker) fn local_binding_is_unaliased(&self, name: &str) -> bool {
+        self.binding_has_no_hidden_writer(name) && !self.static_local_names.contains(name)
+    }
+
+    /// Whether only this body's own visible statements can write the binding: no reference, no
+    /// global, no `eval`. A `static` local passes, though a re-entrant call of the same function
+    /// can still write it — `static_local_keeps_class` is what makes that harmless.
+    fn binding_has_no_hidden_writer(&self, name: &str) -> bool {
         !(self.eval_barrier_active || self.ref_aliased_locals.contains(name)
             || self.by_ref_captured_locals.contains(name)
             || self.boxed_ref_aliased_locals.contains(name)
             || self.active_ref_params.contains(name)
             || self.active_external_ref_bindings.contains(name)
-            || self.active_globals.contains(name) || self.static_local_names.contains(name)
+            || self.active_globals.contains(name)
             || self.top_level_binding_is_program_global(name))
+    }
+
+    /// Whether a `static` local holds a `ty` object for good once it has been set: every write
+    /// the function makes to it is `new` of that class, and nothing hidden writes it. A
+    /// re-entrant call between a guard and a read can then only store another such object, so
+    /// `static $c = null; if ($c === null) { $c = new C(); }` leaves `$c` a `C` on both paths.
+    pub(in crate::types::checker) fn static_local_keeps_class(&self, name: &str, ty: &PhpType) -> bool {
+        let PhpType::Object(class) = ty else { return false; };
+        // `eval` anywhere in the body could write it on a later call, before or after the guard.
+        self.static_local_names.contains(name)
+            && !self.body_contains_eval
+            && !self.mixed_storage_locals.contains(name)
+            && self.binding_has_no_hidden_writer(name)
+            && self.single_class_written_locals.get(name).is_some_and(|written| {
+                written.trim_start_matches('\\').eq_ignore_ascii_case(class.trim_start_matches('\\'))
+            })
     }
 
     /// Computes every binding's true and false views once per boolean-chain operand.

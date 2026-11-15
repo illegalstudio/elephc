@@ -3783,3 +3783,37 @@ class FollowupBadStrictCounter implements FollowupStrictCounter {
 }
 "#, "incompatible return type string (interface returns int)");
 }
+
+/// A `static` local initialized on its null arm stays refused when the function can give it
+/// anything but that object: a re-entrant call between the guard and the read (`f(true)` here)
+/// would leave it `null`, and PHP reads a property of null. Only a static every write of which
+/// is `new` of one class is narrowed (elephc-vp4a).
+#[test]
+fn test_error_null_static_local_reset_elsewhere_keeps_refusal() {
+    for reset in [
+        "$c = null;",
+        "unset($c);",
+        "$c = makeNull();",
+        "$r = &$c; $r = null;",
+        "foreach ([null] as $c) {}",
+        "[$c] = [null];",
+    ] {
+        expect_error(
+            &format!(
+                "<?php
+class Conn {{ public int $n = 0; }}
+function makeNull() {{ return null; }}
+function f(bool $reset): int {{
+    static $c = null;
+    if ($c === null) {{ $c = new Conn(); }}
+    if ($reset) {{ {reset} return 0; }}
+    f(true);
+    return $c->n;
+}}
+echo f(false);
+"
+            ),
+            "Property access requires an object or typed pointer",
+        );
+    }
+}

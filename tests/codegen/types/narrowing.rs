@@ -726,6 +726,61 @@ var_dump($untouched);
     assert_eq!(out, "n1 42 5 NULL\n");
 }
 
+/// Verifies the lazy-initialization idiom on a `static` local: `static $c = null;` initialized on
+/// its null arm is a `C` after the `if` on both paths, because every write the function makes to
+/// it is `new C`. A later call takes the `else` path with the object of the first, and a call
+/// re-entering the function between the guard and the read can only store another `C`.
+/// Namespaced, fully qualified and differently cased spellings name the same class, and a static
+/// method's static local works the same. Every expectation is the host PHP 8.5 output
+/// (elephc-vp4a).
+#[test]
+fn test_null_static_local_initialized_on_its_null_arm_narrows() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Db;
+
+class Conn { public int $n = 0; }
+
+function conn(int $depth): Conn {
+    static $c = null;
+    if ($c === null) {
+        $c = new Conn();
+    }
+    if ($depth > 0) {
+        conn($depth - 1);
+    }
+    $c->n++;
+    return $c;
+}
+
+function other(): Conn {
+    static $o = null;
+    if ($o === null) {
+        $o = new \App\Db\conn();
+    }
+    $o->n += 10;
+    return $o;
+}
+
+class Registry {
+    public int $hits = 0;
+    public static function shared(): Registry {
+        static $r = null;
+        if ($r === null) {
+            $r = new Registry();
+        }
+        $r->hits++;
+        return $r;
+    }
+}
+
+echo conn(2)->n, " ", conn(0)->n, " ", other()->n, " ", other()->n, " ";
+echo Registry::shared()->hits, " ", Registry::shared()->hits, "\n";
+"#,
+    );
+    assert_eq!(out, "3 4 10 20 1 2\n");
+}
+
 /// Verifies the classic singleton: a nullable static property narrowed by an `=== null` guard
 /// whose then-branch assigns it is non-null on both merge paths, so the `: S` return checks.
 #[test]
