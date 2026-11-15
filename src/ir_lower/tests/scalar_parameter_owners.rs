@@ -22,9 +22,18 @@ $xml = new SimpleXMLElement('<r/>'); echo scalarOwnerWalk('abcdefgh', 2);
         && matches!(inst.immediate, Some(Immediate::Data(data))
             if module.data.function_names[data.as_raw() as usize] == "scalarOwnerPick")).unwrap();
     let operand = call.operands[1];
-    assert!(function.instructions[index + 1..].iter().any(|inst|
-        inst.op == Op::Release && inst.operands == [operand]),
-        "{target}: scalar conversion borrows the caller's Mixed box");
+    // The `int` parameter guard converts the box itself and passes the int; the box it read
+    // must then be released once converted, instead of after the call.
+    let guarded_box = function.instructions.iter().find(|inst| inst.result == Some(operand)
+        && inst.op == Op::ScalarParamGuard).map(|guard| guard.operands[0]);
+    match guarded_box {
+        Some(boxed) => assert!(function.instructions.iter().any(|inst|
+            inst.op == Op::Release && inst.operands == [boxed]),
+            "{target}: the guard's converted box is released"),
+        None => assert!(function.instructions[index + 1..].iter().any(|inst|
+            inst.op == Op::Release && inst.operands == [operand]),
+            "{target}: scalar conversion borrows the caller's Mixed box"),
+    }
 }
 
 supported_target_cases!(scalar_parameter_owners, verify_scalar_parameter_owners);
