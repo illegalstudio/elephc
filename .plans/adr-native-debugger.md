@@ -481,7 +481,8 @@ the corresponding implementation issues; they do not reopen the architecture.
 - [x] D4 shared activation stack confirmed; extraction remains a gate.
 - [x] D6 DAP-first confirmed; DBGp remains optional/deferred.
 - [x] `elephc-jwio.1` merged/closed.
-- [ ] Metadata schema v1 reviewed (implementation gate).
+- [x] Metadata schema v1 reviewed: `format`/`version` are published and
+  asserted by the writer tests, and the client parses the same typed document.
 - [x] Target matrix and iOS refusal text reviewed.
 - [x] Security model reviewed (launch/attach/evaluate).
 - [x] Follow-up issues updated to match this ADR.
