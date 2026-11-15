@@ -331,6 +331,13 @@ fn run_server(
         ParsedArgs::Exit(code) => return code,
     };
     install_signal_handlers();
+    // Install the fork gate before binding so a failure cannot leave a
+    // stale Unix socket behind.
+    #[cfg(target_vendor = "apple")]
+    if let Err(error) = listener::install_fork_gate() {
+        eprintln!("elephc-web: failed to install atfork handlers: {error}");
+        return 1;
+    }
     // Bind the shared TCP socket before forking on Apple targets. On Linux
     // install_shared is a no-op and workers keep their per-process
     // SO_REUSEPORT sockets. A Unix listener must always be bound once before
@@ -358,10 +365,6 @@ fn run_server(
             }
         },
     };
-    // Make descriptor-map mutation safe across the forks below. A child forked
-    // while the acceptor holds `pending` would inherit a locked pthread mutex.
-    #[cfg(target_vendor = "apple")]
-    listener::install_fork_gate();
     // Fork workers BEFORE creating any tokio runtime. Track each worker's spawn
     // time so a crash-on-startup loop (e.g. a failed bind) can be detected.
     let mut children: Vec<(libc::pid_t, Instant, usize)> = Vec::new();
