@@ -647,7 +647,8 @@ mod tests {
                 Arch::AArch64 => {
                     assert!(asm.contains("bl __rt_heap_consolidate"));
                     assert!(asm.contains("fmov x0, d0"));
-                    assert!(asm.contains("fcvtzs x9, d1"));
+                    assert!(asm.contains("fmov d3, d1"));
+                    assert!(asm.contains("fcvtzs x9, d3"));
                     assert!(asm.contains("_gc_run_explicit"));
                 }
                 Arch::X86_64 => {
