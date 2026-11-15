@@ -267,3 +267,28 @@ foreach ([1.5, 1.0, 1e100, NAN, INF, true, false, 3] as $v) {
     );
     assert_eq!(out, "ti('12') = 12\ntf('12') = 12.0\nti(' 12') = 12\ntf(' 12') = 12.0\nti('12 ') = 12\ntf('12 ') = 12.0\nti('12abc') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('12abc') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('abc') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('abc') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('1.5') = [diag] Implicit conversion from float-string \"1.5\" to int loses precision\n1\ntf('1.5') = 1.5\nti('1e3') = 1000\ntf('1e3') = 1000.0\nti('0x1A') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('0x1A') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti(' ') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf(' ') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('1.0') = 1\ntf('1.0') = 1.0\nti('9999999999999999999') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('9999999999999999999') = 1.0E+19\nti('.5') = [diag] Implicit conversion from float-string \".5\" to int loses precision\n0\ntf('.5') = 0.5\nti('INF') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('INF') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('1e100') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('1e100') = 1.0E+100\nti('12.5abc') = ti(): Argument #1 ($i) must be of type int, string given, called in F on line 8\ntf('12.5abc') = tf(): Argument #1 ($f) must be of type float, string given, called in F on line 9\nti('-7') = -7\ntf('-7') = -7.0\nti(1.5) = [diag] Implicit conversion from float 1.5 to int loses precision\n1\ntf(1.5) = 1.5\nti(1.0) = 1\ntf(1.0) = 1.0\nti(1.0E+100) = ti(): Argument #1 ($i) must be of type int, float given, called in F on line 12\ntf(1.0E+100) = 1.0E+100\nti(NAN) = ti(): Argument #1 ($i) must be of type int, float given, called in F on line 12\ntf(NAN) = NAN\nti(INF) = ti(): Argument #1 ($i) must be of type int, float given, called in F on line 12\ntf(INF) = INF\nti(true) = 1\ntf(true) = 1.0\nti(false) = 0\ntf(false) = 0.0\nti(3) = 3\ntf(3) = 3.0\n");
 }
+
+/// Positional spreads, static or from a runtime array, check each element bound to a declared
+/// scalar from its value (numeric strings convert), and an unused call to a pure callee keeps
+/// the check and its `catch`.
+#[test]
+fn test_positional_spread_elements_are_checked() {
+    let out = compile_and_run(
+        r#"<?php
+function named(string $s, int $n = 0): string { return "n:" . $s . $n; }
+function pure(string $s): int { return 1; }
+function box(mixed $v): mixed { return $v; }
+function show(TypeError $e): void { echo str_replace(__FILE__, "F", $e->getMessage()), "\n"; }
+$null = box(null);
+$args = [$null];
+$tail = [box("x"), box("nope")];
+try { echo named(...[$null]), "\n"; } catch (TypeError $e) { show($e); }
+try { echo named(...$args), "\n"; } catch (TypeError $e) { show($e); }
+try { echo named(...$tail), "\n"; } catch (TypeError $e) { show($e); }
+try { pure(...[$null]); echo "not reached\n"; } catch (TypeError $e) { show($e); }
+try { pure(...$args); echo "not reached\n"; } catch (TypeError $e) { show($e); }
+echo named(...[box("ok"), box(" 7")]), "\n";
+"#,
+    );
+    assert_eq!(out, "named(): Argument #1 ($s) must be of type string, null given, called in F on line 9\nnamed(): Argument #1 ($s) must be of type string, null given, called in F on line 10\nnamed(): Argument #2 ($n) must be of type int, string given, called in F on line 11\npure(): Argument #1 ($s) must be of type string, null given, called in F on line 12\npure(): Argument #1 ($s) must be of type string, null given, called in F on line 13\nn:ok7\n");
+}
