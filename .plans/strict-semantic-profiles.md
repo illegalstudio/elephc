@@ -1158,6 +1158,23 @@ Builtin inventory is unchanged (828 AOT, 77 graph, 56 primitive, 695 runtime,
   clean heaps. This completes boxed export selection; eval writes and concrete
   static layouts remain part of the ongoing Casts integration.
 
+### Protected eval reference writes
+
+- The versioned reference replacement boundary validates the original RHS through
+  the same native coordinator and declaration callbacks as compiled assignments.
+  Capability-disabled builds keep the existing replacement behavior.
+- A deferred commit transfers the displaced owner to Rust before snapshot cleanup
+  can throw. Eval keeps its existing metadata-update and old-value-release order;
+  failed calls retire any transferred owner through protected cleanup.
+- The publisher shares one validation body across immediate native retirement and
+  deferred eval retirement. Both paths retain the original snapshot and wrapper
+  roots, publish only an accepted candidate, and return owned Throwable outputs.
+- Focused commit/publisher units, real wrapper/publisher/commit assembly on all
+  five targets, checked and permissive native replacement, destructor timing,
+  five publication ownership regressions, validation pins, prior static settype,
+  two real eval reference controls, test-target/compiler builds and hygiene pass.
+  The new publisher slot is covered by an explicit frame-footer bounds check.
+
 ### Verification discipline
 
 Count exact test registrations, use narrow package/test-binary filters, and queue
@@ -1262,4 +1279,5 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 83 | `15faacbb39` | feat(strict): preserve array property conversion references |
 | 84 | `3ca4036dd5` | feat(strict): preserve iterable property conversion references |
 | 85 | `82c96130e7` | feat(strict): preserve boxed static conversion references |
-| 86 | this commit | feat(strict): share checked static reference exports |
+| 86 | `9e2878062e` | feat(strict): share checked static reference exports |
+| 87 | this commit | feat(strict): validate eval reference replacement before publication |

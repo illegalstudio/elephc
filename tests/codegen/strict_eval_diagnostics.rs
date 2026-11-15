@@ -261,7 +261,41 @@ fn test_strict_static_reference_exports_preserve_identity_and_constraints_bundle
     for optimize in [false, true] {
         let output = StrictFixture::new(source).capture_staged_eval_runtime(profile, optimize);
         assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
-        assert_eq!(output.stdout, "I:7:1:7:19:19:8:R8:guarded", "opt={optimize}: {}", output.stderr);
+        assert_eq!(output.stdout, "I:7:1:7:19:19:8:R8:guarded:0:23:P:0ADB:2:0:8", "opt={optimize}: {}", output.stderr);
+        assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
+    }
+}
+
+/// The versioned replacement ABI preserves the ordinary unconstrained displaced-owner contract.
+#[test]
+fn test_eval_reference_replacement_permissive_boundary_bundle() {
+    let source = r#"<?php
+extern class ReplacementCell { public int $tag; public int $value; public int $high; }
+extern class ReplacementOutput { public ptr $cell; }
+extern function __elephc_eval_value_int(int $value): ptr;
+extern function __elephc_eval_value_reference_new(ptr $value): ptr;
+extern function __elephc_eval_value_reference_replace_v2(ptr $reference, ptr $value, int $flags, ptr $previous, ptr $error): int;
+extern function __elephc_eval_value_release_v3(ptr $value, ptr $error): int;
+extern function malloc(int $size): ptr;
+extern function free(ptr $value): void;
+$previous = malloc(8); $error = malloc(8); ptr_set($error, 0);
+$initial = __elephc_eval_value_int(1);
+$reference = __elephc_eval_value_reference_new($initial);
+$next = __elephc_eval_value_int(2);
+echo __elephc_eval_value_reference_replace_v2($reference, $next, 0, $previous, $error);
+$stored = ptr_cast<ReplacementOutput>($previous);
+$old = ptr_cast<ReplacementCell>($stored->cell); echo ':', $old->tag, ':', $old->value;
+__elephc_eval_value_release_v3($stored->cell, $error);
+__elephc_eval_value_release_v3($reference, $error);
+__elephc_eval_value_release_v3($initial, $error);
+__elephc_eval_value_release_v3($next, $error);
+free($previous); free($error);
+"#;
+    for optimize in [false, true] {
+        let output = StrictFixture::new(source).capture_staged_eval_runtime(
+            elephc_semantics::SemanticProfile::PERMISSIVE, optimize);
+        assert!(output.success, "opt={optimize}: {} {} {}", output.status, output.stdout, output.stderr);
+        assert_eq!(output.stdout, "0:0:1", "opt={optimize}: {}", output.stderr);
         assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "opt={optimize}: {}", output.stderr);
     }
 }

@@ -42,8 +42,10 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_is_reference(value: *mut RuntimeCell) -> u64;
     /// Reports whether a persistent reference has another physical owner.
     pub(super) fn __elephc_eval_value_reference_is_shared(value: *mut RuntimeCell) -> u64;
-    /// Replaces a reference payload and transfers its previous value to the caller.
-    pub(super) fn __elephc_eval_value_reference_replace(reference: *mut RuntimeCell, value: *mut RuntimeCell) -> *mut RuntimeCell;
+    /// Validates the original replacement and returns owned previous/Throwable cells through outputs.
+    pub(super) fn __elephc_eval_value_reference_replace_v2(reference: *mut RuntimeCell,
+        value: *mut RuntimeCell, caller_flags: u64, previous: *mut *mut RuntimeCell,
+        throwable: *mut *mut RuntimeCell) -> u64;
     /// Makes an ordinary value copy detached from a reference cell.
     pub(super) fn __elephc_eval_value_copy(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Updates the canonical resource subtype, or marks it closed when subtype is negative.

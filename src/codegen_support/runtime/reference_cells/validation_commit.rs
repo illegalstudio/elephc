@@ -16,12 +16,13 @@ const FRAME: usize = 64;
 
 /// Emits commit(context, wrapper, owned_candidate), returning success0, failure1 or Throwable2.
 pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
-    emit_entry(emitter, "__rt_reference_commit_native", false);
-    emit_entry(emitter, "__rt_reference_commit_native_rooted", true);
+    emit_entry(emitter, "__rt_reference_commit_native", false, false);
+    emit_entry(emitter, "__rt_reference_commit_native_rooted", true, false);
+    emit_entry(emitter, "__rt_reference_commit_native_deferred_rooted", true, true);
 }
 
 /// Optionally consumes the successful publisher's snapshot lease at the ownership transfer point.
-fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool) {
+fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool, defer_previous: bool) {
     let result = abi::int_result_reg(emitter);
     let wrapper = abi::secondary_scratch_reg(emitter);
     let pending = format!("{entry}_pending");
@@ -34,6 +35,9 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool) {
     }
     if take_snapshot {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 3), 40);
+    }
+    if defer_previous {
+        abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 4), 48);
     }
     abi::load_at_offset(emitter, result, 8);
     abi::emit_load_from_address(emitter, result, result, 8);
@@ -48,6 +52,11 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool) {
     abi::store_at_offset(emitter, result, 32);
     abi::load_at_offset(emitter, result, 24);
     abi::emit_store_to_address(emitter, result, wrapper, 8);
+    if defer_previous {
+        abi::load_at_offset(emitter, wrapper, 48);
+        abi::load_at_offset(emitter, result, 32);
+        abi::emit_store_to_address(emitter, result, wrapper, 0);
+    }
     // The wrapper now owns the candidate. Never release that transferred owner again.
     if take_snapshot {
         abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), 40);
@@ -55,7 +64,7 @@ fn emit_entry(emitter: &mut Emitter, entry: &str, take_snapshot: bool) {
         abi::store_at_offset(emitter, result, 24);
         emit_release_slot(emitter, 24);
     }
-    emit_release_slot(emitter, 32);
+    if !defer_previous { emit_release_slot(emitter, 32); }
     if take_snapshot {
         // A snapshot destructor may throw even when the displaced child's release succeeds.
         abi::load_at_offset(emitter, result, 8);
@@ -114,6 +123,14 @@ mod tests {
             assert!(publication < take && take < first_release && first_release < last_release,
                 "{name}: retire the snapshot after publication but before the displaced value");
             assert!(!assembly.contains("__rt_throw_current"), "{name}: the publisher retires roots before propagating a Throwable");
+            let deferred = assembly.split_once("__rt_reference_commit_native_deferred_rooted:").unwrap().1
+                .split_once("__rt_reference_commit_native_deferred_rooted_pending:").unwrap().0;
+            let previous = if name == "linux-x86_64" { "mov QWORD PTR [r10], rax" }
+                else { "str x0, [x10]" };
+            assert!(deferred.find(previous).unwrap() < deferred.find("__rt_reference_validation_pin_take").unwrap(),
+                "{name}: publish the displaced owner before snapshot cleanup can throw");
+            assert_eq!(deferred.matches("__rt_reference_validation_release").count(), 1,
+                "{name}: Rust, rather than the native commit, retires the previous value");
         }
     }
 }

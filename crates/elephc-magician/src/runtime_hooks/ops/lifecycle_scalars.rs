@@ -137,10 +137,22 @@ macro_rules! impl_lifecycle_scalar_ops {
         Self::handle(unsafe { __elephc_eval_value_reference_new(value.as_ptr()) })
     }
 
-    /// Publishes a copied replacement and transfers the previous owner for cleanup.
+    /// Validates before publishing and transfers the previous owner for ordinary eval cleanup.
     fn reference_replace(&mut self, reference: RuntimeCellHandle, value: RuntimeCellHandle) -> Result<RuntimeCellHandle, EvalStatus> {
-        let previous = unsafe { __elephc_eval_value_reference_replace(reference.as_ptr(), value.as_ptr()) };
-        if previous.is_null() { self.null() } else { Self::handle(previous) }
+        let mut previous = std::ptr::null_mut();
+        let mut thrown = std::ptr::null_mut();
+        let status = unsafe { __elephc_eval_value_reference_replace_v2(
+            reference.as_ptr(), value.as_ptr(), 0, &mut previous, &mut thrown) };
+        if status == 0 {
+            return if previous.is_null() { self.null() } else { Self::handle(previous) };
+        }
+        let previous = (!previous.is_null()).then(|| RuntimeCellHandle::from_raw(previous));
+        let thrown = (!thrown.is_null()).then(|| RuntimeCellHandle::from_raw(thrown));
+        let thrown = crate::runtime_hooks::release::release_native_cells(previous, thrown);
+        if let Some(thrown) = thrown {
+            self.schedule_pending_throw(thrown)?;
+            Err(EvalStatus::UncaughtThrowable)
+        } else { Err(EvalStatus::RuntimeFatal) }
     }
 
     /// Detaches a reference before returning an ordinary PHP value copy.

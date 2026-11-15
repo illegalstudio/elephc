@@ -12,7 +12,7 @@
 
 use super::*;
 
-const FRAME: usize = 128;
+const FRAME: usize = 144;
 const CONTEXT: usize = 8;
 const WRAPPER: usize = 16;
 const ORIGINAL: usize = 24;
@@ -21,6 +21,7 @@ const STATUS: usize = 40;
 const SNAPSHOT: usize = 48;
 const WRAPPER_PIN: usize = 80;
 const SNAPSHOT_PIN: usize = 112;
+const PREVIOUS: usize = 120;
 
 /// Emits publish(context, wrapper, owned_rhs, outcome) with the coordinator's status ABI.
 /// Context and outcome must be valid; the RHS is consumed even on a refused wrapper.
@@ -36,10 +37,15 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     let cleanup = "__rt_reference_publish_native_cleanup";
     let done = "__rt_reference_publish_native_done";
     emitter.label_global("__rt_reference_publish_native");
+    abi::emit_load_int_immediate(emitter, abi::int_arg_reg_name(emitter.target, 4), 0);
+    abi::emit_jump(emitter, "__rt_reference_publish_native_body");
+    emitter.label_global("__rt_reference_publish_native_deferred");
+    emitter.label("__rt_reference_publish_native_body");
     abi::emit_frame_prologue(emitter, FRAME);
     for (index, offset) in [CONTEXT, WRAPPER, ORIGINAL, OUTCOME].into_iter().enumerate() {
         abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, index), offset);
     }
+    abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 4), PREVIOUS);
     for offset in [CONTEXT, OUTCOME] {
         abi::load_at_offset(emitter, result, offset);
         abi::emit_branch_if_int_result_zero(emitter, failed);
@@ -83,7 +89,16 @@ pub(in crate::codegen_support::runtime) fn emit(emitter: &mut Emitter) {
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 0), CONTEXT);
     abi::load_at_offset(emitter, abi::int_arg_reg_name(emitter.target, 1), WRAPPER);
     abi::emit_frame_slot_address(emitter, abi::int_arg_reg_name(emitter.target, 3), SNAPSHOT_PIN);
+    let previous = abi::int_arg_reg_name(emitter.target, 4);
+    abi::load_at_offset(emitter, previous, PREVIOUS);
+    let immediate = "__rt_reference_publish_native_immediate";
+    let committed = "__rt_reference_publish_native_committed";
+    abi::emit_branch_if_zero_wide(emitter, previous, immediate);
+    abi::emit_call_label(emitter, "__rt_reference_commit_native_deferred_rooted");
+    abi::emit_jump(emitter, committed);
+    emitter.label(immediate);
     abi::emit_call_label(emitter, "__rt_reference_commit_native_rooted");
+    emitter.label(committed);
     abi::store_at_offset(emitter, result, STATUS);
     abi::emit_jump(emitter, cleanup);
     emitter.label(validation_failure);
@@ -162,6 +177,7 @@ mod tests {
     /// All native ABIs root the same original input and unlink every lease before returning status.
     #[test]
     fn native_reference_publisher_roots_original_rhs_and_contains_every_exit() {
+        assert!(PREVIOUS + 16 <= FRAME, "publisher frame includes its complete locals and linkage footer");
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let mut emitter = Emitter::new(Target::parse(name).unwrap());
             emit(&mut emitter);
