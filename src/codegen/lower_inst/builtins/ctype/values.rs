@@ -137,6 +137,7 @@ fn emit_object_deprecation(ctx: &mut FunctionContext<'_>, kind: CtypeKind) {
     runtime_class_messages::emit_runtime_class_name_to_string_result(ctx, result, "object");
     let (name_ptr, name_len) = abi::string_result_regs(ctx.emitter);
     let (fragment_ptr, fragment_len) = runtime_class_messages::diagnostic_fragment_regs(ctx.emitter);
+    // -- hand the runtime class name to the diagnostic fragment writer --
     if name_ptr != fragment_ptr {
         ctx.emitter.instruction(&format!("mov {fragment_ptr}, {name_ptr}"));    // hand the borrowed class-name pointer to the fragment writer
     }
@@ -155,6 +156,7 @@ fn emit_object_deprecation(ctx: &mut FunctionContext<'_>, kind: CtypeKind) {
 fn emit_tagged_scalar_dispatch(ctx: &mut FunctionContext<'_>, kind: CtypeKind, labels: &CtypeLabels) {
     let null_label = ctx.next_label("ctype_tagged_null");
     let tag = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
+    // -- route a null nullable int to the null deprecation --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cmp {tag}, #{TAG_NULL}"));        // does the nullable int carry the runtime null tag?
@@ -186,6 +188,7 @@ fn emit_mixed_dispatch(ctx: &mut FunctionContext<'_>, kind: CtypeKind, labels: &
     let arm = ctx.emitter.target.arch == Arch::AArch64;
     let (tag, payload, beq) = if arm { ("x0", "x1", "b.eq") } else { ("rax", "rdi", "je") };
     let imm = |value: u64| if arm { format!("#{value}") } else { value.to_string() };
+    // -- dispatch the unboxed payload on its runtime tag --
     ctx.emitter.instruction(&format!("cmp {tag}, {}", imm(TAG_STRING)));        // runtime tag 1 = string payload
     ctx.emitter.instruction(&format!("{beq} {string_label}"));                  // strings are scanned byte by byte without a deprecation
     ctx.emitter.instruction(&format!("cmp {tag}, {}", imm(TAG_INT)));           // runtime tag 0 = int payload
@@ -200,6 +203,7 @@ fn emit_mixed_dispatch(ctx: &mut FunctionContext<'_>, kind: CtypeKind, labels: &
 
     ctx.emitter.label(&string_label);
     let (string_ptr, _) = abi::string_result_regs(ctx.emitter);
+    // -- scan a boxed string without a deprecation --
     if string_ptr != payload {
         ctx.emitter.instruction(&format!("mov {string_ptr}, {payload}"));       // move the unboxed string pointer into the scan register
     }
@@ -207,11 +211,13 @@ fn emit_mixed_dispatch(ctx: &mut FunctionContext<'_>, kind: CtypeKind, labels: &
 
     let result = abi::int_result_reg(ctx.emitter);
     ctx.emitter.label(&int_label);
+    // -- deprecate and classify a boxed int --
     ctx.emitter.instruction(&format!("mov {result}, {payload}"));               // keep the int payload in the register the warning preserves
     emit_deprecation(ctx, kind, "int");
     emit_int_classification(ctx, kind, labels);
 
     ctx.emitter.label(&object_label);
+    // -- deprecate a boxed object by its runtime class and fail --
     ctx.emitter.instruction(&format!("mov {result}, {payload}"));               // the class lookup reads the bare object, not its box
     emit_object_deprecation(ctx, kind);
     abi::emit_jump(ctx.emitter, &labels.fail_label);
@@ -241,6 +247,7 @@ fn emit_int_classification(ctx: &mut FunctionContext<'_>, kind: CtypeKind, label
     };
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            // -- map the int onto one byte, or answer as its decimal string --
             ctx.emitter.instruction("cmp x0, #255");                            // unsigned check for an int already in the byte range 0..=255
             ctx.emitter.instruction(&format!("b.ls {byte_label}"));             // classify 0..=255 as that byte
             ctx.emitter.instruction("add x5, x0, #128");                        // shift -128..=-1 onto 0..=127 for one unsigned range check
@@ -248,16 +255,19 @@ fn emit_int_classification(ctx: &mut FunctionContext<'_>, kind: CtypeKind, label
             ctx.emitter.instruction(&format!("b.hi {out_of_range_label}"));     // other ints answer as their decimal string would
             ctx.emitter.instruction("add x0, x0, #256");                        // map -128..=-1 onto the bytes 128..=255
             ctx.emitter.label(&byte_label);
+            // -- classify the mapped byte with the shared predicate --
             ctx.emitter.instruction("mov w4, w0");                              // place the byte where the shared predicate reads it
             emit_aarch64_ctype_predicate(ctx, kind, &hit_label, &labels.fail_label);
             ctx.emitter.label(&hit_label);
             ctx.emitter.instruction(&format!("b {}", labels.pass_label));       // the single byte satisfied the predicate
             ctx.emitter.label(&out_of_range_label);
+            // -- answer as a digit string, with a leading '-' when negative --
             ctx.emitter.instruction("cmp x0, #0");                              // the decimal string starts with '-' only for a negative int
             ctx.emitter.instruction(&format!("b.lt {negative}"));               // php-src's answer for a '-'-prefixed digit string
             ctx.emitter.instruction(&format!("b {digits}"));                    // php-src's answer for an all-digit string
         }
         Arch::X86_64 => {
+            // -- map the int onto one byte, or answer as its decimal string --
             ctx.emitter.instruction("cmp rax, 255");                            // unsigned check for an int already in the byte range 0..=255
             ctx.emitter.instruction(&format!("jbe {byte_label}"));              // classify 0..=255 as that byte
             ctx.emitter.instruction("lea r9, [rax + 128]");                     // shift -128..=-1 onto 0..=127 for one unsigned range check
@@ -265,11 +275,13 @@ fn emit_int_classification(ctx: &mut FunctionContext<'_>, kind: CtypeKind, label
             ctx.emitter.instruction(&format!("ja {out_of_range_label}"));       // other ints answer as their decimal string would
             ctx.emitter.instruction("add rax, 256");                            // map -128..=-1 onto the bytes 128..=255
             ctx.emitter.label(&byte_label);
+            // -- classify the mapped byte with the shared predicate --
             ctx.emitter.instruction("mov r8d, eax");                            // place the byte where the shared predicate reads it
             emit_x86_64_ctype_predicate(ctx, kind, &hit_label, &labels.fail_label);
             ctx.emitter.label(&hit_label);
             ctx.emitter.instruction(&format!("jmp {}", labels.pass_label));     // the single byte satisfied the predicate
             ctx.emitter.label(&out_of_range_label);
+            // -- answer as a digit string, with a leading '-' when negative --
             ctx.emitter.instruction("test rax, rax");                           // the decimal string starts with '-' only for a negative int
             ctx.emitter.instruction(&format!("js {negative}"));                 // php-src's answer for a '-'-prefixed digit string
             ctx.emitter.instruction(&format!("jmp {digits}"));                  // php-src's answer for an all-digit string

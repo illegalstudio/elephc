@@ -197,6 +197,7 @@ fn emit_result_tail(ctx: &mut FunctionContext<'_>, labels: &CtypeLabels) {
 /// Emits the AArch64 string scan over the payload in `x1`/`x2`.
 fn emit_aarch64_string_scan(ctx: &mut FunctionContext<'_>, kind: CtypeKind, labels: &CtypeLabels) {
     ctx.emitter.label(&labels.string_entry);
+    // -- scan every byte of the string payload --
     ctx.emitter.instruction(&format!("cbz x2, {}", labels.fail_label));         // empty strings fail PHP ctype predicates
     ctx.emitter.instruction("mov x3, #0");                                      // start scanning at byte offset zero
     ctx.emitter.label(&labels.loop_label);
@@ -249,6 +250,7 @@ fn emit_aarch64_ctype_predicate(
 
 /// Emits an AArch64 uppercase ASCII range probe that branches on success.
 fn emit_aarch64_uppercase_accept(ctx: &mut FunctionContext<'_>, next_label: &str) {
+    // -- accept an uppercase ASCII byte --
     ctx.emitter.instruction("sub w5, w4, #65");                                 // normalize the byte against uppercase ASCII 'A'
     ctx.emitter.instruction("cmp w5, #25");                                     // check whether the byte is inside A-Z
     ctx.emitter.instruction(&format!("b.ls {}", next_label));                   // accept uppercase ASCII letters
@@ -256,6 +258,7 @@ fn emit_aarch64_uppercase_accept(ctx: &mut FunctionContext<'_>, next_label: &str
 
 /// Emits an AArch64 lowercase ASCII range probe that branches on success.
 fn emit_aarch64_lowercase_accept(ctx: &mut FunctionContext<'_>, next_label: &str) {
+    // -- accept a lowercase ASCII byte --
     ctx.emitter.instruction("sub w5, w4, #97");                                 // normalize the byte against lowercase ASCII 'a'
     ctx.emitter.instruction("cmp w5, #25");                                     // check whether the byte is inside a-z
     ctx.emitter.instruction(&format!("b.ls {}", next_label));                   // accept lowercase ASCII letters
@@ -263,6 +266,7 @@ fn emit_aarch64_lowercase_accept(ctx: &mut FunctionContext<'_>, next_label: &str
 
 /// Emits an AArch64 lowercase ASCII range probe that branches on failure.
 fn emit_aarch64_lowercase_reject(ctx: &mut FunctionContext<'_>, fail_label: &str) {
+    // -- reject a byte outside lowercase ASCII --
     ctx.emitter.instruction("sub w5, w4, #97");                                 // normalize the byte against lowercase ASCII 'a'
     ctx.emitter.instruction("cmp w5, #25");                                     // check whether the byte is inside a-z
     ctx.emitter.instruction(&format!("b.hi {}", fail_label));                   // reject bytes outside lowercase ASCII after uppercase failed
@@ -270,6 +274,7 @@ fn emit_aarch64_lowercase_reject(ctx: &mut FunctionContext<'_>, fail_label: &str
 
 /// Emits an AArch64 digit ASCII range probe that branches on failure.
 fn emit_aarch64_digit_reject(ctx: &mut FunctionContext<'_>, fail_label: &str) {
+    // -- reject a byte outside the ASCII digits --
     ctx.emitter.instruction("sub w5, w4, #48");                                 // normalize the byte against ASCII '0'
     ctx.emitter.instruction("cmp w5, #9");                                      // check whether the byte is inside 0-9
     ctx.emitter.instruction(&format!("b.hi {}", fail_label));                   // reject bytes outside the ASCII digit range
@@ -281,6 +286,7 @@ fn emit_aarch64_space_reject(
     next_label: &str,
     fail_label: &str,
 ) {
+    // -- accept PHP's ASCII whitespace set --
     ctx.emitter.instruction("cmp w4, #32");                                     // check for ASCII space
     ctx.emitter.instruction(&format!("b.eq {}", next_label));                   // accept ASCII space
     ctx.emitter.instruction("cmp w4, #9");                                      // check for horizontal tab
@@ -298,6 +304,7 @@ fn emit_aarch64_space_reject(
 /// Emits the x86_64 string scan over the payload in `rax`/`rdx`.
 fn emit_x86_64_string_scan(ctx: &mut FunctionContext<'_>, kind: CtypeKind, labels: &CtypeLabels) {
     ctx.emitter.label(&labels.string_entry);
+    // -- scan every byte of the string payload --
     ctx.emitter.instruction("test rdx, rdx");                                   // empty strings fail PHP ctype predicates
     ctx.emitter.instruction(&format!("je {}", labels.fail_label));              // branch to false for an empty input string
     ctx.emitter.instruction("xor rcx, rcx");                                    // start scanning at byte offset zero
@@ -351,6 +358,7 @@ fn emit_x86_64_ctype_predicate(
 
 /// Emits an x86_64 uppercase ASCII range probe that branches on success.
 fn emit_x86_64_uppercase_accept(ctx: &mut FunctionContext<'_>, next_label: &str) {
+    // -- accept an uppercase ASCII byte --
     ctx.emitter.instruction("mov r9d, r8d");                                    // copy the byte before normalizing against uppercase ASCII
     ctx.emitter.instruction("sub r9d, 65");                                     // normalize the byte against uppercase ASCII 'A'
     ctx.emitter.instruction("cmp r9d, 25");                                     // check whether the byte is inside A-Z
@@ -359,6 +367,7 @@ fn emit_x86_64_uppercase_accept(ctx: &mut FunctionContext<'_>, next_label: &str)
 
 /// Emits an x86_64 lowercase ASCII range probe that branches on success.
 fn emit_x86_64_lowercase_accept(ctx: &mut FunctionContext<'_>, next_label: &str) {
+    // -- accept a lowercase ASCII byte --
     ctx.emitter.instruction("mov r9d, r8d");                                    // copy the byte before normalizing against lowercase ASCII
     ctx.emitter.instruction("sub r9d, 97");                                     // normalize the byte against lowercase ASCII 'a'
     ctx.emitter.instruction("cmp r9d, 25");                                     // check whether the byte is inside a-z
@@ -367,6 +376,7 @@ fn emit_x86_64_lowercase_accept(ctx: &mut FunctionContext<'_>, next_label: &str)
 
 /// Emits an x86_64 lowercase ASCII range probe that branches on failure.
 fn emit_x86_64_lowercase_reject(ctx: &mut FunctionContext<'_>, fail_label: &str) {
+    // -- reject a byte outside lowercase ASCII --
     ctx.emitter.instruction("mov r9d, r8d");                                    // copy the byte before normalizing against lowercase ASCII
     ctx.emitter.instruction("sub r9d, 97");                                     // normalize the byte against lowercase ASCII 'a'
     ctx.emitter.instruction("cmp r9d, 25");                                     // check whether the byte is inside a-z
@@ -375,6 +385,7 @@ fn emit_x86_64_lowercase_reject(ctx: &mut FunctionContext<'_>, fail_label: &str)
 
 /// Emits an x86_64 digit ASCII range probe that branches on failure.
 fn emit_x86_64_digit_reject(ctx: &mut FunctionContext<'_>, fail_label: &str) {
+    // -- reject a byte outside the ASCII digits --
     ctx.emitter.instruction("sub r8d, 48");                                     // normalize the byte against ASCII '0'
     ctx.emitter.instruction("cmp r8d, 9");                                      // check whether the byte is inside 0-9
     ctx.emitter.instruction(&format!("ja {}", fail_label));                     // reject bytes outside the ASCII digit range
@@ -386,6 +397,7 @@ fn emit_x86_64_space_reject(
     next_label: &str,
     fail_label: &str,
 ) {
+    // -- accept PHP's ASCII whitespace set --
     ctx.emitter.instruction("cmp r8d, 32");                                     // check for ASCII space
     ctx.emitter.instruction(&format!("je {}", next_label));                     // accept ASCII space
     ctx.emitter.instruction("cmp r8d, 9");                                      // check for horizontal tab
@@ -410,6 +422,7 @@ fn emit_aarch64_span_accept(
     end_offset: u32,
     next_label: &str,
 ) {
+    // -- accept a byte inside one ASCII span --
     ctx.emitter.instruction(&format!("sub w5, w4, #{base}"));                   // shift the byte so the ASCII span starts at zero
     ctx.emitter.instruction(&format!("cmp w5, #{end_offset}"));                 // compare against the last byte of the span
     ctx.emitter.instruction(&format!("b.ls {}", next_label));                   // accept a byte inside this ASCII span
@@ -422,6 +435,7 @@ fn emit_aarch64_span_reject(
     end_offset: u32,
     fail_label: &str,
 ) {
+    // -- reject a byte outside one ASCII span --
     ctx.emitter.instruction(&format!("sub w5, w4, #{base}"));                   // shift the byte so the ASCII span starts at zero
     ctx.emitter.instruction(&format!("cmp w5, #{end_offset}"));                 // compare against the last byte of the span
     ctx.emitter.instruction(&format!("b.hi {}", fail_label));                   // reject a byte outside this ASCII span
@@ -433,6 +447,7 @@ fn emit_aarch64_cntrl_reject(
     next_label: &str,
     fail_label: &str,
 ) {
+    // -- accept C0 controls and DEL, reject every other byte --
     ctx.emitter.instruction("cmp w4, #31");                                     // check the ASCII control range 0x00-0x1F
     ctx.emitter.instruction(&format!("b.ls {}", next_label));                   // accept C0 control bytes
     ctx.emitter.instruction("cmp w4, #127");                                    // check for ASCII DEL
@@ -448,6 +463,7 @@ fn emit_x86_64_span_accept(
     end_offset: u32,
     next_label: &str,
 ) {
+    // -- accept a byte inside one ASCII span --
     ctx.emitter.instruction("mov r9d, r8d");                                    // copy the byte before the range normalization
     ctx.emitter.instruction(&format!("sub r9d, {base}"));                       // shift the byte so the ASCII span starts at zero
     ctx.emitter.instruction(&format!("cmp r9d, {end_offset}"));                 // compare against the last byte of the span
@@ -461,6 +477,7 @@ fn emit_x86_64_span_reject(
     end_offset: u32,
     fail_label: &str,
 ) {
+    // -- reject a byte outside one ASCII span --
     ctx.emitter.instruction("mov r9d, r8d");                                    // copy the byte before the range normalization
     ctx.emitter.instruction(&format!("sub r9d, {base}"));                       // shift the byte so the ASCII span starts at zero
     ctx.emitter.instruction(&format!("cmp r9d, {end_offset}"));                 // compare against the last byte of the span
@@ -473,6 +490,7 @@ fn emit_x86_64_cntrl_reject(
     next_label: &str,
     fail_label: &str,
 ) {
+    // -- accept C0 controls and DEL, reject every other byte --
     ctx.emitter.instruction("cmp r8d, 31");                                     // check the ASCII control range 0x00-0x1F
     ctx.emitter.instruction(&format!("jbe {}", next_label));                    // accept C0 control bytes
     ctx.emitter.instruction("cmp r8d, 127");                                    // check for ASCII DEL
