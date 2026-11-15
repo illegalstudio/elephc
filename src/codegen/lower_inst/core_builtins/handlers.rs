@@ -271,6 +271,91 @@ impl TriggerSite {
     }
 }
 
+/// Returns the module-private once-flag symbol for one declaration site.
+///
+/// The symbol encodes the source, line and column directly instead of hashing them: two
+/// declarations can never share a flag, so a hash collision cannot silently drop a notice.
+/// It stays module-private storage and is never a PHP-visible global.
+fn deprecated_once_symbol(span: Option<crate::span::Span>) -> String {
+    let Some(span) = span else {
+        return "_php_deprecated_once_none".to_string();
+    };
+    format!(
+        "_php_deprecated_once_{}_{}_{}",
+        span.source_id(),
+        span.line,
+        span.col
+    )
+}
+
+/// Reports whether a once-per-site notice has not fired, marking it as fired.
+///
+/// The flag is private module storage, not a PHP global: an interpreted `eval` context cannot
+/// observe or overwrite it, and there is no boxed cell to leak. The instruction's span names
+/// the declaration, so every access site shares one flag.
+pub(super) fn lower_deprecated_once_begin(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let result = inst.result.ok_or_else(|| {
+        crate::codegen::CodegenIrError::invalid_module(
+            "deprecated_once_begin missing result value",
+        )
+    })?;
+    let label = deprecated_once_symbol(inst.span);
+    ctx.data.add_private_identity(&label);
+    let loaded = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, loaded, &label, 0);
+    let scratch = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, scratch, 1);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, &label, 0);
+    let first = ctx.next_label("deprecated_once_first");
+    let done = ctx.next_label("deprecated_once_done");
+    emit_branch_if_zero(ctx, loaded, &first);
+    emit_bool_result(ctx, false);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&first);
+    emit_bool_result(ctx, true);
+    ctx.emitter.label(&done);
+    ctx.store_result_value(result)
+}
+
+/// Stores one call site's `strict_types` state in the runtime slot preludes read.
+pub(super) fn lower_publish_call_strictness(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let strict = expect_operand(inst, 0)?;
+    load_integer_operand(ctx, strict)?;
+    ctx.data
+        .add_comm(CALL_STRICT_TYPES_SYMBOL.to_string(), 8);
+    abi::emit_store_result_to_symbol(
+        ctx.emitter,
+        CALL_STRICT_TYPES_SYMBOL,
+        &PhpType::Bool,
+        false,
+    );
+    Ok(())
+}
+
+/// Reads the `strict_types` state published by the nearest constructor call site.
+pub(super) fn lower_call_strict_types(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let result = inst
+        .result
+        .ok_or_else(|| crate::codegen::CodegenIrError::invalid_module("call_strict_types missing result value"))?;
+    let ty = ctx.value_php_type(result)?;
+    ctx.data
+        .add_comm(CALL_STRICT_TYPES_SYMBOL.to_string(), 8);
+    abi::emit_load_symbol_to_result(ctx.emitter, CALL_STRICT_TYPES_SYMBOL, &ty);
+    ctx.store_result_value(result)
+}
+
+/// Runtime slot carrying the nearest call site's `strict_types` state (1 = strict).
+const CALL_STRICT_TYPES_SYMBOL: &str = "_php_call_strict_types";
+
 /// Rejects every error level outside PHP's four user-generated categories.
 fn emit_validate_trigger_error_level(
     ctx: &mut FunctionContext<'_>,
@@ -683,5 +768,32 @@ fn branch_instruction(ctx: &FunctionContext<'_>, label: &str) -> String {
     match ctx.emitter.target.arch {
         Arch::AArch64 => format!("b {label}"),
         Arch::X86_64 => format!("jmp {label}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::deprecated_once_symbol;
+    use crate::span::Span;
+
+    /// Distinct declaration sites always produce distinct once-flag symbols.
+    #[test]
+    fn deprecated_once_symbols_are_structurally_unique() {
+        let first = Span::new_in_source(4, 9, 1);
+        let second = Span::new_in_source(4, 9, 2);
+        let third = Span::new_in_source(5, 9, 1);
+        let fourth = Span::new_in_source(4, 10, 1);
+        let symbols = [
+            deprecated_once_symbol(Some(first)),
+            deprecated_once_symbol(Some(second)),
+            deprecated_once_symbol(Some(third)),
+            deprecated_once_symbol(Some(fourth)),
+        ];
+        let unique: std::collections::HashSet<&String> = symbols.iter().collect();
+        assert_eq!(unique.len(), symbols.len());
+        assert_eq!(
+            deprecated_once_symbol(Some(first)),
+            deprecated_once_symbol(Some(first))
+        );
     }
 }

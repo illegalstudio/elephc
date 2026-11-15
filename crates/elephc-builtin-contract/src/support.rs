@@ -400,7 +400,7 @@ mod tests {
         // Also includes the SimpleXML allocation and diagnostic adapters, and
         // `__elephc_reflection_class_build` / `__elephc_eval_reflection_class_build`, which
         // only compiled reflector getters call.
-        assert_eq!(eval_internal, 138);
+        assert_eq!(eval_internal, 139);
         // 29 registry builtins awaiting eval homes, plus the 348 PHP-visible prelude-provided
         // and name-resolver-rewritten functions eval does not reach (see `eval_support`).
         assert_eq!(eval_pending, 381);
@@ -414,7 +414,7 @@ mod tests {
         // internal aliases the extension-hosting prelude calls.
         // The PHP 8.5 array value-edge pair adds two AOT-only registry entries, and the
         // compiled and eval `ReflectionClass` builder calls two more.
-        assert_eq!(aot_registry, 828);
+        assert_eq!(aot_registry, 829);
         // Compiler transforms, constructs, dedicated syntax, preludes, and
         // name-resolver rewrites remain outside the ordinary AOT registry.
         assert_eq!(aot_external, 474 + curl_surface);
@@ -472,8 +472,9 @@ mod tests {
         assert_eq!(interpreter_adapter, 688 + curl_surface);
         // Includes the eleven `__elephc_opcache_rt_*` helpers: they lower to an eval-bridge
         // call from AOT code and have no eval execution route of their own. So do the four
-        // internal aliases the extension-hosting prelude calls.
-        assert_eq!(unsupported, 519);
+        // internal aliases the extension-hosting prelude calls, and the internal
+        // `__elephc_call_strict_types` reader the random prelude calls.
+        assert_eq!(unsupported, 520);
         assert_eq!(
             eval_execution(lookup("strval").expect("strval contract")),
             Some(EvalExecution::Adapter {

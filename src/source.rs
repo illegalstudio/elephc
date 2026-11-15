@@ -25,6 +25,26 @@ use std::path::Path;
 use crate::errors::CompileError;
 use crate::parser::ast::Program;
 
+/// Returns the canonical spelling of one physical source path.
+///
+/// Falls back to the given spelling when the path no longer resolves (for example a deleted
+/// temporary), so a diagnostic still names something.
+pub(crate) fn canonical_source_path(path: &std::path::Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .display()
+        .to_string()
+}
+
+/// Returns the canonical physical file of one span.
+///
+/// Runtime diagnostics must name the same file as `_script_source_file` and `__FILE__`, which
+/// use the canonical entry path even when the CLI named it through a symlink.
+pub(crate) fn canonical_span_source_path(span: crate::span::Span) -> Option<String> {
+    span.source_path()
+        .map(|path| canonical_source_path(std::path::Path::new(&path)))
+}
+
 /// Language profile selected for one physical source file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SourceMode {

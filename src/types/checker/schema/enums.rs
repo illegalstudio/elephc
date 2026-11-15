@@ -212,6 +212,7 @@ pub(crate) fn build_enum_info(
             ));
         }
 
+        let mut deprecated_mt_rand_php = false;
         let value = match (&resolved_backing, &case.value) {
             (None, None) => None,
             (None, Some(_)) => {
@@ -227,6 +228,20 @@ pub(crate) fn build_enum_info(
                 ))
             }
             (Some(PhpType::Int), Some(expr)) => match &expr.kind {
+                ExprKind::ConstRef(reference)
+                    if reference.as_str().trim_start_matches('\\') == "MT_RAND_PHP" =>
+                {
+                    // php-src accepts the deprecated constant as an int backing value and
+                    // raises `E_DEPRECATED` when the case is first fetched.
+                    if !seen_int_values.insert(1) {
+                        return Err(CompileError::new(
+                            case.span,
+                            &format!("Duplicate enum backing value in {}: 1", name),
+                        ));
+                    }
+                    deprecated_mt_rand_php = true;
+                    Some(EnumCaseValue::Int(1))
+                }
                 ExprKind::IntLiteral(value) => {
                     if !seen_int_values.insert(*value) {
                         return Err(CompileError::new(
@@ -266,6 +281,8 @@ pub(crate) fn build_enum_info(
         enum_cases.push(EnumCaseInfo {
             name: case.name.clone(),
             value,
+            span: Some(case.span),
+            deprecated_mt_rand_php,
             attribute_names: collect_attribute_names(&case.attributes),
             attribute_args: collect_attribute_args(&case.attributes),
         });

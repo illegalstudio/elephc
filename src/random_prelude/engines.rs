@@ -35,21 +35,21 @@ pub(super) fn declarations() -> Program {
 
 /// Builds `Random\Engine\Mt19937`.
 fn mt19937() -> Stmt {
+    // php-src parses the seed with `Z_PARAM_LONG_OR_NULL`: weak files coerce
+    // int-convertible scalars with PHP's lossy-conversion deprecations, strict files reject
+    // them, and `null` asks for a random seed. The helper receives the constructing file's
+    // `strict_types` state from the runtime slot the call site published, so fixed, named,
+    // spread and dynamically constructed `new` sites all bind the same way.
     let constructor = method("__construct")
         .param_default("seed", t_mixed(), e_null())
         .param_default("mode", TypeExpr::Int, int(0))
         .body(vec![
-            if_then(
-                bin(
-                    bin(var("seed"), BinOp::StrictNotEq, e_null()),
-                    BinOp::And,
-                    not(call("is_int", vec![var("seed")])),
+            assign(
+                "seed",
+                call(
+                    "__elephc_random_mt19937_seed",
+                    vec![var("seed"), call("__elephc_call_strict_types", vec![])],
                 ),
-                vec![throw_(type_error_expr(concat_expr(
-                    "Random\\Engine\\Mt19937::__construct(): Argument #1 ($seed) must be of type ?int, ",
-                    self_call("typeName", vec![var("seed")]),
-                    " given",
-                )))],
             ),
             if_then(
                 bin(
@@ -68,11 +68,8 @@ fn mt19937() -> Stmt {
                     not(e_self_static_prop("__elephc_restoring")),
                 ),
                 vec![expr_stmt(call(
-                    "trigger_error",
-                    vec![
-                        e_str("The MT_RAND_PHP variant of Mt19937 is deprecated"),
-                        e_const("E_USER_DEPRECATED"),
-                    ],
+                    "__elephc_builtin_deprecated",
+                    vec![e_str("The MT_RAND_PHP variant of Mt19937 is deprecated")],
                 ))],
             ),
             expr_stmt(self_call(

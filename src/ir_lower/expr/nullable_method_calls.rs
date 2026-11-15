@@ -287,6 +287,13 @@ fn lower_method_call_with_binding(
         enum_args.unwrap_or_else(|| lower_args_with_signature(ctx, sig.as_ref(), call_args));
     ctx.call_description = previous_description;
     let mut arg_values = arg_values;
+    // The notice can enter user code (a throwing error handler), so the argument evaluation
+    // owners must still protect the lowered argument values while it runs.
+    super::reflection_new_instance::emit_reflection_constant_notice(
+        ctx,
+        dispatch_method,
+        expr,
+    );
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
         ctx,
@@ -301,6 +308,11 @@ fn lower_method_call_with_binding(
     let operand_limit = sig.as_ref().filter(|sig| sig.variadic.is_none())
         .map_or(arg_values.len(), |sig| sig.params.len());
     operands.extend(arg_values.iter().take(operand_limit).copied());
+    super::object_construction::publish_constructor_call_strictness(
+        ctx,
+        dispatch_method,
+        expr.span,
+    );
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
         op,

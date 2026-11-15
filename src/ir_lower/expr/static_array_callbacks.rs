@@ -237,6 +237,7 @@ pub(super) fn lower_static_callable_value_call(
             Some(call)
         }
         StaticCallableBinding::StaticMethod { receiver, method } => {
+            super::static_method_calls::emit_deprecated_enum_case_notice(ctx, &receiver, &method);
             let sig = static_method_implementation_signature(ctx, &receiver, &method).cloned();
             let result_type = sig
                 .as_ref()
@@ -256,6 +257,7 @@ pub(super) fn lower_static_callable_value_call(
             Some(call)
         }
         StaticCallableBinding::StaticMethodDescriptor { receiver, method } => {
+            super::static_method_calls::emit_deprecated_enum_case_notice(ctx, &receiver, &method);
             lower_static_method_descriptor_value_call(ctx, &receiver, &method, operands, expr)
         }
         StaticCallableBinding::InstanceMethod { .. } => None,
