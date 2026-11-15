@@ -251,3 +251,28 @@ echo render([new Nav(), new Foot()]), "\n";
     );
     assert_eq!(out, "2:<nav>/x<nav>/y<nav>/z|2:<foot>/x<foot>/y<foot>/z|\n");
 }
+
+/// A string element of a literal whose storage is `Mixed` -- what an untyped function returns --
+/// is copied into its box unless a call or `acquire` produced it. The merged arm of a ternary
+/// comes out of a local slot, so the write still owns the source and must drop it: returning
+/// `[$c ? 'a' : 'b']` leaked one string per element, while assigning it to a local first did not.
+#[test]
+fn test_mixed_literal_releases_the_string_it_copied_into_a_box() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function pick($c) { return [$c ? 'yes' : 'no']; }
+function pair($c) { return [$c ? 'left' : 'right', 'tail' . $c]; }
+function viaLocal($c) { $r = [$c ? 'a' : 'b']; return $r; }
+for ($i = 0; $i < 3; $i++) {
+    echo pick($i)[0], ',', implode('+', pair($i)), ',', viaLocal($i)[0], "\n";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "no,right+tail0,b\nyes,left+tail1,a\nyes,left+tail2,a\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "{}",
+        out.stderr
+    );
+}

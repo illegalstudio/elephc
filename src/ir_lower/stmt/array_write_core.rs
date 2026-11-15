@@ -67,6 +67,13 @@ pub(in crate::ir_lower) fn release_indexed_array_write_operand(
         Some(PhpType::Mixed)
     ) && !matches!(value_ty, PhpType::Mixed | PhpType::Union(_))
     {
+        // The element's box takes over only a string a call or `acquire` produced; any other
+        // fresh string -- the merged arm of `[$c ? 'a' : 'b']`, a concatenation -- is COPIED into
+        // the box, so this write still owns it. Returning for every string leaked that copy's
+        // source once per element of an untyped function's returned literal.
+        if value_ty == PhpType::Str {
+            release_string_copied_into_box(ctx, value, span);
+        }
         return;
     }
     crate::ir_lower::ownership::release_if_owned(ctx, value, Some(span));
