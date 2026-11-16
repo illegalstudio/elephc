@@ -141,13 +141,9 @@ fn render_attribute_arg_value(value: &EvalAttributeArg, out: &mut String) {
         EvalAttributeArg::Bool(true) => out.push_str("true"),
         EvalAttributeArg::Bool(false) => out.push_str("false"),
         EvalAttributeArg::Int(v) => out.push_str(&v.to_string()),
-        // `{:?}` is the spelling that keeps PHP's trailing `.0` on a whole float (`1.0`, not `1`).
-        EvalAttributeArg::Float(bits) => out.push_str(&format!("{:?}", f64::from_bits(*bits))),
-        EvalAttributeArg::String(s) => render_attribute_arg_string(s, out),
-        // Non-UTF-8 bytes print as their lossy text: the export is a diagnostic string.
-        EvalAttributeArg::Bytes(bytes) => {
-            render_attribute_arg_string(&String::from_utf8_lossy(bytes), out)
-        }
+        EvalAttributeArg::Float(bits) => out.push_str(&render_attribute_arg_float(f64::from_bits(*bits))),
+        EvalAttributeArg::String(s) => render_attribute_arg_string(s.as_bytes(), out),
+        EvalAttributeArg::Bytes(bytes) => render_attribute_arg_string(bytes, out),
         EvalAttributeArg::Array(elements) => {
             out.push('[');
             for (index, element) in elements.iter().enumerate() {
@@ -155,7 +151,7 @@ fn render_attribute_arg_value(value: &EvalAttributeArg, out: &mut String) {
                     out.push_str(", ");
                 }
                 if let Some(key) = element.name() {
-                    render_attribute_arg_string(key, out);
+                    render_attribute_arg_string(key.as_bytes(), out);
                     out.push_str(" => ");
                 } else if let Some(key) = element.int_key() {
                     out.push_str(&key.to_string());
@@ -180,22 +176,83 @@ fn render_attribute_arg_value(value: &EvalAttributeArg, out: &mut String) {
 ///
 /// Confirmed against `php -n`: the backslash and the control characters are escaped, the single
 /// quote is NOT (`q'uote` prints as `'q'uote'`), and neither is `$`. That is deliberately unlike
-/// `var_export`, which escapes the quote instead.
-fn render_attribute_arg_string(value: &str, out: &mut String) {
+/// `var_export`, which escapes the quote instead. This is php's `smart_str_append_escaped()`:
+/// every other byte below 32 or above 126 prints as `\xHH` in upper-case hex (`"a\0b"` is
+/// `'a\x00b'`, `"é"` is `'\xC3\xA9'`).
+fn render_attribute_arg_string(value: &[u8], out: &mut String) {
     out.push('\'');
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\x0b' => out.push_str("\\v"),
-            '\x0c' => out.push_str("\\f"),
-            '\x1b' => out.push_str("\\e"),
-            other => out.push(other),
+    for &byte in value {
+        match byte {
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\r' => out.push_str("\\r"),
+            b'\t' => out.push_str("\\t"),
+            0x0b => out.push_str("\\v"),
+            0x0c => out.push_str("\\f"),
+            0x1b => out.push_str("\\e"),
+            byte if !(32..=126).contains(&byte) => out.push_str(&format!("\\x{byte:02X}")),
+            other => out.push(other as char),
         }
     }
     out.push('\'');
+}
+
+/// Renders a float argument as php's `smart_str_append_double(value, precision = 14, true)`:
+/// `zend_gcvt` with 14 significant digits (`0.30000000000000004` is `0.3`), the exponent form
+/// once the decimal point leaves the `-3..=14` window (`1.0E+20`, `1.5E-7`, `1.0E+14`), and a
+/// `.0` on an integral decimal value (`1.0`, `-0.0`).
+fn render_attribute_arg_float(value: f64) -> String {
+    const PRECISION: i32 = 14;
+    if value.is_nan() {
+        return "NAN".to_string();
+    }
+    if value.is_infinite() {
+        return if value < 0.0 { "-INF" } else { "INF" }.to_string();
+    }
+    // `zend_dtoa` mode 2: `PRECISION` significant digits, trailing zeros dropped, and the
+    // position of the decimal point relative to the first digit.
+    let (mut digits, decimal_point) = if value == 0.0 {
+        ("0".to_string(), 1)
+    } else {
+        let text = format!("{:.*e}", (PRECISION - 1) as usize, value.abs());
+        let (mantissa, exponent) = text.split_once('e').expect("exponent form");
+        let exponent: i32 = exponent.parse().expect("decimal exponent");
+        (mantissa.replace('.', ""), exponent + 1)
+    };
+    while digits.len() > 1 && digits.ends_with('0') {
+        digits.pop();
+    }
+    let mut out = String::new();
+    if value.is_sign_negative() {
+        out.push('-');
+    }
+    if if decimal_point < 0 { decimal_point < -3 } else { decimal_point > PRECISION } {
+        let exponent = decimal_point - 1;
+        out.push_str(&digits[..1]);
+        out.push('.');
+        out.push_str(if digits.len() > 1 { &digits[1..] } else { "0" });
+        out.push('E');
+        out.push(if exponent < 0 { '-' } else { '+' });
+        out.push_str(&exponent.abs().to_string());
+        return out;
+    }
+    if decimal_point <= 0 {
+        out.push_str("0.");
+        out.extend(std::iter::repeat_n('0', (-decimal_point) as usize));
+        out.push_str(&digits);
+        return out;
+    }
+    let split = decimal_point as usize;
+    if digits.len() > split {
+        out.push_str(&digits[..split]);
+        out.push('.');
+        out.push_str(&digits[split..]);
+    } else {
+        out.push_str(&digits);
+        out.extend(std::iter::repeat_n('0', split - digits.len()));
+        out.push_str(".0");
+    }
+    out
 }
 
 #[cfg(test)]
@@ -235,6 +292,39 @@ mod reflection_attribute_string_tests {
                 "    Argument #4 [ true ]\n",
                 "    Argument #5 [ false ]\n",
                 "    Argument #6 [ NULL ]\n",
+                "  }\n}\n",
+            )
+        );
+    }
+
+    /// Floats take php's 14-digit `%G` spelling with a `.0` on whole values, and control or
+    /// non-ASCII bytes print as `\xHH`, as `php -n` 8.5.10 prints
+    /// `#[R(1e20, 1.5e-7, 0.30000000000000004, 1e14, 0.0001, -0.0, "a\0b\x7f", "é")]`.
+    #[test]
+    fn attribute_float_and_byte_arguments_match_php_spelling() {
+        let args = vec![
+            EvalAttributeArg::Float(1e20f64.to_bits()),
+            EvalAttributeArg::Float(1.5e-7f64.to_bits()),
+            EvalAttributeArg::Float(0.30000000000000004f64.to_bits()),
+            EvalAttributeArg::Float(1e14f64.to_bits()),
+            EvalAttributeArg::Float(0.0001f64.to_bits()),
+            EvalAttributeArg::Float((-0.0f64).to_bits()),
+            EvalAttributeArg::Bytes(b"a\0b\x7f".to_vec()),
+            EvalAttributeArg::String("é".to_string()),
+        ];
+        assert_eq!(
+            render_reflection_attribute_string("R", &args),
+            concat!(
+                "Attribute [ R ] {\n",
+                "  - Arguments [8] {\n",
+                "    Argument #0 [ 1.0E+20 ]\n",
+                "    Argument #1 [ 1.5E-7 ]\n",
+                "    Argument #2 [ 0.3 ]\n",
+                "    Argument #3 [ 1.0E+14 ]\n",
+                "    Argument #4 [ 0.0001 ]\n",
+                "    Argument #5 [ -0.0 ]\n",
+                "    Argument #6 [ 'a\\x00b\\x7F' ]\n",
+                "    Argument #7 [ '\\xC3\\xA9' ]\n",
                 "  }\n}\n",
             )
         );

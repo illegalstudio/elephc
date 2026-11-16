@@ -109,7 +109,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 ///
 /// BUMPED TO 24 when the branch was rebased onto main's 23: both lines changed the serialized
 /// eval IR, so neither side's published entries may be read as the combined shape.
-pub(crate) const FORMAT_VERSION: u32 = 25;
+///
+/// BUMPED TO 26 with the `eval_ir::attributes` renderer fix (php's 14-digit float spelling and
+/// `\xHH` escapes in `ReflectionAttribute::__toString()`): no stored shape moved, but the guard
+/// hashes that file's code.
+pub(crate) const FORMAT_VERSION: u32 = 26;
 
 /// Identifies the writer, so one build never reads another's entries.
 ///
