@@ -544,6 +544,13 @@ fn dynamic_new_param_refuses_site_argument(
     inst: &Instruction,
     param_types: &[PhpType],
 ) -> Result<bool> {
+    // The runtime-argument-container form (`Bool(true)`: spreads and named arguments, `I64(n)`:
+    // positional arguments gathered by the lowering) carries ONE `Array(Mixed)` container as
+    // operand 1, not the arguments, so no parameter can be judged against an operand here; the
+    // container's elements are checked when the constructor is entered.
+    if matches!(inst.immediate, Some(Immediate::Bool(true) | Immediate::I64(_))) {
+        return Ok(false);
+    }
     // Operand 0 is the runtime class name; the constructor's arguments follow it.
     let Some(arguments) = inst.operands.get(1..) else {
         return Ok(false);
