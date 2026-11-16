@@ -195,6 +195,7 @@ impl Checker {
             bcmath_operator_sites: HashSet::default(),
             stdclass_by_ref_walk_sites: HashSet::default(),
             runtime_define_names: HashSet::default(),
+            runtime_define_values: Default::default(),
             undefined_constant_reads: HashSet::default(),
             widened_ref_params: HashSet::default(),
             widened_ref_param_decls: Vec::new(),

@@ -215,6 +215,8 @@ pub struct CheckResult {
     pub stdclass_by_ref_walk_sites: HashSet<crate::span::Span>,
     /// Names some `define()` call creates; see `Checker::runtime_define_names`.
     pub runtime_define_names: HashSet<String>,
+    /// First `define()` value expression per runtime-defined name; see `Checker::runtime_define_values`.
+    pub runtime_define_values: std::collections::BTreeMap<String, crate::parser::ast::ExprKind>,
     /// Constant names read but never defined; see `Checker::undefined_constant_reads`.
     pub undefined_constant_reads: HashSet<String>,
     /// Checker-proven types for dynamic property reference locals, keyed by scope and local.

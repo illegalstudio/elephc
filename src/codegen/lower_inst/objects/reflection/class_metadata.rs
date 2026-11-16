@@ -494,6 +494,12 @@ pub(super) fn reflection_direct_shallow_class_metadata_for_name(
     if let Some(interface_name) = resolve_reflection_interface(ctx, reflected_class) {
         let mut metadata = empty_reflection_metadata();
         metadata.reflected_name = Some(interface_name.to_string());
+        // As the full interface metadata: the declaring interface's doc comment.
+        metadata.doc_comment = ctx
+            .module
+            .interface_infos
+            .get(interface_name)
+            .and_then(|info| info.doc_comment.clone());
         metadata.interface_names = reflection_interface_parent_names(ctx, interface_name);
         metadata.is_interface = true;
         metadata.member_flags = reflection_member_flags(

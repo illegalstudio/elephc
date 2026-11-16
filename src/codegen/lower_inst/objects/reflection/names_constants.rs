@@ -320,6 +320,62 @@ pub(super) fn reflection_constant_value(
                 other => Err(unsupported_reflection_constant_value(other)),
             }
         }
+        // php evaluates the chosen arm only, so an arm this evaluator cannot decide never
+        // matters when the other one is taken.
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            let condition =
+                reflection_constant_value(ctx, current_class, current_info, condition, depth)?;
+            let chosen = if reflection_constant_condition(&condition)? { then_expr } else { else_expr };
+            reflection_constant_value(ctx, current_class, current_info, chosen, depth)
+        }
+        ExprKind::ShortTernary { value, default } => {
+            let value = reflection_constant_value(ctx, current_class, current_info, value, depth)?;
+            if reflection_constant_condition(&value)? {
+                Ok(value)
+            } else {
+                reflection_constant_value(ctx, current_class, current_info, default, depth)
+            }
+        }
+        ExprKind::Not(inner) => {
+            let value = reflection_constant_value(ctx, current_class, current_info, inner, depth)?;
+            Ok(ReflectionConstantValue::Bool(!reflection_constant_condition(&value)?))
+        }
+        ExprKind::NullCoalesce { value, default } => {
+            match reflection_constant_value(ctx, current_class, current_info, value, depth)? {
+                ReflectionConstantValue::Null => {
+                    reflection_constant_value(ctx, current_class, current_info, default, depth)
+                }
+                value => Ok(value),
+            }
+        }
+        ExprKind::ArrayAccess { array, index } => {
+            let array = reflection_constant_value(ctx, current_class, current_info, array, depth)?;
+            let index = reflection_constant_value(ctx, current_class, current_info, index, depth)?;
+            let key = super::constant_arrays::reflection_constant_array_key(&index);
+            key.and_then(|key| {
+                reflection_array_entries(&array)
+                    .into_iter()
+                    .find(|entry| entry.key == key)
+                    .map(|entry| entry.value)
+            })
+            .ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "ReflectionClass constant metadata element of a {} value by a {} key",
+                    reflection_constant_value_kind(&array),
+                    reflection_constant_value_kind(&index)
+                ))
+            })
+        }
+        ExprKind::Cast { target, expr: inner } => {
+            let value = reflection_constant_value(ctx, current_class, current_info, inner, depth)?;
+            super::constant_operators::reflection_cast_constant_value(target, &value, expr.span)
+                .ok_or_else(|| {
+                    CodegenIrError::unsupported(format!(
+                        "ReflectionClass constant metadata cast of a {} value",
+                        reflection_constant_value_kind(&value)
+                    ))
+                })
+        }
         ExprKind::BinaryOp { left, op, right } => reflection_binary_constant_value(
             ctx,
             current_class,
@@ -486,6 +542,17 @@ fn reflection_scalar_identity(
     })
 }
 
+/// php's truthiness of an evaluated constant, or the unsupported-value error for one it cannot
+/// decide.
+fn reflection_constant_condition(value: &ReflectionConstantValue) -> Result<bool> {
+    super::constant_operators::reflection_constant_truthiness(value).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "ReflectionClass constant metadata condition on a {} value",
+            reflection_constant_value_kind(value)
+        ))
+    })
+}
+
 /// Evaluates one supported binary operator in a static Reflection constant expression.
 pub(super) fn reflection_binary_constant_value(
     ctx: &FunctionContext<'_>,
@@ -565,13 +632,29 @@ pub(super) fn reflection_binary_constant_value(
                 !identical
             }))
         }
-        (left, _, right) => Err(CodegenIrError::unsupported(format!(
-            "ReflectionClass constant metadata binary value {:?} {:?} {:?} in {}",
-            reflection_constant_value_kind(left),
-            op,
-            reflection_constant_value_kind(right),
-            current_class,
-        ))),
+        // Counts past the integer width: php shifts every bit out (`1 << 64` is 0, `-1 >> 64`
+        // is -1); a negative count throws at run time and is left unsupported.
+        (
+            ReflectionConstantValue::Int(left),
+            BinOp::ShiftLeft | BinOp::ShiftRight,
+            ReflectionConstantValue::Int(right),
+        ) if *right >= 64 => Ok(ReflectionConstantValue::Int(
+            if matches!(op, BinOp::ShiftRight) && *left < 0 { -1 } else { 0 },
+        )),
+        // Comparison, logical operators and the string conversion of a float, bool or null
+        // (`'x' . 1.5`): PHP's own rules, through the shared folder.
+        (left, _, right) => super::constant_operators::reflection_operator_constant_value(
+            left, op, right, span,
+        )
+        .ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "ReflectionClass constant metadata binary value {:?} {:?} {:?} in {}",
+                reflection_constant_value_kind(left),
+                op,
+                reflection_constant_value_kind(right),
+                current_class,
+            ))
+        }),
     }
 }
 
@@ -674,6 +757,13 @@ pub(super) fn reflection_global_constant_value(
         .or_else(|| ctx.module.global_constants.get(name.as_str().trim_start_matches('\\')))
         .map(|(expr_kind, _)| expr_kind.clone())
     else {
+        // A `define()` the lowering folds into each read (one in a branch or a function) leaves no
+        // entry in the global table; its value expression is the one the checker recorded.
+        let bare = name.as_str().trim_start_matches('\\');
+        if let Some(defined) = ctx.module.runtime_define_values.get(bare) {
+            let expr = crate::parser::ast::Expr::new(defined.clone(), span);
+            return reflection_constant_value(ctx, "", None, &expr, depth + 1);
+        }
         // php resolves a class constant's initializer lazily: an undefined name fails only
         // when the value is materialized, which is where this variant raises php's `Error`.
         return Ok(ReflectionConstantValue::Undefined(

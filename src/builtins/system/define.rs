@@ -59,6 +59,10 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker
         .runtime_define_names
         .insert(name_str.trim_start_matches('\\').to_string());
+    cx.checker
+        .runtime_define_values
+        .entry(name_str.trim_start_matches('\\').to_string())
+        .or_insert_with(|| cx.args[1].kind.clone());
     cx.checker.constants.entry(name_str).or_insert(ty);
     Ok(PhpType::Bool)
 }

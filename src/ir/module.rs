@@ -152,6 +152,8 @@ pub struct Module {
     /// Names some `define()` call creates: `defined()` reads their `_define_seen` flag, and
     /// `__rt_web_reset` clears it so each request starts with them undefined, as php does.
     pub(crate) runtime_define_names: std::collections::BTreeSet<String>,
+    /// First `define()` value expression per runtime-defined name, for static Reflection metadata.
+    pub(crate) runtime_define_values: std::collections::BTreeMap<String, crate::parser::ast::ExprKind>,
     /// Optional mbstring startup arguments: effective core encodings followed by raw INI pairs.
     /// These belong to user assembly, never the reusable runtime object.
     pub mbstring_startup: Option<Vec<Vec<u8>>>,
@@ -393,6 +395,7 @@ impl Module {
             runtime_bound_functions: Default::default(),
             ref_param_escaping_callees: Default::default(),
             runtime_define_names: Default::default(),
+            runtime_define_values: Default::default(),
             target,
             source_path: None,
             mbstring_startup: None,

@@ -4903,6 +4903,19 @@ echo json_encode(array_map(fn ($a, $b) => $a . $b, ["x", "y"], ["1", "2"])), "\n
     assert_eq!(out, "[1,\"side\"]\n1\n[\"a\",\"c\"]\n[\"x1\",\"y2\"]\n");
 }
 
+/// A class constant naming a constant a branch `define()`s reads that define's value, as php does
+/// (it raised `Undefined constant` when the table of top-level defines lacked the name).
+#[test]
+fn test_reflection_constant_naming_a_conditionally_defined_constant_matches_php() {
+    let out = compile_and_run(r###"<?php
+if (!defined('APP_ENV')) { define('APP_ENV', 'dev'); }
+class Cfg { const ENV = APP_ENV; const SAME = APP_ENV . '!'; }
+echo json_encode((new ReflectionClass('Cfg'))->getConstants()), "\n";
+echo (new ReflectionClassConstant('Cfg', 'ENV'))->getValue(), "\n";
+"###);
+    assert_eq!(out, "{\"ENV\":\"dev\",\"SAME\":\"dev!\"}\ndev\n");
+}
+
 /// An omitted optional `mixed` parameter of a method called through an untyped receiver is staged
 /// as a fresh box the call site owns; it is released after the call (it leaked one cell, plus the
 /// string of a string default, per call).
@@ -4922,4 +4935,36 @@ echo $sum, "\n";
     assert!(out.success, "{}", out.stderr);
     assert_eq!(out.stdout, "60\n");
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
+
+/// Class constants whose initializer needs php's own operators (a ternary over a global constant,
+/// `!`, a comparison, a read of another constant's element, `<<` past the integer width, a
+/// concatenation with a float) are listed by `getConstants()` and `getReflectionConstants()` with
+/// their value and visibility. A closed build used to drop the ones its static evaluator could not
+/// fold, so `hasConstant()` and the two listings disagreed.
+#[test]
+fn test_reflection_constants_with_operator_initializers_match_php() {
+    let out = compile_and_run(r###"<?php
+class C {
+    const A = ['k' => 1];
+    const B = self::A['k'];
+    const D = PHP_OS_FAMILY === 'Windows' ? ';' : ':';
+    protected const E = !true;
+    const F = 1 < 2;
+    const G = 1 << 3;
+    private const H = 'x' . 1.5;
+    const I = 1 << 64;
+    const J = null ?? 'dflt';
+    const K = 0 ?: 7;
+}
+echo json_encode((new ReflectionClass('C'))->getConstants()), "\n";
+foreach ((new ReflectionClass('C'))->getReflectionConstants() as $c) {
+    echo $c->getName(), ' ', $c->getModifiers(), "\n";
+}
+var_dump((new ReflectionClass('C'))->hasConstant('B'));
+"###);
+    assert_eq!(
+        out,
+        "{\"A\":{\"k\":1},\"B\":1,\"D\":\":\",\"E\":false,\"F\":true,\"G\":8,\"H\":\"x1.5\",\"I\":0,\"J\":\"dflt\",\"K\":7}\nA 1\nB 1\nD 1\nE 2\nF 1\nG 1\nH 4\nI 1\nJ 1\nK 1\nbool(true)\n"
+    );
 }

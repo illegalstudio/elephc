@@ -165,6 +165,7 @@ fn dummy_check_result() -> CheckResult {
         bcmath_operator_sites: Default::default(),
         stdclass_by_ref_walk_sites: Default::default(),
         runtime_define_names: Default::default(),
+        runtime_define_values: Default::default(),
         undefined_constant_reads: Default::default(),
         dynamic_ref_local_types: HashMap::default(),
         local_bind_kill_sites: Default::default(),

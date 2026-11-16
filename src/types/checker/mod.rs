@@ -748,6 +748,11 @@ pub(crate) struct Checker {
     /// function, or a file a request never reaches -- so `defined()` on one of these names reads
     /// the define's own flag instead of folding, and a `--web` request clears the flags.
     pub runtime_define_names: HashSet<String>,
+    /// The value expression of the first `define()` call that creates each name in
+    /// `runtime_define_names`, as the call wrote it. Static Reflection metadata reads a class
+    /// constant that names such a constant from it, since the lowering folds the value into
+    /// each read and keeps no table of it.
+    pub runtime_define_values: std::collections::BTreeMap<String, crate::parser::ast::ExprKind>,
     /// Constant names the program reads that nothing declares or `define()`s, without a leading
     /// `\`. php compiles such a read and throws `Error: Undefined constant "X"` when it runs, so
     /// the checker types it `mixed`, warns, and lowering emits the runtime lookup that throws.
@@ -2097,6 +2102,7 @@ fn check_types_on_compiler_stack(
         bcmath_operator_sites: checker.bcmath_operator_sites,
         stdclass_by_ref_walk_sites: checker.stdclass_by_ref_walk_sites,
         runtime_define_names: checker.runtime_define_names,
+        runtime_define_values: checker.runtime_define_values,
         undefined_constant_reads: checker.undefined_constant_reads,
         dynamic_ref_local_types: checker.dynamic_ref_local_types,
         local_bind_kill_sites: checker.local_bind_kill_sites,

@@ -154,6 +154,7 @@ fn lower_on_compiler_stack(
     );
     module.ref_param_escaping_callees = check_result.ref_param_escaping_callees.clone();
     module.runtime_define_names = check_result.runtime_define_names.iter().cloned().collect();
+    module.runtime_define_values = check_result.runtime_define_values.clone();
     let _runtime_define_names =
         super::context::set_runtime_define_names(check_result.runtime_define_names.clone());
     super::expr::reset_method_declarer_index();
