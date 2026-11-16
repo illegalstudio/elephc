@@ -12,6 +12,9 @@
 //!   method satisfies; that method must still be compatible with it, as PHP checks
 //!   (`Declaration of C::foo() must be compatible with T::foo()`). Visibility is not compared:
 //!   PHP 8.5 lets a private method satisfy an abstract public trait method.
+//! - Each trait's adapted requirement list is memoized once complete (`RequirementWalk`), and
+//!   copies of one abstract method reached along several `use` paths are kept once, so traits
+//!   shared along many paths are not walked again per path.
 
 use std::collections::{HashMap, HashSet};
 
@@ -41,7 +44,7 @@ pub(crate) fn validate_enum_trait_requirements(
     let mut traits = HashMap::new();
     collect_trait_members(program, &mut traits);
     if let Some(uses) = enum_trait_uses(program, &enum_unit.name) {
-        for required in adapted_requirements(uses, &traits, &mut HashSet::new()) {
+        for required in RequirementWalk::new(&traits).adapted_requirements(uses) {
             if let Some(actual) = enum_unit.methods.iter().find(|method| {
                 !method.is_abstract && method.is_static == required.is_static
                     && php_symbol_key(&method.name) == php_symbol_key(&required.name)
@@ -74,9 +77,10 @@ pub(crate) fn validate_class_trait_requirements(
     collect_trait_members(program, &mut traits);
     let mut class_uses = HashMap::new();
     collect_class_trait_uses(program, &mut class_uses);
+    let mut walk = RequirementWalk::new(&traits);
     for class in classes.iter().filter(|class| !class.used_traits.is_empty()) {
         let Some(uses) = class_uses.get(class.name.as_str()) else { continue };
-        for required in adapted_requirements(uses, &traits, &mut HashSet::new()) {
+        for required in walk.adapted_requirements(uses) {
             let Some(actual) = class.methods.iter().find(|method| {
                 !method.is_abstract && method.is_static == required.is_static
                     && php_symbol_key(&method.name) == php_symbol_key(&required.name)
@@ -164,49 +168,94 @@ fn enum_trait_uses<'a>(program: &'a Program, name: &str) -> Option<&'a [TraitUse
     })
 }
 
-/// Preserves abstract requirements through each nested trait alias and visibility adaptation.
-fn adapted_requirements(
-    uses: &[TraitUse], traits: &HashMap<String, TraitMembers<'_>>, visiting: &mut HashSet<String>,
-) -> Vec<ClassMethod> {
-    let mut requirements = Vec::new();
-    for usage in uses {
-        let mut imported = Vec::new();
-        for name in &usage.trait_names {
-            let key = php_symbol_key(name.as_str());
-            if !visiting.insert(key.clone()) { continue; }
-            if let Some((nested, methods)) = traits.get(&key) {
-                let mut members = adapted_requirements(nested, traits, visiting);
-                members.extend(methods.iter().filter(|method| method.is_abstract).cloned());
+/// The trait index plus the memo of each trait's completed requirement list, shared by every
+/// use list walked for one program: a trait reached along several `use` paths is walked once,
+/// so a diamond of shared nested traits stays linear instead of exponential, as in
+/// `trait_requirements::RequirementWalk`.
+struct RequirementWalk<'t, 'a> {
+    traits: &'t HashMap<String, TraitMembers<'a>>,
+    /// Completed requirement lists by trait key, aliases and visibility adaptations applied.
+    done: HashMap<String, Vec<ClassMethod>>,
+    /// Traits on the current path, only to break use cycles (flattening reports those).
+    visiting: HashSet<String>,
+}
+
+impl<'t, 'a> RequirementWalk<'t, 'a> {
+    fn new(traits: &'t HashMap<String, TraitMembers<'a>>) -> Self {
+        Self { traits, done: HashMap::new(), visiting: HashSet::new() }
+    }
+
+    /// Returns the abstract methods `trait_key` brings into a user: those of the traits it
+    /// uses, adapted by its own `use` blocks, then its own. Each trait is computed once.
+    fn trait_requirements(&mut self, trait_key: &str) -> Vec<ClassMethod> {
+        if let Some(requirements) = self.done.get(trait_key) {
+            return requirements.clone();
+        }
+        let traits = self.traits;
+        let Some((nested, methods)) = traits.get(trait_key) else { return Vec::new() };
+        if !self.visiting.insert(trait_key.to_string()) {
+            return Vec::new();
+        }
+        let mut members = self.adapted_requirements(nested);
+        members.extend(methods.iter().filter(|method| method.is_abstract).cloned());
+        dedup_requirements(&mut members);
+        self.visiting.remove(trait_key);
+        self.done.insert(trait_key.to_string(), members.clone());
+        members
+    }
+
+    /// Preserves abstract requirements through each nested trait alias and visibility adaptation.
+    fn adapted_requirements(&mut self, uses: &[TraitUse]) -> Vec<ClassMethod> {
+        let mut requirements = Vec::new();
+        for usage in uses {
+            let mut imported = Vec::new();
+            for name in &usage.trait_names {
+                let key = php_symbol_key(name.as_str());
+                let members = self.trait_requirements(&key);
                 imported.extend(members.into_iter().map(|method| (key.clone(), method)));
             }
-            visiting.remove(&key);
-        }
-        for adaptation in &usage.adaptations {
-            match adaptation {
-                // Selecting a concrete body does not discard another trait's abstract contract.
-                TraitAdaptation::InsteadOf { .. } => {}
-                TraitAdaptation::Alias { trait_name, method, alias, visibility, .. } => {
-                    let mut aliases = Vec::new();
-                    for (origin, required) in &mut imported {
-                        if php_symbol_key(&required.name) != php_symbol_key(method)
-                            || trait_name.as_ref().is_some_and(|name| php_symbol_key(name.as_str()) != *origin)
-                        { continue; }
-                        if let Some(alias) = alias {
-                            let mut adapted = required.clone();
-                            adapted.name = alias.clone();
-                            if let Some(visibility) = visibility { adapted.visibility = visibility.clone(); }
-                            aliases.push((origin.clone(), adapted));
-                        } else if let Some(visibility) = visibility {
-                            required.visibility = visibility.clone();
+            for adaptation in &usage.adaptations {
+                match adaptation {
+                    // Selecting a concrete body does not discard another trait's abstract contract.
+                    TraitAdaptation::InsteadOf { .. } => {}
+                    TraitAdaptation::Alias { trait_name, method, alias, visibility, .. } => {
+                        let mut aliases = Vec::new();
+                        for (origin, required) in &mut imported {
+                            if php_symbol_key(&required.name) != php_symbol_key(method)
+                                || trait_name.as_ref().is_some_and(|name| php_symbol_key(name.as_str()) != *origin)
+                            { continue; }
+                            if let Some(alias) = alias {
+                                let mut adapted = required.clone();
+                                adapted.name = alias.clone();
+                                if let Some(visibility) = visibility { adapted.visibility = visibility.clone(); }
+                                aliases.push((origin.clone(), adapted));
+                            } else if let Some(visibility) = visibility {
+                                required.visibility = visibility.clone();
+                            }
                         }
+                        imported.extend(aliases);
                     }
-                    imported.extend(aliases);
                 }
             }
+            requirements.extend(imported.into_iter().map(|(_, method)| method));
         }
-        requirements.extend(imported.into_iter().map(|(_, method)| method));
+        dedup_requirements(&mut requirements);
+        requirements
     }
-    requirements
+}
+
+/// Drops the copies of one abstract method reached along several `use` paths: same declaration
+/// (span), name, kind and visibility. Each copy would be checked against the same method.
+fn dedup_requirements(requirements: &mut Vec<ClassMethod>) {
+    let mut seen = HashSet::new();
+    requirements.retain(|method| {
+        seen.insert((
+            method.span,
+            php_symbol_key(&method.name),
+            method.is_static,
+            format!("{:?}", method.visibility),
+        ))
+    });
 }
 
 /// Collects raw trait declarations, including namespace blocks used by checker-only fixtures.
