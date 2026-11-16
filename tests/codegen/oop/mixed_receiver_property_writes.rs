@@ -93,59 +93,39 @@ echo $t->pub, $t->s, "\n";
     assert_eq!(out, "6b\n");
 }
 
-/// A runtime type the refined slot cannot represent still fails closed rather than coercing it,
-/// which would diverge from PHP's store-as-is rule for an untyped property.
+/// A string written through a `mixed` receiver into an untyped slot whose default is an `int` is
+/// stored, as php stores it: the write may reach any class's `$u`, so the checker widens every
+/// untyped slot of that name that cannot hold a string, exactly as a write through the class
+/// would. It used to die with "Unsupported dynamic property write" at run time. A same-kind write
+/// (`$o->k = 5`) leaves its slot an `int`. A hydrator typed `object` takes the same path.
+/// Expected output is php 8.5.10's.
 #[test]
-fn test_mixed_receiver_write_refuses_a_mismatched_refined_untyped_property() {
-    let out = compile_and_run_capture(
+fn test_mixed_receiver_write_stores_a_string_into_an_int_defaulted_untyped_property() {
+    let out = compile_and_run(
         r#"<?php
-class T { public $u = 1; }
-function write(mixed $o): void { $o->u = "z"; }
-        write(new T());
-"#,
-    );
-    let diagnostic = format!("{}{}", out.stdout, out.stderr);
-    assert!(
-        !out.success,
-        "mismatched refined untyped property write unexpectedly succeeded"
-    );
-    assert!(
-        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property T::$u"),
-        "output: {}",
-        diagnostic
-    );
-}
-
-/// Refined untyped slots fail closed when their runtime storage representation is ambiguous:
-/// a string written into the slot the compiler refined to `int` has no home in it. (php keeps the
-/// string; an int written into the same slot is stored, see the test below.)
-#[test]
-fn test_mixed_receiver_write_refuses_a_string_into_an_int_refined_untyped_property() {
-    let out = compile_and_run_capture(
-        r#"<?php
-class T { public $u = 1; }
+class T { public $u = 1; public $k = 2; }
+class E { public $status = 0; }
 function write(mixed $o): void { $o->u = "nine"; }
-        write(new T());
+function same(mixed $o): void { $o->k = 5; }
+function set(object $o, string $v): void { $o->status = $v; }
+$t = new T();
+write($t);
+same($t);
+$e = new E();
+set($e, "active");
+var_dump($t->u, $t->k, $e->status);
 "#,
     );
-    let diagnostic = format!("{}{}", out.stdout, out.stderr);
-    assert!(
-        !out.success,
-        "mismatched refined untyped property write unexpectedly succeeded"
-    );
-    assert!(
-        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property T::$u"),
-        "output: {}",
-        diagnostic
-    );
+    assert_eq!(out, "string(4) \"nine\"\nint(5)\nstring(6) \"active\"\n");
 }
 
-/// A runtime value of an UNRELATED class must be refused, not stored and then read back through
-/// the refined class's offsets (#1319 review). The slot's layout belongs to the refined class
-/// alone, so a foreign object would read the wrong words.
+/// A runtime value of an UNRELATED class is stored, as php stores it, and read back through its
+/// own class (#1319 review): the slot was refined to `A`, and reading a `B` through `A`'s offsets
+/// would read the wrong words, so a `mixed` value written through a `mixed` receiver widens the
+/// slot to `Mixed` instead. php 8.5.10 prints `int(2)`.
 #[test]
-fn test_mixed_receiver_write_refuses_a_mismatched_refined_untyped_object_property() {
-    let out = compile_and_run_capture(
+fn test_mixed_receiver_write_stores_an_unrelated_class_in_a_refined_untyped_object_property() {
+    let out = compile_and_run(
         r#"<?php
 class A { public $x = 10; public $n = 3; }
 class B { public $n = 2; }
@@ -156,16 +136,7 @@ w($h, new B());
 var_dump($h->o->n);
 "#,
     );
-    let diagnostic = format!("{}{}", out.stdout, out.stderr);
-    assert!(
-        !out.success,
-        "an unrelated class into a refined object slot unexpectedly succeeded"
-    );
-    assert!(
-        diagnostic.contains("Unsupported dynamic property write: runtime Mixed value cannot be stored safely in the refined untyped property H::$o"),
-        "output: {}",
-        diagnostic
-    );
+    assert_eq!(out, "int(2)\n");
 }
 
 /// A same-class or subclass runtime value still lands in the refined untyped object slot: the

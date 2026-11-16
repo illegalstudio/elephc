@@ -72,11 +72,49 @@ pub(super) fn check_property_assign(
             &obj_ty,
             Some(property),
         );
+    } else if receiver_names_no_class(checker, &obj_ty) {
+        refine_untyped_slots_reachable_by_name(checker, property, &storage_ty);
     }
     if let PhpType::Pointer(Some(class_name)) | PhpType::Packed(class_name) = &obj_ty {
         check_pointer_property_write(checker, class_name, property, &val_ty, span)?;
     }
     Ok(())
+}
+
+/// Whether a property-write receiver names no class the checker can refine: `mixed`, `object`,
+/// or a union with no single object member.
+fn receiver_names_no_class(checker: &Checker, obj_ty: &PhpType) -> bool {
+    match obj_ty.codegen_repr() {
+        PhpType::Mixed => true,
+        PhpType::Object(class_name) => class_name.is_empty(),
+        PhpType::Union(_) => {
+            crate::types::checker::single_object_class_name(obj_ty).is_none()
+                && checker.union_single_object_class(obj_ty).is_none()
+        }
+        _ => false,
+    }
+}
+
+/// Refines every class's untyped slot named `property` as a write of `value_ty` through that
+/// class would, for a write whose receiver names no class (`$mixed->u = "nine"`).
+///
+/// Such a write may land in any class's slot of this name. A slot refined to another kind
+/// (`public $u = 1` is `int`) cannot hold the value, and the backend's mixed-receiver ladder
+/// raised `Unsupported dynamic property write` at run time where php stores it; refining each
+/// candidate widens exactly those slots to `Mixed` and leaves a same-kind slot raw.
+fn refine_untyped_slots_reachable_by_name(checker: &mut Checker, property: &str, value_ty: &PhpType) {
+    let candidates: Vec<String> = checker
+        .classes
+        .iter()
+        .filter(|(class_name, info)| {
+            !crate::types::checker::builtin_stdclass::is_stdclass(class_name)
+                && info.visible_property_index(property).is_some()
+        })
+        .map(|(class_name, _)| class_name.clone())
+        .collect();
+    for class_name in candidates {
+        refine_object_property_type(checker, &class_name, property, value_ty);
+    }
 }
 
 /// Type-checks a declared-property reference bind and promotes both property slots to cells.
