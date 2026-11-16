@@ -71,67 +71,8 @@ pub unsafe extern "C" fn __elephc_eval_dynamic_object_class_name(object: *const 
     .unwrap_or(none)
 }
 
-/// Turns an interpreted `Traversable` into a compiled `ArrayIterator` a compiled `foreach` drives.
-///
-/// `object` is a raw object payload pointer (its identity). Returns the iterator's object pointer
-/// -- the compiled loop keeps it as its source, the way it keeps a `getIterator()` result -- or 0
-/// when the object is not owned by an eval context or could not be drained, in which case the loop
-/// goes on with the original object exactly as before.
-///
-/// # Safety
-/// `object` must be 0 or a live object payload pointer.
-#[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn __elephc_eval_native_iterator_for_object(object: u64) -> u64 {
-    crate::ffi::util::trace_eval_ffi_entry("__elephc_eval_native_iterator_for_object");
-    std::panic::catch_unwind(|| unsafe { native_iterator_for_object_inner(object) }).unwrap_or(0)
-}
-
-/// Drains one eval-owned object through its owner context; see the extern above.
-#[cfg(not(test))]
-unsafe fn native_iterator_for_object_inner(object: u64) -> u64 {
-    if object == 0 {
-        return 0;
-    }
-    let Some(owner) = crate::ffi::dynamic_destructors::dynamic_object_owner_context(object) else {
-        return 0;
-    };
-    let Some(context) = owner.as_mut() else {
-        return 0;
-    };
-    if context.abi_version() != ABI_VERSION {
-        return 0;
-    }
-    // Only an instance of an INTERPRETED class: a generator, a closure or any other object of a
-    // compiled class is driven by the compiled dispatch already, and a generator drained here
-    // could never be resumed again ("Cannot rewind a generator that was already run").
-    if context.dynamic_object_declaring_class(object).is_none() {
-        return 0;
-    }
-    let mut values = ElephcRuntimeOps::with_context(context as *const ElephcEvalContext);
-    let Ok(cell) = values.raw_heap_word_value(object) else {
-        return 0;
-    };
-    let iterator = interpreter::execute_context_native_iterator(context, cell, &mut values);
-    let _ = values.release(cell);
-    match iterator {
-        // The compiled loop keeps only the raw object pointer as its source, so it takes its own
-        // reference to the object and the boxed cell that carried it is released, as
-        // `unwrap_aggregate_inner` does. Keeping the cell leaked one Mixed box per loop.
-        Ok(iterator) => {
-            let word = values.raw_value_word(iterator).unwrap_or(0);
-            let word = if word == 0 { 0 } else { values.retain_raw_heap_word(word).unwrap_or(0) };
-            let _ = values.release(iterator);
-            word
-        }
-        Err(_) => {
-            let _ = context.take_pending_throw();
-            0
-        }
-    }
-}
-
-/// Unwraps an interpreted `IteratorAggregate` for a compiled `new IteratorIterator($object)`.
+/// Unwraps an interpreted `IteratorAggregate` for a compiled `new IteratorIterator($object)`, and
+/// for a compiled `foreach` whose `getIterator()` handed back another interpreted aggregate.
 ///
 /// Returns the raw object pointer of `getIterator()`'s final result, with one reference owned by
 /// the caller, or 0 when `object` is not an interpreted aggregate (the caller then wraps the

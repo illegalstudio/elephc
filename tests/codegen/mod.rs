@@ -65,6 +65,7 @@ mod eval_dynamic_properties;
 mod eval_reference_properties;
 mod eval_native_method_errors;
 mod eval_foreach_object;
+mod eval_compiled_foreach;
 mod eval_constructors;
 mod eval_heredoc;
 mod eval_reflection_invocation;

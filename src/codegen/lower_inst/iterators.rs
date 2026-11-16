@@ -1495,44 +1495,60 @@ fn lower_dynamic_iter_current_value(
 /// The owner recorded in `IterStart` is authoritative. Its absence means lowering proved
 /// this source cannot produce an aggregate result, even if later type widening makes the
 /// backend operand look dynamic.
+///
+/// An object an eval context built is driven LAZILY, like php drives it: the interface dispatch
+/// asks the bridge for `getIterator()` and, every step, for `valid()`/`current()`/`key()`/
+/// `next()` (see `emit_eval_interface_dispatch_miss`), so the loop body interleaves with the
+/// iterator's side effects, `break` stops it, and an endless generator is not run ahead.
 fn resolve_dynamic_object_iterator_source(
     ctx: &mut FunctionContext<'_>,
     offset: usize,
     owner: Option<LocalSlotId>,
 ) -> Result<()> {
-    if ctx.module.required_runtime_features.eval_bridge {
-        // An object an eval context built wraps the generic native header, so neither dispatch
-        // below finds its `getIterator()`/`rewind()`, and the loop ran zero times: every
-        // interpreted Doctrine collection a compiled Twig helper iterated looked empty. The
-        // bridge drains such an object into a compiled ArrayIterator (0 for any other object),
-        // which the Iterator dispatch below then drives like any compiled iterator.
-        let keep_source = ctx.next_label("iter_dynamic_eval_keep_source");
-        let result_reg = abi::int_result_reg(ctx.emitter);
-        let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
-        abi::load_at_offset(ctx.emitter, object_arg, offset - ITER_SOURCE_OFFSET_DELTA);
-        let symbol = ctx
-            .emitter
-            .target
-            .extern_symbol("__elephc_eval_native_iterator_for_object");
-        abi::emit_call_label(ctx.emitter, &symbol);
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, keep_source)); // not an eval-owned iterable: keep the original object
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // did the bridge produce a compiled iterator?
-                ctx.emitter.instruction(&format!("je {}", keep_source));        // not an eval-owned iterable: keep the original object
-            }
-        }
-        abi::store_at_offset(ctx.emitter, result_reg, offset - ITER_SOURCE_OFFSET_DELTA);
-        ctx.emitter.label(&keep_source);
-    }
     if owner.is_none() || !ctx.module.interface_infos.contains_key("IteratorAggregate") {
         return Ok(());
     }
     let return_ty =
         emit_interface_iterator_method_call(ctx, offset, "IteratorAggregate", "getIterator")?;
-    adopt_get_iterator_result(ctx, offset, owner, &return_ty)
+    adopt_get_iterator_result(ctx, offset, owner, &return_ty)?;
+    if ctx.module.required_runtime_features.eval_bridge {
+        adopt_nested_eval_aggregate_iterator(ctx, offset, owner, &return_ty)?;
+    }
+    Ok(())
+}
+
+/// Follows an interpreted `getIterator()` result that is itself an `IteratorAggregate`.
+///
+/// php keeps calling `getIterator()` until it reaches an `Iterator`. The dispatch above made one
+/// call; the bridge follows the rest (`__elephc_eval_unwrap_aggregate`, 0 when the source is not
+/// an interpreted aggregate) and hands back the final iterator with one reference, which
+/// replaces the intermediate aggregate in the owner slot. No iterator method runs here, so the
+/// walk itself stays lazy.
+fn adopt_nested_eval_aggregate_iterator(
+    ctx: &mut FunctionContext<'_>,
+    offset: usize,
+    owner: Option<LocalSlotId>,
+    return_ty: &PhpType,
+) -> Result<()> {
+    let slot = require_get_iterator_owner(owner)?;
+    let done = ctx.next_label("iter_eval_nested_aggregate_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let object_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::load_at_offset(ctx.emitter, object_arg, offset - ITER_SOURCE_OFFSET_DELTA);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_unwrap_aggregate");
+    abi::emit_call_label(ctx.emitter, &symbol);
+    abi::emit_branch_if_int_result_zero(ctx.emitter, &done);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    let local_offset = ctx.local_offset(slot)?;
+    abi::load_at_offset(ctx.emitter, result_reg, local_offset);
+    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    adopt_get_iterator_result(ctx, offset, owner, return_ty)?;
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Owns a nonzero `getIterator()` result in the Mixed owner slot, then publishes a borrow.

@@ -476,44 +476,6 @@ pub fn adopt_compiled_object_clone(
     Ok(true)
 }
 
-/// Drains an interpreted `Traversable` into a COMPILED `ArrayIterator` a compiled `foreach` can
-/// drive through its own Iterator dispatch.
-///
-/// An object an eval context built wraps the generic native header: the compiled `foreach`
-/// found neither `getIterator()` nor `rewind()` on it and iterated nothing, so Twig's compiled
-/// helpers saw every interpreted Doctrine collection as empty. The entries are read the way
-/// `iterator_to_array($object, true)` reads them -- the same walker, generators and aggregates
-/// included -- which drains the source when the loop STARTS rather than step by step.
-pub fn execute_context_native_iterator(
-    context: &mut ElephcEvalContext,
-    object: RuntimeCellHandle,
-    values: &mut impl RuntimeValueOps,
-) -> Result<RuntimeCellHandle, EvalStatus> {
-    let entries = crate::interpreter::iterator_to_array::eval_iterator_to_array_result(
-        object, true, context, values,
-    )?;
-    let iterator = values.new_object("ArrayIterator")?;
-    let args = vec![EvaluatedCallArg {
-        name: None,
-        value: entries.borrowed(),
-        ref_target: None,
-    }];
-    let constructed = eval_native_constructor_with_evaluated_args(
-        "ArrayIterator",
-        iterator,
-        args,
-        context,
-        values,
-    );
-    let released = values.release(entries);
-    if let Err(status) = constructed {
-        let _ = values.release(iterator);
-        return Err(status);
-    }
-    released?;
-    Ok(iterator)
-}
-
 /// Resolves an interpreted `IteratorAggregate` to the traversable it hands over, or `None` when
 /// `object` is not one.
 ///
