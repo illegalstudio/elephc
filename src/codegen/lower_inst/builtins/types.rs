@@ -733,10 +733,21 @@ pub(crate) fn lower_is_a_relation(
             return class_string_relation::lower_runtime_target(ctx, inst, object, target, exclude_self);
         }
     }
+    // A boxed subject with a literal target can hold an object, a closure or a class NAME, so it
+    // takes the runtime-target path, which dispatches on the runtime tag; the literal target
+    // prunes its ancestor table to the related class-likes. The object-only paths below
+    // answered `false` for a name (`is_a($mixed, 'Foo', true)`) and for is_subclass_of().
+    let object_ty = ctx.value_php_type(object)?;
+    if matches!(object_ty, PhpType::Mixed | PhpType::Union(_))
+        && matches!(object_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(ctx.value_php_type(target)?, PhpType::Str)
+        && optional_const_string_operand(ctx, target)?.is_some()
+    {
+        return class_string_relation::lower_runtime_target(ctx, inst, object, target, exclude_self);
+    }
     // `Closure` has no class-info entry, so the walks below answered `false` for every closure.
     // It is final and implements nothing: is_a() matches exactly a Closure object (a native
     // closure, or an eval closure through the eval bridge), and is_subclass_of() never matches.
-    let object_ty = ctx.value_php_type(object)?;
     if matches!(object_ty, PhpType::Callable | PhpType::Mixed | PhpType::Union(_)) {
         if let Some(target_class) = optional_const_string_operand(ctx, target)? {
             if target_class.trim_start_matches('\\').eq_ignore_ascii_case("Closure") {

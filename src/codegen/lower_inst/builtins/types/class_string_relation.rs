@@ -160,7 +160,11 @@ pub(super) fn lower_runtime_target(
                 emit_runtime_target(ctx, inst, subject, &subject_ty, target, exclude_self)?;
                 abi::emit_jump(ctx.emitter, &done);
                 ctx.emitter.label(&object_label);
-                super::super::lower_eval_object_is_a_dynamic(ctx, inst, subject, target, exclude_self)?;
+                // A literal target keeps the named relation query objects always used.
+                match optional_const_string_operand(ctx, target)? {
+                    Some(literal) => super::super::lower_eval_object_is_a(ctx, inst, subject, &literal, exclude_self)?,
+                    None => super::super::lower_eval_object_is_a_dynamic(ctx, inst, subject, target, exclude_self)?,
+                }
                 ctx.emitter.label(&done);
                 return Ok(());
             }
@@ -182,7 +186,14 @@ fn emit_runtime_target(
     };
     let literal_subject = optional_const_string_operand(ctx, subject)?
         .map(|name| php_symbol_key(name.trim_start_matches('\\')));
-    let table = ancestor_table(ctx, exclude_self);
+    let mut table = ancestor_table(ctx, exclude_self);
+    // A literal target keeps only the class-likes related to it, and each of those matches
+    // outright: any other compiled subject is unrelated.
+    let literal_target = optional_const_string_operand(ctx, target)?
+        .map(|name| php_symbol_key(name.trim_start_matches('\\')));
+    if let Some(key) = &literal_target {
+        table.retain(|_, ancestors| ancestors.iter().any(|ancestor| php_symbol_key(ancestor) == *key));
+    }
     let named = table.iter()
         .filter(|(name, _)| literal_subject.as_ref().is_none_or(|key| php_symbol_key(name) == *key))
         .map(|(name, ancestors)| (name.clone(), ancestors))
@@ -337,6 +348,10 @@ fn emit_runtime_target(
 
     for (name, ancestors) in &table {
         ctx.emitter.label(&blocks[name]);
+        if literal_target.is_some() {
+            abi::emit_jump(ctx.emitter, &matched);
+            continue;
+        }
         for ancestor in ancestors {
             emit_match(ctx, 24, ancestor, &matched);
             emit_match(ctx, 24, &format!("\\{ancestor}"), &matched);
