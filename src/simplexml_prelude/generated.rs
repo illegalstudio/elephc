@@ -1126,6 +1126,21 @@ fn decl_class_simplexmlelement() -> Stmt {
                 ]),
         )
         .method(
+            method("__elephc_property_update_read")
+                .final_()
+                .param("name", TypeExpr::Str)
+                .returns(t_nullable(t_class("static")))
+                .body(vec![
+                    s_if(
+                        e_binop(e_var("name"), BinOp::StrictEq, e_str("")),
+                        vec![s_throw(e_new("ValueError", vec![e_str("Cannot create element with an empty name")]))],
+                        vec![],
+                        None,
+                    ),
+                    s_return(e_method_call(e_this(), "__elephc_property_get", vec![e_var("name")])),
+                ]),
+        )
+        .method(
             method("__elephc_property_update_fetch")
                 .final_()
                 .param("name", TypeExpr::Str)

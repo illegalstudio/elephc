@@ -371,7 +371,7 @@ evidence and outstanding guarantees are recorded below.
 
 ## Implementation progress
 
-Verified through step105 (this commit), with native-view admission audits in progress. Issue:
+Verified through step106 (this commit), with original-kind admission audits in progress. Issue:
 https://github.com/illegalstudio/elephc/issues/2347.
 
 The full task remains active. The user requested complete implementation, with a
@@ -382,7 +382,7 @@ but its stronger numeric/reference/eval binding contract is outstanding. All
 other guarantees and the complete umbrella remain explicitly gated until their
 whole contract is enforced.
 
-This progress ledger condenses verified implementation through step105.
+This progress ledger condenses verified implementation through step106.
 Detailed evidence remains in Git history, historical Code Journal plan revisions,
 the linked work logs, and the current agent-facing architecture document
 3739892b. The approved behavior and delivery requirements above are unchanged.
@@ -984,7 +984,8 @@ paths. Keep this plan, agent documentation and the current journal log synchroni
 | 102 | `c7b1e9b122` | fix(strict): retain numeric producer policies and result bindings |
 | 103 | `40185b8f12` | feat(strict): guard builtin comparison modes and callable boundaries |
 | 104 | `018184aad7` | feat(strict): enforce native string and formatting contracts |
-| 105 | this commit | feat(strict): enforce eval string and formatting contracts |
+| 105 | `9da37f1595` | feat(strict): enforce eval string and formatting contracts |
+| 106 | this commit | fix(strict): validate native string updates before mutation |
 
 
 ### Builtin comparison policy integration
@@ -1099,3 +1100,58 @@ Xa7|Xa7x|a7xx instead of Ta|Ta|ax. The heap remained clean. Its module registrat
 and new fixture stay outside105. Public original-kind validation before native
 write-fetch, further native views and broader host parity remain required before
 Strings admission.
+
+
+### Native string update boundary (106, verified)
+
+The reproduced native XML bypass is addressed by a shared, non-mutating
+ObjectProperty::UpdateRead adapter. It preserves empty-name and uninitialized
+receiver diagnostics before a readonly property selection. Both EIR and eval
+inspect that original result and the already evaluated RHS under Strings before
+entering the existing writable update helper. Permissive source, trusted
+implementation source, ordinary object fallback and numeric update operations
+retain their existing paths. Verification is queued as2195bebd: native named and
+dynamic update fixtures plus the independent eval protocol owner control. No
+feature admission is changed while those results remain pending.
+
+Job2195bebd reached compilation and found a moved-value error in the new fake
+fixture before any execution test ran. The fixture now clones its per-case
+source value. Retryd9bd6db8 (session53650) includes the eval owner test, five
+first-class target emitter tests with EIR optimization on/off, both native XML
+execution fixtures, compiler build and builtin exporter. The all-target module
+is registered. The missing typed-string read probe is also registered but stays
+outside the retry filter; its concern remains unverified until separately run.
+No native fix is yet verified or committed.
+
+
+### Native106 verification and typed-string107 baseline
+
+Retryd9bd6db8 exited0 after14m47s. The eval native protocol owner test passed;
+all five supported target emitter tests passed in both EIR optimization modes
+and public/internal source controls; both real XML named/dynamic execution
+fixtures passed in strict/permissive and optimized/unoptimized modes with clean
+heaps; compiler and curl builtin exporter builds passed. The generated builtin
+workflow, module/comparison generation, docs/site audits and architecture audit
+all passed with no generated metadata drift. The first all-target test fixture
+retained unrelated XML/DOM declarations and took525.27s collectively. It now
+uses the production reachability pass with explicit exported probe functions and
+asserts that the neutral contract retains UpdateRead. That test-only refinement
+is queued as26b68d0b/session56243; it must pass before106 is committed.
+
+Separate baseline25bec80c/session84112 reproduced the typed-string missing-read
+issue after four permissive AST/EIR controls passed. Strings with both optimizers
+off produced x|ax|[]|x instead of T|ax|[]|x. Formatting, explicit casts and heap
+balance passed; the original null kind is lost before the concat check. Fact
+6a822db7 captures the evidence. The fixture and its module registration remain
+outside106. Strings is still staged and the complete implementation continues.
+
+
+Final106 fixture verification26b68d0b exited0: all five supported target tests
+passed after production reachability pruning, with both EIR optimization modes
+and public/internal source controls retained. Collective execution dropped from
+525.27s to391.26s. Together with the native/eval, build and generated-doc results
+above,106 is verified. The new missing-string fixture and its registration stay
+outside this commit. Strings remains staged because107 still needs its logical
+null check. Inspection confirms str_persist preserves the dedicated sentinel on
+both architectures; TypePredicate(String) alone accepts concrete Str storage,
+while IsNull already checks its logical missing value (facte2d23047).

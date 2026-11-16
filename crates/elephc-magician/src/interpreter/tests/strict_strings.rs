@@ -12,6 +12,48 @@ use super::super::*;
 use super::{support::*, strict_semantics::staged_numeric_execution};
 use elephc_semantics::{SemanticProfile, StrictFeature};
 
+/// Native update adapters inspect original operands before the first mutating callback.
+#[test]
+fn strict_string_eval_native_property_update_precedes_mutation() {
+    for selected in [false, true] {
+        for operation in [EvalBinOp::Concat, EvalBinOp::Add] {
+            for current in [FakeValue::Object(Vec::new()), FakeValue::Null, FakeValue::String("a".into())] {
+                for right in [FakeValue::Int(7), FakeValue::String("x".into())] {
+                    let rejected = selected && operation == EvalBinOp::Concat
+                        && (!matches!(current, FakeValue::String(_)) || !matches!(right, FakeValue::String(_)));
+                    let mut context = ElephcEvalContext::new();
+                    context.install_semantic_profile(SemanticProfile::PERMISSIVE.with(StrictFeature::Strings, selected)).unwrap();
+                    let mut values = FakeOps::default();
+                    let current = values.alloc(current.clone());
+                    let object = values.alloc(FakeValue::Object(vec![("__xml_update_operand".into(), current)]));
+                    values.release(current).unwrap();
+                    values.object_classes.insert(object.as_ptr() as usize, "SimpleXMLElement".into());
+                    let right = values.alloc(right);
+                    let result = runtime_ops::simplexml_properties::update(&mut values,
+                        object, "child", operation, right, false, &mut context);
+                    if rejected {
+                        assert!(matches!(result, Err(EvalStatus::UncaughtThrowable)));
+                        let error = context.take_pending_throw().expect("native concat TypeError owner");
+                        assert!(values.object_is_a(error, "TypeError", false).unwrap());
+                        values.release(error).unwrap();
+                        assert_eq!(values.output, "G");
+                    } else {
+                        let result = result.unwrap().expect("native update result");
+                        assert_eq!(values.get(result), FakeValue::Int(900));
+                        values.release(result).unwrap();
+                        assert_eq!(values.output, if selected && operation == EvalBinOp::Concat { "GW" } else { "W" });
+                    }
+                    values.release(right).unwrap(); values.release(object).unwrap();
+                    for value in context.take_persistent_cell_owners() { values.release(value).unwrap(); }
+                    for (id, owners) in &values.cell_owners {
+                        assert_eq!(*owners, 0, "strict={selected} op={operation:?}: {:?}", values.values[id]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A throwing Stringable hook transfers one Throwable and retires output/interpolation operands.
 #[test]
 fn strict_string_eval_throwing_formatters_balance_both_engines() {

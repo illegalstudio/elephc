@@ -64,6 +64,19 @@ impl FakeOps {
                 self.null()
             }
             (FakeValue::Object(_), "answer") if args.is_empty() => self.int(42),
+            (FakeValue::Object(properties), "__elephc_property_update_read") if args.len() == 1 => {
+                let current = Self::object_property(&properties, "__xml_update_operand")
+                    .ok_or(EvalStatus::UnsupportedConstruct)?;
+                self.output.push('G');
+                self.retain(current)
+            }
+            (FakeValue::Object(properties), "__elephc_property_update") if args.len() == 4 => {
+                if Self::object_property(&properties, "__xml_update_operand").is_none() {
+                    return Err(EvalStatus::UnsupportedConstruct);
+                }
+                self.output.push('W');
+                self.int(900)
+            }
             (FakeValue::Object(properties), "__elephc_bool") if args.is_empty() => {
                 if Self::object_property(&properties, "__bool_failure").is_some() {
                     let thrown = self.new_object("ValueError")?;

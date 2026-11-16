@@ -196,6 +196,12 @@ original concatenation operands before conversion hooks, and refuses implicit
 array formatting in echo, print and interpolation. Explicit string casts retain
 their conversion contract. Walker echo, owned output and both binary consumers
 share the same tag checks while their existing owner finishers handle failures.
+Native XML compound concatenation also checks the original property operand.
+The shared `ObjectProperty::UpdateRead` adapter validates the update name and
+returns a read-only selection before either consumer enters the writable update
+helper. A failed string check therefore cannot create a missing XML child.
+The caller evaluates the RHS first and retains its owner through selection and
+failure cleanup. Ordinary objects keep their regular getter and setter path.
 Fast calls register ordinary PHP argument and
 backtrace metadata against boxed scopes, whose addresses stay stable as the
 explicit stack grows. Returns and errors remove that metadata before releasing

@@ -9,11 +9,13 @@
 //! - Embedders without native class capabilities keep their ordinary property behavior.
 
 use super::*;
+use crate::context::ElephcEvalContext;
 
 /// Applies a native read-modify-write after its RHS has been evaluated by the caller.
 pub(in crate::interpreter) fn update(
     values: &mut impl RuntimeValueOps, object: RuntimeCellHandle, property: &str,
     operation: EvalBinOp, right: RuntimeCellHandle, post: bool,
+    context: &mut ElephcEvalContext,
 ) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     use elephc_builtin_contract::ObjectPropertyUpdate as Update;
     let operation = match operation {
@@ -26,6 +28,13 @@ pub(in crate::interpreter) fn update(
         _ => return Ok(None),
     };
     if !is_native(values, object, property)? { return Ok(None); }
+    if operation == Update::Concat && context.semantic_profile().contains(elephc_semantics::StrictFeature::Strings) {
+        let current = invoke(values, object, property, elephc_builtin_contract::ObjectProperty::UpdateRead, None)?
+            .ok_or(EvalStatus::RuntimeFatal)?;
+        let checked = crate::interpreter::checked_strings::concatenation(current, right, context, values);
+        let released = crate::interpreter::release_expr_result(current, context, values);
+        checked.and(released)?;
+    }
     let method = elephc_builtin_contract::lookup_class("SimpleXMLElement")
         .and_then(|class| class.operators)
         .and_then(|operators| operators.property_method(elephc_builtin_contract::ObjectProperty::Update))

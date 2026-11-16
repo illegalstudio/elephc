@@ -58,7 +58,11 @@ pub enum ObjectCast { Int, Float, Array }
 
 /// Native property operation that takes precedence over PHP slots and magic methods.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ObjectProperty { Get, Set, Isset, Unset, Probe, Empty, WriteFetch, WriteSelect, Update, ReferenceSelect }
+pub enum ObjectProperty {
+    Get, Set, Isset, Unset, Probe, Empty, WriteFetch, WriteSelect, Update, ReferenceSelect,
+    /// Reads an update operand and validates its name without materializing a writable child.
+    UpdateRead,
+}
 
 /// Stable operation codes shared by compiled and eval native property updates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -260,6 +264,7 @@ pub static SIMPLEXML_OPERATORS: ClassOperators = ClassOperators {
         (ObjectProperty::WriteSelect, "__elephc_property_write_fetch"),
         (ObjectProperty::ReferenceSelect, "__elephc_property_reference_fetch"),
         (ObjectProperty::Update, "__elephc_property_update"),
+        (ObjectProperty::UpdateRead, "__elephc_property_update_read"),
         (ObjectProperty::Unset, "__elephc_property_unset"),
         (ObjectProperty::Probe, "__elephc_property_probe")],
     native_clone: Some("__elephc_clone_initialize"),
