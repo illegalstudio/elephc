@@ -366,9 +366,13 @@ pub unsafe extern "C" fn elephc_web_header_remove(ptr: *const u8, len: i64) {
     headers.retain(|(candidate, _)| !candidate.eq_ignore_ascii_case(&name));
 }
 
-/// The header line `elephc_web_response_header_line` formatted last; the pointer it returns
-/// borrows this buffer until the next call.
-static mut RESPONSE_HEADER_LINE: String = String::new();
+thread_local! {
+    /// The header line `elephc_web_response_header_line` formatted last on this thread; the
+    /// pointer it returns borrows this buffer until the thread's next call. Thread-local, as the
+    /// bridge rule requires of every C-ABI return buffer: a process-global one is refilled by
+    /// another thread while a caller is still copying from it.
+    static RESPONSE_HEADER_LINE: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
 
 /// Drops the pending `Set-Cookie` headers of cookie `name`, as php's session module does before
 /// it sends its own: a response carries one session cookie.
@@ -400,15 +404,17 @@ pub unsafe extern "C" fn elephc_web_response_header_line(index: i64, out_len: *m
     let Some((name, value)) = usize::try_from(index).ok().and_then(|i| headers.get(i)) else {
         return core::ptr::null();
     };
-    let line = &mut *core::ptr::addr_of_mut!(RESPONSE_HEADER_LINE);
-    line.clear();
-    line.push_str(name);
-    line.push_str(": ");
-    line.push_str(value);
-    if !out_len.is_null() {
-        *out_len = line.len() as i64;
-    }
-    line.as_ptr()
+    RESPONSE_HEADER_LINE.with(|line| {
+        let mut line = line.borrow_mut();
+        line.clear();
+        line.push_str(name);
+        line.push_str(": ");
+        line.push_str(value);
+        if !out_len.is_null() {
+            *out_len = line.len() as i64;
+        }
+        line.as_ptr()
+    })
 }
 
 /// The unit tests link no compiled program, so no runtime data defines the version.
@@ -962,6 +968,19 @@ mod tests {
             assert_eq!(line(1).as_deref(), Some("Set-Cookie: s=1; path=/"));
             assert_eq!(line(2), None);
             assert_eq!(line(-1), None);
+            // The returned line belongs to the calling thread: another thread formatting a line
+            // must not refill the buffer this thread is still reading (it did while the buffer
+            // was one process-global `String`).
+            let mut own_len = 0i64;
+            let own = elephc_web_response_header_line(0, &mut own_len) as usize;
+            std::thread::spawn(|| {
+                let mut len = 0i64;
+                elephc_web_response_header_line(1, &mut len);
+            })
+            .join()
+            .unwrap();
+            let own_line = core::slice::from_raw_parts(own as *const u8, own_len as usize);
+            assert_eq!(own_line, b"X-A: 1");
             let name = b"x-a";
             elephc_web_header_remove(name.as_ptr(), name.len() as i64);
             assert_eq!(line(0).as_deref(), Some("Set-Cookie: s=1; path=/"));
