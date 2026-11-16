@@ -186,9 +186,14 @@ pub(super) fn lower_null_coalesce_value(ctx: &mut LoweringContext<'_, '_>, value
         // class is only known at run time needs the runtime-name form to carry that mode.
         // A name the receiver's class refuses from this scope is also probed that way: the named
         // read addresses the slot directly and would hand back the private value php hides.
+        // So is a name the receiver's class does not declare, which only a subclass the object may
+        // be supplies (`lower_known_missing_property_probe` left it here for that reason).
         let needs_probe = property_probe_needs_runtime_name_form(ctx, object)
             || super::native_isset::isset_object_expr_class(ctx, object).is_some_and(|(class, _)| {
                 super::property_access::property_name_is_inaccessible_in_scope(ctx, &class, property)
+                    || ctx.classes.get(&class).is_some_and(|info| {
+                        !info.properties.iter().any(|(name, _)| name == property)
+                    })
             });
         let object = lower_member_receiver(ctx, object, value);
         if property_can_be_uninitialized(ctx, object.value, property)
@@ -466,15 +471,25 @@ fn lower_known_missing_property_probe(
         return None;
     };
     let class_name = instance_callable_object_class(ctx, object)?;
-    let class_info = ctx.classes.get(class_name.trim_start_matches('\\'))?;
-    if class_info
-        .properties
-        .iter()
-        .any(|(name, _)| name == property)
-        || class_info.methods.contains_key("__get")
-        // Any per-instance hash can hold the name: `#[AllowDynamicProperties]`, or the storage
-        // this program reserves for a name it creates (php 8.2+'s deprecated dynamic property).
-        || class_info.dynamic_property_hash_is_name_addressable()
+    let class_name = class_name.trim_start_matches('\\');
+    // The object at run time may be any class inheriting the static one (`$this` in a parent's
+    // method, a parameter typed with a base class), and php answers from that class: the probe is
+    // a constant null only when no class the receiver can be supplies the name.
+    let supplies_name = |info: &crate::types::ClassInfo| {
+        info.properties.iter().any(|(name, _)| name == property)
+            || info.methods.contains_key("__get")
+            // Any per-instance hash can hold the name: `#[AllowDynamicProperties]`, or the
+            // storage this program reserves for a name it creates (php 8.2+'s deprecated dynamic
+            // property).
+            || info.dynamic_property_hash_is_name_addressable()
+    };
+    let class_info = ctx.classes.get(class_name)?;
+    if supplies_name(class_info)
+        || ctx.classes.iter().any(|(candidate, info)| {
+            candidate.as_str() != class_name
+                && crate::types::class_inherits_from(ctx.classes, candidate, class_name)
+                && supplies_name(info)
+        })
     {
         return None;
     }

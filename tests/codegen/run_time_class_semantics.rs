@@ -56,3 +56,22 @@ try { array_map([$h, 'h'], effect()); } catch (TypeError $e) { echo $e->getMessa
         "1,2,3\neffect\nusort(): Argument #2 ($callback) must be a valid callback, cannot access protected method Hidden::h()\neffect\narray_map(): Argument #1 ($callback) must be a valid callback or null, cannot access protected method Hidden::h()\n"
     );
 }
+
+/// `$o->prop ?? $default` is not folded to the default when a class inheriting the receiver's
+/// static class declares the property or answers it through `__get()`.
+#[test]
+fn test_null_coalesce_reads_a_property_only_a_subclass_supplies() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { function label() { return $this->label ?? 'none'; } }
+class Child extends Base { public $label = 'kid'; }
+echo (new Child())->label(), "\n";
+echo (new Base())->label(), "\n";
+function f(Base $o) { return $o->extra ?? 'd'; }
+class Magic extends Base { function __isset($n) { return true; } function __get($n) { return "magic-$n"; } }
+echo f(new Magic()), "\n";
+echo f(new Base()), "\n";
+"#,
+    );
+    assert_eq!(out, "kid\nnone\nmagic-extra\nd\n");
+}
