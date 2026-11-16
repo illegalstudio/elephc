@@ -152,6 +152,9 @@ fn assert_program_output(prefix: &str, source: &str, expected: &str) {
 }
 
 /// Compiles and runs `source`, asserting both output streams from the generated program.
+///
+/// `{file}` in `expected_stderr` stands for the canonical path of the compiled source, which a
+/// runtime warning names in php's ` in FILE on line N` tail.
 fn assert_program_output_and_stderr(
     prefix: &str,
     source: &str,
@@ -160,6 +163,8 @@ fn assert_program_output_and_stderr(
 ) {
     let dir = make_test_dir(prefix);
     let bin = compile(&dir, source, prefix, &[]);
+    let source_path = fs::canonicalize(dir.join(format!("{prefix}.php"))).expect("canonical source path");
+    let expected_stderr = expected_stderr.replace("{file}", &source_path.display().to_string());
     let output = Command::new(&bin)
         .output()
         .expect("failed to run compiled binary");
@@ -377,7 +382,7 @@ function build(): array { return ["a" => 1, "skip" => true, "b" => "s"]; }
 var_dump(array_flip(build()));
 "#,
         "array(2) {\n  [1]=>\n  string(1) \"a\"\n  [\"s\"]=>\n  string(1) \"b\"\n}\n",
-        "Warning: array_flip(): Can only flip string and integer values, entry skipped\n",
+        "Warning: array_flip(): Can only flip string and integer values, entry skipped in {file} on line 3\n",
     );
 }
 
