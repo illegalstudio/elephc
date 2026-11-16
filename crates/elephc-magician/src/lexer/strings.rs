@@ -306,7 +306,9 @@ impl Lexer<'_> {
             '$' => out.push('$'),
             other => {
                 out.push('\\');
-                out.push(other);
+                // Source text in the byte-marker range must be re-encoded like any other
+                // literal char, or `literal_bytes()` reads it back as an escaped byte.
+                push_literal_char(other, out);
             }
         }
         Ok(())

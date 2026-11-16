@@ -1140,3 +1140,15 @@ fn reserved_word_glued_into_a_name_is_a_name_head() {
         ]
     );
 }
+
+/// Keeps a private-use source char after an unknown escape distinct from a byte marker.
+#[test]
+fn unknown_escape_keeps_a_private_use_char_as_text() {
+    let tokens = kinds("\"\\\u{e041}\";");
+    let [TokenKind::String(value), TokenKind::Semicolon, TokenKind::Eof] = tokens.as_slice() else {
+        panic!("unexpected tokens: {tokens:?}");
+    };
+    let mut expected = b"\\".to_vec();
+    expected.extend_from_slice("\u{e041}".as_bytes());
+    assert_eq!(elephc_builtin_contract::string_literal::literal_bytes(value), expected);
+}
