@@ -644,3 +644,44 @@ fn curl_handles_free_their_native_handle() {
     );
     assert_eq!(debug.stdout, "0\ndone\n", "stderr: {}", debug.stderr);
 }
+
+/// Verifies a `curl_*` function given a non-handle throws php's catchable `TypeError` when the
+/// call runs, for the easy, multi and share surfaces. `tests/error_tests/curl.rs` only asserts
+/// that these calls compile (php never refuses them at compile time); this pins what they do.
+/// Expected output is php 8.5.10's. The message is cut at `, called in`: php adds no call site
+/// for an internal function, and elephc's prelude-declared wrappers may (a known divergence
+/// shared with GD's `imagepng(123)`), which this fixture does not pin.
+#[test]
+fn test_curl_functions_throw_type_error_for_a_non_handle() {
+    if skip_without_curl_native("test_curl_functions_throw_type_error_for_a_non_handle") {
+        return;
+    }
+    let out = compile_and_run(
+        r#"<?php
+function t(callable $f) {
+    try { $f(); echo "no error\n"; } catch (TypeError $e) { echo explode(', called in', $e->getMessage())[0], "\n"; }
+}
+t(fn() => curl_exec("not a handle"));
+t(fn() => curl_setopt(1, CURLOPT_URL, "http://127.0.0.1/"));
+t(fn() => curl_getinfo("nope"));
+t(function () { $r = 0; curl_multi_exec("nope", $r); });
+t(fn() => curl_multi_errno(42));
+t(fn() => curl_multi_select("nope"));
+t(fn() => curl_share_setopt("nope", CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS));
+t(fn() => curl_share_errno(42));
+t(fn() => @curl_share_close([]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "curl_exec(): Argument #1 ($handle) must be of type CurlHandle, string given\n\
+         curl_setopt(): Argument #1 ($handle) must be of type CurlHandle, int given\n\
+         curl_getinfo(): Argument #1 ($handle) must be of type CurlHandle, string given\n\
+         curl_multi_exec(): Argument #1 ($multi_handle) must be of type CurlMultiHandle, string given\n\
+         curl_multi_errno(): Argument #1 ($multi_handle) must be of type CurlMultiHandle, int given\n\
+         curl_multi_select(): Argument #1 ($multi_handle) must be of type CurlMultiHandle, string given\n\
+         curl_share_setopt(): Argument #1 ($share_handle) must be of type CurlShareHandle, string given\n\
+         curl_share_errno(): Argument #1 ($share_handle) must be of type CurlShareHandle, int given\n\
+         curl_share_close(): Argument #1 ($share_handle) must be of type CurlShareHandle, array given\n"
+    );
+}

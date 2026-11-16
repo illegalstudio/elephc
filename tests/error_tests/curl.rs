@@ -69,10 +69,11 @@ fn curl_setopt_rejects_wrong_arity() {
     );
 }
 
-/// A `curl_*` function that takes a handle rejects a non-handle argument at compile time,
-/// which is the earliest point elephc can tell the difference.
+/// A `curl_*` function given a non-handle compiles: php binds the `CurlHandle` parameter when the
+/// call runs and throws `TypeError` there (asserted by
+/// `codegen::curl::easy_handle::test_curl_functions_throw_type_error_for_a_non_handle`).
 #[test]
-fn curl_exec_rejects_a_non_handle() {
+fn curl_exec_with_a_non_handle_compiles() {
     expect_curl_compiles(r#"<?php curl_exec("not a handle");"#);
 }
 
@@ -85,14 +86,14 @@ fn curl_init_rejects_a_non_string_url() {
 /// `curl_setopt()`'s first parameter is typed `CurlHandle`, so passing an int is a `TypeError`
 /// at run time (php never refuses it at compile time); the program still compiles.
 #[test]
-fn curl_setopt_rejects_wrong_handle_type() {
+fn curl_setopt_with_a_wrong_handle_type_compiles() {
     expect_curl_compiles(r#"<?php curl_setopt(1, CURLOPT_URL, "http://127.0.0.1/");"#);
 }
 
 /// `curl_getinfo()`'s handle parameter is typed the same way, so the wrong-handle
 /// `TypeError` is not a `curl_setopt()`-only accident.
 #[test]
-fn curl_getinfo_rejects_wrong_handle_type() {
+fn curl_getinfo_with_a_wrong_handle_type_compiles() {
     expect_curl_compiles(r#"<?php curl_getinfo("nope");"#);
 }
 
@@ -117,10 +118,10 @@ fn curl_multi_exec_requires_the_still_running_argument() {
     );
 }
 
-/// The multi functions type their handle parameter, so a non-handle is refused at compile
-/// time — the same guard the easy surface carries.
+/// The multi functions given a non-handle compile too: php throws its `CurlMultiHandle`
+/// `TypeError` when the call runs, as for the easy surface.
 #[test]
-fn curl_multi_functions_reject_a_non_handle() {
+fn curl_multi_functions_with_a_non_handle_compile() {
     expect_curl_compiles(r#"<?php $r = 0; curl_multi_exec("nope", $r);"#);
     expect_curl_compiles(r#"<?php curl_multi_errno(42);"#);
     expect_curl_compiles(r#"<?php curl_multi_select("nope");"#);
@@ -178,10 +179,10 @@ fn curl_share_setopt_rejects_wrong_arity() {
     );
 }
 
-/// The share functions type their handle parameter, so a non-handle is refused at compile
-/// time — the same guard the easy/multi surfaces carry.
+/// The share functions given a non-handle compile too: php throws its `CurlShareHandle`
+/// `TypeError` when the call runs, as for the easy/multi surfaces.
 #[test]
-fn curl_share_functions_reject_a_non_handle() {
+fn curl_share_functions_with_a_non_handle_compile() {
     expect_curl_compiles(r#"<?php curl_share_setopt("nope", CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);"#);
     expect_curl_compiles(r#"<?php curl_share_errno(42);"#);
     expect_curl_compiles(r#"<?php curl_share_close([]);"#);
