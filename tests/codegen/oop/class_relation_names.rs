@@ -513,3 +513,47 @@ echo $cn($e, $t), " ", $cmn($e, $t), " ", m($e, $t), " | ", $cn($i, $t), " ", $c
         "yyyn yyyn yyyn | nnyn nnyn nnyn | nnnn nnnn\n",
     ]);
 }
+
+/// A `mixed` value holding a class NAME is matched by name against a literal target, like a
+/// string subject, and `is_subclass_of()` on a `mixed` object excludes only the class itself.
+/// The object-only paths answered `false` for every name and for every is_subclass_of() call.
+/// Expected output measured with php 8.5.12.
+#[test]
+fn test_mixed_name_subject_literal_target() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+interface I {}
+class Foo implements I {}
+class Bar extends Foo {}
+function m(mixed $v): mixed { return $v; }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+$n = $argv[1] ?? 'Bar';
+$f = $argv[2] ?? '1';
+echo yn(is_a(m($n), 'Foo', true)), yn(is_a(m($n), 'Foo')), yn(is_subclass_of(m($n), 'Foo')), yn(is_subclass_of(m($n), 'Foo', false)), yn(is_a(m($n), 'I', true)), yn(is_a(m('\bar'), 'foo', true)), yn(is_a(m('Ghost'), 'Foo', true)), yn(is_a(m($n), 'Foo', (bool)$f)), " ";
+echo yn(is_subclass_of(m(new Bar()), 'Foo')), yn(is_subclass_of(m(new Foo()), 'Foo')), yn(is_a(m(new Bar()), 'I')), yn(is_subclass_of(m(1), 'Foo')), "\n";
+"#,
+        &[&[], &["Foo", "0"], &["Other"]],
+    );
+    assert_eq!(out, ["ynynyyny ynyn\n", "ynnnyynn ynyn\n", "nnnnnynn ynyn\n"]);
+}
+
+/// With eval() in the program a top-level local is `mixed`, so `is_a($n, 'Foo', true)` on a
+/// class name took the eval object path, which answered `false` for any string. Names, compiled
+/// or eval-declared, now go through the ancestor table and the eval bridge. Expected output
+/// measured with php 8.5.12.
+#[test]
+fn test_mixed_name_subject_literal_target_with_eval() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+class Foo {}
+class Bar extends Foo {}
+eval('class Dyn extends Bar {}');
+function m(mixed $v): mixed { return $v; }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+$n = $argv[1] ?? 'Dyn';
+echo yn(is_a($n, 'Foo', true)), yn(is_subclass_of($n, 'Bar')), yn(is_a($n, 'Foo')), yn(is_a(m('Bar'), 'Foo', true)), yn(is_a(m('Ghost'), 'Foo', true)), yn(is_subclass_of(m(new Dyn()), 'Bar')), yn(is_a(m(new Bar()), 'Dyn')), "\n";
+"#,
+        &[&[], &["Bar"], &["Other"]],
+    );
+    assert_eq!(out, ["yynynyn\n", "ynnynyn\n", "nnnynyn\n"]);
+}
