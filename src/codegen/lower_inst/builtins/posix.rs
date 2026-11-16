@@ -8,8 +8,9 @@
 //!
 //! Key details:
 //! - Both bridges return an `i64` status whose negative value selects PHP's diagnostic.
-//! - A stream resource is reduced to its native descriptor before the terminal probe; a boxed
-//!   operand is inspected at run time so `int|resource` values take the matching path.
+//! - A stream resource is reduced to its native descriptor before the terminal probe; an operand
+//!   stored as a boxed `Mixed` cell is inspected at run time so `int|resource` values take the
+//!   matching path, while inline `TaggedScalar` unions such as `?int` use the int conversion.
 //! - A closed stream (negative release sentinel) throws PHP's `TypeError` before the probe.
 
 use crate::codegen::context::FunctionContext;
@@ -61,13 +62,16 @@ pub(super) fn lower_kill(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 pub(super) fn lower_isatty(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "posix_isatty", 1)?;
     let operand = expect_operand(inst, 0)?;
-    match ctx.raw_value_php_type(operand)? {
-        PhpType::Resource(_) => {
-            ctx.load_value_to_result(operand)?;
-            emit_reject_closed_stream(ctx);
-        }
-        PhpType::Mixed | PhpType::Union(_) => emit_boxed_descriptor(ctx, operand)?,
-        _ => load_as_int(ctx, operand, "posix_isatty file_descriptor")?,
+    let raw_type = ctx.raw_value_php_type(operand)?;
+    if let PhpType::Resource(_) = raw_type {
+        ctx.load_value_to_result(operand)?;
+        emit_reject_closed_stream(ctx);
+    } else if raw_type.codegen_repr() == PhpType::Mixed {
+        // Only a boxed `Mixed` cell can hold a resource; `?int` keeps its union metadata but is
+        // stored inline as a `TaggedScalar`, which the weak integer conversion handles.
+        emit_boxed_descriptor(ctx, operand)?;
+    } else {
+        load_as_int(ctx, operand, "posix_isatty file_descriptor")?;
     }
     let done = ctx.next_label("posix_isatty_done");
     match ctx.emitter.target.arch {
