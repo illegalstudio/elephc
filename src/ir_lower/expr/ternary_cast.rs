@@ -190,41 +190,6 @@ pub(super) fn lower_cast(ctx: &mut LoweringContext<'_, '_>, target: &CastType, i
         return normalize_missing_string_value(ctx, value, expr);
     }
     let source_type = ctx.builder.value_php_type(value.value);
-    // `(array)` of an `array<mixed>` is that same array: the backend passes the pointer through
-    // without retaining it. Wrapping an owned temporary in the cast and then releasing the source
-    // below freed the array the cast had just returned, so `foreach ((array) f() as ...)` walked
-    // freed storage -- null once the allocator handed the block to the next allocation.
-    if matches!(target, CastType::Array)
-        && matches!(source_type.codegen_repr(), PhpType::Array(ref element) if element.codegen_repr() == PhpType::Mixed)
-    {
-        return value;
-    }
-    // `(array) $scalar` is the one-element list `[$scalar]`. The backend's array cast rebuilds a
-    // boxed `array<mixed>` from a boxed runtime value, so a statically typed scalar is boxed
-    // first -- doctrine/dbal's `array_merge((array) $this->getName(), $columns)` over a `string`
-    // getter was refused ("array cast for PHP type Str") and interpreted the whole class. The
-    // result keeps the checker's `array<mixed>` type, not the `mixed` a runtime-typed source gets.
-    if matches!(target, CastType::Array)
-        && matches!(
-            source_type.codegen_repr(),
-            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
-        )
-    {
-        let boxed = ctx.box_value_as_mixed(value, PhpType::Mixed, Some(expr.span));
-        // `__rt_array_from_mixed` always builds a fresh array, so the result is a sole owner.
-        let result = ctx.emit_owned_value(
-            Op::Cast,
-            vec![boxed.value],
-            Some(Immediate::CastTarget(IrType::Heap(IrHeapKind::Array))),
-            PhpType::Array(Box::new(PhpType::Mixed)),
-            Op::Cast.default_effects(),
-            Some(expr.span),
-        );
-        if ctx.value_is_owning_temporary(boxed) {
-            crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
-        }
-        return result;
-    }
     let php_type = cast_php_type(target, &source_type);
     let result = ctx.emit_value(
         Op::Cast,
