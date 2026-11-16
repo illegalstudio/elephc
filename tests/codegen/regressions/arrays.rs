@@ -5498,6 +5498,28 @@ echo f(), f(), '|', g(), '|', g();
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
 
+/// Verifies `array_walk_recursive()` hands the callback the leaves (not slot addresses) of typed
+/// nested and string-element arrays, and writes back through a by-reference callback.
+#[test]
+fn test_array_walk_recursive_over_typed_nested_arrays() {
+    let out = compile_and_run(
+        r#"<?php
+$c = [1, [2]]; $s = [];
+array_walk_recursive($c, function ($v) use (&$s) { $s[] = $v; });
+echo json_encode($s), "\n";
+$d = ['a' => 1, 'b' => ['c' => 2]];
+array_walk_recursive($d, function (&$v, $k) { $v = $v * 10; });
+echo json_encode($d), "\n";
+$t = ['x' => 'y', 'z' => ['q']];
+array_walk_recursive($t, static function (&$v) { $v = null; });
+echo json_encode($t), "\n";
+function f(array $a) { $o = []; array_walk_recursive($a, function ($v) use (&$o) { $o[] = $v; }); return $o; }
+echo json_encode(f(["a", ["b"]])), "\n";
+"#,
+    );
+    assert_eq!(out, "[1,2]\n{\"a\":10,\"b\":{\"c\":20}}\n{\"x\":null,\"z\":[null]}\n[\"a\",\"b\"]\n");
+}
+
 /// Verifies `array_count_values()` over a boxed non-array names the given type in its TypeError.
 ///
 /// php always spells `..., <type> given`; the gradual arm used to stop at `must be of type array`.
