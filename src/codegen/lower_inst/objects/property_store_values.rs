@@ -95,6 +95,16 @@ fn load_accepted_property_store_value_to_result(
         emit_loaded_indexed_array_to_mixed(ctx, &source_elem.codegen_repr());
         return Ok(());
     }
+    // An empty `[]` stored into a hash slot (`public array $m = ['k' => 1]` refines to a
+    // `Str => Int` hash) is a fresh empty hash of the SLOT's value tag: the indexed array
+    // pointer must never be stored where every reader and writer expects a hash. The empty source
+    // stays owned by its own release.
+    if is_empty_array_for_array_property(&value_ty, slot_ty) {
+        if let PhpType::AssocArray { value: slot_value, .. } = slot_ty.codegen_repr() {
+            crate::codegen::literal_defaults::emit_empty_assoc_array_literal_to_result(ctx, &slot_value);
+            return Ok(());
+        }
+    }
     if can_convert_indexed_array_to_assoc_property(&value_ty, slot_ty) {
         let first_arg = abi::int_arg_reg_name(ctx.emitter.target, 0);
         ctx.load_value_to_reg(value, first_arg)?;

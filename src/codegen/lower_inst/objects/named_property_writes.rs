@@ -250,10 +250,45 @@ fn lower_generic_object_prop_set_from_loaded_object(
 
     for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
         ctx.emitter.label(label);
-        let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-        abi::emit_reg_move(ctx.emitter, base_reg, abi::int_result_reg(ctx.emitter));
-        emit_property_store(ctx, value, &candidate.slot, base_reg)?;
-        abi::emit_jump(ctx.emitter, &done_label);
+        // The arm IS one runtime class, so what php does for THIS scope is resolved for it, as
+        // the `Mixed` ladder does: a name this scope may not touch refuses, and a visible slot is
+        // written through the readonly guard and the property hooks.
+        let action = resolve_property_runtime_action(
+            ctx,
+            &candidate.slot.class_name,
+            property,
+            PropertyAccessKind::DirectWrite,
+            inst,
+        )?;
+        match action {
+            PropertyRuntimeAction::Refuse { message } => {
+                super::super::exceptions::emit_error(ctx, &message);
+            }
+            PropertyRuntimeAction::Slot(slot) => {
+                // The receiver waits on the temporary stack, where the guards expect it.
+                abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+                let mut slot = slot;
+                slot.class_name = message_class_for_slot(ctx, &slot);
+                super::readonly_guard::emit_readonly_slot_guard(
+                    ctx,
+                    &slot,
+                    false,
+                    super::readonly_guard::GuardReceiver::Stack(0),
+                    16,
+                )?;
+                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+                abi::emit_load_temporary_stack_slot(ctx.emitter, base_reg, 0);
+                emit_hook_aware_property_store(ctx, value, &slot, base_reg)?;
+                abi::emit_release_temporary_stack(ctx.emitter, 16);
+                abi::emit_jump(ctx.emitter, &done_label);
+            }
+            _ => {
+                let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+                abi::emit_reg_move(ctx.emitter, base_reg, abi::int_result_reg(ctx.emitter));
+                emit_property_store(ctx, value, &candidate.slot, base_reg)?;
+                abi::emit_jump(ctx.emitter, &done_label);
+            }
+        }
     }
 
     ctx.emitter.label(&stdclass_label);

@@ -188,6 +188,12 @@ pub(super) fn emit_property_warning_location(ctx: &mut FunctionContext<'_>, line
     let scratch = abi::symbol_scratch_reg(ctx.emitter);
     abi::emit_load_symbol_to_reg(ctx.emitter, scratch, "_rt_diag_pending_len", 0);
     abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_rt_diag_warning_message_len", 0);
+    // A line of 0 is an instruction with no span: the shared write helpers are built without
+    // one and run for a caller that already published its own site, which a record naming
+    // "entry file, line 0" would overwrite before the message is dispatched.
+    if line == 0 {
+        return;
+    }
     // Publish the real caller location for a user error handler: one `php_site` record
     // `{file descriptor, line}`, whose zero descriptor names the entry file (see
     // `prepare_call_site`); warning dispatch expands it into the `_php_diagnostic_*` words.
