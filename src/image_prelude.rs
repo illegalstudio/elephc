@@ -1831,9 +1831,17 @@ fn decl_const_imagetype_avif() -> Stmt {
     s_const("IMAGETYPE_AVIF", e_int(19))
 }
 
-/// `IMAGETYPE_COUNT` — transcribed from the PHP form.
+/// `IMAGETYPE_COUNT`: one past the last image type of the selected PHP profile. php 8.5 added
+/// `IMAGETYPE_HEIF` (20) and `IMAGETYPE_SVG` (21), so the count is 22 there and 20 before.
 fn decl_const_imagetype_count() -> Stmt {
-    s_const("IMAGETYPE_COUNT", e_int(20))
+    let count = if crate::codegen_support::compile_php_version()
+        >= crate::web_prelude::PhpVersion::Php85
+    {
+        22
+    } else {
+        20
+    };
+    s_const("IMAGETYPE_COUNT", e_int(count))
 }
 
 /// `IMG_GIF` — transcribed from the PHP form.

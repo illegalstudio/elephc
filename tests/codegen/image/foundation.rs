@@ -91,6 +91,19 @@ echo image_type_to_mime_type(IMAGETYPE_WEBP) . "\n";
     assert_eq!(out, "image/png\nimage/jpeg\nimage/gif\nimage/webp\n");
 }
 
+/// `IMAGETYPE_COUNT` is one past php 8.5's last image type: `php -n` 8.5.10 prints
+/// `20:21:22` (`IMAGETYPE_HEIF`, `IMAGETYPE_SVG`, then the count). It stayed at the 8.4 value
+/// 20, equal to `IMAGETYPE_HEIF`, so a loop up to the count skipped HEIF and SVG.
+#[test]
+fn test_imagetype_count_follows_php85_image_types() {
+    let out = compile_and_run(
+        r#"<?php
+echo image_type_to_mime_type(IMAGETYPE_PNG), ":", IMAGETYPE_HEIF, ":", IMAGETYPE_SVG, ":", IMAGETYPE_COUNT, "\n";
+"#,
+    );
+    assert_eq!(out, "image/png:20:21:22\n");
+}
+
 /// `image_type_to_extension` returns the extension with the leading dot by
 /// default, without it when `$include_dot` is false, and `false` for an unknown
 /// type (issue #398).
