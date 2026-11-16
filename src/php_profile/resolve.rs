@@ -245,8 +245,11 @@ fn resolve_in(dir: &Path, notes: &mut Vec<String>) -> Option<(PhpVersion, Proven
 /// — when nothing does, which is the common case and costs nothing.
 pub fn resolve(entry: &Path) -> Resolved {
     let mut notes = Vec::new();
+    // A bare `prog.php` has the EMPTY path as its parent, which neither canonicalizes nor lists:
+    // it means the current directory.
     let start = entry
         .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
     let start = std::fs::canonicalize(&start).unwrap_or(start);

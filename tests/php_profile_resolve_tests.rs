@@ -107,7 +107,14 @@ fn arbitrary_malformed_json_is_ignored() {
         "a manifest elephc does not own must never fail the build:\n{}",
         String::from_utf8_lossy(&compile.stderr)
     );
-    assert!(compile.stderr.is_empty());
+    // PROBE reads the version surface, so the compiler may note that it fell back to the default
+    // profile (that note is about the program, not the manifest). What must never appear is any
+    // word about the malformed document.
+    let stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        !stderr.contains("broken.json") && !stderr.contains("unreadable") && !stderr.contains("error"),
+        "a malformed manifest must stay silent:\n{stderr}"
+    );
 
     let run = Command::new(dir.join("prog"))
         .output()
