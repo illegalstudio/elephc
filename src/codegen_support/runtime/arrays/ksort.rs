@@ -15,7 +15,9 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits the boxed-Mixed `ksort` and `krsort` runtime entry points.
 ///
-/// Each helper accepts a Mixed cell pointer in the first integer argument register. Hash payloads
+/// Each helper accepts a Mixed cell pointer in the first integer argument register and the PHP
+/// `$flags` word in the second, which it carries across the copy-on-write split to the concrete
+/// key sorter. Hash payloads
 /// are copy-on-write split, written back to that cell, and then reordered by the concrete hash
 /// sorter. Non-hash payloads return unchanged.
 pub fn emit_ksort(emitter: &mut Emitter) {
@@ -44,10 +46,12 @@ fn emit_mixed_key_sort(
             emitter.instruction("stp x29, x30, [sp, #16]");                     // preserve the caller frame pointer and return address
             emitter.instruction("add x29, sp, #16");                            // establish the helper frame pointer
             emitter.instruction("str x0, [sp, #0]");                            // preserve the owning Mixed cell across copy-on-write work
+            emitter.instruction("str x1, [sp, #8]");                            // preserve the PHP sort flags across copy-on-write work
             emitter.instruction("ldr x0, [x0, #8]");                            // pass the hash payload to the copy-on-write splitter
             emitter.instruction("bl __rt_hash_ensure_unique");                  // return uniquely owned hash storage in x0
             emitter.instruction("ldr x9, [sp, #0]");                            // reload the owning Mixed cell pointer
             emitter.instruction("str x0, [x9, #8]");                            // publish a relocated copy-on-write payload in the Mixed cell
+            emitter.instruction("ldr x1, [sp, #8]");                            // hand the PHP sort flags back to the concrete sorter
             emitter.instruction(&format!("bl {hash_helper}"));                  // relink the unique hash table in the requested key order
             emitter.instruction("ldp x29, x30, [sp, #16]");                     // restore the caller frame pointer and return address
             emitter.instruction("add sp, sp, #32");                             // release the aligned helper frame
@@ -63,11 +67,13 @@ fn emit_mixed_key_sort(
             emitter.instruction("mov rbp, rsp");                                // establish an aligned frame for nested runtime calls
             emitter.instruction("sub rsp, 16");                                 // reserve a spill slot for the owning Mixed cell
             emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // preserve the owning Mixed cell across copy-on-write work
+            emitter.instruction("mov QWORD PTR [rbp - 16], rsi");               // preserve the PHP sort flags across copy-on-write work
             emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                // pass the hash payload to the copy-on-write splitter
             emitter.instruction("call __rt_hash_ensure_unique");                // return uniquely owned hash storage in rax
             emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                // reload the owning Mixed cell pointer
             emitter.instruction("mov QWORD PTR [r10 + 8], rax");                // publish a relocated copy-on-write payload in the Mixed cell
             emitter.instruction("mov rdi, rax");                                // pass the unique hash pointer to the concrete sorter
+            emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");               // hand the PHP sort flags back to the concrete sorter
             emitter.instruction(&format!("call {hash_helper}"));                // relink the hash table in the requested key order
             emitter.instruction("add rsp, 16");                                 // release the Mixed-cell spill slot
             emitter.instruction("pop rbp");                                     // restore the caller frame pointer

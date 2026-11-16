@@ -714,3 +714,39 @@ foreach ($source as $key => $value) { echo $key . $value; }
     // php 8.5: the sorted copy is returned and the caller's array is untouched.
     assert_eq!(compile_and_run(source), "a1b2:b2a1");
 }
+
+/// Verifies `ksort($flags)` reaches the sorter on an `array<mixed>` receiver whose storage was
+/// promoted to a hash and on a union receiver, and that the union arm answers `true`.
+///
+/// Both arms used to leave the second argument register unset, so the comparator was picked by
+/// whatever the previous helper left there: `SORT_STRING` over keys 10 and 9 must give `[10, 9]`.
+#[test]
+fn test_ksort_flags_reach_gradual_and_union_receivers() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual(array $names) {
+    $g = [];
+    foreach ($names as $n) { $g[$n] = 1; }
+    ksort($g, SORT_STRING);
+    return array_keys($g);
+}
+function plain(array $names) {
+    $g = [];
+    foreach ($names as $n) { $g[$n] = 1; }
+    ksort($g);
+    return array_keys($g);
+}
+function union(array|int $x) {
+    if (is_array($x)) {
+        var_dump(ksort($x, SORT_STRING) === true);
+        return array_keys($x);
+    }
+    return [];
+}
+echo implode(",", gradual([10, 9])), "\n";
+echo implode(",", plain([10, 9])), "\n";
+echo implode(",", union([10 => 1, 9 => 1])), "\n";
+"#,
+    );
+    assert_eq!(out, "10,9\n9,10\nbool(true)\n10,9\n");
+}

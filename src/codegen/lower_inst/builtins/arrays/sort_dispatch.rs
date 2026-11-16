@@ -577,7 +577,7 @@ pub(super) fn lower_array_key_sort(
         PhpType::Array(elem)
             if order == KeySortOrder::Ascending && elem.codegen_repr() == PhpType::Mixed =>
         {
-            lower_gradual_list_key_sort(ctx, inst, array)
+            lower_gradual_list_key_sort(ctx, inst, array, flags)
         }
         PhpType::Array(elem)
             if order == KeySortOrder::Ascending
@@ -605,13 +605,9 @@ pub(super) fn lower_array_key_sort(
             };
             let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
             ctx.load_value_to_reg(array, array_arg_reg)?;
+            super::load_hash_sort_flags(ctx, flags)?;
             abi::emit_call_label(ctx.emitter, helper);
-            abi::emit_load_int_immediate(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                0x7fff_ffff_ffff_fffe,
-            );
-            store_if_result(ctx, inst)
+            super::store_hash_sort_result(ctx, inst)
         }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
@@ -640,6 +636,7 @@ fn lower_gradual_list_key_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     array: ValueId,
+    flags: super::HashSortFlags,
 ) -> Result<()> {
     let list = ctx.next_label("ksort_gradual_list");
     let done = ctx.next_label("ksort_gradual_done");
@@ -656,7 +653,7 @@ fn lower_gradual_list_key_sort(
             ctx.emitter.instruction(&format!("jne {}", list));                  // a real list is already in key order
         }
     }
-    lower_hash_link_sort(ctx, inst, "__rt_hash_ksort")?;
+    lower_hash_link_sort_with_flags(ctx, inst, "__rt_hash_ksort", flags)?;
     abi::emit_jump(ctx.emitter, &done);
     ctx.emitter.label(&list);
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);

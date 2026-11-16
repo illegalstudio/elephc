@@ -661,6 +661,18 @@ fn lower_hash_link_sort_with_flags(
     }
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;
+    load_hash_sort_flags(ctx, flags)?;
+    abi::emit_call_label(ctx.emitter, helper);
+    store_hash_sort_result(ctx, inst)
+}
+
+/// Loads the PHP `$flags` word of a key sort into the second integer argument register.
+///
+/// A value sort (`HashSortFlags::None`) loads nothing: its entry stub owns the whole mode word.
+pub(super) fn load_hash_sort_flags(
+    ctx: &mut FunctionContext<'_>,
+    flags: HashSortFlags,
+) -> Result<()> {
     let flags_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
     match flags {
         HashSortFlags::None => {}
@@ -671,7 +683,15 @@ fn lower_hash_link_sort_with_flags(
             ctx.load_value_to_reg(flags, flags_arg_reg)?;
         }
     }
-    abi::emit_call_label(ctx.emitter, helper);
+    Ok(())
+}
+
+/// Stores the answer of an in-place hash sort: `true` for a bool-typed builtin, else the void
+/// sentinel.
+pub(super) fn store_hash_sort_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
     let result = if inst.result_php_type.codegen_repr() == PhpType::Bool {
         1
     } else {
