@@ -173,6 +173,27 @@ echo $f("a", "Y", "aab", $d), $d;"#,
     assert_eq!(values.output, "XXb2YYb2");
 }
 
+/// Verifies `unpack()` with an offset outside the data raises php's catchable `ValueError`.
+///
+/// `php -n` 8.5.6 prints `ValueError:unpack(): Argument #3 ($offset) must be contained in
+/// argument #2 ($data)`, for an offset past the end and for a negative one alike.
+#[test]
+fn execute_program_unpack_offset_out_of_range_throws_a_value_error() {
+    let program = parse_fragment(
+        br#"foreach ([3, -1] as $offset) {
+    try { unpack("N", "ab", $offset); } catch (ValueError $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+}"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    let message = "ValueError:unpack(): Argument #3 ($offset) must be contained in argument #2 ($data)|";
+    assert_eq!(values.output, format!("{message}{message}"));
+}
+
 /// Verifies eval `substr_replace()` dispatches through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_substr_replace_builtin() {

@@ -450,7 +450,7 @@ impl EvalValuesHook {
             Self::Highlight => eval_highlight_values(name, evaluated_args, values),
             Self::Base64Encode => one_arg(evaluated_args, values, eval_base64_encode_result),
             Self::Bin2Hex => one_arg(evaluated_args, values, eval_bin2hex_result),
-            Self::Unpack => eval_unpack_values_result(evaluated_args, values),
+            Self::Unpack => eval_unpack_values_result(evaluated_args, context, values),
             Self::Chr => one_arg(evaluated_args, values, eval_chr_result),
             Self::ChunkSplit => match evaluated_args {
                 [subject] => eval_chunk_split_result(*subject, None, None, values),

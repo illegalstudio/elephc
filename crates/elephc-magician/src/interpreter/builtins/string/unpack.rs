@@ -36,12 +36,13 @@ pub(in crate::interpreter) fn eval_builtin_unpack(
     for arg in args {
         evaluated.push(eval_expr(arg, context, scope, values)?);
     }
-    eval_unpack_values_result(&evaluated, values)
+    eval_unpack_values_result(&evaluated, context, values)
 }
 
 /// Evaluates `unpack()` over already evaluated arguments.
 pub(in crate::interpreter) fn eval_unpack_values_result(
     evaluated_args: &[RuntimeCellHandle],
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (format, data, offset) = match evaluated_args {
@@ -56,8 +57,12 @@ pub(in crate::interpreter) fn eval_unpack_values_result(
     let format = values.string_bytes(format)?;
     let data = values.string_bytes(data)?;
     if offset < 0 || offset as usize > data.len() {
-        values.warning("Warning: unpack(): Argument #3 ($offset) must be contained in argument #2 ($data)\n")?;
-        return values.bool_value(false);
+        // php 8 refuses an offset outside the data with a catchable `ValueError`, not a warning.
+        return eval_throw_builtin_value_error(
+            "unpack(): Argument #3 ($offset) must be contained in argument #2 ($data)",
+            context,
+            values,
+        );
     }
     let data = &data[offset as usize..];
     let fields = match parse_unpack_format(&format) {
