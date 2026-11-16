@@ -55,13 +55,13 @@ fn parse_fragment_accepts_a_chained_array_append() {
         .expect("a chained append should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ArrayAppendVar {
-            name: "dirs".to_string(),
-            value: EvalExpr::ArrayAppendAssign {
+        &[EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
+            target: Box::new(EvalExpr::LoadVar("dirs".to_string())),
+            value: Box::new(EvalExpr::ArrayAppendAssign {
                 target: Box::new(EvalExpr::LoadVar("paths".to_string())),
                 value: Box::new(EvalExpr::Const(EvalConst::String("/res".to_string()))),
-            },
-        }]
+            }),
+        })]
     );
 }
 
@@ -357,12 +357,11 @@ fn parse_fragment_accepts_nested_array_append_statement() {
         .expect("nested append should parse");
     assert!(matches!(
         program.statements(),
-        [EvalStmt::ArrayAppend {
-            target: EvalExpr::ArrayGet { array, index },
-            value: EvalExpr::LoadVar(value),
-        }] if value == "value"
-            && matches!(array.as_ref(), EvalExpr::LoadVar(name) if name == "index")
-            && matches!(index.as_ref(), EvalExpr::LoadVar(name) if name == "key")
+        [EvalStmt::Expr(EvalExpr::ArrayAppendAssign { target, value })]
+            if matches!(value.as_ref(), EvalExpr::LoadVar(value) if value == "value")
+            && matches!(target.as_ref(), EvalExpr::ArrayGet { array, index }
+                if matches!(array.as_ref(), EvalExpr::LoadVar(name) if name == "index")
+                    && matches!(index.as_ref(), EvalExpr::LoadVar(name) if name == "key"))
     ));
 }
 
@@ -568,16 +567,16 @@ fn parse_fragment_accepts_array_reference_assignment_source() {
     let program = parse_fragment(b"$refs[$group][$name] =& $value;").expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ArrayReferenceBind {
-            target: EvalExpr::ArrayGet {
+        &[EvalStmt::Expr(EvalExpr::ReferenceBind {
+            target: Box::new(EvalExpr::ArrayGet {
                 array: Box::new(EvalExpr::ArrayGet {
                     array: Box::new(EvalExpr::LoadVar("refs".to_string())),
                     index: Box::new(EvalExpr::LoadVar("group".to_string())),
                 }),
                 index: Box::new(EvalExpr::LoadVar("name".to_string())),
-            },
-            source: EvalExpr::LoadVar("value".to_string()),
-        }]
+            }),
+            source: Box::new(EvalExpr::LoadVar("value".to_string())),
+        })]
     );
 }
 
@@ -587,11 +586,11 @@ fn parse_fragment_accepts_nested_array_reference_assignment_source() {
     let program = parse_fragment(b"$value[$key] =& $refs[$rid];").expect("fragment should parse");
     assert!(matches!(
         program.statements(),
-        [EvalStmt::ArrayReferenceBind {
-            target: EvalExpr::ArrayGet { .. },
-            source: EvalExpr::ArrayGet { array, index },
-        }] if matches!(array.as_ref(), EvalExpr::LoadVar(name) if name == "refs")
-            && matches!(index.as_ref(), EvalExpr::LoadVar(name) if name == "rid")
+        [EvalStmt::Expr(EvalExpr::ReferenceBind { target, source })]
+            if matches!(target.as_ref(), EvalExpr::ArrayGet { .. })
+            && matches!(source.as_ref(), EvalExpr::ArrayGet { array, index }
+                if matches!(array.as_ref(), EvalExpr::LoadVar(name) if name == "refs")
+                    && matches!(index.as_ref(), EvalExpr::LoadVar(name) if name == "rid"))
     ));
 }
 /// Verifies multiplicative operators preserve PHP precedence and associativity.

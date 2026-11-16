@@ -118,23 +118,25 @@ fn parse_fragment_accepts_indexed_array_write_source() {
     let program = parse_fragment(br#"$items[1] = "x";"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ArraySetVar {
-            name: "items".to_string(),
-            index: EvalExpr::Const(EvalConst::Int(1)),
-            value: EvalExpr::Const(EvalConst::String("x".to_string())),
-        }]
+        &[EvalStmt::Expr(EvalExpr::Assign {
+            target: Box::new(EvalExpr::ArrayGet {
+                array: Box::new(EvalExpr::LoadVar("items".to_string())),
+                index: Box::new(EvalExpr::Const(EvalConst::Int(1))),
+            }),
+            value: Box::new(EvalExpr::Const(EvalConst::String("x".to_string()))),
+        })]
     );
 }
-/// Verifies indexed array append syntax parses as a variable-target append statement.
+/// Verifies indexed array append syntax parses as an append expression statement.
 #[test]
 fn parse_fragment_accepts_indexed_array_append_source() {
     let program = parse_fragment(br#"$items[] = "x";"#).expect("fragment should parse");
     assert_eq!(
         program.statements(),
-        &[EvalStmt::ArrayAppendVar {
-            name: "items".to_string(),
-            value: EvalExpr::Const(EvalConst::String("x".to_string())),
-        }]
+        &[EvalStmt::Expr(EvalExpr::ArrayAppendAssign {
+            target: Box::new(EvalExpr::LoadVar("items".to_string())),
+            value: Box::new(EvalExpr::Const(EvalConst::String("x".to_string()))),
+        })]
     );
 }
 /// Verifies array append syntax is accepted inside `for` update clauses.
