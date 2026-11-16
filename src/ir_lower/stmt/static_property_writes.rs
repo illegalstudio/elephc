@@ -117,8 +117,28 @@ pub(super) fn lower_static_property_assign(
             }
         }
     }
-    if static_property_store_retains_independent_value(ctx, receiver, property, source) {
-        store_static_property(ctx, receiver, property, source.value, span);
+    let independent =
+        static_property_store_retains_independent_value(ctx, receiver, property, source);
+    finish_static_property_store(ctx, source, independent, span, &mut |ctx, stored| {
+        store_static_property(ctx, receiver, property, stored, span);
+    });
+}
+
+/// Stores `source` into a static-property slot under the store's ownership discipline.
+///
+/// `independent` says the codegen store takes its own reference (see
+/// `lower_static_property_assign`), so the source keeps its owner; otherwise the store MOVES the
+/// value in and a borrowed source is acquired first. `store` emits the actual store of the value
+/// it is handed.
+fn finish_static_property_store(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    independent: bool,
+    span: Span,
+    store: &mut dyn FnMut(&mut LoweringContext<'_, '_>, crate::ir::ValueId),
+) {
+    if independent {
+        store(ctx, source.value);
         if ctx.value_is_owning_temporary(source) {
             crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
         }
@@ -167,7 +187,7 @@ pub(super) fn lower_static_property_assign(
     if provisional_load {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
     }
-    store_static_property(ctx, receiver, property, stored.value, span);
+    store(ctx, stored.value);
     // The string rule's own release, SKIPPED when the provisional-load arm already issued
     // one: the two conditions overlap for an owned unboxed local load of a `Str`, and
     // releasing the same source twice is a double free rather than a tidy-up.
@@ -200,7 +220,12 @@ pub(super) fn static_property_store_retains_independent_value(
     let Some(slot_ty) = static_property_type(ctx, receiver, property) else {
         return false;
     };
-    let value_ty = ctx.builder.value_php_type(value.value);
+    slot_store_retains_independent_value(&slot_ty, &ctx.builder.value_php_type(value.value))
+}
+
+/// Returns true when storing a `value_ty` value into a slot typed `slot_ty` gives the slot a
+/// reference of its own (see `static_property_store_retains_independent_value`).
+fn slot_store_retains_independent_value(slot_ty: &PhpType, value_ty: &PhpType) -> bool {
     let slot_ty = slot_ty.codegen_repr();
     let value_ty = value_ty.codegen_repr();
     let value_is_boxed = matches!(value_ty, PhpType::Mixed | PhpType::Union(_));
@@ -811,8 +836,23 @@ pub(super) fn lower_dynamic_static_property_write(
         return;
     }
 
-    let value = lower_expr(ctx, value);
-    store_dynamic_static_property(ctx, receiver, name, value.value, span);
+    let source = lower_expr(ctx, value);
+    // The slot is chosen at run time, so the store takes its own reference only when it does for
+    // EVERY candidate slot; otherwise the value moves in and a borrowed source is acquired first,
+    // exactly like the named write.
+    let value_ty = ctx.builder.value_php_type(source.value);
+    let independent = static_receiver_class_name(ctx, receiver)
+        .and_then(|class_name| ctx.classes.get(class_name.as_str()))
+        .is_some_and(|class_info| {
+            !class_info.static_properties.is_empty()
+                && class_info
+                    .static_properties
+                    .iter()
+                    .all(|(_, slot_ty)| slot_store_retains_independent_value(slot_ty, &value_ty))
+        });
+    finish_static_property_store(ctx, source, independent, span, &mut |ctx, stored| {
+        store_dynamic_static_property(ctx, receiver, name, stored, span);
+    });
 }
 
 /// Lowers an indexed write through a runtime static-property name.
