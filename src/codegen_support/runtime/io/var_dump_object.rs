@@ -75,6 +75,32 @@ use crate::codegen_support::sentinels::emit_branch_if_null_container;
 use crate::codegen_support::sentinels::emit_resolve_tagged_scalar_property_tag;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
+/// Sets `_vd_ref_pending` when the property row in x0 (descriptor tag) / x1 (slot low word) is
+/// reference-bound and its cell has more than one holder, which is when php's var_dump prints `&`
+/// before the value (`$r = &$o->p; var_dump($o)`). `__rt_vd_pad` prints the marker on the value's
+/// line, as for an array element. Clobbers x9/x10 only; runs before the slot is dereferenced.
+fn emit_flag_shared_reference_property_aarch64(emitter: &mut Emitter) {
+    emitter.instruction("tbz x0, #8, __rt_vd_obj_ref_flagged");                 // a plain slot prints no marker
+    emitter.instruction("ldr w9, [x1, #-12]");                                  // the reference cell's holder count
+    emitter.instruction("cmp w9, #1");                                          // held by the property alone?
+    emitter.instruction("b.ls __rt_vd_obj_ref_flagged");                        // a lone reference prints as a value
+    abi::emit_symbol_address(emitter, "x9", "_vd_ref_pending");                 // flag the value line
+    emitter.instruction("mov x10, #1");                                         // pending = true
+    emitter.instruction("str x10, [x9]");                                       // `__rt_vd_pad` prints the `&`
+    emitter.label("__rt_vd_obj_ref_flagged");
+}
+
+/// x86_64 variant of `emit_flag_shared_reference_property_aarch64` (row in rdi/rsi; clobbers r10).
+fn emit_flag_shared_reference_property_x86_64(emitter: &mut Emitter) {
+    emitter.instruction("test rdi, 0x100");                                     // is this a reference-bound slot?
+    emitter.instruction("jz __rt_vd_obj_ref_flagged_x86");                      // a plain slot prints no marker
+    emitter.instruction("cmp DWORD PTR [rsi - 12], 1");                         // held by the property alone?
+    emitter.instruction("jbe __rt_vd_obj_ref_flagged_x86");                     // a lone reference prints as a value
+    abi::emit_symbol_address(emitter, "r10", "_vd_ref_pending");                // flag the value line
+    emitter.instruction("mov QWORD PTR [r10], 1");                              // `__rt_vd_pad` prints the `&`
+    emitter.label("__rt_vd_obj_ref_flagged_x86");
+}
+
 /// Capacity of the `_vd_seen` visited-object stack, in pointers. Kept in sync
 /// with the `.comm _vd_seen` reservation in `runtime::data::fixed`.
 const VD_SEEN_CAPACITY: u64 = 256;
@@ -910,6 +936,7 @@ pub fn emit_var_dump_object(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [x11, #24]");                                  // property value tag → value renderer
     emitter.instruction("ldr x1, [x13]");                                       // slot low word → value renderer
     emitter.instruction("ldr x2, [x13, #8]");                                   // slot high word → value renderer
+    emit_flag_shared_reference_property_aarch64(emitter);
     emit_deref_reference_property_slot(emitter, "x0", "x1", "x2", "x9");
     emit_resolve_tagged_scalar_property_tag(emitter, "x0", "x2");
     emitter.instruction("bl __rt_var_dump_value");                              // emit `<indent>TYPE(VAL)\n` (recursing when needed)
@@ -1035,6 +1062,7 @@ fn emit_var_dump_object_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [r11 + 24]");                       // property value tag → value renderer
     emitter.instruction("mov rsi, QWORD PTR [r10]");                            // slot low word → value renderer
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // slot high word → value renderer
+    emit_flag_shared_reference_property_x86_64(emitter);
     emit_deref_reference_property_slot(emitter, "rdi", "rsi", "rdx", "r8");
     emit_resolve_tagged_scalar_property_tag(emitter, "rdi", "rdx");
     emitter.instruction("call __rt_var_dump_value");                            // emit `<indent>TYPE(VAL)\n` (recursing when needed)

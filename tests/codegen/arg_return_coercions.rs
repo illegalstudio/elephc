@@ -985,12 +985,37 @@ main();
     );
 }
 
+/// `var_dump()` of an object prints php's `&` before a reference-bound property only while the
+/// reference has another holder: after `unset($rn)` the property is the cell's last holder and
+/// prints as a plain value, as php does. The object walker used to print no marker at all.
+#[test]
+fn test_var_dump_object_reference_marker_follows_its_holders() {
+    let out = compile_and_run(
+        r#"<?php
+class Q { public int $n = 5; public string $s = 'x'; }
+function main(): void {
+    $o = new Q();
+    $rn = &$o->n; $rn = 6;
+    $rs = &$o->s; $rs = 'yy';
+    var_dump($o);
+    unset($rn);
+    var_dump($o);
+}
+main();
+"#,
+    );
+    assert_eq!(
+        out,
+        "object(Q)#1 (2) {\n  [\"n\"]=>\n  &int(6)\n  [\"s\"]=>\n  &string(2) \"yy\"\n}\nobject(Q)#1 (2) {\n  [\"n\"]=>\n  int(6)\n  [\"s\"]=>\n  &string(2) \"yy\"\n}\n"
+    );
+}
+
 /// Object walkers (`(array)`, `get_object_vars`, `foreach`, `var_export`, `print_r`, `var_dump`,
 /// `serialize`, `json_encode`) read a property that took part in `$r = &$o->p`: its slot holds a
 /// pointer to a reference cell and the class descriptor said "Mixed" for it, so each walker saw
 /// garbage (`null` for the value, an empty `var_export`). The descriptor now carries the
-/// declared type's tag plus a reference flag and every walker follows the cell. php's `&`
-/// reference markers in `var_dump` are stripped: the compiled runtime does not print them.
+/// declared type's tag plus a reference flag and every walker follows the cell, and `var_dump`
+/// prints php's `&` marker before a property whose reference has another holder.
 #[test]
 fn test_object_walkers_read_reference_bound_properties() {
     let out = compile_and_run_with_heap_debug(
@@ -1012,7 +1037,7 @@ function main(): void {
     foreach ($o as $k => $v) { echo $k, "=", json_encode($v), " "; }
     echo "\n";
     print_r($o);
-    ob_start(); var_dump($o); echo str_replace('&', '', ob_get_clean());
+    var_dump($o);
     $c = clone $o;
     $c->p['z'] = 9;
     echo json_encode($o->p), json_encode($c->p), "\n";
@@ -1023,6 +1048,6 @@ main();
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(
         out.stdout,
-        "{\"p\":{\"a\":1,\"b\":2},\"n\":6,\"q\":8,\"s\":\"yy\",\"m\":[1],\"t\":\"tt\"}\n{\"p\":{\"a\":1,\"b\":2},\"n\":6,\"q\":8,\"s\":\"yy\",\"m\":[1],\"t\":\"tt\"}\n\\P::__set_state(array(\n   'p' => \n  array (\n    'a' => 1,\n    'b' => 2,\n  ),\n   'n' => 6,\n   'q' => 8,\n   's' => 'yy',\n   'm' => \n  array (\n    0 => 1,\n  ),\n   't' => 'tt',\n))\n{\"p\":{\"a\":1,\"b\":2},\"n\":6,\"q\":8,\"s\":\"yy\",\"m\":[1],\"t\":\"tt\"}\nO:1:\"P\":6:{s:1:\"p\";a:2:{s:1:\"a\";i:1;s:1:\"b\";i:2;}s:1:\"n\";i:6;s:1:\"q\";i:8;s:1:\"s\";s:2:\"yy\";s:1:\"m\";a:1:{i:0;i:1;}s:1:\"t\";s:2:\"tt\";}\np={\"a\":1,\"b\":2} n=6 q=8 s=\"yy\" m=[1] t=\"tt\" \nP Object\n(\n    [p] => Array\n        (\n            [a] => 1\n            [b] => 2\n        )\n\n    [n] => 6\n    [q] => 8\n    [s] => yy\n    [m] => Array\n        (\n            [0] => 1\n        )\n\n    [t] => tt\n)\nobject(P)#1 (6) {\n  [\"p\"]=>\n  array(2) {\n    [\"a\"]=>\n    int(1)\n    [\"b\"]=>\n    int(2)\n  }\n  [\"n\"]=>\n  int(6)\n  [\"q\"]=>\n  int(8)\n  [\"s\"]=>\n  string(2) \"yy\"\n  [\"m\"]=>\n  array(1) {\n    [0]=>\n    int(1)\n  }\n  [\"t\"]=>\n  string(2) \"tt\"\n}\n{\"a\":1,\"b\":2,\"z\":9}{\"a\":1,\"b\":2,\"z\":9}\n"
+        "{\"p\":{\"a\":1,\"b\":2},\"n\":6,\"q\":8,\"s\":\"yy\",\"m\":[1],\"t\":\"tt\"}\n{\"p\":{\"a\":1,\"b\":2},\"n\":6,\"q\":8,\"s\":\"yy\",\"m\":[1],\"t\":\"tt\"}\n\\P::__set_state(array(\n   'p' => \n  array (\n    'a' => 1,\n    'b' => 2,\n  ),\n   'n' => 6,\n   'q' => 8,\n   's' => 'yy',\n   'm' => \n  array (\n    0 => 1,\n  ),\n   't' => 'tt',\n))\n{\"p\":{\"a\":1,\"b\":2},\"n\":6,\"q\":8,\"s\":\"yy\",\"m\":[1],\"t\":\"tt\"}\nO:1:\"P\":6:{s:1:\"p\";a:2:{s:1:\"a\";i:1;s:1:\"b\";i:2;}s:1:\"n\";i:6;s:1:\"q\";i:8;s:1:\"s\";s:2:\"yy\";s:1:\"m\";a:1:{i:0;i:1;}s:1:\"t\";s:2:\"tt\";}\np={\"a\":1,\"b\":2} n=6 q=8 s=\"yy\" m=[1] t=\"tt\" \nP Object\n(\n    [p] => Array\n        (\n            [a] => 1\n            [b] => 2\n        )\n\n    [n] => 6\n    [q] => 8\n    [s] => yy\n    [m] => Array\n        (\n            [0] => 1\n        )\n\n    [t] => tt\n)\nobject(P)#1 (6) {\n  [\"p\"]=>\n  &array(2) {\n    [\"a\"]=>\n    int(1)\n    [\"b\"]=>\n    int(2)\n  }\n  [\"n\"]=>\n  &int(6)\n  [\"q\"]=>\n  &int(8)\n  [\"s\"]=>\n  &string(2) \"yy\"\n  [\"m\"]=>\n  &array(1) {\n    [0]=>\n    int(1)\n  }\n  [\"t\"]=>\n  &string(2) \"tt\"\n}\n{\"a\":1,\"b\":2,\"z\":9}{\"a\":1,\"b\":2,\"z\":9}\n"
     );
 }
