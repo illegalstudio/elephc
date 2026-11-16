@@ -2,23 +2,14 @@
   "schema": 1,
   "checkpoint": "cd514891e47e4a49e6c72a358aeef1f8c1a37d07",
   "pending": {
-    "7d49e3b22e14e564cff2830301deb91230f2d028": {
-      "first_seen": 1794846534,
-      "attempts": 0,
-      "last_observed": 1794846534,
-      "runs": []
-    },
     "cd514891e47e4a49e6c72a358aeef1f8c1a37d07": {
       "first_seen": 1794850280,
-      "attempts": 0
+      "attempts": 0,
+      "last_observed": 1794850280,
+      "runs": []
     }
   },
   "completed": [
-    {
-      "sha": "281c919f8ab5a0881a600ddda36abff5c52135a8",
-      "run_id": 42749939826,
-      "observed_at": 1794306518
-    },
     {
       "sha": "3db7ea321cc90816d131dd316966d929b4d972d9",
       "run_id": 42753473790,
@@ -263,6 +254,11 @@
       "sha": "2f0d662021bc76a55b073d84da09ce47041863f9",
       "run_id": 43887207796,
       "observed_at": 1794843742
+    },
+    {
+      "sha": "7d49e3b22e14e564cff2830301deb91230f2d028",
+      "run_id": 43901299737,
+      "observed_at": 1794850280
     }
   ]
 }
