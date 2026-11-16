@@ -15,6 +15,8 @@
 //!   iOS sandbox refusal must point at the user's call, not into the prelude.
 //! - Operands are boxed to `Mixed` before the helper call so php-src's TypeErrors and
 //!   ValueErrors live in one PHP implementation, exactly like GMP.
+//! - `proc_terminate()`/`proc_nice()` append the calling file's `strict_types` flag, which
+//!   their helpers' shared int coercion needs to throw php-src's strict-mode TypeError.
 //! - `proc_open()` then calls `__elephc_proc_open_pipes($process, $previous)` and stores
 //!   its answer into the caller's `$pipes` with `store_operand_local`: the new pipes
 //!   array, or — when the spawn failed — the variable's previous value, so a failed call
@@ -158,11 +160,25 @@ fn lower(
         )
         .value
     });
+    // The int-coercing helpers take the calling file's `strict_types` (the GMP model), since
+    // `PreserveUncoerced` hands them the raw operand in either mode.
+    let strict = matches!(call.name, "proc_terminate" | "proc_nice").then(|| {
+        ctx.emit_value(
+            Op::ConstBool,
+            Vec::new(),
+            Some(Immediate::Bool(crate::source::current_strict_types())),
+            PhpType::Bool,
+            Op::ConstBool.default_effects(),
+            Some(call.span),
+        )
+        .value
+    });
     let mut boxes = Vec::new();
     let operands: Vec<ValueId> = supplied
         .into_iter()
         .map(|operand| boxed_operand(ctx, operand, &mut boxes, call))
         .chain(raw_streams)
+        .chain(strict)
         .collect();
     let helper = format!("__elephc_{}", call.name);
     let result = ctx.emit_user_call(&helper, operands, call.result_type.clone(), Some(call.span));
