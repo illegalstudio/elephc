@@ -197,7 +197,10 @@ impl Checker {
                 span,
                 &format!("{} cannot use type void", context),
             )),
-            _ if Self::type_contains_never(&ty) => Err(CompileError::new(
+            // The declaration is checked too: a union absorbs `never` when it resolves, so
+            // `int|never` came back as plain `int` and php's compile-time fatal ("never can only
+            // be used as a standalone type") was lost.
+            _ if Self::type_contains_never(&ty) || Self::type_expr_contains_never(type_expr) => Err(CompileError::new(
                 span,
                 &format!("{} cannot use type never", context),
             )),
