@@ -1369,6 +1369,12 @@ struct Callees<'a> {
     methods: &'a methods::MethodTargets,
     /// Names of recursive callees, which are never inlined.
     recursive: &'a HashSet<String>,
+    /// [`is_eligible_callee`] per candidate. It reads only the snapshot body, so one answer
+    /// serves every site of every host; asked per site, its loop analysis of the callee was
+    /// recomputed at each call of a Symfony demo build.
+    eligibility: std::cell::RefCell<HashMap<(bool, usize), bool>>,
+    /// [`callee_stores_a_refcounted_local`] per candidate, for the same reason.
+    stores_refcounted: std::cell::RefCell<HashMap<(bool, usize), bool>>,
 }
 
 /// One resolved inline candidate: a free function or a statically bound method body.
@@ -1380,7 +1386,39 @@ enum CalleeRef {
     Method(usize),
 }
 
+impl CalleeRef {
+    /// A key naming the candidate within one inliner round.
+    fn key(self) -> (bool, usize) {
+        match self {
+            CalleeRef::Function(index) => (false, index),
+            CalleeRef::Method(index) => (true, index),
+        }
+    }
+}
+
 impl Callees<'_> {
+    /// Whether the candidate may be inlined at all, answered once per round.
+    fn eligible(&self, callee: CalleeRef) -> bool {
+        if let Some(&known) = self.eligibility.borrow().get(&callee.key()) {
+            return known;
+        }
+        let receiver = matches!(callee, CalleeRef::Method(_));
+        let answer = is_eligible_callee(self.body(callee), self.recursive, receiver);
+        self.eligibility.borrow_mut().insert(callee.key(), answer);
+        answer
+    }
+
+    /// Whether the candidate stores release-requiring storage into a local, answered once per
+    /// round.
+    fn stores_a_refcounted_local(&self, callee: CalleeRef) -> bool {
+        if let Some(&known) = self.stores_refcounted.borrow().get(&callee.key()) {
+            return known;
+        }
+        let answer = callee_stores_a_refcounted_local(self.body(callee));
+        self.stores_refcounted.borrow_mut().insert(callee.key(), answer);
+        answer
+    }
+
     /// Resolves a call-site instruction to the snapshot body it would execute, if any.
     fn resolve(&self, host: &Function, inst: &Instruction, strings: &[String]) -> Option<CalleeRef> {
         if is_user_call_op(inst.op) {
@@ -1413,10 +1451,11 @@ fn inline_into_function(host: &mut Function, callees: &Callees<'_>, data: &mut D
     let mut fuel = inline_budget();
     loop {
         // Recompute after every splice because an inlined body can add blocks to
-        // an existing loop and can itself contain further eligible call sites.
-        let dominance = compute_dominance(host);
-        let loops = compute_loops(host, &dominance);
-        let value_uses = crate::ir_passes::rewrite::count_value_uses(host);
+        // an existing loop and can itself contain further eligible call sites. Both analyses
+        // are built only when a site needs them: most hosts have no eligible call at all, and
+        // their loop and use analyses were a few percent of a Symfony demo build.
+        let mut loops = None;
+        let mut value_uses = None;
         let mut site: Option<(usize, InstId, CalleeRef)> = None; // (block_idx, inst_id, callee)
         'search: for (bidx, block) in host.blocks.iter().enumerate() {
             for &iid in &block.instructions {
@@ -1426,16 +1465,24 @@ fn inline_into_function(host: &mut Function, callees: &Callees<'_>, data: &mut D
                 let Some(target) = callees.resolve(host, inst, &data.strings) else {
                     continue;
                 };
+                if !callees.eligible(target) {
+                    continue;
+                }
                 let callee = callees.body(target);
                 let has_result = !inst.result_type.is_void()
-                    && inst.result.is_some_and(|value| value_uses.contains_key(&value));
-                let receiver = matches!(target, CalleeRef::Method(_));
-                if is_eligible_callee(callee, callees.recursive, receiver)
-                    && (loops.loop_depth(block.id) == 0
-                        || !callee_stores_a_refcounted_local(callee))
-                    && site_is_inlinable(callee, has_result, inst.result_ownership)
+                    && inst.result.is_some_and(|value| {
+                        value_uses
+                            .get_or_insert_with(|| crate::ir_passes::rewrite::count_value_uses(host))
+                            .contains_key(&value)
+                    });
+                if site_is_inlinable(callee, has_result, inst.result_ownership)
                     && call_args_bind_directly(host, inst, callee)
                     && call_string_args_are_stable(host, inst, callee)
+                    && (!callees.stores_a_refcounted_local(target)
+                        || loops
+                            .get_or_insert_with(|| compute_loops(host, &compute_dominance(host)))
+                            .loop_depth(block.id)
+                            == 0)
                 {
                     site = Some((bidx, iid, target));
                     break 'search;
@@ -1486,6 +1533,8 @@ pub(crate) fn inline_small_functions(module: &mut Module) -> bool {
         resolver: &resolver,
         methods: &methods,
         recursive: &recursive,
+        eligibility: Default::default(),
+        stores_refcounted: Default::default(),
     };
 
     // Every body table can host call sites to small helpers. They are distinct module

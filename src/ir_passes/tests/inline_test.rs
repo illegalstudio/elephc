@@ -1445,3 +1445,40 @@ fn inliner_resolves_main_to_the_user_function_not_the_entry() {
     assert!(!caller.instructions.iter().any(|i| matches!(i.immediate, Some(Immediate::I64(7)))),
         "f() never inlines the entry body");
 }
+
+/// One inliner round analyses the loops of a candidate callee once, and of a host only when a
+/// site needs it: 40 hosts calling `fortytwo` (which stores nothing refcounted) and 40 hosts with
+/// no call cost one loop analysis, not one per host and per site.
+#[test]
+fn inliner_analyses_loops_only_where_a_site_needs_them() {
+    let mut module = Module::new(Target::new(Platform::MacOS, Arch::AArch64));
+    module.add_function(make_fortytwo_callee());
+    for index in 0..40 {
+        module.add_function(make_const_function(&format!("plain{index}"), index));
+        let mut caller = Function::new(format!("caller{index}"), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut caller);
+            let entry = b.create_named_block("entry", vec![]);
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let data_id = module.data.intern_function_name("fortytwo");
+            let call_res = b
+                .emit(Op::Call, vec![], Some(Immediate::Data(data_id)), IrType::I64, PhpType::Int, Ownership::NonHeap)
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(call_res) });
+        }
+        module.add_function(caller);
+    }
+    let before = crate::ir_passes::loops::LOOP_ANALYSES.with(|count| count.get());
+
+    assert!(inline_small_functions(&mut module));
+
+    let analyses = crate::ir_passes::loops::LOOP_ANALYSES.with(|count| count.get()) - before;
+    validate_module(&module).unwrap();
+    assert!(module
+        .functions
+        .iter()
+        .filter(|f| f.name.starts_with("caller"))
+        .all(|f| f.instructions.iter().all(|i| !matches!(i.op, Op::Call | Op::FunctionVariantCall))));
+    assert!(analyses <= 2, "{analyses} loop analyses for one candidate callee");
+}
