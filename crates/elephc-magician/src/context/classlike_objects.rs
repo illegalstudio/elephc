@@ -1010,6 +1010,17 @@ mod tests {
         assert!(properties.is_empty());
         assert!(should_finalize);
     }
+
+    /// `php -n` 8.5.10 `class_implements()`: `ArrayIterator` is `Serializable` and
+    /// `SplObjectStorage` is a `SeekableIterator`; the two tables used to deny it.
+    #[test]
+    fn builtin_hierarchy_matches_php_class_implements() {
+        assert!(eval_array_iterator_class_is_a("Serializable"));
+        assert!(eval_array_iterator_class_is_a("\\SeekableIterator"));
+        assert!(!eval_array_iterator_class_is_a("IteratorAggregate"));
+        assert_eq!(eval_builtin_class_is_a("SplObjectStorage", "SeekableIterator"), Some(true));
+        assert_eq!(eval_builtin_class_is_a("SplObjectStorage", "Iterator"), Some(true));
+    }
 }
 
 /// One live `ArrayIterator` instance's backing array and cursor.
@@ -1066,7 +1077,7 @@ fn eval_builtin_class_hierarchy(class_name: &str) -> Option<(Option<&'static str
             "splqueue" | "splstack" => (Some("SplDoublyLinkedList"), &[]),
             "splobjectstorage" => (
                 None,
-                &["Countable", "Iterator", "Traversable", "Serializable", "ArrayAccess"],
+                &["Countable", "SeekableIterator", "Iterator", "Traversable", "Serializable", "ArrayAccess"],
             ),
             "splfixedarray" => (
                 None,
@@ -1121,19 +1132,10 @@ pub fn eval_builtin_class_is_a(class_name: &str, target_class: &str) -> Option<b
 /// Returns whether `ArrayIterator` is, or descends from, one class-like name.
 ///
 /// Kept beside the state table rather than in the interpreter, because both the `instanceof`
-/// answer and the declared-return-type check need it and neither owns the other.
+/// answer and the declared-return-type check need it and neither owns the other. It answers from
+/// the builtin hierarchy table, so the two cannot disagree (`Serializable` was missing here).
 pub fn eval_array_iterator_class_is_a(target_class: &str) -> bool {
-    let target = target_class.trim_start_matches('\\');
-    [
-        "ArrayIterator",
-        "Iterator",
-        "Traversable",
-        "Countable",
-        "ArrayAccess",
-        "SeekableIterator",
-    ]
-    .iter()
-    .any(|name| name.eq_ignore_ascii_case(target))
+    eval_builtin_class_is_a("ArrayIterator", target_class).unwrap_or(false)
 }
 
 /// Borrows the eval context that built one dynamic object, when it is not the asking context.
