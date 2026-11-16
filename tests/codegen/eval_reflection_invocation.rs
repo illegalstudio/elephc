@@ -8,7 +8,7 @@
 //! - Fixtures distinguish PHP's by-value `invoke()` forwarding from by-reference
 //!   `invokeArgs([&$value])` forwarding for eval-declared and generated/AOT callables.
 
-use crate::support::{compile_and_run, compile_and_run_capture};
+use crate::support::{compile_and_run, compile_and_run_capture, compile_and_run_with_heap_debug};
 
 /// Verifies ReflectionFunction preserves PHP by-ref semantics for invoke and invokeArgs.
 #[test]
@@ -229,4 +229,45 @@ echo implode("|", array_keys($seen));
 "#,
     );
     assert_eq!(out, "template,maxAge");
+}
+
+/// Verifies a `ReflectionFunction` built through the eval bridge over a compiled closure bound to
+/// `$this` gives its reference on the receiver back when the reflector dies.
+///
+/// The bridge boxed the closure's `$this` for the reflector's registered target and the registry
+/// kept that reference: a compiled free never reaches it, so the receiver outlived `unset()` and
+/// its destructor never ran. The reflector now owns the box as a runtime edge released with it.
+/// `reflect_it()` owns the eval context, so the reflector is built by the bridge, while `outer()`
+/// has none and drops the receiver as php does. Expected output is `php -n` 8.5's.
+#[test]
+fn test_eval_reflection_function_releases_a_bound_closure_receiver() {
+    let output = compile_and_run_with_heap_debug(
+        r##"<?php
+class ReflectedReceiver {
+    public function __construct(public string $name) {}
+    public function __destruct() { echo "destruct {$this->name}\n"; }
+    public function make(): Closure { return function (string $suffix = "!") { return $this->name . $suffix; }; }
+}
+function reflect_it(string $code, Closure $c): string {
+    eval($code);
+    $rf = new ReflectionFunction($c);
+    $again = $rf->getClosure();
+    return $rf->invoke("?") . " " . $rf->invokeArgs(["#"]) . " " . $again("~") . " " . $rf->getNumberOfParameters();
+}
+function outer(string $code): void {
+    $r = new ReflectedReceiver("r");
+    $c = $r->make();
+    echo reflect_it($code, $c), "\n";
+    unset($c);
+    echo "before unset\n";
+    unset($r);
+    echo "after unset\n";
+}
+outer($argc > 0 ? "" : "echo 1;");
+echo "end\n";
+"##,
+    );
+    assert!(output.success, "stdout: {}\nstderr: {}", output.stdout, output.stderr);
+    assert_eq!(output.stdout, "r? r# r~ 1\nbefore unset\ndestruct r\nafter unset\nend\n");
+    assert!(output.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", output.stderr);
 }

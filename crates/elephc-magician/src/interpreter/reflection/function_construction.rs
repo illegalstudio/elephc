@@ -17,6 +17,9 @@ struct EvalReflectionFunctionCallableArg {
     lookup_name: String,
     display_name: String,
     metadata_closure: Option<EvalClosure>,
+    /// The receiver box this resolution made and owns (a compiled closure's `$this`), which
+    /// `target` refers to; every other target borrows its receiver from a live owner.
+    owned_receiver: Option<RuntimeCellHandle>,
 }
 
 /// Builds an eval-backed `ReflectionFunction` object for eval or registered native functions.
@@ -61,6 +64,63 @@ fn eval_reflection_callable_new(
     let args = bind_evaluated_function_args(&[String::from("function")], evaluated_args)?;
     let callable_target =
         eval_reflection_function_callable_target_arg(args[0], context, values)?;
+    let owned_receiver = callable_target.as_ref().and_then(|target| target.owned_receiver);
+    let result =
+        eval_reflection_resolved_callable_new(args, callable_target, invoke_method, context, values);
+    match owned_receiver {
+        Some(receiver) => eval_reflection_settle_owned_receiver(result, receiver, context, values),
+        None => result,
+    }
+}
+
+/// Gives the receiver box a compiled closure's resolution made to the reflector that keeps it.
+///
+/// The registered target names that box, so it must live exactly as long as the reflector: the
+/// reflector takes it as a runtime edge (`retain_object_children`), which the generated runtime
+/// releases when the reflector is freed and which the cycle collector traverses, and the
+/// resolution's own reference is given back. The registry is keyed by the reflector's address and
+/// a compiled free never reaches it, so the registry itself must not own anything: holding the
+/// reference there kept `$this` alive past `unset()` -- its destructor ran late or never. A
+/// reflector that registered no target (a `Closure::__invoke()` `ReflectionMethod`, a failed
+/// construction) just gives the reference back.
+fn eval_reflection_settle_owned_receiver(
+    result: Result<Option<RuntimeCellHandle>, EvalStatus>,
+    receiver: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let attached = match &result {
+        Ok(Some(object)) => {
+            let object = *object;
+            values.object_identity(object).and_then(|identity| {
+                if context.eval_reflection_function_closure_target(identity).is_some() {
+                    values.retain_object_children(object, &[receiver])
+                } else {
+                    Ok(())
+                }
+            })
+        }
+        _ => Ok(()),
+    };
+    let released = values.release(receiver);
+    if let Err(status) = attached.and(released) {
+        if let Ok(Some(object)) = result {
+            let _ = eval_release_value(context, values, object);
+        }
+        return Err(status);
+    }
+    result
+}
+
+/// Builds the reflector for an already resolved callable argument; see
+/// [`eval_reflection_callable_new`].
+fn eval_reflection_resolved_callable_new(
+    args: Vec<RuntimeCellHandle>,
+    callable_target: Option<EvalReflectionFunctionCallableArg>,
+    invoke_method: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
     let closure_target = callable_target.as_ref().map(|target| target.target.clone());
     let requested_name = match callable_target.as_ref() {
         Some(target) => target.display_name.clone(),
@@ -494,6 +554,7 @@ fn eval_reflection_function_callable_target_arg(
                 lookup_name,
                 target,
                 metadata_closure: None,
+                owned_receiver: None,
             }))
         }
         EVAL_TAG_CALLABLE => {
@@ -546,6 +607,7 @@ fn eval_reflection_function_callable_target_arg(
                             metadata_closure: captured_context.closure(&lookup_name).cloned(),
                             lookup_name,
                             target,
+                            owned_receiver: None,
                         }));
                     }
                 }
@@ -573,6 +635,7 @@ fn eval_reflection_function_callable_target_arg(
                             lookup_name,
                             target,
                             metadata_closure: None,
+                            owned_receiver: None,
                         }));
                     }
                 }
@@ -619,6 +682,7 @@ fn eval_reflection_function_callable_target_arg(
                 lookup_name,
                 display_name: decoded.display_name,
                 metadata_closure: None,
+                owned_receiver: bound_this,
             }))
         }
         _ => Ok(None),
@@ -661,6 +725,7 @@ fn eval_reflection_foreign_closure_target_arg(
             target: Box::new(owner_target),
             owner: lease,
         },
+        owned_receiver: None,
         metadata_closure,
     }))
 }
