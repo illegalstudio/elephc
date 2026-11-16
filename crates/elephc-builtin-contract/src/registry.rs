@@ -176,7 +176,9 @@ mod tests {
         // +1: `__elephc_eval_reflection_class_build`, its eval twin for the class names
         // eval-built member reflectors store.
         // +24: the `tidy_*` procedures of the tidy prelude.
-        assert_eq!(contracts().len(), 1302 + curl_surface);
+        // +1: `__elephc_call_strict_types`, the internal strictness reader the random
+        // prelude's injected constructor calls.
+        assert_eq!(contracts().len(), 1303 + curl_surface);
         assert_eq!(lookup("STRLEN").map(|contract| contract.name), Some("strlen"));
         assert_eq!(lookup("\\parse_url").map(|contract| contract.name), Some("parse_url"));
     }

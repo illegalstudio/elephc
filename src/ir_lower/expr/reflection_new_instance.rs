@@ -119,6 +119,54 @@ pub(super) fn reflection_class_new_instance_reflected_class(
     }
 }
 
+/// Returns the receiver expression of a method-call AST node.
+///
+/// `lower_method_call` keeps the original receiver only for its own dispatch; the nullable
+/// and binding paths receive the receiver as an already lowered value, so the enclosing call
+/// expression is the one place where both can recover the reflected-class annotation.
+fn method_call_receiver_expr(expr: &Expr) -> Option<&Expr> {
+    match &expr.kind {
+        ExprKind::MethodCall { object, .. } | ExprKind::NullsafeMethodCall { object, .. } => {
+            Some(object)
+        }
+        _ => None,
+    }
+}
+
+/// Raises the `MT_RAND_PHP` notice of an int enum case when reflection materializes its
+/// constant table.
+///
+/// php-src loads the whole constant table on either `getConstant()` or `getConstants()`, so
+/// the case reports even when a different constant name is requested. It reports the case
+/// declaration line and shares the direct `E::A` guard. Ordinary class constants are
+/// evaluated by `crate::ir_lower::reflection_deprecations`.
+pub(super) fn emit_reflection_constant_notice(
+    ctx: &mut LoweringContext<'_, '_>,
+    method: &str,
+    expr: &Expr,
+) {
+    let method = php_symbol_key(method);
+    if method != "getconstant" && method != "getconstants" {
+        return;
+    }
+    let Some(receiver) = method_call_receiver_expr(expr) else {
+        return;
+    };
+    let Some(reflected) = reflection_class_reflected_class(ctx, receiver) else {
+        return;
+    };
+    let reflected = reflected.trim_start_matches('\\').to_string();
+    let enum_case = ctx.enums.get(&reflected).and_then(|info| {
+        info.cases
+            .iter()
+            .find(|case| case.deprecated_mt_rand_php)
+            .and_then(|case| case.span)
+    });
+    if let Some(declaration_span) = enum_case {
+        super::constants::emit_mt_rand_php_deprecation(ctx, declaration_span, declaration_span);
+    }
+}
+
 /// Resolves the target class from a static `ReflectionClass(...)` argument list.
 pub(super) fn reflection_class_reflected_class_from_args(
     ctx: &LoweringContext<'_, '_>,

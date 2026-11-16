@@ -327,6 +327,13 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub(crate) expression_depth: usize,
     /// Printed callable description (`Class::method`) for argument `TypeError` messages.
     pub(crate) call_description: Option<String>,
+    /// Call span of the `ReflectionMethod::invoke*()` currently dispatching its target.
+    ///
+    /// Reflection calls run under weak typing in php-src, so an explicitly reflected
+    /// `__construct` must publish weak typing — but only that final call. The span keeps
+    /// ordinary constructor calls nested in the forwarded arguments on the calling file's
+    /// own `strict_types` mode.
+    pub(crate) reflected_invoke_call_span: Option<Span>,
     /// Staging published by the enclosing reference assignment, if one is being lowered.
     ///
     /// `finish_reference_return_call` adopts the transferred lease into that staging immediately
@@ -779,6 +786,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             int_seed_bindings: HashMap::new(),
             pointer_reference_bindings: Vec::new(),
             call_description: None,
+            reflected_invoke_call_span: None,
             source_path,
             closure_display_names: HashMap::new(),
         }

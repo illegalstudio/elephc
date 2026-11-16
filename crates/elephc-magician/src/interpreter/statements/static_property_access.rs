@@ -383,23 +383,6 @@ pub(in crate::interpreter) fn eval_static_property_unset_result(
     )
 }
 
-/// Raises one replayed deprecation notice, or records it in an open capture.
-///
-/// A notice eval replays (a class constant's first read, a class or enum initialization, a
-/// parameter default's first evaluation) can itself happen while an outer initializer is being
-/// evaluated eagerly; it then belongs to that outer initializer, exactly as php-src raises it
-/// while evaluating the outer one.
-pub(in crate::interpreter) fn eval_raise_or_capture_deprecation(
-    message: &'static str,
-    context: &mut ElephcEvalContext,
-    values: &mut impl RuntimeValueOps,
-) -> Result<(), EvalStatus> {
-    if !context.capture_deprecation(message) {
-        eval_dispatch_php_error(message, E_DEPRECATED, context, values)?;
-    }
-    Ok(())
-}
-
 /// Initializes an eval-declared class (and its ancestors first, from the root, each once) the
 /// way php-src does on the first instantiation, static-property access, or reflection use:
 /// the constants of its table not evaluated yet, then its flattened instance defaults

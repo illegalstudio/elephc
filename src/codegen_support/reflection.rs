@@ -111,7 +111,7 @@ pub(crate) fn collect_attribute_factories_with_extra(
     classes: &HashMap<String, ClassInfo>,
     extra_attrs: &[AttributeMetadataSource<'_>],
 ) -> Vec<ReflectionAttributeFactory> {
-    let mut unique = BTreeMap::new();
+    let mut unique: BTreeMap<AttributeFactoryKey, bool> = BTreeMap::new();
     for class_info in classes.values() {
         collect_from_attribute_lists(
             classes,
@@ -154,7 +154,7 @@ pub(crate) fn collect_attribute_factories_with_extra(
         .into_iter()
         .enumerate()
         .map(
-            |(idx, ((class_name, args), resolvable))| ReflectionAttributeFactory {
+            |(idx, ((class_name, args, _deprecation_site), resolvable))| ReflectionAttributeFactory {
                 id: (idx as i64) + 1,
                 class_name,
                 args,
@@ -162,6 +162,37 @@ pub(crate) fn collect_attribute_factories_with_extra(
             },
         )
         .collect()
+}
+
+/// Identity of one reflection attribute factory.
+///
+/// Two occurrences of the same attribute share a factory unless an argument reads a
+/// constant: a deprecated constant reports that read at its declaration site, so those
+/// occurrences must stay distinct.
+type AttributeFactoryKey = (String, Vec<AttrArgEntry>, Option<(u32, u32)>);
+
+/// Returns the declaration site of an argument that reads a constant, if the arguments contain
+/// one. Any constant read may be deprecated, whichever the active profile.
+fn attr_arg_deprecation_site(entries: &[AttrArgEntry]) -> Option<(u32, u32)> {
+    /// Reports whether one captured value evaluates a constant read.
+    fn reads_deprecated_constant(value: &AttrArgValue) -> bool {
+        match value {
+            AttrArgValue::ConstRef(..) | AttrArgValue::ScopedConst(..) => true,
+            AttrArgValue::Array(entries) => entries
+                .iter()
+                .any(|entry| reads_deprecated_constant(&entry.value)),
+            _ => false,
+        }
+    }
+    entries
+        .iter()
+        .find(|entry| reads_deprecated_constant(&entry.value))
+        .map(|entry| (entry.span.source_id(), entry.span.line))
+}
+
+/// Builds the deduplication key of one attribute occurrence.
+fn attribute_factory_key(name: String, args: &[AttrArgEntry]) -> AttributeFactoryKey {
+    (name, args.to_vec(), attr_arg_deprecation_site(args))
 }
 
 /// The attribute factory ids of one program, keyed by resolved attribute name and captured
@@ -172,7 +203,7 @@ pub(crate) fn collect_attribute_factories_with_extra(
 /// instead of renumbering the whole program per attribute.
 pub(crate) struct AttributeFactoryIds<'a> {
     classes: &'a HashMap<String, ClassInfo>,
-    ids: HashMap<(String, Vec<AttrArgEntry>), i64>,
+    ids: HashMap<AttributeFactoryKey, i64>,
 }
 
 impl<'a> AttributeFactoryIds<'a> {
@@ -184,7 +215,12 @@ impl<'a> AttributeFactoryIds<'a> {
     ) -> Self {
         let ids = collect_attribute_factories_with_extra(classes, extra_attrs)
             .into_iter()
-            .map(|factory| ((factory.class_name, factory.args), factory.id))
+            .map(|factory| {
+                (
+                    attribute_factory_key(factory.class_name, &factory.args),
+                    factory.id,
+                )
+            })
             .collect();
         Self { classes, ids }
     }
@@ -198,7 +234,7 @@ impl<'a> AttributeFactoryIds<'a> {
             .map(|resolved| resolved.to_string())
             .unwrap_or_else(|| attr_name.to_string());
         self.ids
-            .get(&(lookup_name, attr_args.to_vec()))
+            .get(&attribute_factory_key(lookup_name, attr_args))
             .copied()
             .unwrap_or(0)
     }
@@ -244,11 +280,11 @@ pub(crate) fn build_attribute_new_instance_body_with_extra(
                             Some(crate::types::AttrKey::Str(name)) => Expr::new(
                                 ExprKind::NamedArg {
                                     name: name.clone(),
-                                    value: Box::new(attr_arg_expr(&entry.value, false)),
+                                    value: Box::new(attr_arg_expr_at(&entry.value, entry.span)),
                                 },
                                 span,
                             ),
-                            _ => attr_arg_expr(&entry.value, false),
+                            _ => attr_arg_expr_at(&entry.value, entry.span),
                         })
                         .collect(),
                 },
@@ -302,11 +338,28 @@ fn factory_condition(factory_id: i64) -> Expr {
 /// folds to its value; an enum case materializes the case object, matching
 /// PHP's `ReflectionAttribute::getArguments()`).
 fn attr_arg_expr(arg: &AttrArgValue, caller_line: bool) -> Expr {
+    attr_arg_expr_with(arg, caller_line, None)
+}
+
+/// [`attr_arg_expr`] for a top-level `newInstance()` argument: php-src evaluates it with the
+/// attribute's line as the reported line (`EG(lineno_override)`), so a constant read in it
+/// reports `attribute` (the declaration span), while a read nested in an array reports its own
+/// line.
+fn attr_arg_expr_at(arg: &AttrArgValue, attribute: crate::span::Span) -> Expr {
+    attr_arg_expr_with(arg, false, (attribute.line != 0).then_some(attribute))
+}
+
+/// Builds one argument expression; `top_read` overrides the span of a top-level constant read.
+fn attr_arg_expr_with(arg: &AttrArgValue, caller_line: bool, top_read: Option<crate::span::Span>) -> Expr {
     let span = crate::span::Span::dummy();
     // A constant read keeps its source line, which a deprecated constant reports at. A bare
     // top-level `getArguments()` argument takes php-src's fast path and reports at the
     // caller's line instead; its dummy span asks for that.
-    let read_span = |line: u32| if caller_line || line == 0 { span } else { crate::span::Span::new(line, 1) };
+    let read_span = |line: u32| match top_read {
+        Some(attribute) => attribute,
+        None if caller_line || line == 0 => span,
+        None => crate::span::Span::new(line, 1),
+    };
     match arg {
         AttrArgValue::Null => Expr::new(ExprKind::Null, span),
         AttrArgValue::Int(value) => Expr::new(ExprKind::IntLiteral(*value), span),
@@ -322,7 +375,11 @@ fn attr_arg_expr(arg: &AttrArgValue, caller_line: bool) -> Expr {
                 receiver: StaticReceiver::Named(name_from_canonical(type_name)),
                 name: member.clone(),
             },
-            if *line == 0 { span } else { crate::span::Span::new(*line, 1) },
+            match top_read {
+                Some(attribute) => attribute,
+                None if *line == 0 => span,
+                None => crate::span::Span::new(*line, 1),
+            },
         ),
     }
 }
@@ -430,7 +487,7 @@ fn collect_from_attribute_lists(
     classes: &HashMap<String, ClassInfo>,
     names: &[String],
     args: &[Option<Vec<AttrArgEntry>>],
-    unique: &mut BTreeMap<(String, Vec<AttrArgEntry>), bool>,
+    unique: &mut BTreeMap<AttributeFactoryKey, bool>,
 ) {
     if names.len() != args.len() {
         return;
@@ -448,7 +505,73 @@ fn collect_from_attribute_lists(
             None => (attr_name.clone(), false),
         };
         unique
-            .entry((name, attr_args.clone()))
+            .entry(attribute_factory_key(name, attr_args))
             .or_insert(resolvable);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Purpose:
+    //! Unit tests for reflection attribute factory identity.
+    //!
+    //! Called from:
+    //! - `cargo test` through Rust's test harness.
+    //!
+    //! Key details:
+    //! - Identical attributes must share a factory so `newInstance()` dispatch does not grow
+    //!   per occurrence; a deprecated constant read needs one factory per declaration site.
+
+    use super::*;
+    use crate::span::Span;
+
+    /// Builds one captured attribute argument at `line`.
+    fn entry(value: AttrArgValue, line: u32) -> AttrArgEntry {
+        AttrArgEntry {
+            key: None,
+            value,
+            span: Span::new_in_source(line, 1, 0),
+        }
+    }
+
+    /// Returns the deduplication key of one occurrence.
+    fn key(name: &str, args: &[AttrArgEntry]) -> AttributeFactoryKey {
+        attribute_factory_key(name.to_string(), args)
+    }
+
+    /// Identical non-deprecated attributes at different lines share one factory.
+    #[test]
+    fn attribute_span_is_not_part_of_factory_identity() {
+        let first = entry(AttrArgValue::Str("x".to_string()), 3);
+        let second = entry(AttrArgValue::Str("x".to_string()), 9);
+        assert_eq!(first, second);
+        assert_eq!(first.cmp(&second), std::cmp::Ordering::Equal);
+        assert_eq!(key("A", &[first]), key("A", &[second]));
+    }
+
+    /// A deprecated constant read splits factories per declaration site.
+    #[test]
+    fn deprecated_attribute_reads_keep_distinct_factories() {
+        let first = entry(AttrArgValue::ConstRef("MT_RAND_PHP".to_string(), 1), 3);
+        let second = entry(AttrArgValue::ConstRef("MT_RAND_PHP".to_string(), 1), 9);
+        assert_eq!(first, second);
+        assert_ne!(key("A", &[first]), key("A", &[second]));
+    }
+
+    /// A nested array argument still identifies its deprecated constant read.
+    #[test]
+    fn nested_deprecated_attribute_read_is_detected() {
+        let nested = entry(
+            AttrArgValue::Array(vec![entry(
+                AttrArgValue::ConstRef("MT_RAND_PHP".to_string(), 4),
+                4,
+            )]),
+            4,
+        );
+        assert_eq!(
+            attr_arg_deprecation_site(&[nested]),
+            Some((0, 4)),
+            "the nested MT_RAND_PHP read must split the factory"
+        );
     }
 }

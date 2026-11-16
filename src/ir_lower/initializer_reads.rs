@@ -261,7 +261,18 @@ pub(crate) fn parameter_default_line(root: &Expr, scoped: bool, span: Span) -> S
 /// which `RECV_INIT` does not cache, so such a default is evaluated again, and reports again,
 /// on every call. A conditional yields the branch its condition selects.
 pub(crate) fn parameter_default_is_refcounted(ctx: &LoweringContext<'_, '_>, scope: Option<&str>, root: &Expr) -> bool {
-    result_is_refcounted(ctx, scope, root, true)
+    // php-src never caches a default that constructs an object, whatever its result.
+    constructs_object(root) || result_is_refcounted(ctx, scope, root, true)
+}
+
+/// Reports whether evaluating `expr` constructs an object (`new`).
+fn constructs_object(expr: &Expr) -> bool {
+    if matches!(expr.kind, ExprKind::NewObject { .. }) {
+        return true;
+    }
+    let mut found = false;
+    visit_direct_children(expr, &mut |child| found = found || constructs_object(child));
+    found
 }
 
 /// Reports whether `expr` evaluates to a refcounted value in php-src: an object, a non-empty
@@ -923,6 +934,7 @@ fn walk_initializer_reads(
                 Some(false) => {}
                 Some(true) => walk(ctx, default),
                 None => {
+                    // `walk_runtime_branch` probes the condition quietly, as `??` does.
                     let not_null = Expr::new(
                         ExprKind::BinaryOp { left: value.clone(), op: BinOp::StrictNotEq, right: Box::new(Expr::new(ExprKind::Null, value.span)) },
                         value.span,
@@ -956,7 +968,9 @@ fn walk_initializer_reads(
 /// so only that branch's reads report. The condition's own reads were walked already, so it
 /// is evaluated here with their deprecations suppressed, after its class constants are
 /// replaced by their values (a `self::` read resolves against `scope`, not the code lowering
-/// this walk).
+/// this walk). The value lowering evaluates the condition for real and raises its warnings, so
+/// this probe evaluates it under `?? null`, which reads a missing key quietly; `null` is falsy,
+/// so the branch taken does not change.
 fn walk_runtime_branch(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,
@@ -964,7 +978,7 @@ fn walk_runtime_branch(
     when_true: impl FnOnce(&mut LoweringContext<'_, '_>),
     when_false: impl FnOnce(&mut LoweringContext<'_, '_>),
 ) {
-    let condition = substitute_constants(ctx, scope, condition, 0, true);
+    let condition = quiet_probe(substitute_constants(ctx, scope, condition, 0, true));
     let then_block = ctx.builder.create_named_block("initializer.branch.then", Vec::new());
     let else_block = ctx.builder.create_named_block("initializer.branch.else", Vec::new());
     let after = ctx.builder.create_named_block("initializer.branch.after", Vec::new());
@@ -978,6 +992,29 @@ fn walk_runtime_branch(
     when_false(ctx);
     ctx.builder.terminate(crate::ir::Terminator::Br { target: after, args: Vec::new() });
     ctx.builder.position_at_end(after);
+}
+
+/// Rewrites `expr` so the dimension reads in it probe quietly (`read ?? null`), keeping its value
+/// otherwise.
+fn quiet_probe(expr: Expr) -> Expr {
+    let span = expr.span;
+    let quiet = |inner: Box<Expr>| Box::new(quiet_probe(*inner));
+    let kind = match expr.kind {
+        ExprKind::ArrayAccess { .. } => {
+            return Expr::new(ExprKind::NullCoalesce { value: Box::new(expr), default: Box::new(Expr::new(ExprKind::Null, span)) }, span);
+        }
+        ExprKind::BinaryOp { left, op, right } => ExprKind::BinaryOp { left: quiet(left), op, right: quiet(right) },
+        ExprKind::Not(inner) => ExprKind::Not(quiet(inner)),
+        ExprKind::Negate(inner) => ExprKind::Negate(quiet(inner)),
+        ExprKind::BitNot(inner) => ExprKind::BitNot(quiet(inner)),
+        ExprKind::Cast { target, expr: inner } => ExprKind::Cast { target, expr: quiet(inner) },
+        ExprKind::Ternary { condition, then_expr, else_expr } => {
+            ExprKind::Ternary { condition: quiet(condition), then_expr: quiet(then_expr), else_expr: quiet(else_expr) }
+        }
+        ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary { value: quiet(value), default: quiet(default) },
+        other => other,
+    };
+    Expr::new(kind, span)
 }
 
 /// Calls `visit` for the direct children of `expr` in evaluation order.
@@ -1189,6 +1226,14 @@ fn substitute_constants(
         },
         ExprKind::ShortTernary { value, default } => ExprKind::ShortTernary { value: sub(value), default: sub(default) },
         ExprKind::NullCoalesce { value, default } => ExprKind::NullCoalesce { value: sub(value), default: sub(default) },
+        // php-src's compiler folds a constant array and a dimension read of one; a cast folds
+        // only when the value is computed at run time (`deprecated`).
+        ExprKind::ArrayAccess { array, index } => ExprKind::ArrayAccess { array: sub(array), index: sub(index) },
+        ExprKind::ArrayLiteral(elements) => ExprKind::ArrayLiteral(elements.iter().map(|element| *sub(element)).collect()),
+        ExprKind::ArrayLiteralAssoc(pairs) => {
+            ExprKind::ArrayLiteralAssoc(pairs.iter().map(|(key, value)| (*sub(key), *sub(value))).collect())
+        }
+        ExprKind::Cast { target, expr: inner } if deprecated => ExprKind::Cast { target: target.clone(), expr: sub(inner) },
         _ => return expr.clone(),
     };
     Expr::new(kind, expr.span)

@@ -144,11 +144,19 @@ pub(super) fn lower_scoped_constant(ctx: &mut LoweringContext<'_, '_>, receiver:
     let normalized_class_name = class_name.trim_start_matches('\\');
     // The first fetch of any constant or case of a backed enum initializes the enum.
     super::static_method_calls::emit_backed_enum_initialization(ctx, normalized_class_name, expr.span);
-    if ctx
+    let enum_case = ctx
         .enums
         .get(normalized_class_name)
-        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == name))
-    {
+        .and_then(|enum_info| enum_info.cases.iter().find(|case| case.name == name))
+        .map(|case| (case.deprecated_mt_rand_php, case.span));
+    if let Some((deprecated, declaration_span)) = enum_case {
+        // php-src evaluates enum case values lazily: the deprecated backing-value read
+        // deprecates once, when the case is first fetched, at the case declaration line.
+        if deprecated {
+            if let Some(span) = declaration_span {
+                super::constants::emit_mt_rand_php_deprecation(ctx, span, span);
+            }
+        }
         let key = format!("{}::{}", normalized_class_name, name);
         let data = ctx.intern_string(&key);
         return ctx.emit_value(

@@ -540,6 +540,22 @@ fn eval_reflected_parameter_default(
     }
 }
 
+/// Reports whether parameter default `default`, which evaluated to `value`, yields a refcounted
+/// value, which `RECV_INIT` does not cache, so such a default is evaluated again, and reports
+/// again, on every call (see [`eval_result_is_refcounted`]).
+pub(in crate::interpreter) fn eval_parameter_default_is_refcounted(
+    default: &EvalExpr,
+    value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<bool, EvalStatus> {
+    // php-src never caches a default that constructs an object, whatever its result.
+    if values.type_tag(value)? == EVAL_TAG_OBJECT || eval_expr_constructs_object(default) {
+        return Ok(true);
+    }
+    eval_result_is_refcounted(default, true, context, values)
+}
+
 /// Reports whether `expr` evaluates to a refcounted value in php-src: an object, a non-empty
 /// array built at run time or read from a constant, an array cast of anything but an array
 /// that is not refcounted, an array `+`, or a string built at run time (a concatenation of two
@@ -644,7 +660,16 @@ fn eval_constant_is_refcounted<V: RuntimeValueOps>(
     context: &mut ElephcEvalContext,
     values: &mut V,
 ) -> Result<bool, EvalStatus> {
+    thread_local! {
+        /// How many class-constant initializers the classification is following.
+        static FOLLOWED_INITIALIZERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
     if let EvalExpr::ClassConstantFetch { class_name, constant } = expr {
+        // A constant that reads itself (`const K = self::K`) is an `Error` when evaluated; the
+        // classification must not follow it forever.
+        if FOLLOWED_INITIALIZERS.with(|depth| depth.get()) >= 16 {
+            return Ok(false);
+        }
         let class = resolve_eval_static_member_class_name(class_name, context)?;
         if eval_is_enum_case(&class, constant, context) {
             return Ok(true);
@@ -656,7 +681,9 @@ fn eval_constant_is_refcounted<V: RuntimeValueOps>(
                     .unwrap_or(true));
             }
             context.push_class_scope(owner.clone());
+            FOLLOWED_INITIALIZERS.with(|depth| depth.set(depth.get() + 1));
             let result = eval_result_is_refcounted(&initializer, true, context, values);
+            FOLLOWED_INITIALIZERS.with(|depth| depth.set(depth.get() - 1));
             context.pop_class_scope();
             return result;
         }
@@ -716,13 +743,16 @@ fn eval_is_empty_string<V: RuntimeValueOps>(value: RuntimeCellHandle, values: &m
 }
 
 /// Evaluates a default's condition again silently and applies `test` to its value; `None` when
-/// the silent evaluation cannot answer.
+/// the silent evaluation cannot answer, or would construct an object (running user code again).
 fn eval_default_condition<V: RuntimeValueOps>(
     condition: &EvalExpr,
     context: &mut ElephcEvalContext,
     values: &mut V,
     test: impl FnOnce(RuntimeCellHandle, &mut V) -> Result<bool, EvalStatus>,
 ) -> Result<Option<bool>, EvalStatus> {
+    if eval_expr_constructs_object(condition) {
+        return Ok(None);
+    }
     let mut condition_scope = ElephcEvalScope::new();
     context.begin_deprecation_silence();
     context.enter_constant_expression();
@@ -737,6 +767,29 @@ fn eval_default_condition<V: RuntimeValueOps>(
         values.release(value)?;
     }
     answer.map(Some)
+}
+
+/// Reports whether evaluating constant expression `expr` constructs an object (`new`).
+fn eval_expr_constructs_object(expr: &EvalExpr) -> bool {
+    use crate::eval_ir::EvalArrayElement;
+    match expr {
+        EvalExpr::NewObject { .. } | EvalExpr::NewAnonymousClass { .. } => true,
+        EvalExpr::ArrayGet { array, index } => eval_expr_constructs_object(array) || eval_expr_constructs_object(index),
+        EvalExpr::Array(elements) => elements.iter().any(|element| match element {
+            EvalArrayElement::Value(value) => eval_expr_constructs_object(value),
+            EvalArrayElement::KeyValue { key, value } => eval_expr_constructs_object(key) || eval_expr_constructs_object(value),
+            _ => false,
+        }),
+        EvalExpr::NullCoalesce { value, default } => eval_expr_constructs_object(value) || eval_expr_constructs_object(default),
+        EvalExpr::Ternary { condition, then_branch, else_branch } => {
+            eval_expr_constructs_object(condition)
+                || then_branch.as_deref().is_some_and(eval_expr_constructs_object)
+                || eval_expr_constructs_object(else_branch)
+        }
+        EvalExpr::Cast { expr, .. } | EvalExpr::Unary { expr, .. } => eval_expr_constructs_object(expr),
+        EvalExpr::Binary { left, right, .. } => eval_expr_constructs_object(left) || eval_expr_constructs_object(right),
+        _ => false,
+    }
 }
 
 /// Takes, when eval program `statements` starts, the declaration snapshot of each class php-src

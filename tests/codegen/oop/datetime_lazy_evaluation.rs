@@ -2005,3 +2005,110 @@ end
 "#
     );
 }
+
+/// A property default's `??` whose left side reads a missing key probes it quietly; a parameter default whose condition reads a constant through an array folds, so its cached branch reports once.
+#[test]
+fn test_null_probe_and_foldable_array_conditions_report_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m): bool { echo "  ", $l === E_DEPRECATED ? substr($m, 0, strpos($m, " is deprecated")) : $m, "\n"; return true; });
+class C { public $z = [][0] ?? DATE_RFC7231; }
+echo "c\n"; new C;
+function f($a = [MT_RAND_PHP][0] ? DATE_RFC7231 : [1]) {}
+echo "f\n"; f(); f();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"c
+  Constant DATE_RFC7231
+f
+  Constant MT_RAND_PHP
+  Constant DATE_RFC7231
+end
+"#
+    );
+}
+
+/// The `??` probe in `eval()` (which does not accept an array dimension read in a parameter default).
+#[test]
+fn test_eval_null_probe_reports_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m): bool { echo "  ", $l === E_DEPRECATED ? substr($m, 0, strpos($m, " is deprecated")) : $m, "\n"; return true; });
+eval(<<<'PHPCODE'
+class C { public $z = [][0] ?? DATE_RFC7231; }
+echo "c\n"; new C;
+echo "end\n";
+PHPCODE
+);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"c
+  Constant DATE_RFC7231
+end
+"#
+    );
+}
+
+/// In `eval()`, a parameter default whose condition constructs an object runs the constructor once per evaluation and caches its scalar result; a self-referencing constant in a default throws on every call. (`eval()`)
+#[test]
+fn test_eval_parameter_default_caching_runs_user_code_once_and_survives_cycles() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m): bool { echo "  ", substr($m, 0, strpos($m, " is deprecated")), "\n"; return true; });
+eval(<<<'PHPCODE'
+class A { public function __construct($v) { echo "ctor\n"; } }
+function f($x = (new A(DATE_RFC7231)) ? 1 : 2) { echo $x, "\n"; }
+f(); f();
+class C { const K = self::K; }
+function g($x = C::K) {}
+try { g(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+try { g(); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+echo "end\n";
+PHPCODE
+);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"  Constant DATE_RFC7231
+ctor
+1
+  Constant DATE_RFC7231
+ctor
+1
+Cannot declare self-referencing constant self::K
+Cannot declare self-referencing constant self::K
+end
+"#
+    );
+}
+
+/// A parameter default that constructs an object is evaluated, and reports, on every call that omits it, even when its result is a scalar.
+#[test]
+fn test_parameter_default_constructing_an_object_is_never_cached() {
+    let out = compile_and_run(
+        r#"<?php
+set_error_handler(function (int $l, string $m): bool { echo "  ", substr($m, 0, strpos($m, " is deprecated")), "\n"; return true; });
+class A { public function __construct($v) { echo "ctor\n"; } }
+function f($x = (new A(DATE_RFC7231)) ? 1 : 2) { echo $x, "\n"; }
+f(); f();
+echo "end\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"  Constant DATE_RFC7231
+ctor
+1
+  Constant DATE_RFC7231
+ctor
+1
+end
+"#
+    );
+}

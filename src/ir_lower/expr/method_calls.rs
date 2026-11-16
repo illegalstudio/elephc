@@ -252,6 +252,13 @@ pub(super) fn lower_method_call(
             *argument = root_evaluated_call_argument(ctx, boxed, expr.span).value;
         }
     }
+    // The notice can enter user code (a throwing error handler), so the argument evaluation
+    // owners must still protect the lowered argument values while it runs.
+    super::reflection_new_instance::emit_reflection_constant_notice(
+        ctx,
+        dispatch_method,
+        expr,
+    );
     let evaluation_intermediates = finish_call_argument_evaluation(ctx, &mut arg_values);
     let roots = root_user_call_operands(
         ctx,
@@ -262,6 +269,11 @@ pub(super) fn lower_method_call(
         expr.span,
     );
     operands.extend(arg_values.iter().copied());
+    super::object_construction::publish_constructor_call_strictness(
+        ctx,
+        dispatch_method,
+        expr.span,
+    );
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
         op,
