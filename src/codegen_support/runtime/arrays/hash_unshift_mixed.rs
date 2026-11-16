@@ -34,6 +34,25 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve frame pointer and return address
     emitter.instruction("add x29, sp, #32");                                    // establish the runtime helper frame pointer
     emitter.instruction("str x1, [sp, #8]");                                    // preserve the owned boxed value to prepend
+    emitter.instruction("str x0, [sp, #0]");                                    // keep the source hash across the optional box detach
+    emitter.instruction("ldr x9, [x1]");                                        // inspect the prepended cell's runtime value tag
+    emitter.instruction(&format!("cmp x9, #{}", INVOKER_ARG_REF_CELL_TAG));     // reference markers keep their wrapper identity
+    emitter.instruction("b.eq __rt_hash_unshift_mixed_aarch64_detached");       // markers are stored as they are
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_GLOBAL_REF_CELL_TAG));    // request-global markers keep their wrapper identity
+    emitter.instruction("b.eq __rt_hash_unshift_mixed_aarch64_detached");       // markers are stored as they are
+    emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));     // promoted local markers keep their wrapper identity
+    emitter.instruction("b.eq __rt_hash_unshift_mixed_aarch64_detached");       // markers are stored as they are
+    emitter.instruction("ldr w10, [x1, #-12]");                                 // load the cell's refcount from the uniform heap header
+    emitter.instruction("cmp w10, #1");                                         // does the caller hold the only reference?
+    emitter.instruction("b.ls __rt_hash_unshift_mixed_aarch64_detached");       // a sole owner may be emptied into the entry below
+    emitter.instruction("mov x0, x1");                                          // a cell shared with a variable must not be emptied: read its value
+    emitter.instruction("bl __rt_mixed_clone");                                 // x0 = a detached owned cell with its own payload reference
+    emitter.instruction("ldr x9, [sp, #8]");                                    // reload the shared cell the caller retained for this call
+    emitter.instruction("str x0, [sp, #8]");                                    // the detached cell is the value to prepend
+    emitter.instruction("mov x0, x9");                                          // release the caller's reference to the shared cell
+    emitter.instruction("bl __rt_decref_mixed");                                // the other holders keep the cell and its payload alive
+    emitter.label("__rt_hash_unshift_mixed_aarch64_detached");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source hash for the copy-on-write split
     emitter.instruction("bl __rt_hash_ensure_unique");                          // isolate this mutating owner from copy-on-write aliases
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the unique source hash to consume later
     emitter.instruction("ldr x9, [x0, #8]");                                    // reuse the source capacity as the rebuild baseline
@@ -54,6 +73,9 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_unshift_mixed_aarch64_marker");         // keep the owning marker wrapper in the rebuilt array
     emitter.instruction(&format!("cmp x5, #{}", ARRAY_LOCAL_REF_CELL_TAG));     // promoted local reference markers share the same contract
     emitter.instruction("b.eq __rt_hash_unshift_mixed_aarch64_marker");         // preserve the local reference marker wrapper too
+    emitter.instruction("ldr w11, [x9, #-12]");                                 // a cell that stayed shared (a resource) keeps its identity
+    emitter.instruction("cmp w11, #1");                                         // does the destination become the only owner?
+    emitter.instruction("b.hi __rt_hash_unshift_mixed_aarch64_marker");         // store the shared cell itself, owning the retained reference
     emitter.instruction("ldr x3, [x9, #8]");                                    // transfer the ordinary cell's low payload word
     emitter.instruction("ldr x4, [x9, #16]");                                   // transfer the ordinary cell's high payload word
     emitter.instruction("mov x10, #1");                                         // remember to release only the transferred wrapper after insertion
@@ -95,6 +117,24 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable runtime helper frame
     emitter.instruction("sub rsp, 32");                                         // reserve aligned rebuild state
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the owned boxed value to prepend
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // keep the source hash across the optional box detach
+    emitter.instruction("mov r9, QWORD PTR [rsi]");                             // inspect the prepended cell's runtime value tag
+    emitter.instruction(&format!("cmp r9, {}", INVOKER_ARG_REF_CELL_TAG));      // reference markers keep their wrapper identity
+    emitter.instruction("je __rt_hash_unshift_mixed_x86_detached");             // markers are stored as they are
+    emitter.instruction(&format!("cmp r9, {}", ARRAY_GLOBAL_REF_CELL_TAG));     // request-global markers keep their wrapper identity
+    emitter.instruction("je __rt_hash_unshift_mixed_x86_detached");             // markers are stored as they are
+    emitter.instruction(&format!("cmp r9, {}", ARRAY_LOCAL_REF_CELL_TAG));      // promoted local markers keep their wrapper identity
+    emitter.instruction("je __rt_hash_unshift_mixed_x86_detached");             // markers are stored as they are
+    emitter.instruction("cmp DWORD PTR [rsi - 12], 1");                         // does the caller hold the only reference to the cell?
+    emitter.instruction("jbe __rt_hash_unshift_mixed_x86_detached");            // a sole owner may be emptied into the entry below
+    emitter.instruction("mov rax, rsi");                                        // a cell shared with a variable must not be emptied: read its value
+    emitter.instruction("call __rt_mixed_clone");                               // rax = a detached owned cell with its own payload reference
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the shared cell the caller retained for this call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // the detached cell is the value to prepend
+    emitter.instruction("mov rax, r10");                                        // release the caller's reference to the shared cell
+    emitter.instruction("call __rt_decref_mixed");                              // the other holders keep the cell and its payload alive
+    emitter.label("__rt_hash_unshift_mixed_x86_detached");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source hash for the copy-on-write split
     emitter.instruction("call __rt_hash_ensure_unique");                        // isolate this mutating owner from copy-on-write aliases
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the unique source hash to consume later
     emitter.instruction("mov rdi, QWORD PTR [rax + 8]");                        // reuse source capacity as the rebuild baseline
@@ -116,6 +156,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_unshift_mixed_x86_marker");               // keep the owning marker wrapper in the rebuilt array
     emitter.instruction(&format!("cmp r9, {}", ARRAY_LOCAL_REF_CELL_TAG));      // promoted local reference markers share the same contract
     emitter.instruction("je __rt_hash_unshift_mixed_x86_marker");               // preserve the local reference marker wrapper too
+    emitter.instruction("cmp DWORD PTR [r10 - 12], 1");                         // a cell that stayed shared (a resource) keeps its identity
+    emitter.instruction("ja __rt_hash_unshift_mixed_x86_marker");               // store the shared cell itself, owning the retained reference
     emitter.instruction("mov rcx, QWORD PTR [r10 + 8]");                        // transfer the ordinary cell's low payload word
     emitter.instruction("mov r8, QWORD PTR [r10 + 16]");                        // transfer the ordinary cell's high payload word
     emitter.instruction("mov QWORD PTR [rbp - 32], 1");                         // remember to release only the transferred wrapper after insertion
