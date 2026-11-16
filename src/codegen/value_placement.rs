@@ -210,7 +210,14 @@ pub fn allocate_with(
             }
         }
         active = keep;
-        let slot = match free[class(request.bytes)].pop() {
+        // An ownership marker never shares: it has reads its value's interval does not show. An
+        // edge copy reads an argument's marker AFTER storing the higher-index block parameters
+        // (`normalize_loaded_block_argument`), and a `Move`/`Borrow` return reads its source's
+        // marker after the source's last use (`classify_return_value`), so a slot handed on at
+        // the interval's end could already hold another value when the marker is read.
+        let marker = matches!(request.key, SlotKey::OwnershipMarker(_));
+        let reused = if marker { None } else { free[class(request.bytes)].pop() };
+        let slot = match reused {
             Some(slot) => slot,
             None => {
                 slots.push(Slot { bytes: request.bytes, weight: 0 });
@@ -219,7 +226,9 @@ pub fn allocate_with(
         };
         slots[slot].weight += u64::from(request.weight);
         slot_of_request[index] = slot;
-        active.push((request.end, slot));
+        if !marker {
+            active.push((request.end, slot));
+        }
     }
 
     // Hottest slots first: they land nearest the frame pointer.
@@ -375,6 +384,54 @@ mod tests {
         let first_const = values[0];
         let second_const = values[1];
         assert_ne!(shared.slot(first_const), shared.slot(second_const));
+    }
+
+    /// A runtime ownership marker keeps a slot of its own under sharing.
+    ///
+    /// The marker is read where its value's interval does not reach: an edge copy reads an
+    /// argument's marker after storing the higher-index block parameters, so the join's parameter
+    /// (whose interval starts after the argument's ends) must not be placed in the marker's slot,
+    /// and neither may any later value.
+    #[test]
+    fn sharing_never_hands_out_an_ownership_marker_slot() {
+        let mut function = Function::new("marker".to_string(), IrType::I64, PhpType::Int);
+        let mut builder = Builder::new(&mut function);
+        let mixed = (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+        let entry = builder.create_named_block("entry", vec![mixed]);
+        let join = builder.create_named_block("join", vec![(IrType::Str, PhpType::Str)]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let source = builder.block_param(entry, 0);
+        let text = builder
+            .emit(
+                Op::Cast,
+                vec![source],
+                Some(Immediate::CastTarget(IrType::Str)),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::MaybeOwned,
+            )
+            .expect("cast produces a value");
+        builder.terminate(Terminator::Br { target: join, args: vec![text] });
+        builder.position_at_end(join);
+        let mut acc = builder.emit_const_i64(1);
+        for step in 0..8 {
+            let operand = builder.emit_const_i64(step + 2);
+            acc = builder.emit_iadd(acc, operand);
+        }
+        builder.terminate(Terminator::Return { value: Some(acc) });
+
+        let shared = allocate_with(&function, &Allocation::all_spilled(), true);
+        let marker = shared
+            .runtime_return_ownership_slot(text)
+            .expect("a Mixed-to-string cast publishes a runtime ownership marker");
+        for (value, slot) in &shared.slot_of {
+            let bytes = bytes_for(function.values[value.as_raw() as usize].ir_type);
+            assert!(
+                marker + bytes <= *slot || *slot + 8 <= marker,
+                "value {value:?} at {slot} overlaps the ownership marker at {marker}"
+            );
+        }
     }
 
     /// Values the register allocator keeps in a register leave no slot behind.
