@@ -124,7 +124,13 @@ pub(super) fn emit_object_storage(emitter: &mut Emitter) {
     emitter.instruction("ldr x6, [x14, #16]");                                  // property byte offset
     emitter.instruction("ldr x7, [x14, #24]");                                  // property value tag
     emitter.instruction("add x8, x0, x6");                                      // address of the property slot
-    emitter.instruction("tbnz x7, #8, __rt_obj_store_prop_reference");          // a reference-bound slot holds a cell pointer, not a value: nothing to release or overwrite
+    emitter.instruction("tbz x7, #8, __rt_obj_store_prop_slot_ready");          // a plain slot is stored into directly
+    // A reference-bound slot holds a pointer to the managed cell, which keeps the value in the
+    // slot's own two-word shape: hydrate THROUGH the cell so every alias of the reference sees it.
+    emitter.instruction("and x7, x7, #0xff");                                   // fold the reference flag out of the descriptor tag
+    emitter.instruction("ldr x8, [x8]");                                        // the slot's low word is the reference-cell pointer
+    emitter.instruction("cbz x8, __rt_obj_store_prop_reference");               // no cell to write through: retire the parsed box
+    emitter.label("__rt_obj_store_prop_slot_ready");
     emitter.instruction("stp x3, x7, [sp, #-32]!");                             // preserve box and tag across the previous-value release
     emitter.instruction("stp x8, x30, [sp, #16]");                              // preserve slot and return address across the release
     emitter.instruction("mov x0, x8");                                          // pass the property slot to the previous-value release

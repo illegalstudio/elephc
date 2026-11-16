@@ -455,3 +455,43 @@ echo unserialize('i:42;'), "\n";
     assert_eq!(out.stdout, "RuntimeException:cleanup|RuntimeException:cleanup|RuntimeException:cleanup|42\n", "{}", out.stderr);
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
 }
+
+/// A property some method takes by reference lives in a managed reference cell: `unserialize()`
+/// hydrates through that cell (it used to drop the wire value), the by-name allocator builds the
+/// cell like the direct one (so cloning and destruction retain and release the payload), and an
+/// untyped promoted property is born null while a typed default-less one stays uninitialized.
+#[test]
+fn test_unserialize_hydrates_reference_bound_properties_through_their_cells() {
+    let out = compile_and_run_with_heap_debug(r#"<?php
+class A {
+    public $p = 1;
+    public string $s = 'x';
+    public int $n;
+    function r() { $r = &$this->p; $q = &$this->s; $m = &$this->n; return $r; }
+}
+class P { function __construct(public $x = null) {} }
+$o = unserialize('O:1:"A":3:{s:1:"p";i:5;s:1:"s";s:3:"abc";s:1:"n";i:7;}');
+var_dump($o->p, $o->s, $o->n);
+$o->r();
+for ($i = 0; $i < 50; $i++) {
+    $word = str_repeat("z", $i + 3);
+    $c = unserialize('O:1:"A":2:{s:1:"p";s:4:"vvvv";s:1:"s";s:' . strlen($word) . ':"' . $word . '";}');
+    $d = clone $c;
+    $d->s .= "!";
+    if ($c->s === $d->s) { echo "alias\n"; }
+}
+echo $c->p, "|", strlen($c->s), "|", strlen($d->s), "\n";
+var_dump(unserialize('O:1:"P":0:{}'));
+$t = unserialize('O:1:"A":0:{}');
+try { var_dump($t->n); } catch (Error $e) { echo $e->getMessage(), "\n"; }
+var_dump($t->p, $t->s);
+"#);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(
+        out.stdout,
+        "int(5)\nstring(3) \"abc\"\nint(7)\nvvvv|52|53\nobject(P)#3 (1) {\n  [\"x\"]=>\n  NULL\n}\nTyped property A::$n must not be accessed before initialization\nint(1)\nstring(1) \"x\"\n",
+        "{}",
+        out.stderr
+    );
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}
