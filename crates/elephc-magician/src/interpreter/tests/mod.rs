@@ -119,6 +119,7 @@ mod interleaved_html_include;
 mod method_arguments;
 mod native_class_return_type_covariance;
 mod native_scope;
+mod nested_array_unset;
 mod nested_by_ref_foreach;
 mod nested_increment;
 mod new_class_expressions;

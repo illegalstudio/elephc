@@ -1120,6 +1120,94 @@ fn evaluate_property_component(
     }
 }
 
+/// Rewrites the element `container` names through ONE evaluation of its location.
+///
+/// `unset($a[f()][$k])` reads `$a[f()]`, removes `$k` from it and stores it back. Evaluating
+/// the container as an expression for the read and again as an lvalue for the store ran `f()`
+/// twice more than php does. Here the location is evaluated once, in source order, with the
+/// silent element fetch `??=` uses (a missing link reads as null without a warning); `update`
+/// sees the observed element and returns the replacement to store, or `None` to store nothing.
+/// The store re-reads the containers above the element, reusing the evaluated keys, because
+/// `update` may have run user code (`offsetUnset()`, a destructor) that changed them.
+///
+/// php also fetches the chain's root for the unset: an undefined root variable warns
+/// `Undefined variable $x` after the keys were evaluated, as php's dim fetch does.
+pub(in crate::interpreter) fn eval_update_element_once<V: RuntimeValueOps>(
+    container: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut V,
+    update: impl FnOnce(
+        RuntimeCellHandle,
+        &mut ElephcEvalContext,
+        &mut ElephcEvalScope,
+        &mut V,
+    ) -> Result<Option<RuntimeCellHandle>, EvalStatus>,
+) -> Result<(), EvalStatus> {
+    context.push_quiet_property_fetch();
+    let location = evaluate_location(container, context, scope, values);
+    context.pop_quiet_property_fetch();
+    let mut location = location?;
+    if let Err(status) = warn_undefined_chain_root(container, context, scope, values) {
+        abandon_container(location, context, values)?;
+        return Err(status);
+    }
+    let element = location.current();
+    let updated = update(element, context, scope, values);
+    // The observation was `update`'s operand only; the store goes through the parent container.
+    release_element_observation(&mut location, context, values)?;
+    if let EvaluatedLocation::ArrayAccessElement { current, .. } = &mut location {
+        if let Some(observed) = current.take() {
+            if !observed.is_borrowed() {
+                eval_release_value(context, values, observed)?;
+            }
+        }
+    }
+    match updated {
+        Ok(Some(updated)) => {
+            context.push_quiet_property_fetch();
+            let location = refresh_element_containers(location, context, scope, values);
+            context.pop_quiet_property_fetch();
+            write_location(location?, updated, false, context, scope, values)
+        }
+        Ok(None) => abandon_location(location, context, values),
+        Err(status) => {
+            abandon_location(location, context, values)?;
+            Err(status)
+        }
+    }
+}
+
+/// Raises php's `Undefined variable $x` for the root of an element chain whose root variable
+/// does not exist in this scope.
+fn warn_undefined_chain_root(
+    chain: &EvalExpr,
+    context: &mut ElephcEvalContext,
+    scope: &mut ElephcEvalScope,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut root = chain;
+    while let EvalExpr::ArrayGet { array, .. } = root {
+        if is_globals_array(array) {
+            return Ok(());
+        }
+        root = array;
+    }
+    let EvalExpr::LoadVar(name) = root else {
+        return Ok(());
+    };
+    let defined = scope_entry(context, scope, name).is_some_and(|entry| entry.flags().is_visible());
+    if defined
+        || name == "this"
+        || crate::interpreter::scope_cells::EVAL_SUPERGLOBALS.contains(&name.as_str())
+        || context.errors_suppressed()
+    {
+        return Ok(());
+    }
+    values.warning(&format!("Undefined variable ${name}"))
+}
+
+/// Writes an evaluated value back through a previously materialized location.
 /// Stores one ALREADY EVALUATED value into any writable PHP lvalue.
 ///
 /// Ownership follows `eval_assign`'s convention, which is what every other writer here uses: the

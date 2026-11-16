@@ -285,6 +285,10 @@ fn eval_property_array_unset_result(
 /// ArrayAccess form was supported, so Doctrine's
 /// `unset($this->initializedHashMapping[$event][$hash])` (`ContainerAwareEventManager`) failed as
 /// an unsupported construct and took every database-backed page down with it.
+///
+/// The container's keys run ONCE (`eval_update_element_once`): probing it with `isset`, reading
+/// it, then storing it back as an lvalue ran `f()` in `unset($a[f()][$k])` three times. The
+/// unset key is evaluated even when the container is missing, as php's operand order does.
 fn eval_nested_array_unset_element(
     container: &EvalExpr,
     index: &EvalExpr,
@@ -292,26 +296,22 @@ fn eval_nested_array_unset_element(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
-    if !crate::interpreter::builtins::eval_isset_arg(container, context, scope, values)? {
-        return Ok(());
-    }
-    let element = eval_expr(container, context, scope, values)?;
-    let tag = values.type_tag(element)?;
-    if tag == EVAL_TAG_OBJECT {
-        let result = eval_array_access_unset_result(element, index, context, scope, values);
-        eval_release_value(context, values, element)?;
-        return result;
-    }
-    if !matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
-        eval_release_value(context, values, element)?;
-        return Err(EvalStatus::UnsupportedConstruct);
-    }
-    let updated = eval_array_unset_target_result(element, index, context, scope, values);
-    eval_release_value(context, values, element)?;
-    if let Some(updated) = updated? {
-        eval_store_value_in_lvalue(container, updated, context, scope, values)?;
-    }
-    Ok(())
+    eval_update_element_once(container, context, scope, values, |element, context, scope, values| {
+        let tag = values.type_tag(element)?;
+        if tag == EVAL_TAG_OBJECT {
+            eval_array_access_unset_result(element, index, context, scope, values)?;
+            return Ok(None);
+        }
+        if matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC) {
+            return eval_array_unset_target_result(element, index, context, scope, values);
+        }
+        if tag == crate::interpreter::EVAL_TAG_NULL {
+            let key = eval_expr(index, context, scope, values)?;
+            eval_release_value(context, values, key)?;
+            return Ok(None);
+        }
+        Err(EvalStatus::UnsupportedConstruct)
+    })
 }
 
 /// Unsets one offset from an already-resolved array-like target and returns a replacement array.
