@@ -83,9 +83,14 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         // object is an object.
         let string_case = ctx.next_label("gettype_callable_string");
         let array_case = ctx.next_label("gettype_callable_array");
+        let null_case = ctx.next_label("gettype_callable_null");
         let done = ctx.next_label("gettype_callable_done");
         let result = abi::int_result_reg(ctx.emitter);
         ctx.load_value_to_reg(value, result)?;
+        // A missed read leaves null in the slot, not a descriptor.
+        crate::codegen_support::callable_descriptor::emit_branch_if_missing_descriptor(
+            ctx.emitter, result, &null_case,
+        );
         crate::codegen_support::callable_descriptor::emit_branch_on_descriptor_origin(
             ctx.emitter, result, &string_case, &array_case,
         );
@@ -93,6 +98,7 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         abi::emit_jump(ctx.emitter, &done);
         emit_mixed_gettype_case(ctx, &string_case, b"string", &done);
         emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
+        emit_mixed_gettype_case(ctx, &null_case, b"NULL", &done);
         ctx.emitter.label(&done);
         return store_if_result(ctx, inst);
     }
@@ -176,6 +182,10 @@ pub(in crate::codegen::lower_inst) fn emit_mixed_gettype(ctx: &mut FunctionConte
         Arch::AArch64 => "x1",
         Arch::X86_64 => "rdi",
     };
+    // A missed read boxed into the Mixed leaves no descriptor behind the tag.
+    crate::codegen_support::callable_descriptor::emit_branch_if_missing_descriptor(
+        ctx.emitter, payload, &null_case,
+    );
     crate::codegen_support::callable_descriptor::emit_branch_on_descriptor_origin(
         ctx.emitter, payload, &string_case, &array_case,
     );
