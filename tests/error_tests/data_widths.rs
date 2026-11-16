@@ -12,13 +12,12 @@
 use super::*;
 
 /// Verifies a width name is not a type outside packed fields and buffer elements: a parameter
-/// declared `i32` is an unknown type, as before.
+/// declared `i32` names an ordinary class, as in php, which accepts the declaration and refuses
+/// an argument only when the call runs (php -n 8.5.10: `function f(i32 $x) {} echo 'ok';`
+/// prints `ok`; `f(1)` throws `f(): Argument #1 ($x) must be of type i32, int given`).
 #[test]
 fn test_error_width_names_are_not_types_outside_packed_and_buffer() {
-    expect_error(
-        "<?php function f(i32 $x): int { return $x; }",
-        "Unknown type: i32",
-    );
+    expect_no_error("<?php function f(i32 $x) {} echo 'ok';");
 }
 
 /// Verifies `buffer<i32>` and `buffer<int>` are distinct types: their strides differ, so one
@@ -61,7 +60,11 @@ fn test_error_f32_buffer_element_rejects_an_int() {
 /// Verifies a width is only a bare field type: a nullable width is not a storage format.
 #[test]
 fn test_error_width_packed_field_cannot_be_nullable() {
-    expect_error("<?php packed class P { public ?i32 $x; }", "Unknown type: i32");
+    // `?i32` is a nullable class name, not a width, so the field is refused as non-POD storage.
+    expect_error(
+        "<?php packed class P { public ?i32 $x; }",
+        "Packed class fields must use POD scalars, pointers, or packed classes",
+    );
 }
 
 /// Verifies an integer-width buffer element takes an `int`, like a `buffer<int>` element.
@@ -103,8 +106,10 @@ fn test_error_width_buffer_rejected_at_an_int_buffer_return() {
 /// Verifies a width is only a bare element type: nullable and union spellings are not widths.
 #[test]
 fn test_error_width_buffer_element_cannot_be_nullable_or_union() {
-    expect_error("<?php buffer<?u8> $b = buffer_new<?u8>(2);", "Unknown type: u8");
-    expect_error("<?php buffer<u8|int> $b = buffer_new<u8|int>(2);", "Unknown type: u8");
+    // Neither spelling is a width, so the element is refused as non-POD storage.
+    let refusal = "buffer<T> requires a POD scalar, pointer, or packed class element type";
+    expect_error("<?php buffer<?u8> $b = buffer_new<?u8>(2);", refusal);
+    expect_error("<?php buffer<u8|int> $b = buffer_new<u8|int>(2);", refusal);
 }
 
 /// Verifies a misspelled width in a packed field or buffer element names the accepted
@@ -184,7 +189,8 @@ wrong<u8>(buffer_new<u8>(1));
 fn test_error_generic_native_storage_carriers_reject_literal_width_annotations() {
     expect_error(
         "<?php function wrong<T>(T $value): T { u32 $local = $value; return $local; } echo wrong<int>(1);",
-        "Unknown type: u32",
+        // A literal `u32` outside a buffer or packed field names a class, which an int is not.
+        "cannot initialize $local as u32 with int",
     );
 }
 
@@ -198,7 +204,11 @@ fn test_error_generic_native_storage_carriers_object_bounds() {
     ] {
         expect_error(source, "does not satisfy its bound Animal");
     }
-    expect_error("<?php class InvalidBound<T : u32> {} new InvalidBound<int>();", "Unknown type: u32");
+    // A literal `u32` bound names a class, which `int` does not satisfy.
+    expect_error(
+        "<?php class InvalidBound<T : u32> {} new InvalidBound<int>();",
+        "which does not satisfy its bound u32",
+    );
 }
 
 /// Verifies native width arguments cannot widen through unrelated global width-named classes.
