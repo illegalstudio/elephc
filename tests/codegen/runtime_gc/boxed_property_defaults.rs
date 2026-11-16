@@ -181,3 +181,26 @@ echo "\n";
         out.stderr
     );
 }
+
+/// Verifies an enum-case default boxed into an untyped (Mixed) slot takes one reference only.
+///
+/// The singleton load is borrowed; retaining it AND boxing it through the retaining boxer left
+/// one stray reference per default written, so the shutdown retire no longer freed the case.
+#[test]
+fn test_enum_case_default_on_untyped_static_property_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+enum Status { case On; case Off; }
+class D { public static $x = Status::Off; }
+class E { public $s = Status::On; }
+for ($i = 0; $i < 8; $i++) { $e = new E(); }
+var_dump(D::$x === Status::Off, $e->s === Status::On);
+"#,
+    );
+    assert_eq!(out.stdout, "bool(true)\nbool(true)\n", "stderr: {}", out.stderr);
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "a boxed enum-case default leaked its singleton: {}",
+        out.stderr
+    );
+}

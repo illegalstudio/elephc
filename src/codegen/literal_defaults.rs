@@ -612,9 +612,12 @@ pub(crate) fn emit_empty_assoc_array_literal_to_result(
     abi::emit_call_label(ctx.emitter, "__rt_hash_new");
 }
 
-/// Emits a boxed PHP null default into the canonical result register.
 /// Loads an enum case's singleton into the integer result register with a reference of its own
 /// (boxed for a `mixed` slot), materializing the case on first use.
+///
+/// The singleton load is borrowed. For a `mixed` slot the box's own retain is that reference
+/// (`__rt_mixed_from_value` retains an object payload), so only the unboxed slot takes an
+/// explicit one; retaining before boxing left the singleton one reference too high per default.
 pub(crate) fn emit_enum_case_default_to_result(
     ctx: &mut FunctionContext<'_>,
     enum_name: &str,
@@ -623,12 +626,14 @@ pub(crate) fn emit_enum_case_default_to_result(
 ) {
     crate::codegen::enum_singletons::emit_lazy_case_load(ctx, enum_name, case_name);
     let case_type = PhpType::Object(enum_name.to_string());
-    abi::emit_incref_if_refcounted(ctx.emitter, &case_type);
     if boxed {
         crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &case_type);
+    } else {
+        abi::emit_incref_if_refcounted(ctx.emitter, &case_type);
     }
 }
 
+/// Emits a boxed PHP null default into the canonical result register.
 pub(crate) fn emit_boxed_null_literal_to_result(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_int_immediate(
         ctx.emitter,
