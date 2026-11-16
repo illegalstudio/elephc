@@ -626,9 +626,13 @@ fn unit_body_is_eligible(body: &[Stmt]) -> bool {
             StmtKind::Return(Some(value)) if unit_expr_is_eligible(value, &locals) => returned = true,
             // A file-level local written before any read (Symfony's dumped translation catalogues:
             // `$catalogue = new MessageCatalogue(...); ...; return $catalogue;`). It reads nothing
-            // of the caller. An include would also leave it in the caller's scope, but these files
-            // hand their result back through `return`, which is what the caller reads.
-            StmtKind::Assign { name, value } if unit_expr_is_eligible(value, &locals) => {
+            // of the caller. An include would also leave it in the caller's scope, which a unit
+            // cannot: only a closed world, where nothing else could run the file, takes that
+            // difference. With the interpreter linked the include keeps running there, in the
+            // includer's frame, so a later `if ($debug)` in the includer still sees the local.
+            StmtKind::Assign { name, value }
+                if crate::closed_world::is_enabled() && unit_expr_is_eligible(value, &locals) =>
+            {
                 locals.insert(name.clone());
             }
             // Guards around the value (`if (!class_exists(...)) { class_alias(...); }`): control
@@ -689,7 +693,13 @@ fn unit_expr_is_eligible(expr: &Expr, locals: &HashSet<String>) -> bool {
             .all(|(key, value)| unit_expr_is_eligible(key, locals) && unit_expr_is_eligible(value, locals)),
         ExprKind::NewObject { args, .. } => args.iter().all(|arg| unit_expr_is_eligible(arg, locals)),
         ExprKind::Negate(inner) | ExprKind::Not(inner) => unit_expr_is_eligible(inner, locals),
-        ExprKind::FunctionCall { args, .. } => args.iter().all(|arg| unit_expr_is_eligible(arg, locals)),
+        // A call is eligible when its arguments are, unless the function reads or writes the
+        // frame it runs in: as its own zero-argument function the file would answer with the
+        // unit's empty frame instead of the includer's (`return func_get_args();`).
+        ExprKind::FunctionCall { name, args } => {
+            !reads_the_calling_frame(name.as_str(), args.len())
+                && args.iter().all(|arg| unit_expr_is_eligible(arg, locals))
+        }
         // A closure without captures that names no calling class: its body is its own scope
         // (`return static function (array $context) { return new Kernel(...); }`). `static` is
         // not needed: without `$this` in the body the object it would bind shows nowhere, and
@@ -718,6 +728,28 @@ fn unit_expr_is_eligible(expr: &Expr, locals: &HashSet<String>) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether a call to `name` with `arg_count` arguments observes the frame it is called from: its
+/// variables, its arguments, its class scope or the call stack. An included file shares the includer's frame, a unit does not.
+fn reads_the_calling_frame(name: &str, arg_count: usize) -> bool {
+    let bare = name.rsplit('\\').next().unwrap_or(name).to_ascii_lowercase();
+    // `get_class()` and `get_parent_class()` read the calling class only without an argument.
+    if arg_count == 0 && matches!(bare.as_str(), "get_class" | "get_parent_class") {
+        return true;
+    }
+    matches!(
+        bare.as_str(),
+        "get_defined_vars"
+            | "func_get_args"
+            | "func_get_arg"
+            | "func_num_args"
+            | "compact"
+            | "extract"
+            | "debug_backtrace"
+            | "debug_print_backtrace"
+            | "get_called_class"
+    )
 }
 
 /// Whether `word` occurs in `text` with no identifier character on either side.
@@ -1360,7 +1392,14 @@ mod tests {
     #[test]
     fn a_file_that_writes_its_locals_before_reading_them_is_a_unit() {
         let catalogue = "<?php\nuse A\\C;\n$c = new C('fr', []);\n$e = new C('en', []);\n$c->add($e);\nreturn $c;";
-        assert!(unit_body_is_eligible(&program(catalogue)));
+        // With the interpreter linked, the include runs in the includer's frame and leaves the
+        // locals there, as php does; only a closed world compiles the file as a unit.
+        assert!(!unit_body_is_eligible(&program(catalogue)));
+        crate::closed_world::set_enabled(true);
+        let closed = unit_body_is_eligible(&program(catalogue));
+        crate::closed_world::set_enabled(false);
+        assert!(closed);
+        crate::closed_world::set_enabled(true);
         let reads_caller = "<?php\nreturn $context;";
         assert!(!unit_body_is_eligible(&program(reads_caller)));
         let reads_first = "<?php\n$a = $b;\n$b = 1;\nreturn $a;";
@@ -1369,6 +1408,26 @@ mod tests {
         assert!(!unit_body_is_eligible(&program(caller_receiver)));
         let conditional = "<?php\nif (A) { $x = 1; }\nreturn 1;";
         assert!(!unit_body_is_eligible(&program(conditional)));
+        crate::closed_world::set_enabled(false);
+    }
+
+    /// A file that asks for the frame it runs in (`func_get_args()`, `get_defined_vars()`,
+    /// `get_class()` without an argument, ...) is not a unit: as its own zero-argument function
+    /// it answered `[]` where php, running it in the includer's frame, returns the includer's.
+    #[test]
+    fn a_file_that_reads_the_calling_frame_is_not_a_unit() {
+        for source in [
+            "<?php\nreturn func_get_args();",
+            "<?php\nreturn get_defined_vars();",
+            "<?php\nreturn func_num_args();",
+            "<?php\nreturn get_class();",
+            "<?php\nreturn \\get_called_class();",
+            "<?php\nreturn ['trace' => debug_backtrace()];",
+        ] {
+            assert!(!unit_body_is_eligible(&program(source)), "{source}");
+        }
+        assert!(unit_body_is_eligible(&program("<?php\nreturn get_class(new \\stdClass());")));
+        assert!(unit_body_is_eligible(&program("<?php\nreturn strtoupper('x');")));
     }
 
     /// A dumped cache value holds anonymous classes, which the parser hoists behind the `return`;
