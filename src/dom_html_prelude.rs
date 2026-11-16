@@ -13,7 +13,8 @@
 //! - SCOPE. The classes cover what PHP's DOM exposes for an HTML document that code READS:
 //!   parsing, the node and element properties, `childNodes` / `children` / `attributes`,
 //!   `getAttribute()` and friends, `getElementsByTagName()`, `getElementById()`, `textContent`,
-//!   and the mutators `appendChild()` / `insertBefore()` / `removeChild()` / `setAttribute()`.
+//!   and the mutators `appendChild()` / `insertBefore()` / `removeChild()` / `setAttribute()`,
+//!   which throw php's `\DOMException` (declared by `crate::dom_prelude`, injected with this one).
 //!   Serialization (`saveHtml()`, `innerHTML`), selectors (`querySelector*`), `XMLDocument`,
 //!   `DocumentFragment` parsing and live collections are NOT provided: a `NodeList` and an
 //!   `HTMLCollection` are snapshots rebuilt when the tree changes.
@@ -21,9 +22,13 @@
 //!   active formatting list, foster parenting, foreign content for svg and math, the character
 //!   reference table (2,125 named references plus the 106 legacy forms that need no `;`).
 //!   Differences from php's bundled lexbor that were measured and copied: `sup` is not a
-//!   breakout element inside foreign content, and `<select>` content is inserted as written
-//!   (the customizable-select parsing). Not copied: the reconstruction of formatting elements
-//!   inside a `<textarea>` / `<title>`, and select content containing formatting elements.
+//!   breakout element inside foreign content, and `<select>` content is parsed by the in-body
+//!   rules (the customizable-select parsing: no "in select" insertion mode). A `<template>`'s
+//!   contents go to a fragment outside the tree, as php keeps them out of `childNodes`. Not
+//!   copied: the reconstruction of formatting elements inside a `<textarea>` / `<title>`.
+//! - ENCODING. A UTF-8 byte order mark is dropped and invalid UTF-8 becomes U+FFFD. The
+//!   `$overrideEncoding` argument and a `<meta charset>` in the first 1024 bytes are honoured for
+//!   UTF-8 and windows-1252 (latin1 and its labels); any other encoding is read as UTF-8.
 //! - HOW IT WAS VERIFIED. The PHP model was run against `Dom\HTMLDocument` in one process over a
 //!   curated list of 276 inputs and some 14,000 generated ones: identical trees (node types,
 //!   names, attributes, text, doctype ids). The same source, compiled by elephc, produced output
@@ -101,7 +106,9 @@ pub fn inject_if_used(
     let mut combined = declarations();
     inventory.record_program(GROUP, &combined);
     combined.extend(program);
-    combined
+    // The mutators throw php's `\DOMException`, which the classic DOM prelude declares; the late
+    // gate injects this surface after that prelude's own gate has run, so it is pulled in here.
+    crate::dom_prelude::inject_if_used(combined, inventory)
 }
 
 #[cfg(test)]

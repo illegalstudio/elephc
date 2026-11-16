@@ -107,6 +107,7 @@ fn decl_class_dom_node() -> Stmt {
         .method(decl_class_dom_node_m26())
         .method(decl_class_dom_node_m27())
         .method(decl_class_dom_node_m28())
+        .method(decl_class_dom_node_m29())
         .build()
 }
 
@@ -118,8 +119,8 @@ fn decl_class_dom_characterdata() -> Stmt {
         .prop("length", TypeExpr::Int, Some(e_int(0)))
         .prop("previousElementSibling", t_nullable(t_class("\\Dom\\Element")), Some(e_null()))
         .prop("nextElementSibling", t_nullable(t_class("\\Dom\\Element")), Some(e_null()))
-        .method(decl_class_dom_characterdata_m29())
         .method(decl_class_dom_characterdata_m30())
+        .method(decl_class_dom_characterdata_m31())
         .build()
 }
 
@@ -128,7 +129,7 @@ fn decl_class_dom_text() -> Stmt {
     class("Dom\\Text")
         .extends("\\Dom\\CharacterData")
         .prop("wholeText", TypeExpr::Str, Some(e_str("")))
-        .method(decl_class_dom_text_m31())
+        .method(decl_class_dom_text_m32())
         .build()
 }
 
@@ -136,7 +137,7 @@ fn decl_class_dom_text() -> Stmt {
 fn decl_class_dom_comment() -> Stmt {
     class("Dom\\Comment")
         .extends("\\Dom\\CharacterData")
-        .method(decl_class_dom_comment_m32())
+        .method(decl_class_dom_comment_m33())
         .build()
 }
 
@@ -147,7 +148,7 @@ fn decl_class_dom_documenttype() -> Stmt {
         .prop("name", TypeExpr::Str, Some(e_str("")))
         .prop("publicId", TypeExpr::Str, Some(e_str("")))
         .prop("systemId", TypeExpr::Str, Some(e_str("")))
-        .method(decl_class_dom_documenttype_m33())
+        .method(decl_class_dom_documenttype_m34())
         .build()
 }
 
@@ -162,8 +163,8 @@ fn decl_class_dom_attr() -> Stmt {
         .prop("value", TypeExpr::Str, Some(e_str("")))
         .prop("ownerElement", t_nullable(t_class("\\Dom\\Element")), Some(e_null()))
         .prop("specified", TypeExpr::Bool, Some(e_bool(true)))
-        .method(decl_class_dom_attr_m34())
         .method(decl_class_dom_attr_m35())
+        .method(decl_class_dom_attr_m36())
         .build()
 }
 
@@ -184,7 +185,6 @@ fn decl_class_dom_element() -> Stmt {
         .prop("childElementCount", TypeExpr::Int, Some(e_int(0)))
         .prop("previousElementSibling", t_nullable(t_class("\\Dom\\Element")), Some(e_null()))
         .prop("nextElementSibling", t_nullable(t_class("\\Dom\\Element")), Some(e_null()))
-        .method(decl_class_dom_element_m36())
         .method(decl_class_dom_element_m37())
         .method(decl_class_dom_element_m38())
         .method(decl_class_dom_element_m39())
@@ -196,6 +196,8 @@ fn decl_class_dom_element() -> Stmt {
         .method(decl_class_dom_element_m45())
         .method(decl_class_dom_element_m46())
         .method(decl_class_dom_element_m47())
+        .method(decl_class_dom_element_m48())
+        .method(decl_class_dom_element_m49())
         .build()
 }
 
@@ -203,7 +205,7 @@ fn decl_class_dom_element() -> Stmt {
 fn decl_class_dom_documentfragment() -> Stmt {
     class("Dom\\DocumentFragment")
         .extends("\\Dom\\Node")
-        .method(decl_class_dom_documentfragment_m48())
+        .method(decl_class_dom_documentfragment_m50())
         .build()
 }
 
@@ -223,14 +225,14 @@ fn decl_class_dom_document() -> Stmt {
         .prop("body", t_nullable(t_class("\\Dom\\Element")), Some(e_null()))
         .prop("head", t_nullable(t_class("\\Dom\\Element")), Some(e_null()))
         .prop("title", TypeExpr::Str, Some(e_str("")))
-        .method(decl_class_dom_document_m49())
-        .method(decl_class_dom_document_m50())
         .method(decl_class_dom_document_m51())
         .method(decl_class_dom_document_m52())
         .method(decl_class_dom_document_m53())
         .method(decl_class_dom_document_m54())
         .method(decl_class_dom_document_m55())
         .method(decl_class_dom_document_m56())
+        .method(decl_class_dom_document_m57())
+        .method(decl_class_dom_document_m58())
         .build()
 }
 
@@ -239,8 +241,8 @@ fn decl_class_dom_htmldocument() -> Stmt {
     class("Dom\\HTMLDocument")
         .final_()
         .extends("\\Dom\\Document")
-        .method(decl_class_dom_htmldocument_m57())
-        .method(decl_class_dom_htmldocument_m58())
+        .method(decl_class_dom_htmldocument_m59())
+        .method(decl_class_dom_htmldocument_m60())
         .build()
 }
 
@@ -274,9 +276,9 @@ fn decl_class_dom_elephchtmlparser() -> Stmt {
         .private_prop("tableTexts", t_array(), Some(e_array(vec![])))
         .private_prop("templateModes", t_array(), Some(e_array(vec![])))
         .private_prop("unterminated", TypeExpr::Bool, Some(e_bool(false)))
+        .private_prop("templateElements", t_array(), Some(e_array(vec![])))
+        .private_prop("templateFragments", t_array(), Some(e_array(vec![])))
         .private_prop("tableTextBuf", TypeExpr::Str, Some(e_str("")))
-        .method(decl_class_dom_elephchtmlparser_m59())
-        .method(decl_class_dom_elephchtmlparser_m60())
         .method(decl_class_dom_elephchtmlparser_m61())
         .method(decl_class_dom_elephchtmlparser_m62())
         .method(decl_class_dom_elephchtmlparser_m63())
@@ -367,6 +369,14 @@ fn decl_class_dom_elephchtmlparser() -> Stmt {
         .method(decl_class_dom_elephchtmlparser_m148())
         .method(decl_class_dom_elephchtmlparser_m149())
         .method(decl_class_dom_elephchtmlparser_m150())
+        .method(decl_class_dom_elephchtmlparser_m151())
+        .method(decl_class_dom_elephchtmlparser_m152())
+        .method(decl_class_dom_elephchtmlparser_m153())
+        .method(decl_class_dom_elephchtmlparser_m154())
+        .method(decl_class_dom_elephchtmlparser_m155())
+        .method(decl_class_dom_elephchtmlparser_m156())
+        .method(decl_class_dom_elephchtmlparser_m157())
+        .method(decl_class_dom_elephchtmlparser_m158())
         .build()
 }
 
@@ -2522,7 +2532,6 @@ fn decl_fn_elephc_dom_legacy_entities() -> Stmt {
         .build()
 }
 
-/// Builds the whole surface, one declaration per helper above.
 /// `__construct` lifted out of `decl_class_dom_nodelist` so it builds in its own stack frame.
 fn decl_class_dom_nodelist_m1() -> MethodBuilder {
     method("__construct")
@@ -2620,10 +2629,8 @@ fn decl_class_dom_htmlcollection_m7() -> MethodBuilder {
                     vec![],
                     None,
                 ),
-            ]),
-            s_foreach(e_this_prop("items"), None, "element", vec![
                 s_if(
-                    e_binop(e_method_call(e_var("element"), "getAttribute", vec![e_str("name")]), BinOp::StrictEq, e_var("key")),
+                    e_binop(e_binop(e_prop(e_var("element"), "namespaceURI"), BinOp::StrictEq, e_str("http://www.w3.org/1999/xhtml")), BinOp::And, e_binop(e_method_call(e_var("element"), "getAttribute", vec![e_str("name")]), BinOp::StrictEq, e_var("key"))),
                     vec![
                         s_return(e_var("element")),
                     ],
@@ -2822,6 +2829,26 @@ fn decl_class_dom_node_m22() -> MethodBuilder {
         .param_default("child", t_nullable(t_class("\\Dom\\Node")), e_null())
         .returns(t_class("\\Dom\\Node"))
         .body(vec![
+            s_assign("walk", e_this()),
+            s_while(e_binop(e_var("walk"), BinOp::StrictNotEq, e_null()), vec![
+                s_if(
+                    e_binop(e_var("walk"), BinOp::StrictEq, e_var("node")),
+                    vec![
+                        s_throw(e_new_fq("DOMException", vec![e_str("Hierarchy Request Error"), e_int(3)])),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("walk", e_prop(e_var("walk"), "parentNode")),
+            ]),
+            s_if(
+                e_binop(e_binop(e_var("child"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_call("array_search", vec![e_var("child"), e_this_prop("kids"), e_bool(true)]), BinOp::StrictEq, e_bool(false))),
+                vec![
+                    s_throw(e_new_fq("DOMException", vec![e_str("Not Found Error"), e_int(8)])),
+                ],
+                vec![],
+                None,
+            ),
             s_if(
                 e_binop(e_prop(e_var("node"), "parentNode"), BinOp::StrictNotEq, e_null()),
                 vec![
@@ -2834,16 +2861,7 @@ fn decl_class_dom_node_m22() -> MethodBuilder {
             s_if(
                 e_binop(e_var("child"), BinOp::StrictNotEq, e_null()),
                 vec![
-                    s_assign("found", e_call("array_search", vec![e_var("child"), e_this_prop("kids"), e_bool(true)])),
-                    s_if(
-                        e_binop(e_var("found"), BinOp::StrictEq, e_bool(false)),
-                        vec![
-                            s_throw(e_new_fq("Exception", vec![e_str("Not Found Error"), e_int(8)])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_assign("index", e_var("found")),
+                    s_assign("index", e_call("array_search", vec![e_var("child"), e_this_prop("kids"), e_bool(true)])),
                 ],
                 vec![],
                 None,
@@ -2875,12 +2893,33 @@ fn decl_class_dom_node_m22() -> MethodBuilder {
             ),
             s_expr(e_call("array_splice", vec![e_this_prop("kids"), e_var("index"), e_int(0), e_array(vec![e_var("node")])])),
             s_expr(e_method_call(e_this(), "relink", vec![])),
+            s_if(
+                e_not(e_method_call(e_this(), "isBuilding", vec![])),
+                vec![
+                    s_expr(e_method_call(e_var("node"), "markConnected", vec![e_this_prop("isConnected")])),
+                ],
+                vec![],
+                None,
+            ),
             s_return(e_var("node")),
         ])
 }
 
-/// `removeChild` lifted out of `decl_class_dom_node` so it builds in its own stack frame.
+/// `markConnected` lifted out of `decl_class_dom_node` so it builds in its own stack frame.
 fn decl_class_dom_node_m23() -> MethodBuilder {
+    method("markConnected")
+        .param("connected", TypeExpr::Bool)
+        .returns(TypeExpr::Void)
+        .body(vec![
+            s_prop_assign(e_this(), "isConnected", e_var("connected")),
+            s_foreach(e_this_prop("kids"), None, "kid", vec![
+                s_expr(e_method_call(e_var("kid"), "markConnected", vec![e_var("connected")])),
+            ]),
+        ])
+}
+
+/// `removeChild` lifted out of `decl_class_dom_node` so it builds in its own stack frame.
+fn decl_class_dom_node_m24() -> MethodBuilder {
     method("removeChild")
         .param("child", t_class("\\Dom\\Node"))
         .returns(t_class("\\Dom\\Node"))
@@ -2889,7 +2928,7 @@ fn decl_class_dom_node_m23() -> MethodBuilder {
             s_if(
                 e_binop(e_var("found"), BinOp::StrictEq, e_bool(false)),
                 vec![
-                    s_throw(e_new_fq("Exception", vec![e_str("Not Found Error"), e_int(8)])),
+                    s_throw(e_new_fq("DOMException", vec![e_str("Not Found Error"), e_int(8)])),
                 ],
                 vec![],
                 None,
@@ -2900,12 +2939,13 @@ fn decl_class_dom_node_m23() -> MethodBuilder {
             s_prop_assign(e_var("child"), "previousSibling", e_null()),
             s_prop_assign(e_var("child"), "nextSibling", e_null()),
             s_expr(e_method_call(e_this(), "relink", vec![])),
+            s_expr(e_method_call(e_var("child"), "markConnected", vec![e_bool(false)])),
             s_return(e_var("child")),
         ])
 }
 
 /// `relink` lifted out of `decl_class_dom_node` so it builds in its own stack frame.
-fn decl_class_dom_node_m24() -> MethodBuilder {
+fn decl_class_dom_node_m25() -> MethodBuilder {
     method("relink")
         .returns(TypeExpr::Void)
         .body(vec![
@@ -2940,10 +2980,11 @@ fn decl_class_dom_node_m24() -> MethodBuilder {
 }
 
 /// `finishBuild` lifted out of `decl_class_dom_node` so it builds in its own stack frame.
-fn decl_class_dom_node_m25() -> MethodBuilder {
+fn decl_class_dom_node_m26() -> MethodBuilder {
     method("finishBuild")
         .returns(TypeExpr::Void)
         .body(vec![
+            s_prop_assign(e_this(), "isConnected", e_ternary(e_binop(e_this_prop("parentNode"), BinOp::StrictEq, e_null()), e_instance_of(e_this(), "\\Dom\\Document"), e_prop(e_this_prop("parentNode"), "isConnected"))),
             s_foreach(e_this_prop("kids"), None, "kid", vec![
                 s_expr(e_method_call(e_var("kid"), "finishBuild", vec![])),
             ]),
@@ -2954,13 +2995,13 @@ fn decl_class_dom_node_m25() -> MethodBuilder {
 }
 
 /// `afterRelink` lifted out of `decl_class_dom_node` so it builds in its own stack frame.
-fn decl_class_dom_node_m26() -> MethodBuilder {
+fn decl_class_dom_node_m27() -> MethodBuilder {
     method("afterRelink")
         .returns(TypeExpr::Void)
 }
 
 /// `refreshText` lifted out of `decl_class_dom_node` so it builds in its own stack frame.
-fn decl_class_dom_node_m27() -> MethodBuilder {
+fn decl_class_dom_node_m28() -> MethodBuilder {
     method("refreshText")
         .returns(TypeExpr::Void)
         .body(vec![
@@ -2981,7 +3022,7 @@ fn decl_class_dom_node_m27() -> MethodBuilder {
 }
 
 /// `computeText` lifted out of `decl_class_dom_node` so it builds in its own stack frame.
-fn decl_class_dom_node_m28() -> MethodBuilder {
+fn decl_class_dom_node_m29() -> MethodBuilder {
     method("computeText")
         .returns(TypeExpr::Void)
         .body(vec![
@@ -3005,29 +3046,37 @@ fn decl_class_dom_node_m28() -> MethodBuilder {
 }
 
 /// `setData` lifted out of `decl_class_dom_characterdata` so it builds in its own stack frame.
-fn decl_class_dom_characterdata_m29() -> MethodBuilder {
+fn decl_class_dom_characterdata_m30() -> MethodBuilder {
     method("setData")
         .param("data", TypeExpr::Str)
         .returns(TypeExpr::Void)
         .body(vec![
             s_prop_assign(e_this(), "data", e_var("data")),
             s_prop_assign(e_this(), "nodeValue", e_var("data")),
-            s_prop_assign(e_this(), "length", e_call("strlen", vec![e_var("data")])),
+            s_if(
+                e_not(e_method_call(e_this(), "isBuilding", vec![])),
+                vec![
+                    s_prop_assign(e_this(), "length", e_call("mb_strlen", vec![e_var("data"), e_str("UTF-8")])),
+                ],
+                vec![],
+                None,
+            ),
             s_prop_assign(e_this(), "textContent", e_var("data")),
         ])
 }
 
 /// `computeText` lifted out of `decl_class_dom_characterdata` so it builds in its own stack frame.
-fn decl_class_dom_characterdata_m30() -> MethodBuilder {
+fn decl_class_dom_characterdata_m31() -> MethodBuilder {
     method("computeText")
         .returns(TypeExpr::Void)
         .body(vec![
             s_prop_assign(e_this(), "textContent", e_this_prop("data")),
+            s_prop_assign(e_this(), "length", e_call("mb_strlen", vec![e_this_prop("data"), e_str("UTF-8")])),
         ])
 }
 
 /// `__construct` lifted out of `decl_class_dom_text` so it builds in its own stack frame.
-fn decl_class_dom_text_m31() -> MethodBuilder {
+fn decl_class_dom_text_m32() -> MethodBuilder {
     method("__construct")
         .param_default("data", TypeExpr::Str, e_str(""))
         .body(vec![
@@ -3040,7 +3089,7 @@ fn decl_class_dom_text_m31() -> MethodBuilder {
 }
 
 /// `__construct` lifted out of `decl_class_dom_comment` so it builds in its own stack frame.
-fn decl_class_dom_comment_m32() -> MethodBuilder {
+fn decl_class_dom_comment_m33() -> MethodBuilder {
     method("__construct")
         .param_default("data", TypeExpr::Str, e_str(""))
         .body(vec![
@@ -3052,7 +3101,7 @@ fn decl_class_dom_comment_m32() -> MethodBuilder {
 }
 
 /// `__construct` lifted out of `decl_class_dom_documenttype` so it builds in its own stack frame.
-fn decl_class_dom_documenttype_m33() -> MethodBuilder {
+fn decl_class_dom_documenttype_m34() -> MethodBuilder {
     method("__construct")
         .param_default("name", TypeExpr::Str, e_str(""))
         .param_default("publicId", TypeExpr::Str, e_str(""))
@@ -3068,7 +3117,7 @@ fn decl_class_dom_documenttype_m33() -> MethodBuilder {
 }
 
 /// `__construct` lifted out of `decl_class_dom_attr` so it builds in its own stack frame.
-fn decl_class_dom_attr_m34() -> MethodBuilder {
+fn decl_class_dom_attr_m35() -> MethodBuilder {
     method("__construct")
         .param_default("name", TypeExpr::Str, e_str(""))
         .param_default("value", TypeExpr::Str, e_str(""))
@@ -3085,7 +3134,7 @@ fn decl_class_dom_attr_m34() -> MethodBuilder {
 }
 
 /// `computeText` lifted out of `decl_class_dom_attr` so it builds in its own stack frame.
-fn decl_class_dom_attr_m35() -> MethodBuilder {
+fn decl_class_dom_attr_m36() -> MethodBuilder {
     method("computeText")
         .returns(TypeExpr::Void)
         .body(vec![
@@ -3094,7 +3143,7 @@ fn decl_class_dom_attr_m35() -> MethodBuilder {
 }
 
 /// `__construct` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m36() -> MethodBuilder {
+fn decl_class_dom_element_m37() -> MethodBuilder {
     method("__construct")
         .param_default("qualifiedName", TypeExpr::Str, e_str(""))
         .body(vec![
@@ -3110,7 +3159,7 @@ fn decl_class_dom_element_m36() -> MethodBuilder {
 }
 
 /// `afterRelink` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m37() -> MethodBuilder {
+fn decl_class_dom_element_m38() -> MethodBuilder {
     method("afterRelink")
         .returns(TypeExpr::Void)
         .body(vec![
@@ -3138,7 +3187,7 @@ fn decl_class_dom_element_m37() -> MethodBuilder {
 }
 
 /// `hasAttributes` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m38() -> MethodBuilder {
+fn decl_class_dom_element_m39() -> MethodBuilder {
     method("hasAttributes")
         .returns(TypeExpr::Bool)
         .body(vec![
@@ -3147,7 +3196,7 @@ fn decl_class_dom_element_m38() -> MethodBuilder {
 }
 
 /// `getAttributeNames` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m39() -> MethodBuilder {
+fn decl_class_dom_element_m40() -> MethodBuilder {
     method("getAttributeNames")
         .returns(t_array())
         .body(vec![
@@ -3160,7 +3209,7 @@ fn decl_class_dom_element_m39() -> MethodBuilder {
 }
 
 /// `getAttribute` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m40() -> MethodBuilder {
+fn decl_class_dom_element_m41() -> MethodBuilder {
     method("getAttribute")
         .param("qualifiedName", TypeExpr::Str)
         .returns(t_nullable(TypeExpr::Str))
@@ -3171,7 +3220,7 @@ fn decl_class_dom_element_m40() -> MethodBuilder {
 }
 
 /// `hasAttribute` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m41() -> MethodBuilder {
+fn decl_class_dom_element_m42() -> MethodBuilder {
     method("hasAttribute")
         .param("qualifiedName", TypeExpr::Str)
         .returns(TypeExpr::Bool)
@@ -3181,7 +3230,7 @@ fn decl_class_dom_element_m41() -> MethodBuilder {
 }
 
 /// `getAttributeNode` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m42() -> MethodBuilder {
+fn decl_class_dom_element_m43() -> MethodBuilder {
     method("getAttributeNode")
         .param("qualifiedName", TypeExpr::Str)
         .returns(t_nullable(t_class("\\Dom\\Attr")))
@@ -3191,7 +3240,7 @@ fn decl_class_dom_element_m42() -> MethodBuilder {
 }
 
 /// `setAttribute` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m43() -> MethodBuilder {
+fn decl_class_dom_element_m44() -> MethodBuilder {
     method("setAttribute")
         .param("qualifiedName", TypeExpr::Str)
         .param("value", TypeExpr::Str)
@@ -3223,7 +3272,7 @@ fn decl_class_dom_element_m43() -> MethodBuilder {
 }
 
 /// `removeAttribute` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m44() -> MethodBuilder {
+fn decl_class_dom_element_m45() -> MethodBuilder {
     method("removeAttribute")
         .param("qualifiedName", TypeExpr::Str)
         .returns(TypeExpr::Void)
@@ -3257,7 +3306,7 @@ fn decl_class_dom_element_m44() -> MethodBuilder {
 }
 
 /// `noteAttribute` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m45() -> MethodBuilder {
+fn decl_class_dom_element_m46() -> MethodBuilder {
     method("noteAttribute")
         .private()
         .param("name", TypeExpr::Str)
@@ -3280,22 +3329,58 @@ fn decl_class_dom_element_m45() -> MethodBuilder {
 }
 
 /// `getElementsByTagName` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m46() -> MethodBuilder {
+fn decl_class_dom_element_m47() -> MethodBuilder {
     method("getElementsByTagName")
         .param("qualifiedName", TypeExpr::Str)
         .returns(t_class("\\Dom\\HTMLCollection"))
         .body(vec![
             s_assign("found", e_array(vec![])),
-            s_expr(e_method_call(e_this(), "collectByTagName", vec![e_call("strtolower", vec![e_var("qualifiedName")]), e_var("found")])),
+            s_expr(e_method_call(e_this(), "collectByTagName", vec![e_var("qualifiedName"), e_var("found"), e_call("strtolower", vec![e_var("qualifiedName")])])),
             s_return(e_new_fq("Dom\\HTMLCollection", vec![e_var("found")])),
         ])
 }
 
+/// `firstHtmlTitle` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
+fn decl_class_dom_element_m48() -> MethodBuilder {
+    method("firstHtmlTitle")
+        .returns(t_nullable(t_class("\\Dom\\Element")))
+        .body(vec![
+            s_if(
+                e_binop(e_binop(e_this_prop("localName"), BinOp::StrictEq, e_str("title")), BinOp::And, e_binop(e_this_prop("namespaceURI"), BinOp::StrictEq, e_str("http://www.w3.org/1999/xhtml"))),
+                vec![
+                    s_return(e_this()),
+                ],
+                vec![],
+                None,
+            ),
+            s_foreach(e_this_prop("kids"), None, "kid", vec![
+                s_if(
+                    e_instance_of(e_var("kid"), "\\Dom\\Element"),
+                    vec![
+                        s_assign("found", e_method_call(e_var("kid"), "firstHtmlTitle", vec![])),
+                        s_if(
+                            e_binop(e_var("found"), BinOp::StrictNotEq, e_null()),
+                            vec![
+                                s_return(e_var("found")),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                    ],
+                    vec![],
+                    None,
+                ),
+            ]),
+            s_return(e_null()),
+        ])
+}
+
 /// `collectByTagName` lifted out of `decl_class_dom_element` so it builds in its own stack frame.
-fn decl_class_dom_element_m47() -> MethodBuilder {
+fn decl_class_dom_element_m49() -> MethodBuilder {
     method("collectByTagName")
         .param("wanted", TypeExpr::Str)
         .param_by_ref("found", Some(t_array()))
+        .param_default("lower", TypeExpr::Str, e_str(""))
         .returns(TypeExpr::Void)
         .body(vec![
             s_foreach(e_this_prop("kids"), None, "kid", vec![
@@ -3303,14 +3388,14 @@ fn decl_class_dom_element_m47() -> MethodBuilder {
                     e_instance_of(e_var("kid"), "\\Dom\\Element"),
                     vec![
                         s_if(
-                            e_binop(e_binop(e_var("wanted"), BinOp::StrictEq, e_str("*")), BinOp::Or, e_binop(e_prop(e_var("kid"), "localName"), BinOp::StrictEq, e_var("wanted"))),
+                            e_binop(e_binop(e_var("wanted"), BinOp::StrictEq, e_str("*")), BinOp::Or, e_binop(e_prop(e_var("kid"), "localName"), BinOp::StrictEq, e_ternary(e_binop(e_prop(e_var("kid"), "namespaceURI"), BinOp::StrictEq, e_str("http://www.w3.org/1999/xhtml")), e_var("lower"), e_var("wanted")))),
                             vec![
                                 s_array_push("found", e_var("kid")),
                             ],
                             vec![],
                             None,
                         ),
-                        s_expr(e_method_call(e_var("kid"), "collectByTagName", vec![e_var("wanted"), e_var("found")])),
+                        s_expr(e_method_call(e_var("kid"), "collectByTagName", vec![e_var("wanted"), e_var("found"), e_var("lower")])),
                     ],
                     vec![],
                     None,
@@ -3320,7 +3405,7 @@ fn decl_class_dom_element_m47() -> MethodBuilder {
 }
 
 /// `__construct` lifted out of `decl_class_dom_documentfragment` so it builds in its own stack frame.
-fn decl_class_dom_documentfragment_m48() -> MethodBuilder {
+fn decl_class_dom_documentfragment_m50() -> MethodBuilder {
     method("__construct")
         .body(vec![
             s_expr(e_parent_call("__construct", vec![])),
@@ -3330,17 +3415,18 @@ fn decl_class_dom_documentfragment_m48() -> MethodBuilder {
 }
 
 /// `__construct` lifted out of `decl_class_dom_document` so it builds in its own stack frame.
-fn decl_class_dom_document_m49() -> MethodBuilder {
+fn decl_class_dom_document_m51() -> MethodBuilder {
     method("__construct")
         .body(vec![
             s_expr(e_parent_call("__construct", vec![])),
             s_prop_assign(e_this(), "nodeType", e_int(9)),
             s_prop_assign(e_this(), "nodeName", e_str("#document")),
+            s_prop_assign(e_this(), "isConnected", e_bool(true)),
         ])
 }
 
 /// `afterRelink` lifted out of `decl_class_dom_document` so it builds in its own stack frame.
-fn decl_class_dom_document_m50() -> MethodBuilder {
+fn decl_class_dom_document_m52() -> MethodBuilder {
     method("afterRelink")
         .returns(TypeExpr::Void)
         .body(vec![
@@ -3394,34 +3480,57 @@ fn decl_class_dom_document_m50() -> MethodBuilder {
 }
 
 /// `computeText` lifted out of `decl_class_dom_document` so it builds in its own stack frame.
-fn decl_class_dom_document_m51() -> MethodBuilder {
+fn decl_class_dom_document_m53() -> MethodBuilder {
     method("computeText")
         .returns(TypeExpr::Void)
         .body(vec![
             s_prop_assign(e_this(), "textContent", e_null()),
+            s_assign("title", e_ternary(e_binop(e_this_prop("documentElement"), BinOp::StrictEq, e_null()), e_null(), e_method_call(e_this_prop("documentElement"), "firstHtmlTitle", vec![]))),
+            s_prop_assign(e_this(), "title", e_str("")),
+            s_if(
+                e_binop(e_var("title"), BinOp::StrictNotEq, e_null()),
+                vec![
+                    s_assign("words", e_call("explode", vec![e_str(" "), e_call("strtr", vec![e_cast(CastType::String, e_prop(e_var("title"), "textContent")), e_str("\t\n\u{c}\r"), e_str("    ")])])),
+                    s_assign("kept", e_array(vec![])),
+                    s_foreach(e_var("words"), None, "word", vec![
+                        s_if(
+                            e_binop(e_var("word"), BinOp::StrictNotEq, e_str("")),
+                            vec![
+                                s_array_push("kept", e_var("word")),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                    ]),
+                    s_prop_assign(e_this(), "title", e_call("implode", vec![e_str(" "), e_var("kept")])),
+                ],
+                vec![],
+                None,
+            ),
         ])
 }
 
 /// `getElementsByTagName` lifted out of `decl_class_dom_document` so it builds in its own stack frame.
-fn decl_class_dom_document_m52() -> MethodBuilder {
+fn decl_class_dom_document_m54() -> MethodBuilder {
     method("getElementsByTagName")
         .param("qualifiedName", TypeExpr::Str)
         .returns(t_class("\\Dom\\HTMLCollection"))
         .body(vec![
             s_assign("found", e_array(vec![])),
-            s_assign("wanted", e_call("strtolower", vec![e_var("qualifiedName")])),
+            s_assign("lower", e_call("strtolower", vec![e_var("qualifiedName")])),
+            s_assign("root", e_this_prop("documentElement")),
             s_if(
-                e_binop(e_this_prop("documentElement"), BinOp::StrictNotEq, e_null()),
+                e_binop(e_var("root"), BinOp::StrictNotEq, e_null()),
                 vec![
                     s_if(
-                        e_binop(e_binop(e_var("wanted"), BinOp::StrictEq, e_str("*")), BinOp::Or, e_binop(e_prop(e_this_prop("documentElement"), "localName"), BinOp::StrictEq, e_var("wanted"))),
+                        e_binop(e_binop(e_var("qualifiedName"), BinOp::StrictEq, e_str("*")), BinOp::Or, e_binop(e_prop(e_var("root"), "localName"), BinOp::StrictEq, e_ternary(e_binop(e_prop(e_var("root"), "namespaceURI"), BinOp::StrictEq, e_str("http://www.w3.org/1999/xhtml")), e_var("lower"), e_var("qualifiedName")))),
                         vec![
-                            s_array_push("found", e_this_prop("documentElement")),
+                            s_array_push("found", e_var("root")),
                         ],
                         vec![],
                         None,
                     ),
-                    s_expr(e_method_call(e_this_prop("documentElement"), "collectByTagName", vec![e_var("wanted"), e_var("found")])),
+                    s_expr(e_method_call(e_var("root"), "collectByTagName", vec![e_var("qualifiedName"), e_var("found"), e_var("lower")])),
                 ],
                 vec![],
                 None,
@@ -3431,7 +3540,7 @@ fn decl_class_dom_document_m52() -> MethodBuilder {
 }
 
 /// `createElement` lifted out of `decl_class_dom_document` so it builds in its own stack frame.
-fn decl_class_dom_document_m53() -> MethodBuilder {
+fn decl_class_dom_document_m55() -> MethodBuilder {
     method("createElement")
         .param("localName", TypeExpr::Str)
         .returns(t_class("\\Dom\\Element"))
@@ -3443,7 +3552,7 @@ fn decl_class_dom_document_m53() -> MethodBuilder {
 }
 
 /// `createTextNode` lifted out of `decl_class_dom_document` so it builds in its own stack frame.
-fn decl_class_dom_document_m54() -> MethodBuilder {
+fn decl_class_dom_document_m56() -> MethodBuilder {
     method("createTextNode")
         .param("data", TypeExpr::Str)
         .returns(t_class("\\Dom\\Text"))
@@ -3455,7 +3564,7 @@ fn decl_class_dom_document_m54() -> MethodBuilder {
 }
 
 /// `createComment` lifted out of `decl_class_dom_document` so it builds in its own stack frame.
-fn decl_class_dom_document_m55() -> MethodBuilder {
+fn decl_class_dom_document_m57() -> MethodBuilder {
     method("createComment")
         .param("data", TypeExpr::Str)
         .returns(t_class("\\Dom\\Comment"))
@@ -3467,7 +3576,7 @@ fn decl_class_dom_document_m55() -> MethodBuilder {
 }
 
 /// `getElementById` lifted out of `decl_class_dom_document` so it builds in its own stack frame.
-fn decl_class_dom_document_m56() -> MethodBuilder {
+fn decl_class_dom_document_m58() -> MethodBuilder {
     method("getElementById")
         .param("elementId", TypeExpr::Str)
         .returns(t_nullable(t_class("\\Dom\\Element")))
@@ -3505,7 +3614,7 @@ fn decl_class_dom_document_m56() -> MethodBuilder {
 }
 
 /// `createEmpty` lifted out of `decl_class_dom_htmldocument` so it builds in its own stack frame.
-fn decl_class_dom_htmldocument_m57() -> MethodBuilder {
+fn decl_class_dom_htmldocument_m59() -> MethodBuilder {
     method("createEmpty")
         .static_()
         .param_default("encoding", TypeExpr::Str, e_str("UTF-8"))
@@ -3513,12 +3622,13 @@ fn decl_class_dom_htmldocument_m57() -> MethodBuilder {
         .returns(t_class("\\Dom\\HTMLDocument"))
         .body(vec![
             s_assign("document", e_new_fq("Dom\\HTMLDocument", vec![])),
+            s_prop_assign(e_var("document"), "nodeType", e_int(13)),
             s_return(e_var("document")),
         ])
 }
 
 /// `createFromString` lifted out of `decl_class_dom_htmldocument` so it builds in its own stack frame.
-fn decl_class_dom_htmldocument_m58() -> MethodBuilder {
+fn decl_class_dom_htmldocument_m60() -> MethodBuilder {
     method("createFromString")
         .static_()
         .param("source", TypeExpr::Str)
@@ -3529,6 +3639,18 @@ fn decl_class_dom_htmldocument_m58() -> MethodBuilder {
         .body(vec![
             s_assign("document", e_new_fq("Dom\\HTMLDocument", vec![])),
             s_prop_assign(e_var("document"), "nodeType", e_int(13)),
+            s_assign("encoding", e_static_call("\\Dom\\__ElephcHtmlParser", "sniffEncoding", vec![e_var("source"), e_var("overrideEncoding")])),
+            s_if(
+                e_binop(e_var("encoding"), BinOp::StrictEq, e_str("windows-1252")),
+                vec![
+                    s_assign("source", e_static_call("\\Dom\\__ElephcHtmlParser", "decodeWindows1252", vec![e_var("source")])),
+                ],
+                vec![],
+                None,
+            ),
+            s_prop_assign(e_var("document"), "characterSet", e_var("encoding")),
+            s_prop_assign(e_var("document"), "charset", e_var("encoding")),
+            s_prop_assign(e_var("document"), "inputEncoding", e_var("encoding")),
             s_prop_assign(e_var("document"), "building", e_bool(true)),
             s_assign("parser", e_new_fq("Dom\\__ElephcHtmlParser", vec![e_var("document"), e_var("source")])),
             s_expr(e_method_call(e_var("parser"), "run", vec![])),
@@ -3539,12 +3661,28 @@ fn decl_class_dom_htmldocument_m58() -> MethodBuilder {
 }
 
 /// `__construct` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m59() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m61() -> MethodBuilder {
     method("__construct")
         .param("doc", t_class("\\Dom\\Document"))
         .param("source", TypeExpr::Str)
         .body(vec![
             s_prop_assign(e_this(), "doc", e_var("doc")),
+            s_if(
+                e_binop(e_call("substr", vec![e_var("source"), e_int(0), e_int(3)]), BinOp::StrictEq, e_str("\u{e0ef}\u{e0bb}\u{e0bf}")),
+                vec![
+                    s_assign("source", e_call("substr", vec![e_var("source"), e_int(3)])),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_not(e_call("mb_check_encoding", vec![e_var("source"), e_str("UTF-8")])),
+                vec![
+                    s_assign("source", e_self_call("scrubUtf8", vec![e_var("source")])),
+                ],
+                vec![],
+                None,
+            ),
             s_assign("source", e_call("str_replace", vec![e_str("\r\n"), e_str("\n"), e_var("source")])),
             s_assign("source", e_call("str_replace", vec![e_str("\r"), e_str("\n"), e_var("source")])),
             s_prop_assign(e_this(), "src", e_var("source")),
@@ -3552,8 +3690,272 @@ fn decl_class_dom_elephchtmlparser_m59() -> MethodBuilder {
         ])
 }
 
+/// `sniffEncoding` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
+fn decl_class_dom_elephchtmlparser_m62() -> MethodBuilder {
+    method("sniffEncoding")
+        .static_()
+        .param("source", TypeExpr::Str)
+        .param("override", t_nullable(TypeExpr::Str))
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_if(
+                e_binop(e_call("substr", vec![e_var("source"), e_int(0), e_int(3)]), BinOp::StrictEq, e_str("\u{e0ef}\u{e0bb}\u{e0bf}")),
+                vec![
+                    s_return(e_str("UTF-8")),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_binop(e_var("override"), BinOp::StrictNotEq, e_null()),
+                vec![
+                    s_assign("known", e_self_call("encodingForLabel", vec![e_var("override")])),
+                    s_return(e_ternary(e_binop(e_var("known"), BinOp::StrictEq, e_str("")), e_str("UTF-8"), e_var("known"))),
+                ],
+                vec![],
+                None,
+            ),
+            s_assign("head", e_call("strtolower", vec![e_call("substr", vec![e_var("source"), e_int(0), e_int(1024)])])),
+            s_assign("at", e_int(0)),
+            s_while(e_bool(true), vec![
+                s_assign("lt", e_call("strpos", vec![e_var("head"), e_str("<"), e_var("at")])),
+                s_if(
+                    e_binop(e_var("lt"), BinOp::StrictEq, e_bool(false)),
+                    vec![
+                        s_break(1),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_if(
+                    e_binop(e_call("substr", vec![e_var("head"), e_var("lt"), e_int(4)]), BinOp::StrictEq, e_str("<!--")),
+                    vec![
+                        s_assign("close", e_call("strpos", vec![e_var("head"), e_str("-->"), e_binop(e_var("lt"), BinOp::Add, e_int(4))])),
+                        s_if(
+                            e_binop(e_var("close"), BinOp::StrictEq, e_bool(false)),
+                            vec![
+                                s_break(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("at", e_binop(e_var("close"), BinOp::Add, e_int(3))),
+                        s_continue(1),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("end", e_call("strpos", vec![e_var("head"), e_str(">"), e_var("lt")])),
+                s_if(
+                    e_binop(e_var("end"), BinOp::StrictEq, e_bool(false)),
+                    vec![
+                        s_break(1),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("tag", e_call("substr", vec![e_var("head"), e_var("lt"), e_binop(e_var("end"), BinOp::Sub, e_var("lt"))])),
+                s_assign("at", e_binop(e_var("end"), BinOp::Add, e_int(1))),
+                s_if(
+                    e_binop(e_binop(e_binop(e_call("strlen", vec![e_var("tag")]), BinOp::Lt, e_int(6)), BinOp::Or, e_binop(e_call("substr", vec![e_var("tag"), e_int(0), e_int(5)]), BinOp::StrictNotEq, e_str("<meta"))), BinOp::Or, e_not(e_binop(e_self_call("isSpace", vec![e_index(e_var("tag"), e_int(5))]), BinOp::Or, e_binop(e_index(e_var("tag"), e_int(5)), BinOp::StrictEq, e_str("/"))))),
+                    vec![
+                        s_continue(1),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("c", e_call("strpos", vec![e_var("tag"), e_str("charset=")])),
+                s_if(
+                    e_binop(e_var("c"), BinOp::StrictEq, e_bool(false)),
+                    vec![
+                        s_continue(1),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("value", e_call("ltrim", vec![e_call("substr", vec![e_var("tag"), e_binop(e_var("c"), BinOp::Add, e_int(8))]), e_str(" \t\n\u{c}\r\"'")])),
+                s_assign("known", e_self_call("encodingForLabel", vec![e_call("substr", vec![e_var("value"), e_int(0), e_call("strcspn", vec![e_var("value"), e_str(" \t\n\u{c}\r\"';/>")])])])),
+                s_if(
+                    e_binop(e_var("known"), BinOp::StrictNotEq, e_str("")),
+                    vec![
+                        s_return(e_var("known")),
+                    ],
+                    vec![],
+                    None,
+                ),
+            ]),
+            s_return(e_str("UTF-8")),
+        ])
+}
+
+/// `encodingForLabel` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
+fn decl_class_dom_elephchtmlparser_m63() -> MethodBuilder {
+    method("encodingForLabel")
+        .private()
+        .static_()
+        .param("label", TypeExpr::Str)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_assign("label", e_call("strtolower", vec![e_call("trim", vec![e_var("label"), e_str(" \t\n\u{c}\r")])])),
+            s_if(
+                e_call("in_array", vec![e_var("label"), e_array(vec![e_str("utf-8"), e_str("utf8"), e_str("unicode-1-1-utf-8"), e_str("unicode11utf8"), e_str("unicode20utf8"), e_str("x-unicode20utf8")]), e_bool(true)]),
+                vec![
+                    s_return(e_str("UTF-8")),
+                ],
+                vec![],
+                None,
+            ),
+            s_if(
+                e_call("in_array", vec![e_var("label"), e_array(vec![e_str("ansi_x3.4-1968"), e_str("ascii"), e_str("cp1252"), e_str("cp819"), e_str("csisolatin1"), e_str("ibm819"), e_str("iso-8859-1"), e_str("iso-ir-100"), e_str("iso8859-1"), e_str("iso88591"), e_str("iso_8859-1"), e_str("iso_8859-1:1987"), e_str("l1"), e_str("latin1"), e_str("us-ascii"), e_str("windows-1252"), e_str("x-cp1252")]), e_bool(true)]),
+                vec![
+                    s_return(e_str("windows-1252")),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_str("")),
+        ])
+}
+
+/// `decodeWindows1252` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
+fn decl_class_dom_elephchtmlparser_m64() -> MethodBuilder {
+    method("decodeWindows1252")
+        .static_()
+        .param("s", TypeExpr::Str)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_assign("out", e_str("")),
+            s_assign("n", e_call("strlen", vec![e_var("s")])),
+            s_assign("from", e_int(0)),
+            s_for(Some(s_assign("i", e_int(0))), Some(e_binop(e_var("i"), BinOp::Lt, e_var("n"))), Some(s_expr(e_post_inc("i"))), vec![
+                s_assign("b", e_call("ord", vec![e_index(e_var("s"), e_var("i"))])),
+                s_if(
+                    e_binop(e_var("b"), BinOp::GtEq, e_int(128)),
+                    vec![
+                        s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_binop(e_call("substr", vec![e_var("s"), e_var("from"), e_binop(e_var("i"), BinOp::Sub, e_var("from"))]), BinOp::Concat, e_self_call("codepointText", vec![e_var("b")])))),
+                        s_assign("from", e_binop(e_var("i"), BinOp::Add, e_int(1))),
+                    ],
+                    vec![],
+                    None,
+                ),
+            ]),
+            s_return(e_binop(e_var("out"), BinOp::Concat, e_call("substr", vec![e_var("s"), e_var("from")]))),
+        ])
+}
+
+/// `scrubUtf8` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
+fn decl_class_dom_elephchtmlparser_m65() -> MethodBuilder {
+    method("scrubUtf8")
+        .private()
+        .static_()
+        .param("s", TypeExpr::Str)
+        .returns(TypeExpr::Str)
+        .body(vec![
+            s_assign("out", e_str("")),
+            s_assign("n", e_call("strlen", vec![e_var("s")])),
+            s_assign("i", e_int(0)),
+            s_while(e_binop(e_var("i"), BinOp::Lt, e_var("n")), vec![
+                s_assign("b", e_call("ord", vec![e_index(e_var("s"), e_var("i"))])),
+                s_if(
+                    e_binop(e_var("b"), BinOp::Lt, e_int(128)),
+                    vec![
+                        s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_index(e_var("s"), e_var("i")))),
+                        s_expr(e_post_inc("i")),
+                        s_continue(1),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("need", e_int(0)),
+                s_assign("lower", e_int(128)),
+                s_assign("upper", e_int(191)),
+                s_if(
+                    e_binop(e_binop(e_var("b"), BinOp::GtEq, e_int(194)), BinOp::And, e_binop(e_var("b"), BinOp::LtEq, e_int(223))),
+                    vec![
+                        s_assign("need", e_int(1)),
+                    ],
+                    vec![
+                    (e_binop(e_binop(e_var("b"), BinOp::GtEq, e_int(224)), BinOp::And, e_binop(e_var("b"), BinOp::LtEq, e_int(239))), vec![
+                        s_assign("need", e_int(2)),
+                        s_if(
+                            e_binop(e_var("b"), BinOp::StrictEq, e_int(224)),
+                            vec![
+                                s_assign("lower", e_int(160)),
+                            ],
+                            vec![
+                            (e_binop(e_var("b"), BinOp::StrictEq, e_int(237)), vec![
+                                s_assign("upper", e_int(159)),
+                            ]),
+                        ],
+                            None,
+                        ),
+                    ]),
+                    (e_binop(e_binop(e_var("b"), BinOp::GtEq, e_int(240)), BinOp::And, e_binop(e_var("b"), BinOp::LtEq, e_int(244))), vec![
+                        s_assign("need", e_int(3)),
+                        s_if(
+                            e_binop(e_var("b"), BinOp::StrictEq, e_int(240)),
+                            vec![
+                                s_assign("lower", e_int(144)),
+                            ],
+                            vec![
+                            (e_binop(e_var("b"), BinOp::StrictEq, e_int(244)), vec![
+                                s_assign("upper", e_int(143)),
+                            ]),
+                        ],
+                            None,
+                        ),
+                    ]),
+                ],
+                    Some(vec![
+                    s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_str("�"))),
+                    s_expr(e_post_inc("i")),
+                    s_continue(1),
+                ]),
+                ),
+                s_assign("j", e_binop(e_var("i"), BinOp::Add, e_int(1))),
+                s_assign("ok", e_bool(true)),
+                s_for(Some(s_assign("k", e_int(0))), Some(e_binop(e_var("k"), BinOp::Lt, e_var("need"))), Some(s_expr(e_post_inc("k"))), vec![
+                    s_if(
+                        e_binop(e_var("j"), BinOp::GtEq, e_var("n")),
+                        vec![
+                            s_assign("ok", e_bool(false)),
+                            s_break(1),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("c", e_call("ord", vec![e_index(e_var("s"), e_var("j"))])),
+                    s_if(
+                        e_binop(e_binop(e_var("c"), BinOp::Lt, e_var("lower")), BinOp::Or, e_binop(e_var("c"), BinOp::Gt, e_var("upper"))),
+                        vec![
+                            s_assign("ok", e_bool(false)),
+                            s_break(1),
+                        ],
+                        vec![],
+                        None,
+                    ),
+                    s_assign("lower", e_int(128)),
+                    s_assign("upper", e_int(191)),
+                    s_expr(e_post_inc("j")),
+                ]),
+                s_if(
+                    e_var("ok"),
+                    vec![
+                        s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_call("substr", vec![e_var("s"), e_var("i"), e_binop(e_var("j"), BinOp::Sub, e_var("i"))]))),
+                    ],
+                    vec![],
+                    Some(vec![
+                    s_assign("out", e_binop(e_var("out"), BinOp::Concat, e_str("�"))),
+                ]),
+                ),
+                s_assign("i", e_var("j")),
+            ]),
+            s_return(e_var("out")),
+        ])
+}
+
 /// `run` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m60() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m66() -> MethodBuilder {
     method("run")
         .returns(TypeExpr::Void)
         .body(vec![
@@ -3620,7 +4022,7 @@ fn decl_class_dom_elephchtmlparser_m60() -> MethodBuilder {
 }
 
 /// `peek` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m61() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m67() -> MethodBuilder {
     method("peek")
         .private()
         .param_default("offset", TypeExpr::Int, e_int(0))
@@ -3640,7 +4042,7 @@ fn decl_class_dom_elephchtmlparser_m61() -> MethodBuilder {
 }
 
 /// `isSpace` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m62() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m68() -> MethodBuilder {
     method("isSpace")
         .private()
         .static_()
@@ -3652,7 +4054,7 @@ fn decl_class_dom_elephchtmlparser_m62() -> MethodBuilder {
 }
 
 /// `isAlpha` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m63() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m69() -> MethodBuilder {
     method("isAlpha")
         .private()
         .static_()
@@ -3664,7 +4066,7 @@ fn decl_class_dom_elephchtmlparser_m63() -> MethodBuilder {
 }
 
 /// `tagOpen` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m64() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m70() -> MethodBuilder {
     method("tagOpen")
         .private()
         .returns(TypeExpr::Void)
@@ -3755,7 +4157,7 @@ fn decl_class_dom_elephchtmlparser_m64() -> MethodBuilder {
 }
 
 /// `bogusComment` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m65() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m71() -> MethodBuilder {
     method("bogusComment")
         .private()
         .param("prefix", TypeExpr::Str)
@@ -3779,7 +4181,7 @@ fn decl_class_dom_elephchtmlparser_m65() -> MethodBuilder {
 }
 
 /// `markupDeclaration` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m66() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m72() -> MethodBuilder {
     method("markupDeclaration")
         .private()
         .returns(TypeExpr::Void)
@@ -3807,6 +4209,30 @@ fn decl_class_dom_elephchtmlparser_m66() -> MethodBuilder {
             s_if(
                 e_binop(e_call("substr", vec![e_this_prop("src"), e_binop(e_this_prop("pos"), BinOp::Add, e_int(2)), e_int(7)]), BinOp::StrictEq, e_str("[CDATA[")),
                 vec![
+                    s_assign("current", e_method_call(e_this(), "curr", vec![])),
+                    s_if(
+                        e_binop(e_binop(e_var("current"), BinOp::StrictNotEq, e_null()), BinOp::And, e_binop(e_prop(e_var("current"), "namespaceURI"), BinOp::StrictNotEq, e_self_const("HTMLNS"))),
+                        vec![
+                            s_assign("start", e_binop(e_this_prop("pos"), BinOp::Add, e_int(9))),
+                            s_assign("end", e_call("strpos", vec![e_this_prop("src"), e_str("]]>"), e_var("start")])),
+                            s_if(
+                                e_binop(e_var("end"), BinOp::StrictEq, e_bool(false)),
+                                vec![
+                                    s_assign("text", e_call("substr", vec![e_this_prop("src"), e_var("start")])),
+                                    s_prop_assign(e_this(), "pos", e_this_prop("len")),
+                                ],
+                                vec![],
+                                Some(vec![
+                                s_assign("text", e_call("substr", vec![e_this_prop("src"), e_var("start"), e_binop(e_var("end"), BinOp::Sub, e_var("start"))])),
+                                s_prop_assign(e_this(), "pos", e_binop(e_var("end"), BinOp::Add, e_int(3))),
+                            ]),
+                            ),
+                            s_expr(e_method_call(e_this(), "emitChars", vec![e_var("text")])),
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_prop_assign(e_this(), "pos", e_binop(e_this_prop("pos"), BinOp::Add, e_int(2))),
                     s_expr(e_method_call(e_this(), "bogusComment", vec![e_str("")])),
                     s_return_void(),
@@ -3820,7 +4246,7 @@ fn decl_class_dom_elephchtmlparser_m66() -> MethodBuilder {
 }
 
 /// `readComment` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m67() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m73() -> MethodBuilder {
     method("readComment")
         .private()
         .returns(TypeExpr::Void)
@@ -3893,11 +4319,14 @@ fn decl_class_dom_elephchtmlparser_m67() -> MethodBuilder {
             s_assign("text", e_call("substr", vec![e_this_prop("src"), e_var("start")])),
             s_prop_assign(e_this(), "pos", e_this_prop("len")),
             s_if(
-                e_binop(e_call("substr", vec![e_var("text"), e_neg(e_int(2))]), BinOp::StrictEq, e_str("--")),
+                e_binop(e_call("substr", vec![e_var("text"), e_neg(e_int(3))]), BinOp::StrictEq, e_str("--!")),
                 vec![
-                    s_assign("text", e_call("substr", vec![e_var("text"), e_int(0), e_neg(e_int(2))])),
+                    s_assign("text", e_call("substr", vec![e_var("text"), e_int(0), e_neg(e_int(3))])),
                 ],
                 vec![
+                (e_binop(e_call("substr", vec![e_var("text"), e_neg(e_int(2))]), BinOp::StrictEq, e_str("--")), vec![
+                    s_assign("text", e_call("substr", vec![e_var("text"), e_int(0), e_neg(e_int(2))])),
+                ]),
                 (e_binop(e_call("substr", vec![e_var("text"), e_neg(e_int(1))]), BinOp::StrictEq, e_str("-")), vec![
                     s_assign("text", e_call("substr", vec![e_var("text"), e_int(0), e_neg(e_int(1))])),
                 ]),
@@ -3909,7 +4338,7 @@ fn decl_class_dom_elephchtmlparser_m67() -> MethodBuilder {
 }
 
 /// `readDoctype` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m68() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m74() -> MethodBuilder {
     method("readDoctype")
         .private()
         .returns(TypeExpr::Void)
@@ -4011,7 +4440,7 @@ fn decl_class_dom_elephchtmlparser_m68() -> MethodBuilder {
 }
 
 /// `doctypeId` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m69() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m75() -> MethodBuilder {
     method("doctypeId")
         .private()
         .returns(t_nullable(TypeExpr::Str))
@@ -4045,7 +4474,7 @@ fn decl_class_dom_elephchtmlparser_m69() -> MethodBuilder {
 }
 
 /// `skipSpaces` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m70() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m76() -> MethodBuilder {
     method("skipSpaces")
         .private()
         .returns(TypeExpr::Void)
@@ -4057,7 +4486,7 @@ fn decl_class_dom_elephchtmlparser_m70() -> MethodBuilder {
 }
 
 /// `readTag` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m71() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m77() -> MethodBuilder {
     method("readTag")
         .private()
         .param("isStart", TypeExpr::Bool)
@@ -4191,7 +4620,7 @@ fn decl_class_dom_elephchtmlparser_m71() -> MethodBuilder {
 }
 
 /// `attrValueQuoted` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m72() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m78() -> MethodBuilder {
     method("attrValueQuoted")
         .private()
         .param("quote", TypeExpr::Str)
@@ -4239,7 +4668,7 @@ fn decl_class_dom_elephchtmlparser_m72() -> MethodBuilder {
 }
 
 /// `attrValueUnquoted` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m73() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m79() -> MethodBuilder {
     method("attrValueUnquoted")
         .private()
         .returns(TypeExpr::Str)
@@ -4272,7 +4701,7 @@ fn decl_class_dom_elephchtmlparser_m73() -> MethodBuilder {
 }
 
 /// `charRef` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m74() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m80() -> MethodBuilder {
     method("charRef")
         .private()
         .param("inAttribute", TypeExpr::Bool)
@@ -4326,6 +4755,15 @@ fn decl_class_dom_elephchtmlparser_m74() -> MethodBuilder {
                         None,
                     ),
                     s_prop_assign(e_this(), "pos", e_var("i")),
+                    s_assign("digits", e_call("ltrim", vec![e_var("digits"), e_str("0")])),
+                    s_if(
+                        e_binop(e_var("digits"), BinOp::StrictEq, e_str("")),
+                        vec![
+                            s_assign("digits", e_str("0")),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_if(
                         e_binop(e_call("strlen", vec![e_var("digits")]), BinOp::Gt, e_int(8)),
                         vec![
@@ -4410,7 +4848,7 @@ fn decl_class_dom_elephchtmlparser_m74() -> MethodBuilder {
 }
 
 /// `isAlnum` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m75() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m81() -> MethodBuilder {
     method("isAlnum")
         .private()
         .static_()
@@ -4430,7 +4868,7 @@ fn decl_class_dom_elephchtmlparser_m75() -> MethodBuilder {
 }
 
 /// `codepointText` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m76() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m82() -> MethodBuilder {
     method("codepointText")
         .private()
         .static_()
@@ -4490,7 +4928,7 @@ fn decl_class_dom_elephchtmlparser_m76() -> MethodBuilder {
 }
 
 /// `scanRaw` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m77() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m83() -> MethodBuilder {
     method("scanRaw")
         .private()
         .returns(TypeExpr::Void)
@@ -4500,7 +4938,7 @@ fn decl_class_dom_elephchtmlparser_m77() -> MethodBuilder {
             s_if(
                 e_binop(e_var("mode"), BinOp::StrictEq, e_str("plaintext")),
                 vec![
-                    s_expr(e_method_call(e_this(), "emitChars", vec![e_call("substr", vec![e_this_prop("src"), e_this_prop("pos")])])),
+                    s_expr(e_method_call(e_this(), "emitChars", vec![e_call("str_replace", vec![e_str("\0"), e_str("�"), e_call("substr", vec![e_this_prop("src"), e_this_prop("pos")])])])),
                     s_prop_assign(e_this(), "pos", e_this_prop("len")),
                     s_return_void(),
                 ],
@@ -4511,7 +4949,15 @@ fn decl_class_dom_elephchtmlparser_m77() -> MethodBuilder {
             s_assign("limit", e_this_prop("len")),
             s_assign("found", e_neg(e_int(1))),
             s_assign("i", e_var("from")),
-            s_while(e_bool(true), vec![
+            s_if(
+                e_binop(e_var("mode"), BinOp::StrictEq, e_str("script")),
+                vec![
+                    s_assign("found", e_method_call(e_this(), "scriptEnd", vec![e_var("from")])),
+                ],
+                vec![],
+                None,
+            ),
+            s_while(e_binop(e_var("mode"), BinOp::StrictNotEq, e_str("script")), vec![
                 s_assign("at", e_call("stripos", vec![e_this_prop("src"), e_binop(e_str("</"), BinOp::Concat, e_var("tag")), e_var("i")])),
                 s_if(
                     e_binop(e_var("at"), BinOp::StrictEq, e_bool(false)),
@@ -4542,7 +4988,7 @@ fn decl_class_dom_elephchtmlparser_m77() -> MethodBuilder {
                     s_if(
                         e_binop(e_var("mode"), BinOp::StrictEq, e_str("rcdata")),
                         vec![
-                            s_expr(e_method_call(e_this(), "emitChars", vec![e_method_call(e_this(), "decodeInText", vec![e_var("text")])])),
+                            s_expr(e_method_call(e_this(), "emitChars", vec![e_call("str_replace", vec![e_str("\0"), e_str("�"), e_method_call(e_this(), "decodeInText", vec![e_var("text")])])])),
                         ],
                         vec![],
                         Some(vec![
@@ -4569,8 +5015,155 @@ fn decl_class_dom_elephchtmlparser_m77() -> MethodBuilder {
         ])
 }
 
+/// `scriptEnd` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
+fn decl_class_dom_elephchtmlparser_m84() -> MethodBuilder {
+    method("scriptEnd")
+        .private()
+        .param("from", TypeExpr::Int)
+        .returns(TypeExpr::Int)
+        .body(vec![
+            s_assign("state", e_int(0)),
+            s_assign("dashes", e_int(0)),
+            s_assign("i", e_var("from")),
+            s_while(e_binop(e_var("i"), BinOp::Lt, e_this_prop("len")), vec![
+                s_if(
+                    e_binop(e_var("state"), BinOp::StrictEq, e_int(0)),
+                    vec![
+                        s_assign("lt", e_call("strpos", vec![e_this_prop("src"), e_str("<"), e_var("i")])),
+                        s_if(
+                            e_binop(e_var("lt"), BinOp::StrictEq, e_bool(false)),
+                            vec![
+                                s_return(e_neg(e_int(1))),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_if(
+                            e_binop(e_call("substr", vec![e_this_prop("src"), e_var("lt"), e_int(4)]), BinOp::StrictEq, e_str("<!--")),
+                            vec![
+                                s_assign("state", e_int(1)),
+                                s_assign("dashes", e_int(2)),
+                                s_assign("i", e_binop(e_var("lt"), BinOp::Add, e_int(4))),
+                                s_continue(1),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_if(
+                            e_method_call(e_this(), "scriptTagAt", vec![e_var("lt"), e_bool(true)]),
+                            vec![
+                                s_return(e_var("lt")),
+                            ],
+                            vec![],
+                            None,
+                        ),
+                        s_assign("i", e_binop(e_var("lt"), BinOp::Add, e_int(1))),
+                        s_continue(1),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("c", e_index(e_this_prop("src"), e_var("i"))),
+                s_if(
+                    e_binop(e_var("c"), BinOp::StrictEq, e_str("-")),
+                    vec![
+                        s_expr(e_post_inc("dashes")),
+                        s_expr(e_post_inc("i")),
+                        s_continue(1),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_if(
+                    e_binop(e_binop(e_var("c"), BinOp::StrictEq, e_str(">")), BinOp::And, e_binop(e_var("dashes"), BinOp::GtEq, e_int(2))),
+                    vec![
+                        s_assign("state", e_int(0)),
+                        s_assign("dashes", e_int(0)),
+                        s_expr(e_post_inc("i")),
+                        s_continue(1),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_assign("dashes", e_int(0)),
+                s_if(
+                    e_binop(e_var("c"), BinOp::StrictEq, e_str("<")),
+                    vec![
+                        s_if(
+                            e_binop(e_var("state"), BinOp::StrictEq, e_int(1)),
+                            vec![
+                                s_if(
+                                    e_method_call(e_this(), "scriptTagAt", vec![e_var("i"), e_bool(true)]),
+                                    vec![
+                                        s_return(e_var("i")),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                                s_if(
+                                    e_method_call(e_this(), "scriptTagAt", vec![e_var("i"), e_bool(false)]),
+                                    vec![
+                                        s_assign("state", e_int(2)),
+                                        s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(7))),
+                                        s_continue(1),
+                                    ],
+                                    vec![],
+                                    None,
+                                ),
+                            ],
+                            vec![
+                            (e_method_call(e_this(), "scriptTagAt", vec![e_var("i"), e_bool(true)]), vec![
+                                s_assign("state", e_int(1)),
+                                s_assign("i", e_binop(e_var("i"), BinOp::Add, e_int(8))),
+                                s_continue(1),
+                            ]),
+                        ],
+                            None,
+                        ),
+                    ],
+                    vec![],
+                    None,
+                ),
+                s_expr(e_post_inc("i")),
+            ]),
+            s_return(e_neg(e_int(1))),
+        ])
+}
+
+/// `scriptTagAt` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
+fn decl_class_dom_elephchtmlparser_m85() -> MethodBuilder {
+    method("scriptTagAt")
+        .private()
+        .param("at", TypeExpr::Int)
+        .param("end", TypeExpr::Bool)
+        .returns(TypeExpr::Bool)
+        .body(vec![
+            s_assign("open", e_ternary(e_var("end"), e_str("</script"), e_str("<script"))),
+            s_assign("width", e_call("strlen", vec![e_var("open")])),
+            s_if(
+                e_binop(e_call("strtolower", vec![e_call("substr", vec![e_this_prop("src"), e_var("at"), e_var("width")])]), BinOp::StrictNotEq, e_var("open")),
+                vec![
+                    s_return(e_bool(false)),
+                ],
+                vec![],
+                None,
+            ),
+            s_assign("after", e_binop(e_var("at"), BinOp::Add, e_var("width"))),
+            s_assign("c", e_ternary(e_binop(e_var("after"), BinOp::Lt, e_this_prop("len")), e_index(e_this_prop("src"), e_var("after")), e_str(""))),
+            s_if(
+                e_binop(e_var("c"), BinOp::StrictEq, e_str("")),
+                vec![
+                    s_return(e_var("end")),
+                ],
+                vec![],
+                None,
+            ),
+            s_return(e_binop(e_binop(e_self_call("isSpace", vec![e_var("c")]), BinOp::Or, e_binop(e_var("c"), BinOp::StrictEq, e_str("/"))), BinOp::Or, e_binop(e_var("c"), BinOp::StrictEq, e_str(">")))),
+        ])
+}
+
 /// `decodeInText` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m78() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m86() -> MethodBuilder {
     method("decodeInText")
         .private()
         .param("text", TypeExpr::Str)
@@ -4614,7 +5207,7 @@ fn decl_class_dom_elephchtmlparser_m78() -> MethodBuilder {
 }
 
 /// `emitChars` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m79() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m87() -> MethodBuilder {
     method("emitChars")
         .private()
         .param("text", TypeExpr::Str)
@@ -4633,7 +5226,7 @@ fn decl_class_dom_elephchtmlparser_m79() -> MethodBuilder {
 }
 
 /// `emitComment` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m80() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m88() -> MethodBuilder {
     method("emitComment")
         .private()
         .param("text", TypeExpr::Str)
@@ -4645,7 +5238,7 @@ fn decl_class_dom_elephchtmlparser_m80() -> MethodBuilder {
 }
 
 /// `emitDoctype` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m81() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m89() -> MethodBuilder {
     method("emitDoctype")
         .private()
         .param("name", TypeExpr::Str)
@@ -4660,7 +5253,7 @@ fn decl_class_dom_elephchtmlparser_m81() -> MethodBuilder {
 }
 
 /// `curr` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m82() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m90() -> MethodBuilder {
     method("curr")
         .private()
         .returns(t_nullable(t_class("\\Dom\\Element")))
@@ -4671,7 +5264,7 @@ fn decl_class_dom_elephchtmlparser_m82() -> MethodBuilder {
 }
 
 /// `currName` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m83() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m91() -> MethodBuilder {
     method("currName")
         .private()
         .returns(TypeExpr::Str)
@@ -4682,7 +5275,7 @@ fn decl_class_dom_elephchtmlparser_m83() -> MethodBuilder {
 }
 
 /// `pushOpen` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m84() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m92() -> MethodBuilder {
     method("pushOpen")
         .private()
         .param("el", t_class("\\Dom\\Element"))
@@ -4693,7 +5286,7 @@ fn decl_class_dom_elephchtmlparser_m84() -> MethodBuilder {
 }
 
 /// `popOpen` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m85() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m93() -> MethodBuilder {
     method("popOpen")
         .private()
         .returns(t_nullable(t_class("\\Dom\\Element")))
@@ -4711,7 +5304,7 @@ fn decl_class_dom_elephchtmlparser_m85() -> MethodBuilder {
 }
 
 /// `stackHas` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m86() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m94() -> MethodBuilder {
     method("stackHas")
         .private()
         .param("name", TypeExpr::Str)
@@ -4732,7 +5325,7 @@ fn decl_class_dom_elephchtmlparser_m86() -> MethodBuilder {
 }
 
 /// `openIndex` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m87() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m95() -> MethodBuilder {
     method("openIndex")
         .private()
         .param("el", t_class("\\Dom\\Element"))
@@ -4753,7 +5346,7 @@ fn decl_class_dom_elephchtmlparser_m87() -> MethodBuilder {
 }
 
 /// `removeOpen` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m88() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m96() -> MethodBuilder {
     method("removeOpen")
         .private()
         .param("el", t_class("\\Dom\\Element"))
@@ -4772,7 +5365,7 @@ fn decl_class_dom_elephchtmlparser_m88() -> MethodBuilder {
 }
 
 /// `makeElement` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m89() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m97() -> MethodBuilder {
     method("makeElement")
         .private()
         .param("name", TypeExpr::Str)
@@ -4801,7 +5394,7 @@ fn decl_class_dom_elephchtmlparser_m89() -> MethodBuilder {
 }
 
 /// `insertForeign` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m90() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m98() -> MethodBuilder {
     method("insertForeign")
         .private()
         .param("name", TypeExpr::Str)
@@ -4828,7 +5421,7 @@ fn decl_class_dom_elephchtmlparser_m90() -> MethodBuilder {
 }
 
 /// `svgTagName` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m91() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m99() -> MethodBuilder {
     method("svgTagName")
         .private()
         .static_()
@@ -4841,7 +5434,7 @@ fn decl_class_dom_elephchtmlparser_m91() -> MethodBuilder {
 }
 
 /// `adjustSvgAttributes` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m92() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m100() -> MethodBuilder {
     method("adjustSvgAttributes")
         .private()
         .static_()
@@ -4859,7 +5452,7 @@ fn decl_class_dom_elephchtmlparser_m92() -> MethodBuilder {
 }
 
 /// `adjustMathAttributes` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m93() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m101() -> MethodBuilder {
     method("adjustMathAttributes")
         .private()
         .static_()
@@ -4876,7 +5469,7 @@ fn decl_class_dom_elephchtmlparser_m93() -> MethodBuilder {
 }
 
 /// `inForeign` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m94() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m102() -> MethodBuilder {
     method("inForeign")
         .private()
         .param("kind", TypeExpr::Str)
@@ -4937,7 +5530,7 @@ fn decl_class_dom_elephchtmlparser_m94() -> MethodBuilder {
 }
 
 /// `isHtmlIntegration` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m95() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m103() -> MethodBuilder {
     method("isHtmlIntegration")
         .private()
         .param("node", t_class("\\Dom\\Element"))
@@ -4973,7 +5566,7 @@ fn decl_class_dom_elephchtmlparser_m95() -> MethodBuilder {
 }
 
 /// `foreignStart` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m96() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m104() -> MethodBuilder {
     method("foreignStart")
         .private()
         .param("name", TypeExpr::Str)
@@ -5035,7 +5628,7 @@ fn decl_class_dom_elephchtmlparser_m96() -> MethodBuilder {
 }
 
 /// `foreignEnd` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m97() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m105() -> MethodBuilder {
     method("foreignEnd")
         .private()
         .param("name", TypeExpr::Str)
@@ -5109,7 +5702,7 @@ fn decl_class_dom_elephchtmlparser_m97() -> MethodBuilder {
 }
 
 /// `insertionParent` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m98() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m106() -> MethodBuilder {
     method("insertionParent")
         .private()
         .param("override", t_nullable(t_class("\\Dom\\Node")))
@@ -5167,17 +5760,49 @@ fn decl_class_dom_elephchtmlparser_m98() -> MethodBuilder {
                         vec![],
                         None,
                     ),
-                    s_return(e_ternary(e_binop(e_var("tableIndex"), BinOp::Gt, e_int(0)), e_index(e_this_prop("open"), e_binop(e_var("tableIndex"), BinOp::Sub, e_int(1))), e_this_prop("doc"))),
+                    s_return(e_method_call(e_this(), "templateContents", vec![e_ternary(e_binop(e_var("tableIndex"), BinOp::Gt, e_int(0)), e_index(e_this_prop("open"), e_binop(e_var("tableIndex"), BinOp::Sub, e_int(1))), e_this_prop("doc"))])),
                 ],
                 vec![],
                 None,
             ),
-            s_return(e_var("target")),
+            s_return(e_method_call(e_this(), "templateContents", vec![e_var("target")])),
+        ])
+}
+
+/// `templateContents` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
+fn decl_class_dom_elephchtmlparser_m107() -> MethodBuilder {
+    method("templateContents")
+        .private()
+        .param("parent", t_class("\\Dom\\Node"))
+        .returns(t_class("\\Dom\\Node"))
+        .body(vec![
+            s_if(
+                e_binop(e_binop(e_not(e_instance_of(e_var("parent"), "\\Dom\\Element")), BinOp::Or, e_binop(e_prop(e_var("parent"), "localName"), BinOp::StrictNotEq, e_str("template"))), BinOp::Or, e_binop(e_prop(e_var("parent"), "namespaceURI"), BinOp::StrictNotEq, e_self_const("HTMLNS"))),
+                vec![
+                    s_return(e_var("parent")),
+                ],
+                vec![],
+                None,
+            ),
+            s_assign("at", e_call("array_search", vec![e_var("parent"), e_this_prop("templateElements"), e_bool(true)])),
+            s_if(
+                e_binop(e_var("at"), BinOp::StrictNotEq, e_bool(false)),
+                vec![
+                    s_return(e_index(e_this_prop("templateFragments"), e_var("at"))),
+                ],
+                vec![],
+                None,
+            ),
+            s_assign("fragment", e_new_fq("Dom\\DocumentFragment", vec![])),
+            s_prop_assign(e_var("fragment"), "ownerDocument", e_this_prop("doc")),
+            s_prop_array_push(e_this(), "templateElements", e_var("parent")),
+            s_prop_array_push(e_this(), "templateFragments", e_var("fragment")),
+            s_return(e_var("fragment")),
         ])
 }
 
 /// `insertNode` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m99() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m108() -> MethodBuilder {
     method("insertNode")
         .private()
         .param("node", t_class("\\Dom\\Node"))
@@ -5191,7 +5816,7 @@ fn decl_class_dom_elephchtmlparser_m99() -> MethodBuilder {
 }
 
 /// `insertElement` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m100() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m109() -> MethodBuilder {
     method("insertElement")
         .private()
         .param("name", TypeExpr::Str)
@@ -5206,7 +5831,7 @@ fn decl_class_dom_elephchtmlparser_m100() -> MethodBuilder {
 }
 
 /// `insertVoid` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m101() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m110() -> MethodBuilder {
     method("insertVoid")
         .private()
         .param("name", TypeExpr::Str)
@@ -5220,7 +5845,7 @@ fn decl_class_dom_elephchtmlparser_m101() -> MethodBuilder {
 }
 
 /// `resolveTableText` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m102() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m111() -> MethodBuilder {
     method("resolveTableText")
         .private()
         .returns(TypeExpr::Void)
@@ -5254,7 +5879,7 @@ fn decl_class_dom_elephchtmlparser_m102() -> MethodBuilder {
 }
 
 /// `flushText` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m103() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m112() -> MethodBuilder {
     method("flushText")
         .private()
         .returns(TypeExpr::Void)
@@ -5307,7 +5932,7 @@ fn decl_class_dom_elephchtmlparser_m103() -> MethodBuilder {
 }
 
 /// `insertCharsNow` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m104() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m113() -> MethodBuilder {
     method("insertCharsNow")
         .private()
         .param("text", TypeExpr::Str)
@@ -5318,7 +5943,7 @@ fn decl_class_dom_elephchtmlparser_m104() -> MethodBuilder {
 }
 
 /// `inScope` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m105() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m114() -> MethodBuilder {
     method("inScope")
         .private()
         .param("name", TypeExpr::Str)
@@ -5350,7 +5975,7 @@ fn decl_class_dom_elephchtmlparser_m105() -> MethodBuilder {
 }
 
 /// `elementIsBoundary` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m106() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m115() -> MethodBuilder {
     method("elementIsBoundary")
         .private()
         .param("el", t_class("\\Dom\\Element"))
@@ -5366,9 +5991,9 @@ fn decl_class_dom_elephchtmlparser_m106() -> MethodBuilder {
                 None,
             ),
             s_if(
-                e_binop(e_binop(e_var("kind"), BinOp::StrictEq, e_str("table")), BinOp::Or, e_binop(e_var("kind"), BinOp::StrictEq, e_str("select"))),
+                e_binop(e_var("kind"), BinOp::StrictEq, e_str("table")),
                 vec![
-                    s_return(e_ternary(e_binop(e_var("kind"), BinOp::StrictEq, e_str("table")), e_bool(false), e_bool(true))),
+                    s_return(e_bool(false)),
                 ],
                 vec![],
                 None,
@@ -5386,7 +6011,7 @@ fn decl_class_dom_elephchtmlparser_m106() -> MethodBuilder {
 }
 
 /// `scopeBoundary` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m107() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m116() -> MethodBuilder {
     method("scopeBoundary")
         .private()
         .param("n", TypeExpr::Str)
@@ -5402,15 +6027,7 @@ fn decl_class_dom_elephchtmlparser_m107() -> MethodBuilder {
                 None,
             ),
             s_if(
-                e_binop(e_var("kind"), BinOp::StrictEq, e_str("select")),
-                vec![
-                    s_return(e_binop(e_binop(e_var("n"), BinOp::StrictNotEq, e_str("optgroup")), BinOp::And, e_binop(e_var("n"), BinOp::StrictNotEq, e_str("option")))),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_call("in_array", vec![e_var("n"), e_array(vec![e_str("applet"), e_str("caption"), e_str("html"), e_str("table"), e_str("td"), e_str("th"), e_str("marquee"), e_str("object"), e_str("template")]), e_bool(true)]),
+                e_call("in_array", vec![e_var("n"), e_array(vec![e_str("applet"), e_str("caption"), e_str("html"), e_str("table"), e_str("td"), e_str("th"), e_str("marquee"), e_str("object"), e_str("select"), e_str("template")]), e_bool(true)]),
                 vec![
                     s_return(e_bool(true)),
                 ],
@@ -5438,7 +6055,7 @@ fn decl_class_dom_elephchtmlparser_m107() -> MethodBuilder {
 }
 
 /// `headingInScope` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m108() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m117() -> MethodBuilder {
     method("headingInScope")
         .private()
         .returns(TypeExpr::Bool)
@@ -5468,7 +6085,7 @@ fn decl_class_dom_elephchtmlparser_m108() -> MethodBuilder {
 }
 
 /// `generateImpliedEndTags` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m109() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m118() -> MethodBuilder {
     method("generateImpliedEndTags")
         .private()
         .param_default("except", TypeExpr::Str, e_str(""))
@@ -5491,7 +6108,7 @@ fn decl_class_dom_elephchtmlparser_m109() -> MethodBuilder {
 }
 
 /// `generateAllImpliedEndTags` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m110() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m119() -> MethodBuilder {
     method("generateAllImpliedEndTags")
         .private()
         .returns(TypeExpr::Void)
@@ -5503,7 +6120,7 @@ fn decl_class_dom_elephchtmlparser_m110() -> MethodBuilder {
 }
 
 /// `closeP` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m111() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m120() -> MethodBuilder {
     method("closeP")
         .private()
         .returns(TypeExpr::Void)
@@ -5524,7 +6141,7 @@ fn decl_class_dom_elephchtmlparser_m111() -> MethodBuilder {
 }
 
 /// `closePIfInButtonScope` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m112() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m121() -> MethodBuilder {
     method("closePIfInButtonScope")
         .private()
         .returns(TypeExpr::Void)
@@ -5541,7 +6158,7 @@ fn decl_class_dom_elephchtmlparser_m112() -> MethodBuilder {
 }
 
 /// `popUntil` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m113() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m122() -> MethodBuilder {
     method("popUntil")
         .private()
         .param("name", TypeExpr::Str)
@@ -5562,7 +6179,7 @@ fn decl_class_dom_elephchtmlparser_m113() -> MethodBuilder {
 }
 
 /// `popUntilOneOf` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m114() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m123() -> MethodBuilder {
     method("popUntilOneOf")
         .private()
         .param("names", t_array())
@@ -5583,7 +6200,7 @@ fn decl_class_dom_elephchtmlparser_m114() -> MethodBuilder {
 }
 
 /// `isSpecial` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m115() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m124() -> MethodBuilder {
     method("isSpecial")
         .private()
         .static_()
@@ -5595,7 +6212,7 @@ fn decl_class_dom_elephchtmlparser_m115() -> MethodBuilder {
 }
 
 /// `isSpecialEl` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m116() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m125() -> MethodBuilder {
     method("isSpecialEl")
         .private()
         .param("el", t_class("\\Dom\\Element"))
@@ -5622,7 +6239,7 @@ fn decl_class_dom_elephchtmlparser_m116() -> MethodBuilder {
 }
 
 /// `isFormatting` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m117() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m126() -> MethodBuilder {
     method("isFormatting")
         .private()
         .static_()
@@ -5634,7 +6251,7 @@ fn decl_class_dom_elephchtmlparser_m117() -> MethodBuilder {
 }
 
 /// `afeIndexOf` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m118() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m127() -> MethodBuilder {
     method("afeIndexOf")
         .private()
         .param("el", t_class("\\Dom\\Element"))
@@ -5655,7 +6272,7 @@ fn decl_class_dom_elephchtmlparser_m118() -> MethodBuilder {
 }
 
 /// `afePush` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m119() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m128() -> MethodBuilder {
     method("afePush")
         .private()
         .param("el", t_class("\\Dom\\Element"))
@@ -5697,7 +6314,7 @@ fn decl_class_dom_elephchtmlparser_m119() -> MethodBuilder {
 }
 
 /// `sameAttributes` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m120() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m129() -> MethodBuilder {
     method("sameAttributes")
         .private()
         .param("a", t_class("\\Dom\\Element"))
@@ -5728,7 +6345,7 @@ fn decl_class_dom_elephchtmlparser_m120() -> MethodBuilder {
 }
 
 /// `reconstructFormatting` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m121() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m130() -> MethodBuilder {
     method("reconstructFormatting")
         .private()
         .returns(TypeExpr::Void)
@@ -5778,7 +6395,7 @@ fn decl_class_dom_elephchtmlparser_m121() -> MethodBuilder {
 }
 
 /// `clearFormattingToMarker` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m122() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m131() -> MethodBuilder {
     method("clearFormattingToMarker")
         .private()
         .returns(TypeExpr::Void)
@@ -5798,7 +6415,7 @@ fn decl_class_dom_elephchtmlparser_m122() -> MethodBuilder {
 }
 
 /// `adoptionAgency` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m123() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m132() -> MethodBuilder {
     method("adoptionAgency")
         .private()
         .param("subject", TypeExpr::Str)
@@ -6003,7 +6620,7 @@ fn decl_class_dom_elephchtmlparser_m123() -> MethodBuilder {
 }
 
 /// `resetMode` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m124() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m133() -> MethodBuilder {
     method("resetMode")
         .private()
         .returns(TypeExpr::Void)
@@ -6011,15 +6628,6 @@ fn decl_class_dom_elephchtmlparser_m124() -> MethodBuilder {
             s_for(Some(s_assign("i", e_binop(e_call("count", vec![e_this_prop("open")]), BinOp::Sub, e_int(1)))), Some(e_binop(e_var("i"), BinOp::GtEq, e_int(0))), Some(s_expr(e_post_dec("i"))), vec![
                 s_assign("n", e_prop(e_index(e_this_prop("open"), e_var("i")), "localName")),
                 s_assign("last", e_binop(e_var("i"), BinOp::StrictEq, e_int(0))),
-                s_if(
-                    e_binop(e_var("n"), BinOp::StrictEq, e_str("select")),
-                    vec![
-                        s_prop_assign(e_this(), "mode", e_str("in select")),
-                        s_return_void(),
-                    ],
-                    vec![],
-                    None,
-                ),
                 s_if(
                     e_binop(e_binop(e_binop(e_var("n"), BinOp::StrictEq, e_str("td")), BinOp::Or, e_binop(e_var("n"), BinOp::StrictEq, e_str("th"))), BinOp::And, e_not(e_var("last"))),
                     vec![
@@ -6134,7 +6742,7 @@ fn decl_class_dom_elephchtmlparser_m124() -> MethodBuilder {
 }
 
 /// `tbDoctype` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m125() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m134() -> MethodBuilder {
     method("tbDoctype")
         .private()
         .param("name", TypeExpr::Str)
@@ -6173,7 +6781,7 @@ fn decl_class_dom_elephchtmlparser_m125() -> MethodBuilder {
 }
 
 /// `tbComment` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m126() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m135() -> MethodBuilder {
     method("tbComment")
         .private()
         .param("text", TypeExpr::Str)
@@ -6205,7 +6813,7 @@ fn decl_class_dom_elephchtmlparser_m126() -> MethodBuilder {
 }
 
 /// `tbChars` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m127() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m136() -> MethodBuilder {
     method("tbChars")
         .private()
         .param("text", TypeExpr::Str)
@@ -6265,7 +6873,7 @@ fn decl_class_dom_elephchtmlparser_m127() -> MethodBuilder {
 }
 
 /// `tbWhitespace` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m128() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m137() -> MethodBuilder {
     method("tbWhitespace")
         .private()
         .param("ws", TypeExpr::Str)
@@ -6333,15 +6941,6 @@ fn decl_class_dom_elephchtmlparser_m128() -> MethodBuilder {
                 None,
             ),
             s_if(
-                e_binop(e_var("m"), BinOp::StrictEq, e_str("in select")),
-                vec![
-                    s_expr(e_method_call(e_this(), "insertCharsNow", vec![e_var("ws")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
                 e_binop(e_var("m"), BinOp::StrictEq, e_str("text")),
                 vec![
                     s_expr(e_method_call(e_this(), "insertCharsNow", vec![e_var("ws")])),
@@ -6355,12 +6954,21 @@ fn decl_class_dom_elephchtmlparser_m128() -> MethodBuilder {
 }
 
 /// `bodyChars` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m129() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m138() -> MethodBuilder {
     method("bodyChars")
         .private()
         .param("text", TypeExpr::Str)
         .returns(TypeExpr::Void)
         .body(vec![
+            s_assign("text", e_call("str_replace", vec![e_str("\0"), e_str(""), e_var("text")])),
+            s_if(
+                e_binop(e_var("text"), BinOp::StrictEq, e_str("")),
+                vec![
+                    s_return_void(),
+                ],
+                vec![],
+                None,
+            ),
             s_expr(e_method_call(e_this(), "reconstructFormatting", vec![])),
             s_expr(e_method_call(e_this(), "insertCharsNow", vec![e_var("text")])),
             s_if(
@@ -6375,7 +6983,7 @@ fn decl_class_dom_elephchtmlparser_m129() -> MethodBuilder {
 }
 
 /// `processUsing` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m130() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m139() -> MethodBuilder {
     method("processUsing")
         .private()
         .param("mode", TypeExpr::Str)
@@ -6398,7 +7006,7 @@ fn decl_class_dom_elephchtmlparser_m130() -> MethodBuilder {
 }
 
 /// `tbText` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m131() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m140() -> MethodBuilder {
     method("tbText")
         .private()
         .param("text", TypeExpr::Str)
@@ -6524,15 +7132,6 @@ fn decl_class_dom_elephchtmlparser_m131() -> MethodBuilder {
                 None,
             ),
             s_if(
-                e_binop(e_var("m"), BinOp::StrictEq, e_str("in select")),
-                vec![
-                    s_expr(e_method_call(e_this(), "insertCharsNow", vec![e_var("text")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
                 e_binop(e_binop(e_var("m"), BinOp::StrictEq, e_str("after body")), BinOp::Or, e_binop(e_var("m"), BinOp::StrictEq, e_str("after after body"))),
                 vec![
                     s_prop_assign(e_this(), "mode", e_str("in body")),
@@ -6555,7 +7154,7 @@ fn decl_class_dom_elephchtmlparser_m131() -> MethodBuilder {
 }
 
 /// `createHtml` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m132() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m141() -> MethodBuilder {
     method("createHtml")
         .private()
         .param("attrs", t_array())
@@ -6569,7 +7168,7 @@ fn decl_class_dom_elephchtmlparser_m132() -> MethodBuilder {
 }
 
 /// `mergeAttributes` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m133() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m142() -> MethodBuilder {
     method("mergeAttributes")
         .private()
         .param("into", t_class("\\Dom\\Element"))
@@ -6590,7 +7189,7 @@ fn decl_class_dom_elephchtmlparser_m133() -> MethodBuilder {
 }
 
 /// `tbStart` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m134() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m143() -> MethodBuilder {
     method("tbStart")
         .private()
         .param("name", TypeExpr::Str)
@@ -6613,7 +7212,7 @@ fn decl_class_dom_elephchtmlparser_m134() -> MethodBuilder {
 }
 
 /// `dispatchStart` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m135() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m144() -> MethodBuilder {
     method("dispatchStart")
         .private()
         .param("name", TypeExpr::Str)
@@ -7004,15 +7603,6 @@ fn decl_class_dom_elephchtmlparser_m135() -> MethodBuilder {
                 None,
             ),
             s_if(
-                e_binop(e_var("m"), BinOp::StrictEq, e_str("in select")),
-                vec![
-                    s_expr(e_method_call(e_this(), "startInSelect", vec![e_var("name"), e_var("attrs"), e_var("selfClosing")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
                 e_binop(e_var("m"), BinOp::StrictEq, e_str("after body")),
                 vec![
                     s_if(
@@ -7110,7 +7700,7 @@ fn decl_class_dom_elephchtmlparser_m135() -> MethodBuilder {
 }
 
 /// `clearToContext` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m136() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m145() -> MethodBuilder {
     method("clearToContext")
         .private()
         .param("names", t_array())
@@ -7123,7 +7713,7 @@ fn decl_class_dom_elephchtmlparser_m136() -> MethodBuilder {
 }
 
 /// `tableBodyInScope` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m137() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m146() -> MethodBuilder {
     method("tableBodyInScope")
         .private()
         .returns(TypeExpr::Bool)
@@ -7133,7 +7723,7 @@ fn decl_class_dom_elephchtmlparser_m137() -> MethodBuilder {
 }
 
 /// `closeCell` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m138() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m147() -> MethodBuilder {
     method("closeCell")
         .private()
         .returns(TypeExpr::Void)
@@ -7146,7 +7736,7 @@ fn decl_class_dom_elephchtmlparser_m138() -> MethodBuilder {
 }
 
 /// `startInHead` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m139() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m148() -> MethodBuilder {
     method("startInHead")
         .private()
         .param("name", TypeExpr::Str)
@@ -7240,7 +7830,7 @@ fn decl_class_dom_elephchtmlparser_m139() -> MethodBuilder {
 }
 
 /// `startRaw` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m140() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m149() -> MethodBuilder {
     method("startRaw")
         .private()
         .param("tag", TypeExpr::Str)
@@ -7255,7 +7845,7 @@ fn decl_class_dom_elephchtmlparser_m140() -> MethodBuilder {
 }
 
 /// `startInTable` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m141() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m150() -> MethodBuilder {
     method("startInTable")
         .private()
         .param("name", TypeExpr::Str)
@@ -7400,127 +7990,8 @@ fn decl_class_dom_elephchtmlparser_m141() -> MethodBuilder {
         ])
 }
 
-/// `startInSelect` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m142() -> MethodBuilder {
-    method("startInSelect")
-        .private()
-        .param("name", TypeExpr::Str)
-        .param("attrs", t_array())
-        .param("selfClosing", TypeExpr::Bool)
-        .returns(TypeExpr::Void)
-        .body(vec![
-            s_if(
-                e_binop(e_var("name"), BinOp::StrictEq, e_str("html")),
-                vec![
-                    s_expr(e_method_call(e_this(), "startInBody", vec![e_var("name"), e_var("attrs"), e_var("selfClosing")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("name"), BinOp::StrictEq, e_str("option")),
-                vec![
-                    s_if(
-                        e_binop(e_method_call(e_this(), "currName", vec![]), BinOp::StrictEq, e_str("option")),
-                        vec![
-                            s_expr(e_method_call(e_this(), "popOpen", vec![])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_method_call(e_this(), "insertElement", vec![e_str("option"), e_var("attrs")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("name"), BinOp::StrictEq, e_str("optgroup")),
-                vec![
-                    s_if(
-                        e_binop(e_method_call(e_this(), "currName", vec![]), BinOp::StrictEq, e_str("option")),
-                        vec![
-                            s_expr(e_method_call(e_this(), "popOpen", vec![])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_method_call(e_this(), "currName", vec![]), BinOp::StrictEq, e_str("optgroup")),
-                        vec![
-                            s_expr(e_method_call(e_this(), "popOpen", vec![])),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_method_call(e_this(), "insertElement", vec![e_str("optgroup"), e_var("attrs")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_var("name"), BinOp::StrictEq, e_str("select")),
-                vec![
-                    s_if(
-                        e_not(e_method_call(e_this(), "inScope", vec![e_str("select"), e_str("select")])),
-                        vec![
-                            s_return_void(),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_method_call(e_this(), "popUntil", vec![e_str("select")])),
-                    s_expr(e_method_call(e_this(), "resetMode", vec![])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_binop(e_binop(e_var("name"), BinOp::StrictEq, e_str("input")), BinOp::Or, e_binop(e_var("name"), BinOp::StrictEq, e_str("keygen"))), BinOp::Or, e_binop(e_var("name"), BinOp::StrictEq, e_str("textarea"))),
-                vec![
-                    s_if(
-                        e_not(e_method_call(e_this(), "inScope", vec![e_str("select"), e_str("select")])),
-                        vec![
-                            s_return_void(),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_method_call(e_this(), "popUntil", vec![e_str("select")])),
-                    s_expr(e_method_call(e_this(), "resetMode", vec![])),
-                    s_expr(e_method_call(e_this(), "dispatchStart", vec![e_var("name"), e_var("attrs"), e_var("selfClosing")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_binop(e_binop(e_var("name"), BinOp::StrictEq, e_str("script")), BinOp::Or, e_binop(e_var("name"), BinOp::StrictEq, e_str("template"))),
-                vec![
-                    s_expr(e_method_call(e_this(), "startInHead", vec![e_var("name"), e_var("attrs"), e_var("selfClosing")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
-                e_call("in_array", vec![e_var("name"), e_array(vec![e_str("area"), e_str("br"), e_str("embed"), e_str("hr"), e_str("img"), e_str("keygen"), e_str("wbr"), e_str("param"), e_str("source"), e_str("track"), e_str("col"), e_str("base"), e_str("basefont"), e_str("bgsound"), e_str("link"), e_str("meta"), e_str("frame")]), e_bool(true)]),
-                vec![
-                    s_expr(e_method_call(e_this(), "insertVoid", vec![e_var("name"), e_var("attrs")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_expr(e_method_call(e_this(), "insertElement", vec![e_var("name"), e_var("attrs")])),
-        ])
-}
-
 /// `startInBody` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m143() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m151() -> MethodBuilder {
     method("startInBody")
         .private()
         .param("name", TypeExpr::Str)
@@ -7798,6 +8269,14 @@ fn decl_class_dom_elephchtmlparser_m143() -> MethodBuilder {
                     s_return_void(),
                 ]),
                 (vec![e_str("input")], vec![
+                    s_if(
+                        e_method_call(e_this(), "inScope", vec![e_str("select")]),
+                        vec![
+                            s_expr(e_method_call(e_this(), "popUntil", vec![e_str("select")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_expr(e_method_call(e_this(), "reconstructFormatting", vec![])),
                     s_expr(e_method_call(e_this(), "insertVoid", vec![e_str("input"), e_var("attrs")])),
                     s_assign("type", e_str("")),
@@ -7826,7 +8305,16 @@ fn decl_class_dom_elephchtmlparser_m143() -> MethodBuilder {
                     s_return_void(),
                 ]),
                 (vec![e_str("hr")], vec![
-                    s_expr(e_method_call(e_this(), "closePIfInButtonScope", vec![])),
+                    s_if(
+                        e_method_call(e_this(), "inScope", vec![e_str("select")]),
+                        vec![
+                            s_expr(e_method_call(e_this(), "generateImpliedEndTags", vec![])),
+                        ],
+                        vec![],
+                        Some(vec![
+                        s_expr(e_method_call(e_this(), "closePIfInButtonScope", vec![])),
+                    ]),
+                    ),
                     s_expr(e_method_call(e_this(), "insertVoid", vec![e_str("hr"), e_var("attrs")])),
                     s_prop_assign(e_this(), "framesetOk", e_bool(false)),
                     s_return_void(),
@@ -7896,28 +8384,31 @@ fn decl_class_dom_elephchtmlparser_m143() -> MethodBuilder {
                     s_return_void(),
                 ]),
                 (vec![e_str("select")], vec![
+                    s_if(
+                        e_method_call(e_this(), "inScope", vec![e_str("select")]),
+                        vec![
+                            s_expr(e_method_call(e_this(), "popUntil", vec![e_str("select")])),
+                            s_return_void(),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_expr(e_method_call(e_this(), "reconstructFormatting", vec![])),
                     s_expr(e_method_call(e_this(), "insertElement", vec![e_str("select"), e_var("attrs")])),
                     s_prop_assign(e_this(), "framesetOk", e_bool(false)),
-                    s_if(
-                        e_binop(e_binop(e_binop(e_binop(e_binop(e_this_prop("mode"), BinOp::StrictEq, e_str("in table")), BinOp::Or, e_binop(e_this_prop("mode"), BinOp::StrictEq, e_str("in caption"))), BinOp::Or, e_binop(e_this_prop("mode"), BinOp::StrictEq, e_str("in table body"))), BinOp::Or, e_binop(e_this_prop("mode"), BinOp::StrictEq, e_str("in row"))), BinOp::Or, e_binop(e_this_prop("mode"), BinOp::StrictEq, e_str("in cell"))),
-                        vec![
-                            s_prop_assign(e_this(), "mode", e_str("in select")),
-                        ],
-                        vec![],
-                        Some(vec![
-                        s_prop_assign(e_this(), "mode", e_str("in select")),
-                    ]),
-                    ),
                     s_return_void(),
                 ]),
                 (vec![e_str("optgroup"), e_str("option")], vec![
                     s_if(
-                        e_binop(e_method_call(e_this(), "currName", vec![]), BinOp::StrictEq, e_str("option")),
+                        e_method_call(e_this(), "inScope", vec![e_str("select")]),
                         vec![
-                            s_expr(e_method_call(e_this(), "popOpen", vec![])),
+                            s_expr(e_method_call(e_this(), "generateImpliedEndTags", vec![e_ternary(e_binop(e_var("name"), BinOp::StrictEq, e_str("option")), e_str("optgroup"), e_str(""))])),
                         ],
-                        vec![],
+                        vec![
+                        (e_binop(e_method_call(e_this(), "currName", vec![]), BinOp::StrictEq, e_str("option")), vec![
+                            s_expr(e_method_call(e_this(), "popOpen", vec![])),
+                        ]),
+                    ],
                         None,
                     ),
                     s_expr(e_method_call(e_this(), "reconstructFormatting", vec![])),
@@ -7964,7 +8455,7 @@ fn decl_class_dom_elephchtmlparser_m143() -> MethodBuilder {
 }
 
 /// `skipNewline` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m144() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m152() -> MethodBuilder {
     method("skipNewline")
         .private()
         .returns(TypeExpr::Void)
@@ -7981,7 +8472,7 @@ fn decl_class_dom_elephchtmlparser_m144() -> MethodBuilder {
 }
 
 /// `tbEnd` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m145() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m153() -> MethodBuilder {
     method("tbEnd")
         .private()
         .param("name", TypeExpr::Str)
@@ -8002,7 +8493,7 @@ fn decl_class_dom_elephchtmlparser_m145() -> MethodBuilder {
 }
 
 /// `dispatchEnd` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m146() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m154() -> MethodBuilder {
     method("dispatchEnd")
         .private()
         .param("name", TypeExpr::Str)
@@ -8509,82 +9000,6 @@ fn decl_class_dom_elephchtmlparser_m146() -> MethodBuilder {
                 None,
             ),
             s_if(
-                e_binop(e_var("m"), BinOp::StrictEq, e_str("in select")),
-                vec![
-                    s_if(
-                        e_binop(e_var("name"), BinOp::StrictEq, e_str("optgroup")),
-                        vec![
-                            s_if(
-                                e_binop(e_binop(e_binop(e_method_call(e_this(), "currName", vec![]), BinOp::StrictEq, e_str("option")), BinOp::And, e_binop(e_call("count", vec![e_this_prop("open")]), BinOp::Gt, e_int(1))), BinOp::And, e_binop(e_prop(e_index(e_this_prop("open"), e_binop(e_call("count", vec![e_this_prop("open")]), BinOp::Sub, e_int(2))), "localName"), BinOp::StrictEq, e_str("optgroup"))),
-                                vec![
-                                    s_expr(e_method_call(e_this(), "popOpen", vec![])),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_if(
-                                e_binop(e_method_call(e_this(), "currName", vec![]), BinOp::StrictEq, e_str("optgroup")),
-                                vec![
-                                    s_expr(e_method_call(e_this(), "popOpen", vec![])),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_return_void(),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("name"), BinOp::StrictEq, e_str("option")),
-                        vec![
-                            s_if(
-                                e_binop(e_method_call(e_this(), "currName", vec![]), BinOp::StrictEq, e_str("option")),
-                                vec![
-                                    s_expr(e_method_call(e_this(), "popOpen", vec![])),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_return_void(),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("name"), BinOp::StrictEq, e_str("select")),
-                        vec![
-                            s_if(
-                                e_not(e_method_call(e_this(), "inScope", vec![e_str("select"), e_str("select")])),
-                                vec![
-                                    s_return_void(),
-                                ],
-                                vec![],
-                                None,
-                            ),
-                            s_expr(e_method_call(e_this(), "popUntil", vec![e_str("select")])),
-                            s_expr(e_method_call(e_this(), "resetMode", vec![])),
-                            s_return_void(),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_if(
-                        e_binop(e_var("name"), BinOp::StrictEq, e_str("template")),
-                        vec![
-                            s_expr(e_method_call(e_this(), "endTemplate", vec![])),
-                            s_return_void(),
-                        ],
-                        vec![],
-                        None,
-                    ),
-                    s_expr(e_method_call(e_this(), "anyOtherEnd", vec![e_var("name")])),
-                    s_return_void(),
-                ],
-                vec![],
-                None,
-            ),
-            s_if(
                 e_binop(e_var("m"), BinOp::StrictEq, e_str("after body")),
                 vec![
                     s_if(
@@ -8666,7 +9081,7 @@ fn decl_class_dom_elephchtmlparser_m146() -> MethodBuilder {
 }
 
 /// `endTemplate` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m147() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m155() -> MethodBuilder {
     method("endTemplate")
         .private()
         .returns(TypeExpr::Void)
@@ -8688,7 +9103,7 @@ fn decl_class_dom_elephchtmlparser_m147() -> MethodBuilder {
 }
 
 /// `endInBody` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m148() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m156() -> MethodBuilder {
     method("endInBody")
         .private()
         .param("name", TypeExpr::Str)
@@ -8697,6 +9112,17 @@ fn decl_class_dom_elephchtmlparser_m148() -> MethodBuilder {
             s_switch(e_var("name"), vec![
                 (vec![e_str("template")], vec![
                     s_expr(e_method_call(e_this(), "endTemplate", vec![])),
+                    s_return_void(),
+                ]),
+                (vec![e_str("select")], vec![
+                    s_if(
+                        e_method_call(e_this(), "inScope", vec![e_str("select")]),
+                        vec![
+                            s_expr(e_method_call(e_this(), "popUntil", vec![e_str("select")])),
+                        ],
+                        vec![],
+                        None,
+                    ),
                     s_return_void(),
                 ]),
                 (vec![e_str("body")], vec![
@@ -8858,7 +9284,7 @@ fn decl_class_dom_elephchtmlparser_m148() -> MethodBuilder {
 }
 
 /// `anyOtherEnd` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m149() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m157() -> MethodBuilder {
     method("anyOtherEnd")
         .private()
         .param("name", TypeExpr::Str)
@@ -8891,7 +9317,7 @@ fn decl_class_dom_elephchtmlparser_m149() -> MethodBuilder {
 }
 
 /// `tbEof` lifted out of `decl_class_dom_elephchtmlparser` so it builds in its own stack frame.
-fn decl_class_dom_elephchtmlparser_m150() -> MethodBuilder {
+fn decl_class_dom_elephchtmlparser_m158() -> MethodBuilder {
     method("tbEof")
         .private()
         .returns(TypeExpr::Void)
@@ -8906,6 +9332,12 @@ fn decl_class_dom_elephchtmlparser_m150() -> MethodBuilder {
                 vec![],
                 None,
             ),
+            s_while(e_method_call(e_this(), "stackHas", vec![e_str("template")]), vec![
+                s_expr(e_method_call(e_this(), "popUntil", vec![e_str("template")])),
+                s_expr(e_method_call(e_this(), "clearFormattingToMarker", vec![])),
+                s_expr(e_call("array_pop", vec![e_this_prop("templateModes")])),
+                s_expr(e_method_call(e_this(), "resetMode", vec![])),
+            ]),
             s_if(
                 e_binop(e_this_prop("mode"), BinOp::StrictEq, e_str("in head noscript")),
                 vec![
@@ -8964,6 +9396,7 @@ fn decl_class_dom_elephchtmlparser_m150() -> MethodBuilder {
         ])
 }
 
+/// Builds the whole surface, one declaration per helper above.
 pub(crate) fn dom_declarations() -> Program {
     internal_declarations(|| {
         vec![

@@ -66,13 +66,12 @@ class Dom__HTMLCollection implements \IteratorAggregate, \Countable
         if ($key === '') {
             return null;
         }
+        // the first element in tree order carrying the key as its id, or as the name of an html one
         foreach ($this->items as $element) {
             if ($element->getAttribute('id') === $key) {
                 return $element;
             }
-        }
-        foreach ($this->items as $element) {
-            if ($element->getAttribute('name') === $key) {
+            if ($element->namespaceURI === 'http://www.w3.org/1999/xhtml' && $element->getAttribute('name') === $key) {
                 return $element;
             }
         }
@@ -219,16 +218,22 @@ class Dom__Node
 
     public function insertBefore(\Dom__Node $node, ?\Dom__Node $child = null): \Dom__Node
     {
+        $walk = $this;
+        while ($walk !== null) {
+            if ($walk === $node) {
+                throw new \DOMException('Hierarchy Request Error', 3);
+            }
+            $walk = $walk->parentNode;
+        }
+        if ($child !== null && array_search($child, $this->kids, true) === false) {
+            throw new \DOMException('Not Found Error', 8);
+        }
         if ($node->parentNode !== null) {
             $node->parentNode->removeChild($node);
         }
         $index = count($this->kids);
         if ($child !== null) {
-            $found = array_search($child, $this->kids, true);
-            if ($found === false) {
-                throw new \Exception('Not Found Error', 8);
-            }
-            $index = $found;
+            $index = array_search($child, $this->kids, true);
         }
         $node->parentNode = $this;
         $node->parentElement = $this instanceof \Dom__Element ? $this : null;
@@ -248,14 +253,26 @@ class Dom__Node
         }
         array_splice($this->kids, $index, 0, [$node]);
         $this->relink();
+        if (!$this->isBuilding()) {
+            $node->markConnected($this->isConnected);
+        }
         return $node;
+    }
+
+    // a node is connected while its root is a document
+    public function markConnected(bool $connected): void
+    {
+        $this->isConnected = $connected;
+        foreach ($this->kids as $kid) {
+            $kid->markConnected($connected);
+        }
     }
 
     public function removeChild(\Dom__Node $child): \Dom__Node
     {
         $found = array_search($child, $this->kids, true);
         if ($found === false) {
-            throw new \Exception('Not Found Error', 8);
+            throw new \DOMException('Not Found Error', 8);
         }
         array_splice($this->kids, $found, 1);
         $child->parentNode = null;
@@ -263,6 +280,7 @@ class Dom__Node
         $child->previousSibling = null;
         $child->nextSibling = null;
         $this->relink();
+        $child->markConnected(false);
         return $child;
     }
 
@@ -292,6 +310,7 @@ class Dom__Node
     
     public function finishBuild(): void
     {
+        $this->isConnected = $this->parentNode === null ? $this instanceof \Dom__Document : $this->parentNode->isConnected;
         foreach ($this->kids as $kid) {
             $kid->finishBuild();
         }
@@ -342,13 +361,18 @@ class Dom__CharacterData extends \Dom__Node
     {
         $this->data = $data;
         $this->nodeValue = $data;
-        $this->length = strlen($data);
+        // php counts characters; while the parser grows a text node chunk by chunk the count is
+        // left to the bottom-up pass that ends the build (computeText)
+        if (!$this->isBuilding()) {
+            $this->length = mb_strlen($data, 'UTF-8');
+        }
         $this->textContent = $data;
     }
 
     public function computeText(): void
     {
         $this->textContent = $this->data;
+        $this->length = mb_strlen($this->data, 'UTF-8');
     }
 }
 
@@ -550,18 +574,35 @@ class Dom__Element extends \Dom__Node
     public function getElementsByTagName(string $qualifiedName): \Dom__HTMLCollection
     {
         $found = [];
-        $this->collectByTagName(strtolower($qualifiedName), $found);
+        $this->collectByTagName($qualifiedName, $found, strtolower($qualifiedName));
         return new \Dom__HTMLCollection($found);
     }
 
-    public function collectByTagName(string $wanted, array &$found): void
+    public function firstHtmlTitle(): ?\Dom__Element
+    {
+        if ($this->localName === 'title' && $this->namespaceURI === 'http://www.w3.org/1999/xhtml') {
+            return $this;
+        }
+        foreach ($this->kids as $kid) {
+            if ($kid instanceof \Dom__Element) {
+                $found = $kid->firstHtmlTitle();
+                if ($found !== null) {
+                    return $found;
+                }
+            }
+        }
+        return null;
+    }
+
+    public function collectByTagName(string $wanted, array &$found, string $lower = ''): void
     {
         foreach ($this->kids as $kid) {
             if ($kid instanceof \Dom__Element) {
-                if ($wanted === '*' || $kid->localName === $wanted) {
+                // an html element matches the lowercased name, an svg or math one the name as written
+                if ($wanted === '*' || $kid->localName === ($kid->namespaceURI === 'http://www.w3.org/1999/xhtml' ? $lower : $wanted)) {
                     $found[] = $kid;
                 }
-                $kid->collectByTagName($wanted, $found);
+                $kid->collectByTagName($wanted, $found, $lower);
             }
         }
     }
@@ -597,6 +638,7 @@ class Dom__Document extends \Dom__Node
         parent::__construct();
         $this->nodeType = 9;
         $this->nodeName = '#document';
+        $this->isConnected = true;
     }
 
     public function afterRelink(): void
@@ -628,17 +670,31 @@ class Dom__Document extends \Dom__Node
     public function computeText(): void
     {
         $this->textContent = null;
+        // the first html title element's text, ASCII whitespace stripped and collapsed
+        $title = $this->documentElement === null ? null : $this->documentElement->firstHtmlTitle();
+        $this->title = '';
+        if ($title !== null) {
+            $words = explode(' ', strtr((string) $title->textContent, "\t\n\f\r", '    '));
+            $kept = [];
+            foreach ($words as $word) {
+                if ($word !== '') {
+                    $kept[] = $word;
+                }
+            }
+            $this->title = implode(' ', $kept);
+        }
     }
 
     public function getElementsByTagName(string $qualifiedName): \Dom__HTMLCollection
     {
         $found = [];
-        $wanted = strtolower($qualifiedName);
-        if ($this->documentElement !== null) {
-            if ($wanted === '*' || $this->documentElement->localName === $wanted) {
-                $found[] = $this->documentElement;
+        $lower = strtolower($qualifiedName);
+        $root = $this->documentElement;
+        if ($root !== null) {
+            if ($qualifiedName === '*' || $root->localName === ($root->namespaceURI === 'http://www.w3.org/1999/xhtml' ? $lower : $qualifiedName)) {
+                $found[] = $root;
             }
-            $this->documentElement->collectByTagName($wanted, $found);
+            $root->collectByTagName($qualifiedName, $found, $lower);
         }
         return new \Dom__HTMLCollection($found);
     }
@@ -688,6 +744,7 @@ final class Dom__HTMLDocument extends \Dom__Document
     public static function createEmpty(string $encoding = 'UTF-8'): \Dom__HTMLDocument
     {
         $document = new \Dom__HTMLDocument();
+        $document->nodeType = 13;
         return $document;
     }
 
@@ -695,6 +752,13 @@ final class Dom__HTMLDocument extends \Dom__Document
     {
         $document = new \Dom__HTMLDocument();
         $document->nodeType = 13;
+        $encoding = \Dom____ElephcHtmlParser::sniffEncoding($source, $overrideEncoding);
+        if ($encoding === 'windows-1252') {
+            $source = \Dom____ElephcHtmlParser::decodeWindows1252($source);
+        }
+        $document->characterSet = $encoding;
+        $document->charset = $encoding;
+        $document->inputEncoding = $encoding;
         $document->building = true;
         $parser = new \Dom____ElephcHtmlParser($document, $source);
         $parser->run();
@@ -738,10 +802,156 @@ final class Dom____ElephcHtmlParser
     public function __construct(\Dom__Document $doc, string $source)
     {
         $this->doc = $doc;
+        // the decoder drops a UTF-8 byte order mark and turns every invalid sequence into U+FFFD
+        if (substr($source, 0, 3) === "\xEF\xBB\xBF") {
+            $source = substr($source, 3);
+        }
+        if (!mb_check_encoding($source, 'UTF-8')) {
+            $source = self::scrubUtf8($source);
+        }
         $source = str_replace("\r\n", "\n", $source);
         $source = str_replace("\r", "\n", $source);
         $this->src = $source;
         $this->len = strlen($source);
+    }
+
+    // the document's encoding: a UTF-8 byte order mark, else the override, else a `<meta>` charset
+    // in the first 1024 bytes, else UTF-8; only UTF-8 and windows-1252 (latin1) are decoded, any
+    // other label is read as UTF-8
+    public static function sniffEncoding(string $source, ?string $override): string
+    {
+        if (substr($source, 0, 3) === "\xEF\xBB\xBF") {
+            return 'UTF-8';
+        }
+        if ($override !== null) {
+            $known = self::encodingForLabel($override);
+            return $known === '' ? 'UTF-8' : $known;
+        }
+        $head = strtolower(substr($source, 0, 1024));
+        $at = 0;
+        while (true) {
+            $lt = strpos($head, '<', $at);
+            if ($lt === false) {
+                break;
+            }
+            if (substr($head, $lt, 4) === '<!--') {
+                $close = strpos($head, '-->', $lt + 4);
+                if ($close === false) {
+                    break;
+                }
+                $at = $close + 3;
+                continue;
+            }
+            $end = strpos($head, '>', $lt);
+            if ($end === false) {
+                break;
+            }
+            $tag = substr($head, $lt, $end - $lt);
+            $at = $end + 1;
+            if (strlen($tag) < 6 || substr($tag, 0, 5) !== '<meta' || !(self::isSpace($tag[5]) || $tag[5] === '/')) {
+                continue;
+            }
+            $c = strpos($tag, 'charset=');
+            if ($c === false) {
+                continue;
+            }
+            $value = ltrim(substr($tag, $c + 8), " \t\n\f\r\"'");
+            $known = self::encodingForLabel(substr($value, 0, strcspn($value, " \t\n\f\r\"';/>")));
+            if ($known !== '') {
+                return $known;
+            }
+        }
+        return 'UTF-8';
+    }
+
+    private static function encodingForLabel(string $label): string
+    {
+        $label = strtolower(trim($label, " \t\n\f\r"));
+        if (in_array($label, ['utf-8', 'utf8', 'unicode-1-1-utf-8', 'unicode11utf8', 'unicode20utf8', 'x-unicode20utf8'], true)) {
+            return 'UTF-8';
+        }
+        if (in_array($label, ['ansi_x3.4-1968', 'ascii', 'cp1252', 'cp819', 'csisolatin1', 'ibm819', 'iso-8859-1', 'iso-ir-100', 'iso8859-1', 'iso88591', 'iso_8859-1', 'iso_8859-1:1987', 'l1', 'latin1', 'us-ascii', 'windows-1252', 'x-cp1252'], true)) {
+            return 'windows-1252';
+        }
+        return '';
+    }
+
+    public static function decodeWindows1252(string $s): string
+    {
+        $out = '';
+        $n = strlen($s);
+        $from = 0;
+        for ($i = 0; $i < $n; $i++) {
+            $b = ord($s[$i]);
+            if ($b >= 0x80) {
+                $out .= substr($s, $from, $i - $from) . self::codepointText($b);
+                $from = $i + 1;
+            }
+        }
+        return $out . substr($s, $from);
+    }
+
+    // WHATWG UTF-8 decoding: each maximal invalid subpart becomes one U+FFFD
+    private static function scrubUtf8(string $s): string
+    {
+        $out = '';
+        $n = strlen($s);
+        $i = 0;
+        while ($i < $n) {
+            $b = ord($s[$i]);
+            if ($b < 0x80) {
+                $out .= $s[$i];
+                $i++;
+                continue;
+            }
+            $need = 0;
+            $lower = 0x80;
+            $upper = 0xBF;
+            if ($b >= 0xC2 && $b <= 0xDF) {
+                $need = 1;
+            } elseif ($b >= 0xE0 && $b <= 0xEF) {
+                $need = 2;
+                if ($b === 0xE0) {
+                    $lower = 0xA0;
+                } elseif ($b === 0xED) {
+                    $upper = 0x9F;
+                }
+            } elseif ($b >= 0xF0 && $b <= 0xF4) {
+                $need = 3;
+                if ($b === 0xF0) {
+                    $lower = 0x90;
+                } elseif ($b === 0xF4) {
+                    $upper = 0x8F;
+                }
+            } else {
+                $out .= "\u{fffd}";
+                $i++;
+                continue;
+            }
+            $j = $i + 1;
+            $ok = true;
+            for ($k = 0; $k < $need; $k++) {
+                if ($j >= $n) {
+                    $ok = false;
+                    break;
+                }
+                $c = ord($s[$j]);
+                if ($c < $lower || $c > $upper) {
+                    $ok = false;
+                    break;
+                }
+                $lower = 0x80;
+                $upper = 0xBF;
+                $j++;
+            }
+            if ($ok) {
+                $out .= substr($s, $i, $j - $i);
+            } else {
+                $out .= "\u{fffd}";
+            }
+            $i = $j;
+        }
+        return $out;
     }
 
     // ------------------------------------------------------------------------------------------
@@ -874,6 +1084,21 @@ final class Dom____ElephcHtmlParser
             return;
         }
         if (substr($this->src, $this->pos + 2, 7) === '[CDATA[') {
+            $current = $this->curr();
+            if ($current !== null && $current->namespaceURI !== self::HTMLNS) {
+                // a CDATA section in svg / math content is text
+                $start = $this->pos + 9;
+                $end = strpos($this->src, ']]>', $start);
+                if ($end === false) {
+                    $text = substr($this->src, $start);
+                    $this->pos = $this->len;
+                } else {
+                    $text = substr($this->src, $start, $end - $start);
+                    $this->pos = $end + 3;
+                }
+                $this->emitChars($text);
+                return;
+            }
             $this->pos += 2;
             $this->bogusComment('');
             return;
@@ -923,7 +1148,9 @@ final class Dom____ElephcHtmlParser
         // end of input inside the comment: the comment is emitted with what was read
         $text = substr($this->src, $start);
         $this->pos = $this->len;
-        if (substr($text, -2) === '--') {
+        if (substr($text, -3) === '--!') {
+            $text = substr($text, 0, -3);
+        } elseif (substr($text, -2) === '--') {
             $text = substr($text, 0, -2);
         } elseif (substr($text, -1) === '-') {
             $text = substr($text, 0, -1);
@@ -1165,6 +1392,11 @@ final class Dom____ElephcHtmlParser
                 $i++;
             }
             $this->pos = $i;
+            // leading zeros carry no value: `&#0000000065;` is `A`
+            $digits = ltrim($digits, '0');
+            if ($digits === '') {
+                $digits = '0';
+            }
             if (strlen($digits) > 8) {
                 return "\u{fffd}";
             }
@@ -1254,7 +1486,7 @@ final class Dom____ElephcHtmlParser
         $tag = $this->rawTag;
         $mode = $this->rawMode;
         if ($mode === 'plaintext') {
-            $this->emitChars(substr($this->src, $this->pos));
+            $this->emitChars(str_replace("\0", "\u{fffd}", substr($this->src, $this->pos)));
             $this->pos = $this->len;
             return;
         }
@@ -1262,7 +1494,10 @@ final class Dom____ElephcHtmlParser
         $limit = $this->len;
         $found = -1;
         $i = $from;
-        while (true) {
+        if ($mode === 'script') {
+            $found = $this->scriptEnd($from);
+        }
+        while ($mode !== 'script') {
             $at = stripos($this->src, '</' . $tag, $i);
             if ($at === false) {
                 break;
@@ -1279,7 +1514,7 @@ final class Dom____ElephcHtmlParser
         $text = substr($this->src, $from, $end - $from);
         if ($text !== '') {
             if ($mode === 'rcdata') {
-                $this->emitChars($this->decodeInText($text));
+                $this->emitChars(str_replace("\0", "\u{fffd}", $this->decodeInText($text)));
             } else {
                 $this->emitChars(str_replace("\0", "\u{fffd}", $text));
             }
@@ -1292,6 +1527,81 @@ final class Dom____ElephcHtmlParser
         $this->rawTag = '';
         $this->pos = $found + 2;
         $this->readTag(false);
+    }
+
+    // where script data ends: the first `</script` outside the escaped (`<!--`) and double-escaped
+    // (`<!-- <script>`) states of the tokenizer, or -1
+    private function scriptEnd(int $from): int
+    {
+        $state = 0;
+        $dashes = 0;
+        $i = $from;
+        while ($i < $this->len) {
+            if ($state === 0) {
+                $lt = strpos($this->src, '<', $i);
+                if ($lt === false) {
+                    return -1;
+                }
+                if (substr($this->src, $lt, 4) === '<!--') {
+                    $state = 1;
+                    $dashes = 2;
+                    $i = $lt + 4;
+                    continue;
+                }
+                if ($this->scriptTagAt($lt, true)) {
+                    return $lt;
+                }
+                $i = $lt + 1;
+                continue;
+            }
+            $c = $this->src[$i];
+            if ($c === '-') {
+                $dashes++;
+                $i++;
+                continue;
+            }
+            if ($c === '>' && $dashes >= 2) {
+                $state = 0;
+                $dashes = 0;
+                $i++;
+                continue;
+            }
+            $dashes = 0;
+            if ($c === '<') {
+                if ($state === 1) {
+                    if ($this->scriptTagAt($i, true)) {
+                        return $i;
+                    }
+                    if ($this->scriptTagAt($i, false)) {
+                        $state = 2;
+                        $i += 7;
+                        continue;
+                    }
+                } elseif ($this->scriptTagAt($i, true)) {
+                    $state = 1;
+                    $i += 8;
+                    continue;
+                }
+            }
+            $i++;
+        }
+        return -1;
+    }
+
+    // whether `</script` (or `<script`) followed by a tag delimiter starts at $at
+    private function scriptTagAt(int $at, bool $end): bool
+    {
+        $open = $end ? '</script' : '<script';
+        $width = strlen($open);
+        if (strtolower(substr($this->src, $at, $width)) !== $open) {
+            return false;
+        }
+        $after = $at + $width;
+        $c = $after < $this->len ? $this->src[$after] : '';
+        if ($c === '') {
+            return $end;
+        }
+        return self::isSpace($c) || $c === '/' || $c === '>';
     }
 
     private function decodeInText(string $text): string
@@ -1637,9 +1947,29 @@ final class Dom____ElephcHtmlParser
                 $before = $table;
                 return $table->parentNode;
             }
-            return $tableIndex > 0 ? $this->open[$tableIndex - 1] : $this->doc;
+            return $this->templateContents($tableIndex > 0 ? $this->open[$tableIndex - 1] : $this->doc);
         }
-        return $target;
+        return $this->templateContents($target);
+    }
+
+    private array $templateElements = [];
+    private array $templateFragments = [];
+
+    // what is parsed inside a template goes to its contents, a fragment outside the tree
+    private function templateContents(\Dom__Node $parent): \Dom__Node
+    {
+        if (!($parent instanceof \Dom__Element) || $parent->localName !== 'template' || $parent->namespaceURI !== self::HTMLNS) {
+            return $parent;
+        }
+        $at = array_search($parent, $this->templateElements, true);
+        if ($at !== false) {
+            return $this->templateFragments[$at];
+        }
+        $fragment = new \Dom__DocumentFragment();
+        $fragment->ownerDocument = $this->doc;
+        $this->templateElements[] = $parent;
+        $this->templateFragments[] = $fragment;
+        return $fragment;
     }
 
     private function insertNode(\Dom__Node $node, ?\Dom__Node $override = null): void
@@ -1742,8 +2072,8 @@ final class Dom____ElephcHtmlParser
         if ($el->namespaceURI === self::HTMLNS) {
             return $this->scopeBoundary($el->localName, $kind);
         }
-        if ($kind === 'table' || $kind === 'select') {
-            return $kind === 'table' ? false : true;
+        if ($kind === 'table') {
+            return false;
         }
         if ($el->namespaceURI === self::MATHML) {
             return in_array($el->localName, ['mi', 'mo', 'mn', 'ms', 'mtext', 'annotation-xml'], true);
@@ -1756,10 +2086,7 @@ final class Dom____ElephcHtmlParser
         if ($kind === 'table') {
             return $n === 'html' || $n === 'table' || $n === 'template';
         }
-        if ($kind === 'select') {
-            return $n !== 'optgroup' && $n !== 'option';
-        }
-        if (in_array($n, ['applet', 'caption', 'html', 'table', 'td', 'th', 'marquee', 'object', 'template'], true)) {
+        if (in_array($n, ['applet', 'caption', 'html', 'table', 'td', 'th', 'marquee', 'object', 'select', 'template'], true)) {
             return true;
         }
         if ($kind === 'list' && ($n === 'ol' || $n === 'ul')) {
@@ -2085,10 +2412,6 @@ final class Dom____ElephcHtmlParser
         for ($i = count($this->open) - 1; $i >= 0; $i--) {
             $n = $this->open[$i]->localName;
             $last = $i === 0;
-            if ($n === 'select') {
-                $this->mode = 'in select';
-                return;
-            }
             if (($n === 'td' || $n === 'th') && !$last) {
                 $this->mode = 'in cell';
                 return;
@@ -2243,10 +2566,6 @@ final class Dom____ElephcHtmlParser
             $this->bodyChars($ws);
             return;
         }
-        if ($m === 'in select') {
-            $this->insertCharsNow($ws);
-            return;
-        }
         if ($m === 'text') {
             $this->insertCharsNow($ws);
             return;
@@ -2256,6 +2575,11 @@ final class Dom____ElephcHtmlParser
 
     private function bodyChars(string $text): void
     {
+        // the tree builder ignores U+0000 in body and table text
+        $text = str_replace("\0", '', $text);
+        if ($text === '') {
+            return;
+        }
         $this->reconstructFormatting();
         $this->insertCharsNow($text);
         if (trim($text, " \t\n\f") !== '') {
@@ -2338,10 +2662,6 @@ final class Dom____ElephcHtmlParser
                 $this->mode = 'in table';
                 $this->tbText($text);
             }
-            return;
-        }
-        if ($m === 'in select') {
-            $this->insertCharsNow($text);
             return;
         }
         if ($m === 'after body' || $m === 'after after body') {
@@ -2571,10 +2891,6 @@ final class Dom____ElephcHtmlParser
             $this->startInBody($name, $attrs, $selfClosing);
             return;
         }
-        if ($m === 'in select') {
-            $this->startInSelect($name, $attrs, $selfClosing);
-            return;
-        }
         if ($m === 'after body') {
             if ($name === 'html') {
                 $this->startInBody($name, $attrs, $selfClosing);
@@ -2765,59 +3081,6 @@ final class Dom____ElephcHtmlParser
         $this->foster = true;
         $this->startInBody($name, $attrs, $selfClosing);
         $this->foster = $saved;
-    }
-
-    private function startInSelect(string $name, array $attrs, bool $selfClosing): void
-    {
-        if ($name === 'html') {
-            $this->startInBody($name, $attrs, $selfClosing);
-            return;
-        }
-        if ($name === 'option') {
-            if ($this->currName() === 'option') {
-                $this->popOpen();
-            }
-            $this->insertElement('option', $attrs);
-            return;
-        }
-        if ($name === 'optgroup') {
-            if ($this->currName() === 'option') {
-                $this->popOpen();
-            }
-            if ($this->currName() === 'optgroup') {
-                $this->popOpen();
-            }
-            $this->insertElement('optgroup', $attrs);
-            return;
-        }
-        if ($name === 'select') {
-            if (!$this->inScope('select', 'select')) {
-                return;
-            }
-            $this->popUntil('select');
-            $this->resetMode();
-            return;
-        }
-        if ($name === 'input' || $name === 'keygen' || $name === 'textarea') {
-            if (!$this->inScope('select', 'select')) {
-                return;
-            }
-            $this->popUntil('select');
-            $this->resetMode();
-            $this->dispatchStart($name, $attrs, $selfClosing);
-            return;
-        }
-        if ($name === 'script' || $name === 'template') {
-            $this->startInHead($name, $attrs, $selfClosing);
-            return;
-        }
-        // Any other start tag is inserted as it is (the customizable-select parsing the bundled
-        // lexbor implements): no implied end tags, no formatting bookkeeping.
-        if (in_array($name, ['area', 'br', 'embed', 'hr', 'img', 'keygen', 'wbr', 'param', 'source', 'track', 'col', 'base', 'basefont', 'bgsound', 'link', 'meta', 'frame'], true)) {
-            $this->insertVoid($name, $attrs);
-            return;
-        }
-        $this->insertElement($name, $attrs);
     }
 
     private function startInBody(string $name, array $attrs, bool $selfClosing): void
@@ -3042,6 +3305,9 @@ final class Dom____ElephcHtmlParser
                 $this->framesetOk = false;
                 return;
             case 'input':
+                if ($this->inScope('select')) {
+                    $this->popUntil('select');
+                }
                 $this->reconstructFormatting();
                 $this->insertVoid('input', $attrs);
                 $type = '';
@@ -3060,7 +3326,11 @@ final class Dom____ElephcHtmlParser
                 $this->insertVoid($name, $attrs);
                 return;
             case 'hr':
-                $this->closePIfInButtonScope();
+                if ($this->inScope('select')) {
+                    $this->generateImpliedEndTags();
+                } else {
+                    $this->closePIfInButtonScope();
+                }
                 $this->insertVoid('hr', $attrs);
                 $this->framesetOk = false;
                 return;
@@ -3111,18 +3381,21 @@ final class Dom____ElephcHtmlParser
                 }
                 return;
             case 'select':
+                // the customizable-select parsing php's lexbor implements: select content is
+                // parsed in body, and a nested select closes the open one and is dropped
+                if ($this->inScope('select')) {
+                    $this->popUntil('select');
+                    return;
+                }
                 $this->reconstructFormatting();
                 $this->insertElement('select', $attrs);
                 $this->framesetOk = false;
-                if ($this->mode === 'in table' || $this->mode === 'in caption' || $this->mode === 'in table body' || $this->mode === 'in row' || $this->mode === 'in cell') {
-                    $this->mode = 'in select';
-                } else {
-                    $this->mode = 'in select';
-                }
                 return;
             case 'optgroup':
             case 'option':
-                if ($this->currName() === 'option') {
+                if ($this->inScope('select')) {
+                    $this->generateImpliedEndTags($name === 'option' ? 'optgroup' : '');
+                } elseif ($this->currName() === 'option') {
                     $this->popOpen();
                 }
                 $this->reconstructFormatting();
@@ -3416,37 +3689,6 @@ final class Dom____ElephcHtmlParser
             $this->endInBody($name);
             return;
         }
-        if ($m === 'in select') {
-            if ($name === 'optgroup') {
-                if ($this->currName() === 'option' && count($this->open) > 1 && $this->open[count($this->open) - 2]->localName === 'optgroup') {
-                    $this->popOpen();
-                }
-                if ($this->currName() === 'optgroup') {
-                    $this->popOpen();
-                }
-                return;
-            }
-            if ($name === 'option') {
-                if ($this->currName() === 'option') {
-                    $this->popOpen();
-                }
-                return;
-            }
-            if ($name === 'select') {
-                if (!$this->inScope('select', 'select')) {
-                    return;
-                }
-                $this->popUntil('select');
-                $this->resetMode();
-                return;
-            }
-            if ($name === 'template') {
-                $this->endTemplate();
-                return;
-            }
-            $this->anyOtherEnd($name);
-            return;
-        }
         if ($m === 'after body') {
             if ($name === 'html') {
                 $this->mode = 'after after body';
@@ -3499,6 +3741,12 @@ final class Dom____ElephcHtmlParser
         switch ($name) {
             case 'template':
                 $this->endTemplate();
+                return;
+            case 'select':
+                // closes everything opened inside the select
+                if ($this->inScope('select')) {
+                    $this->popUntil('select');
+                }
                 return;
             case 'body':
                 if (!$this->inScope('body')) {
@@ -3658,6 +3906,13 @@ final class Dom____ElephcHtmlParser
         if ($this->mode === 'text') {
             $this->popOpen();
             $this->mode = $this->origMode;
+        }
+        // an unclosed template is closed, and the document then gets the rest of its skeleton
+        while ($this->stackHas('template')) {
+            $this->popUntil('template');
+            $this->clearFormattingToMarker();
+            array_pop($this->templateModes);
+            $this->resetMode();
         }
         if ($this->mode === 'in head noscript') {
             $this->popOpen();
