@@ -728,3 +728,23 @@ o
 "#
     );
 }
+
+/// A throwable is never cloneable, however many levels below Exception or Error it sits
+/// (the flag only looked at the direct parent).
+#[test]
+fn test_reflection_throwable_descendants_are_not_cloneable() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class MyEx extends RuntimeException {}
+class Deep extends MyEx {}
+foreach (["Deep", "MyEx", "InvalidArgumentException", "ArgumentCountError"] as $name) {
+    echo $name, " ", var_export((new ReflectionClass($name))->isCloneable(), true), "\n";
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "Deep false\nMyEx false\nInvalidArgumentException false\nArgumentCountError false\n"
+    );
+}

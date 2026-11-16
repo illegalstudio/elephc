@@ -2978,13 +2978,10 @@ fn eval_reflection_class_is_cloneable(class_name: &str, class_info: &ClassInfo) 
         key.as_str(),
         "throwable" | "error" | "exception" | "generator" | "fiber" | "closure"
     ) || key.starts_with("reflection")
-        || class_info
-            .parent
-            .as_deref()
-            .is_some_and(|parent| {
-                let parent = crate::names::php_symbol_key(parent.trim_start_matches('\\'));
-                matches!(parent.as_str(), "exception" | "error")
-            });
+        // Every throwable, however deep below Exception or Error: the interface list is flattened.
+        || class_info.interfaces.iter().any(|interface| {
+            crate::names::php_symbol_key(interface.trim_start_matches('\\')) == "throwable"
+        });
     if runtime_managed {
         return false;
     }
