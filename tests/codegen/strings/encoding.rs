@@ -1563,3 +1563,27 @@ echo (int) ctype_print('a b'), (int) ctype_print("a\n"), (int) ctype_upper(''), 
     );
     assert_eq!(out, "1010101010101000");
 }
+
+/// Verifies `htmlspecialchars(..., double_encode: false)` keeps a numeric reference by the
+/// doctype rule only under `ENT_DISALLOWED`, as php does (measured against `php -n` 8.5.10).
+#[test]
+fn test_htmlspecialchars_keeps_numeric_references_by_disallowed_rule() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([16, 16 | 128, 48, 48 | 128, 32 | 128, 128] as $flags) {
+    foreach (['&#1;', '&#xD;', '&#x9F;', '&#xFFFE;', '&#xD800;', '&#x110000;'] as $ref) {
+        echo $flags, ' ', htmlspecialchars($ref, $flags, 'UTF-8', false), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "16 &#1;\n16 &#xD;\n16 &#x9F;\n16 &#xFFFE;\n16 &#xD800;\n16 &amp;#x110000;\n\
+         144 &amp;#1;\n144 &#xD;\n144 &#x9F;\n144 &amp;#xFFFE;\n144 &amp;#xD800;\n144 &amp;#x110000;\n\
+         48 &#1;\n48 &#xD;\n48 &#x9F;\n48 &#xFFFE;\n48 &#xD800;\n48 &amp;#x110000;\n\
+         176 &amp;#1;\n176 &amp;#xD;\n176 &amp;#x9F;\n176 &amp;#xFFFE;\n176 &#xD800;\n176 &amp;#x110000;\n\
+         160 &amp;#1;\n160 &#xD;\n160 &#x9F;\n160 &amp;#xFFFE;\n160 &amp;#xD800;\n160 &amp;#x110000;\n\
+         128 &#1;\n128 &#xD;\n128 &#x9F;\n128 &#xFFFE;\n128 &#xD800;\n128 &amp;#x110000;\n"
+    );
+}

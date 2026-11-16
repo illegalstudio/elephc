@@ -204,6 +204,45 @@ fn entity_is_kept_fn() -> Stmt {
             ),
         ),
     );
+    let cp_between = |low: i64, high: i64| {
+        e_binop(
+            e_binop(e_var("cp"), BinOp::GtEq, e_int(low)),
+            BinOp::And,
+            e_binop(e_var("cp"), BinOp::LtEq, e_int(high)),
+        )
+    };
+    let cp_is = |value: i64| e_binop(e_var("cp"), BinOp::StrictEq, e_int(value));
+    // php-src's HTML5 rule: printable ASCII, tab, line feed, form feed, then U+00A0 upward minus
+    // the noncharacters (the last two code points of each plane and U+FDD0..U+FDEF).
+    let code_point_allowed_html5 = e_binop(
+        e_binop(
+            cp_between(0x20, 0x7E),
+            BinOp::Or,
+            e_binop(
+                e_binop(cp_is(0x09), BinOp::Or, cp_is(0x0A)),
+                BinOp::Or,
+                cp_is(0x0C),
+            ),
+        ),
+        BinOp::Or,
+        e_binop(
+            e_binop(
+                e_binop(e_var("cp"), BinOp::GtEq, e_int(0xA0)),
+                BinOp::And,
+                e_binop(
+                    e_binop(e_var("cp"), BinOp::BitAnd, e_int(0xFFFF)),
+                    BinOp::Lt,
+                    e_int(0xFFFE),
+                ),
+            ),
+            BinOp::And,
+            e_binop(
+                e_binop(e_var("cp"), BinOp::Lt, e_int(0xFDD0)),
+                BinOp::Or,
+                e_binop(e_var("cp"), BinOp::Gt, e_int(0xFDEF)),
+            ),
+        ),
+    );
     let numeric = vec![
         s_assign("digits", e_call("substr", vec![e_var("body"), e_int(1)])),
         s_assign(
@@ -271,8 +310,31 @@ fn entity_is_kept_fn() -> Stmt {
             vec![],
             None,
         ),
-        s_if(doctype_is(16), vec![s_return(code_point_allowed_xml)], vec![], None),
-        s_return(e_binop(e_var("cp"), BinOp::LtEq, e_int(0x10FFFF))),
+        s_if(
+            e_binop(e_var("cp"), BinOp::Gt, e_int(0x10FFFF)),
+            vec![s_return(e_bool(false))],
+            vec![],
+            None,
+        ),
+        // The doctype's own rule applies only under ENT_DISALLOWED (128), as in php-src.
+        s_if(
+            e_binop(
+                e_binop(e_var("flags"), BinOp::BitAnd, e_int(128)),
+                BinOp::StrictEq,
+                e_int(0),
+            ),
+            vec![s_return(e_bool(true))],
+            vec![],
+            None,
+        ),
+        s_if(
+            e_binop(doctype_is(16), BinOp::Or, doctype_is(32)),
+            vec![s_return(code_point_allowed_xml)],
+            vec![],
+            None,
+        ),
+        s_if(doctype_is(0), vec![s_return(e_bool(true))], vec![], None),
+        s_return(code_point_allowed_html5),
     ];
     let body = vec![
         s_if(

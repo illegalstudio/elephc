@@ -18,6 +18,10 @@
 const DOCTYPE_MASK: i64 = 48;
 /// The `ENT_XML1` doctype value.
 const DOCTYPE_XML1: i64 = 16;
+/// The `ENT_XHTML` doctype value.
+const DOCTYPE_XHTML: i64 = 32;
+/// The `ENT_DISALLOWED` flag: a reference to a code point the doctype disallows is encoded.
+const ENT_DISALLOWED: i64 = 128;
 /// The `ENT_HTML401` doctype value (no doctype bits set).
 const DOCTYPE_HTML401: i64 = 0;
 
@@ -80,7 +84,7 @@ pub fn html_entity_is_kept(body: &[u8], flags: i64) -> bool {
         } else {
             u32::from_str_radix(text, radix).unwrap_or(u32::MAX)
         };
-        return numeric_code_point_is_allowed(code_point, doctype);
+        return numeric_code_point_is_allowed(code_point, flags);
     }
     if body.is_empty() || !body.iter().all(u8::is_ascii_alphanumeric) {
         return false;
@@ -97,17 +101,36 @@ pub fn html_entity_is_kept(body: &[u8], flags: i64) -> bool {
     HTML401_ENTITY_NAMES.binary_search(&name).is_ok()
 }
 
-/// php-src's `numeric_entity_is_allowed`: any code point up to U+10FFFF, except under XML 1.0,
-/// which also excludes the control range, surrogates and the two non-characters.
-fn numeric_code_point_is_allowed(code_point: u32, doctype: i64) -> bool {
-    if doctype == DOCTYPE_XML1 {
-        return (0x20..=0xD7FF).contains(&code_point)
-            || matches!(code_point, 0x09 | 0x0A | 0x0D)
-            || ((0xE000..=0x10FFFF).contains(&code_point)
-                && code_point != 0xFFFE
-                && code_point != 0xFFFF);
+/// php-src's `process_numeric_entity` bound plus `numeric_entity_is_allowed`: any code point up
+/// to U+10FFFF is kept, and only under `ENT_DISALLOWED` is the doctype's own rule applied on top.
+///
+/// HTML 4.01 disallows nothing more; XHTML and XML 1.0 follow the XML 1.0 `Char` production;
+/// HTML5 allows printable ASCII, tab, line feed, form feed and U+00A0 upward minus the
+/// noncharacters (U+FDD0..U+FDEF and the last two code points of each plane).
+fn numeric_code_point_is_allowed(code_point: u32, flags: i64) -> bool {
+    if code_point > 0x10FFFF {
+        return false;
     }
-    code_point <= 0x10FFFF
+    if flags & ENT_DISALLOWED == 0 {
+        return true;
+    }
+    match flags & DOCTYPE_MASK {
+        DOCTYPE_XML1 | DOCTYPE_XHTML => {
+            (0x20..=0xD7FF).contains(&code_point)
+                || matches!(code_point, 0x09 | 0x0A | 0x0D)
+                || ((0xE000..=0x10FFFF).contains(&code_point)
+                    && code_point != 0xFFFE
+                    && code_point != 0xFFFF)
+        }
+        DOCTYPE_HTML401 => true,
+        _ => {
+            (0x20..=0x7E).contains(&code_point)
+                || matches!(code_point, 0x09 | 0x0A | 0x0C)
+                || (code_point >= 0xA0
+                    && (code_point & 0xFFFF) < 0xFFFE
+                    && !(0xFDD0..=0xFDEF).contains(&code_point))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -138,5 +161,25 @@ mod tests {
     fn xml1_keeps_only_its_five_names() {
         assert!(html_entity_is_kept(b"apos", 16 | 3));
         assert!(!html_entity_is_kept(b"nbsp", 16 | 3));
+    }
+
+    /// A numeric reference is subject to the doctype's rule only under `ENT_DISALLOWED`, as in
+    /// php 8.5.10 (`htmlspecialchars("&#1;", ENT_XML1, 'UTF-8', false)` keeps it).
+    #[test]
+    fn numeric_references_are_checked_only_under_ent_disallowed() {
+        assert!(html_entity_is_kept(b"#1", 16));
+        assert!(html_entity_is_kept(b"#xD800", 16));
+        assert!(!html_entity_is_kept(b"#1", 16 | 128));
+        assert!(!html_entity_is_kept(b"#xFFFE", 16 | 128));
+        assert!(html_entity_is_kept(b"#x80", 16 | 128));
+        assert!(!html_entity_is_kept(b"#1", 48 | 128));
+        assert!(html_entity_is_kept(b"#xD800", 48 | 128));
+        assert!(!html_entity_is_kept(b"#xD", 48 | 128));
+        assert!(!html_entity_is_kept(b"#x9F", 48 | 128));
+        assert!(!html_entity_is_kept(b"#xFDD0", 48 | 128));
+        assert!(html_entity_is_kept(b"#x9", 48 | 128));
+        assert!(!html_entity_is_kept(b"#1", 32 | 128));
+        assert!(html_entity_is_kept(b"#1", 128));
+        assert!(!html_entity_is_kept(b"#x110000", 128));
     }
 }
