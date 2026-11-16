@@ -43,6 +43,9 @@ pub(super) fn fold_backing_value(
     let mut value = expr.clone();
     bind_constants(&mut value, owner, checker, global_constants, 0);
     join_int_concats(&mut value);
+    // A joined concatenation can decide a ternary whose skipped branch is not a literal
+    // (`('n' . 1) ? 6 : $v`); the forms check already let PHP's compile-time pruning skip it.
+    crate::types::deferred_defaults::prune_literal_branches(&mut value);
     match value.kind {
         ExprKind::IntLiteral(value) => Some(FoldedBacking::Int(value)),
         ExprKind::StringLiteral(value) => Some(FoldedBacking::Str(value)),
@@ -54,7 +57,7 @@ pub(super) fn fold_backing_value(
 /// (an int converts to its decimal string, as in PHP), children first, then refolds each operator
 /// so a comparison, ternary or array read around a joined concatenation folds too
 /// (`['n' . C::ONE][0]`).
-fn join_int_concats(expr: &mut Expr) {
+pub(super) fn join_int_concats(expr: &mut Expr) {
     match &mut expr.kind {
         ExprKind::BinaryOp { left, right, .. } => {
             join_int_concats(left);

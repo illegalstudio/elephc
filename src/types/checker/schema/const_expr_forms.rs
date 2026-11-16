@@ -22,6 +22,8 @@ use crate::parser::ast::{
 };
 use crate::types::deferred_defaults::{literal_truthiness, prune_literal_branches};
 
+use super::enum_backing::join_int_concats;
+
 const INVALID: &str = "Constant expression contains invalid operations";
 
 /// Returns PHP's compile error for the first forbidden form in constant expression `expr`.
@@ -123,11 +125,12 @@ pub(super) fn validate_constant_expression(expr: &Expr) -> Result<(), CompileErr
 }
 
 /// Folds an already validated operand the way PHP does at compile time: literals and
-/// predefined constants only. Returns `None` when the operand is not known until run time.
+/// predefined constants only, operators and concatenations included. Returns `None` when the operand is not known until run time.
 fn compile_time_value(expr: &Expr) -> Option<Expr> {
     let mut value = expr.clone();
     substitute_predefined_constants(&mut value);
-    let mut value = crate::optimize::fold_constant_expression(value);
+    // PHP folds `'n' . 1` at compile time too; the shared folder joins only string operands.
+    join_int_concats(&mut value);
     prune_literal_branches(&mut value);
     literal_truthiness(&value).map(|_| value)
 }
