@@ -55,7 +55,6 @@ pub mod array_merge_prelude;
 pub mod assert_prelude;
 pub mod throwable_string_prelude;
 /// PHP's builtin `ErrorException`, declared as an AST-built class.
-pub mod error_exception_prelude;
 pub mod password_prelude;
 pub mod array_edge_prelude;
 pub mod array_gradual_prelude;

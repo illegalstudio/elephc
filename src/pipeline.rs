@@ -1115,7 +1115,6 @@ fn compile_config(config: CliConfig, entry: EntryKind<'_>) {
     if prelude_inventory.groups.contains_key(crate::builtin_callable_prelude::GROUP) {
         forced_groups.insert(crate::builtin_callable_prelude::GROUP.to_string());
     }
-    let ast = crate::error_exception_prelude::inject_if_used(ast, &mut prelude_inventory);
     // `ext/sodium` sealed boxes: Symfony's `SodiumVault` is autoloaded, so this gate reads the
     // complete program too, and it keeps `SodiumException` for code the interpreter runs.
     let ast = crate::sodium_prelude::inject_if_used(ast, &mut prelude_inventory);
