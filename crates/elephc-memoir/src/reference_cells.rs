@@ -21,7 +21,7 @@ pub fn emit_new(emitter: &mut impl Emitter) {
     emitter.label_global("__rt_reference_cell_new");
     abi::emit_frame_prologue(emitter, 32);
     abi::store_at_offset(emitter, abi::int_arg_reg_name(emitter, 0), 8);
-    abi::emit_load_int_immediate(emitter, result, 16);
+    abi::emit_load_int_immediate(emitter, result, crate::layout::REFERENCE_CELL_SIZE as i64);
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     abi::load_at_offset(emitter, scratch, 8);
     match emitter.arch() {
@@ -311,3 +311,4 @@ pub fn emit_unmanaged_borrow_lookup(emitter: &mut impl Emitter) {
     }
     abi::emit_return(emitter);
 }
+pub mod local_release;

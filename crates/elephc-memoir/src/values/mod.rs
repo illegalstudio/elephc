@@ -25,3 +25,5 @@ pub mod mixed_clone;
 pub mod deep_cleanup;
 pub mod native_reference_source_retirement;
 pub mod hash_write_guard;
+pub mod mixed_from_value;
+pub mod mixed_reference;

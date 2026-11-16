@@ -79,3 +79,10 @@ pub fn emit_branch_if_null_container(
         }
     }
 }
+
+/// Bytes in a Mixed cell: one tag word and two payload words.
+pub const MIXED_CELL_SIZE: usize = 24;
+/// Bytes in the payload of a managed native reference cell.
+pub const REFERENCE_CELL_SIZE: usize = 16;
+/// Raw nullable pointer-container tag, normalized to integer/null before boxing.
+pub const POINTER_ARRAY_VALUE_TYPE: i64 = 13;

@@ -89,7 +89,7 @@ pub(crate) const TAGGED_SCALAR_ARRAY_VALUE_TYPE: i64 = 11;
 /// tag, so readers that see only the container (`json_encode`, `var_dump`, mixed reads) show a 0
 /// word as PHP null and any other word as its integer address. Boxing normalizes it, so a mixed
 /// cell never carries it; typed pointer reads ignore it and load the raw word.
-pub(crate) const POINTER_ARRAY_VALUE_TYPE: i64 = 13;
+pub(crate) use elephc_memoir::layout::POINTER_ARRAY_VALUE_TYPE;
 
 /// Rewrites a `POINTER_ARRAY_VALUE_TYPE` tag in `tag_reg` to the PHP value its word stands for.
 ///

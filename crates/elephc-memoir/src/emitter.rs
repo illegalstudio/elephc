@@ -181,4 +181,11 @@ pub trait Emitter {
     /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
     fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str);
 
+    /// Uses the host ABI to address a local slot in the active native frame.
+    fn emit_frame_slot_address(&mut self, dest: &str, offset: usize);
+    /// Emits PHP resource policy inside the Mixed boxing frame, including its resource entry label.
+    fn emit_mixed_resource_identity(&mut self);
+    /// Publishes the boxed result through the compiler's weak resource inventory layout.
+    fn emit_mixed_resource_publication(&mut self);
+
 }
