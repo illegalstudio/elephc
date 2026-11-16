@@ -333,3 +333,45 @@ try { v("strlen", "strrev", z: "nope"); } catch (TypeError $e) { echo $e->getMes
          v(): Argument #3 must be of type callable, string given\n"
     );
 }
+
+/// Verifies a `callable` passed from eval into an AOT constructor, an `__invoke` method and an
+/// ordinary method keeps its PHP value, and that a builtin named only inside the evaluated code
+/// (`sort`, by reference) or a function declared there still invokes.
+///
+/// A constructor (and a method reached without a bridge scope) used to run without the eval
+/// frame, so invoking a builtin the compiled program never named was a fatal error; the eval
+/// bridges also replaced the value with a Closure, which `var_dump` then showed.
+#[test]
+fn test_declared_callable_values_from_eval_keep_their_value_and_invoke() {
+    let out = compile_and_run(
+        r#"<?php
+class T {
+    public function __construct(callable &$callback) {
+        $items = [3, "1", 2];
+        $ok = $callback($items);
+        echo ($ok ? "T" : "F"), ":", implode(",", $items), ":", $callback, "\n";
+    }
+}
+class I {
+    public function __invoke(callable &$callback): string { $items = [2, 1]; $callback($items); return implode(",", $items); }
+}
+class S {
+    public function show(callable $c): void { var_dump($c); }
+}
+$callback = "sort";
+eval('new T($callback);');
+eval('$i = new I(); echo $i($callback), "\n";');
+echo $callback, "\n";
+eval('(new S())->show("strlen");');
+eval('function evalShown(): int { return 1; } (new S())->show("evalShown");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "T:1,2,3:sort\n\
+         1,2\n\
+         sort\n\
+         string(6) \"strlen\"\n\
+         string(9) \"evalShown\"\n"
+    );
+}

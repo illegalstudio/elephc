@@ -268,8 +268,7 @@ pub(super) fn emit_eval_native_function_invoker_inline(
     name: &str,
 ) -> String {
     ctx.shared.callable_argument_normalizer |=
-        crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig)
-            || crate::codegen::runtime_callable_invoker::needs_declared_callable_argument_normalizer(sig);
+        crate::codegen::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let label = ctx.next_global_label("eval_callable_invoker");
     let captures: [(String, PhpType, bool); 0] = [];
     // A registered native FREE function has no class scope, so its defaults resolve globally.
@@ -285,7 +284,6 @@ pub(super) fn emit_eval_native_function_invoker_inline(
             .is_some_and(crate::codegen::runtime_callable_invoker::function_returns_owned_string),
         php_return_status: true,
         defaults: &defaults,
-        convert_eval_callables: true,
     };
     // See `Emitter::begin_out_of_line` for the branch-range failure that splicing caused.
     let scope = ctx.emitter.begin_out_of_line();

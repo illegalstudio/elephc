@@ -129,9 +129,6 @@ pub(super) struct RuntimeCallableInvoker<'a> {
     /// A declared default that could not be folded into a materializable value stays `None`, and
     /// the invoker keeps its fatal diagnostic for that slot rather than inventing a value.
     pub(super) defaults: &'a [Option<InvokerDefaultValue>],
-    /// Invokers called from eval convert eval-only callbacks bound to a declared `callable`
-    /// parameter (see `emit_owned_declared_callable_argument`).
-    pub(super) convert_eval_callables: bool,
 }
 
 /// Reports whether regular or variadic callable parameters can require runtime normalization.
@@ -139,15 +136,6 @@ pub(super) fn needs_callable_argument_normalizer(sig: &FunctionSig) -> bool {
     sig.params.iter().any(|(_, ty)| {
         ty.codegen_repr() == PhpType::Callable
             || matches!(ty, PhpType::Array(element) if **element == PhpType::Callable)
-    })
-}
-
-/// Returns whether an eval-facing invoker converts eval-only callbacks for a parameter that
-/// declares `callable` (alone, nullable, in a union or as a variadic element), which calls the
-/// callable argument normalizer.
-pub(super) fn needs_declared_callable_argument_normalizer(sig: &FunctionSig) -> bool {
-    sig.params.iter().any(|(_, ty)| {
-        ty.declares_callable() || matches!(ty, PhpType::Array(element) if element.declares_callable())
     })
 }
 
@@ -164,8 +152,6 @@ struct InvokerEmitContext {
     defaults: InvokerDefaults,
     /// The declared literal parameter currently being decoded, before ABI coercion.
     literal_parameter: Option<(usize, String)>,
-    /// Invokers reached from eval convert eval-only callbacks bound to a declared `callable`.
-    convert_eval_callables: bool,
 }
 
 impl InvokerEmitContext {
@@ -188,7 +174,6 @@ impl InvokerEmitContext {
             mbstring_operation: None,
             mbstring_variable_ref_warnings: false,
             literal_parameter: None,
-            convert_eval_callables: false,
         }
     }
 
@@ -286,7 +271,6 @@ fn emit_runtime_callable_invoker_impl(
     );
     ctx.mbstring_operation = invoker.mbstring_operation;
     ctx.mbstring_variable_ref_warnings = invoker.mbstring_variable_ref_warnings;
-    ctx.convert_eval_callables = invoker.convert_eval_callables || catch_native_throws;
 
     emitter.blank();
     emitter.comment(&format!("runtime callable invoker {}", invoker.label));
@@ -2856,16 +2840,6 @@ fn coerce_current_value_to_target(
         tagged_args::coerce(emitter, ctx, source_ty);
         return (PhpType::TaggedScalar, false);
     }
-    if source_repr == PhpType::Mixed && target_ty.is_some_and(PhpType::declares_callable) {
-        if ctx.convert_eval_callables {
-            emit_owned_declared_callable_argument(emitter, ctx);
-        } else {
-            // Native callers pass values native dispatch resolves; the callee's entry check
-            // rejects anything else. The argument keeps its value with an owner of its own.
-            abi::emit_incref_if_refcounted(emitter, &PhpType::Mixed);
-        }
-        return (PhpType::Mixed, true);
-    }
     if source_repr != PhpType::Callable
         && target_ty.is_some_and(|target| target.codegen_repr() == PhpType::Callable)
     {
@@ -2899,49 +2873,6 @@ fn coerce_current_value_to_target(
     }
 
     (pushed_ty, boxed_to_mixed)
-}
-
-/// Passes the current boxed argument to a parameter declaring `callable` with an owner of its own.
-///
-/// A natively callable value keeps its PHP value (one extra reference). A value native code
-/// cannot resolve by itself but eval can, such as the name of a function declared inside
-/// `eval()`, is normalized to a descriptor (which consults eval) and boxed, so the callee's
-/// entry check and invocation see a callable. Any other value also keeps its PHP value: the
-/// callee's entry check decides, so `int|callable` still receives an int and a value no member
-/// accepts raises PHP's `must be of type ...` `TypeError`. Every arm leaves one owner for the
-/// invoker's argument cleanup.
-fn emit_owned_declared_callable_argument(emitter: &mut Emitter, ctx: &mut InvokerEmitContext) {
-    let keep = ctx.next_label("declared_callable_native_arg");
-    let done = ctx.next_label("declared_callable_arg_ready");
-    let result = abi::int_result_reg(emitter);
-    let (arg0, arg1) = (
-        abi::int_arg_reg_name(emitter.target, 0),
-        abi::int_arg_reg_name(emitter.target, 1),
-    );
-    // -- keep a natively callable value --
-    abi::emit_push_reg(emitter, result);
-    abi::emit_reg_move(emitter, arg0, result);
-    abi::emit_call_label(emitter, "__rt_is_callable_mixed");
-    abi::emit_branch_if_int_result_nonzero(emitter, &keep);
-    // -- convert only a value eval resolves; leave the rest to the callee's entry check --
-    abi::emit_load_int_immediate(emitter, arg0, 0);
-    abi::emit_load_temporary_stack_slot(emitter, arg1, 0);
-    let context_symbol = emitter.target.extern_symbol("__elephc_eval_object_context");
-    abi::emit_call_label(emitter, &context_symbol);
-    abi::emit_branch_if_int_result_zero(emitter, &keep);
-    abi::emit_reg_move(emitter, arg0, result);
-    abi::emit_load_temporary_stack_slot(emitter, arg1, 0);
-    let probe_symbol = emitter.target.extern_symbol("__elephc_eval_is_callable");
-    abi::emit_call_label(emitter, &probe_symbol);
-    abi::emit_branch_if_int_result_zero(emitter, &keep);
-    abi::emit_pop_reg(emitter, result);
-    owned_value_args::normalize_callable(emitter, ctx, &PhpType::Mixed);
-    crate::codegen::emit_box_current_owned_value_as_mixed(emitter, &PhpType::Callable);
-    abi::emit_jump(emitter, &done);
-    emitter.label(&keep);
-    abi::emit_pop_reg(emitter, result);
-    abi::emit_incref_if_refcounted(emitter, &PhpType::Mixed);
-    emitter.label(&done);
 }
 
 /// Unboxes the current Mixed argument into an OWNED hash for a declared `array<K, V>` parameter.
@@ -3839,7 +3770,6 @@ mod tests {
                     label, sig: &signature, captures: &[], mbstring_operation: None,
                     mbstring_variable_ref_warnings: false, owns_string_return: false,
                     php_return_status: false, defaults: &defaults,
-                    convert_eval_callables: false,
                 };
                 emit_runtime_callable_invoker_impl(&mut emitter, &mut data, &invoker, true);
             }
@@ -3995,7 +3925,6 @@ mod tests {
             owns_string_return: false,
             php_return_status: false,
             defaults: &[None],
-            convert_eval_callables: false,
         };
         for name in ["macos-aarch64", "ios-arm64", "ios-sim-arm64", "linux-aarch64", "linux-x86_64"] {
             let target = Target::parse(name).unwrap();
@@ -4353,7 +4282,6 @@ mod tests {
             owns_string_return: false,
             php_return_status: false,
             defaults: &defaults,
-            convert_eval_callables: false,
         };
         emit_runtime_callable_invoker_impl(&mut emitter, &mut DataSection::new(), &invoker, false);
         emitter.output()

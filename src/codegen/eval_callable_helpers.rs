@@ -36,10 +36,7 @@ use crate::types::{callable_wrapper_sig, FunctionSig, PhpType};
 mod tests;
 mod shared_cast;
 pub(super) mod argument_owners;
-pub(super) use shared_cast::{
-    emit_aarch64_cast_eval_callable_arg, emit_aarch64_cast_eval_declared_callable_arg,
-    emit_x86_64_cast_eval_callable_arg, emit_x86_64_cast_eval_declared_callable_arg,
-};
+pub(super) use shared_cast::{emit_aarch64_cast_eval_callable_arg, emit_x86_64_cast_eval_callable_arg};
 
 const EVAL_RECEIVER_CAPTURE_PARAM: &str = "__elephc_eval_callable_receiver";
 const MIXED_METHOD_TAG_OFFSET: usize = 0;
@@ -805,8 +802,7 @@ fn emit_eval_runtime_callable_invoker_inline(
     current_class: Option<&str>,
 ) -> String {
     state.argument_normalizer_needed |=
-        super::runtime_callable_invoker::needs_callable_argument_normalizer(sig)
-            || super::runtime_callable_invoker::needs_declared_callable_argument_normalizer(sig);
+        super::runtime_callable_invoker::needs_callable_argument_normalizer(sig);
     let defaults = super::runtime_callable_invoker::resolve_invoker_defaults(
         module,
         current_class,
@@ -821,7 +817,6 @@ fn emit_eval_runtime_callable_invoker_inline(
         owns_string_return,
         php_return_status: true,
         defaults: &defaults,
-        convert_eval_callables: true,
     };
     // Owner callbacks outlive this placeholder body, including when an identical body is dropped.
     // Allocate their real label before detaching so body renaming cannot invalidate the cache.
