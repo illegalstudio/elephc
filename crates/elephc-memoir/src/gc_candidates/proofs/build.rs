@@ -10,10 +10,10 @@
 //! - Geometric libc storage is reused across refreshes and never becomes a PHP owner.
 
 use super::{load, op, reg, restore, save};
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND}};
+use crate::{abi, Emitter, Arch, layout::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND}};
 
 /// Emits append, refresh, comparison and request-boundary cache maintenance helpers.
-pub(super) fn emit(e: &mut Emitter) {
+pub fn emit(e: &mut impl Emitter) {
     record(e);
     refresh(e);
     compare(e);
@@ -21,7 +21,7 @@ pub(super) fn emit(e: &mut Emitter) {
 }
 
 /// Appends the first discovered owning edge for one graph identity.
-fn record(e: &mut Emitter) {
+fn record(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_proof_record ---");
     e.label_global("__rt_gc_proof_record");
@@ -45,7 +45,7 @@ fn record(e: &mut Emitter) {
     e.label("__rt_gc_proof_record_kind");
     op(e, "ldr x9, [x0, #-8]", "bts DWORD PTR [rax - 8], 20", "claim temporary discovery membership without owning the value");
     op(e, "tbnz x9, #20, __rt_gc_proof_record_done", "jc __rt_gc_proof_record_done", "the first incoming edge defines an acyclic spanning-tree parent");
-    if e.target.arch == Arch::AArch64 {
+    if e.arch() == Arch::AArch64 {
         op(e, "orr x9, x9, #0x100000", "", "mark the identity before following any cyclic descendants");
         op(e, "str x9, [x0, #-8]", "", "publish discovery membership for subsequent parent visits");
     }
@@ -98,7 +98,7 @@ fn record(e: &mut Emitter) {
 }
 
 /// Rebuilds the cache from actual roots and leaves fresh root anchors for candidate preparation.
-fn refresh(e: &mut Emitter) {
+fn refresh(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_proofs_refresh ---");
     e.label_global("__rt_gc_proofs_refresh");
@@ -132,7 +132,7 @@ fn refresh(e: &mut Emitter) {
     op(e, "b.hs __rt_gc_proofs_sort", "jae __rt_gc_proofs_sort", "sort only after every temporary discovery mark was retired");
     node(e);
     op(e, "ldr x9, [x0, #-8]", "and DWORD PTR [rax - 8], 0xffefffff", "retire the temporary discovery bit without changing PHP ownership");
-    if e.target.arch == Arch::AArch64 {
+    if e.arch() == Arch::AArch64 {
         op(e, "bic x9, x9, #0x100000", "", "clear discovery membership before restoring actual root anchors");
         op(e, "str x9, [x0, #-8]", "", "publish the retired temporary mark");
     }
@@ -159,17 +159,17 @@ fn refresh(e: &mut Emitter) {
 }
 
 /// Invokes the compiler-published current-root visitor without assuming it exists.
-fn roots(e: &mut Emitter, phase: &str) {
+fn roots(e: &mut impl Emitter, phase: &str) {
     let done = format!("__rt_gc_proofs_{phase}_roots_done");
     load(e, "x9", "r10", "_gc_candidate_root_scan_fn");
     op(e, &format!("cbz x9, {done}"), "test r10, r10", "skip unavailable per-program root metadata");
-    if e.target.arch == Arch::X86_64 { op(e, "", &format!("jz {done}"), "leave an empty forest when no root visitor was installed"); }
+    if e.arch() == Arch::X86_64 { op(e, "", &format!("jz {done}"), "leave an empty forest when no root visitor was installed"); }
     op(e, "blr x9", "call r10", "borrow actual initialized global and static owners");
     e.label(&done);
 }
 
 /// Compares two borrowed records using the libc qsort callback ABI.
-fn compare(e: &mut Emitter) {
+fn compare(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_proof_compare ---");
     e.label_global("__rt_gc_proof_compare");
@@ -179,7 +179,7 @@ fn compare(e: &mut Emitter) {
     op(e, "cmp x9, x10", "cmp r8, r9", "order exact bases using unsigned pointer comparison");
     op(e, "cset w0, hi", "seta al", "produce the positive ordering component");
     op(e, "cset w9, lo", "setb dl", "produce the negative ordering component");
-    if e.target.arch == Arch::X86_64 {
+    if e.arch() == Arch::X86_64 {
         op(e, "", "movzx eax, al", "widen the positive comparison result to C int");
         op(e, "", "movzx edx, dl", "widen the negative comparison result to C int");
     }
@@ -188,13 +188,13 @@ fn compare(e: &mut Emitter) {
 }
 
 /// Amortizes cache reconstruction against already traced surviving candidate identities.
-fn pending(e: &mut Emitter) {
+fn pending(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_proofs_refresh_pending ---");
     e.label_global("__rt_gc_proofs_refresh_pending");
     load(e, "x9", "r10", "_gc_proofs_debt");
     op(e, "cbz x9, __rt_gc_proofs_pending_done", "test r10, r10", "skip cache construction when no surviving candidate work has accrued");
-    if e.target.arch == Arch::X86_64 { op(e, "", "jz __rt_gc_proofs_pending_done", "keep cache maintenance outside a graph with no unproved surviving candidates"); }
+    if e.arch() == Arch::X86_64 { op(e, "", "jz __rt_gc_proofs_pending_done", "keep cache maintenance outside a graph with no unproved surviving candidates"); }
     // -- a small retained write cannot independently force a walk of unrelated application state --
     load(e, "x10", "r11", "_gc_proofs_cost");
     op(e, "cmp x10, #256", "cmp r11, 256", "require a useful minimum amount of earned cache work");
@@ -213,21 +213,21 @@ fn pending(e: &mut Emitter) {
 }
 
 /// Compares the private traversal index with the current growing record count.
-fn cursor(e: &mut Emitter) {
+fn cursor(e: &mut impl Emitter) {
     restore(e, 0);
     load(e, "x9", "r10", "_gc_proofs_count");
     op(e, "cmp x0, x9", "cmp rax, r10", "bound this breadth-first cursor by the current record count");
 }
 
 /// Resolves the node belonging to the current breadth-first record index.
-fn node(e: &mut Emitter) {
+fn node(e: &mut impl Emitter) {
     op(e, "add x9, x0, x0, lsl #1", "lea r10, [rax + rax * 2]", "scale the traversal index by three record words");
     load(e, "x10", "r11", "_gc_proofs");
     op(e, "ldr x0, [x10, x9, lsl #3]", "mov rax, QWORD PTR [r11 + r10 * 8]", "borrow the next discovered graph identity");
 }
 
 /// Advances the private cursor without assuming nested discovery preserved registers.
-fn increment(e: &mut Emitter) {
+fn increment(e: &mut impl Emitter) {
     restore(e, 0);
     op(e, "add x0, x0, #1", "add rax, 1", "advance to the next discovered graph record");
     save(e, 0);

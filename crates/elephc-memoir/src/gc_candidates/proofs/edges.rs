@@ -9,10 +9,10 @@
 //! - Every typed edge is checked again; a pointer-shaped scalar cannot establish ownership.
 
 use super::super::{load, op};
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch, sentinels::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND}};
+use crate::{abi, Emitter, Arch, layout::{REFERENCE_CELL_HEAP_KIND, CALLABLE_HEAP_KIND}};
 
 /// Emits a leaf predicate with parent in x0/rax, logical slot in x1/rdi, child in x2/rsi.
-pub(super) fn emit(e: &mut Emitter) {
+pub fn emit(e: &mut impl Emitter) {
     e.blank();
     e.comment("--- runtime: gc_proof_edge ---");
     e.label_global("__rt_gc_proof_edge");
@@ -64,7 +64,7 @@ pub(super) fn emit(e: &mut Emitter) {
     branch(e, "hs", "ae", "invalid");
     op(e, "ldr x11, [x0, #40]", "mov r10, QWORD PTR [rax + 40]", "borrow the current entry buffer rather than a cached native address");
     op(e, "add x11, x11, x1, lsl #6", "mov r11, rdi", "locate the saved logical entry in the current storage");
-    if e.target.arch == Arch::X86_64 {
+    if e.arch() == Arch::X86_64 {
         op(e, "", "shl r11, 6", "scale the logical hash slot by the entry width");
         op(e, "", "add r10, r11", "address this entry in the current hash buffer");
     }
@@ -125,14 +125,14 @@ pub(super) fn emit(e: &mut Emitter) {
 }
 
 /// Reads the graph-bearing array or reference payload descriptor from the current header.
-fn descriptor(e: &mut Emitter) {
+fn descriptor(e: &mut impl Emitter) {
     op(e, "ldr x10, [x0, #-8]", "mov r9, QWORD PTR [rax - 8]", "inspect the current packed payload representation");
     op(e, "ubfx x10, x10, #8, #7", "shr r9, 8", "isolate the descriptor from physical kind and collector metadata");
-    if e.target.arch == Arch::X86_64 { op(e, "", "and r9d, 0x7f", "exclude COW and collector flags from payload typing"); }
+    if e.arch() == Arch::X86_64 { op(e, "", "and r9d, 0x7f", "exclude COW and collector flags from payload typing"); }
 }
 
 /// Requires a graph-bearing descriptor, optionally including managed reference entries.
-fn graph_tag(e: &mut Emitter, reference: bool, name: &str) {
+fn graph_tag(e: &mut impl Emitter, reference: bool, name: &str) {
     let next = format!("__rt_gc_proof_edge_tag_{name}");
     op(e, "cmp x10, #10", "cmp r9, 10", "a current callable slot owns its managed descriptor");
     abi::emit_branch_if_equal_wide(e, &next);
@@ -145,7 +145,7 @@ fn graph_tag(e: &mut Emitter, reference: bool, name: &str) {
 }
 
 /// Restricts tags to array, hash, object or boxed Mixed ownership representations.
-fn tag_range(e: &mut Emitter) {
+fn tag_range(e: &mut impl Emitter) {
     op(e, "cmp x10, #4", "cmp r9, 4", "exclude scalar, string and null values from ownership proofs");
     branch(e, "lo", "b", "invalid");
     op(e, "cmp x10, #7", "cmp r9, 7", "exclude unsupported or non-owning payload representations");
@@ -153,11 +153,11 @@ fn tag_range(e: &mut Emitter) {
 }
 
 /// Emits a local representation check in the appropriate condition-code dialect.
-fn branch(e: &mut Emitter, arm: &str, x86: &str, target: &str) {
+fn branch(e: &mut impl Emitter, arm: &str, x86: &str, target: &str) {
     op(e, &format!("b.{arm} __rt_gc_proof_edge_{target}"), &format!("j{x86} __rt_gc_proof_edge_{target}"), "reject a stale ownership claim or select the next valid layout check");
 }
 
 /// Addresses immutable class-layout metadata without borrowing live ownership operands.
-fn address(e: &mut Emitter, arm: &str, x86: &str, symbol: &str) {
-    abi::emit_symbol_address(e, if e.target.arch == Arch::AArch64 { arm } else { x86 }, symbol);
+fn address(e: &mut impl Emitter, arm: &str, x86: &str, symbol: &str) {
+    abi::emit_symbol_address(e, if e.arch() == Arch::AArch64 { arm } else { x86 }, symbol);
 }

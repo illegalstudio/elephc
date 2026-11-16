@@ -31,12 +31,12 @@ pub(crate) use phpext::emit_phpext_exports;
 pub(crate) const STATUS_OK: i32 = 0;
 pub(crate) const STATUS_INVALID_ARGUMENT: i32 = 1;
 pub(crate) const STATUS_PHP_EXCEPTION: i32 = 2;
-pub(crate) const STATUS_ALLOCATION_FAILURE: i32 = 3;
+pub(crate) use elephc_memoir::layout::STATUS_ALLOCATION_FAILURE;
 pub(crate) const STATUS_RUNTIME_FAILURE: i32 = 4;
 pub(crate) const STATUS_REPLACEMENT_LIMIT: i32 = 6;
 
-pub(crate) const BOUNDARY_ACTIVE: &str = "_elephc_boundary_active";
-pub(crate) const BOUNDARY_STATUS: &str = "_elephc_boundary_status";
+pub(crate) use elephc_memoir::layout::BOUNDARY_ACTIVE;
+pub(crate) use elephc_memoir::layout::BOUNDARY_STATUS;
 pub(crate) const PHPEXT_REPLACEMENT_OWNER_COUNT: &str =
     "_elephc_phpext_replacement_owner_count";
 pub(crate) const PHPEXT_REPLACEMENT_OWNER_BASE: &str =

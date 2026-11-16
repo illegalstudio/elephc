@@ -9,13 +9,13 @@
 //! - Every notified key requests another mark pass, protecting new allocations and graph changes.
 //! - Callback exceptions join the collector's pending owner after all observers are processed.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::{abi, Emitter, Arch};
 
 /// Emits the bounded callback phase shared by all supported collectors.
-pub(super) fn emit(emitter: &mut Emitter) {
-    let arm = emitter.target.arch == Arch::AArch64;
+pub fn emit(emitter: &mut impl Emitter) {
+    let arm = emitter.arch() == Arch::AArch64;
     let result = abi::int_result_reg(emitter);
-    let arg0 = abi::int_arg_reg_name(emitter.target, 0);
+    let arg0 = abi::int_arg_reg_name(emitter, 0);
     emitter.blank();
     emitter.label_global("__rt_gc_weak_observers");
     abi::emit_frame_prologue(emitter, 64);
@@ -72,7 +72,7 @@ pub(super) fn emit(emitter: &mut Emitter) {
     abi::store_at_offset(emitter, result, 40);
     abi::emit_call_label(emitter, "__rt_gc_destructor_begin");
     abi::load_at_offset(emitter, arg0, 40);
-    super::super::exceptions::emit_guarded_cleanup_call(emitter, "__rt_weak_map_notify", arg0, 32);
+    emitter.emit_guarded_cleanup_call( "__rt_weak_map_notify", arg0, 32);
     abi::emit_call_label(emitter, "__rt_gc_destructor_end");
     abi::emit_load_int_immediate(emitter, result, 1);
     abi::store_at_offset(emitter, result, 24);

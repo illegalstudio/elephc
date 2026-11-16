@@ -13,13 +13,13 @@
 use crate::codegen_support::emit::Emitter;
 
 /// Size of the pre-allocated try handler slot.
-pub(crate) const TRY_HANDLER_SLOT_SIZE: usize = 224;
+pub(crate) use elephc_memoir::layout::TRY_HANDLER_SLOT_SIZE;
 
 /// Offset within the try handler slot for the diagnostic depth field.
-pub(crate) const TRY_HANDLER_DIAG_DEPTH_OFFSET: usize = 16;
+pub(crate) use elephc_memoir::layout::TRY_HANDLER_DIAG_DEPTH_OFFSET;
 
 /// Offset within the try handler slot for the `jmp_buf` field.
-pub(crate) const TRY_HANDLER_JMP_BUF_OFFSET: usize = 24;
+pub(crate) use elephc_memoir::layout::TRY_HANDLER_JMP_BUF_OFFSET;
 
 /// Bytes in an owned-value cleanup activation, including its standard three-word prefix.
 pub(crate) const EXCEPTION_GUARD_SLOT_SIZE: usize = 32;

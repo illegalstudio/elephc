@@ -9,10 +9,10 @@
 //! - A real candidate retains the existing exact comparison and 64-bit accumulator.
 //! - The walker keeps every register and stack alignment across a cached edge update.
 
-use crate::codegen_support::emit::Emitter;
+use crate::Emitter;
 
 /// Records one cached child edge or one exact edge into the currently selected candidate.
-pub(super) fn emit_edge(emitter: &mut Emitter, child: &str, next: &str, name: &str) {
+pub fn emit_edge(emitter: &mut impl Emitter, child: &str, next: &str, name: &str) {
     let exact = format!("__rt_gc_cache_{name}_exact");
 
     // -- a zero candidate primes all incoming counts in one outgoing-edge walk --
