@@ -4750,6 +4750,11 @@ echo count($k), ":", implode(",", array_keys($k)), "\n";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "2:a,b\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "the accumulator must be released exactly once, neither freed early nor leaked: {}",
+        out.stderr
+    );
 }
 
 /// Same accumulator reached through an INTERFACE, where no callee is known statically and no
@@ -4784,6 +4789,11 @@ echo count($out), ":", implode(",", array_keys($out)), "\n";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "2:a,b\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "the accumulator must be released exactly once, neither freed early nor leaked: {}",
+        out.stderr
+    );
 }
 
 /// Regression test for issue #604 (conditional-return callee, alias path): a callee
