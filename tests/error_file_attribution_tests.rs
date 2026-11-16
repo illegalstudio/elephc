@@ -88,6 +88,14 @@ fn assert_reports_at(stderr: &str, file: &str, line: u32, message: &str) {
     );
 }
 
+/// The diagnostic every probe plants: a `break` outside any loop.
+///
+/// It has to be a CHECKER error that php also refuses before running anything, on the line of
+/// the statement itself. php -n 8.5.10 refuses it at compile time (`Fatal error: 'break' not in
+/// the 'loop' or 'switch' context in FILE on line N`); the probes used to call an undefined
+/// method, which php only raises when the call runs and elephc now compiles the same way.
+const BREAK_OUTSIDE_LOOP: &str = "Cannot 'break' 1 levels";
+
 const MAIN: &str = r#"<?php
 require __DIR__ . '/lib/Widget.php';
 require __DIR__ . '/lib/helpers.php';
@@ -109,7 +117,7 @@ class Widget
 {
     public function label(): string
     {
-        return $this->missingHelper();
+        break;
     }
 }
 "#;
@@ -123,7 +131,7 @@ class Widget
         &stderr,
         "lib/Widget.php",
         7,
-        "Undefined method: Widget::missingHelper",
+        BREAK_OUTSIDE_LOOP,
     );
 }
 
@@ -150,7 +158,7 @@ class Widget
 function describe(): string
 {
     $w = new Widget();
-    $w->nope();
+    break;
     return "d";
 }
 "#;
@@ -159,7 +167,7 @@ function describe(): string
         ("lib/Widget.php", widget),
         ("lib/helpers.php", helpers),
     ]);
-    assert_reports_at(&stderr, "lib/helpers.php", 6, "Undefined method: Widget::nope");
+    assert_reports_at(&stderr, "lib/helpers.php", 6, BREAK_OUTSIDE_LOOP);
 }
 
 /// Verifies the file a diagnostic names is the one that DECLARES the code, not the entry file
@@ -185,7 +193,7 @@ class Second
 {
     public function run(): string
     {
-        return $this->absent();
+        break;
     }
 }
 "#;
@@ -200,7 +208,7 @@ echo (new First())->run(), (new Second())->run();
         ("lib/First.php", first),
         ("lib/Second.php", second),
     ]);
-    assert_reports_at(&stderr, "lib/Second.php", 7, "Undefined method: Second::absent");
+    assert_reports_at(&stderr, "lib/Second.php", 7, BREAK_OUTSIDE_LOOP);
     assert!(
         !stderr.contains("lib/First.php"),
         "the clean file must not be named: {stderr}"
@@ -215,7 +223,7 @@ fn single_file_program_still_reports_its_own_error() {
     let path = dir.join("solo.php");
     fs::write(
         &path,
-        "<?php\nclass Solo { public function go(): string { return $this->absent(); } }\necho (new Solo())->go();\n",
+        "<?php\nclass Solo { public function go(): string { break; } }\necho (new Solo())->go();\n",
     )
     .unwrap();
 
@@ -227,7 +235,7 @@ fn single_file_program_still_reports_its_own_error() {
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(!output.status.success(), "expected --check to fail: {stderr}");
     assert!(
-        stderr.contains("Undefined method: Solo::absent"),
+        stderr.contains(BREAK_OUTSIDE_LOOP),
         "unexpected stderr: {stderr}"
     );
     let _ = fs::remove_dir_all(Path::new(&dir));
