@@ -185,6 +185,29 @@ echo $format('parent');
     assert_eq!(out, "base!");
 }
 
+/// A trait method's `static` captured by reference keeps one copy per USING class, as php does.
+#[test]
+fn test_trait_static_captured_by_reference_is_per_using_class() {
+    let out = compile_and_run(
+        r#"<?php
+trait T {
+    function n() {
+        static $c;
+        $f = function () use (&$c) { return ++$c; };
+        return $f();
+    }
+}
+class A { use T; }
+class B { use T; }
+class C extends A {}
+(new A)->n();
+(new A)->n();
+echo (new B)->n(), (new B)->n(), (new A)->n(), (new C)->n(), "\n";
+"#,
+    );
+    assert_eq!(out, "1234\n");
+}
+
 /// Verifies closure with typed parameter, return type annotation, and `use` clause capturing a string variable.
 #[test]
 fn test_closure_return_type_annotation() {

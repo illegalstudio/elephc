@@ -31,7 +31,7 @@ use std::path::Path;
 use crate::names::Name;
 use crate::parser::ast::{ClassConst, ClassMethod, ClassProperty, Program, Stmt};
 
-const TRAIT_CLASS_PLACEHOLDER: &str = "\x1F__ELEPHC_TRAIT_CLASS__\x1F";
+pub(crate) const TRAIT_CLASS_PLACEHOLDER: &str = "\x1F__ELEPHC_TRAIT_CLASS__\x1F";
 
 /// Binds only trait-origin `__CLASS__` placeholders in flattened declaration constants.
 pub fn bind_trait_constant_values(constants: Vec<ClassConst>, class_name: &str) -> Vec<ClassConst> {

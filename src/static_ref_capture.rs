@@ -18,11 +18,22 @@
 //!   initializer keeps the ordinary static lowering.
 //! - The hidden name is unique per function or per `Class::method`, so two functions keep two
 //!   statics, as php does.
+//! - A trait method's static is per USING class in php. The rewrite runs before traits are
+//!   flattened, so the hidden global of a trait method is an array keyed by the trait-class placeholder
+//!   (`__CLASS__`, which names the using class once flattened) and the local binds to that class's element.
 
 use crate::fast_hash::FastSet as HashSet;
 
 use crate::parser::ast::visit::{walk_nodes, Node};
 use crate::parser::ast::{ClassMethod, Expr, ExprKind, Program, Stmt, StmtKind};
+
+/// The function or method whose statics are rewritten.
+struct Owner {
+    /// Unique name of the function or `Class::method`.
+    name: String,
+    /// Whether the method belongs to a trait, whose statics are per using class.
+    in_trait: bool,
+}
 
 /// Applies the rewrite to every function and class-like method of `program`.
 pub fn rewrite_captured_statics(program: Program) -> Program {
@@ -44,32 +55,41 @@ fn rewrite_stmt(mut stmt: Stmt, namespace: Option<&str>) -> Stmt {
                 Some(ns) => format!("{ns}\\{name}"),
                 None => name.clone(),
             };
+            let owner = Owner { name: owner, in_trait: false };
             rewrite_body(body, &owner);
         }
-        StmtKind::ClassDecl { name, methods, .. }
-        | StmtKind::TraitDecl { name, methods, .. }
-        | StmtKind::EnumDecl { name, methods, .. } => {
+        StmtKind::ClassDecl { name, methods, .. } | StmtKind::EnumDecl { name, methods, .. } => {
             let class = match namespace {
                 Some(ns) => format!("{ns}\\{name}"),
                 None => name.clone(),
             };
-            rewrite_methods(methods, &class);
+            rewrite_methods(methods, &class, false);
+        }
+        StmtKind::TraitDecl { name, methods, .. } => {
+            let class = match namespace {
+                Some(ns) => format!("{ns}\\{name}"),
+                None => name.clone(),
+            };
+            rewrite_methods(methods, &class, true);
         }
         _ => {}
     }
     stmt
 }
 
-fn rewrite_methods(methods: &mut [ClassMethod], class: &str) {
+fn rewrite_methods(methods: &mut [ClassMethod], class: &str, in_trait: bool) {
     for method in methods {
-        let owner = format!("{class}::{}", method.name);
+        let owner = Owner {
+            name: format!("{class}::{}", method.name),
+            in_trait,
+        };
         rewrite_body(&mut method.body, &owner);
     }
 }
 
 /// Rewrites the body's `static` declarations, at any statement depth, of names a closure
 /// captures by reference. Symfony's `normalizeBody()` declares its static inside an `if`.
-fn rewrite_body(body: &mut [Stmt], owner: &str) {
+fn rewrite_body(body: &mut [Stmt], owner: &Owner) {
     let captured = names_captured_by_reference(body);
     if captured.is_empty() {
         return;
@@ -77,27 +97,47 @@ fn rewrite_body(body: &mut [Stmt], owner: &str) {
     rewrite_statics_in(body, owner, &captured);
 }
 
-fn rewrite_statics_in(body: &mut [Stmt], owner: &str, captured: &HashSet<String>) {
+fn rewrite_statics_in(body: &mut [Stmt], owner: &Owner, captured: &HashSet<String>) {
     for stmt in body.iter_mut() {
         rewrite_static_stmt(stmt, owner, captured);
     }
 }
 
-fn rewrite_static_stmt(stmt: &mut Stmt, owner: &str, captured: &HashSet<String>) {
+fn rewrite_static_stmt(stmt: &mut Stmt, owner: &Owner, captured: &HashSet<String>) {
     match &mut stmt.kind {
         StmtKind::StaticVar { name, init } => {
             if !captured.contains(name) || !matches!(init.kind, ExprKind::Null) {
                 return;
             }
-            let hidden = hidden_global_name(owner, name);
+            let hidden = hidden_global_name(&owner.name, name);
             let span = stmt.span;
             let local = name.clone();
+            // A trait method's static is one per using class: the hidden global is an array
+            // and the local binds to the element of `__CLASS__`, the using class.
+            let source = if owner.in_trait {
+                Expr::new(
+                    ExprKind::ArrayAccess {
+                        array: Box::new(Expr::new(ExprKind::Variable(hidden.clone()), span)),
+                        // What `__CLASS__` became in a trait body: the using class once the
+                        // trait is bound to it.
+                        index: Box::new(Expr::new(
+                            ExprKind::StringLiteral(
+                                crate::magic_constants::TRAIT_CLASS_PLACEHOLDER.to_string(),
+                            ),
+                            span,
+                        )),
+                    },
+                    span,
+                )
+            } else {
+                Expr::new(ExprKind::Variable(hidden.clone()), span)
+            };
             stmt.kind = StmtKind::Synthetic(vec![
                 Stmt::new(StmtKind::Global { vars: vec![hidden.clone()] }, span),
                 Stmt::new(
                     StmtKind::RefAssign {
                         target: local,
-                        source: Expr::new(ExprKind::Variable(hidden), span),
+                        source,
                     },
                     span,
                 ),
