@@ -697,7 +697,7 @@ fn emit_registry_string_lookup(
     match ty.codegen_repr() {
         PhpType::Str => {}
         PhpType::Mixed | PhpType::Union(_) => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            super::strings::common::emit_mixed_cast_string_borrowed(ctx);
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(

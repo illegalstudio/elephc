@@ -36,17 +36,6 @@ use super::super::super::context::FunctionContext;
 use super::super::{expect_operand, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
-/// IEEE-754 bit pattern of `+2.0^63` — the exclusive upper bound for a float
-/// value to fit `PHP_INT_MAX`. Any float `>= this` (and any float `< -this`)
-/// cannot be represented as a PHP int (`(float) PHP_INT_MAX` itself rounds up
-/// to exactly this value and is php-verified to fail `FILTER_VALIDATE_INT`).
-const FLOAT_INT_UPPER_BOUND_BITS: i64 = 0x43E0_0000_0000_0000;
-/// IEEE-754 bit pattern of `-2.0^63` (`PHP_INT_MIN` exactly, the inclusive lower bound).
-const FLOAT_INT_LOWER_BOUND_BITS: i64 = 0xC3E0_0000_0000_0000_u64 as i64;
-/// IEEE-754 bit pattern of `+infinity`, used to detect a NaN/Infinite float by
-/// comparing `|value|` against it.
-const FLOAT_INFINITY_BITS: i64 = 0x7FF0_0000_0000_0000;
-
 /// Lowers `filter_var$int`/`filter_var$int_nof` (`FILTER_VALIDATE_INT`).
 pub(super) fn lower_filter_var_int(
     ctx: &mut FunctionContext<'_>,
@@ -593,126 +582,35 @@ fn emit_branch_if_int_reg_equals_one(ctx: &mut FunctionContext<'_>, label: &str)
 }
 
 // -- Float(loaded)-input handlers -------------------------------------------
+//
+// php converts a non-string scalar with `(string)` (precision 14) before validating, so a float
+// goes through the string validators on its `__rt_ftoa` text: `1e15` is `"1.0E+15"` (not an int),
+// `0.1 + 0.2` is `"0.3"` and `-0.0` is `"-0"` (neither `"0"` nor `"1"` for the BOOL filter).
 
-/// `FILTER_VALIDATE_FLOAT` on a loaded float: reject NaN/Infinite, else succeed as-is.
+/// Formats the loaded float result (d0/xmm0) as its `(string)` text in the string result registers.
+fn emit_loaded_float_as_string(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa");                             // x1/x2 or rax/rdx = the float's (string) form in concat scratch
+}
+
+/// `FILTER_VALIDATE_FLOAT` on a loaded float: validates the float's `(string)` text.
 fn emit_float_from_loaded_float(ctx: &mut FunctionContext<'_>, null_on_failure: bool) {
-    let fail_label = ctx.next_label("filter_float_flt_fail");
-    let done_label = ctx.next_label("filter_float_flt_done");
-    emit_branch_if_float_not_finite(ctx, &fail_label);
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Float);
-    abi::emit_jump(ctx.emitter, &done_label);
-    ctx.emitter.label(&fail_label);
-    emit_filter_failure(ctx, null_on_failure);
-    ctx.emitter.label(&done_label);
+    emit_loaded_float_as_string(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_filter_validate_float");
+    emit_float_from_validate_float_result(ctx, null_on_failure);
 }
 
-/// `FILTER_VALIDATE_INT` on a loaded float: reject NaN/Infinite/fractional/out-of-range.
+/// `FILTER_VALIDATE_INT` on a loaded float: validates the float's `(string)` text.
 fn emit_int_from_loaded_float(ctx: &mut FunctionContext<'_>, null_on_failure: bool) {
-    let fail_label = ctx.next_label("filter_int_flt_fail");
-    let done_label = ctx.next_label("filter_int_flt_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("fcmp d0, d0");                             // NaN is unordered against itself
-            ctx.emitter.instruction(&format!("b.vs {}", fail_label));           // NaN -> fail
-            ctx.emitter.instruction("frintz d1, d0");                           // d1 = value truncated toward zero
-            ctx.emitter.instruction("fcmp d0, d1");                             // does the value have a fractional part?
-            ctx.emitter.instruction(&format!("b.ne {}", fail_label));           // fractional part -> fail
-            abi::emit_load_int_immediate(ctx.emitter, "x5", FLOAT_INT_LOWER_BOUND_BITS);
-            ctx.emitter.instruction("fmov d2, x5");                             // d2 = PHP_INT_MIN as a double (inclusive lower bound)
-            ctx.emitter.instruction("fcmp d0, d2");                             // is the value below PHP_INT_MIN?
-            ctx.emitter.instruction(&format!("b.lt {}", fail_label));           // below range -> fail
-            abi::emit_load_int_immediate(ctx.emitter, "x5", FLOAT_INT_UPPER_BOUND_BITS);
-            ctx.emitter.instruction("fmov d3, x5");                             // d3 = 2^63 as a double (exclusive upper bound)
-            ctx.emitter.instruction("fcmp d0, d3");                             // is the value at or above 2^63?
-            ctx.emitter.instruction(&format!("b.ge {}", fail_label));           // at/above the upper bound -> fail
-            ctx.emitter.instruction("fcvtzs x0, d0");                           // convert the already-truncated, in-range value to i64
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("ucomisd xmm0, xmm0");                      // NaN is unordered against itself
-            ctx.emitter.instruction(&format!("jp {}", fail_label));             // NaN -> fail
-            ctx.emitter.instruction("roundsd xmm1, xmm0, 3");                   // xmm1 = value truncated toward zero (mode 3 = truncate)
-            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // does the value have a fractional part?
-            ctx.emitter.instruction(&format!("jne {}", fail_label));            // fractional part -> fail
-            abi::emit_load_int_immediate(ctx.emitter, "rax", FLOAT_INT_LOWER_BOUND_BITS);
-            ctx.emitter.instruction("movq xmm2, rax");                          // xmm2 = PHP_INT_MIN as a double (inclusive lower bound)
-            ctx.emitter.instruction("ucomisd xmm0, xmm2");                      // is the value below PHP_INT_MIN?
-            ctx.emitter.instruction(&format!("jb {}", fail_label));             // below range -> fail
-            abi::emit_load_int_immediate(ctx.emitter, "rax", FLOAT_INT_UPPER_BOUND_BITS);
-            ctx.emitter.instruction("movq xmm2, rax");                          // xmm2 = 2^63 as a double (exclusive upper bound)
-            ctx.emitter.instruction("ucomisd xmm0, xmm2");                      // is the value at or above 2^63?
-            ctx.emitter.instruction(&format!("jae {}", fail_label));            // at/above the upper bound -> fail
-            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // convert the already-truncated, in-range value to i64
-        }
-    }
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
-    abi::emit_jump(ctx.emitter, &done_label);
-    ctx.emitter.label(&fail_label);
-    emit_filter_failure(ctx, null_on_failure);
-    ctx.emitter.label(&done_label);
+    emit_loaded_float_as_string(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_filter_validate_int");
+    emit_int_from_validate_int_result(ctx, null_on_failure);
 }
 
-/// `FILTER_VALIDATE_BOOL(EAN)` on a loaded float: only `0.0`/`1.0` are valid.
+/// `FILTER_VALIDATE_BOOL(EAN)` on a loaded float: validates the float's `(string)` text.
 fn emit_bool_from_loaded_float(ctx: &mut FunctionContext<'_>, null_on_failure: bool) {
-    let zero_label = ctx.next_label("filter_bool_flt_zero");
-    let one_label = ctx.next_label("filter_bool_flt_one");
-    let fail_label = ctx.next_label("filter_bool_flt_fail");
-    let done_label = ctx.next_label("filter_bool_flt_done");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("fmov d1, xzr");                            // d1 = 0.0
-            ctx.emitter.instruction("fcmp d0, d1");
-            ctx.emitter.instruction(&format!("b.eq {}", zero_label));           // value == 0.0
-            ctx.emitter.instruction("fmov d1, #1.0");                           // d1 = 1.0
-            ctx.emitter.instruction("fcmp d0, d1");
-            ctx.emitter.instruction(&format!("b.eq {}", one_label));            // value == 1.0
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // xmm1 = 0.0
-            ctx.emitter.instruction("ucomisd xmm0, xmm1");
-            ctx.emitter.instruction(&format!("je {}", zero_label));             // value == 0.0
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 0x3FF0_0000_0000_0000_i64);
-            ctx.emitter.instruction("movq xmm1, rax");                          // xmm1 = 1.0
-            ctx.emitter.instruction("ucomisd xmm0, xmm1");
-            ctx.emitter.instruction(&format!("je {}", one_label));              // value == 1.0
-        }
-    }
-    abi::emit_jump(ctx.emitter, &fail_label);
-    ctx.emitter.label(&zero_label);
-    emit_static_bool_mixed(ctx, false);
-    abi::emit_jump(ctx.emitter, &done_label);
-    ctx.emitter.label(&one_label);
-    emit_static_bool_mixed(ctx, true);
-    abi::emit_jump(ctx.emitter, &done_label);
-    ctx.emitter.label(&fail_label);
-    emit_filter_failure(ctx, null_on_failure);
-    ctx.emitter.label(&done_label);
-}
-
-/// Branches to `label` when the loaded float result register is NaN or +-infinite.
-fn emit_branch_if_float_not_finite(ctx: &mut FunctionContext<'_>, label: &str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("fcmp d0, d0");                             // NaN is unordered against itself
-            ctx.emitter.instruction(&format!("b.vs {}", label));                // NaN -> not finite
-            ctx.emitter.instruction("fabs d1, d0");                             // d1 = |value|
-            abi::emit_load_int_immediate(ctx.emitter, "x5", FLOAT_INFINITY_BITS);
-            ctx.emitter.instruction("fmov d2, x5");                             // d2 = +infinity
-            ctx.emitter.instruction("fcmp d1, d2");
-            ctx.emitter.instruction(&format!("b.eq {}", label));                // |value| == infinity -> not finite
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("ucomisd xmm0, xmm0");                      // NaN is unordered against itself
-            ctx.emitter.instruction(&format!("jp {}", label));                  // NaN -> not finite
-            ctx.emitter.instruction("movq xmm1, xmm0");                         // xmm1 = value
-            abi::emit_load_int_immediate(ctx.emitter, "rax", 0x7FFF_FFFF_FFFF_FFFF_i64);
-            ctx.emitter.instruction("movq xmm2, rax");                          // xmm2 = sign-bit mask
-            ctx.emitter.instruction("andpd xmm1, xmm2");                        // xmm1 = |value|
-            abi::emit_load_int_immediate(ctx.emitter, "rax", FLOAT_INFINITY_BITS);
-            ctx.emitter.instruction("movq xmm2, rax");                          // xmm2 = +infinity
-            ctx.emitter.instruction("ucomisd xmm1, xmm2");
-            ctx.emitter.instruction(&format!("je {}", label));                  // |value| == infinity -> not finite
-        }
-    }
+    emit_loaded_float_as_string(ctx);
+    abi::emit_call_label(ctx.emitter, "__rt_filter_validate_bool_str");
+    emit_bool_from_validate_bool_result(ctx, null_on_failure);
 }
 
 // -- String(validated)-input result handlers --------------------------------
@@ -880,16 +778,36 @@ fn emit_mixed_default(
 ) -> Result<()> {
     let array_label = ctx.next_label("filter_mixed_default_array");
     let scalar_label = ctx.next_label("filter_mixed_default_scalar");
+    let object_label = ctx.next_label("filter_mixed_default_object");
     let done_label = ctx.next_label("filter_mixed_default_done");
 
     ctx.load_value_to_result(value)?;
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // x0/rax=tag (payload registers unused here)
     emit_branch_on_mixed_tag(ctx, 4, &array_label);
     emit_branch_on_mixed_tag(ctx, 5, &array_label);
+    emit_branch_on_mixed_tag(ctx, 6, &object_label);
     abi::emit_jump(ctx.emitter, &scalar_label);
 
     ctx.emitter.label(&array_label);
     emit_filter_failure(ctx, null_on_failure);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    // An object stringifies only through `__toString`; the cast answers a null pointer for a
+    // class without one, and php's filter refuses such an object instead of passing "" through.
+    ctx.emitter.label(&object_label);
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x1, {}", array_label));      // no __toString: the object is not convertible
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the object produce a string?
+            ctx.emitter.instruction(&format!("jz {}", array_label));            // no __toString: the object is not convertible
+        }
+    }
+    super::strings::common::copy_owned_string_to_concat_and_release(ctx);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&scalar_label);

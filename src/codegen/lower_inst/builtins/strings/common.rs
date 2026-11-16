@@ -338,8 +338,19 @@ fn load_object_as_borrowed_string_to_regs(
     Ok(())
 }
 
+/// Casts the boxed Mixed value in the int result register to a string BORROWED from concat scratch.
+///
+/// `__rt_mixed_cast_string` hands back a fresh heap copy for a string or `__toString` payload and
+/// scratch for every other tag; the caller of a borrowed read owns neither. The owned copy moves
+/// into concat scratch and its heap block is released (a scratch result is untouched), so the
+/// registers always hold a string nothing has to free.
+pub(in crate::codegen::lower_inst) fn emit_mixed_cast_string_borrowed(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+    copy_owned_string_to_concat_and_release(ctx);
+}
+
 /// Copies the current owned string result into concat scratch and frees its original heap owner.
-fn copy_owned_string_to_concat_and_release(ctx: &mut FunctionContext<'_>) {
+pub(in crate::codegen::lower_inst) fn copy_owned_string_to_concat_and_release(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                  // preserve the owned __toString result before copying it
