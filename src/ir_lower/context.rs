@@ -367,6 +367,7 @@ pub(crate) struct RefParamEscapingCalleesGuard {
 }
 
 impl Drop for RefParamEscapingCalleesGuard {
+    /// Restores the enclosing invocation's by-reference escaping callees.
     fn drop(&mut self) {
         let previous = std::mem::take(&mut self.previous);
         REF_PARAM_ESCAPING_CALLEES.with(|set| *set.borrow_mut() = previous);
@@ -395,6 +396,7 @@ pub(crate) struct RuntimeDefineNamesGuard {
 }
 
 impl Drop for RuntimeDefineNamesGuard {
+    /// Restores the enclosing invocation's runtime-define names.
     fn drop(&mut self) {
         let previous = std::mem::take(&mut self.previous);
         RUNTIME_DEFINE_NAMES.with(|set| *set.borrow_mut() = previous);
@@ -424,6 +426,7 @@ pub(crate) struct PropertyBoundPromotionSitesGuard {
 }
 
 impl Drop for PropertyBoundPromotionSitesGuard {
+    /// Restores the enclosing invocation's property-bound promotion sites.
     fn drop(&mut self) {
         let previous = std::mem::take(&mut self.previous);
         PROPERTY_BOUND_PROMOTION_SITES.with(|set| *set.borrow_mut() = previous);
@@ -461,6 +464,7 @@ pub(crate) struct ByRefCallResultSitesGuard {
 }
 
 impl Drop for ByRefCallResultSitesGuard {
+    /// Restores the enclosing invocation's by-reference call-result sites.
     fn drop(&mut self) {
         let previous = std::mem::take(&mut self.previous);
         BY_REF_CALL_RESULT_SITES.with(|set| *set.borrow_mut() = previous);
@@ -510,6 +514,7 @@ pub(crate) struct ProgramLoadsCodeGuard {
 }
 
 impl Drop for ProgramLoadsCodeGuard {
+    /// Restores the enclosing invocation's program-loads-code fact.
     fn drop(&mut self) {
         PROGRAM_LOADS_CODE_AT_RUN_TIME.with(|loads| loads.set(self.previous));
     }
@@ -2830,8 +2835,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.pending_static_callable_result = None;
     }
 
-    /// Emits a load from a PHP local slot.
-    /// Loads a PHP local using its current semantic type and the slot's stable frame contract.
     /// Returns the IR type `load_local(name)` would produce now, without emitting the load.
     ///
     /// A path choice taken from a real load leaves that load behind once the chosen path loads
@@ -2869,6 +2872,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value_ir_type(&php_type)
     }
 
+    /// Emits a load from a PHP local slot.
+    ///
+    /// Loads a PHP local using its current semantic type and the slot's stable frame contract.
     pub(crate) fn load_local(&mut self, name: &str, span: Option<Span>) -> LoweredValue {
         if let Some(php_type) = self.extern_global_type(name) {
             return self.load_extern_global(name, php_type, span);
@@ -6578,11 +6584,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
-    /// Returns whether the named PHP variable should use program-global storage.
-    ///
-    /// Request superglobals (`$_SERVER`/`$_GET`/`$_POST`) route to the shared
-    /// `_eir_global_*` symbol in EVERY scope — main and functions alike — so a
-    /// function read targets the same storage the top-level `--web` prelude writes.
     /// Returns whether an entry-block array seed would land on storage that is not this scope's
     /// to create.
     ///
@@ -6634,6 +6635,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         kind == LocalKind::StaticLocal || self.uses_global_storage(name, kind)
     }
 
+    /// Returns whether the named PHP variable should use program-global storage.
+    ///
+    /// Request superglobals (`$_SERVER`/`$_GET`/`$_POST`) route to the shared
+    /// `_eir_global_*` symbol in EVERY scope — main and functions alike — so a
+    /// function read targets the same storage the top-level `--web` prelude writes.
     fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {
         kind == LocalKind::GlobalAlias
             || crate::superglobals::is_superglobal(name)
@@ -6706,7 +6712,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.insert(slot);
     }
 
-    /// Emits a store opcode to an already declared local or static-local slot.
     /// Reports whether a string value may still point into the shared concat scratch buffer.
     ///
     /// Two ways that happens: the value was produced by a scratch-writing opcode, or it was
@@ -6761,6 +6766,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
+    /// Emits a store opcode to an already declared local or static-local slot.
     fn store_slot_with_op(
         &mut self,
         slot: LocalSlotId,
