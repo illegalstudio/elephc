@@ -158,8 +158,8 @@ by EIR lowering and `src/codegen/`.
 | `src/ir_passes/` | `optimize_module()` / `allocate_registers()` | EIR analyses and transformations over lowered functions: fixed-point optimization pass driver (identity folding, …; gated by `--ir-opt`) and linear-scan register allocation, before codegen |
 | `src/codegen/` | `generate()` | Active EIR → target assembly backend |
 | `src/codegen_support/abi/` | ABI helpers | Target-specific argument materialization, frame layout, registers, stack slots, symbols, and call helpers |
-| `crates/elephc-memoir/` | Memory emitters / host `Emitter` trait | Compiler-only heap, refcount, cycle-collector, traversal, and diagnostic assembly generation |
-| `src/codegen_support/runtime/` | Runtime integration | Runtime ordering/data, compiler-to-Memoir adapter, and type-specific PHP helpers |
+| `crates/elephc-memoir/` | Memory emitters / host `Emitter` trait | Compiler-only heap, GC, COW, deep release, strings, buffers, reference lifetimes and fixed memory data |
+| `src/codegen_support/runtime/` | Runtime integration | Runtime ordering, semantic data, compiler-to-Memoir adapter and PHP validation |
 | `src/codegen/program_usage/` | Program scans | Collects codegen metadata such as required classes and variables before emission |
 | `src/runtime_cache.rs` | `prepare_runtime_object()` | Builds/reuses the target runtime object before final linking |
 | `src/errors/` | `report()` | Error formatting with line:col |

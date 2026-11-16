@@ -3,21 +3,21 @@
 //! Stale aliases fail descriptor resolution instead of observing recycled payload storage.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `buffers`.
+//! - `elephc::codegen_support::runtime::emitters::emit_runtime()` via `buffers`.
 //!
 //! Key details:
 //! - The public handle supplies the free-list index before resolution changes the result register.
 //! - A descriptor at generation `u32::MAX` is retired and never linked into the free list.
 
-use crate::codegen_support::abi;
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::abi;
+use crate::Emitter;
+use crate::Arch;
 
 /// Emits `__rt_buffer_free` for the active target.
 /// Resolves a non-zero scalar handle, invalidates and recycles its descriptor when
 /// possible, then tail-calls `__rt_heap_free` with the detached payload pointer.
-pub fn emit_buffer_free(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_buffer_free(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_buffer_free_linux_x86_64(emitter);
         return;
     }
@@ -62,7 +62,7 @@ pub fn emit_buffer_free(emitter: &mut Emitter) {
 /// Emits the Linux x86_64 variant of `__rt_buffer_free`.
 /// The scalar handle arrives in `rax`; its low u32 is saved before the resolver
 /// returns the descriptor in the same register.
-fn emit_buffer_free_linux_x86_64(emitter: &mut Emitter) {
+fn emit_buffer_free_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_free ---");
     emitter.label_global("__rt_buffer_free");

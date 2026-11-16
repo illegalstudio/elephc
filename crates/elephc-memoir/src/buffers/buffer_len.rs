@@ -3,20 +3,20 @@
 //! Public Buffer values are scalar handles and must be resolved before metadata access.
 //!
 //! Called from:
-//! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `buffers`.
+//! - `elephc::codegen_support::runtime::emitters::emit_runtime()` via `buffers`.
 //!
 //! Key details:
 //! - `__rt_buffer_resolve` validates index, generation, and activity before offset-eight access.
 
-use crate::codegen_support::abi;
-use crate::codegen_support::emit::Emitter;
-use crate::codegen_support::platform::Arch;
+use crate::abi;
+use crate::Emitter;
+use crate::Arch;
 
 /// Emits `__rt_buffer_len` for the active target.
 /// Accepts a scalar Buffer handle in the integer result register and returns the
 /// logical element count from the validated descriptor's offset-eight field.
-pub fn emit_buffer_len(emitter: &mut Emitter) {
-    if emitter.target.arch == Arch::X86_64 {
+pub fn emit_buffer_len(emitter: &mut impl Emitter) {
+    if emitter.arch() == Arch::X86_64 {
         emit_buffer_len_linux_x86_64(emitter);
         return;
     }
@@ -35,7 +35,7 @@ pub fn emit_buffer_len(emitter: &mut Emitter) {
 
 /// Emits the Linux x86_64 `__rt_buffer_len` variant.
 /// Preserves `rbp` solely to satisfy the System V nested-call stack alignment.
-fn emit_buffer_len_linux_x86_64(emitter: &mut Emitter) {
+fn emit_buffer_len_linux_x86_64(emitter: &mut impl Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_len ---");
     emitter.label_global("__rt_buffer_len");

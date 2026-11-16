@@ -40,6 +40,10 @@ pub struct GraphLayout {
     pub gen_return_value_offset: i32,
     /// Byte layout fact supplied by the compiler.
     pub spl_dll_storage_offset: i32,
+    /// Compiler-owned special object storage offset.
+    pub fiber_stack_size_offset: i32,
+    /// Compiler-owned special object storage offset.
+    pub spl_fixed_storage_offset: i32,
 }
 
 /// EIR GC metric selectors supplied without a dependency on the compiler IR.
@@ -155,4 +159,26 @@ pub trait Emitter {
     fn string_result_regs(&self) -> (&'static str, &'static str);
     /// Contains throws while releasing a weak observer through the compiler boundary.
     fn emit_guarded_cleanup_call(&mut self, entry: &str, payload: &str, pending_offset: usize);
+    /// Returns the configured string scratch capacity.
+    fn concat_capacity(&self) -> usize;
+    /// Emits raw target directives while preserving their exact ordering.
+    fn raw(&mut self, text: &str);
+    /// Keeps reference-registry status translation in the compiler.
+    fn emit_reference_source_success(&mut self);
+    /// Supplies the compiler's marker for an uninitialized PHP property payload.
+    fn uninitialized_property_sentinel(&self) -> i64;
+
+    /// Delegates emit cdylib exit escape to the established compiler ABI.
+    fn emit_cdylib_exit_escape(&mut self);
+    /// Delegates emit store to address to the established compiler ABI.
+    fn emit_store_to_address(&mut self, reg: &str, addr_reg: &str, byte_offset: usize);
+    /// Delegates emit store zero to address to the established compiler ABI.
+    fn emit_store_zero_to_address(&mut self, addr_reg: &str, byte_offset: usize);
+    /// Delegates tertiary scratch reg to the established compiler ABI.
+    fn tertiary_scratch_reg(&self) -> &'static str;
+    /// Delegates emit cmp reg to symbol to the established compiler ABI.
+    fn emit_cmp_reg_to_symbol(&mut self, reg: &str, symbol: &str);
+    /// Delegates emit unary cleanup preserving exception to the established compiler ABI.
+    fn emit_unary_cleanup_preserving_exception(&mut self, entry: &str, payload: &str);
+
 }

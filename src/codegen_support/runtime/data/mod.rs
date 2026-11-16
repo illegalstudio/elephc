@@ -36,7 +36,7 @@ pub(crate) const HEAP_FATAL_MIDDLE: &str = " bytes exhausted (tried to allocate 
 pub(crate) const HEAP_FATAL_SUFFIX: &str = " bytes) in Unknown on line 0\n";
 
 /// Optional native stream closer installed only by an application worker after its startup reset.
-pub(crate) const WEB_STREAM_CLOSE_SLOT: &str = "_web_application_stream_close";
+pub(crate) use elephc_memoir::diagnostics::WEB_STREAM_CLOSE_SLOT;
 /// Program-specific close body shared with explicit fclose lowering.
 pub(crate) const WEB_STREAM_CLOSE_ENTRY: &str = "__rt_web_application_close_stream";
 
@@ -123,13 +123,6 @@ pub(crate) const DIRNAME_LEVELS_MSG: &str =
 /// stack left), so it reports the same condition without the byte count and location.
 pub(crate) const STACK_OVERFLOW_MSG: &str =
     "Fatal error: Maximum call stack size reached. Infinite recursion?\n";
-/// Fatal error message when an array allocation request cannot be sized safely,
-/// i.e. `capacity * elem_size` does not fit in the machine word. PHP reports the
-/// same class of failure as a `ValueError` naming the offending argument
-/// (`array_fill(): Argument #2 ($count) is too large`); elephc's runtime has no
-/// per-call-site context inside `__rt_array_new`, so it reports the shared cause.
-pub(crate) const ARRAY_ALLOC_SIZE_MSG: &str =
-    "Fatal error: requested array size exceeds the maximum allowed array size\n";
 /// Catchable Error message when PHP_INT_MAX is already occupied during array append.
 pub(crate) const HASH_APPEND_ERROR_MSG: &str =
     "Cannot add element to the array as the next element is already occupied";
@@ -142,27 +135,6 @@ pub(crate) const MIXED_SORT_NON_SCALAR_MSG: &str =
 /// PHP's `ValueError: The supplied range exceeds the maximum array size`.
 pub(crate) const RANGE_SIZE_MSG: &str =
     "Fatal error: The supplied range exceeds the maximum array size\n";
-/// Fatal error message when `buffer_new<T>()` receives a negative length or a
-/// length whose `len * stride` payload size does not fit in the machine word.
-/// `buffer_new` is an elephc extension with no PHP equivalent, so the wording is
-/// elephc's own rather than a PHP parity string.
-pub(crate) const BUFFER_ALLOC_SIZE_MSG: &str =
-    "Fatal error: buffer_new() length is negative or exceeds the maximum buffer size\n";
-/// Fatal error message when a runtime string producer is asked for a result whose byte
-/// count cannot be allocated: either the size computation itself wrapped (`str_repeat()`'s
-/// `len * times`, an encoder's `2 * len` / `3 * len` expansion) or the requested size
-/// exceeds the configured heap capacity. PHP reports the same class of failure as
-/// `Fatal error: Possible integer overflow in memory allocation (...)`; elephc's runtime
-/// has no per-call-site operand context, so it reports the shared cause.
-pub(crate) const ALLOC_OVERFLOW_MSG: &str =
-    "Fatal error: Possible integer overflow in memory allocation\n";
-/// Fatal error message when a runtime writer would append past the shared `_concat_buf`
-/// arena. A writer that calls `__rt_concat_headroom` before an append fails closed here rather
-/// than overwriting `_concat_off` and the adjacent heap. `json_encode()` and `serialize()` do
-/// not stop here: they write through the growable `__rt_strbuf_*` buffer, which moves to the
-/// heap past the arena, as PHP grows its result buffer.
-pub(crate) const CONCAT_OVERFLOW_MSG: &str =
-    "Fatal error: string result exceeds the configured string buffer\n";
 /// Fatal error message when `str_repeat()` receives a `$times` argument less than 0.
 pub(crate) const STR_REPEAT_TIMES_MSG: &str =
     "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";

@@ -107,13 +107,15 @@ pub(crate) use arrays::heap_live_bases::emit_reset as emit_heap_live_bases_reset
 pub(crate) use system::STACK_LIMIT_SYMBOL;
 /// Emit full runtime helpers (orchestrates all runtime sections).
 pub(crate) use fibers::{
-    FIBER_CALLABLE_OFFSET, FIBER_PENDING_THROW_OFFSET, FIBER_STACK_BASE_OFFSET,
-    FIBER_STACK_SIZE_OFFSET, FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET,
+    FIBER_CALLABLE_OFFSET, FIBER_START_ARGS_MAX, FIBER_START_ARGS_OFFSET,
     FIBER_START_ARG_COUNT_OFFSET, FIBER_STATE_NOT_STARTED, FIBER_STATE_RUNNING,
-    FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED, FIBER_TRANSFER_VALUE_OFFSET,
+    FIBER_STATE_SUSPENDED, FIBER_STATE_TERMINATED,
     FIBER_USER_ARG_MAX_OFFSET,
 };
 
 pub(crate) use exceptions::guards as exception_guards;
 
 mod memoir;
+
+#[cfg(test)]
+mod memoir_values_tests;

@@ -1,0 +1,12 @@
+//! Purpose:
+//! Collects owned string and scratch allocation machinery.
+//!
+//! Called from:
+//! - Compiler memory emission and its integration tests.
+//!
+//! Key details:
+//! - Runs only in the compiler and preserves the generated target assembly.
+
+pub mod str_persist;
+pub mod str_new_owned;
+pub mod concat_scratch;

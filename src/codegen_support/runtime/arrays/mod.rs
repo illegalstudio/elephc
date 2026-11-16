@@ -207,6 +207,7 @@ mod natsort;
 
 pub(super) mod deep_cleanup;
 mod object_free_deep;
+#[cfg(test)]
 mod native_reference_source_retirement;
 mod range;
 mod incref;
@@ -541,8 +542,6 @@ pub use hash_unset::emit_hash_unset;
 pub use heap_alloc::emit_heap_alloc;
 /// Emit the bin-merging consolidation pass and the bin reset helper.
 pub use heap_consolidate::emit_heap_consolidate;
-/// Bytes of the exact size-class bin table the runtime data reserves.
-pub(crate) use heap_consolidate::{heap_bin_mark_bytes, HEAP_BIN_TABLE_BYTES};
 /// Emit heap allocation helper.
 pub use heap_debug_check_live::emit_heap_debug_check_live;
 /// Emit heap debug live check helper.

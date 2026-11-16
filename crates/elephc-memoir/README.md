@@ -8,25 +8,30 @@ capability. Generated programs continue to use the same emitted `__rt_*` helpers
 ## Boundary
 
 Memoir owns heap allocation and consolidation, allocator diagnostics and metrics,
-reference counting, cycle collection and candidate proofs, graph traversal, and
-resumable cleanup scopes. The `Emitter` trait delegates assembly output, symbol
-spelling, library-boundary modes and target ABI operations to the compiler.
+reference counting, cycle collection and candidate proofs, graph traversal,
+container allocation and growth, copy-on-write and cloning, deep release, owned
+strings and scratch allocation, generation-safe buffers, and reference-cell
+lifetime and pin primitives. It also emits fixed heap, GC, buffer, reference-root
+and string-scratch declarations, keeping their existing order and byte layout.
+
+The `Emitter` trait delegates assembly output, symbol spelling, library-boundary
+modes, compiler-owned layout facts and target ABI operations to the compiler.
+`DataTarget` delegates object-format syntax. `ValueFeatures`, `GraphLayout` and
+`GcStatusSelectors` carry the small set of compiler facts needed by the emitters
+without importing PHP types or EIR.
 
 The compiler retains EIR lifetime analysis, ownership optimization and placement,
-PHP class/coroutine/SPL layout definitions, runtime data emission, runtime helper
-ordering, runtime object caching, and final linking. Type-specific operations such
-as string persistence and array/hash copy-on-write and deep release stay with
-their PHP runtime modules in this phase. `GraphLayout` and
-`GcStatusSelectors` supply compiler-owned facts without importing compiler types.
-Canonical heap-kind and boundary constants live in Memoir and remain available
-through the compiler's compatibility re-exports. The former memory modules under
-`src/codegen_support/runtime/arrays` retain thin re-exports and integration tests;
+PHP reference/type validation, class/coroutine/SPL layout definitions, semantic
+runtime data, helper ordering, runtime object caching, and final linking.
+Memory constants live in Memoir with compatibility re-exports where needed.
+The former compiler memory modules retain thin adapters and integration tests;
 they contain no duplicate implementation.
 
-This first extraction preserves emitted instructions, labels and ownership
-behavior. Existing compiler integration tests use the actual target emitter;
-assembly fingerprints cover all five supported targets and executable, PIC,
-recoverable-library, hosted-extension and dead-strip configurations.
+Both extractions preserve emitted instructions, labels and ownership behavior.
+Frozen assembly fingerprints cover all five supported targets and executable,
+PIC, recoverable-library, hosted-extension and dead-strip configurations. The
+value-storage fingerprints also cover optional resource hooks and the complete
+fixed runtime-data block.
 
 `build.rs` includes this crate's Rust sources in the runtime-cache identity.
 Changes to these emitters therefore invalidate cached runtime objects even when

@@ -52,3 +52,12 @@ pub mod heap_kind;
 pub mod heap_live_bases;
 pub mod incref;
 pub mod memory;
+
+pub mod diagnostics;
+pub mod values;
+pub mod strings;
+pub mod buffers;
+pub mod reference_cells;
+mod value_features;
+pub use value_features::ValueFeatures;
+pub mod data;

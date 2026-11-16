@@ -9,7 +9,7 @@
 //! - Fixed symbols are cached across compilations, with target and PHP-profile inputs covered by the cache key.
 
 use super::{
-    ALLOC_OVERFLOW_MSG, CONCAT_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
+    RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, ICONV_STRPOS_OFFSET_MSG,
@@ -38,7 +38,6 @@ use crate::codegen_support::data_section::comm_directive;
 use crate::codegen_support::runtime::strings::{
     B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
 };
-use crate::codegen_support::data_section::comm_directive_aligned;
 use crate::codegen_support::platform::{Platform, Target};
 use crate::php_version::PhpVersion;
 use crate::types::checker::builtins::{
@@ -79,19 +78,12 @@ pub(crate) fn emit_runtime_data_fixed(
     let mut out = String::new();
     out.push_str(".data\n");
     out.push_str(&format!("_native_debug_info_fatal:\n    .ascii {:?}\n", elephc_builtin_contract::NATIVE_DEBUG_INFO_FATAL));
-    // The scratch arena is bounded by the same capacity the runtime publishes: a
-    // `--heap-size` above 1 GiB must not reserve a second giant buffer, or the link
-    // exceeds AArch64's 4 GiB ADRP window.
-    out.push_str(&comm_directive(
-        "_concat_buf",
-        super::super::concat_scratch_capacity(heap_size),
-        target,
-    ));
-    out.push_str(&comm_directive("_concat_off", 8, target));
+    elephc_memoir::data::append_string_scratch_storage(&mut out, heap_size, &target);
+
     out.push_str(&comm_directive(super::WEB_STREAM_CLOSE_SLOT, 8, target));
     // User boundary code reads this value from its linked runtime, including cached objects.
-    out.push_str(&format!(".globl _concat_capacity\n_concat_capacity:\n    .quad {}\n",
-        super::super::concat_scratch_capacity(heap_size)));
+    elephc_memoir::data::append_string_scratch_capacity(&mut out, heap_size);
+
     out.push_str(&comm_directive(
         "_itoa_spill_ring",
         32 * crate::codegen_support::runtime::strings::itoa::ITOA_SPILL_SLOTS,
@@ -455,9 +447,8 @@ pub(crate) fn emit_runtime_data_fixed(
     // publishes the exact hash-entry value slot it lends as `mixed &$value`, allowing
     // escape boundaries to reject only that unmanaged reference instead of ordinary
     // frame aliases. The owning walk boundary restores the saved head after unwinding.
-    out.push_str(&comm_directive("_rt_unmanaged_ref_borrow_top", 8, target));
-    // Active boxed-value validation roots are excluded from PHP-visible sharing counts.
-    out.push_str(&comm_directive("_rt_reference_validation_pins_top", 8, target));
+    elephc_memoir::data::append_reference_roots(&mut out, &target);
+
     out.push_str(&comm_directive("_php_backtrace_next_line", 8, target));
     for symbol in ["_rt_diag_pending_ptr", "_rt_diag_pending_len", "_rt_diag_warning_message_len", "_php_diagnostic_file", "_php_diagnostic_file_len", "_php_diagnostic_line"] {
         out.push_str(&comm_directive(symbol, 8, target));
@@ -659,44 +650,15 @@ pub(crate) fn emit_runtime_data_fixed(
     ));
     // Heap headers and object-handle side-table indices use 16-byte granules.
     // Keep payload alignment stable when preceding runtime symbols change.
-    out.push_str(&comm_directive_aligned("_heap_buf", heap_size, 16, target));
-    // One bit per 8-byte heap granule records live payload bases. String persistence uses this
-    // authoritative side table to reject forged headers in interior byte views in constant time.
-    out.push_str(&comm_directive(
-        "_heap_live_bases",
-        heap_size.div_ceil(64).max(1),
-        target,
-    ));
-    out.push_str(&comm_directive("_heap_off", 8, target));
-    out.push_str(&comm_directive("_heap_free_list", 8, target));
-    out.push_str(&comm_directive(
-        "_heap_small_bins",
-        super::super::arrays::HEAP_BIN_TABLE_BYTES as usize,
-        target,
-    ));
-    // One byte per heap granule: set while a guarded free parks the block in a bin.
-    out.push_str(&comm_directive(
-        "_heap_bin_marks",
-        super::super::arrays::heap_bin_mark_bytes(heap_size),
-        target,
-    ));
-    // `_gc_frees` at the end of the allocator's last consolidation pass (see `__rt_heap_alloc`).
-    out.push_str(&comm_directive("_heap_consolidated_frees", 8, target));
-    out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
-    out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
+    elephc_memoir::data::append_heap_storage(&mut out, heap_size, &target);
+
     // Generation-safe buffer descriptor registry. Public Buffer values are
     // scalar `(generation << 32) | index` handles, never heap pointers: slot
     // reuse increments generation so stale aliases cannot access a new payload.
     // Index zero is reserved as the invalid/null handle; the descriptor free
     // list is static metadata and therefore does not consume user heap space.
-    out.push_str(&comm_directive(
-        "_buffer_registry",
-        (crate::codegen_support::runtime::buffers::BUFFER_REGISTRY_CAPACITY + 1)
-            * crate::codegen_support::runtime::buffers::BUFFER_DESCRIPTOR_SIZE,
-        target,
-    ));
-    out.push_str(&comm_directive("_buffer_registry_free", 8, target));
-    out.push_str(".globl _buffer_registry_next\n_buffer_registry_next:\n    .quad 1\n");
+    elephc_memoir::data::append_buffer_registry(&mut out, &target);
+
     // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
     // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
     // blocks can never share a granule because the smallest block is 16 header
@@ -746,37 +708,7 @@ pub(crate) fn emit_runtime_data_fixed(
     // payload-to-id hash, this list keeps closed resources after descriptor reuse.
     out.push_str(&comm_directive("_resource_inventory_head", 8, target));
     out.push_str(&comm_directive("_resource_inventory_tail", 8, target));
-    out.push_str(".globl _gc_enabled\n_gc_enabled:\n    .quad 1\n");
-    for symbol in [
-        "_gc_candidates_enabled", "_gc_candidates_gathering", "_gc_candidates_visited",
-        "_gc_candidates_roots", "_gc_candidates_roots_count", "_gc_candidates_roots_capacity",
-        "_gc_candidates_nodes", "_gc_candidates_nodes_count", "_gc_candidates_nodes_capacity",
-        "_gc_candidates_anchors", "_gc_candidates_anchors_count", "_gc_candidates_anchors_capacity",
-        "_gc_candidate_root_scan_fn",
-        "_gc_proofs", "_gc_proofs_count", "_gc_proofs_capacity", "_gc_proofs_initialized",
-        "_gc_proof_parent", "_gc_proof_slot", "_gc_proofs_debt", "_gc_proofs_visited",
-        "_gc_proof_epoch", "_gc_proof_memos", "_gc_proof_memos_capacity", "_gc_proofs_cost",
-    ] {
-        out.push_str(&comm_directive(symbol, 8, target));
-    }
-    out.push_str(&comm_directive("_gc_collecting", 8, target));
-    out.push_str(&comm_directive("_gc_freeing_unreachable", 8, target));
-    out.push_str(&comm_directive("_gc_pin_head", 8, target));
-    out.push_str(&comm_directive("_gc_pending_throw", 8, target));
-    out.push_str(&comm_directive("_gc_release_suppressed", 8, target));
-    out.push_str(&comm_directive("_hash_write_guard_top", 8, target));
-    out.push_str(&comm_directive("_gc_runs", 8, target));
-    out.push_str(&comm_directive("_gc_safe_point_credit", 8, target));
-    out.push_str(&comm_directive("_gc_safe_point_live_limit", 8, target));
-    out.push_str(&comm_directive("_gc_collected", 8, target));
-    out.push_str(&comm_directive("_gc_application_started", 8, target));
-    out.push_str(&comm_directive("_gc_collector_started", 8, target));
-    out.push_str(&comm_directive("_gc_free_started", 8, target));
-    out.push_str(&comm_directive("_gc_destructor_started", 8, target));
-    out.push_str(&comm_directive("_gc_collector_time", 8, target));
-    out.push_str(&comm_directive("_gc_destructor_time", 8, target));
-    out.push_str(&comm_directive("_gc_free_time", 8, target));
-    out.push_str(&comm_directive("_gc_destructor_depth", 8, target));
+    elephc_memoir::data::append_gc_state(&mut out, &target);
     out.push_str(&format!(
         ".globl _php_error_reporting\n_php_error_reporting:\n    .quad {}\n",
         php_version.error_reporting_mask()
@@ -837,42 +769,13 @@ pub(crate) fn emit_runtime_data_fixed(
     // and for `php -r`. elephc already renders STDIN/STDOUT/STDERR as 1/2/3, so
     // starting user resources at 5 reproduces reference numbering end to end.
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
-    out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
-    out.push_str(&format!(
-        ".globl _heap_limit\n_heap_limit:\n    .quad {}\n",
-        memory_limit
-    ));
-    // The startup ceiling is immutable: `ini_set('memory_limit', …)` only moves `_heap_limit`,
-    // and the web request boundary copies this value back so one request cannot cap the next.
-    out.push_str(&format!(
-        ".globl _heap_limit_startup\n_heap_limit_startup:\n    .quad {}\n",
-        memory_limit
-    ));
-    out.push_str(".globl _heap_fail_request\n_heap_fail_request:\n    .quad 0\n");
-    out.push_str(&format!(
-        ".globl _heap_fatal_prefix\n_heap_fatal_prefix:\n    .ascii {:?}\n",
-        super::HEAP_FATAL_PREFIX
-    ));
-    out.push_str(&format!(
-        ".globl _heap_fatal_middle\n_heap_fatal_middle:\n    .ascii {:?}\n",
-        super::HEAP_FATAL_MIDDLE
-    ));
-    out.push_str(&format!(
-        ".globl _heap_fatal_suffix\n_heap_fatal_suffix:\n    .ascii {:?}\n",
-        super::HEAP_FATAL_SUFFIX
-    ));
-    out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
-    out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
-    out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
-    out.push_str(".globl _heap_dbg_free_list_msg\n_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
+    elephc_memoir::data::append_heap_limits(&mut out, heap_size, memory_limit);
+
     out.push_str(&format!(
         ".globl _stack_err_msg\n_stack_err_msg:\n    .ascii {:?}\n",
         STACK_OVERFLOW_MSG
     ));
-    out.push_str(&format!(
-        ".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii {:?}\n",
-        ARRAY_ALLOC_SIZE_MSG
-    ));
+    elephc_memoir::data::append_array_allocation_message(&mut out);
     out.push_str(&format!(
         ".globl _hash_append_err_msg\n_hash_append_err_msg:\n    .ascii {:?}\n",
         super::HASH_APPEND_ERROR_MSG
@@ -885,13 +788,8 @@ pub(crate) fn emit_runtime_data_fixed(
         ".globl _range_size_err_msg\n_range_size_err_msg:\n    .ascii {:?}\n",
         RANGE_SIZE_MSG
     ));
-    out.push_str(&format!(
-        ".globl _buffer_alloc_size_msg\n_buffer_alloc_size_msg:\n    .ascii {:?}\n",
-        BUFFER_ALLOC_SIZE_MSG
-    ));
-    out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
-    out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
-    out.push_str(".globl _buffer_registry_exhausted_msg\n_buffer_registry_exhausted_msg:\n    .ascii \"Fatal error: buffer registry exhausted\\n\"\n");
+    elephc_memoir::data::append_buffer_messages(&mut out);
+
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _unmanaged_reference_escape_msg\n_unmanaged_reference_escape_msg:\n    .ascii \"Escaping a borrowed boxed array_walk() element reference is not supported\"\n");
@@ -908,14 +806,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _static_prop_private_access_msg\n_static_prop_private_access_msg:\n    .ascii \"Fatal error: Cannot access private static property\\n\"\n");
     out.push_str(".globl _ptr_null_err_msg\n_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     out.push_str(".globl _ptr_read_string_len_err_msg\n_ptr_read_string_len_err_msg:\n    .ascii \"Fatal error: ptr_read_string() length must be non-negative\\n\"\n");
-    out.push_str(&format!(
-        ".globl _alloc_overflow_msg\n_alloc_overflow_msg:\n    .ascii {:?}\n",
-        ALLOC_OVERFLOW_MSG
-    ));
-    out.push_str(&format!(
-        ".globl _concat_overflow_msg\n_concat_overflow_msg:\n    .ascii {:?}\n",
-        CONCAT_OVERFLOW_MSG
-    ));
+    elephc_memoir::data::append_allocation_messages(&mut out);
+
     out.push_str(&format!(
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
         STR_REPEAT_TIMES_MSG
@@ -1203,10 +1095,8 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
     out.push_str(".globl _fiber_msg_switch_signal\n_fiber_msg_switch_signal:\n    .ascii \"Cannot switch fibers in current execution context\"\n");
     out.push_str(&emit_builtin_callable_data(target));
-    out.push_str(&comm_directive("_gc_allocs", 8, target));
-    out.push_str(&comm_directive("_gc_frees", 8, target));
-    out.push_str(&comm_directive("_gc_live", 8, target));
-    out.push_str(&comm_directive("_gc_peak", 8, target));
+    elephc_memoir::data::append_memory_counters(&mut out, &target);
+
     out.push_str(&comm_directive("_cstr_buf", 4096, target));
     out.push_str(&comm_directive("_cstr_buf2", 4096, target));
     // C-string conversions need a NUL-terminated copy for libc. The 4 KiB inline
@@ -1888,28 +1778,14 @@ pub(crate) fn emit_runtime_data_fixed(
     out.push_str(".globl _etc_group_path\n_etc_group_path:\n    .asciz \"/etc/group\"\n");
     out.push_str(".globl _principal_lookup_read_mode\n_principal_lookup_read_mode:\n    .asciz \"r\"\n");
     out.push_str(&emit_spl_autoload_extensions_data());
-    out.push_str(".globl _heap_dbg_stats_prefix\n_heap_dbg_stats_prefix:\n    .ascii \"HEAP DEBUG: allocs=\"\n");
-    out.push_str(".globl _heap_dbg_frees_label\n_heap_dbg_frees_label:\n    .ascii \" frees=\"\n");
-    out.push_str(".globl _heap_dbg_live_blocks_label\n_heap_dbg_live_blocks_label:\n    .ascii \" live_blocks=\"\n");
-    out.push_str(".globl _heap_dbg_live_bytes_label\n_heap_dbg_live_bytes_label:\n    .ascii \" live_bytes=\"\n");
-    out.push_str(".globl _heap_dbg_peak_label\n_heap_dbg_peak_label:\n    .ascii \" peak_live_bytes=\"\n");
-    out.push_str(".globl _heap_dbg_leak_prefix\n_heap_dbg_leak_prefix:\n    .ascii \"HEAP DEBUG: leak summary: \"\n");
-    out.push_str(".globl _heap_dbg_live_blocks_short_label\n_heap_dbg_live_blocks_short_label:\n    .ascii \"live_blocks=\"\n");
-    out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
-    out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
+    elephc_memoir::data::append_heap_debug_stat_labels(&mut out);
+
     out.push_str(".globl _rt_diag_leading_newline\n_rt_diag_leading_newline:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _rt_diag_in\n_rt_diag_in:\n    .ascii \" in \"\n");
     out.push_str(".globl _rt_diag_on_line\n_rt_diag_on_line:\n    .ascii \" on line \"\n");
     out.push_str(".globl _rt_diag_newline\n_rt_diag_newline:\n    .ascii \"\\n\"\n");
-    out.push_str(".globl _heap_dbg_block_offset\n_heap_dbg_block_offset:\n    .ascii \"HEAP DEBUG: live offset=\"\n");
-    out.push_str(".globl _heap_dbg_block_bytes\n_heap_dbg_block_bytes:\n    .ascii \" bytes=\"\n");
-    out.push_str(".globl _heap_dbg_block_kind\n_heap_dbg_block_kind:\n    .ascii \" kind=\"\n");
-    out.push_str(".globl _heap_dbg_block_refs\n_heap_dbg_block_refs:\n    .ascii \" refs=\"\n");
-    out.push_str(".globl _heap_dbg_block_class\n_heap_dbg_block_class:\n    .ascii \" class_id=\"\n");
-    out.push_str(".globl _heap_dbg_block_class_name\n_heap_dbg_block_class_name:\n    .ascii \" class=\"\n");
-    out.push_str(".globl _heap_dbg_block_tag\n_heap_dbg_block_tag:\n    .ascii \" tag=\"\n");
-    out.push_str(".globl _heap_dbg_block_length\n_heap_dbg_block_length:\n    .ascii \" length=\"\n");
-    out.push_str(".globl _heap_dbg_block_fingerprint\n_heap_dbg_block_fingerprint:\n    .ascii \" fingerprint=\"\n");
+    elephc_memoir::data::append_heap_debug_block_labels(&mut out);
+
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
     for (label, value) in [
         ("_bt_arg_unknown", "Unknown"),
@@ -2220,6 +2096,15 @@ mod tests {
             let asm = emit_runtime_data_fixed(8_388_608, target, PhpVersion::Php85, crate::codegen_support::RuntimeFeatures::all());
             assert_eq!(asm.contains("_iconv_write_options"), expected, "{target:?}");
         }
+    }
+
+    /// Large arenas reserve exactly the bounded scratch capacity published to the runtime.
+    #[test]
+    fn test_large_heap_uses_bounded_concat_reservation() {
+        let target = Target::new(Platform::Linux, Arch::AArch64);
+        let asm = emit_runtime_data_fixed(1 << 31, target, PhpVersion::Php85);
+        assert!(asm.contains(&comm_directive("_concat_buf", 1 << 30, target)));
+        assert!(asm.contains("_concat_capacity:\n    .quad 1073741824\n"));
     }
 
     /// Pins the stack-guard symbols in `.data`, aligned, rather than in `.comm`.
