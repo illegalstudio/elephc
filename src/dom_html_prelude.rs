@@ -91,6 +91,21 @@ pub fn inject_if_used(
     force: bool,
     inventory: &mut crate::optimize::reachability::PreludeInventory,
 ) -> Program {
+    // The usage scan recurses through the whole program, so it runs on the compiler's own
+    // stack: an embedder thread's small stack overflowed on a deeply nested program
+    // (`tests/embedder_stack_tests.rs`).
+    crate::compiler_stack::with_compiler_stack(|| {
+        inject_if_used_on_compiler_stack(program, php_version, force, inventory)
+    })
+}
+
+/// The body of [`inject_if_used`], run on the stack `with_compiler_stack` sized.
+fn inject_if_used_on_compiler_stack(
+    program: Program,
+    php_version: PhpVersion,
+    force: bool,
+    inventory: &mut crate::optimize::reachability::PreludeInventory,
+) -> Program {
     if php_version < PhpVersion::Php84 {
         return program;
     }
