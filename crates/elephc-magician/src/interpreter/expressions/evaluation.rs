@@ -125,7 +125,11 @@ fn eval_date_object_instant(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(i64, i64), EvalStatus> {
     let format = values.string("U.u")?;
-    let rendered = eval_method_call_result(date, "format", vec![format], context, values)?;
+    // The method call borrows its arguments, so the format cell is this function's to release.
+    let rendered = eval_method_call_result(date, "format", vec![format], context, values);
+    let format_release = values.release(format);
+    let rendered = rendered?;
+    format_release?;
     let bytes = values.string_bytes(rendered);
     eval_release_value(context, values, rendered)?;
     let text = String::from_utf8(bytes?).map_err(|_| EvalStatus::RuntimeFatal)?;
@@ -520,7 +524,9 @@ fn eval_object_array_cast_with_mangled_keys(
     let mut result = values.assoc_new(properties.len())?;
     for property in properties {
         let key = values.string(&eval_serialize_mangled_property_key(&property))?;
-        result = values.array_set(result, key, property.value)?;
+        let stored = values.array_set(result, key, property.value);
+        values.release(key)?;
+        result = stored?;
     }
     Ok(result)
 }
@@ -554,7 +560,9 @@ pub(in crate::interpreter) fn eval_object_array_cast_value(
     let mut result = values.assoc_new(property_count + dynamic_properties.len())?;
     for (property, value) in dynamic_properties {
         let key = values.string(&property)?;
-        result = values.array_set(result, key, value)?;
+        let stored = values.array_set(result, key, value);
+        values.release(key)?;
+        result = stored?;
         emitted_properties.insert(property);
     }
     for position in 0..property_count {
@@ -568,7 +576,13 @@ pub(in crate::interpreter) fn eval_object_array_cast_value(
         }
         let value = values.property_get(object, &property)?;
         let key = values.string(&property)?;
-        result = values.array_set(result, key, value)?;
+        // `array_set` borrows its key and value, so both temporaries are given back here.
+        let stored = values.array_set(result, key, value);
+        let key_release = values.release(key);
+        let value_release = values.release(value);
+        result = stored?;
+        key_release?;
+        value_release?;
     }
     Ok(result)
 }
@@ -1165,7 +1179,7 @@ fn eval_throw_unhandled_match_error<T>(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<T, EvalStatus> {
-    let description = eval_unhandled_match_subject(subject, values)?;
+    let description = eval_unhandled_match_subject(subject, context, values)?;
     eval_throw_builtin_exception_with_code("UnhandledMatchError", &format!("Unhandled match case {description}"), 0, context, values)
 }
 
@@ -1178,6 +1192,7 @@ fn eval_throw_unhandled_match_error<T>(
 /// difference between the two spellings: `(string)1.0` is `1` but the message says `1.0`.
 fn eval_unhandled_match_subject(
     subject: RuntimeCellHandle,
+    context: &ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<String, EvalStatus> {
     match values.type_tag(subject)? {
@@ -1201,9 +1216,21 @@ fn eval_unhandled_match_subject(
         EVAL_TAG_ARRAY | EVAL_TAG_ASSOC => Ok("of type array".to_string()),
         EVAL_TAG_RESOURCE => Ok("of type resource".to_string()),
         EVAL_TAG_OBJECT => {
+            // An interpreter-declared object is carried by a `stdClass` runtime object, so its
+            // own class is asked first, as every other reader does.
+            if let Some(class) = values
+                .object_identity(subject)
+                .ok()
+                .and_then(|identity| context.dynamic_object_class_name(identity))
+            {
+                return Ok(format!("of type {class}"));
+            }
             let class = values.object_class_name(subject)?;
-            let class = eval_scalar_text(class, values)?;
-            Ok(format!("of type {class}"))
+            let text = eval_scalar_text(class, values);
+            let released = values.release(class);
+            let text = text?;
+            released?;
+            Ok(format!("of type {text}"))
         }
         _ => Ok("of type mixed".to_string()),
     }
