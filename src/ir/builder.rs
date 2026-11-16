@@ -40,16 +40,16 @@ impl<'f> Builder<'f> {
     }
 
     /// Installs the run-time definedness flags: every later instruction that writes a slot of
-    /// one of these PHP locals first sets its flag to 1.
+    /// one of these PHP locals is followed by a store of 1 into its flag.
     pub fn set_definedness_flags(&mut self, flags: crate::fast_hash::FastMap<String, LocalSlotId>) {
         self.definedness_flags = flags;
     }
 
-    /// Returns the definedness flag an instruction must set before it writes a tracked local.
+    /// Returns the definedness flag an instruction that writes a tracked local must set.
     ///
     /// Every op that names the local's slot DEFINES the PHP variable, except the ones that only
-    /// read it, release it or pin it for a call: a store, an in-place string append, a reference
-    /// promotion or alias, a by-reference argument. Over-approximating here can only hide an
+    /// read it, release it or pin it for a call: a store, a reference promotion or alias, a
+    /// by-reference argument. A consuming string append is followed by the store that defines. Over-approximating here can only hide an
     /// `Undefined variable` warning, never invent one. `UnsetLocal` is handled by its caller.
     ///
     /// A store of the slot's own value, converted (`array_to_mixed`, a box, a retain), changes
@@ -73,6 +73,7 @@ impl<'f> Builder<'f> {
                 | Op::PushCallOperandOwner
                 | Op::PopCallOperandOwner
                 | Op::IterEnd
+                | Op::StrAppend
                 | Op::UnsetLocal
                 | Op::ZeroLocalSlot
         ) {
@@ -843,11 +844,13 @@ impl<'f> Builder<'f> {
         effects: Effects,
         span: Option<Span>,
     ) -> Option<ValueId> {
-        if !self.definedness_flags.is_empty() {
-            if let Some(flag) = self.definedness_flag_written_by(op, &operands, immediate.as_ref()) {
-                self.emit_definedness_flag_store(flag, true);
-            }
-        }
+        // Set AFTER the write, so the writes whose neighbours the validator pins (a consuming
+        // string append's load, append and store) stay adjacent.
+        let defines = if self.definedness_flags.is_empty() {
+            None
+        } else {
+            self.definedness_flag_written_by(op, &operands, immediate.as_ref())
+        };
         let block_id = self.current_block();
         self.assert_can_append(block_id);
         for operand in &operands {
@@ -894,6 +897,9 @@ impl<'f> Builder<'f> {
             span,
         ));
         self.func.blocks[block_index].instructions.push(inst_id);
+        if let Some(flag) = defines {
+            self.emit_definedness_flag_store(flag, true);
+        }
         result
     }
 

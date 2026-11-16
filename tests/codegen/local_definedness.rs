@@ -264,6 +264,31 @@ int(2)"
     );
 }
 
+/// An object stored inside a `try` is possibly undefined after it, but a read through it keeps
+/// its typed dispatch: `empty($box['q'])` still asks `offsetExists()` before `offsetGet()`.
+#[test]
+fn test_object_from_a_try_keeps_its_array_access_dispatch() {
+    let out = normalized(
+        r#"<?php
+class Box implements ArrayAccess {
+    public function offsetExists(mixed $offset): bool { echo "E"; return $offset === "p"; }
+    public function offsetGet(mixed $offset): mixed { echo "G"; throw new Exception("x"); }
+    public function offsetSet(mixed $offset, mixed $value): void {}
+    public function offsetUnset(mixed $offset): void {}
+}
+try {
+    $box = new Box();
+    $value = $box["p"];
+} catch (Exception $e) {
+    echo "|caught\n";
+}
+echo empty($box["q"]) ? "|empty\n" : "|set\n";
+var_dump(isset($value));
+"#,
+    );
+    assert_eq!(out, "G|caught\nE|empty\nbool(false)");
+}
+
 /// A plain read of such a local before any write warns like php. Its value stays the empty
 /// array: the checker types the local `array` for the whole scope, so the returned NULL php has
 /// would not fit the function's `array` return.

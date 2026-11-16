@@ -27,7 +27,7 @@
 //!   including the writes lowered BEFORE the read that discovers the need, so the first lowering
 //!   records the names and the body is lowered again with their flags installed. The names
 //!   survive rollback, so a later replay of the same body installs them up front.
-//! - The flag is set by the builder (`Builder::set_definedness_flags`) on EVERY instruction that
+//! - The flag is set by the builder (`Builder::set_definedness_flags`) after EVERY instruction that
 //!   writes a slot of the name, not by the lowering paths one by one: a store the lowering does
 //!   not report as an initialization still defines the variable at run time. A write that only
 //!   mutates the storage in place (`$a[] = 1`, a by-reference fill) is covered by
@@ -64,6 +64,8 @@ pub(crate) struct DefinednessState {
     flags: HashMap<String, LocalSlotId>,
     /// Spans of the variables `isset`, `empty` and `??` probe: read without a warning.
     quiet_reads: HashSet<Span>,
+    /// The subset of `quiet_reads` whose probe operand is the variable itself.
+    whole_probe_reads: HashSet<Span>,
     /// Names the body may pass to a by-reference parameter. The call binds the argument's own
     /// storage and defines it without a store this module could see, so they are never tracked.
     by_ref_arguments: HashSet<String>,
@@ -157,7 +159,9 @@ pub(crate) fn begin_body(ctx: &mut LoweringContext<'_, '_>, body: &[Stmt]) {
         let eligible = body_is_eligible(ctx, body);
         ctx.definedness.eligible = Some(eligible);
         if eligible {
-            ctx.definedness.quiet_reads = quiet_read_spans(body);
+            let (quiet, whole) = quiet_read_spans(body);
+            ctx.definedness.quiet_reads = quiet;
+            ctx.definedness.whole_probe_reads = whole;
             ctx.definedness.by_ref_arguments = by_ref_argument_names(ctx, body);
             let params: Vec<String> = ctx
                 .builder
@@ -236,19 +240,37 @@ pub(crate) fn lower_variable_read(
     name: &str,
     span: Span,
 ) -> LoweredValue {
-    match read_guard(ctx, name) {
-        Some(flag)
-            if ctx.definedness.seeded.contains(name)
-                && !ctx.definedness.quiet_reads.contains(&span) =>
-        {
-            lower_warned_seed_read(ctx, name, flag, span)
-        }
-        Some(flag) => {
-            let quiet = ctx.definedness.quiet_reads.contains(&span);
-            lower_guarded_read(ctx, name, flag, quiet, span)
-        }
-        None => ctx.load_local(name, Some(span)),
+    let Some(flag) = read_guard(ctx, name) else {
+        return ctx.load_local(name, Some(span));
+    };
+    let quiet = ctx.definedness.quiet_reads.contains(&span);
+    if load_holds_null(ctx, name)
+        || ctx.definedness.whole_probe_reads.contains(&span)
+        || (quiet && ctx.definedness.seeded.contains(name))
+    {
+        return lower_guarded_read(ctx, name, flag, quiet, span);
     }
+    if !quiet {
+        warn_unless_defined(ctx, name, flag, span);
+    }
+    ctx.load_local(name, Some(span))
+}
+
+/// Whether a read of `name` is a boxed `mixed`, which can carry php's NULL without changing the
+/// value's representation for its consumer.
+///
+/// A read lowering types concretely (an object, a string, the `array` the checker gives a local
+/// `$a[] = …` creates for its whole scope) keeps its typed load: php's warning when the variable
+/// is undefined, but the value read as before. Answering NULL there would hand every consumer a
+/// boxed value where it expected the concrete one and change how it dispatches, and the checker
+/// promises the concrete type onward: an inferred `array` return of such a local turned php's
+/// warning into a TypeError, and `empty($box['k'])` on a boxed ArrayAccess receiver no longer
+/// asked `offsetExists()` first. A probe whose whole operand is the variable (`isset($x)`,
+/// `$x ?? $d`) is the exception, as is any probe of a seeded array local: they consume the
+/// value themselves.
+fn load_holds_null(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    ctx.local_load_php_type(name)
+        .is_some_and(|ty| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Void))
 }
 
 /// Reads a by-value closure capture of `$name`.
@@ -261,25 +283,29 @@ pub(crate) fn lower_capture_read(
     arrow: bool,
     span: Span,
 ) -> LoweredValue {
-    match read_guard(ctx, name) {
-        Some(flag) if ctx.definedness.seeded.contains(name) => {
-            if arrow {
-                ctx.load_local(name, Some(span))
-            } else {
-                lower_warned_seed_read(ctx, name, flag, span)
-            }
-        }
-        Some(flag) => lower_guarded_read(ctx, name, flag, arrow, span),
-        None => ctx.load_local(name, Some(span)),
+    let Some(flag) = read_guard(ctx, name) else {
+        return ctx.load_local(name, Some(span));
+    };
+    if load_holds_null(ctx, name) {
+        return lower_guarded_read(ctx, name, flag, arrow, span);
     }
+    if !arrow {
+        warn_unless_defined(ctx, name, flag, span);
+    }
+    ctx.load_local(name, Some(span))
 }
 
 /// Prepares `++`/`--` on `$name`, which reads the variable before writing it: an undefined one
-/// warns like a read and is set to NULL first, so the operator sees php's NULL operand.
+/// warns like a read and, when its storage can hold it, is set to NULL first, so the operator
+/// sees php's NULL operand.
 pub(crate) fn define_before_increment(ctx: &mut LoweringContext<'_, '_>, name: &str, span: Span) {
     let Some(flag) = read_guard(ctx, name) else {
         return;
     };
+    if !load_holds_null(ctx, name) {
+        warn_unless_defined(ctx, name, flag, span);
+        return;
+    }
     let defined = load_flag(ctx, flag, span);
     let split_initialized = ctx.initialized_slots_snapshot();
     let split_types = ctx.local_types_snapshot();
@@ -311,19 +337,8 @@ pub(crate) fn define_before_increment(ctx: &mut LoweringContext<'_, '_>, name: &
     note_defined(ctx, name);
 }
 
-/// Reads a local `$a[] = …` creates, before any write may have created it: php's warning, then
-/// the entry seed's empty array where php has NULL.
-///
-/// The checker types such a local `array` for its whole scope (`seed_vivified_array_locals`),
-/// so a function returning it, or passing it to an inferred `array` parameter, has an `array`
-/// ABI that cannot carry NULL: answering NULL would turn php's warning into a TypeError. The
-/// probes (`isset`, `empty`, `??`) and `compact()` do not hand the value on, and answer exactly.
-fn lower_warned_seed_read(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    flag: LocalSlotId,
-    span: Span,
-) -> LoweredValue {
+/// Raises php's `Undefined variable $x` when the flag says the variable does not exist.
+fn warn_unless_defined(ctx: &mut LoweringContext<'_, '_>, name: &str, flag: LocalSlotId, span: Span) {
     let defined = load_flag(ctx, flag, span);
     let undefined_block = ctx.builder.create_named_block("var.undefined", Vec::new());
     let read = ctx.builder.create_named_block("var.read", Vec::new());
@@ -338,7 +353,6 @@ fn lower_warned_seed_read(
     emit_warning(ctx, &format!("Warning: Undefined variable ${name}\n"), span);
     branch_to(ctx, read);
     ctx.builder.position_at_end(read);
-    ctx.load_local(name, Some(span))
 }
 
 /// Returns the flag a read of `name` must test here, recording an untracked possibly unassigned
@@ -763,9 +777,16 @@ fn body_is_eligible(ctx: &LoweringContext<'_, '_>, body: &[Stmt]) -> bool {
 ///
 /// php fetches them in its quiet "is" mode, so an unassigned one warns about nothing. Only the
 /// spine is quiet: `isset($a[$b])` still warns for `$b` (see `types::checker::null_probe`).
-fn quiet_read_spans(body: &[Stmt]) -> HashSet<Span> {
+///
+/// The second set holds the probes whose WHOLE operand is the variable (`isset($x)`, `$x ?? d`):
+/// those consume the value themselves, where a chain root (`$box['k'] ?? d`) hands it on.
+fn quiet_read_spans(body: &[Stmt]) -> (HashSet<Span>, HashSet<Span>) {
     let mut spans = HashSet::default();
+    let mut whole = HashSet::default();
     let mut record = |operand: &Expr| {
+        if matches!(operand.kind, ExprKind::Variable(_)) {
+            whole.insert(operand.span);
+        }
         let mut current = operand;
         loop {
             match &current.kind {
@@ -797,7 +818,7 @@ fn quiet_read_spans(body: &[Stmt]) -> HashSet<Span> {
             _ => {}
         }
     });
-    spans
+    (spans, whole)
 }
 
 /// Names every variable the body reads (or writes as a whole) outside a nested scope.
