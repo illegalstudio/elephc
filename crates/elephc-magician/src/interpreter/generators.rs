@@ -272,11 +272,27 @@ fn eval_generator_step(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
+    eval_generator_step_throwing(identity, sent, None, resuming, context, values)
+}
+
+/// Advances one generator like [`eval_generator_step`], raising `thrown` at the suspended yield.
+///
+/// `thrown` is an OWNED Throwable cell (`Generator::throw()`): it is handed to the body's
+/// enclosing `try` region exactly as a throw raised inside the body would be, or it leaves the
+/// generator finished and carries on outward when none is open.
+fn eval_generator_step_throwing(
+    identity: u64,
+    sent: Option<RuntimeCellHandle>,
+    thrown: Option<RuntimeCellHandle>,
+    resuming: bool,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
     let Some(mut frame) = context.take_eval_generator(identity) else {
         return Err(EvalStatus::RuntimeFatal);
     };
     let resumer_site = eval_generator_enter_activation(&frame, context);
-    let result = eval_generator_run(&mut frame, sent, resuming, context, values);
+    let result = eval_generator_run(&mut frame, sent, thrown, resuming, context, values);
     eval_generator_leave_activation(&mut frame, resumer_site, context);
     context.restore_eval_generator(identity, frame);
     result
@@ -384,14 +400,31 @@ fn eval_generator_leave_activation(
 fn eval_generator_run(
     frame: &mut EvalGeneratorFrame,
     sent: Option<RuntimeCellHandle>,
+    thrown: Option<RuntimeCellHandle>,
     resuming: bool,
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<(), EvalStatus> {
     if frame.state == EvalGeneratorState::Finished {
-        return Ok(());
+        return match thrown {
+            Some(thrown) => {
+                context.set_pending_throw(thrown);
+                Err(EvalStatus::UncaughtThrowable)
+            }
+            None => Ok(()),
+        };
     }
-    if resuming {
+    if let Some(thrown) = thrown {
+        // The suspended `yield` receives no value; a `yield from` in progress is abandoned, and
+        // the throw surfaces at the delegating statement.
+        frame.pending_send_slot = None;
+        if frame.delegate.is_some() {
+            eval_generator_end_delegation(frame, context, values)?;
+        }
+        context.set_pending_throw(thrown);
+        frame.state = EvalGeneratorState::Suspended;
+        eval_generator_absorb_throw(frame, context, values)?;
+    } else if resuming {
         eval_generator_deliver_sent(frame, sent, values)?;
         if frame.delegate.is_some() {
             eval_generator_advance_delegate(frame, sent, context, values)?;
@@ -411,32 +444,42 @@ fn eval_generator_run(
             Ok(EvalGeneratorFlow::Continue) => {}
             Ok(EvalGeneratorFlow::Suspended) | Ok(EvalGeneratorFlow::Finished) => return Ok(()),
             Err(EvalStatus::UncaughtThrowable) => {
-                // A `try` region the body is inside absorbs the throw and continues at its
-                // handler; with none open the generator ends and the throw carries on outward.
-                let Some(thrown) = context.take_pending_throw() else {
-                    frame.state = EvalGeneratorState::Finished;
-                    return Err(EvalStatus::UncaughtThrowable);
-                };
-                let Some(region) = frame.regions.pop() else {
-                    frame.state = EvalGeneratorState::Finished;
-                    context.set_pending_throw(thrown);
-                    return Err(EvalStatus::UncaughtThrowable);
-                };
-                if let Some(replaced) =
-                    frame
-                        .scope
-                        .set(&region.thrown_slot, thrown, ScopeCellOwnership::Owned)
-                {
-                    values.release(replaced)?;
-                }
-                frame.step = region.handler;
+                eval_generator_absorb_throw(frame, context, values)?;
             }
             Err(status) => {
-                frame.state = EvalGeneratorState::Finished;
+                let _ = eval_generator_finish(frame, None, values);
                 return Err(status);
             }
         }
     }
+}
+
+/// Hands the context's pending throw to the innermost `try` region the body is inside.
+///
+/// A `try` region absorbs the throw and the body continues at its handler; with none open the
+/// generator ends and the throw carries on outward as `Err(UncaughtThrowable)`.
+fn eval_generator_absorb_throw(
+    frame: &mut EvalGeneratorFrame,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let Some(thrown) = context.take_pending_throw() else {
+        eval_generator_finish(frame, None, values)?;
+        return Err(EvalStatus::UncaughtThrowable);
+    };
+    let Some(region) = frame.regions.pop() else {
+        eval_generator_finish(frame, None, values)?;
+        context.set_pending_throw(thrown);
+        return Err(EvalStatus::UncaughtThrowable);
+    };
+    if let Some(replaced) = frame
+        .scope
+        .set(&region.thrown_slot, thrown, ScopeCellOwnership::Owned)
+    {
+        values.release(replaced)?;
+    }
+    frame.step = region.handler;
+    Ok(())
 }
 
 /// What running one step told the loop to do next.
@@ -542,7 +585,16 @@ fn eval_generator_execute_value_step(
         EvalGeneratorStep::Yield { key, value, into } => {
             let value = eval_generator_kept_expr(&value, frame, context, values)?;
             let key = match key {
-                Some(key) => eval_generator_kept_expr(&key, frame, context, values)?,
+                Some(key) => {
+                    let key = eval_generator_kept_expr(&key, frame, context, values)?;
+                    // php keeps the largest integer key used so far: an explicit integer key
+                    // at or past the counter moves the next automatic key to one beyond it.
+                    if values.type_tag(key)? == EVAL_TAG_INT {
+                        let explicit = eval_int_value(key, values)?;
+                        frame.auto_key = frame.auto_key.max(explicit.saturating_add(1));
+                    }
+                    key
+                }
                 None => {
                     let key = values.int(frame.auto_key)?;
                     frame.auto_key += 1;
@@ -566,8 +618,7 @@ fn eval_generator_execute_value_step(
             EvalGeneratorFlow::Continue
         }
         EvalGeneratorStep::JumpIfFalse { condition, target } => {
-            let condition = eval_expr(&condition, context, &mut frame.scope, values)?;
-            if !values.truthy(condition)? {
+            if !eval_truthy_expr(&condition, context, &mut frame.scope, values)? {
                 frame.step = target;
             }
             EvalGeneratorFlow::Continue
@@ -600,6 +651,7 @@ fn eval_generator_execute_value_step(
             // generator closure; the array-only walk ended that loop before its first element,
             // so every lazy pipeline answered an empty array.
             let (subject, position) = eval_generator_foreach_subject(subject, context, values)?;
+            eval_generator_end_foreach(frame, slot, values)?;
             frame.foreach_slots[slot] = Some((subject, position));
             EvalGeneratorFlow::Continue
         }
@@ -626,6 +678,7 @@ fn eval_generator_execute_value_step(
                 frame.foreach_slots[slot] = Some((array, EVAL_GENERATOR_FOREACH_ITERATOR_RUNNING));
                 if !is_valid {
                     frame.step = exit;
+                    eval_generator_end_foreach(frame, slot, values)?;
                     return Ok(EvalGeneratorFlow::Continue);
                 }
                 let value = eval_method_call_result(array, "current", Vec::new(), context, values)?;
@@ -638,6 +691,7 @@ fn eval_generator_execute_value_step(
             } else {
                 if position >= values.array_len(array)? {
                     frame.step = exit;
+                    eval_generator_end_foreach(frame, slot, values)?;
                     return Ok(EvalGeneratorFlow::Continue);
                 }
                 let key = values.array_iter_key(array, position)?;
@@ -667,6 +721,22 @@ fn eval_generator_execute_value_step(
         | EvalGeneratorStep::LeaveTry
         | EvalGeneratorStep::Rethrow { .. } => return Err(EvalStatus::RuntimeFatal),
     })
+}
+
+/// Gives back the subject a generator `foreach` slot owns and empties the slot.
+///
+/// A loop that ends frees its subject at once, as php does, and a lowered `foreach` nested in
+/// another loop runs `ForeachInit` again with the same slot, which must not drop the previous
+/// subject without releasing it.
+fn eval_generator_end_foreach(
+    frame: &mut EvalGeneratorFrame,
+    slot: usize,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    match frame.foreach_slots[slot].take() {
+        Some((subject, _)) => values.release(subject),
+        None => Ok(()),
+    }
 }
 
 /// Marks a generator `foreach` slot that holds an `Iterator` object not yet rewound.
@@ -1051,6 +1121,23 @@ pub(in crate::interpreter) fn eval_generator_method_result(
                 None => values.null().map(Some),
             }
         }
+        "throw" => {
+            let Some(exception) = evaluated_args.first().map(|arg| arg.value) else {
+                return Ok(None);
+            };
+            // php runs the body up to its first yield before the throw can land on one.
+            eval_generator_prime(identity, context, values)?;
+            eval_generator_mark_advanced(identity, context);
+            let thrown = values.retain(exception)?;
+            eval_generator_step_throwing(identity, None, Some(thrown), true, context, values)?;
+            match context
+                .eval_generator(identity, |frame| frame.current_value)
+                .flatten()
+            {
+                Some(value) => values.retain(value).map(Some),
+                None => values.null().map(Some),
+            }
+        }
         "rewind" => {
             eval_generator_prime(identity, context, values)?;
             let advanced = context
@@ -1096,7 +1183,6 @@ fn eval_generator_mark_advanced(identity: u64, context: &mut ElephcEvalContext) 
     }
 }
 
-/// Creates and schedules a plain `Exception`, which is what the generator errors are.
 /// Raises one PHP `\Error` with a fixed message.
 fn eval_throw_error_message<T>(
     message: &str,
@@ -1106,6 +1192,7 @@ fn eval_throw_error_message<T>(
     eval_throw_builtin_exception_with_code("Error", message, 0, context, values)
 }
 
+/// Creates and schedules a plain `Exception`, which is what the generator errors are.
 fn eval_throw_exception_message<T>(
     message: &str,
     context: &mut ElephcEvalContext,
@@ -1165,6 +1252,7 @@ pub(in crate::interpreter) fn eval_generator_collect_entries(
     }
 }
 
+/// Runs a `foreach` over an interpreted generator, binding each pair and honouring `break`/`continue`.
 pub(in crate::interpreter) fn execute_foreach_generator_stmt(
     identity: u64,
     key_name: Option<&str>,

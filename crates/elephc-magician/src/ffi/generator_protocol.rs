@@ -144,6 +144,20 @@ unsafe fn generator_protocol_inner(
                 unsafe { *out = thrown.as_ptr() as u64 };
                 return PROTOCOL_THROWN;
             }
+            // A body that failed with something that is not a throw (`RuntimeFatal`,
+            // `UnsupportedConstruct`) is a fatal error, not "no more elements": answering
+            // "handled, null" made the compiled loop end quietly over truncated data.
+            if let Err(status @ (crate::errors::EvalStatus::RuntimeFatal | crate::errors::EvalStatus::UnsupportedConstruct)) = result {
+                let prefix = if status == crate::errors::EvalStatus::RuntimeFatal {
+                    "Fatal error: eval() runtime failed"
+                } else {
+                    "Fatal error: eval() fragment uses an unsupported construct"
+                };
+                let clause = crate::errors::take_eval_runtime_failure()
+                    .map(|failure| failure.clause())
+                    .unwrap_or_default();
+                let _ = values.fatal(&format!("{prefix}{clause}\n"));
+            }
             unsafe { *out = 0 };
             return 1;
         }
