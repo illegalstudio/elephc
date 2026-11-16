@@ -877,6 +877,23 @@ fn abstract_setter_storage_type_accepts(
     storage: &PhpType,
     setter: &PhpType,
 ) -> bool {
+    // Two classes the program declares are related through the complete declaration map. The
+    // class table is still being built here, so `type_accepts` sees a declared class that is not
+    // in it yet as one a runtime autoloader supplies and accepts it unproven: php -n 8.5.10
+    // refuses `public public(set) readonly J $x` over an `abstract public Z $x { set; }` whose
+    // `Z` is not a `J` ("Type of B::$x must be supertype of Z").
+    if let (PhpType::Object(storage_name), PhpType::Object(setter_name)) = (storage, setter) {
+        if !storage_name.is_empty()
+            && declared_in_program(checker, class_map, storage_name)
+            && declared_in_program(checker, class_map, setter_name)
+        {
+            return declared_class_is_a(checker, class_map, setter_name, storage_name)
+                || checker.interface_extends_interface(
+                    setter_name.trim_start_matches('\\'),
+                    storage_name.trim_start_matches('\\'),
+                );
+        }
+    }
     if checker.type_accepts(storage, setter) {
         return true;
     }
@@ -894,6 +911,22 @@ fn abstract_setter_storage_type_accepts(
         return false;
     };
     declared_class_is_a(checker, class_map, setter_name, storage_name)
+}
+
+/// Whether `name` is a class in the flattened declaration map or an interface the program
+/// declares, so its ancestry is known without the partially built class table.
+fn declared_in_program(
+    checker: &Checker,
+    class_map: &HashMap<String, FlattenedClass>,
+    name: &str,
+) -> bool {
+    let name = name.trim_start_matches('\\');
+    let key = crate::names::php_symbol_key(name);
+    class_map
+        .keys()
+        .any(|declared| crate::names::php_symbol_key(declared.trim_start_matches('\\')) == key)
+        || checker.interfaces.contains_key(name)
+        || checker.declared_interfaces.contains(name)
 }
 
 /// Walks the complete flattened declaration map instead of the partially built class table.
