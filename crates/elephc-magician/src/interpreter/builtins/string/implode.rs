@@ -37,15 +37,32 @@ pub(in crate::interpreter) fn eval_builtin_implode(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let (separator, array) = match args {
-        [separator, array] => (
-            eval_expr(separator, context, scope, values)?,
-            eval_expr(array, context, scope, values)?,
-        ),
-        [array] => (values.string("")?, eval_expr(array, context, scope, values)?),
-        _ => return Err(EvalStatus::RuntimeFatal),
-    };
-    eval_implode_result(separator, array, context, values)
+    // The evaluated operands are this call's leases: released on every exit.
+    match args {
+        [separator, array] => {
+            with_eval_operands(&[separator, array], context, scope, values, |operands, context, _, values| {
+                eval_implode_result(operands[0], operands[1], context, values)
+            })
+        }
+        [array] => with_eval_operands(&[array], context, scope, values, |operands, context, _, values| {
+            eval_implode_without_separator(operands[0], context, values)
+        }),
+        _ => Err(EvalStatus::RuntimeFatal),
+    }
+}
+
+/// Joins an array with the empty separator the one-argument `implode($array)` form implies.
+///
+/// The separator cell is built here, so it is released here.
+pub(in crate::interpreter) fn eval_implode_without_separator(
+    array: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<RuntimeCellHandle, EvalStatus> {
+    let separator = values.string("")?;
+    let joined = eval_implode_result(separator, array, context, values);
+    values.release(separator)?;
+    joined
 }
 
 /// Joins array values in eval iteration order using PHP string conversion.
@@ -92,10 +109,7 @@ pub(in crate::interpreter) fn eval_implode_declared_values_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
         [separator, array] => eval_implode_result(*separator, *array, context, values),
-        [array] => {
-            let separator = values.string("")?;
-            eval_implode_result(separator, *array, context, values)
-        }
+        [array] => eval_implode_without_separator(*array, context, values),
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }

@@ -49,8 +49,10 @@ pub(in crate::interpreter) fn eval_builtin_serialize(
             values,
         );
     };
-    let value = eval_expr(value, context, scope, values)?;
-    eval_serialize_result(value, context, values)
+    // The evaluated operand is this call's lease: released on every exit.
+    with_eval_operands(&[value], context, scope, values, |operands, context, _, values| {
+        eval_serialize_result(operands[0], context, values)
+    })
 }
 
 /// Dispatches an evaluated-argument `serialize()` call (named args, spread, callable dispatch).
@@ -415,7 +417,10 @@ fn eval_serialize_sleep_names(
         if values.type_tag(name)? != EVAL_TAG_STRING {
             values.warning(&warning)?;
         }
-        listed.push(values.string_bytes(name)?);
+        let bytes = values.string_bytes(name);
+        // The element read is this loop's own: only its bytes are kept.
+        values.release(name)?;
+        listed.push(bytes?);
     }
     values.release(names)?;
     Ok(Some(listed))

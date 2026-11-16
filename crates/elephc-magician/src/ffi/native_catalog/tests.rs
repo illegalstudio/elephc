@@ -134,3 +134,22 @@ fn native_catalog_ffi_distinguishes_replacements_from_rejected_metadata() {
         __elephc_eval_context_free(rejected);
     }
 }
+
+/// A rejected array-constant registration keeps the catalog from being published.
+///
+/// The generated caller ignores the status, so the catalog's own failure flag is the only way a
+/// missing array-valued class constant is noticed.
+#[test]
+fn native_catalog_ffi_rejects_a_failed_class_constant_array_registration() {
+    use crate::ffi::__elephc_eval_register_native_class_constant_default_array;
+    let mut token = 0u64;
+    let record = b"0|Probe|Probe::VALUE";
+    unsafe {
+        let context = __elephc_eval_context_new_with_native_catalog(&mut token);
+        assert_eq!(__elephc_eval_register_native_class_constant_default_array(
+            context, record.as_ptr(), record.len() as u64, std::ptr::null(), 1,
+        ), 0);
+        assert_eq!(__elephc_eval_context_publish_native_catalog(context), 0);
+        __elephc_eval_context_free(context);
+    }
+}

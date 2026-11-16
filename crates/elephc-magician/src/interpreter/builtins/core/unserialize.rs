@@ -62,14 +62,14 @@ pub(in crate::interpreter) fn eval_builtin_unserialize(
             context,
             values,
         ),
-        [data] => {
-            let data = eval_expr(data, context, scope, values)?;
-            eval_unserialize_call(data, None, context, values)
-        }
+        // The evaluated operands are this call's leases: released on every exit.
+        [data] => with_eval_operands(&[data], context, scope, values, |operands, context, _, values| {
+            eval_unserialize_call(operands[0], None, context, values)
+        }),
         [data, options] => {
-            let data = eval_expr(data, context, scope, values)?;
-            let options = eval_expr(options, context, scope, values)?;
-            eval_unserialize_call(data, Some(options), context, values)
+            with_eval_operands(&[data, options], context, scope, values, |operands, context, _, values| {
+                eval_unserialize_call(operands[0], Some(operands[1]), context, values)
+            })
         }
         _ => eval_throw_argument_count_error(
             &format!("unserialize() expects at most 2 arguments, {} given", args.len()),

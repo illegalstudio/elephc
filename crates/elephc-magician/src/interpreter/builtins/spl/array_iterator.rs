@@ -39,8 +39,18 @@ pub(in crate::interpreter) fn eval_array_iterator_new(
                 )?;
                 eval_object_array_cast_value(arg.value, context, values)?
             }
-            EVAL_TAG_NULL => values.assoc_new(0)?,
-            _ => return Err(EvalStatus::RuntimeFatal),
+            // `null`, a string, an int...: php refuses them with a catchable TypeError that
+            // names the given type (`php -n` 8.5.10).
+            _ => {
+                let given = eval_given_type_spelling(arg.value, values)?;
+                return eval_throw_type_error(
+                    &format!(
+                        "ArrayIterator::__construct(): Argument #1 ($array) must be of type array, {given} given"
+                    ),
+                    context,
+                    values,
+                );
+            }
         },
     };
     let object = values.new_object("ArrayIterator")?;
@@ -157,7 +167,12 @@ pub(in crate::interpreter) fn eval_array_iterator_method_result(
                 values.retain(key)?
             };
             let value = values.retain(value)?;
-            let updated = values.array_set(storage, key, value)?;
+            let updated = values.array_set(storage, key, value);
+            // `array_set` borrows both and retains the value for the storage it keeps: the
+            // leases taken above are this arm's own to give back.
+            values.release(key)?;
+            values.release(value)?;
+            let updated = updated?;
             eval_array_iterator_store(identity, storage, updated, context, values)?;
             values.null()?
         }
@@ -223,6 +238,9 @@ fn eval_array_iterator_without_key(
         }
         let value = values.array_get(storage, key)?;
         result = values.array_set(result, key, value)?;
+        // `array_set` retained the value; this loop's own key and value reads are released.
+        values.release(key)?;
+        values.release(value)?;
     }
     Ok(result)
 }

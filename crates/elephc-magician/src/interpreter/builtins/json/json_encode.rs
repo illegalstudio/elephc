@@ -72,6 +72,8 @@ pub(crate) fn eval_json_encode_serialized_object(
         if !hands_itself_back {
             return Ok(serialized);
         }
+        // The object handed itself back: that result is only a reference to `object`.
+        values.release(serialized)?;
     }
     let len = values.object_property_len(object)?;
     let mut result = values.assoc_new(len)?;
@@ -85,6 +87,9 @@ pub(crate) fn eval_json_encode_serialized_object(
         let property = std::str::from_utf8(&key_bytes).map_err(|_| EvalStatus::RuntimeFatal)?;
         let element = values.property_get(object, property)?;
         result = values.array_set(result, key, element)?;
+        // `array_set` retained the value; the property reads of this loop are released.
+        values.release(key)?;
+        values.release(element)?;
     }
     Ok(result)
 }

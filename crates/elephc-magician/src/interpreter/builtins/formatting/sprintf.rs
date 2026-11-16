@@ -81,10 +81,16 @@ pub(in crate::interpreter) fn eval_sprintf_bytes(
                 .take_while(|byte| byte.is_ascii_digit())
                 .count();
         let named = if digits_end > index && format.get(digits_end) == Some(&b'$') {
-            let (number, _) = eval_parse_sprintf_number(format, index)?;
+            // A digit string that overflows is far past php's 2147483647 limit: the same
+            // catchable ValueError, not an uncatchable fatal.
+            let number = match eval_parse_sprintf_number(format, index) {
+                Ok((number, _)) => number,
+                Err(EvalStatus::RuntimeFatal) => None,
+                Err(status) => return Err(status),
+            };
             index = digits_end + 1;
             match number {
-                Some(number) if number > 0 => Some(number - 1),
+                Some(number) if number > 0 && number < i32::MAX as usize => Some(number - 1),
                 _ => {
                     return eval_throw_builtin_value_error(
                         "Argument number specifier must be greater than zero and less than 2147483647",

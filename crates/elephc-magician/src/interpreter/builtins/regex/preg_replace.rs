@@ -166,14 +166,16 @@ pub(in crate::interpreter) fn eval_preg_replace_full(
     let patterns = eval_preg_patterns(pattern, values)?;
     let mut replacements = Vec::with_capacity(patterns.len());
     if replacement_is_array {
-        for (_, element) in eval_preg_array_entries(replacement, values)? {
-            replacements.push(eval_preg_string_bytes(element, values)?);
+        let entries = eval_preg_array_entries(replacement, values)?;
+        for (_, element) in &entries {
+            replacements.push(eval_preg_string_bytes(*element, values)?);
         }
+        eval_preg_release_entries(entries, values)?;
     } else {
         let bytes = eval_preg_string_bytes(replacement, values)?;
         replacements.resize(patterns.len(), bytes);
     }
-    eval_preg_over_subject(subject, filter, values, |subject, values| {
+    let replaced = eval_preg_over_subject(subject, filter, values, |subject, values| {
         let mut result = subject;
         let mut count = 0i64;
         for (index, regex) in patterns.iter().enumerate() {
@@ -187,7 +189,10 @@ pub(in crate::interpreter) fn eval_preg_replace_full(
             result = next;
         }
         Ok((Some(result), count))
-    })
+    });
+    // The pattern casts built for an array `$pattern` are this call's own.
+    eval_preg_release_patterns(patterns, pattern, values)?;
+    replaced
 }
 
 /// Replaces one pattern in one subject; `None` is a pattern php rejects or a failed match.

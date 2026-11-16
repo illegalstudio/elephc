@@ -181,36 +181,37 @@ pub(super) unsafe fn register_native_class_constant_default_array_inner(
     record_len: u64,
     spec_ptr: *const u8,
     spec_len: u64,
-) -> i32 {
+) -> Result<i32, ()> {
     let Some(default) = native_callable_array_default(spec_ptr, spec_len) else {
-        return 0;
+        return Err(());
     };
     let Some(context) = ctx.as_mut() else {
-        return 0;
+        return Err(());
     };
     if context.abi_version() != ABI_VERSION {
-        return 0;
+        return Err(());
     }
     let Ok(record) = abi_name_to_string(record_ptr, record_len) else {
-        return 0;
+        return Err(());
     };
     let mut parts = record.splitn(3, '|');
     let (Some(visibility), Some(declaring_class), Some(constant_key)) =
         (parts.next(), parts.next(), parts.next())
     else {
-        return 0;
+        return Err(());
     };
     let declaring_class = declaring_class.to_string();
     let Some((class_name, constant_name)) = split_property_key(constant_key) else {
-        return 0;
+        return Err(());
     };
     let visibility = match visibility {
         "0" => crate::eval_ir::EvalVisibility::Public,
         "1" => crate::eval_ir::EvalVisibility::Protected,
         "2" => crate::eval_ir::EvalVisibility::Private,
-        _ => return 0,
+        _ => return Err(()),
     };
-    i32::from(context.define_native_class_constant_default(
+    // A repeated registration answers 0 without being a failure, like every property default.
+    Ok(i32::from(context.define_native_class_constant_default(
         class_name,
         constant_name,
         crate::context::NativeClassConstantDefault {
@@ -218,7 +219,7 @@ pub(super) unsafe fn register_native_class_constant_default_array_inner(
             visibility,
             default,
         },
-    ))
+    )))
 }
 
 /// Records a native property default in the property metadata table.

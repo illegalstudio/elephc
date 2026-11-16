@@ -83,8 +83,11 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_array_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<(RuntimeCellHandle, i64), EvalStatus> {
     if !eval_preg_is_array(pattern, values)? {
+        let given = eval_given_type_spelling(pattern, values)?;
         return eval_throw_type_error(
-            "preg_replace_callback_array(): Argument #1 ($pattern) must be of type array",
+            &format!(
+                "preg_replace_callback_array(): Argument #1 ($pattern) must be of type array, {given} given"
+            ),
             context,
             values,
         );
@@ -102,9 +105,9 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_array_result(
     }
     let mut subject = subject;
     let mut total = 0i64;
-    for (regex, callback) in entries {
-        let regex = values.cast_string(regex)?;
-        let (result, count) = eval_preg_replace_callback_full(
+    for (key, callback) in entries {
+        let regex = values.cast_string(key)?;
+        let replaced = eval_preg_replace_callback_full(
             regex,
             callback,
             subject,
@@ -114,7 +117,12 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_array_result(
             lexical_scope,
             context,
             values,
-        )?;
+        );
+        // The key read, its cast and the callback read are this iteration's own.
+        values.release(regex)?;
+        values.release(key)?;
+        values.release(callback)?;
+        let (result, count) = replaced?;
         total += count;
         if values.is_null(result)? {
             return Ok((result, total));

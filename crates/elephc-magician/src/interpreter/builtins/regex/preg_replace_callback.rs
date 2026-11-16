@@ -193,6 +193,8 @@ pub(in crate::interpreter) fn eval_preg_replace_callback_full(
             }
             Ok((Some(result), count))
         })?;
+        // The pattern casts built for an array `$pattern` are this call's own.
+        eval_preg_release_patterns(patterns, pattern, values)?;
         total = count;
         Ok(result)
     })?;

@@ -42,15 +42,15 @@ pub(in crate::interpreter) fn eval_builtin_var_export(
     if !(1..=2).contains(&args.len()) {
         return Err(EvalStatus::RuntimeFatal);
     }
-    let value = eval_expr(&args[0], context, scope, values)?;
-    let return_output = match args.get(1) {
-        Some(arg) => {
-            let flag = eval_expr(arg, context, scope, values)?;
-            values.truthy(flag)?
-        }
-        None => false,
-    };
-    eval_var_export_value_result(value, return_output, context, values)
+    // The evaluated operands are this call's leases: released on every exit.
+    let operands: Vec<&EvalExpr> = args.iter().collect();
+    with_eval_operands(&operands, context, scope, values, |operands, context, _, values| {
+        let return_output = match operands.get(1) {
+            Some(flag) => values.truthy(*flag)?,
+            None => false,
+        };
+        eval_var_export_value_result(operands[0], return_output, context, values)
+    })
 }
 
 /// Evaluates already materialized `var_export()` arguments.
@@ -82,7 +82,10 @@ fn eval_var_export_value_result(
         return values.string_bytes_value(&output);
     }
     let rendered = values.string_bytes_value(&output)?;
-    values.echo(rendered)?;
+    let echoed = values.echo(rendered);
+    // `echo` does not consume the rendered cell.
+    values.release(rendered)?;
+    echoed?;
     values.null()
 }
 

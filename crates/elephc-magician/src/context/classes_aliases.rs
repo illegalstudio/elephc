@@ -125,6 +125,9 @@ impl ElephcEvalContext {
         self.local_native_functions.clear();
         self.claimed_aot_include_classlikes.clear();
         self.include_execution_stack.clear();
+        // The next request names its own main file; the shared include state (and with it the
+        // inclusion order) is reset by the request boundary itself.
+        self.included_main_file = None;
         self.autoloading_classes.clear();
         super::runtime_state::clear_global_autoloading_classes();
         self.function_stack.clear();

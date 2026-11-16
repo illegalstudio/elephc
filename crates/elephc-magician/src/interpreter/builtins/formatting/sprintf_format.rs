@@ -324,7 +324,9 @@ pub(in crate::interpreter) fn eval_sprintf_apply_width(
         bytes.extend(std::iter::repeat_n(b' ', pad_len));
         return bytes;
     }
-    if numeric && (spec.zero_pad || spec.padding == Some(b'0')) && spec.precision.is_none() {
+    // A precision shapes the digits before this runs, so it never turns zero padding off:
+    // `%08.3f` is `0001.500` and `%05.3d` is `00007`.
+    if numeric && (spec.zero_pad || spec.padding == Some(b'0')) {
         let prefix_len = eval_sprintf_zero_pad_prefix_len(&bytes);
         let mut output = Vec::with_capacity(width);
         output.extend_from_slice(&bytes[..prefix_len]);

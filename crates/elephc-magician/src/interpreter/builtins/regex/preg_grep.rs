@@ -59,7 +59,10 @@ pub(in crate::interpreter) fn eval_preg_grep_values_result(
         None => false,
     };
     let pattern = values.cast_string(pattern)?;
-    let Some(regex) = eval_preg_regex(pattern, "preg_grep", values)? else {
+    let regex = eval_preg_regex(pattern, "preg_grep", values);
+    // The cast box is this call's own; the compiled regex no longer needs it.
+    values.release(pattern)?;
+    let Some(regex) = regex? else {
         return values.bool_value(false);
     };
     let entries = eval_preg_array_entries(array, values)?;
@@ -70,6 +73,9 @@ pub(in crate::interpreter) fn eval_preg_grep_values_result(
         if matched != invert {
             out = values.array_set(out, key, element)?;
         }
+        // `array_set` retained the kept element; this loop's own reads are released.
+        values.release(key)?;
+        values.release(element)?;
     }
     Ok(out)
 }

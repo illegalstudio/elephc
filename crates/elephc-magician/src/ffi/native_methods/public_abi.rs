@@ -1158,12 +1158,15 @@ pub unsafe extern "C" fn __elephc_eval_register_native_class_constant_default_ar
     crate::ffi::util::trace_eval_ffi_entry(
         "__elephc_eval_register_native_class_constant_default_array",
     );
-    std::panic::catch_unwind(|| unsafe {
+    let outcome = std::panic::catch_unwind(|| unsafe {
         register_native_class_constant_default_array_inner(
             ctx, record_ptr, record_len, spec_ptr, spec_len,
         )
     })
-    .unwrap_or(0)
+    .ok()
+    .and_then(Result::ok);
+    // A failed registration marks the catalog incomplete, so it is never published.
+    unsafe { crate::ffi::native_catalog::record_registration_outcome(ctx, outcome) }
 }
 
 /// Registers one generated native PHP class/member attribute in an eval context.

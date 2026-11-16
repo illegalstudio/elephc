@@ -136,6 +136,9 @@ fn eval_exec_append_lines(
         let key = values.int(next)?;
         let value = values.string_bytes_value(line)?;
         array = values.array_set(array, key, value)?;
+        // `array_set` retained the value; the key and line cells built here are released.
+        values.release(key)?;
+        values.release(value)?;
         next += 1;
     }
     Ok(array)

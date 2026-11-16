@@ -55,11 +55,11 @@ pub(in crate::interpreter) fn eval_builtin_error_log(
             values,
         );
     }
-    let mut evaluated = Vec::with_capacity(args.len());
-    for arg in args {
-        evaluated.push(eval_expr(arg, context, scope, values)?);
-    }
-    eval_error_log_result(&evaluated, context, values)
+    // The evaluated operands are this call's leases: released on every exit.
+    let operands: Vec<&EvalExpr> = args.iter().collect();
+    with_eval_operands(&operands, context, scope, values, |operands, context, _, values| {
+        eval_error_log_result(operands, context, values)
+    })
 }
 
 /// Dispatches an evaluated-argument `error_log()` call (named args, spread, callable dispatch).

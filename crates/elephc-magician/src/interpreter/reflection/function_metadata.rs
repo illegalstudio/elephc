@@ -117,8 +117,9 @@ pub(super) fn eval_reflection_function_method_target(
         }
         if let Some(function) = context.native_function(&lookup_name) {
             let parameters = eval_reflection_native_function_parameters(name, &function);
-            let is_variadic =
-                (0..function.param_count()).any(|index| function.param_variadic(index));
+            // Only a variadic the PHP source declared: the hidden `func_get_args()` collector a
+            // descriptor lists as its variadic slot is compiler-internal.
+            let is_variadic = function.source_variadic_index().is_some();
             let return_type_metadata = function
                 .return_type()
                 .and_then(eval_reflection_parameter_type_metadata);

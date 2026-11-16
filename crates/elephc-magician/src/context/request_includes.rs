@@ -25,6 +25,8 @@ impl NativeIncludeHooks {
 #[derive(Default)]
 pub(super) struct RequestIncludeState {
     included: HashSet<PathBuf>,
+    /// First-inclusion order of every source this request opened, whichever context did it.
+    order: Vec<String>,
     native: Option<NativeIncludeHooks>,
 }
 
@@ -53,7 +55,15 @@ impl RequestIncludeState {
         !cell.is_null() && unsafe { cell.read() } == COMPILER_INCLUDED
     }
 
+    /// Returns the sources opened so far, in the order they were first included.
+    pub(super) fn order(&self) -> &[String] {
+        &self.order
+    }
+
     pub(super) fn mark(&mut self, path: PathBuf) {
+        if !self.contains(&path) {
+            self.order.push(path.to_string_lossy().into_owned());
+        }
         if let Some(hooks) = self.native {
             let cell = unsafe { hooks.cell(&path) };
             if !cell.is_null() {
@@ -70,6 +80,7 @@ impl RequestIncludeState {
 
     pub(super) fn reset(&mut self) {
         self.included.clear();
+        self.order.clear();
         if let Some(hooks) = self.native { unsafe { (hooks.reset)(); } }
     }
 
@@ -229,6 +240,22 @@ mod tests {
         state.lock().unwrap().reset();
         assert!(!first.has_included_file("/included.php"));
         assert!(!second.has_included_file("/included.php"));
+    }
+
+    /// `get_included_files()` reads the request's inclusion order, so a file one context opened
+    /// is listed by every other context of the request, and a request reset empties the list.
+    #[test]
+    fn included_file_names_follow_the_request_not_the_context() {
+        let state = SharedIncludeState::default();
+        let mut first = context(&state);
+        let mut second = context(&state);
+        first.mark_included_file("/a.php");
+        second.mark_included_file("/b.php");
+        first.mark_included_file("/b.php");
+        assert_eq!(first.included_file_names(), ["/a.php", "/b.php"]);
+        assert_eq!(second.included_file_names(), ["/a.php", "/b.php"]);
+        state.lock().unwrap().reset();
+        assert!(second.included_file_names().is_empty());
     }
 
     #[test]

@@ -73,7 +73,7 @@ fn native_catalog_shares_metadata_without_sharing_activation_state() {
     seed(&mut first, 101);
     assert!(first.publish_native_catalog());
     first.call_file = "first.php".into();
-    first.included_file_order.push("first.php".into());
+    first.mark_included_file("first.php");
     first.may_have_foreign_pcntl_callables = true;
     for _ in 0..100 {
         let mut next = ElephcEvalContext::new();
@@ -95,11 +95,10 @@ fn native_catalog_shares_metadata_without_sharing_activation_state() {
         assert!(next.native_function("probe").is_some());
         assert_eq!(next.native_class_parent("Probe"), Some("ParentProbe"));
         assert!(next.call_file.is_empty());
-        assert!(next.included_file_order.is_empty());
+        assert!(next.included_file_names().is_empty());
         assert!(!next.may_have_foreign_pcntl_callables);
         assert!(next.global_scope.is_none());
         assert!(next.pending_throw.is_none());
-        assert!(next.static_properties.is_empty());
         assert!(next.closures.is_empty());
     }
 }

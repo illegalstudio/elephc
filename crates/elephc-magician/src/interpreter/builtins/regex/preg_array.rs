@@ -59,7 +59,27 @@ pub(in crate::interpreter) fn eval_preg_string_bytes(
         return Ok(b"Array".to_vec());
     }
     let string = values.cast_string(value)?;
-    values.string_bytes(string)
+    let bytes = values.string_bytes(string);
+    // The cast box is this helper's own; only its bytes outlive it.
+    values.release(string)?;
+    bytes
+}
+
+/// Releases the owner of every key/value pair read by [`eval_preg_array_entries`].
+pub(in crate::interpreter) fn eval_preg_release_entries(
+    entries: Vec<(RuntimeCellHandle, RuntimeCellHandle)>,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut outcome = Ok(());
+    for (key, value) in entries {
+        for cell in [key, value] {
+            let released = values.release(cell);
+            if outcome.is_ok() {
+                outcome = released;
+            }
+        }
+    }
+    outcome
 }
 
 /// Returns the patterns a call applies, in order: every element of an array, or the one pattern.
@@ -71,10 +91,35 @@ pub(in crate::interpreter) fn eval_preg_patterns(
         return Ok(vec![pattern]);
     }
     let mut patterns = Vec::new();
-    for (_, element) in eval_preg_array_entries(pattern, values)? {
-        patterns.push(values.cast_string(element)?);
+    let entries = eval_preg_array_entries(pattern, values)?;
+    for (_, element) in &entries {
+        // An array element is php's `Array` with its conversion warning, like a subject's.
+        let bytes = eval_preg_string_bytes(*element, values)?;
+        patterns.push(values.string_bytes_value(&bytes)?);
     }
+    eval_preg_release_entries(entries, values)?;
     Ok(patterns)
+}
+
+/// Releases the pattern cells [`eval_preg_patterns`] built: the casts of an array's elements.
+///
+/// A single pattern is answered as the caller's own cell, which stays with the caller.
+pub(in crate::interpreter) fn eval_preg_release_patterns(
+    patterns: Vec<RuntimeCellHandle>,
+    pattern: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    let mut outcome = Ok(());
+    for cell in patterns {
+        if cell == pattern {
+            continue;
+        }
+        let released = values.release(cell);
+        if outcome.is_ok() {
+            outcome = released;
+        }
+    }
+    outcome
 }
 
 /// Runs `replace_one` over one scalar subject or over every element of an array subject.
@@ -107,14 +152,14 @@ where
         let bytes = eval_preg_string_bytes(element, values)?;
         let (result, count) = replace_one(bytes, values)?;
         total += count;
-        let Some(result) = result else {
-            continue;
-        };
-        if filter && count == 0 {
-            continue;
+        if let Some(result) = result.filter(|_| !(filter && count == 0)) {
+            let result = values.string_bytes_value(&result)?;
+            out = values.array_set(out, key, result)?;
+            // `array_set` retained the replaced string; this loop's own cell is released.
+            values.release(result)?;
         }
-        let result = values.string_bytes_value(&result)?;
-        out = values.array_set(out, key, result)?;
+        values.release(key)?;
+        values.release(element)?;
     }
     Ok((out, total))
 }

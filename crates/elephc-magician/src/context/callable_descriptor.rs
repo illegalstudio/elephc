@@ -80,7 +80,8 @@ pub(crate) struct DecodedCallableCapture {
 pub(crate) unsafe fn decode_callable_descriptor(
     descriptor: *mut c_void,
 ) -> Option<DecodedCallableDescriptor> {
-    if descriptor.is_null() {
+    // The same low-address guard the capture decoders apply: a small integer is no descriptor.
+    if (descriptor as usize) < 4096 {
         return None;
     }
     let words = descriptor.cast::<u64>();
@@ -153,7 +154,7 @@ const HIDDEN_FUNC_ARGS_PARAM: &str = "__elephc_func_args#gen";
 /// frame took it for a PHP variadic, so `new ReflectionFunction($closure)` reported the extra
 /// `$__elephc_func_args#gen` parameter and `isVariadic()`. The binding still fills the collector:
 /// only the visible/hidden partition changes.
-fn mark_hidden_func_args_collector(function: &mut NativeFunction) {
+pub(crate) fn mark_hidden_func_args_collector(function: &mut NativeFunction) {
     let names = function.param_names();
     let Some(last) = names.len().checked_sub(1) else {
         return;

@@ -144,7 +144,10 @@ impl ElephcEvalContext {
         }
         #[cfg(not(test))]
         {
-            crate::context::global_eval_function_owner_context(name).is_some()
+            // The exact name only: `global_eval_function_owner_context` retries a qualified name
+            // under its bare spelling, which is right for a CALL but made
+            // `function_exists('Ns\\f')` true while only the global `f` was declared.
+            crate::context::global_eval_function_is_declared(name)
         }
         #[cfg(test)]
         {
@@ -387,14 +390,10 @@ impl ElephcEvalContext {
     /// records first inclusion, so `get_included_files()` does not reconstruct a lexical order
     /// on reads. The main script may already have been seeded without joining the once set.
     pub fn mark_included_file(&mut self, path: impl Into<std::path::PathBuf>) {
-        let path = path.into();
-        let first = !self.has_included_file(&path);
+        // The shared state records the first-inclusion order itself, so a file another context
+        // opened is listed by every context of the request.
         self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-            .mark(path.clone());
-        let key = path.to_string_lossy().into_owned();
-        if first && self.included_main_file.as_deref() != Some(key.as_str()) {
-            self.included_file_order.push(key);
-        }
+            .mark(path.into());
     }
 
     /// Seeds the first nonempty call site once, independently of earlier include entries.
@@ -406,16 +405,19 @@ impl ElephcEvalContext {
         if self.call_file.is_empty() || self.included_main_file.is_some() {
             return;
         }
-        if let Some(position) = self.included_file_order.iter().position(|name| name == &self.call_file) {
-            self.included_file_order.remove(position);
-        }
-        self.included_file_order.insert(0, self.call_file.clone());
         self.included_main_file = Some(self.call_file.clone());
     }
 
     /// Returns the stable main entry followed by files in first-inclusion order.
     pub(crate) fn included_file_names(&self) -> Vec<String> {
-        self.included_file_order.clone()
+        let state = self.include_state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let order = state.order().iter();
+        match &self.included_main_file {
+            Some(main) => std::iter::once(main.clone())
+                .chain(order.filter(|name| *name != main).cloned())
+                .collect(),
+            None => order.cloned().collect(),
+        }
     }
 
     /// Returns the current error reporting mask, replacing it when a new mask is supplied.
