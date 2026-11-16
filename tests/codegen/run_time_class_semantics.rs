@@ -112,3 +112,20 @@ cnt(new ArrayObject([7, 8]));
     );
     assert_eq!(out, "0=1\n1=2\npub=p\nv=7\nv=8\n");
 }
+
+/// Unpacking binds the integer-keyed elements to the positions in iteration order, whatever
+/// their key values.
+#[test]
+fn test_spread_binds_integer_keys_in_iteration_order() {
+    let out = compile_and_run(
+        r#"<?php
+function f($a, $b = PHP_EOL) { return "$a|$b"; }
+$args = array_filter(['', 'x', 'y']);
+echo f(...$args), "\n";
+function g($a, $b) { return "$a|$b"; }
+$m = [5 => 'p', 9 => 'q'];
+echo g(...$m), "\n";
+"#,
+    );
+    assert_eq!(out, "x|y\np|q\n");
+}

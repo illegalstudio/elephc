@@ -224,7 +224,7 @@ pub(super) fn lower_assoc_spread_only_args(
     let spread_type = ctx.builder.value_php_type(spread.value);
     let temp_name = ctx.declare_hidden_temp(spread_type.clone());
     store_value_into_temp(ctx, &temp_name, spread_type, spread, arg.span);
-    let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
+    let spread_expr = renumbered_spread_source(ctx, &temp_name, inner.span);
     let mut operands = Vec::with_capacity(sig.params.len());
     for (idx, (param_name, _)) in sig.params.iter().enumerate().take(source_params) {
         let default = sig.defaults.get(idx).and_then(|default| default.as_ref());
@@ -279,11 +279,57 @@ pub(super) fn lower_assoc_spread_only_args(
     Some(operands)
 }
 
+/// Stores the spread held in `temp_name` with its integer keys renumbered `0..n` in iteration
+/// order, string keys kept, and returns the variable holding it.
+///
+/// php binds the integer-keyed elements of an unpacked array to the positions IN ORDER and
+/// ignores their key values: `f(...[5 => 'x', 9 => 'y'])` passes `'x'` and `'y'`. The readers
+/// below address a position by key, which `array_merge([], $spread)` makes right (it renumbers
+/// integer keys and keeps string keys and their order). A value that is no array is left as it
+/// is.
+fn renumbered_spread_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    temp_name: &str,
+    span: crate::span::Span,
+) -> Expr {
+    use crate::synthetic_class::{e_array, e_call, e_var, s_array_assign, s_array_push, s_assign, s_foreach, s_if};
+    // Generated locals (named after the spread's own temp, so each call site has its own), which
+    // the statement lowering declares and types like any local.
+    let renumbered = crate::names::generated_local_name(&format!("{temp_name}_spread"));
+    let key = crate::names::generated_local_name(&format!("{temp_name}_key"));
+    let value = crate::names::generated_local_name(&format!("{temp_name}_value"));
+    // if (is_array($s)) { $r = []; foreach ($s as $k => $v) { if (is_int($k)) { $r[] = $v; }
+    // else { $r[$k] = $v; } } } else { $r = $s; }
+    let copy = s_if(
+        e_call("is_array", vec![e_var(temp_name)]),
+        vec![
+            s_assign(&renumbered, e_array(Vec::new())),
+            s_foreach(
+                e_var(temp_name),
+                Some(&key),
+                &value,
+                vec![s_if(
+                    e_call("is_int", vec![e_var(&key)]),
+                    vec![s_array_push(&renumbered, e_var(&value))],
+                    vec![],
+                    Some(vec![s_array_assign(&renumbered, e_var(&key), e_var(&value))]),
+                )],
+            ),
+        ],
+        vec![],
+        Some(vec![s_assign(&renumbered, e_var(temp_name))]),
+    );
+    crate::ir_lower::stmt::lower_stmt(ctx, &copy);
+    Expr::new(ExprKind::Variable(renumbered), span)
+}
+
 /// Builds an expression that reads one parameter from a spread whose array type has keys that
 /// may be strings: the parameter's name, else its position, else its default.
 ///
-/// PHP binds `f(...$a)` per KEY: `$a[0]` goes to the first parameter and `$a['b']` to `$b`, in
-/// the same unpack. This read the name only, so a plain `array $args` spread with a list --
+/// PHP binds `f(...$a)` per KEY KIND: the integer-keyed elements fill the positions in order and
+/// `$a['b']` goes to `$b`, in the same unpack; the spread is renumbered first
+/// (`renumbered_spread_source`), so position `i` is key `i`. Reading the name only made a plain
+/// `array $args` spread with a list --
 /// `f(...[1, 2])` held in a variable -- bound every parameter to its default.
 pub(super) fn assoc_spread_param_expr(
     spread_expr: &Expr,
