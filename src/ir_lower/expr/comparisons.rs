@@ -118,9 +118,18 @@ fn lower_compare_values(
         && matches!(op, BinOp::Lt | BinOp::Gt | BinOp::LtEq | BinOp::GtEq)
         && ordered_compare_uses_php_runtime(lhs.ir_type, rhs.ir_type)
     {
+        // php evaluates `a > b` as `b < a` and `a >= b` as `b <= a` (`ZEND_IS_SMALLER` with the
+        // operands swapped). The two only differ for an uncomparable pair, which `<=>` answers
+        // with 1 in both orders: two arrays with different keys, or a NaN. `[a=>1] > [b=>1]` is
+        // false in php, and `<=>(a, b) > 0` said true.
+        let (first, second, predicate) = match op {
+            BinOp::Gt => (rhs.value, lhs.value, cmp_predicate(&BinOp::Lt)),
+            BinOp::GtEq => (rhs.value, lhs.value, cmp_predicate(&BinOp::LtEq)),
+            _ => (lhs.value, rhs.value, cmp_predicate(op)),
+        };
         let comparison = ctx.emit_value(
             Op::Spaceship,
-            vec![lhs.value, rhs.value],
+            vec![first, second],
             None,
             PhpType::Int,
             Op::Spaceship.default_effects(),
@@ -130,7 +139,7 @@ fn lower_compare_values(
         let result = ctx.emit_value(
             Op::ICmp,
             vec![comparison.value, zero.value],
-            Some(Immediate::CmpPredicate(cmp_predicate(op))),
+            Some(Immediate::CmpPredicate(predicate)),
             PhpType::Bool,
             Op::ICmp.default_effects(),
             Some(expr.span),

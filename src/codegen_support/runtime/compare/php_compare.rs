@@ -31,8 +31,11 @@
 //!   beyond 2^53 can compare equal there where PHP compares them exactly. Two STRINGS
 //!   no longer share that deviation: `__rt_str_smart_cmp` classifies each side and
 //!   compares two integer strings as `zend_long`.
-//! - Known deviations: arrays, objects, resources and callables only rank above the
-//!   scalar tags and compare equal to each other.
+//! - Two arrays or two objects order through the program's `__elephc_internal_order_compare`
+//!   (php's `zend_compare` rules, built as AST in `ir_lower::function::object_comparisons`); an
+//!   uncomparable pair reports 1 with the unordered flag, so every relational operator is false.
+//!   Known deviation: resources and callables only rank above the scalar tags and compare equal
+//!   to each other.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -239,7 +242,33 @@ fn emit_php_compare_aarch64(emitter: &mut Emitter) {
     // -- containers, objects, resources and callables --
     emitter.label("__rt_pcmp_nonscalar");
     emitter.instruction("orr x11, x9, x10");                                    // is exactly one operand a comparable scalar?
-    emitter.instruction("cbz x11, __rt_pcmp_zero");                             // two non-scalars are reported equal (documented limitation)
+    emitter.instruction("cbnz x11, __rt_pcmp_scalar_rank");                     // a scalar against a non-scalar uses the coarse ranking
+    // -- two non-scalars: arrays and objects order through the program's comparator --
+    emitter.instruction("ldp x0, x1, [sp, #0]");                                // borrow the saved left tag and payload word
+    emitter.instruction("ldr x2, [sp, #16]");                                   // borrow the saved left high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the left operand for the ordering comparator
+    emitter.instruction("str x0, [sp, #56]");                                   // park the left box across the right boxing
+    emitter.instruction("ldr x0, [sp, #24]");                                   // borrow the saved right tag
+    emitter.instruction("ldp x1, x2, [sp, #32]");                               // borrow the saved right payload words
+    emitter.instruction("bl __rt_mixed_from_value");                            // box the right operand for the ordering comparator
+    emitter.instruction("str x0, [sp, #64]");                                   // park the right box across the comparator call
+    emitter.instruction("ldr x0, [sp, #56]");                                   // pass the left boxed operand
+    emitter.instruction("ldr x1, [sp, #64]");                                   // pass the right boxed operand
+    abi::emit_call_label(emitter, &crate::names::function_symbol("__elephc_internal_order_compare")); // x0 = ordering, 2 uncomparable, 3 unhandled
+    emitter.instruction("str x0, [sp, #72]");                                   // preserve the ordering across box release
+    emitter.instruction("ldr x0, [sp, #56]");                                   // reload the left box for release
+    emitter.instruction("bl __rt_decref_mixed");                                // release the temporary left box
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the right box for release
+    emitter.instruction("bl __rt_decref_mixed");                                // release the temporary right box
+    emitter.instruction("ldr x0, [sp, #72]");                                   // reload the ordering result
+    emitter.instruction("cmp x0, #3");                                          // three means no array/object pair (resources, callables)
+    emitter.instruction("b.eq __rt_pcmp_zero");                                 // such pairs keep comparing equal
+    emitter.instruction("cmp x0, #2");                                          // two means php found the pair uncomparable
+    emitter.instruction("b.ne __rt_pcmp_done");                                 // return the comparator's three-way ordering
+    emitter.instruction("mov x9, #1");                                          // an uncomparable pair answers like an unordered NaN
+    emitter.instruction("str x9, [sp, #104]");                                  // every relational operator is false for it
+    emitter.instruction("b __rt_pcmp_pos");                                     // and `<=>` reports 1, as php's ZEND_UNCOMPARABLE
+    emitter.label("__rt_pcmp_scalar_rank");
     emitter.instruction("cbz x9, __rt_pcmp_pos");                               // a non-scalar left operand ranks above a scalar
     emitter.instruction("b __rt_pcmp_neg");                                     // a non-scalar right operand ranks above a scalar
 
@@ -590,7 +619,34 @@ fn emit_php_compare_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pcmp_nonscalar");
     emitter.instruction("mov rax, r10");                                        // copy the left predicate for the combined tests
     emitter.instruction("or rax, r11");                                         // is exactly one operand a comparable scalar?
-    emitter.instruction("jz __rt_pcmp_zero");                                   // two non-scalars are reported equal (documented limitation)
+    emitter.instruction("jnz __rt_pcmp_scalar_rank");                           // a scalar against a non-scalar uses the coarse ranking
+    // -- two non-scalars: arrays and objects order through the program's comparator --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // borrow the saved left tag
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // borrow the saved left payload word
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // borrow the saved left high word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the left operand for the ordering comparator
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // park the left box across the right boxing
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // borrow the saved right tag
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // borrow the saved right payload word
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // borrow the saved right high word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the right operand for the ordering comparator
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // park the right box across the comparator call
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 64]");                       // pass the left boxed operand
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 72]");                       // pass the right boxed operand
+    abi::emit_call_label(emitter, &crate::names::function_symbol("__elephc_internal_order_compare")); // rax = ordering, 2 uncomparable, 3 unhandled
+    emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // preserve the ordering across box release
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // reload the left box for release
+    emitter.instruction("call __rt_decref_mixed");                              // release the temporary left box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 72]");                       // reload the right box for release
+    emitter.instruction("call __rt_decref_mixed");                              // release the temporary right box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // reload the ordering result
+    emitter.instruction("cmp rax, 3");                                          // three means no array/object pair (resources, callables)
+    emitter.instruction("je __rt_pcmp_zero");                                   // such pairs keep comparing equal
+    emitter.instruction("cmp rax, 2");                                          // two means php found the pair uncomparable
+    emitter.instruction("jne __rt_pcmp_done");                                  // return the comparator's three-way ordering
+    emitter.instruction("mov QWORD PTR [rbp - 112], 1");                        // an uncomparable pair answers like an unordered NaN
+    emitter.instruction("jmp __rt_pcmp_pos");                                   // `<=>` reports 1, as php's ZEND_UNCOMPARABLE
+    emitter.label("__rt_pcmp_scalar_rank");
     emitter.instruction("test r10, r10");                                       // is the left operand the non-scalar one?
     emitter.instruction("jz __rt_pcmp_pos");                                    // a non-scalar left operand ranks above a scalar
     emitter.instruction("jmp __rt_pcmp_neg");                                   // a non-scalar right operand ranks above a scalar

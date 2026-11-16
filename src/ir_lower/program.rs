@@ -220,6 +220,7 @@ fn lower_on_compiler_stack(
     lower_dynamic_constructor_thunks(&mut module, check_result, &constants, &fiber_return_sigs);
     function::lower_optional_interface_adapters(&mut module);
     function::lower_object_comparison_dispatch(&mut module);
+    function::lower_order_comparison_dispatch(&mut module);
     include_lowered_runtime_features(&mut module);
     super::reflection::lower_referenced_builtin_methods(
         &mut module,

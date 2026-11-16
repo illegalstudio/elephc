@@ -2531,3 +2531,47 @@ foreach ($pairs as $pair) {
          Unsupported operand types: ArrayObject + array\n"
     );
 }
+
+/// `<`, `>` and `<=>` on two arrays or two objects follow php's `zend_compare`: arrays by element
+/// count, then key by key (a key the other array lacks makes the pair uncomparable, every
+/// relational operator false and `<=>` 1); objects of one class by their properties, objects of
+/// two classes uncomparable; a `DateTimeInterface` pair by its instant. The shared runtime
+/// comparator reported every such pair as equal, so `usort` with `<=>` left rows unsorted.
+#[test]
+fn test_ordering_operators_on_arrays_and_objects_follow_php() {
+    let out = compile_and_run(
+        r#"<?php
+class V { public function __construct(public int $a, public string $b) {} }
+class W { public int $a = 1; }
+function show($x) { echo var_export($x, true), "\n"; }
+show([1, 2] < [1, 3]);
+show([3] <=> [1, 2]);
+show([1, 2] <=> [1, 2]);
+show(['a' => 1] < ['b' => 1]);
+show(['a' => 1] > ['b' => 1]);
+show(['a' => 1] <=> ['b' => 1]);
+show([[1, 2], 3] < [[1, 3], 0]);
+$rows = [[3, 'c'], [1, 'a'], [2, 'b']];
+usort($rows, fn (array $x, array $y) => $x <=> $y);
+echo json_encode($rows), "\n";
+show(new V(1, 'x') < new V(2, 'a'));
+show(new V(1, 'x') <=> new V(1, 'x'));
+show(new V(1, 'y') > new V(1, 'x'));
+show(new V(1, 'x') < new W());
+show(new V(1, 'x') > new W());
+$m = $argc > 5 ? 1 : [5, 6];
+$n = $argc > 5 ? 2 : [5, 7];
+show($m < $n);
+show($m <=> $n);
+$d1 = new DateTimeImmutable('2020-01-01 00:00:00', new DateTimeZone('UTC'));
+$d2 = new DateTimeImmutable('2020-01-01 01:00:00', new DateTimeZone('Europe/Paris'));
+$e1 = $argc > 5 ? null : $d1;
+$e2 = $argc > 5 ? null : $d2;
+show($e1 <=> $e2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "true\n-1\n0\nfalse\nfalse\n1\ntrue\n[[1,\"a\"],[2,\"b\"],[3,\"c\"]]\ntrue\n0\ntrue\nfalse\nfalse\ntrue\n-1\n0\n"
+    );
+}
