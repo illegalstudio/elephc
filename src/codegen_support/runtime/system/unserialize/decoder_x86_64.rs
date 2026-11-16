@@ -614,6 +614,13 @@ pub(super) fn emit_parser(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r11]");                            // its class id
     emitter.instruction("cmp rax, -2");                                         // is it the __PHP_Incomplete_Class sentinel?
     emitter.instruction("jne __rt_unser_at_obj_box");                           // anything else is not ours to replace
+    // A back-reference (`r:N;`) parsed inside the body cloned the registry box and so retained
+    // THIS stand-in; freeing it below would leave those clones dangling. Such an object keeps
+    // its stand-in: only the result box may hold it.
+    emitter.instruction("mov eax, DWORD PTR [r11 - 12]");                       // the stand-in's refcount word
+    emitter.instruction("and eax, 0x7fffffff");                                     // the count proper, without the in-progress guard bits
+    emitter.instruction("cmp eax, 1");                                          // only the result box holds it?
+    emitter.instruction("jne __rt_unser_at_obj_box");                           // a parsed back-reference shares it: keep the stand-in
     // The policy is re-asked rather than remembered: `[rbp - 80]` is cleared both for a BLOCKED
     // class and for one with no layout, and a blocked class must stay incomplete.
     emitter.instruction("mov rax, QWORD PTR [r11 + 8]");                        // persisted original class-name pointer
