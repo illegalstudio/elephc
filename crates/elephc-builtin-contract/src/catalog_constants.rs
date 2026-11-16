@@ -773,7 +773,7 @@ pub(crate) static CONSTANTS: &[ConstantContract] = &[
     constant!("STREAM_OPTION_WRITE_BUFFER", Standard, ConstValue::Int(3)),
     constant!("STREAM_PEEK", Standard, ConstValue::Int(2)),
     constant!("STREAM_PF_INET", Standard, ConstValue::Int(2)),
-    constant!("STREAM_PF_INET6", Standard, ConstValue::Int(30)),
+    constant!("STREAM_PF_INET6", Standard, ConstValue::TargetDependent(ConstType::Int)),
     constant!("STREAM_PF_UNIX", Standard, ConstValue::Int(1)),
     constant!("STREAM_REPORT_ERRORS", Standard, ConstValue::Int(8)),
     constant!("STREAM_SERVER_BIND", Standard, ConstValue::Int(4)),

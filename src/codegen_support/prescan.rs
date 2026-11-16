@@ -130,6 +130,8 @@ pub(crate) fn collect_constants(
         // php-src exposes `MAXPATHLEN` from the target's own headers: `PATH_MAX` is 1024 on
         // Darwin and 4096 on Linux.
         ("PHP_MAXPATHLEN", per_platform(1024, 4096)),
+        // `STREAM_PF_INET6` is the libc's `AF_INET6`: 30 on Darwin, 10 on glibc/musl.
+        ("STREAM_PF_INET6", per_platform(30, 10)),
     ];
     for (name, value) in computed {
         debug_assert!(
@@ -263,6 +265,10 @@ mod tests {
         assert_eq!(int_constant(&linux, "LC_MESSAGES"), 5);
         assert_eq!(int_constant(&linux, "LC_ALL"), 6);
         assert_eq!(int_constant(&linux, "PHP_MAXPATHLEN"), 4096);
+
+        // `STREAM_PF_INET6` is the libc's `AF_INET6`: 30 on Darwin, 10 on Linux.
+        assert_eq!(int_constant(&mac, "STREAM_PF_INET6"), 30);
+        assert_eq!(int_constant(&linux, "STREAM_PF_INET6"), 10);
 
         // The runtime's own `setlocale()` call sites read the same category from `Platform`.
         assert_eq!(i64::from(Platform::MacOS.lc_ctype()), int_constant(&mac, "LC_CTYPE"));

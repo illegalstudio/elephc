@@ -263,6 +263,8 @@ fn eval_target_dependent_constant(name: &str) -> Option<EvalPredefinedConstant> 
         // The platform's `MAXPATHLEN`, as the compiled prescan answers it (1024 on macOS, 4096 on
         // Linux). It had no arm, so Laravel's `FileViewFinder::findInPaths()` fataled on it.
         "PHP_MAXPATHLEN" => EvalPredefinedConstant::Int(if is_macos { 1024 } else { 4096 }),
+        // The libc's `AF_INET6`, as the compiled prescan answers it (30 on Darwin, 10 on Linux).
+        "STREAM_PF_INET6" => EvalPredefinedConstant::Int(if is_macos { 30 } else { 10 }),
         // Platform `fnmatch(3)` flag values; the fnmatch/glob builtins interpret the same bits.
         "FNM_NOESCAPE" => EvalPredefinedConstant::Int(EVAL_FNM_NOESCAPE),
         "FNM_PATHNAME" => EvalPredefinedConstant::Int(EVAL_FNM_PATHNAME),
