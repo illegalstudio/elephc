@@ -328,16 +328,18 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             }
             ctx.emitter.label(&already_hash);
             abi::emit_pop_reg(ctx.emitter, "x0");
+            // The result is an owner on every arm: a source this conversion may not consume keeps
+            // its reference, so the reused hash takes one of its own whatever the entry type.
+            if !release_source {
+                abi::emit_incref_if_refcounted(
+                    ctx.emitter,
+                    &PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(PhpType::Mixed),
+                    },
+                );
+            }
             if result_value_ty == PhpType::Mixed {
-                if !release_source {
-                    abi::emit_incref_if_refcounted(
-                        ctx.emitter,
-                        &PhpType::AssocArray {
-                            key: Box::new(PhpType::Mixed),
-                            value: Box::new(PhpType::Mixed),
-                        },
-                    );
-                }
                 abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
             }
             ctx.emitter.instruction(&format!("b {}", done));                    // finish after reusing an existing hash payload
@@ -410,16 +412,18 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             }
             ctx.emitter.label(&already_hash);
             abi::emit_pop_reg(ctx.emitter, "rax");
+            // The result is an owner on every arm: a source this conversion may not consume keeps
+            // its reference, so the reused hash takes one of its own whatever the entry type.
+            if !release_source {
+                abi::emit_incref_if_refcounted(
+                    ctx.emitter,
+                    &PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(PhpType::Mixed),
+                    },
+                );
+            }
             if result_value_ty == PhpType::Mixed {
-                if !release_source {
-                    abi::emit_incref_if_refcounted(
-                        ctx.emitter,
-                        &PhpType::AssocArray {
-                            key: Box::new(PhpType::Mixed),
-                            value: Box::new(PhpType::Mixed),
-                        },
-                    );
-                }
                 ctx.emitter.instruction("mov rdi, rax");                        // pass the existing hash to the Mixed-entry conversion helper
                 abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
             }
