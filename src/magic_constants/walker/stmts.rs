@@ -105,7 +105,15 @@ pub(super) fn walk_type_params<P: Pass>(
         .map(|param| crate::parser::ast::TypeParam {
             bound: param.bound.map(|ty| pass.transform_value_type(ty, span)),
             default: param.default.map(|ty| pass.transform_type(ty, span)),
-            native_hint: param.native_hint.map(|ty| pass.transform_value_type(ty, span)),
+            native_hint: param.native_hint.map(|hint| crate::parser::ast::NativeHint {
+                ty: pass.transform_value_type(hint.ty, span),
+                params: hint
+                    .params
+                    .into_iter()
+                    .map(|(name, ty)| (name, pass.transform_value_type(ty, span)))
+                    .collect(),
+                return_type: hint.return_type.map(|ty| pass.transform_value_type(ty, span)),
+            }),
             ..param
         })
         .collect()

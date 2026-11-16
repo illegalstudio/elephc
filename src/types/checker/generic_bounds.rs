@@ -67,16 +67,17 @@ impl Checker {
     ) -> bool {
         param.from_docblock
             && (crate::generics::is_mixed_type(argument)
-                || param.native_hint.as_ref() == Some(argument))
+                || param.native_hint.as_ref().is_some_and(|hint| &hint.ty == argument))
     }
 
     /// Keeps the native hint a PHPDoc parameter took over binding on its type argument.
     ///
-    /// `@param T $m` on a native `Model $m` replaces a hint php-src enforces at every call. A
-    /// type argument the hint accepts refines it, which is the annotation's whole purpose. One
-    /// it does not accept (or `mixed`, which says nothing) is replaced by the hint itself: the
-    /// instantiation then has the signature php-src runs, and the ordinary argument check
-    /// reports the call exactly as it would without the annotation.
+    /// `@param T $m` on a native `Model $m` replaces a hint php-src enforces at every call, and
+    /// `@return T` on a native `: Model` one it enforces at every return. A type argument the
+    /// hint accepts refines it, which is the annotation's whole purpose. One it does not accept
+    /// (or `mixed`, which says nothing) is replaced by the hint itself: the instantiation then
+    /// has the signature php-src runs, and the ordinary argument and return checks report the
+    /// program exactly as they would without the annotation.
     pub(crate) fn settle_native_hints(
         &self,
         type_params: &[crate::parser::ast::TypeParam],
@@ -84,7 +85,7 @@ impl Checker {
         span: crate::span::Span,
     ) -> Result<(), CompileError> {
         for param in type_params {
-            let Some(hint) = param.native_hint.as_ref() else {
+            let Some(hint) = param.native_hint.as_ref().map(|hint| &hint.ty) else {
                 continue;
             };
             let Some((_, argument)) = bindings.iter_mut().find(|(name, _)| name == &param.name)

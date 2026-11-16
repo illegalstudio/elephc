@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::parser::ast::{ClassMethod, ClassProperty, TypeExpr, TypeParam};
+use crate::parser::ast::{ClassMethod, ClassProperty, NativeHint, TypeExpr, TypeParam};
 
 use super::DocBlock;
 
@@ -59,11 +59,12 @@ pub(super) fn apply(
             in_scope.extend(block.type_params.iter().map(|param| param.name.clone()));
             let anchored = anchor_native_hints(
                 &block.type_params,
-                annotated_positions(
+                &annotated_positions(
                     &method.params,
                     method.variadic.as_deref(),
                     method.variadic_type.as_ref(),
-                    &block.params,
+                    method.return_type.as_ref(),
+                    block,
                 ),
             );
             method.type_params = anchored.clone();
@@ -78,7 +79,7 @@ pub(super) fn apply(
             let Some(annotated) = block.params.get(name) else {
                 continue;
             };
-            if apply_param_type(declared, annotated, in_scope, own) && is_constructor {
+            if apply_signature_type(declared, annotated, in_scope, own) && is_constructor {
                 promoted.extend(declared.clone().map(|adopted| (name.clone(), adopted)));
             }
         }
@@ -87,10 +88,10 @@ pub(super) fn apply(
             .as_ref()
             .and_then(|name| block.params.get(name))
         {
-            apply_param_type(&mut method.variadic_type, annotated, in_scope, own);
+            apply_signature_type(&mut method.variadic_type, annotated, in_scope, own);
         }
         if let Some(annotated) = &block.return_type {
-            apply_type(&mut method.return_type, annotated, in_scope, own);
+            apply_signature_type(&mut method.return_type, annotated, in_scope, own);
         }
         // A template whose `@param` lost to a native hint (`@param T $v` on `mixed $v`) but
         // whose `@return T` was adopted is kept: no argument binds it any more, and a call that
@@ -148,12 +149,13 @@ fn apply_type(
     true
 }
 
-/// Applies a PARAMETER annotation, under `apply_type`'s rule plus the one a parameter needs.
+/// Applies a parameter or return annotation: `apply_type`'s rule, plus the two a signature needs.
 ///
-/// A parameter annotated directly with one of the declaration's own templates (`@param T $m`)
-/// hands its native hint over to the type argument, so it does only where the template recorded
-/// that hint (`anchor_native_hints`) and the checker keeps enforcing it.
-fn apply_param_type(
+/// A position annotated directly with one of the declaration's own templates (`@param T $m`,
+/// `@return T`) hands its native hint over to the type argument, so it does only where the
+/// template recorded that hint (`anchor_native_hints`) and the checker keeps enforcing it. And
+/// whether the position accepts `null` is the native hint's to say, never the annotation's.
+fn apply_signature_type(
     declared: &mut Option<TypeExpr>,
     annotated: &TypeExpr,
     in_scope: &[String],
@@ -162,94 +164,175 @@ fn apply_param_type(
     if !annotated.mentions_type_param(in_scope) {
         return false;
     }
-    let Some(adopted) = adopted_param_type(declared.as_ref(), annotated, own) else {
+    let Some(adopted) = adopted_signature_type(declared.as_ref(), annotated, own) else {
         return false;
     };
     *declared = Some(adopted);
     true
 }
 
-/// Returns the type a parameter takes from its annotation, or `None` when its native hint wins.
+/// Returns the type a parameter or return position takes from its annotation, or `None` when
+/// its native hint wins.
 ///
-/// `own` are the declaration's templates after `anchor_native_hints`. A parameter annotated
-/// directly with one of them is adopted when it is untyped, or when its native hint is the one
-/// the template recorded. `?Model $m` documented `@param T $m` becomes `?T`: php-src accepts
-/// `null` there whatever the annotation says. Every other annotation follows `refines_native`.
-pub(super) fn adopted_param_type(
+/// `own` are the declaration's templates after `anchor_native_hints`. An untyped position takes
+/// the annotation as written. A hinted one annotated directly with a template is adopted when
+/// the hint is the one the template recorded, and any other annotation follows
+/// `refines_native`. Either way the adopted type keeps the native hint's nullability:
+/// `?Model $m` documented `@param T $m` becomes `?T`, and `Model $m` documented `@param ?T $m`
+/// becomes `T`, because php-src decides from the hint alone whether `null` is accepted.
+pub(super) fn adopted_signature_type(
     native: Option<&TypeExpr>,
     annotated: &TypeExpr,
     own: &[TypeParam],
 ) -> Option<TypeExpr> {
-    let Some(param) = direct_template(annotated, own) else {
-        return refines_native(native, annotated, own).then(|| annotated.clone());
-    };
     let Some(native) = native else {
         return Some(annotated.clone());
     };
-    let hint = param.native_hint.as_ref()?;
-    if !same_hint(hint, strip_nullable(native)) {
-        return None;
+    match direct_template(annotated, own) {
+        Some(param) => {
+            let hint = param.native_hint.as_ref()?;
+            if !hint_covers(&hint.ty, strip_nullable(native)) {
+                return None;
+            }
+        }
+        None if !refines_native(Some(native), annotated, own) => return None,
+        None => {}
     }
-    let widens_to_null = matches!(native, TypeExpr::Nullable(_))
-        && !matches!(annotated, TypeExpr::Nullable(_) | TypeExpr::Union(_));
-    Some(if widens_to_null {
-        TypeExpr::Nullable(Box::new(annotated.clone()))
-    } else {
-        annotated.clone()
-    })
+    Some(with_nullability_of(native, annotated))
 }
 
-/// Pairs every annotated parameter (the variadic included) with its native hint.
+/// Returns `annotated` accepting `null` exactly when the native hint `native` does.
+fn with_nullability_of(native: &TypeExpr, annotated: &TypeExpr) -> TypeExpr {
+    let bare = match annotated {
+        TypeExpr::Nullable(inner) => (**inner).clone(),
+        TypeExpr::Union(members) if members.iter().any(is_null) => {
+            let mut rest: Vec<TypeExpr> =
+                members.iter().filter(|member| !is_null(member)).cloned().collect();
+            if rest.len() == 1 {
+                rest.remove(0)
+            } else {
+                TypeExpr::Union(rest)
+            }
+        }
+        other => other.clone(),
+    };
+    match (native, bare) {
+        (TypeExpr::Nullable(_), TypeExpr::Union(mut members)) => {
+            members.push(TypeExpr::Named(crate::names::Name::unqualified("null")));
+            TypeExpr::Union(members)
+        }
+        (TypeExpr::Nullable(_), bare) => TypeExpr::Nullable(Box::new(bare)),
+        (_, bare) => bare,
+    }
+}
+
+/// One annotated position of a signature: its name (`None` for the return type), its native
+/// hint and its annotation.
+pub(super) type Position<'a> = (Option<&'a str>, Option<&'a TypeExpr>, &'a TypeExpr);
+
+/// Lists every annotated parameter (the variadic included) and the annotated return type.
 pub(super) fn annotated_positions<'a>(
     params: &'a [(String, Option<TypeExpr>, Option<crate::parser::ast::Expr>, bool)],
-    variadic: Option<&str>,
+    variadic: Option<&'a str>,
     variadic_type: Option<&'a TypeExpr>,
-    annotations: &'a HashMap<String, TypeExpr>,
-) -> Vec<(Option<&'a TypeExpr>, &'a TypeExpr)> {
-    let mut positions: Vec<(Option<&TypeExpr>, &TypeExpr)> = params
+    return_type: Option<&'a TypeExpr>,
+    block: &'a DocBlock,
+) -> Vec<Position<'a>> {
+    let mut positions: Vec<Position<'a>> = params
         .iter()
         .filter_map(|(name, declared, _, _)| {
-            annotations.get(name).map(|annotated| (declared.as_ref(), annotated))
+            block
+                .params
+                .get(name)
+                .map(|annotated| (Some(name.as_str()), declared.as_ref(), annotated))
         })
         .collect();
-    if let Some(annotated) = variadic.and_then(|name| annotations.get(name)) {
-        positions.push((variadic_type, annotated));
+    if let Some((name, annotated)) =
+        variadic.and_then(|name| block.params.get(name).map(|annotated| (name, annotated)))
+    {
+        positions.push((Some(name), variadic_type, annotated));
+    }
+    if let Some(annotated) = &block.return_type {
+        positions.push((None, return_type, annotated));
     }
     positions
 }
 
-/// Records on each template the native hint its directly annotated parameters replace.
+/// Records on each template the native hint the positions annotated directly with it replace.
 ///
-/// `@param T $m` on a native `Model $m` trades a hint php-src enforces for a type argument, so the
-/// hint is kept on the template (`TypeParam::native_hint`) and stays binding. That is sound only
-/// when the template speaks for ONE hint: every parameter annotated directly with it must carry
-/// the same replaceable native hint. A template that also annotates an untyped parameter, or
-/// parameters with different hints, records nothing, and its hinted parameters keep their hints.
-pub(super) fn anchor_native_hints(
-    declared: &[TypeParam],
-    positions: Vec<(Option<&TypeExpr>, &TypeExpr)>,
-) -> Vec<TypeParam> {
+/// `@param T $m` on a native `Model $m` (or `@return T` on `: Model`) trades a hint php-src
+/// enforces for a type argument, so the hint is kept on the template
+/// (`TypeParam::native_hint`) and stays binding. That is sound only when the template speaks
+/// for ONE hint: every natively hinted position annotated directly with it must carry the same
+/// replaceable hint, or an `object` beside the class the others name (the class is the
+/// narrower of the two, so it speaks for both). Positions whose hints differ otherwise record
+/// nothing and keep their hints. An untyped position constrains nothing and simply takes the
+/// template.
+pub(super) fn anchor_native_hints(declared: &[TypeParam], positions: &[Position]) -> Vec<TypeParam> {
     declared
         .iter()
         .map(|param| {
-            let mut natives = positions
+            let hinted: Vec<(Option<&str>, &TypeExpr)> = positions
                 .iter()
-                .filter(|(_, annotated)| {
+                .filter(|(_, _, annotated)| {
                     direct_template(annotated, std::slice::from_ref(param)).is_some()
                 })
-                .map(|(native, _)| native.map(strip_nullable));
-            let native_hint = match natives.next() {
-                Some(Some(first))
-                    if replaceable_by(first, param)
-                        && natives.all(|other| other.is_some_and(|other| same_hint(other, first))) =>
-                {
-                    Some(first.clone())
-                }
-                _ => None,
-            };
+                .filter_map(|(name, native, _)| native.map(|native| (*name, native)))
+                .collect();
+            let candidate = hinted
+                .iter()
+                .map(|(_, native)| strip_nullable(native))
+                .find(|native| !is_object_hint(native))
+                .or_else(|| hinted.first().map(|(_, native)| strip_nullable(native)));
+            let native_hint = candidate
+                .filter(|candidate| {
+                    replaceable_by(candidate, param)
+                        && hinted
+                            .iter()
+                            .all(|(_, native)| hint_covers(candidate, strip_nullable(native)))
+                })
+                .map(|candidate| NativeHint {
+                    ty: candidate.clone(),
+                    params: hinted
+                        .iter()
+                        .filter_map(|(name, native)| {
+                            name.map(|name| (name.to_string(), (*native).clone()))
+                        })
+                        .collect(),
+                    return_type: hinted
+                        .iter()
+                        .find(|(name, _)| name.is_none())
+                        .map(|(_, native)| (*native).clone()),
+                });
             TypeParam { native_hint, ..param.clone() }
         })
         .collect()
+}
+
+/// Returns whether the recorded hint `hint` speaks for a position natively hinted `native`:
+/// the same type, or `object` under a class hint.
+fn hint_covers(hint: &TypeExpr, native: &TypeExpr) -> bool {
+    same_hint(hint, native)
+        || (is_object_hint(native)
+            && matches!(hint, TypeExpr::Named(name) if !is_loose_keyword(name.as_str())))
+}
+
+/// Returns whether `ty` is the native `object` hint.
+fn is_object_hint(ty: &TypeExpr) -> bool {
+    matches!(ty, TypeExpr::Named(name)
+        if name.as_str().trim_start_matches('\\').eq_ignore_ascii_case("object"))
+}
+
+/// Returns whether `written` is a hint php-src enforces loosely enough for an annotation to
+/// refine. `mixed` is not one: it is already the widest type, so the PHPDoc cannot sharpen it
+/// without a later erasure (a dispatched method) having to guess whether to give the `mixed`
+/// back or leave the position untyped, and only `mixed` keeps an implementation of
+/// `JsonSerializable::jsonSerialize(): mixed` compatible.
+fn is_loose_keyword(written: &str) -> bool {
+    let written = written.trim_start_matches('\\');
+    ["callable", "object", "closure", "array", "iterable"]
+        .iter()
+        .any(|loose| written.eq_ignore_ascii_case(loose))
 }
 
 /// Returns the template an annotation names directly: `T`, `?T` or `T|null`.
@@ -291,7 +374,7 @@ fn same_hint(a: &TypeExpr, b: &TypeExpr) -> bool {
     }
 }
 
-/// Returns whether a parameter annotated directly with `param` may give up the hint `native`:
+/// Returns whether a position annotated directly with `param` may give up the hint `native`:
 /// a hint php-src treats loosely, or the class that bounds the template (`T of Model` on
 /// `Model`), the two cases `refines_native` admits.
 fn replaceable_by(native: &TypeExpr, param: &TypeParam) -> bool {
@@ -304,11 +387,11 @@ fn replaceable_by(native: &TypeExpr, param: &TypeParam) -> bool {
 
 /// Returns whether `annotated` may replace the native hint `native`.
 ///
-/// `method_params` are the method's own PHPDoc templates: `@return T` with
-/// `@template T of Model` refines a native `: Model`, because the bound says every `T` is one.
-/// A PARAMETER annotated that way goes through `adopted_param_type` instead, which keeps the
-/// hint binding.
-pub(super) fn refines_native(
+/// `method_params` are the method's own PHPDoc templates: `T` with `@template T of Model`
+/// refines a native `Model`, because the bound says every `T` is one. That is the test
+/// `anchor_native_hints` applies before recording the hint; an annotation that names a template
+/// directly is then adopted through `adopted_signature_type`, which keeps the hint binding.
+fn refines_native(
     native: Option<&TypeExpr>,
     annotated: &TypeExpr,
     method_params: &[TypeParam],
@@ -331,14 +414,7 @@ pub(super) fn refines_native(
             refines_native(Some(inner), annotated, method_params)
         }
         TypeExpr::Named(name) => {
-            let written = name.as_str().trim_start_matches('\\');
-            // `mixed` is not weak: it is already the widest type, so the PHPDoc cannot sharpen it
-            // without a later erasure (a dispatched method) having to guess whether to give the
-            // `mixed` back or leave the position untyped, and only `mixed` keeps an
-            // implementation of `JsonSerializable::jsonSerialize(): mixed` compatible.
-            let weak = ["callable", "object", "closure", "array", "iterable"]
-                .iter()
-                .any(|weak| written.eq_ignore_ascii_case(weak));
+            let weak = is_loose_keyword(name.as_str());
             weak || match annotated {
                 TypeExpr::GenericClass { name: generic, .. } => same_class(generic, name),
                 // A method template bounded by the native class (`T of Model` on `Model`).

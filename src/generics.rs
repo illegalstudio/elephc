@@ -360,7 +360,7 @@ pub fn infer_bindings_with_args(
         type_params
             .iter()
             .find(|param| param.from_docblock && param.name == name)
-            .map(|param| param.native_hint.clone().unwrap_or_else(mixed_type))
+            .map(|param| param.native_hint.as_ref().map_or_else(mixed_type, |hint| hint.ty.clone()))
     };
     // Each retry erases one more PHPDoc parameter, so the loop ends within `type_params.len()`.
     let mut erased: Vec<(String, TypeExpr)> = Vec::new();
@@ -1055,7 +1055,11 @@ mod tests {
     fn a_docblock_parameter_falls_back_to_the_native_hint_it_took_over() {
         let model = TypeExpr::Named(Name::unqualified("Model"));
         let hinted = TypeParam {
-            native_hint: Some(model.clone()),
+            native_hint: Some(crate::parser::ast::NativeHint {
+                ty: model.clone(),
+                params: vec![("m".to_string(), model.clone())],
+                return_type: None,
+            }),
             ..doc_tp("T")
         };
         let object = |name: &str| PhpType::Object(name.to_string());

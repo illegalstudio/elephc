@@ -1176,8 +1176,9 @@ For example, `new Pair<int>(7, 'seven')` with a constructor-local `U` creates
 
 ### Annotations never reject valid PHP
 
-php-src ignores a doc comment, so a file it runs must also compile, whatever its annotations
-claim. Native syntax keeps every check strict; a PHPDoc declaration gives way instead:
+php-src ignores a doc comment, so a call it runs must not be refused because of what an
+annotation claims. Native syntax keeps every check strict; a PHPDoc declaration gives way
+instead:
 
 - **A bound a call breaks is a warning.** `@template E of Entity` with `accept(new Other())`
   compiles at `E = Other`, exactly as php-src executes the call, and reports the violation as a
@@ -1193,13 +1194,15 @@ claim. Native syntax keeps every check strict; a PHPDoc declaration gives way in
   (`array`, `iterable`, `callable`, `object`, or none) gives way to the annotation, as does a
   class hint to its own generic form (`Box $b` documented `@param Box<T> $b`).
 - **A hint a type parameter takes over stays binding.** `@param T $m` replaces a native
-  `object $m`, or a native `Model $m` when the template is `T of Model`, and php-src still
-  enforces that hint at every call. A type argument the hint accepts refines it:
-  `keep(new User())` is `T = User`. Any other call is compiled at the hint itself, so it is
-  checked exactly as it is without the annotation: `keep(new Other())` is the ordinary
-  argument error, and `pair(new User(), new Admin())` is `T = Model`. A type parameter that
-  also annotates an untyped parameter, or parameters with different hints, takes over none of
-  them: those parameters keep their native hints.
+  `object $m`, or a native `Model $m` when the template is `T of Model`, and `@return T`
+  replaces a native return type the same way. php-src still enforces those hints, so the type
+  argument has to be one the hint accepts: `keep(new User())` is `T = User`. Any other call is
+  compiled at the hint itself and checked exactly as it is without the annotation:
+  `keep(new Other())` is the ordinary argument error, and `pair(new User(), new Admin())` is
+  `T = Model`. The hint also decides whether the position accepts `null`, whatever a `?T`
+  says. Hinted positions that disagree (`object $a` and `callable $b`, both `@param T`) keep
+  their native hints; `object` beside the class that bounds the template is not a
+  disagreement, the class speaks for both.
 - **A template no position adopts is not a template.** When every annotation naming `T` lost
   to a native hint, the function or method keeps its own name and its native signature.
 
@@ -1220,8 +1223,11 @@ class Repo
 echo (new Repo())->accept(new Other());   // 1, with a warning about the bound
 ```
 
-One divergence remains: a class or constructor template still names its instantiations, so
-`get_class(new Value(7))` answers `Value<int>` (see [A class](#a-class)).
+Two limits remain. A class or constructor template still names its instantiations, so
+`get_class(new Value(7))` answers `Value<int>` (see [A class](#a-class)). And the checks that
+give way are the ones made at a call: the body of a template is still compiled once per type
+argument, so a body that contradicts its own annotations (`@return T` on a function that
+returns a fresh `Model` whatever `T` is) is an error in the instantiation that exposes it.
 
 ## Limitations
 

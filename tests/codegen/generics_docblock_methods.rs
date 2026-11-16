@@ -862,53 +862,167 @@ function same(object $o): object { return $o; }
     }
 }
 
-/// A template that also annotates an untyped parameter speaks for no single native hint, so it
-/// takes over none: the hinted parameter keeps its hint, and the untyped one accepts what
-/// php-src accepts.
+/// A template that takes over a native hint carries it to the untyped parameters it annotates
+/// too: the type argument is one type, and the hint php-src enforces has to accept it.
 #[test]
 fn test_docblock_template_spanning_typed_and_untyped_parameters_keeps_the_hint() {
     let declarations = r#"<?php
 class Model {}
-class User extends Model {}
+class User extends Model { public function hi() { return "hi"; } }
 class Other {}
 /**
  * @template T of Model
  * @param T $a
  * @param T $b
+ * @return T
  */
-function both(Model $a, $b): string { return gettype($b); }
+function both(Model $a, $b) { return $b; }
 "#;
-    let valid = format!("{declarations}echo both(new User(), \"x\"), \"|\", both(new User(), new User());\n");
-    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "string|object");
+    let valid = format!("{declarations}echo both(new User(), new User())->hi();\n");
+    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "hi");
     let error = compile_cli_file_with_flags_expect_failure(
-        &format!("{declarations}both(new Other(), 1);\n"),
+        &format!("{declarations}both(new Other(), new Other());\n"),
         &[],
     );
     assert!(error.contains("expects Model, got Other"), "{error}");
 }
 
-/// A dispatched method is erased back to the signature php-src enforces: the native hint a
-/// template took over returns, so an unrelated argument is still rejected.
+/// The native hint alone decides whether a position accepts `null`: `@param ?T $m` (or
+/// `T|null`) on a native `Model $m` does not make it nullable, on a free function or on a
+/// method erased for dispatch, while `?Model $m` keeps accepting `null` under `@param T $m`.
+#[test]
+fn test_docblock_template_keeps_the_native_nullability() {
+    let declarations = r#"<?php
+class Model {}
+class User extends Model {}
+interface Sink { public function accept(Model $m): int; }
+class Repo implements Sink {
+    /**
+     * @template T of Model
+     * @param ?T $m
+     */
+    public function accept(Model $m): int { return 1; }
+}
+/**
+ * @template T of Model
+ * @param ?T $m
+ */
+function strict(Model $m): int { return 1; }
+/**
+ * @template T of Model
+ * @param T|null $m
+ */
+function union(Model $m): int { return 1; }
+/**
+ * @template T of Model
+ * @param T $m
+ */
+function loose(?Model $m): int { return $m === null ? 0 : 1; }
+"#;
+    let valid = format!(
+        "{declarations}echo strict(new User()), union(new User()), loose(null), loose(new User()), (new Repo())->accept(new User());\n"
+    );
+    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "11011");
+    for call in ["strict(null);", "union(null);", "(new Repo())->accept(null);"] {
+        let error =
+            compile_cli_file_with_flags_expect_failure(&format!("{declarations}{call}\n"), &[]);
+        assert!(error.contains("expects Model"), "{call}: {error}");
+    }
+}
+
+/// A native return type `@return T` documents stays enforced: the type argument has to be one
+/// the return type accepts, so a value php-src refuses to return is still rejected, and a
+/// template only the `@return` mentions is read as the native return type.
+#[test]
+fn test_docblock_template_keeps_the_native_return_type() {
+    let declarations = r#"<?php
+class Model { public function name() { return "model"; } }
+class User extends Model { public function hi() { return "hi"; } }
+class Other {}
+/**
+ * @template T of Model
+ * @param T $m
+ * @return T
+ */
+function id($m): Model { return $m; }
+/**
+ * @template T of Model
+ * @return T
+ */
+function make(): Model { return new User(); }
+/**
+ * @template T
+ * @param T $m
+ * @return T
+ */
+function thing($m): object { return $m; }
+/**
+ * @template T of Model
+ * @param T $m
+ * @return T
+ */
+function wide(object $m): Model { return $m; }
+"#;
+    let valid = format!(
+        "{declarations}echo id(new User())->hi(), \"|\", make()->name(), \"|\", thing(new User())->hi(), \"|\", wide(new User())->hi();\n"
+    );
+    for flags in [&[][..], &["--strict-php"][..]] {
+        assert_eq!(
+            compile_cli_file_and_run_with_flags(&valid, flags),
+            "hi|model|hi|hi",
+            "{flags:?}"
+        );
+    }
+    for (call, expected) in [
+        ("id(new Other());", "expects Model, got Other"),
+        ("thing(1);", "expects object, got int"),
+        ("wide(new Other());", "expects Model, got Other"),
+    ] {
+        let error =
+            compile_cli_file_with_flags_expect_failure(&format!("{declarations}{call}\n"), &[]);
+        assert!(error.contains(expected), "{call}: {error}");
+    }
+    let wrong_body = r#"<?php
+class Model {}
+class Other {}
+/**
+ * @template T of Model
+ * @return T
+ */
+function make(): Model { return new Other(); }
+make();
+"#;
+    let error = compile_cli_file_with_flags_expect_failure(wrong_body, &[]);
+    assert!(error.contains("return type expects Model, got Other"), "{error}");
+}
+
+/// A dispatched method is erased back to the signature php-src enforces: the native hints a
+/// template took over return, on the parameter and on the return type, so the method still
+/// implements its interface and an unrelated argument is still rejected.
 #[test]
 fn test_docblock_erased_method_restores_the_native_hint() {
     let declarations = r#"<?php
 class Model {}
 class User extends Model {}
 class Other {}
-interface Sink { public function accept(Model $m): int; }
+interface Sink { public function accept(Model $m, $tag): Model; }
 class Repo implements Sink {
     /**
      * @template T of Model
      * @param T $m
+     * @param T $tag
+     * @return T
      */
-    public function accept(Model $m): int { return 1; }
+    public function accept(Model $m, $tag): Model { return $m; }
 }
-function through(Sink $sink): int { return $sink->accept(new User()); }
+function through(Sink $sink): string { return get_class($sink->accept(new User(), "untyped")); }
 "#;
-    let valid = format!("{declarations}echo (new Repo())->accept(new User()), through(new Repo());\n");
-    assert_eq!(compile_and_run(&valid), "11");
+    let valid = format!(
+        "{declarations}echo get_class((new Repo())->accept(new User(), 7)), \"|\", through(new Repo());\n"
+    );
+    assert_eq!(compile_and_run(&valid), "User|User");
     let error = compile_cli_file_with_flags_expect_failure(
-        &format!("{declarations}(new Repo())->accept(new Other());\n"),
+        &format!("{declarations}(new Repo())->accept(new Other(), 1);\n"),
         &[],
     );
     assert!(error.contains("expects Model, got Other"), "{error}");

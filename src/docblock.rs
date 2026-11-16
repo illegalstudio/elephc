@@ -124,11 +124,12 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             // not adopted, and then none of its annotations may leak into the declaration.
             let own = members::anchor_native_hints(
                 &block.type_params,
-                members::annotated_positions(
+                &members::annotated_positions(
                     params,
                     variadic.as_deref(),
                     variadic_type.as_ref(),
-                    &block.params,
+                    return_type.as_ref(),
+                    block,
                 ),
             );
             let mut adopted_params = params.clone();
@@ -141,16 +142,14 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
                     // PHPStan-annotated code has, and the annotation is the more precise of the
                     // two. A native scalar or class hint is a contract php-src enforces (and
                     // coerces to), so it wins: `@param T $m` documenting `int $m` stays `int`.
-                    adopt_param(declared, annotated, &own);
+                    adopt_annotation(declared, annotated, &own);
                 }
             }
             if let Some(annotated) = variadic.as_ref().and_then(|name| block.params.get(name)) {
-                adopt_param(&mut adopted_variadic, annotated, &own);
+                adopt_annotation(&mut adopted_variadic, annotated, &own);
             }
             if let Some(annotated) = &block.return_type {
-                if members::refines_native(adopted_return.as_ref(), annotated, &own) {
-                    adopted_return = Some(annotated.clone());
-                }
+                adopt_annotation(&mut adopted_return, annotated, &own);
             }
             // A template no position adopted changes no declared type: the function is not a
             // template, keeps its own name, and compiles exactly as php-src declares it.
@@ -217,14 +216,14 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
     stmt
 }
 
-/// Replaces a function parameter's declared type with its annotation when the annotation
-/// refines it.
+/// Replaces a function parameter's or return's declared type with its annotation when the
+/// annotation refines it.
 ///
-/// The rule is the one a method template follows (`members::adopted_param_type`): a missing or
-/// loosely enforced native hint gives way to the annotation, a native scalar or class hint does
-/// not, and a hint a template takes over stays binding through `TypeParam::native_hint`.
-fn adopt_param(declared: &mut Option<TypeExpr>, annotated: &TypeExpr, own: &[TypeParam]) {
-    if let Some(adopted) = members::adopted_param_type(declared.as_ref(), annotated, own) {
+/// The rule is the one a method template follows (`members::adopted_signature_type`): a missing
+/// or loosely enforced native hint gives way to the annotation, a native scalar or class hint
+/// does not, and a hint a template takes over stays binding through `TypeParam::native_hint`.
+fn adopt_annotation(declared: &mut Option<TypeExpr>, annotated: &TypeExpr, own: &[TypeParam]) {
+    if let Some(adopted) = members::adopted_signature_type(declared.as_ref(), annotated, own) {
         *declared = Some(adopted);
     }
 }
@@ -1072,68 +1071,71 @@ mod tests {
         assert_eq!(method.return_type, None);
     }
 
-    /// A template takes over a native hint only when every parameter annotated directly with it
-    /// carries that hint, and then records it; a nullable hint keeps accepting `null`.
+    /// A template takes over a native hint when every hinted position annotated directly with it
+    /// carries that hint, and then records it with the hints as written; the hint alone decides
+    /// whether a position accepts `null`.
     #[test]
     fn a_template_records_the_native_hint_it_takes_over() {
         let program = program_of(concat!(
-            "<?php
-class C {
-",
-            "/**
- * @template T of Model
- * @param T $a
- * @param T $b
- */
-",
-            "public function same(Model $a, ?Model $b) { return 1; }
-",
-            "/**
- * @template T of Model
- * @param T $a
- * @param T $b
- */
-",
-            "public function split(Model $a, $b) { return 1; }
-",
-            "/**
- * @template T
- * @param T $a
- * @param T $b
- */
-",
-            "public function differ(object $a, callable $b) { return 1; }
-}
-",
-            "/**
- * @template T
- * @param T $o
- */
-",
-            "function weak(object $o) { return 1; }
-",
+            "<?php\nclass C {\n",
+            "/**\n * @template T of Model\n * @param T $a\n * @param ?T $b\n * @param ?T $c\n",
+            " * @return T\n */\n",
+            "public function same(Model $a, ?Model $b, Model $c, $d): ?Model { return $a; }\n",
+            "/**\n * @template T of Model\n * @param T $a\n * @param T $b\n * @return T\n */\n",
+            "public function untyped($a, $b): Model { return $a; }\n",
+            "/**\n * @template T\n * @param T $a\n * @param T $b\n */\n",
+            "public function differ(object $a, callable $b) { return 1; }\n",
+            "/**\n * @template T of Model\n * @param T $a\n * @return T\n */\n",
+            "public function wide(object $a): Model { return $a; }\n}\n",
+            "/**\n * @template T\n * @param T $o\n */\n",
+            "function weak(object $o) { return 1; }\n",
         ));
         let named = |name: &str| TypeExpr::Named(Name::unqualified(name));
+        let nullable = |ty: TypeExpr| TypeExpr::Nullable(Box::new(ty));
+        let hint = |ty: &str, params: &[(&str, TypeExpr)], return_type: Option<TypeExpr>| {
+            Some(crate::parser::ast::NativeHint {
+                ty: named(ty),
+                params: params.iter().map(|(name, ty)| (name.to_string(), ty.clone())).collect(),
+                return_type,
+            })
+        };
         let StmtKind::ClassDecl { methods, .. } = &program[0].kind else {
             panic!("expected a class declaration");
         };
         let same = &methods[0];
-        assert_eq!(same.type_params[0].native_hint, Some(named("Model")));
+        assert_eq!(
+            same.type_params[0].native_hint,
+            hint(
+                "Model",
+                &[("a", named("Model")), ("b", nullable(named("Model"))), ("c", named("Model"))],
+                Some(nullable(named("Model")))
+            )
+        );
         assert_eq!(same.params[0].1, Some(named("T")));
-        assert_eq!(same.params[1].1, Some(TypeExpr::Nullable(Box::new(named("T")))));
-        // One untyped position: the template speaks for no single hint, so `Model $a` stays.
-        let split = &methods[1];
-        assert_eq!(split.type_params[0].native_hint, None);
-        assert_eq!(split.params[0].1, Some(named("Model")));
-        assert_eq!(split.params[1].1, Some(named("T")));
+        assert_eq!(same.params[1].1, Some(nullable(named("T"))));
+        // `@param ?T $c` on a native `Model $c`: php-src rejects `null` there.
+        assert_eq!(same.params[2].1, Some(named("T")));
+        assert_eq!(same.return_type, Some(nullable(named("T"))));
+        // The return type is the only hinted position: the untyped parameters just take `T`.
+        let untyped = &methods[1];
+        assert_eq!(untyped.type_params[0].native_hint, hint("Model", &[], Some(named("Model"))));
+        assert_eq!(untyped.params[0].1, Some(named("T")));
+        assert_eq!(untyped.return_type, Some(named("T")));
         // Two different hints: both stay, no position adopts `T`, and the template is dropped.
         let differ = &methods[2];
         assert!(differ.type_params.is_empty());
         assert_eq!(differ.params[0].1, Some(named("object")));
+        // `object` beside the class that bounds the template: the class speaks for both.
+        let wide = &methods[3];
+        assert_eq!(
+            wide.type_params[0].native_hint,
+            hint("Model", &[("a", named("object"))], Some(named("Model")))
+        );
+        assert_eq!(wide.params[0].1, Some(named("T")));
         let StmtKind::FunctionDecl { type_params, params, .. } = &program[1].kind else {
             panic!("expected a function declaration");
         };
-        assert_eq!(type_params[0].native_hint, Some(named("object")));
+        assert_eq!(type_params[0].native_hint, hint("object", &[("o", named("object"))], None));
         assert_eq!(params[0].1, Some(named("T")));
     }
 

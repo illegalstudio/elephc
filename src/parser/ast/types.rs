@@ -46,15 +46,31 @@ pub struct TypeParam {
     /// same AST.
     pub from_docblock: bool,
     /// The native hint a PHPDoc parameter took over: `Model` for `@param T $m` documenting a
-    /// native `Model $m`.
+    /// native `Model $m`, or `@return T` documenting a native `: Model`.
     ///
     /// php-src enforces that hint whatever the annotation says, so it stays binding. A type
     /// argument it does not accept is replaced by the hint itself (the call is then checked
     /// against the signature php-src runs), and so is one inference cannot settle. Set by
-    /// `crate::docblock` only when every parameter annotated directly with this type parameter
-    /// carries the same native hint. Always `None` for native syntax, and excluded from equality
-    /// like [`TypeParam::from_docblock`].
-    pub native_hint: Option<TypeExpr>,
+    /// `crate::docblock` only when every natively hinted position annotated directly with this
+    /// type parameter carries the same hint. Always `None` for native syntax, and excluded from
+    /// equality like [`TypeParam::from_docblock`].
+    pub native_hint: Option<NativeHint>,
+}
+
+/// The native hint a PHPDoc type parameter took over, and the hints it stood for.
+///
+/// The per-position hints are what lets `crate::generics::erasure` give a dispatched method
+/// back the signature php-src declares: the type parameter may also annotate untyped
+/// parameters, which must stay untyped, and an `object` parameter beside a `Model` return.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeHint {
+    /// The hint every type argument must satisfy, without a leading `?`.
+    pub ty: TypeExpr,
+    /// The parameters (the variadic included) that carried a native hint, each with the hint
+    /// as written.
+    pub params: Vec<(String, TypeExpr)>,
+    /// The native return type as written, when the type parameter took it over too.
+    pub return_type: Option<TypeExpr>,
 }
 
 impl PartialEq for TypeParam {
