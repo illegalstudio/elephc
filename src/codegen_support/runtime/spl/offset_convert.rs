@@ -298,8 +298,7 @@ fn emit_throw_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #32]");                                   // recover the first concatenation buffer
     emitter.instruction("bl __rt_heap_free");                                   // release heap-backed storage; concat scratch is ignored
     // -- create the canonical Throwable object with owned message storage --
-    emitter.instruction("mov x0, #56");                                         // canonical Throwable payload size
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the Throwable object payload
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE); // allocate and clear the declared Throwable layout
     emitter.instruction("mov x9, #6");                                          // heap kind 6 identifies a throwable object
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the allocation as a runtime object
     emitter.instruction("bl __rt_object_handle_acquire");                       // bind the Throwable to its PHP object handle
@@ -310,7 +309,6 @@ fn emit_throw_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x11, [x0, #16]");                                  // message byte length
     emitter.instruction("str xzr, [x0, #24]");                                  // code = 0
     emit_throwable_creation_line_unknown(emitter, "x0");
-    emitter.instruction("str xzr, [x0, #40]");                                  // previous = null
     // -- publish the error and unwind after retiring the construction frame --
     abi::emit_store_reg_to_symbol(emitter, "x0", "_exc_value", 0);              // publish the Throwable for the unwinder
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore the caller frame and return address
@@ -534,8 +532,7 @@ fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // recover the first concatenation buffer
     abi::emit_call_label(emitter, "__rt_heap_free");                            // release heap-backed storage; concat scratch is ignored
     // -- create the canonical Throwable object with owned message storage --
-    emitter.instruction("mov rax, 56");                                         // canonical Throwable payload size
-    abi::emit_call_label(emitter, "__rt_heap_alloc");                           // allocate the Throwable object payload (rax = payload)
+    crate::codegen_support::throwable_layout::emit_allocate(emitter, crate::codegen_support::throwable_layout::PAYLOAD_SIZE); // allocate and clear the declared Throwable layout (rax = payload)
     emitter.instruction(&format!("mov r10, 0x{:x}", x86_64_heap_kind_word(6))); // magic + kind 6 identifies a throwable object
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform heap header
     abi::emit_call_label(emitter, "__rt_object_handle_acquire");                // bind the Throwable to its PHP object handle
@@ -547,7 +544,6 @@ fn emit_throw_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 16], r11");                       // message byte length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // code = 0
     emit_throwable_creation_line_unknown(emitter, "rax");
-    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous = null
     // -- publish the error and unwind after retiring the construction frame --
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // publish the Throwable for the unwinder
     emitter.instruction("mov rsp, rbp");                                        // release the local frame

@@ -910,3 +910,38 @@ try { $f[$r] = 1; } catch (TypeError $e) { echo "set: ", $e->getMessage(), "\n";
         "set: Cannot access offset of type resource on SplFixedArray\n"
     );
 }
+
+/// The TypeError `SplFixedArray` raises for an illegal offset is built with the declared Throwable
+/// layout, so file, trace and previous are initialized and the heap neighbour stays untouched
+/// (the old 56-byte payload let the line store land in the next block). Heap-debug clean.
+#[test]
+fn test_spl_fixed_array_offset_type_error_uses_declared_throwable_layout() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$f = new SplFixedArray(2);
+$keep = [];
+for ($i = 0; $i < 200; $i++) {
+    $keep[] = str_repeat("n", 8 + ($i % 5));
+    try { $f[[]] = 1; } catch (TypeError $e) {
+        if ($e->getPrevious() !== null) { echo "previous\n"; }
+        if ($e->getFile() === "") { echo "nofile\n"; }
+        if ($e->getTraceAsString() !== "#0 {main}") { echo "trace\n"; }
+        if ($e->getLine() < 0) { echo "line\n"; }
+    }
+}
+$ok = 0;
+foreach ($keep as $i => $s) { if ($s === str_repeat("n", 8 + ($i % 5))) { $ok++; } }
+echo $e->getMessage(), "|", $ok, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "Cannot access offset of type array on SplFixedArray|200\n"
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
