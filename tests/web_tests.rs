@@ -4950,3 +4950,30 @@ fn web_cookies_follow_php_rules() {
         "response: {resp:?}"
     );
 }
+
+/// Verifies the last diagnostic and the run-time `class_alias()` table do not cross a worker's
+/// request boundary. php frees both at request shutdown: request 2 starts with
+/// `error_get_last() === null` and may register the same alias again.
+#[test]
+fn web_last_error_and_class_alias_reset_between_requests() {
+    let dir = make_test_dir("web_last_error_alias_reset");
+    let src = r#"<?php
+class Original {}
+$alias = 'Al' . ($_GET['n'] ?? 'x');
+if (($_GET['first'] ?? '') === '1') {
+    trigger_error('first request notice', E_USER_NOTICE);
+}
+echo error_get_last() === null ? 'clean' : 'stale', '|';
+echo var_export(class_alias('Original', $alias), true), '|';
+echo var_export(class_exists($alias), true);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let r1 = http_request(&addr, "GET", "/?first=1", &[], "");
+    let r2 = http_request(&addr, "GET", "/", &[], "");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(r2.ends_with("clean|true|true"), "r2 saw request 1 state: {:?} (r1 {:?})", r2, r1);
+}

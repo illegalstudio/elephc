@@ -1587,3 +1587,63 @@ foreach ([16, 16 | 128, 48, 48 | 128, 32 | 128, 128] as $flags) {
          128 &#1;\n128 &#xD;\n128 &#x9F;\n128 &#xFFFE;\n128 &#xD800;\n128 &amp;#x110000;\n"
     );
 }
+
+/// `strtr()` over a pairs array whose values are boxed Mixed cells must unwrap each cell before
+/// coercing it (the x86_64 helper unboxed the tag instead of the cell and faulted).
+#[test]
+fn test_strtr_pairs_array_param_with_mixed_values() {
+    let out = compile_and_run(
+        r#"<?php
+function f(array $pairs) { return strtr("a %l b", $pairs); }
+echo f(['%l' => 12]), "|", f(['%l' => "x", 'a' => 1.5]);
+"#,
+    );
+    assert_eq!(out, "a 12 b|1.5 x b");
+}
+
+/// A reading `$mixed[$i]` past the end of a boxed string reports `Uninitialized string offset`
+/// and answers an empty string, as php does.
+#[test]
+fn test_mixed_string_offset_read_past_end_warns() {
+    let out = compile_and_run_capture(
+        r#"<?php
+function f(mixed $m) { return $m[10]; }
+var_dump(f("abc"));
+"#,
+    );
+    assert_eq!(out.stdout, "string(0) \"\"\n");
+    assert!(out.stderr.contains("Uninitialized string offset 10"), "{}", out.stderr);
+}
+
+/// Object projections must keep a string property's length, pair `(array)` keys with the values
+/// of the same property row, and list an enum's `name` first.
+#[test]
+fn test_object_projections_keep_string_lengths_and_row_pairing() {
+    let out = compile_and_run(
+        r#"<?php
+enum Suit: string { case Hearts = 'H'; }
+class P { private $a = 1; public $b = 2; function __debugInfo() { return ['x' => $this->b]; } }
+class A { public ?string $s = "abc"; public mixed $m = "xy"; }
+echo json_encode((array) Suit::Hearts), "\n";
+$arr = (array) new P;
+echo count($arr), ":", json_encode(array_values($arr)), "\n";
+echo json_encode(get_object_vars(new A)), "\n";
+"#,
+    );
+    assert_eq!(out, "{\"name\":\"Hearts\",\"value\":\"H\"}\n2:[1,2]\n{\"s\":\"abc\",\"m\":\"xy\"}\n");
+}
+
+/// Applying many search elements to a large subject must release every heap-backed intermediate.
+#[test]
+fn test_str_replace_array_search_releases_intermediates() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$page = str_repeat("a&b<c>d\"e'f", 2000);
+for ($i = 0; $i < 3; $i++) {
+    $r = str_replace(['&','<','>','"',"'"], ['&amp;','&lt;','&gt;','&quot;','&#039;'], $page);
+}
+echo md5($r);
+"#,
+    );
+    assert_eq!(out.stdout, "a09fdf07ab970955bb02798f8e5a10c1");
+}
