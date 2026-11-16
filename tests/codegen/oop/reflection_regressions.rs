@@ -1043,3 +1043,27 @@ echo implode(',', array_column([['p', 1], ['q', 2]], 0)), "\n";
         "A,B,C|A|C\na=1;b=x%20y\nbool(true)\nhello\na,b|p,q\n"
     );
 }
+
+/// Every instantiation method of a `ReflectionEnum` throws php's `Error: Cannot instantiate enum`.
+/// The enum copy of `ReflectionClass` inherited `newInstanceWithoutConstructor()`, whose body
+/// calls itself on `$this` and is lowered to an allocation only for a `ReflectionClass` receiver:
+/// on a `ReflectionEnum` it recursed until the stack overflowed.
+#[test]
+fn test_reflection_enum_instantiation_throws_instead_of_recursing() {
+    let out = compile_and_run(
+        r#"<?php
+enum E { case A; }
+$r = new ReflectionEnum(E::class);
+try { $r->newInstanceWithoutConstructor(); echo "no throw\n"; }
+catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { $r->newLazyGhost(function ($o) {}); echo "no throw\n"; }
+catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { $r->newInstance(); echo "no throw\n"; }
+catch (Error $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Error: Cannot instantiate enum E\nError: Cannot instantiate enum E\nError: Cannot instantiate enum E\n"
+    );
+}

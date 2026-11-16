@@ -764,6 +764,38 @@ pub(super) fn builtin_reflection_object_class() -> FlattenedClass {
 pub(super) fn builtin_reflection_enum_class() -> FlattenedClass {
     let mut class = builtin_reflection_class();
     class.name = "ReflectionEnum".to_string();
+    // An enum is never instantiated: php answers every instantiation method of a ReflectionEnum
+    // with `Error: Cannot instantiate enum E`. The inherited bodies call
+    // `$this->newInstanceWithoutConstructor()`, which only a `ReflectionClass`/`ReflectionObject`
+    // receiver lowers to an allocation; on a `ReflectionEnum` it called itself until the stack
+    // overflowed.
+    for method in &mut class.methods {
+        if matches!(
+            method.name.as_str(),
+            "newInstance" | "newInstanceArgs" | "newInstanceWithoutConstructor" | "newLazyGhost" | "newLazyProxy"
+        ) {
+            method.body = vec![Stmt::new(
+                StmtKind::Throw(Expr::new(
+                    ExprKind::NewObject {
+                        class_name: Name::unqualified("Error"),
+                        args: vec![Expr::new(
+                            ExprKind::BinaryOp {
+                                left: Box::new(Expr::new(
+                                    ExprKind::StringLiteral("Cannot instantiate enum ".to_string()),
+                                    dummy(),
+                                )),
+                                op: BinOp::Concat,
+                                right: Box::new(reflection_this_property("name", dummy())),
+                            },
+                            dummy(),
+                        )],
+                    },
+                    dummy(),
+                )),
+                dummy(),
+            )];
+        }
+    }
     class.properties.extend([
         builtin_property(
             "__case_names",
