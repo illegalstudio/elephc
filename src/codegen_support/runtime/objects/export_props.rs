@@ -408,6 +408,7 @@ fn emit_prop_value(emitter: &mut Emitter, p: &str, table: &str, row_bytes: u64, 
     emitter.instruction("bl __rt_mixed_from_value");                            // x0 = freshly owned Mixed cell
     emitter.instruction(&format!("b {p}_done"));                          // return the boxed property value
 
+    if dynamic { // the cast reader has no dynamic rows, so it never branches here
     emitter.label(&format!("{p}_dyn"));
     emitter.instruction("sub x1, x1, x12");                                     // index past the declared rows = dynamic ordinal
     emitter.instruction("bl __rt_obj_dyn_prop_at");                             // x0=found x3=lo x4=hi x5=tag
@@ -417,6 +418,7 @@ fn emit_prop_value(emitter: &mut Emitter, p: &str, table: &str, row_bytes: u64, 
     emitter.instruction("mov x2, x4");                                          // dynamic value high word → boxing path
     emitter.instruction(&format!("b {p}_tagged"));                        // box a fresh copy exactly like a declared slot
 
+    }
     emitter.label(&format!("{p}_null"));
     emitter.instruction("mov x0, #8");                                          // runtime tag 8 = canonical PHP null
     abi::emit_load_int_immediate(emitter, "x1", NULL_SENTINEL);                 // null payload uses the shared in-band sentinel
@@ -482,6 +484,7 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter, p: &str, table: &str,
     emitter.instruction("call __rt_mixed_from_value");                          // rax = freshly owned Mixed cell
     emitter.instruction(&format!("jmp {p}_done_x86"));                    // return the boxed property value
 
+    if dynamic { // the cast reader has no dynamic rows, so it never branches here
     emitter.label(&format!("{p}_dyn_x86"));
     emitter.instruction("sub rsi, r10");                                        // index past the declared rows = dynamic ordinal
     emitter.instruction("call __rt_obj_dyn_prop_at");                           // rax=found rcx=lo r8=hi r9=tag
@@ -492,6 +495,7 @@ fn emit_obj_prop_value_linux_x86_64(emitter: &mut Emitter, p: &str, table: &str,
     emitter.instruction("mov rsi, r8");                                         // dynamic value high word → boxing path
     emitter.instruction(&format!("jmp {p}_tagged_x86"));                  // box a fresh copy exactly like a declared slot
 
+    }
     emitter.label(&format!("{p}_null_x86"));
     emitter.instruction("mov rax, 8");                                          // runtime tag 8 = canonical PHP null
     abi::emit_load_int_immediate(emitter, "rdi", NULL_SENTINEL);                // null payload uses the shared in-band sentinel

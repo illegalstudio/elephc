@@ -316,8 +316,23 @@ fn try_lower_source_at_for_target(
     module.declared_class_source_files.extend(included_sources.class_likes);
     module.declared_function_source_files = autoload_sources.functions;
     module.declared_function_source_files.extend(included_sources.functions);
+    drop_internal_comparators(&mut module);
     Ok(module)
 }
+
+/// Names of the program-wide comparators every lowered module carries for `__rt_php_compare`.
+const INTERNAL_COMPARATORS: [&str; 2] =
+    ["__elephc_internal_object_compare", "__elephc_internal_order_compare"];
+
+/// Removes the always-emitted internal comparators from a lowered test module.
+///
+/// They are runtime support (the shared `__rt_php_compare` calls them), not part of the program a
+/// test inspects: their bodies hold calls, loops and synthetic spans that would otherwise count as
+/// the fixture's own and make the EIR text depend on how many modules the process lowered before.
+pub(super) fn drop_internal_comparators(module: &mut crate::ir::Module) {
+    module.functions.retain(|function| !INTERNAL_COMPARATORS.contains(&function.name.as_str()));
+}
+
 
 #[test]
 fn lowering_source_catalog_preserves_original_entry() {

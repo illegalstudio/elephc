@@ -990,7 +990,7 @@ return function_exists("get_loaded_extensions");"#,
 
     let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
 
-    let count = if curl_present { 18 } else { 17 };
+    let count = if curl_present { 19 } else { 18 };
     let curl_label = if curl_present { "curl-present" } else { "curl-absent" };
     assert_eq!(
         values.output,

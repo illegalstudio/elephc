@@ -299,10 +299,11 @@ fn lower_program(program: Program) -> String {
             source: "<?php echo 'guard';".into(),
         }
     })).unwrap();
-    let module = crate::ir_lower::lower_program_with_source_catalog(
+    let mut module = crate::ir_lower::lower_program_with_source_catalog(
         &program, &check_result, target, std::path::Path::new("synthetic.php"), false, catalog,
     )
         .expect("synthetic AST should lower to valid EIR");
+    super::drop_internal_comparators(&mut module);
     let text = print_module(&module);
     assert!(text.contains("function main"), "expected main function in {text}");
     text
