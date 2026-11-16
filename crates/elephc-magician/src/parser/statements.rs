@@ -100,10 +100,11 @@ impl Parser {
             TokenKind::Ident(name) if ident_eq(name, "goto") => self.parse_goto_stmt(),
             // `name:` at statement position is a jump label. Every other `name` `:` pair is
             // inside an expression (a ternary, a named argument) or belongs to a keyword that
-            // its own parser consumes first (`case`, `default`, `else:`); reserved words are
-            // excluded so a misplaced one still reports its own error.
+            // its own parser consumes first (`case`, `default`, `else:`); keywords are
+            // excluded so a misplaced one still reports its own error. A type name such as
+            // `int` is not a keyword and is a valid label.
             TokenKind::Ident(name)
-                if matches!(self.peek(), TokenKind::Colon) && !super::is_reserved_word(name) =>
+                if matches!(self.peek(), TokenKind::Colon) && !super::is_reserved_keyword(name) =>
             {
                 let name = name.clone();
                 self.advance();

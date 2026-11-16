@@ -49,6 +49,14 @@ fn execute_program_goto_backward_jump_across_function_declaration() {
     assert_eq!(output, "ff|done");
 }
 
+/// Verifies a label may be named like a type: `int` is reserved as a class name, not as a
+/// keyword.
+#[test]
+fn execute_program_goto_label_named_like_a_type() {
+    let output = run(br#"goto int; echo "skipped"; int: echo "ok";"#);
+    assert_eq!(output, "ok");
+}
+
 /// Verifies a forward jump skips the statements before its label.
 #[test]
 fn execute_program_goto_forward_jump_skips_code() {

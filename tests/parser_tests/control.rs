@@ -434,6 +434,17 @@ fn test_goto_keyword_case_and_label_spelling() {
     assert_eq!(stmts[1].kind, StmtKind::GotoLabel("Done".into()));
 }
 
+/// Verifies a label may be named like a type: PHP reserves those words as class names, not as
+/// keywords.
+#[test]
+fn test_goto_label_named_like_a_type() {
+    for name in ["int", "string", "mixed", "bool", "float", "void", "iterable", "object", "never"] {
+        let stmts = parse_source(&format!("<?php goto {name}; {name}: echo 1;"));
+        assert_eq!(stmts[0].kind, StmtKind::Goto(name.into()), "{name}");
+        assert_eq!(stmts[1].kind, StmtKind::GotoLabel(name.into()), "{name}");
+    }
+}
+
 /// Verifies a label can end a block and a `goto` can be the body of a braceless `if`.
 #[test]
 fn test_goto_nested_positions() {

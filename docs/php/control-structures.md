@@ -485,6 +485,10 @@ yet, an interface that extends another, or a trait that uses a trait.
 `goto` is a reserved word, so it cannot be used as a function name. As in PHP,
 it remains valid as a method or constant name (`$obj->goto()`).
 
+A label may be named like a type (`int:`, `string:`, `mixed:`), as in PHP. In
+compiled code a label cannot be named `true`, `false`, `null`, `self`, `parent`
+or `enum`, which PHP and `eval()` accept.
+
 ### How it is compiled
 
 elephc reads control flow from the statement tree: reachability, type

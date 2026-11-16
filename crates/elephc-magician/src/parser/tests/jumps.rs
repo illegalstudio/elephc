@@ -54,6 +54,25 @@ fn parse_fragment_does_not_confuse_labels_with_other_colons() {
     }
 }
 
+/// Verifies the words PHP reserves only as class-like names are valid labels, while its
+/// keywords are not.
+#[test]
+fn parse_fragment_accepts_type_names_as_labels_and_rejects_keywords() {
+    for name in [
+        "int", "string", "mixed", "bool", "float", "void", "null", "true", "false", "self",
+        "parent", "iterable", "object", "never", "enum",
+    ] {
+        let source = format!("goto {name}; {name}: echo 1;");
+        let program = parse_fragment(source.as_bytes()).expect("fragment should parse");
+        assert_eq!(program.statements()[0], EvalStmt::Goto(name.to_string()), "{source}");
+        assert_eq!(program.statements()[1], EvalStmt::Label(name.to_string()), "{source}");
+    }
+    for name in ["static", "match", "fn", "class", "else", "array"] {
+        let source = format!("goto {name}; {name}: echo 1;");
+        assert!(parse_fragment(source.as_bytes()).is_err(), "{source}");
+    }
+}
+
 /// Verifies `goto` takes a plain label name and a semicolon, never an expression.
 #[test]
 fn parse_fragment_rejects_malformed_goto_source() {
