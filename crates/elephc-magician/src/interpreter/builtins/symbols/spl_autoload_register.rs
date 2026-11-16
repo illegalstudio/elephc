@@ -24,12 +24,17 @@ pub(in crate::interpreter) fn eval_spl_autoload_register_declared_call(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (callback, throw, prepend) = match args {
-        [callback] => (callback, None, None),
-        [callback, throw] => (callback, Some(throw), None),
-        [callback, throw, prepend] => (callback, Some(throw), Some(prepend)),
+        [] => (None, None, None),
+        [callback] => (Some(callback), None, None),
+        [callback, throw] => (Some(callback), Some(throw), None),
+        [callback, throw, prepend] => (Some(callback), Some(throw), Some(prepend)),
         _ => return Err(EvalStatus::RuntimeFatal),
     };
-    let callback = eval_expr(callback, context, scope, values)?;
+    // `?callable $callback = null`: no callback registers php's default `spl_autoload()` loader.
+    let callback = match callback {
+        Some(callback) => eval_expr(callback, context, scope, values)?,
+        None => values.null()?,
+    };
     if let Some(throw) = throw {
         let _ = eval_expr(throw, context, scope, values)?;
     }
@@ -49,6 +54,7 @@ pub(in crate::interpreter) fn eval_spl_autoload_register_declared_values_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let (callback, throw, prepend) = match evaluated_args {
+        [] => (values.null()?, None, None),
         [callback] => (*callback, None, None),
         [callback, throw] => (*callback, Some(*throw), None),
         [callback, throw, prepend] => (*callback, Some(*throw), Some(*prepend)),
@@ -109,6 +115,13 @@ pub(crate) fn register_spl_autoload_callback(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
+    // A null callback (or none at all) is php's default loader, `spl_autoload()`.
+    if values.type_tag(callback)? == EVAL_TAG_NULL {
+        let default = values.string("spl_autoload")?;
+        let registered = register_spl_autoload_callback(default, prepend, context, values);
+        values.release(default)?;
+        return registered;
+    }
     let normalized = eval_callable(callback, context, values)?;
     // PHP validates the callback AT REGISTRATION and throws `TypeError` naming what is wrong with
     // it, rather than waiting for the first autoload attempt. Deferring the check moves the

@@ -51,6 +51,27 @@ return true;"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies `spl_autoload_register()` with no callback, or `null`, registers the default loader.
+///
+/// `php -n` 8.5.6 prints `1:1:spl_autoload:1`: the call succeeds, one loader is registered and it
+/// is `spl_autoload`; a second null registration is the same loader and leaves one.
+#[test]
+fn execute_program_spl_autoload_register_without_callback_registers_the_default_loader() {
+    let program = parse_fragment(
+        br#"echo spl_autoload_register() ? 1 : 0, ":";
+echo count(spl_autoload_functions()), ":";
+echo spl_autoload_functions()[0], ":";
+echo spl_autoload_register(null) ? 1 : 0;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "1:1:spl_autoload:1");
+}
+
 /// Verifies a callback that names nothing is refused AT REGISTRATION, with PHP's wording.
 ///
 /// `php -n` 8.5.6 throws `TypeError` the moment `spl_autoload_register()` is called, naming what
