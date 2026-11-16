@@ -1185,12 +1185,21 @@ claim. Native syntax keeps every check strict; a PHPDoc declaration gives way in
   `<E : Entity>` stays an error.
 - **A parameter the call cannot determine is `mixed`.** That covers a template only the
   `@return` mentions, an annotation elephc has no type for (`@param class-string<T> $class`),
-  two arguments that bind one parameter to two types, and a `null` argument. The native form
-  reports each of these and asks for the type argument.
+  two arguments that bind one parameter to two types, and a `null` argument. A parameter that
+  took over a native hint (below) is read as that hint instead. The native form reports each of
+  these and asks for the type argument.
 - **A native hint wins over the annotation that documents it.** php-src enforces `int $m` and
   coerces to it, so `@param T $m` does not replace it. A hint php-src enforces loosely
   (`array`, `iterable`, `callable`, `object`, or none) gives way to the annotation, as does a
   class hint to its own generic form (`Box $b` documented `@param Box<T> $b`).
+- **A hint a type parameter takes over stays binding.** `@param T $m` replaces a native
+  `object $m`, or a native `Model $m` when the template is `T of Model`, and php-src still
+  enforces that hint at every call. A type argument the hint accepts refines it:
+  `keep(new User())` is `T = User`. Any other call is compiled at the hint itself, so it is
+  checked exactly as it is without the annotation: `keep(new Other())` is the ordinary
+  argument error, and `pair(new User(), new Admin())` is `T = Model`. A type parameter that
+  also annotates an untyped parameter, or parameters with different hints, takes over none of
+  them: those parameters keep their native hints.
 - **A template no position adopts is not a template.** When every annotation naming `T` lost
   to a native hint, the function or method keeps its own name and its native signature.
 

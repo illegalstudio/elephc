@@ -45,10 +45,21 @@ pub struct TypeParam {
     /// Excluded from equality, so an annotated declaration and its native spelling stay the
     /// same AST.
     pub from_docblock: bool,
+    /// The native hint a PHPDoc parameter took over: `Model` for `@param T $m` documenting a
+    /// native `Model $m`.
+    ///
+    /// php-src enforces that hint whatever the annotation says, so it stays binding. A type
+    /// argument it does not accept is replaced by the hint itself (the call is then checked
+    /// against the signature php-src runs), and so is one inference cannot settle. Set by
+    /// `crate::docblock` only when every parameter annotated directly with this type parameter
+    /// carries the same native hint. Always `None` for native syntax, and excluded from equality
+    /// like [`TypeParam::from_docblock`].
+    pub native_hint: Option<TypeExpr>,
 }
 
 impl PartialEq for TypeParam {
-    /// Compares the declaration, ignoring where it was spelled ([`TypeParam::from_docblock`]).
+    /// Compares the declaration, ignoring where it was spelled ([`TypeParam::from_docblock`],
+    /// [`TypeParam::native_hint`]).
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
             && self.bound == other.bound

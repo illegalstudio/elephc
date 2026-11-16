@@ -55,15 +55,55 @@ impl Checker {
         Ok(())
     }
 
-    /// Returns whether a bound is left unchecked: a PHPDoc parameter bound to `mixed`.
+    /// Returns whether a bound is left unchecked: a PHPDoc parameter bound to `mixed`, or to the
+    /// native hint it took over.
     ///
-    /// `mixed` is what an undetermined PHPDoc parameter is read as, and what an untyped argument
-    /// infers. Neither says the annotation was broken, so neither is worth a diagnostic.
+    /// Those are what a PHPDoc parameter is read as when its annotation cannot be honoured, and
+    /// `mixed` is also what an untyped argument infers. Neither says the annotation was broken
+    /// beyond what `settle_native_hints` already reports, so neither is worth a diagnostic.
     pub(crate) fn skips_docblock_bound(
         param: &crate::parser::ast::TypeParam,
         argument: &crate::parser::ast::TypeExpr,
     ) -> bool {
-        param.from_docblock && crate::generics::is_mixed_type(argument)
+        param.from_docblock
+            && (crate::generics::is_mixed_type(argument)
+                || param.native_hint.as_ref() == Some(argument))
+    }
+
+    /// Keeps the native hint a PHPDoc parameter took over binding on its type argument.
+    ///
+    /// `@param T $m` on a native `Model $m` replaces a hint php-src enforces at every call. A
+    /// type argument the hint accepts refines it, which is the annotation's whole purpose. One
+    /// it does not accept (or `mixed`, which says nothing) is replaced by the hint itself: the
+    /// instantiation then has the signature php-src runs, and the ordinary argument check
+    /// reports the call exactly as it would without the annotation.
+    pub(crate) fn settle_native_hints(
+        &self,
+        type_params: &[crate::parser::ast::TypeParam],
+        bindings: &mut crate::generics::Bindings,
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        for param in type_params {
+            let Some(hint) = param.native_hint.as_ref() else {
+                continue;
+            };
+            let Some((_, argument)) = bindings.iter_mut().find(|(name, _)| name == &param.name)
+            else {
+                continue;
+            };
+            if argument == hint {
+                continue;
+            }
+            let refines = !crate::generics::is_mixed_type(argument) && {
+                let hint_ty = self.resolve_type_expr(hint, span)?;
+                let argument_ty = self.resolve_generic_bound_argument(argument, span)?;
+                self.type_accepts(&hint_ty, &argument_ty)
+            };
+            if !refines {
+                *argument = hint.clone();
+            }
+        }
+        Ok(())
     }
 
     /// Rejects any type argument that does not satisfy its parameter's declared bound.

@@ -345,31 +345,40 @@ pub fn infer_bindings(
 /// on the expression. Every other parameter is decided by its type alone, exactly as before.
 ///
 /// A PHPDoc type parameter never fails a call php-src runs. One the arguments leave undetermined,
-/// bind to two different types, or bind to `null`/`never` is read as `mixed`, which is how
-/// php-src treats the position the annotation documents. A native parameter keeps the error:
-/// its author wrote compiler syntax and can write the type argument.
+/// bind to two different types, or bind to `null`/`never` is read as the type php-src gives the
+/// position the annotation documents: the native hint the parameter took over
+/// (`TypeParam::native_hint`), or `mixed` when it documents untyped positions. A native
+/// parameter keeps the error: its author wrote compiler syntax and can write the type argument.
 pub fn infer_bindings_with_args(
     type_params: &[TypeParam],
     declared_params: &[Option<TypeExpr>],
     actual_types: &[PhpType],
     args: &[crate::parser::ast::Expr],
 ) -> Result<Bindings, InferError> {
-    let from_docblock = |name: &str| {
-        type_params.iter().any(|param| param.from_docblock && param.name == name)
+    // What php-src reads a PHPDoc parameter as when the annotation cannot be honoured.
+    let fallback = |name: &str| {
+        type_params
+            .iter()
+            .find(|param| param.from_docblock && param.name == name)
+            .map(|param| param.native_hint.clone().unwrap_or_else(mixed_type))
     };
     // Each retry erases one more PHPDoc parameter, so the loop ends within `type_params.len()`.
-    let mut erased: Vec<String> = Vec::new();
+    let mut erased: Vec<(String, TypeExpr)> = Vec::new();
     loop {
         match infer_bindings_erasing(type_params, declared_params, actual_types, args, &erased) {
             Err(InferError::Unconstrained(param) | InferError::Conflict { param, .. })
-                if from_docblock(&param) && !erased.contains(&param) =>
+                if fallback(&param).is_some()
+                    && !erased.iter().any(|(name, _)| name == &param) =>
             {
-                erased.push(param);
+                let ty = fallback(&param).unwrap_or_else(mixed_type);
+                erased.push((param, ty));
             }
             Ok(mut bindings) => {
                 for (name, ty) in bindings.iter_mut() {
-                    if matches!(ty, TypeExpr::Void | TypeExpr::Never) && from_docblock(name) {
-                        *ty = mixed_type();
+                    if matches!(ty, TypeExpr::Void | TypeExpr::Never) {
+                        if let Some(read_as) = fallback(name) {
+                            *ty = read_as;
+                        }
                     }
                 }
                 return Ok(bindings);
@@ -389,7 +398,7 @@ pub(crate) fn is_mixed_type(ty: &TypeExpr) -> bool {
     matches!(ty, TypeExpr::Named(name) if name.as_str().eq_ignore_ascii_case("mixed"))
 }
 
-/// Runs one inference pass with the parameters in `erased` bound to `mixed` up front.
+/// Runs one inference pass with the parameters in `erased` bound to their fallback up front.
 ///
 /// An erased parameter is left out of unification, so the positions that mention it constrain
 /// nothing, and it reaches `finish` already bound.
@@ -398,15 +407,14 @@ fn infer_bindings_erasing(
     declared_params: &[Option<TypeExpr>],
     actual_types: &[PhpType],
     args: &[crate::parser::ast::Expr],
-    erased: &[String],
+    erased: &[(String, TypeExpr)],
 ) -> Result<Bindings, InferError> {
     let names: Vec<String> = type_params
         .iter()
         .map(|param| param.name.clone())
-        .filter(|name| !erased.contains(name))
+        .filter(|name| !erased.iter().any(|(erased, _)| erased == name))
         .collect();
-    let mut bound: Vec<(String, TypeExpr)> =
-        erased.iter().map(|name| (name.clone(), mixed_type())).collect();
+    let mut bound: Vec<(String, TypeExpr)> = erased.to_vec();
     for (index, declared) in declared_params.iter().enumerate() {
         let (Some(TypeExpr::CallableSig { params, ret }), Some(arg)) =
             (declared.as_ref(), args.get(index))
@@ -905,6 +913,7 @@ mod tests {
             default: None,
             variance: Variance::Invariant,
             from_docblock: false,
+            native_hint: None,
         }
     }
 
@@ -1009,6 +1018,7 @@ mod tests {
     fn doc_tp(name: &str) -> TypeParam {
         TypeParam {
             from_docblock: true,
+            native_hint: None,
             ..tp(name)
         }
     }
@@ -1037,6 +1047,33 @@ mod tests {
         let null_bound = infer_bindings(&[doc_tp("T")], &[param(t("T"))], &[PhpType::Void])
             .expect("a PHPDoc parameter bound to null is mixed");
         assert_eq!(null_bound, vec![("T".to_string(), mixed)]);
+    }
+
+    /// A PHPDoc parameter that took over a native hint reads as that hint, not as `mixed`, when
+    /// inference cannot settle it: the hint is what php-src enforces at the position.
+    #[test]
+    fn a_docblock_parameter_falls_back_to_the_native_hint_it_took_over() {
+        let model = TypeExpr::Named(Name::unqualified("Model"));
+        let hinted = TypeParam {
+            native_hint: Some(model.clone()),
+            ..doc_tp("T")
+        };
+        let object = |name: &str| PhpType::Object(name.to_string());
+        let conflicting = infer_bindings(
+            std::slice::from_ref(&hinted),
+            &[param(t("T")), param(t("T"))],
+            &[object("User"), object("Admin")],
+        )
+        .expect("a conflicting hinted parameter is its native hint");
+        assert_eq!(conflicting, vec![("T".to_string(), model.clone())]);
+
+        let null_bound = infer_bindings(
+            std::slice::from_ref(&hinted),
+            &[param(TypeExpr::Nullable(Box::new(t("T"))))],
+            &[PhpType::Void],
+        )
+        .expect("a hinted parameter bound to null is its native hint");
+        assert_eq!(null_bound, vec![("T".to_string(), model)]);
     }
 
     /// A native parameter beside a PHPDoc one keeps its own error: only the PHPDoc half erases.
@@ -1072,6 +1109,7 @@ mod tests {
             default: Some(TypeExpr::Str),
             variance: Variance::Invariant,
             from_docblock: false,
+            native_hint: None,
         };
         let bindings = infer_bindings(&[declared], &[param(TypeExpr::Int)], &[PhpType::Int])
             .expect("the default determines K");
@@ -1087,6 +1125,7 @@ mod tests {
             default: Some(TypeExpr::Str),
             variance: Variance::Invariant,
             from_docblock: false,
+            native_hint: None,
         };
         let bindings = infer_bindings(&[declared], &[param(t("T"))], &[PhpType::Int])
             .expect("T is constrained by the argument");

@@ -105,6 +105,7 @@ pub(super) fn walk_type_params<P: Pass>(
         .map(|param| crate::parser::ast::TypeParam {
             bound: param.bound.map(|ty| pass.transform_value_type(ty, span)),
             default: param.default.map(|ty| pass.transform_type(ty, span)),
+            native_hint: param.native_hint.map(|ty| pass.transform_value_type(ty, span)),
             ..param
         })
         .collect()

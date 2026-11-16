@@ -115,13 +115,14 @@ impl Checker {
         &mut self,
         name: &str,
         decl: &crate::types::checker::FnDecl,
-        bindings: generics::Bindings,
+        mut bindings: generics::Bindings,
         span: crate::span::Span,
         record_site: bool,
     ) -> Result<String, CompileError> {
         if let Some(error) = self.failed_variant_contracts.get(name) {
             return Err(error.clone());
         }
+        self.settle_native_hints(&decl.type_params, &mut bindings, span)?;
         // Bounds are checked HERE rather than inside inference, because satisfying a bound is a
         // subtyping question and only the checker holds the class table: `type_accepts` already
         // answers it for subclasses, implemented interfaces and interface inheritance. Inference

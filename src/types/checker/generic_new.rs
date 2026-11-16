@@ -57,7 +57,7 @@ impl Checker {
                 template.constructor_variadic.as_ref(),
             ));
         }
-        let bindings = generics::infer_bindings(
+        let mut bindings = generics::infer_bindings(
             &template.type_params,
             &declared_params,
             &actual_types,
@@ -68,6 +68,7 @@ impl Checker {
                 &describe_construction_error(&template.declared_name, &error),
             )
         })?;
+        self.settle_native_hints(&template.type_params, &mut bindings, expr.span)?;
         self.reject_uninformative_bindings(&template, &bindings, expr)?;
         self.verify_construction_bounds(&template, &bindings, expr)?;
         self.warn_on_inferred_mixed(&template, &bindings, expr);
@@ -161,7 +162,7 @@ impl Checker {
                 signature.variadic_type.as_ref(),
             ));
         }
-        let bindings =
+        let mut bindings =
             generics::infer_bindings(&template.type_params, &declared_params, &actual_types)
                 .map_err(|error| {
                     CompileError::new(
@@ -173,6 +174,7 @@ impl Checker {
                         ),
                     )
                 })?;
+        self.settle_native_hints(&template.type_params, &mut bindings, expr.span)?;
         self.reject_uninformative_bindings(&template, &bindings, expr)?;
         self.verify_construction_bounds(&template, &bindings, expr)?;
         self.warn_on_inferred_mixed(&template, &bindings, expr);
@@ -275,6 +277,7 @@ impl Checker {
         for arg in args {
             self.infer_type(arg, env)?;
         }
+        self.settle_native_hints(&template.type_params, &mut bindings, expr.span)?;
         self.verify_construction_bounds(&template, &bindings, expr)?;
 
         let instantiated = generics::instantiated_name(&template.declared_name, &bindings);

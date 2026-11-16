@@ -798,3 +798,118 @@ echo keep(4), "|", keep("4"), "|", first(1, ["a", "b"]);
     assert!(!warnings.contains("its bound"), "{warnings}");
     assert_eq!(compile_cli_file_and_run_with_flags(native_hint, &[]), "5|5|a");
 }
+
+/// A template that takes over a native hint keeps it binding (issue #1899 review): a type
+/// argument the hint accepts refines it, and every other call is compiled at the hint itself,
+/// so it is rejected exactly as php-src rejects it, whatever the PHPDoc bound says.
+#[test]
+fn test_docblock_template_keeps_the_native_hint_it_takes_over() {
+    let declarations = r#"<?php
+class Model { public function name() { return "model"; } }
+class User extends Model { public function hi() { return "hi"; } }
+class Admin extends Model {}
+class Other {}
+class Repo {
+    /**
+     * @template T of Model
+     * @param T $m
+     * @return T
+     */
+    public function keep(Model $m): Model { return $m; }
+}
+/**
+ * @template T of Model
+ * @param T $a
+ * @param T $b
+ * @return T
+ */
+function pair(Model $a, Model $b): Model { return $b; }
+/**
+ * @template T of Model
+ * @param T $m
+ */
+function opt(?Model $m): int { return $m === null ? 0 : 1; }
+/**
+ * @template T
+ * @param T $o
+ * @return T
+ */
+function same(object $o): object { return $o; }
+"#;
+    let valid = format!(
+        "{declarations}{}",
+        r#"echo (new Repo())->keep(new User())->hi(), "|", pair(new User(), new Admin())->name(),
+    "|", opt(new User()), opt(null), "|", same(new User())->hi();
+"#
+    );
+    for flags in [&[][..], &["--strict-php"][..]] {
+        let warnings = compile_cli_file_with_flags_capturing_stderr(&valid, flags);
+        assert!(!warnings.contains("its bound"), "{warnings}");
+        assert_eq!(
+            compile_cli_file_and_run_with_flags(&valid, flags),
+            "hi|model|10|hi",
+            "{flags:?}"
+        );
+    }
+    for (call, expected) in [
+        ("(new Repo())->keep(new Other());", "expects Model, got Other"),
+        ("pair(new User(), new Other());", "expects Model, got Other"),
+        ("pair<Other>(new Other(), new Other());", "expects Model, got Other"),
+        ("same(5);", "expects object, got int"),
+    ] {
+        let error = compile_cli_file_with_flags_expect_failure(&format!("{declarations}{call}\n"), &[]);
+        assert!(error.contains(expected), "{call}: {error}");
+    }
+}
+
+/// A template that also annotates an untyped parameter speaks for no single native hint, so it
+/// takes over none: the hinted parameter keeps its hint, and the untyped one accepts what
+/// php-src accepts.
+#[test]
+fn test_docblock_template_spanning_typed_and_untyped_parameters_keeps_the_hint() {
+    let declarations = r#"<?php
+class Model {}
+class User extends Model {}
+class Other {}
+/**
+ * @template T of Model
+ * @param T $a
+ * @param T $b
+ */
+function both(Model $a, $b): string { return gettype($b); }
+"#;
+    let valid = format!("{declarations}echo both(new User(), \"x\"), \"|\", both(new User(), new User());\n");
+    assert_eq!(compile_cli_file_and_run_with_flags(&valid, &[]), "string|object");
+    let error = compile_cli_file_with_flags_expect_failure(
+        &format!("{declarations}both(new Other(), 1);\n"),
+        &[],
+    );
+    assert!(error.contains("expects Model, got Other"), "{error}");
+}
+
+/// A dispatched method is erased back to the signature php-src enforces: the native hint a
+/// template took over returns, so an unrelated argument is still rejected.
+#[test]
+fn test_docblock_erased_method_restores_the_native_hint() {
+    let declarations = r#"<?php
+class Model {}
+class User extends Model {}
+class Other {}
+interface Sink { public function accept(Model $m): int; }
+class Repo implements Sink {
+    /**
+     * @template T of Model
+     * @param T $m
+     */
+    public function accept(Model $m): int { return 1; }
+}
+function through(Sink $sink): int { return $sink->accept(new User()); }
+"#;
+    let valid = format!("{declarations}echo (new Repo())->accept(new User()), through(new Repo());\n");
+    assert_eq!(compile_and_run(&valid), "11");
+    let error = compile_cli_file_with_flags_expect_failure(
+        &format!("{declarations}(new Repo())->accept(new Other());\n"),
+        &[],
+    );
+    assert!(error.contains("expects Model, got Other"), "{error}");
+}

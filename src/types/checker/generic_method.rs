@@ -85,7 +85,7 @@ impl Checker {
         let Some((key, template)) = self.generic_method_template_for(class_name, base) else {
             return Ok(None);
         };
-        let bindings = match &written {
+        let mut bindings = match &written {
             Some((_, arguments)) => generics::bindings_from_written_arguments(
                 &template.type_params,
                 arguments,
@@ -139,6 +139,7 @@ impl Checker {
                 })?
             }
         };
+        self.settle_native_hints(&template.type_params, &mut bindings, expr.span)?;
         for param in &template.type_params {
             let Some(bound) = param.bound.as_ref() else {
                 continue;

@@ -299,7 +299,39 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
 /// Drops a method's own type parameters, and reads every one of them, and every name in
 /// `class_params`, as `mixed` in the declared types: `array<TKey, TValue>` keeps the `array` an
 /// override is checked against, and a bare `T` (or `?T`, `T|mixed`) becomes untyped.
+///
+/// A parameter whose template took over a native hint (`TypeParam::native_hint`) gets that hint
+/// back first, so the erased method declares what php-src enforces: `@param T $m` on
+/// `Model $m` is `Model $m` again.
 fn erase_method(method: &mut ClassMethod, class_params: &[String]) {
+    let hints: Vec<(String, TypeExpr)> = method
+        .type_params
+        .iter()
+        .filter_map(|param| param.native_hint.clone().map(|hint| (param.name.clone(), hint)))
+        .collect();
+    let restore = |ty: &mut Option<TypeExpr>| {
+        let hint_of = |ty: &TypeExpr| match ty {
+            TypeExpr::Named(name) => hints
+                .iter()
+                .find(|(param, _)| param == name.as_str())
+                .map(|(_, hint)| hint.clone()),
+            _ => None,
+        };
+        let restored = match ty.as_ref() {
+            Some(TypeExpr::Nullable(inner)) => {
+                hint_of(inner).map(|hint| TypeExpr::Nullable(Box::new(hint)))
+            }
+            Some(declared) => hint_of(declared),
+            None => None,
+        };
+        if restored.is_some() {
+            *ty = restored;
+        }
+    };
+    for (_, declared, _, _) in method.params.iter_mut() {
+        restore(declared);
+    }
+    restore(&mut method.variadic_type);
     let mut names: Vec<String> = method.type_params.iter().map(|p| p.name.clone()).collect();
     names.extend(class_params.iter().cloned());
     method.type_params.clear();
