@@ -353,7 +353,7 @@ fn emit_sscanf_output_writebacks(
     Ok(())
 }
 
-/// Writes one scanned Mixed cell, or PHP null when no conversion value exists, into a local.
+/// Writes one scanned Mixed cell into a local; an output without a scanned value is left as is.
 fn emit_sscanf_single_output_writeback(
     ctx: &mut FunctionContext<'_>,
     slot: LocalSlotId,
@@ -362,47 +362,33 @@ fn emit_sscanf_single_output_writeback(
     cell_offset: usize,
 ) -> Result<()> {
     let missing = ctx.next_label("sscanf_output_missing");
-    let ready = ctx.next_label("sscanf_output_ready");
     let element_offset = 24 + index * 8;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", array_offset);
             ctx.emitter.instruction("ldr x10, [x9]");                          // load the number of scanned cells before indexing
             ctx.emitter.instruction(&format!("cmp x10, #{}", index));          // does this output position exist in the result array?
-            ctx.emitter.instruction(&format!("b.ls {}", missing));             // absent conversions write PHP null
+            ctx.emitter.instruction(&format!("b.ls {}", missing));             // absent conversions leave the output untouched
             abi::emit_load_from_address(ctx.emitter, "x0", "x9", element_offset);
             abi::emit_store_to_sp(ctx.emitter, "x0", cell_offset);
             abi::emit_call_label(ctx.emitter, "__rt_incref");                  // transfer an ownership share from the result array to the local
-            ctx.emitter.instruction(&format!("b {}", ready));
-            ctx.emitter.label(&missing);
-            ctx.emitter.instruction("mov x0, #8");                             // runtime tag 8 = PHP null
-            ctx.emitter.instruction("mov x1, xzr");                            // null has no low payload word
-            ctx.emitter.instruction("mov x2, xzr");                            // null has no high payload word
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            abi::emit_store_to_sp(ctx.emitter, "x0", cell_offset);
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", array_offset);
             ctx.emitter.instruction("mov r11, QWORD PTR [r10]");               // load the number of scanned cells before indexing
             ctx.emitter.instruction(&format!("cmp r11, {}", index));           // does this output position exist in the result array?
-            ctx.emitter.instruction(&format!("jbe {}", missing));              // absent conversions write PHP null
+            ctx.emitter.instruction(&format!("jbe {}", missing));              // absent conversions leave the output untouched
             abi::emit_load_from_address(ctx.emitter, "rax", "r10", element_offset);
             abi::emit_store_to_sp(ctx.emitter, "rax", cell_offset);
             abi::emit_call_label(ctx.emitter, "__rt_incref");                  // transfer an ownership share from the result array to the local
-            ctx.emitter.instruction(&format!("jmp {}", ready));
-            ctx.emitter.label(&missing);
-            ctx.emitter.instruction("mov rax, 8");                             // runtime tag 8 = PHP null
-            ctx.emitter.instruction("xor edi, edi");                           // null has no low payload word
-            ctx.emitter.instruction("xor esi, esi");                           // null has no high payload word
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
-            abi::emit_store_to_sp(ctx.emitter, "rax", cell_offset);
         }
     }
-    ctx.emitter.label(&ready);
     ctx.release_local_before_refcounted_writeback(slot)?;
     let result_reg = abi::int_result_reg(ctx.emitter).to_string();
     abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, cell_offset);
-    ctx.store_current_result_to_local(slot)
+    ctx.store_current_result_to_local(slot)?;
+    ctx.emitter.label(&missing);                                               // php leaves an output without a scanned value untouched
+    Ok(())
 }
 
 /// Lowers `str_split(string, length?)` into the fixed-width string-array splitter.
