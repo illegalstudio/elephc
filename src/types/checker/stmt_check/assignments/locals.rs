@@ -168,12 +168,12 @@ pub(super) fn check_assign(
     } = &value.kind
     {
         if let ExprKind::StringLiteral(suffix) = &right.kind {
-            checker.string_suffix_locals.insert(suffix_key, suffix.clone());
+            checker.record_string_suffix_binding(suffix_key, Some(suffix));
         } else {
-            checker.string_suffix_locals.remove(&suffix_key);
+            checker.record_string_suffix_binding(suffix_key, None);
         }
     } else {
-        checker.string_suffix_locals.remove(&suffix_key);
+        checker.record_string_suffix_binding(suffix_key, None);
     }
 
     // A direct reassignment (`$k = ...`) makes `$k` an ordinary local: it is no
@@ -628,6 +628,7 @@ fn check_ref_assign_dynamic_property(
         ExprKind::Variable(name) => checker
             .string_suffix_locals
             .get(&(checker.current_loop_storage_scope.clone(), name.clone()))
+            .filter(|suffix| suffix.as_str() != Checker::STRING_SUFFIX_UNKNOWN)
             .cloned(),
         _ => None,
     };
@@ -1995,6 +1996,12 @@ pub(super) fn check_list_unpack(
     span: Span,
     env: &mut TypeEnv,
 ) -> Result<(), CompileError> {
+    for var in vars {
+        checker.record_string_suffix_binding(
+            (checker.current_loop_storage_scope.clone(), var.clone()),
+            None,
+        );
+    }
     let arr_ty = match checker.infer_type_with_assignment_effects(value, env) {
         Ok(arr_ty) => arr_ty,
         Err(error) => {

@@ -1610,6 +1610,28 @@ impl Checker {
         self.foreach_key_locals.remove(name);
     }
 
+    /// The `string_suffix_locals` value of a name whose suffix is not one known literal.
+    pub(crate) const STRING_SUFFIX_UNKNOWN: &'static str = "\u{0}";
+
+    /// Records one binding of a local for the known-string-suffix fact.
+    ///
+    /// The fact survives only while EVERY binding of the name is the same `<expr> . 'suffix'`
+    /// assignment: the table is flow-insensitive, so a first binding that is not one, a second
+    /// binding with another suffix (on a branch the first path never took) or a `foreach` /
+    /// `list()` target leaves the name unknown for the rest of the body.
+    pub(crate) fn record_string_suffix_binding(
+        &mut self,
+        key: (String, String),
+        suffix: Option<&String>,
+    ) {
+        let value = match (suffix, self.string_suffix_locals.get(&key)) {
+            (Some(suffix), None) => suffix.clone(),
+            (Some(suffix), Some(known)) if known == suffix => suffix.clone(),
+            _ => Self::STRING_SUFFIX_UNKNOWN.to_string(),
+        };
+        self.string_suffix_locals.insert(key, value);
+    }
+
     /// Ends the current binding's managed-cell provenance and records conditional uncertainty.
     pub(crate) fn invalidate_boxed_ref_alias_binding(&mut self, name: &str) {
         self.boxed_ref_aliased_locals.remove(name);

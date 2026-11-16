@@ -1781,6 +1781,10 @@ impl Checker {
 
     /// Clears callable metadata for a foreach key or value binding.
     fn clear_foreach_callable_metadata(&mut self, dest: &str) {
+        self.record_string_suffix_binding(
+            (self.current_loop_storage_scope.clone(), dest.to_string()),
+            None,
+        );
         self.mark_callable_array_target_write(dest);
         self.closure_return_types.remove(dest);
         self.callable_sigs.remove(dest);
