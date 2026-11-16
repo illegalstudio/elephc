@@ -3853,3 +3853,93 @@ class Child extends Box {
     );
     assert!(error.contains("return type expects object, got string"), "{error}");
 }
+
+/// A dispatched method erased for a PHPDoc class template still makes the check php-src makes
+/// on entry: an argument the native hint rejects throws a `TypeError`, `null` passes a nullable
+/// hint, and the body still stores the parameter in a property of the template.
+#[test]
+fn test_docblock_class_template_erased_method_checks_its_native_parameter_hints() {
+    let out = compile_and_run(
+        r#"<?php
+class User {}
+interface Sink { public function put(object $v): int; }
+/** @template T */
+class Bin implements Sink {
+    /** @var T */
+    public object $value;
+    /** @param T $v */
+    public function __construct(object $v) { $this->value = $v; }
+    /** @param T $v */
+    public function put(object $v): int {
+        $this->value = $v;
+        return 1;
+    }
+}
+interface Rows { public function add(?array $row, callable $f, iterable $it): int; }
+/** @template T */
+class Table implements Rows {
+    /** @param ?T $row */
+    public function add(?array $row, callable $f, iterable $it): int {
+        return $row === null ? 0 : count($row);
+    }
+}
+$bin = new Bin(new User());
+echo $bin->put(new User()), get_class($bin->value);
+try {
+    $bin->put(5);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
+$table = new Table();
+echo "|", $table->add(null, 'strlen', [1]), $table->add([1, 2], 'strlen', [1]);
+try {
+    $table->add("x", 'strlen', [1]);
+} catch (TypeError $e) {
+    echo "|", $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "1User|Bin::put(): Argument #1 ($v) must be of type object, integer given\
+         |02|Table::add(): Argument #1 ($row) must be of type ?array, string given"
+    );
+}
+
+/// A native class hint and the class an annotation names are compared after resolving both
+/// against the namespace and the `use` imports, not by basename: an alias of the annotated
+/// class adopts the annotation, and an unrelated class of the same basename keeps its hint.
+#[test]
+fn test_docblock_annotation_matches_a_native_hint_through_an_import_alias() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Lib {
+    /** @template T */
+    class Box {
+        /** @param T $value */
+        public function __construct(public $value) {}
+    }
+}
+namespace App {
+    use Lib\Box as Crate;
+    class Box {
+        public function __construct(public $value) {}
+    }
+    /**
+     * @template T
+     * @param \Lib\Box<T> $b
+     * @return T
+     */
+    function unwrap(Crate $b) { return $b->value; }
+    /**
+     * @template T
+     * @param \Lib\Box<T> $b
+     * @return T
+     */
+    function own(Box $b) { return $b->value; }
+    echo unwrap(new Crate(7)) + 1, "|", own(new Box("own"));
+}
+"#,
+    );
+    assert_eq!(out, "8|own");
+}

@@ -1207,7 +1207,10 @@ instead:
   their native hints; `object` beside the class that bounds the template is not a
   disagreement, the class speaks for both. A class template follows the same rule across
   all its members: `@var T` on a `public object $value` property keeps every `Box<...>` an
-  object holder, and a written `Box<string>` is an error.
+  object holder, and a written `Box<string>` is an error. A method of such a class that is
+  called through dynamic dispatch (it implements an interface method, or is overridden) keeps
+  its php-src signature instead of the type argument: an argument its native hint rejects
+  throws the `TypeError` php-src throws.
 - **A template no position adopts is not a template.** When every annotation naming `T` lost
   to a native hint, the function or method keeps its own name and its native signature.
 

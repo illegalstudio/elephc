@@ -75,6 +75,9 @@ pub struct NativeHint {
     /// For a CLASS type parameter: the methods (by lowercased name) whose native return type
     /// it took over, each with that type as written.
     pub member_returns: Vec<(String, TypeExpr)>,
+    /// For a CLASS type parameter: the method parameters `(lowercased method, parameter)` whose
+    /// native hint it took over, each with that hint as written.
+    pub member_params: Vec<(String, String, TypeExpr)>,
 }
 
 impl PartialEq for TypeParam {

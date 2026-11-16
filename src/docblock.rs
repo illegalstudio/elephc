@@ -98,14 +98,81 @@ pub fn apply(program: Program, source: &str) -> Program {
     if blocks.is_empty() {
         return program;
     }
-    program
+    apply_in(program, &blocks, NameScope::default())
+}
+
+/// The namespace and class imports in effect where a declaration is written.
+///
+/// Annotations are applied per file, before name resolution, so comparing a native class hint
+/// with the class an annotation names (`Crate $b` against `@param \Lib\Box<T> $b` under
+/// `use Lib\Box as Crate`) has to resolve both the way php-src will.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct NameScope {
+    namespace: Option<String>,
+    /// Lowercased alias to the imported class's fully qualified name.
+    classes: HashMap<String, String>,
+}
+
+impl NameScope {
+    /// Returns the lowercased fully qualified name `name` resolves to in this scope.
+    pub(crate) fn class_key(&self, name: &Name) -> String {
+        let written = name.parts.join("\\");
+        let resolved = if name.is_fully_qualified() {
+            written
+        } else {
+            let import = name
+                .parts
+                .first()
+                .and_then(|first| self.classes.get(&first.to_ascii_lowercase()));
+            match (import, &self.namespace) {
+                (Some(target), _) if name.parts.len() == 1 => target.clone(),
+                (Some(target), _) => format!("{}\\{}", target, name.parts[1..].join("\\")),
+                (None, Some(namespace)) => format!("{namespace}\\{written}"),
+                (None, None) => written,
+            }
+        };
+        resolved.trim_start_matches('\\').to_ascii_lowercase()
+    }
+
+    /// Records the class imports of one `use` statement.
+    fn import(&mut self, imports: &[crate::parser::ast::UseItem]) {
+        for item in imports {
+            if item.kind == crate::parser::ast::UseKind::Class {
+                self.classes
+                    .insert(item.alias.to_ascii_lowercase(), item.name.parts.join("\\"));
+            }
+        }
+    }
+}
+
+/// Applies the annotations to a statement list, tracking the namespace and the imports each
+/// declaration is written under.
+fn apply_in(stmts: Program, blocks: &HashMap<(u32, u32), DocBlock>, mut scope: NameScope) -> Program {
+    stmts
         .into_iter()
-        .map(|stmt| apply_to_stmt(stmt, &blocks))
+        .map(|stmt| {
+            match &stmt.kind {
+                // A namespace declaration starts a new scope: its imports are its own.
+                StmtKind::NamespaceDecl { name } => {
+                    scope = NameScope {
+                        namespace: name.as_ref().map(|name| name.parts.join("\\")),
+                        classes: HashMap::new(),
+                    };
+                }
+                StmtKind::UseDecl { imports } => scope.import(imports),
+                _ => {}
+            }
+            apply_to_stmt(stmt, blocks, &scope)
+        })
         .collect()
 }
 
 /// Applies the doc comment that ends just above `stmt`, if any.
-fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt {
+fn apply_to_stmt(
+    mut stmt: Stmt,
+    blocks: &HashMap<(u32, u32), DocBlock>,
+    scope: &NameScope,
+) -> Stmt {
     let block = blocks.get(&(stmt.span.line, stmt.span.col));
     match &mut stmt.kind {
         StmtKind::FunctionDecl {
@@ -131,6 +198,7 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
                     return_type.as_ref(),
                     block,
                 ),
+                scope,
             );
             let mut adopted_params = params.clone();
             let mut adopted_variadic = variadic_type.clone();
@@ -142,14 +210,14 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
                     // PHPStan-annotated code has, and the annotation is the more precise of the
                     // two. A native scalar or class hint is a contract php-src enforces (and
                     // coerces to), so it wins: `@param T $m` documenting `int $m` stays `int`.
-                    adopt_annotation(declared, annotated, &own);
+                    adopt_annotation(declared, annotated, &own, scope);
                 }
             }
             if let Some(annotated) = variadic.as_ref().and_then(|name| block.params.get(name)) {
-                adopt_annotation(&mut adopted_variadic, annotated, &own);
+                adopt_annotation(&mut adopted_variadic, annotated, &own, scope);
             }
             if let Some(annotated) = &block.return_type {
-                adopt_annotation(&mut adopted_return, annotated, &own);
+                adopt_annotation(&mut adopted_return, annotated, &own, scope);
             }
             // A template no position adopted changes no declared type: the function is not a
             // template, keeps its own name, and compiles exactly as php-src declares it.
@@ -179,7 +247,7 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
         } => {
             let extends_args = adopt_inherited(block, extends.as_ref());
             adopt_generics(block, generics, extends_args, implements);
-            members::apply(class_templates(generics), properties, methods, blocks);
+            members::apply(class_templates(generics), properties, methods, blocks, scope);
         }
         StmtKind::InterfaceDecl {
             generics,
@@ -192,24 +260,24 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
             // everything annotated lands in `interface_args` — which is why `GenericDecl` says
             // `extends_args` is always empty for one.
             adopt_generics(block, generics, Vec::new(), extends);
-            members::apply(class_templates(generics), properties, methods, blocks);
+            members::apply(class_templates(generics), properties, methods, blocks, scope);
         }
         StmtKind::TraitDecl {
             generics, properties, methods, ..
         } => {
             adopt_generics(block, generics, Vec::new(), &[]);
-            members::apply(class_templates(generics), properties, methods, blocks);
+            members::apply(class_templates(generics), properties, methods, blocks, scope);
         }
         // Enums carry no class templates, but their methods may declare their own templates.
         StmtKind::EnumDecl { methods, .. } => {
-            members::apply(&mut [], &mut [], methods, blocks);
+            members::apply(&mut [], &mut [], methods, blocks, scope);
         }
-        StmtKind::NamespaceBlock { body, .. } => {
-            let nested = std::mem::take(body);
-            *body = nested
-                .into_iter()
-                .map(|inner| apply_to_stmt(inner, blocks))
-                .collect();
+        StmtKind::NamespaceBlock { name, body } => {
+            let nested = NameScope {
+                namespace: name.as_ref().map(|name| name.parts.join("\\")),
+                classes: HashMap::new(),
+            };
+            *body = apply_in(std::mem::take(body), blocks, nested);
         }
         _ => {}
     }
@@ -222,8 +290,14 @@ fn apply_to_stmt(mut stmt: Stmt, blocks: &HashMap<(u32, u32), DocBlock>) -> Stmt
 /// The rule is the one a method template follows (`members::adopted_signature_type`): a missing
 /// or loosely enforced native hint gives way to the annotation, a native scalar or class hint
 /// does not, and a hint a template takes over stays binding through `TypeParam::native_hint`.
-fn adopt_annotation(declared: &mut Option<TypeExpr>, annotated: &TypeExpr, own: &[TypeParam]) {
-    if let Some(adopted) = members::adopted_signature_type(declared.as_ref(), annotated, own) {
+fn adopt_annotation(
+    declared: &mut Option<TypeExpr>,
+    annotated: &TypeExpr,
+    own: &[TypeParam],
+    scope: &NameScope,
+) {
+    if let Some(adopted) = members::adopted_signature_type(declared.as_ref(), annotated, own, scope)
+    {
         *declared = Some(adopted);
     }
 }
@@ -1098,6 +1172,7 @@ mod tests {
                 params: params.iter().map(|(name, ty)| (name.to_string(), ty.clone())).collect(),
                 return_type,
                 member_returns: Vec::new(),
+                member_params: Vec::new(),
             })
         };
         let StmtKind::ClassDecl { methods, .. } = &program[0].kind else {

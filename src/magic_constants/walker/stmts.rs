@@ -118,6 +118,11 @@ pub(super) fn walk_type_params<P: Pass>(
                     .into_iter()
                     .map(|(method, ty)| (method, pass.transform_value_type(ty, span)))
                     .collect(),
+                member_params: hint
+                    .member_params
+                    .into_iter()
+                    .map(|(method, param, ty)| (method, param, pass.transform_value_type(ty, span)))
+                    .collect(),
             }),
             ..param
         })

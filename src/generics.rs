@@ -1060,6 +1060,7 @@ mod tests {
                 params: vec![("m".to_string(), model.clone())],
                 return_type: None,
                 member_returns: Vec::new(),
+                member_params: Vec::new(),
             }),
             ..doc_tp("T")
         };

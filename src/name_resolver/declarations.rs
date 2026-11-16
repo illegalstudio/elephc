@@ -91,6 +91,11 @@ fn resolve_type_params(
                         .iter()
                         .map(|(method, ty)| (method.clone(), resolve(ty)))
                         .collect(),
+                    member_params: hint
+                        .member_params
+                        .iter()
+                        .map(|(method, param, ty)| (method.clone(), param.clone(), resolve(ty)))
+                        .collect(),
                 }
             }),
         })

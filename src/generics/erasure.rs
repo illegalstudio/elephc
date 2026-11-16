@@ -297,6 +297,23 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
                         if native_return.is_some() {
                             method.return_type = native_return;
                         }
+                        // The parameter hints it took over cannot come back as types (see
+                        // `erase_method`), so the check php-src makes on entry is compiled
+                        // into the body instead.
+                        let guards: Vec<Stmt> = generics
+                            .iter()
+                            .flat_map(|g| g.type_params.iter())
+                            .filter(|param| param.from_docblock)
+                            .filter_map(|param| param.native_hint.as_ref())
+                            .flat_map(|hint| hint.member_params.iter())
+                            .filter(|(member, _, _)| member.eq_ignore_ascii_case(&method.name))
+                            .filter_map(|(_, param, native)| {
+                                native_param_guard(name, method, param, native)
+                            })
+                            .collect();
+                        if method.has_body {
+                            method.body.splice(0..0, guards);
+                        }
                         erase_method(method, &doc_class_params);
                     }
                 }
@@ -307,6 +324,76 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
             _ => {}
         }
     }
+}
+
+/// Builds the entry check php-src makes for a parameter whose loose native hint a class
+/// template took over: `if (!is_object($v)) { throw new \TypeError(...); }`.
+///
+/// The erased parameter is untyped, so without this an argument the hint rejects (`put(5)` on
+/// `put(object $v)`) would run. A `TypeError` thrown on entry is exactly what php-src does, and
+/// unlike a restored hint it leaves the parameter's static type to the call, so the body still
+/// stores it in a property of the template. `null` passes when the hint is nullable or the
+/// parameter defaults to `null`. The variadic is not guarded.
+fn native_param_guard(
+    class: &str,
+    method: &ClassMethod,
+    param: &str,
+    native: &TypeExpr,
+) -> Option<Stmt> {
+    use crate::synthetic_class::{
+        e_binop, e_call, e_concat_all, e_instance_of, e_new_fq, e_not, e_null, e_str, e_var, s_if,
+    };
+    let index = method.params.iter().position(|(name, _, _, _)| name == param)?;
+    let (hint, mut nullable) = match native {
+        TypeExpr::Nullable(inner) => (inner.as_ref(), true),
+        other => (other, false),
+    };
+    nullable |= method.params[index]
+        .2
+        .as_ref()
+        .is_some_and(|default| matches!(default.kind, crate::parser::ast::ExprKind::Null));
+    let is = |function: &str| e_call(function, vec![e_var(param)]);
+    let accepted = match hint {
+        TypeExpr::Array(_) | TypeExpr::AssocArray { .. } => is("\\is_array"),
+        TypeExpr::Iterable => is("\\is_iterable"),
+        TypeExpr::Named(name) => {
+            match name.as_str().trim_start_matches('\\').to_ascii_lowercase().as_str() {
+                "object" => is("\\is_object"),
+                "array" => is("\\is_array"),
+                "iterable" => is("\\is_iterable"),
+                "callable" => is("\\is_callable"),
+                "closure" => e_instance_of(e_var(param), "\\Closure"),
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let mut rejected = e_not(accepted);
+    if nullable {
+        rejected = e_binop(
+            e_binop(e_var(param), crate::parser::ast::BinOp::StrictNotEq, e_null()),
+            crate::parser::ast::BinOp::And,
+            rejected,
+        );
+    }
+    let message = e_concat_all(vec![
+        e_str(&format!(
+            "{}::{}(): Argument #{} (${}) must be of type {}, ",
+            class,
+            method.name,
+            index + 1,
+            param,
+            super::describe_type(native)
+        )),
+        is("\\gettype"),
+        e_str(" given"),
+    ]);
+    // A distinct span: the throw's span is what the compiler keys the exception class by.
+    let throw = Stmt::new(
+        StmtKind::Throw(e_new_fq("TypeError", vec![message])),
+        crate::span::Span::synthetic(),
+    );
+    Some(s_if(rejected, vec![throw], Vec::new(), None))
 }
 
 /// Drops a method's own type parameters, and reads every one of them, and every name in
@@ -321,8 +408,9 @@ fn erase_in(stmts: &mut [Stmt], dispatched: &BTreeSet<(String, String)>) {
 /// A CLASS template's parameters are not restored. The instantiation keeps the template's
 /// properties at the type argument (`Bin<User>::$value` is a `User`), and a body that stores an
 /// erased parameter there (`$this->value = $v`) only checks while that parameter is untyped: a
-/// restored `object $v` is not a `User`, and php-src runs the method. Its return type is
-/// restored by `erase_in` (a `User` is a legal `object` return), which is what keeps the method
+/// restored `object $v` is not a `User`, and php-src runs the method. `erase_in` compiles the
+/// native hint into the body as an entry check instead (`native_param_guard`), and restores the
+/// return type (a `User` is a legal `object` return), which is what keeps the method
 /// compatible with the interface or parent method it implements.
 fn erase_method(method: &mut ClassMethod, class_params: &[String]) {
     for hint in method.type_params.iter().filter_map(|param| param.native_hint.as_ref()) {
