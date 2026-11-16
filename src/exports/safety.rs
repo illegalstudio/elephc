@@ -201,7 +201,7 @@ fn validate_call_graph(
                 }
 
                 if instruction.op == Op::MethodCall
-                    && enqueue_fixed_array_access_method(
+                    && enqueue_fixed_implicit_hook_method(
                         module,
                         function,
                         instruction,
@@ -663,9 +663,11 @@ fn enqueue_user_body<'a>(
     true
 }
 
-/// Resolves the synthetic ArrayAccess existence/removal calls that lowering emits as
-/// `MethodCall`, while leaving every other virtual method call on the opaque-reject path.
-fn enqueue_fixed_array_access_method<'a>(
+/// Resolves the synthetic implicit-hook calls that lowering emits as `MethodCall` — the
+/// ArrayAccess existence/removal calls and the `getIterator()` a typed `foreach` over an
+/// `IteratorAggregate` makes (`ir_lower::stmt::typed_foreach`) — while leaving every other
+/// virtual method call on the opaque-reject path.
+fn enqueue_fixed_implicit_hook_method<'a>(
     module: &'a Module,
     function: &Function,
     instruction: &crate::ir::Instruction,
@@ -676,7 +678,10 @@ fn enqueue_fixed_array_access_method<'a>(
     let Some(method) = immediate_string(module, instruction.immediate.as_ref()) else {
         return false;
     };
-    if !matches!(php_symbol_key(method).as_str(), "offsetexists" | "offsetunset") {
+    if !matches!(
+        php_symbol_key(method).as_str(),
+        "offsetexists" | "offsetunset" | "getiterator"
+    ) {
         return false;
     }
     let Some(receiver) = instruction.operands.first().copied() else {
