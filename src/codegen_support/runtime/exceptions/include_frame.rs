@@ -110,7 +110,7 @@ fn emit_include_frame_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the argument array
     emitter.instruction("call __rt_array_push_refcounted");                     // append, retaining the box
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // publish the final argument array
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 40]");                       // reload the temporary box
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the temporary box into the x86_64 decref input register
     emitter.instruction("call __rt_decref_mixed");                              // the array owns its own reference now
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the descriptor is also the file record
     emitter.instruction("mov rsi, QWORD PTR [rdi + 16]");                       // the include statement's line
@@ -121,4 +121,42 @@ fn emit_include_frame_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the builder slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed frame
+}
+
+#[cfg(test)]
+mod tests {
+    use super::emit_include_frame_reader;
+    use crate::codegen_support::emit::Emitter;
+    use crate::codegen_support::platform::Target;
+
+    /// Returns the instruction that precedes the builder's `__rt_decref_mixed` call on `target`.
+    fn instruction_before_decref(target: &str) -> String {
+        let mut emitter = Emitter::new(Target::parse(target).unwrap());
+        emit_include_frame_reader(&mut emitter);
+        let lines: Vec<String> = emitter
+            .output()
+            .lines()
+            .map(|line| line.split("//").next().unwrap().trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect();
+        let call = lines
+            .iter()
+            .position(|line| line.ends_with("__rt_decref_mixed"))
+            .expect("the builder releases its temporary path box");
+        lines[call - 1].clone()
+    }
+
+    /// The temporary path box reaches `__rt_decref_mixed` in its input register on every target:
+    /// `rax` on linux-x86_64 (passing it in `rdi` released the argument array instead), `x0` on
+    /// aarch64.
+    #[test]
+    fn test_include_frame_builder_releases_the_box_through_decref_input_register() {
+        assert_eq!(
+            instruction_before_decref("linux-x86_64"),
+            "mov rax, QWORD PTR [rbp - 40]"
+        );
+        for target in ["macos-aarch64", "linux-aarch64"] {
+            assert_eq!(instruction_before_decref(target), "ldr x0, [sp, #32]");
+        }
+    }
 }

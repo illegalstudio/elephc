@@ -557,6 +557,37 @@ try { boom(); } catch (RuntimeException $e) {
     assert_eq!(out, "show|inc.php:2|0|require_once|main.php:10|1|\nboom|require_once|\n");
 }
 
+/// Repeated reads of an include frame keep its `args` array alive and intact.
+///
+/// The linux-x86_64 frame builder released its temporary path box through `rdi` while
+/// `__rt_decref_mixed` reads `rax`, so it freed the freshly built `args` array instead: the frame
+/// then reported no `args` (or a dangling one) and leaked the box on every read.
+#[test]
+fn test_core_backtrace_regression_include_frame_args_survive_repeated_reads() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                r#"<?php
+function show(): void {
+    for ($i = 0; $i < 3; $i++) {
+        foreach (debug_backtrace() as $f) {
+            echo $f["function"] ?? "-", "|", isset($f["args"]) ? count($f["args"]) : -1, "|";
+            if (isset($f["args"][0])) { echo basename($f["args"][0]), "|"; }
+        }
+        echo "\n";
+    }
+}
+require_once __DIR__ . "/inc.php";
+"#,
+            ),
+            ("inc.php", "<?php\nshow();\n"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "show|0|require_once|1|inc.php|\n".repeat(3));
+}
+
 /// `(array) $exception` exposes the Traceable `trace` slot as the array it is.
 ///
 /// PHP declares the slot `array`; elephc declares it `Mixed` (stores may publish a boxed cell)
