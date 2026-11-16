@@ -791,13 +791,23 @@ fn emit_inline_mixed_callable_descriptor_value(
         emit_push_mixed_unbox_payload(ctx);
         let selected_label = ctx.next_label("mixed_callable_value_object_done");
         let object_miss_label = ctx.next_label("mixed_callable_value_object_miss");
+        let object_bound_label = ctx.next_label("mixed_callable_value_object_bound");
         selector_tables::emit_instance_target_table_lookup(
             ctx,
             &invokable_targets,
             selector_tables::ReceiverSelector::InvokableObject,
-            &selected_label,
+            &object_bound_label,
             &object_miss_label,
         )?;
+        ctx.emitter.label(&object_bound_label);
+        // The template is shared with `[$obj, '__invoke']`, an array in PHP. Only this copy
+        // stands for the object itself, which is_object() and get_class() still see.
+        callable_descriptor::emit_store_kind_to_runtime_descriptor(
+            ctx.emitter,
+            abi::int_result_reg(ctx.emitter),
+            callable_descriptor::CALLABLE_DESC_KIND_OBJECT_INVOKE,
+        );
+        abi::emit_jump(ctx.emitter, &selected_label);
         ctx.emitter.label(&object_miss_label);
         if eval_fallback_slot.is_some() {
             abi::emit_release_temporary_stack(ctx.emitter, MIXED_VALUE_BYTES);
