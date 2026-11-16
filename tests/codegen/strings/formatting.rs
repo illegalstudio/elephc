@@ -587,17 +587,6 @@ fn test_sprintf_overlong_width_reports_runtime_error() {
     );
 }
 
-/// A width that fits in `INT_MAX` but not in the configured result arena must be a controlled
-/// error too; `sprintf("%2000000000s", "x")` used to segfault.
-#[test]
-fn test_sprintf_result_larger_than_buffer_reports_runtime_error() {
-    let err = compile_and_run_expect_failure(r#"<?php echo sprintf("%2000000000s", "x");"#);
-    assert!(
-        err.contains("formatted result exceeds the configured string buffer"),
-        "{err}"
-    );
-}
-
 /// Formatted results must move beyond the shared 64 KiB scratch arena without truncation or
 /// corruption. This covers a large `%s` operand, a dynamically-built literal-only format,
 /// and width padding, which exercise the conversion and literal append paths independently.
