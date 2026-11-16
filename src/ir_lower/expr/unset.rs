@@ -331,9 +331,11 @@ pub(super) fn lower_unset_array_access(
         }
     }
     if let ExprKind::Variable(name) = &array.kind {
+        // A gradual (`mixed`, union) local goes through `OffsetUnset` too: the backend branches
+        // on the runtime payload, so a boxed ArrayAccess object has its `offsetUnset()` called,
+        // null is a no-op and a scalar raises PHP's `Error`.
         if ctx.local_type(name).is_php_array()
-            || (ctx.is_ref_bound_local(name)
-                && ctx.local_type(name).codegen_repr() == PhpType::Mixed)
+            || ctx.local_type(name).codegen_repr() == PhpType::Mixed
         {
             let removed = lower_unset_boxed_array_element(ctx, name, array.span, index, expr);
             return can_gate.then_some(removed);
@@ -351,10 +353,6 @@ pub(super) fn lower_unset_array_access(
                 };
                 let removed = lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
                 return can_gate.then_some(removed);
-            }
-            PhpType::Mixed | PhpType::Union(_) => {
-                lower_unset_mixed_array_element(ctx, name, array.span, index, expr);
-                return None;
             }
             _ => {}
         }
@@ -711,11 +709,6 @@ fn lower_unset_gradual_property_element(
     index: &Expr,
     expr: &Expr,
 ) -> bool {
-    // KNOWN LIMIT. A gradual property could hold an ArrayAccess OBJECT instead of an array, and
-    // PHP decides that at run time. The shape this replaces did not decide it either — it emitted
-    // `offsetUnset()` unconditionally, which faults on the array case that actually occurs
-    // (Symfony's container, Twig's `Node::$attributes`). Getting both right needs a runtime tag
-    // branch here; until then this takes the array reading, which is the one these frameworks use.
     let receiver_is_generic =
         crate::ir_lower::stmt::property_array_writes::is_generic_object_receiver(
             ctx,
@@ -782,6 +775,42 @@ fn lower_unset_gradual_property_element(
         Op::PropGet.default_effects(),
         Some(expr.span),
     );
+    // An ArrayAccess OBJECT held by the gradual property has its `offsetUnset()` called, as PHP
+    // does; the array reading below would raise the gradual array TypeError for it.
+    let is_object = ctx.emit_value(
+        Op::TypePredicate,
+        vec![property_value.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+        PhpType::Bool,
+        Op::TypePredicate.default_effects(),
+        Some(expr.span),
+    );
+    let object_block = ctx
+        .builder
+        .create_named_block("unset.generic_property_element.object", Vec::new());
+    let array_block = ctx
+        .builder
+        .create_named_block("unset.generic_property_element.array", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_object.value,
+        then_target: object_block,
+        then_args: Vec::new(),
+        else_target: array_block,
+        else_args: Vec::new(),
+    });
+    ctx.builder.position_at_end(object_block);
+    ctx.emit_void(
+        Op::OffsetUnset,
+        vec![property_value.value, key.value],
+        None,
+        Op::OffsetUnset.default_effects(),
+        Some(expr.span),
+    );
+    if ctx.value_is_owning_temporary(property_value) {
+        crate::ir_lower::ownership::release_if_owned(ctx, property_value, Some(expr.span));
+    }
+    branch_to(ctx, merge);
+    ctx.builder.position_at_end(array_block);
     let assoc_ty = PhpType::AssocArray {
         key: Box::new(PhpType::Mixed),
         value: Box::new(PhpType::Mixed),
@@ -827,75 +856,6 @@ fn lower_unset_gradual_property_element(
         crate::ir_lower::ownership::release_if_owned(ctx, boxed, Some(expr.span));
     }
     true
-}
-
-/// Lowers `unset($mixed[$key])` for a gradual local that holds an array at runtime.
-///
-/// `MixedToHash` enforces the runtime array boundary and returns an independently owned sparse
-/// hash, so deleting a key cannot mutate aliases of the original boxed array. The mutated hash is
-/// boxed back into the local's unchanged `Mixed` storage after the previous boxed owner is
-/// released. This is the gradual counterpart of `lower_unset_indexed_element` and preserves PHP's
-/// non-renumbering `unset()` semantics for both indexed and associative runtime arrays.
-fn lower_unset_mixed_array_element(
-    ctx: &mut LoweringContext<'_, '_>,
-    name: &str,
-    array_span: Span,
-    index: &Expr,
-    expr: &Expr,
-) {
-    let source = ctx.load_local(name, Some(array_span));
-    let assoc_ty = PhpType::AssocArray {
-        key: Box::new(PhpType::Mixed),
-        value: Box::new(PhpType::Mixed),
-    };
-    let key = lower_expr(ctx, index);
-    // Unsetting an element of null is a silent no-op in PHP; `MixedToHash` would raise the
-    // array TypeError instead, so a null local skips the delete and keeps its value.
-    let is_null = ctx.emit_value(
-        Op::IsNull,
-        vec![source.value],
-        None,
-        PhpType::Bool,
-        Op::IsNull.default_effects(),
-        Some(array_span),
-    );
-    let delete = ctx
-        .builder
-        .create_named_block("unset.mixed_element.delete", Vec::new());
-    let merge = ctx
-        .builder
-        .create_named_block("unset.mixed_element.merge", Vec::new());
-    ctx.builder.terminate(Terminator::CondBr {
-        cond: is_null.value,
-        then_target: merge,
-        then_args: Vec::new(),
-        else_target: delete,
-        else_args: Vec::new(),
-    });
-    ctx.builder.position_at_end(delete);
-    let hash = ctx.emit_value(
-        Op::MixedToHash,
-        vec![source.value],
-        None,
-        assoc_ty,
-        Op::MixedToHash.default_effects(),
-        Some(array_span),
-    );
-    ctx.emit_void(
-        Op::HashUnset,
-        vec![hash.value, key.value],
-        None,
-        Op::HashUnset.default_effects(),
-        Some(expr.span),
-    );
-    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span));
-    let slot = ctx.declare_local(name, PhpType::Mixed);
-    ctx.release_stored_local_value(name, slot, Some(expr.span));
-    ctx.store_prepared_mutated_local(name, boxed, PhpType::Mixed, Some(expr.span));
-    branch_to(ctx, merge);
-    ctx.builder.position_at_end(merge);
-    crate::ir_lower::stmt::release_persisted_string_operand(ctx, key, expr.span);
-    ctx.set_local_type(name, PhpType::Mixed);
 }
 
 /// Detaches the declared array cell before sparse removal and roots an owned key across callbacks.
