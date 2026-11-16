@@ -858,6 +858,28 @@ echo "plain: ", cipher($db), "\n";
     assert_eq!(out, "bool(true)\nssl_set only: plain\nbool(true)\nflag no-verify: tls\nflag: tls\nplain: plain\n");
 }
 
+/// mysqlnd verifies the server certificate as soon as `ssl_set()` named ANY TLS option, not only
+/// a CA file, and whenever `MYSQLI_CLIENT_SSL_VERIFY_SERVER_CERT` (1 << 30) is passed. The live
+/// server's certificate is self-signed, so php refuses both connections; the prelude used to turn
+/// verification on only for a CA file and connected to any certificate.
+#[test]
+#[ignore]
+fn test_mysqli_ssl_set_without_a_ca_file_still_verifies() {
+    let out = compile_and_run(&my_program(
+        r#"
+mysqli_report(MYSQLI_REPORT_OFF);
+$a = mysqli_init();
+$a->ssl_set(null, null, null, null, 'ECDHE-RSA-AES128-GCM-SHA256');
+$ok = @$a->real_connect($host, $user, $pass, $dbname, $port, null, MYSQLI_CLIENT_SSL);
+echo "cipher only: ", $ok ? "connected" : "refused", "\n";
+$b = mysqli_init();
+$ok = @$b->real_connect($host, $user, $pass, $dbname, $port, null, MYSQLI_CLIENT_SSL | 1073741824);
+echo "verify flag: ", $ok ? "connected" : "refused", "\n";
+"#,
+    ));
+    assert_eq!(out, "cipher only: refused\nverify flag: refused\n");
+}
+
 /// `send_long_data()` streams a parameter in chunks (doctrine/dbal's `Mysqli\Statement` sends
 /// LOB streams this way); `execute()` binds the accumulated chunks and forgets them, `reset()`
 /// drops pending ones, and an out-of-range or negative parameter number fails as php does.

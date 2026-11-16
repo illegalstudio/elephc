@@ -180,8 +180,11 @@ class mysqli {
         }
         $_foundRows = (($flags & 2) != 0) ? 1 : 0;
         // MYSQLI_CLIENT_SSL opens TLS with the ssl_set() files, packed as PDO packs its
-        // Pdo\Mysql::ATTR_SSL_* options. mysqlnd verifies the server certificate only
-        // against a CA it was given, and never under MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT.
+        // Pdo\Mysql::ATTR_SSL_* options. mysqlnd (mysqlnd_vio enable_ssl) verifies the
+        // server certificate whenever ssl_set() named any of key, certificate, CA file, CA
+        // directory or cipher, or MYSQLI_CLIENT_SSL_VERIFY_SERVER_CERT (1 << 30) asks for it;
+        // it skips verification only under MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT or when
+        // nothing was set.
         $_sslConfig = "";
         if (($flags & 2048) != 0) {
             if ($this->sslCa !== "") {
@@ -193,7 +196,8 @@ class mysqli {
             if ($this->sslKey !== "") {
                 $_sslConfig = $_sslConfig . "key=" . $this->sslKey . ";";
             }
-            $_verify = ($this->sslCa !== "" && ($flags & 64) == 0) ? "1" : "0";
+            $_anySsl = $this->sslKey !== "" || $this->sslCert !== "" || $this->sslCa !== "" || $this->sslCapath !== "" || $this->sslCipher !== "";
+            $_verify = (($flags & 1073741824) != 0 || ($_anySsl && ($flags & 64) == 0)) ? "1" : "0";
             $_sslConfig = $_sslConfig . "verify=" . $_verify . ";";
             if ($this->sslCapath !== "") {
                 $_driverConfig = $_driverConfig . "capath=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $this->sslCapath))) . ";";

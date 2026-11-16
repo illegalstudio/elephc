@@ -295,7 +295,8 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                                 vec![],
                                 None,
                             ),
-                            s_assign("_verify", e_ternary(e_binop(e_binop(e_this_prop("sslCa"), BinOp::StrictNotEq, e_str("")), BinOp::And, e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(64)), BinOp::Eq, e_int(0))), e_str("1"), e_str("0"))),
+                            s_assign("_anySsl", e_binop(e_binop(e_binop(e_binop(e_binop(e_this_prop("sslKey"), BinOp::StrictNotEq, e_str("")), BinOp::Or, e_binop(e_this_prop("sslCert"), BinOp::StrictNotEq, e_str(""))), BinOp::Or, e_binop(e_this_prop("sslCa"), BinOp::StrictNotEq, e_str(""))), BinOp::Or, e_binop(e_this_prop("sslCapath"), BinOp::StrictNotEq, e_str(""))), BinOp::Or, e_binop(e_this_prop("sslCipher"), BinOp::StrictNotEq, e_str("")))),
+                            s_assign("_verify", e_ternary(e_binop(e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(1073741824)), BinOp::NotEq, e_int(0)), BinOp::Or, e_binop(e_var("_anySsl"), BinOp::And, e_binop(e_binop(e_var("flags"), BinOp::BitAnd, e_int(64)), BinOp::Eq, e_int(0)))), e_str("1"), e_str("0"))),
                             s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("verify=")), BinOp::Concat, e_var("_verify")), BinOp::Concat, e_str(";"))),
                             s_if(
                                 e_binop(e_this_prop("sslCapath"), BinOp::StrictNotEq, e_str("")),
