@@ -57,38 +57,58 @@ fn emit_string_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #64");                                    // establish this helper's frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save candidate string pointer for repeated table comparisons
     emitter.instruction("str x1, [sp, #8]");                                    // save candidate string length for repeated table comparisons
+    // -- builtin names: binary search over the strict range, then (non-strict) the rest --
+    // The table holds two ranges, each sorted the way `__rt_strcasecmp` orders names: the
+    // strict-profile builtins in [0, strict_count) and every other builtin after them.
     abi::emit_symbol_address(emitter, "x9", "_callable_builtin_table");
     emitter.instruction("str x9, [sp, #16]");                                   // save the builtin callable-name table pointer
+    emitter.instruction("str xzr, [sp, #32]");                                  // search the strict range from entry index zero
+    abi::emit_symbol_address(emitter, "x9", "_callable_builtin_strict_count");
+    emitter.instruction("ldr x9, [x9]");                                        // load the end of the strict-profile range
+    emitter.instruction("str x9, [sp, #24]");                                   // bound the first search by the strict range
     abi::emit_symbol_address(emitter, "x10", "_callable_strict_profile");
     emitter.instruction("ldr x10, [x10]");                                      // load the current call site's builtin visibility profile
-    emitter.instruction("cbz x10, __rt_is_callable_string_full_count");         // non-strict call sites scan the complete elephc builtin table
-    abi::emit_symbol_address(emitter, "x9", "_callable_builtin_strict_count");
-    emitter.instruction("b __rt_is_callable_string_count_ready");               // skip the full-count selection after choosing strict metadata
-    emitter.label("__rt_is_callable_string_full_count");
-    abi::emit_symbol_address(emitter, "x9", "_callable_builtin_count");
-    emitter.label("__rt_is_callable_string_count_ready");
-    emitter.instruction("ldr x9, [x9]");                                        // load builtin callable-name count from fixed runtime data
-    emitter.instruction("str x9, [sp, #24]");                                   // save the active table count for the builtin scan
-    emitter.instruction("str xzr, [sp, #32]");                                  // start the builtin scan at entry index zero
+    emitter.instruction("cmp x10, #0");                                         // does this call site see only strict-profile builtins?
+    emitter.instruction("cset x10, eq");                                        // a non-strict call site also searches the remaining builtins
+    emitter.instruction("str x10, [sp, #48]");                                  // remember whether the second range is still pending
 
     emitter.label("__rt_is_callable_string_builtin_loop");
-    emitter.instruction("ldr x9, [sp, #32]");                                   // load current builtin table index
-    emitter.instruction("ldr x10, [sp, #24]");                                  // load builtin table entry count
-    emitter.instruction("cmp x9, x10");                                         // have all builtin names been checked?
-    emitter.instruction("b.ge __rt_is_callable_string_user_setup");             // continue with user functions after the builtin table
+    emitter.instruction("ldr x9, [sp, #32]");                                   // load the lower search bound
+    emitter.instruction("ldr x10, [sp, #24]");                                  // load the exclusive upper search bound
+    emitter.instruction("cmp x9, x10");                                         // is the current builtin range exhausted?
+    emitter.instruction("b.ge __rt_is_callable_string_builtin_range_done");     // try the next range or the user functions
+    emitter.instruction("add x9, x9, x10");                                     // sum both bounds to locate the midpoint
+    emitter.instruction("lsr x9, x9, #1");                                      // midpoint index of the remaining range
+    emitter.instruction("str x9, [sp, #40]");                                   // keep the midpoint across the comparison call
     emitter.instruction("ldr x11, [sp, #16]");                                  // reload builtin table base pointer
-    emitter.instruction("lsl x12, x9, #4");                                     // multiply index by 16-byte builtin table entry size
-    emitter.instruction("add x11, x11, x12");                                   // compute address of the current builtin table entry
+    emitter.instruction("add x11, x11, x9, lsl #4");                            // address the 16-byte midpoint entry
     emitter.instruction("ldr x1, [sp, #0]");                                    // pass candidate string pointer as comparison left side
     emitter.instruction("ldr x2, [sp, #8]");                                    // pass candidate string length as comparison left side
     emitter.instruction("ldr x3, [x11]");                                       // pass builtin name pointer as comparison right side
     emitter.instruction("ldr x4, [x11, #8]");                                   // pass builtin name length as comparison right side
-    abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare builtin names case-insensitively like PHP internals
+    abi::emit_call_label(emitter, "__rt_strcasecmp");                           // order the candidate against the midpoint like PHP's case-insensitive lookup
     emitter.instruction("cbz x0, __rt_is_callable_string_true");                // a zero comparison result means the string is a builtin callable
-    emitter.instruction("ldr x9, [sp, #32]");                                   // reload current builtin table index after comparison
-    emitter.instruction("add x9, x9, #1");                                      // advance to the next builtin table entry
-    emitter.instruction("str x9, [sp, #32]");                                   // persist the incremented builtin table index
-    emitter.instruction("b __rt_is_callable_string_builtin_loop");              // continue scanning builtin callable names
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the midpoint after the comparison call
+    emitter.instruction("cmp x0, #0");                                          // does the candidate sort before the midpoint name?
+    emitter.instruction("b.ge __rt_is_callable_string_builtin_upper");          // a later candidate continues in the upper half
+    emitter.instruction("str x9, [sp, #24]");                                   // an earlier candidate continues below the midpoint
+    emitter.instruction("b __rt_is_callable_string_builtin_loop");              // keep halving the lower half
+    emitter.label("__rt_is_callable_string_builtin_upper");
+    emitter.instruction("add x9, x9, #1");                                      // skip the midpoint, already compared
+    emitter.instruction("str x9, [sp, #32]");                                   // continue above the midpoint
+    emitter.instruction("b __rt_is_callable_string_builtin_loop");              // keep halving the upper half
+
+    emitter.label("__rt_is_callable_string_builtin_range_done");
+    emitter.instruction("ldr x9, [sp, #48]");                                   // is the non-strict range still pending?
+    emitter.instruction("cbz x9, __rt_is_callable_string_user_setup");          // continue with user functions after the builtin ranges
+    emitter.instruction("str xzr, [sp, #48]");                                  // search the second range only once
+    abi::emit_symbol_address(emitter, "x9", "_callable_builtin_strict_count");
+    emitter.instruction("ldr x9, [x9]");                                        // the second range starts after the strict builtins
+    emitter.instruction("str x9, [sp, #32]");                                   // set the lower bound of the remaining builtins
+    abi::emit_symbol_address(emitter, "x9", "_callable_builtin_count");
+    emitter.instruction("ldr x9, [x9]");                                        // the second range ends at the full builtin count
+    emitter.instruction("str x9, [sp, #24]");                                   // set the upper bound of the remaining builtins
+    emitter.instruction("b __rt_is_callable_string_builtin_loop");              // search the remaining builtins
 
     emitter.label("__rt_is_callable_string_user_setup");
     abi::emit_symbol_address(emitter, "x9", "_callable_user_function_table");
@@ -663,41 +683,61 @@ fn emit_string_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_is_callable_string_unqualified_x86_64");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer before table scans
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base for saved string and table cursor
-    emitter.instruction("sub rsp, 48");                                         // reserve slots for string pointer, length, table pointer, count, index, and entry pointer
+    emitter.instruction("sub rsp, 64");                                         // reserve slots for string pointer, length, table pointer, bounds, entry pointer, and pending range
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save candidate string pointer for repeated comparisons
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save candidate string length for repeated comparisons
+    // -- builtin names: binary search over the strict range, then (non-strict) the rest --
+    // The table holds two ranges, each sorted the way `__rt_strcasecmp` orders names: the
+    // strict-profile builtins in [0, strict_count) and every other builtin after them.
     abi::emit_symbol_address(emitter, "r10", "_callable_builtin_table");
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save builtin callable-name table pointer
-    abi::emit_symbol_address(emitter, "r11", "_callable_strict_profile");
-    emitter.instruction("cmp QWORD PTR [r11], 0");                              // inspect the current call site's builtin visibility profile
-    emitter.instruction("je __rt_is_callable_string_full_count_x86_64");        // non-strict call sites scan the complete elephc builtin table
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // search the strict range from entry index zero
     abi::emit_symbol_address(emitter, "r10", "_callable_builtin_strict_count");
-    emitter.instruction("jmp __rt_is_callable_string_count_ready_x86_64");      // skip full-count selection after choosing strict metadata
-    emitter.label("__rt_is_callable_string_full_count_x86_64");
-    abi::emit_symbol_address(emitter, "r10", "_callable_builtin_count");
-    emitter.label("__rt_is_callable_string_count_ready_x86_64");
-    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load builtin callable-name count from fixed runtime data
-    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // save active table count for builtin scan
-    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // start builtin scan at entry index zero
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // load the end of the strict-profile range
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // bound the first search by the strict range
+    abi::emit_symbol_address(emitter, "r11", "_callable_strict_profile");
+    emitter.instruction("xor r10, r10");                                        // assume the strict range is the only one searched
+    emitter.instruction("cmp QWORD PTR [r11], 0");                              // does this call site see every builtin?
+    emitter.instruction("sete r10b");                                           // a non-strict call site also searches the remaining builtins
+    emitter.instruction("mov QWORD PTR [rbp - 56], r10");                       // remember whether the second range is still pending
 
     emitter.label("__rt_is_callable_string_builtin_loop_x86_64");
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // load current builtin table index
-    emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // have all builtin names been checked?
-    emitter.instruction("jge __rt_is_callable_string_user_setup_x86_64");       // continue with user functions after builtin scan
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // load the lower search bound
+    emitter.instruction("cmp r10, QWORD PTR [rbp - 32]");                       // is the current builtin range exhausted?
+    emitter.instruction("jge __rt_is_callable_string_builtin_range_done_x86_64"); // try the next range or the user functions
+    emitter.instruction("add r10, QWORD PTR [rbp - 32]");                       // sum both bounds to locate the midpoint
+    emitter.instruction("shr r10, 1");                                          // midpoint index of the remaining range
+    emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // keep the midpoint across the comparison call
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload builtin table pointer
-    emitter.instruction("shl r10, 4");                                          // multiply index by 16-byte builtin table entry size
-    emitter.instruction("add r11, r10");                                        // compute current builtin table entry address
+    emitter.instruction("shl r10, 4");                                          // scale the midpoint by the 16-byte entry size
+    emitter.instruction("add r11, r10");                                        // address the midpoint entry
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // pass candidate string pointer as comparison left side
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass candidate string length as comparison left side
     emitter.instruction("mov rdx, QWORD PTR [r11]");                            // pass builtin name pointer as comparison right side
     emitter.instruction("mov rcx, QWORD PTR [r11 + 8]");                        // pass builtin name length as comparison right side
-    abi::emit_call_label(emitter, "__rt_strcasecmp");                           // compare builtin names case-insensitively like PHP internals
+    abi::emit_call_label(emitter, "__rt_strcasecmp");                           // order the candidate against the midpoint like PHP's case-insensitive lookup
     emitter.instruction("test rax, rax");                                       // zero comparison result means equal strings
     emitter.instruction("je __rt_is_callable_string_true_x86_64");              // return true for recognized builtin callable strings
-    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload current builtin table index
-    emitter.instruction("add r10, 1");                                          // advance to the next builtin table entry
-    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // persist incremented builtin table index
-    emitter.instruction("jmp __rt_is_callable_string_builtin_loop_x86_64");     // continue scanning builtin callable names
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // reload the midpoint after the comparison call
+    emitter.instruction("jg __rt_is_callable_string_builtin_upper_x86_64");     // a later candidate continues in the upper half
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // an earlier candidate continues below the midpoint
+    emitter.instruction("jmp __rt_is_callable_string_builtin_loop_x86_64");     // keep halving the lower half
+    emitter.label("__rt_is_callable_string_builtin_upper_x86_64");
+    emitter.instruction("add r10, 1");                                          // skip the midpoint, already compared
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // continue above the midpoint
+    emitter.instruction("jmp __rt_is_callable_string_builtin_loop_x86_64");     // keep halving the upper half
+
+    emitter.label("__rt_is_callable_string_builtin_range_done_x86_64");
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // is the non-strict range still pending?
+    emitter.instruction("je __rt_is_callable_string_user_setup_x86_64");        // continue with user functions after the builtin ranges
+    emitter.instruction("mov QWORD PTR [rbp - 56], 0");                         // search the second range only once
+    abi::emit_symbol_address(emitter, "r10", "_callable_builtin_strict_count");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // the second range starts after the strict builtins
+    emitter.instruction("mov QWORD PTR [rbp - 40], r10");                       // set the lower bound of the remaining builtins
+    abi::emit_symbol_address(emitter, "r10", "_callable_builtin_count");
+    emitter.instruction("mov r10, QWORD PTR [r10]");                            // the second range ends at the full builtin count
+    emitter.instruction("mov QWORD PTR [rbp - 32], r10");                       // set the upper bound of the remaining builtins
+    emitter.instruction("jmp __rt_is_callable_string_builtin_loop_x86_64");     // search the remaining builtins
 
     emitter.label("__rt_is_callable_string_user_setup_x86_64");
     abi::emit_symbol_address(emitter, "r10", "_callable_user_function_table");
@@ -788,7 +828,7 @@ fn emit_string_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor eax, eax");                                        // return false when no callable string target exists
 
     emitter.label("__rt_is_callable_string_done_x86_64");
-    emitter.instruction("add rsp, 48");                                         // release lookup frame slots
+    emitter.instruction("add rsp, 64");                                         // release lookup frame slots
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return boolean result in rax
 }

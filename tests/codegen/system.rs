@@ -3067,6 +3067,23 @@ fn test_is_callable_dynamic_builtin_string_returns_true() {
     assert_eq!(out, "y");
 }
 
+/// Verifies the runtime builtin lookup behind a dynamic `is_callable()` finds names in both
+/// table ranges (PHP builtins and elephc extension builtins such as `buffer_new`), whatever
+/// their case or a leading `\`, and refuses near misses that share a prefix with a builtin.
+///
+/// The lookup binary-searches each sorted range, so names on either side of an `_` boundary
+/// (`array_map`, `arraymap`) and prefixes (`str`, `strlen_`) exercise its ordering.
+#[test]
+fn test_is_callable_dynamic_builtin_lookup_covers_both_table_ranges() {
+    let out = compile_and_run(
+        r#"<?php
+            $names = explode(",", "abs,ARRAY_MAP,arraymap,Strlen,str,strlen_,\\ucfirst,buffer_new,BUFFER_NEW,zzz_missing,a");
+            foreach ($names as $name) { echo is_callable($name) ? "y" : "n"; }
+        "#,
+    );
+    assert_eq!(out, "yynynnyyynn");
+}
+
 /// Verifies `is_callable` correctly resolves a dynamic string (function argument) that names a
 /// user-defined function, demonstrating runtime catalog lookup for user functions.
 #[test]
