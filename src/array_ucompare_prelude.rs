@@ -24,9 +24,9 @@
 
 use crate::parser::ast::{BinOp, CastType, Program, Stmt, StmtKind, TypeExpr};
 use crate::synthetic_class::{
-    e_array, e_binop, e_bool, e_call, e_cast, e_index, e_int, e_not, e_null,
+    e_array, e_binop, e_bool, e_call, e_cast, e_concat_all, e_index, e_int, e_new_fq, e_not, e_null, e_str,
     e_ternary, e_var, function, php_semantics_declarations, s_array_assign, s_assign, s_break,
-    s_continue, s_expr, s_foreach, s_if, s_return, t_array, t_mixed,
+    s_continue, s_expr, s_foreach, s_if, s_return, s_throw, t_array, t_mixed,
 };
 
 /// Prelude inventory group holding the declarations.
@@ -173,6 +173,23 @@ fn helper() -> Stmt {
 /// One public wrapper: pops its comparator(s) off the variadic tail and calls the helper.
 fn wrapper(name: &str, intersect: bool, value_mode: i64, key_mode: i64) -> Stmt {
     let mut body = Vec::new();
+    // php's arity: the array plus one callable per user comparator, so fewer arguments than that
+    // is an ArgumentCountError rather than a pop from an empty list.
+    let comparators = i64::from(key_mode == USER) + i64::from(value_mode == USER);
+    let rest_count = || e_call("count", vec![e_var("rest")]);
+    body.push(s_if(
+        e_binop(rest_count(), BinOp::Lt, e_int(comparators)),
+        vec![s_throw(e_new_fq(
+            "ArgumentCountError",
+            vec![e_concat_all(vec![
+                e_str(&format!("{name}() expects at least {} arguments, ", comparators + 1)),
+                e_binop(rest_count(), BinOp::Add, e_int(1)),
+                e_str(" given"),
+            ])],
+        ))],
+        vec![],
+        None,
+    ));
     // The key comparator is the last argument, the value comparator the one before it.
     if key_mode == USER {
         body.push(s_assign("keyCb", e_call("array_pop", vec![e_var("rest")])));
@@ -180,6 +197,27 @@ fn wrapper(name: &str, intersect: bool, value_mode: i64, key_mode: i64) -> Stmt 
     if value_mode == USER {
         body.push(s_assign("valueCb", e_call("array_pop", vec![e_var("rest")])));
     }
+    // Every remaining argument is an array parameter in php (`array ...$arrays`).
+    body.push(s_foreach(
+        e_var("rest"),
+        Some("position"),
+        "other",
+        vec![s_if(
+            e_not(e_call("is_array", vec![e_var("other")])),
+            vec![s_throw(e_new_fq(
+                "TypeError",
+                vec![e_concat_all(vec![
+                    e_str(&format!("{name}(): Argument #")),
+                    e_binop(e_var("position"), BinOp::Add, e_int(2)),
+                    e_str(" must be of type array, "),
+                    e_call("get_debug_type", vec![e_var("other")]),
+                    e_str(" given"),
+                ])],
+            ))],
+            vec![],
+            None,
+        )],
+    ));
     body.push(s_expr(e_call(
         "array_unshift",
         vec![e_var("rest"), e_var("array")],
