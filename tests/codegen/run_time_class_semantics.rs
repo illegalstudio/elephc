@@ -94,3 +94,21 @@ echo "\n";
     );
     assert_eq!(out, "c\n20\n2;3;\n");
 }
+
+/// A by-value `foreach` over an object declared as a non-traversable class or an interface walks
+/// the iterator when the run-time object is traversable, and the visible properties otherwise.
+#[test]
+fn test_foreach_over_a_declared_type_follows_the_run_time_object() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag { public $pub = 'p'; private $priv = 'q'; }
+class Coll extends Bag implements IteratorAggregate { private array $items = [1, 2]; function getIterator(): Iterator { return new ArrayIterator($this->items); } }
+function walk(Bag $b) { foreach ($b as $k => $v) echo "$k=$v\n"; }
+walk(new Coll());
+walk(new Bag());
+function cnt(Countable $c) { foreach ($c as $v) echo "v=$v\n"; }
+cnt(new ArrayObject([7, 8]));
+"#,
+    );
+    assert_eq!(out, "0=1\n1=2\npub=p\nv=7\nv=8\n");
+}

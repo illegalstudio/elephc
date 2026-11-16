@@ -1161,6 +1161,89 @@ fn retire_aggregate_root_under_iterator_owners(
     }
 }
 
+/// Builds the boxed `foreach` source of an object whose traversability is known only at run
+/// time: the object itself when it is `Traversable`, its scope-filtered property projection
+/// otherwise. The object is not consumed; the caller pins it for the loop as for a projection.
+fn foreach_source_by_run_time_class(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let traversable = ctx.intern_class_name("Traversable");
+    let is_traversable = ctx.emit_value(
+        Op::InstanceOf,
+        vec![source.value],
+        Some(Immediate::Data(traversable)),
+        PhpType::Bool,
+        Op::InstanceOf.default_effects(),
+        Some(span),
+    );
+    let iterate = ctx.builder.create_named_block("foreach.object.traversable", Vec::new());
+    let project = ctx.builder.create_named_block("foreach.object.properties", Vec::new());
+    let merge = ctx.builder.create_named_block("foreach.object.source", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_traversable.value,
+        then_target: iterate,
+        then_args: Vec::new(),
+        else_target: project,
+        else_args: Vec::new(),
+    });
+    let split = ctx.initialized_slots_snapshot();
+
+    ctx.builder.position_at_end(iterate);
+    let held = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
+    let boxed = ctx.box_value_as_mixed(held, PhpType::Mixed, Some(span));
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, boxed, span);
+    let merged = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::Br { target: merge, args: Vec::new() });
+
+    ctx.builder.position_at_end(project);
+    ctx.restore_initialized_slots(split);
+    let projection = ctx.emit_value(
+        Op::Cast,
+        vec![source.value],
+        Some(Immediate::CastTarget(IrType::Heap(crate::ir::IrHeapKind::Hash))),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        Op::Cast.default_effects(),
+        Some(span),
+    );
+    let boxed = ctx.box_value_as_mixed(projection, PhpType::Mixed, Some(span));
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, boxed, span);
+    ctx.builder.terminate(Terminator::Br { target: merge, args: Vec::new() });
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merged);
+    crate::ir_lower::expr::take_owned_temp(ctx, &temp, span)
+}
+
+/// Whether a value declared as `declared` (a class or an interface that is not itself traversable)
+/// can be, at run time, an object of a class implementing `Iterator` or `IteratorAggregate`.
+///
+/// An interface answers yes outright: builtin classes such as `ArrayObject` implement
+/// `Countable` / `ArrayAccess` beside `IteratorAggregate`, and they are not all in the class table.
+/// A class answers yes when one of the classes inheriting from it is traversable.
+fn foreach_object_may_be_traversable_at_run_time(
+    ctx: &LoweringContext<'_, '_>,
+    declared: &str,
+) -> bool {
+    if ctx.interfaces.contains_key(declared) || !ctx.classes.contains_key(declared) {
+        return true;
+    }
+    ctx.classes.keys().any(|candidate| {
+        candidate.as_str() != declared
+            && crate::types::class_inherits_from(ctx.classes, candidate, declared)
+            && ["Iterator", "IteratorAggregate"].iter().any(|interface| {
+                crate::ir_lower::expr::array_access_types::class_implements_interface_for_ir(
+                    ctx, candidate, interface,
+                )
+            })
+    })
+}
+
 /// Casts an ordinary concrete object to its visible property hash before `foreach` iteration.
 ///
 /// Returns the projection and, when the object was an owning temporary, the object itself: php's
@@ -1199,6 +1282,15 @@ fn normalize_plain_object_foreach_source(
         );
     if traversable {
         return (source, None);
+    }
+    // The declared type is not the run-time class: a `Bag` parameter may hold a subclass that
+    // implements `IteratorAggregate`, and an interface (`Countable`) may be implemented by an
+    // `ArrayObject`. When any class the value can be is traversable, the object it actually gets
+    // decides: the loop walks it boxed when it is `Traversable`, its property projection else.
+    if foreach_object_may_be_traversable_at_run_time(ctx, class_name.trim_start_matches('\\')) {
+        let walked = foreach_source_by_run_time_class(ctx, source, span);
+        let kept = ctx.value_is_owning_temporary(source).then_some(source);
+        return (walked, kept);
     }
     // The projection is scope-filtered by the function's lexical class, so it serves a walk from
     // any scope: outside the class it holds only the public properties, as php visits them.
