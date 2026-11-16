@@ -687,6 +687,15 @@ fn push_source_byte(byte: u32, out: &mut String) {
 /// PHP hands the program too.
 fn push_code_point(value: u32, out: &mut String) {
     if let Some(ch) = char::from_u32(value) {
+        // A character of the byte-marker block (U+F0000..U+F00FF) would decode as one raw byte,
+        // so it is written as its UTF-8 bytes instead.
+        if super::binary::is_marker_char(ch) {
+            let mut encoded = [0; 4];
+            for byte in ch.encode_utf8(&mut encoded).bytes() {
+                push_escaped_byte(byte, out);
+            }
+            return;
+        }
         // Through `push_literal_char`: `"\u{E000}"` is the three bytes `ee8080` in PHP, and
         // pushed as itself the character would read back as the byte marker for `0x00`.
         push_literal_char(ch, out);

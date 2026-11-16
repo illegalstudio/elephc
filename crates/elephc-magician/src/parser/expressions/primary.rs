@@ -271,7 +271,7 @@ fn eval_string_constant(value: String) -> EvalConst {
     let mut bytes = Vec::with_capacity(value.len());
     let mut has_binary_marker = false;
     for ch in value.chars() {
-        if (0xF0000..=0xF00FF).contains(&(ch as u32)) {
+        if (0xF0080..=0xF00FF).contains(&(ch as u32)) {
             let byte = (ch as u32 - 0xF0000) as u8;
             bytes.push(byte);
             has_binary_marker = true;

@@ -33,20 +33,47 @@ pub(crate) const BINARY_MARKER_BASE: u32 = 0xF_0000;
 /// per-byte markers round-trip to the same bytes either way.
 pub(crate) fn normalize_binary_source(code: &[u8]) -> String {
     if let Ok(source) = std::str::from_utf8(code) {
-        return source.to_owned();
+        // A genuine character of the marker block itself (`U+F0041` in a valid UTF-8 file) would
+        // be read back as the single byte its code point names, so those characters are spelled
+        // as the markers of their own UTF-8 bytes, which decode to exactly those bytes.
+        if !source.chars().any(is_marker_char) {
+            return source.to_owned();
+        }
+        let mut output = String::with_capacity(source.len());
+        for ch in source.chars() {
+            if is_marker_char(ch) {
+                let mut encoded = [0; 4];
+                for byte in ch.encode_utf8(&mut encoded).bytes() {
+                    push_marker(byte, &mut output);
+                }
+            } else {
+                output.push(ch);
+            }
+        }
+        return output;
     }
     let mut output = String::with_capacity(code.len());
     for &byte in code {
         if byte >= 0x80 {
-            output.push(
-                char::from_u32(BINARY_MARKER_BASE + u32::from(byte))
-                    .expect("the private use plane holds every marker code point"),
-            );
+            push_marker(byte, &mut output);
         } else {
             output.push(byte as char);
         }
     }
     output
+}
+
+/// Appends the marker character that stands for one raw source byte at or above `0x80`.
+fn push_marker(byte: u8, output: &mut String) {
+    output.push(
+        char::from_u32(BINARY_MARKER_BASE + u32::from(byte))
+            .expect("the private use plane holds every marker code point"),
+    );
+}
+
+/// Reports whether `ch` lies in the marker block, whatever the source meant by it.
+pub(crate) fn is_marker_char(ch: char) -> bool {
+    (BINARY_MARKER_BASE..=BINARY_MARKER_BASE + 0xFF).contains(&(ch as u32))
 }
 
 #[cfg(test)]
@@ -57,6 +84,21 @@ mod tests {
     #[test]
     fn valid_utf8_source_is_returned_verbatim() {
         assert_eq!(normalize_binary_source("class Café {}".as_bytes()), "class Café {}");
+    }
+
+    /// Verifies a real marker-block character in valid UTF-8 source keeps its own UTF-8 bytes.
+    ///
+    /// `"\u{F0041}"` is the four bytes `f3b08181` in php; read as the marker for `0x41` it was
+    /// the single byte `A`.
+    #[test]
+    fn a_real_marker_block_character_becomes_the_markers_of_its_utf8_bytes() {
+        let normalized = normalize_binary_source("echo \"\u{F0041}\";".as_bytes());
+        let restored: Vec<u8> = normalized
+            .chars()
+            .filter(|ch| (BINARY_MARKER_BASE..=BINARY_MARKER_BASE + 0xFF).contains(&(*ch as u32)))
+            .map(|ch| u8::try_from(ch as u32 - BINARY_MARKER_BASE).expect("marker holds one byte"))
+            .collect();
+        assert_eq!(restored, "\u{F0041}".as_bytes());
     }
 
     /// Verifies a high byte outside any quote survives as a marker instead of failing.
