@@ -328,9 +328,8 @@ fn uncaught_reports_the_construction_site_not_the_throw_site() {
 /// exits 255.
 ///
 /// `intdiv($n, 0)` raises a `DivisionByZeroError` synthesized by a codegen guard, which stamps the
-/// line of the instruction it guards. A module with no `throw` keeps no frame readers (they would
-/// cost every program code size), so the guard writes its own short report without a
-/// `Stack trace:` block. The uncaught paths must also agree on `$?`: the short codegen path once
+/// line of the instruction it guards, and reports it with php's `Stack trace:` block and
+/// `thrown in` line. The uncaught paths must also agree on `$?`: the short codegen path once
 /// exited `1` while `throw new ...` exited `255`.
 #[test]
 fn synthesized_error_is_located_at_the_call_and_still_exits_255() {
@@ -340,10 +339,20 @@ fn synthesized_error_is_located_at_the_call_and_still_exits_255() {
         "<?php\n$n = 1;\n$d = 0;\necho intdiv($n, $d);\n",
     );
 
+    // php -n 8.5.10 prints the full report: `Stack trace:`, `#0 FILE(4): intdiv(1, 0)`,
+    // `#1 {main}` and `  thrown in FILE on line 4`. The guard now goes through the full report
+    // too; the internal `intdiv` frame is missing, as the sibling test below documents, so only
+    // the header and the closing line are compared.
     let file = canonical_script(&dir, &format!("{prefix}.php"));
-    assert_eq!(
-        reported,
-        format!("\nFatal error: Uncaught DivisionByZeroError: Division by zero in {file}:4\n")
+    assert!(
+        reported.starts_with(&format!(
+            "\nFatal error: Uncaught DivisionByZeroError: Division by zero in {file}:4\nStack trace:\n"
+        )),
+        "unexpected report header: {reported:?}"
+    );
+    assert!(
+        reported.ends_with(&format!(" {{main}}\n  thrown in {file} on line 4\n")),
+        "unexpected report tail: {reported:?}"
     );
     assert_eq!(
         code,
