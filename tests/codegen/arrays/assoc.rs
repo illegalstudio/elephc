@@ -1629,3 +1629,23 @@ echo f(5), "|", g("s"), "\n";
     );
     assert_eq!(out, "{\"a\":\"x\",\"k\":5}|{\"a\":1,\"0\":\"s\"}\n");
 }
+
+/// A Mixed hash value read tests the boxed entry pointer for null before loading its tag word:
+/// a zero entry clones as a boxed null instead of dereferencing address 0. The guard existed on
+/// main and was lost when the marker checks were inlined.
+#[test]
+fn test_mixed_hash_read_guards_a_null_boxed_entry_before_its_tag() {
+    let (out, asm) = compile_and_run_with_heap_debug_and_asm(
+        r#"<?php
+$h = ['a' => 1, 'b' => 'two', 'c' => [3]];
+$k = $argc > 0 ? 'b' : 'a';
+var_dump($h[$k]);
+"#,
+    );
+    assert_eq!(out.stdout, "string(3) \"two\"\n", "stderr: {}", out.stderr);
+    let guarded = asm.lines().map(str::trim).any(|line| {
+        (line.starts_with("cbz x0, ") || line.starts_with("jz "))
+            && line.contains("hash_get_mixed_clone")
+    });
+    assert!(guarded, "the Mixed hash read must skip the tag load for a null entry");
+}

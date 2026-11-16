@@ -1906,6 +1906,9 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>, for_write:
     if for_write {
         abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     } else {
+        // A zero payload word has no marker tag to inspect: it clones as a boxed null.
+        let clone_label = ctx.next_label("hash_get_mixed_clone");
+        ctx.emitter.instruction(&format!("cbz x0, {}", clone_label));           // a null boxed entry has no tag word to read
         ctx.emitter.instruction("ldr x9, [x0]");                                // inspect boxed entries before cloning a stored reference marker
         ctx.emitter.instruction(&format!("cmp x9, #{}", INVOKER_ARG_REF_CELL_TAG));  // detect borrowed invoker reference markers
         ctx.emitter.instruction(&format!("b.eq {}", ref_label));                // dereference the marker instead of exposing it as a PHP value
@@ -1913,6 +1916,7 @@ fn emit_hash_get_mixed_success_aarch64(ctx: &mut FunctionContext<'_>, for_write:
         ctx.emitter.instruction(&format!("b.eq {}", ref_label));                // both marker kinds share the same ref-cell payload layout
         ctx.emitter.instruction(&format!("cmp x9, #{}", ARRAY_LOCAL_REF_CELL_TAG));  // detect owning local reference markers
         ctx.emitter.instruction(&format!("b.eq {}", ref_label));                // every marker kind shares the same ref-cell payload layout
+        ctx.emitter.label(&clone_label);
         abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach values while preserving shared PHP resource identity
         ctx.emitter.instruction(&format!("b {}", done_label));                  // skip the marker-only dereference path
         ctx.emitter.label(&ref_label);
@@ -1956,6 +1960,10 @@ fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>, for_write: 
     if for_write {
         abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
     } else {
+        // A zero payload word has no marker tag to inspect: it clones as a boxed null.
+        let clone_label = ctx.next_label("hash_get_mixed_clone");
+        ctx.emitter.instruction("test rax, rax");                               // is the boxed entry pointer null?
+        ctx.emitter.instruction(&format!("jz {}", clone_label));                // a null boxed entry has no tag word to read
         ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                    // inspect boxed entries before cloning a stored reference marker
         ctx.emitter.instruction(&format!("cmp r11, {}", INVOKER_ARG_REF_CELL_TAG));  // detect borrowed invoker reference markers
         ctx.emitter.instruction(&format!("je {}", ref_label));                  // dereference the marker instead of exposing it as a PHP value
@@ -1963,6 +1971,7 @@ fn emit_hash_get_mixed_success_x86_64(ctx: &mut FunctionContext<'_>, for_write: 
         ctx.emitter.instruction(&format!("je {}", ref_label));                  // both marker kinds share the same ref-cell payload layout
         ctx.emitter.instruction(&format!("cmp r11, {}", ARRAY_LOCAL_REF_CELL_TAG));  // detect owning local reference markers
         ctx.emitter.instruction(&format!("je {}", ref_label));                  // every marker kind shares the same ref-cell payload layout
+        ctx.emitter.label(&clone_label);
         abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");                  // detach values while preserving shared PHP resource identity
         ctx.emitter.instruction(&format!("jmp {}", done_label));                // skip the marker-only dereference path
         ctx.emitter.label(&ref_label);
