@@ -455,3 +455,15 @@ fn parse_fragment_rejects_invalid_interface_property_hooks() {
     )
     .expect_err("asymmetric interface property must be typed");
 }
+
+/// Verifies a hook whose only use of its slot is a plain write keeps the property backed.
+#[test]
+fn parse_fragment_keeps_a_property_backed_when_a_set_hook_writes_its_slot() {
+    let program =
+        parse_fragment(b"class C { public string $name { set { $this->name = strtolower($value); } } }")
+            .expect("a set hook writing its own slot should parse");
+    let EvalStmt::ClassDecl(class) = &program.statements()[0] else {
+        panic!("expected class declaration");
+    };
+    assert!(!class.properties()[0].is_virtual());
+}
