@@ -981,15 +981,23 @@ pub(crate) fn compile_files_fails_with_defines(
 // Used for tests that verify runtime behavior with specific input (e.g., read(), fgets).
 /// Provides the Compile and run with stdin helper used by the projects module.
 pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> String {
-    compile_and_run_with_stdin_mode(source, stdin_data, false)
+    compile_and_run_with_stdin_mode(source, stdin_data, false).0
 }
 
 /// Runs with a regular file on descriptor zero, so stdin seek behavior is exercised too.
 pub(crate) fn compile_and_run_with_seekable_stdin(source: &str, stdin_data: &str) -> String {
-    compile_and_run_with_stdin_mode(source, stdin_data, true)
+    compile_and_run_with_stdin_mode(source, stdin_data, true).0
 }
 
-fn compile_and_run_with_stdin_mode(source: &str, stdin_data: &str, seekable: bool) -> String {
+/// Runs with a pipe on descriptor zero and returns `(stdout, stderr)`, for diagnostics the
+/// runtime writes to stderr.
+pub(crate) fn compile_and_run_with_stdin_capture(source: &str, stdin_data: &str) -> (String, String) {
+    compile_and_run_with_stdin_mode(source, stdin_data, false)
+}
+
+/// Compiles `source`, runs it with `stdin_data` on descriptor zero (a pipe, or a regular file when
+/// `seekable`), and returns `(stdout, stderr)`.
+fn compile_and_run_with_stdin_mode(source: &str, stdin_data: &str, seekable: bool) -> (String, String) {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -1113,7 +1121,10 @@ fn compile_and_run_with_stdin_mode(source: &str, stdin_data: &str, seekable: boo
     assert!(output.status.success(), "binary exited with error");
 
     let _ = fs::remove_dir_all(&dir);
-    String::from_utf8(output.stdout).unwrap()
+    (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
 }
 
 // Compiles a PHP source string, runs the binary, and returns stdout alongside the

@@ -243,16 +243,16 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fgc_stdin_seek_message_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // load the requested position
     emitter.instruction("call __rt_itoa");                                      // format the signed seek position
-    emitter.instruction("mov rcx, rax");                                        // use the digits as the right concat operand
-    emitter.instruction("mov r8, rdx");                                         // use their byte count as its length
+    emitter.instruction("mov rdi, rax");                                        // use the digits as the right concat operand (rdi/rsi)
+    emitter.instruction("mov rsi, rdx");                                        // use their byte count as its length
     abi::emit_symbol_address(emitter, "rax", "_diag_fgc_seek_prefix_msg");
     emitter.instruction(
         &format!("mov rdx, {}", FILE_GET_CONTENTS_SEEK_MESSAGES[0].1.len()),
     );                                                                          // warning prefix length
     emitter.instruction("call __rt_concat");                                    // prepend the failed-seek diagnostic
-    abi::emit_symbol_address(emitter, "rcx", "_diag_fgc_seek_suffix_msg");
+    abi::emit_symbol_address(emitter, "rdi", "_diag_fgc_seek_suffix_msg");
     emitter.instruction(
-        &format!("mov r8, {}", FILE_GET_CONTENTS_SEEK_MESSAGES[1].1.len()),
+        &format!("mov rsi, {}", FILE_GET_CONTENTS_SEEK_MESSAGES[1].1.len()),
     );                                                                          // warning suffix length
     emitter.instruction("call __rt_concat");                                    // finish the seek diagnostic
     emitter.instruction("mov rdi, rax");                                        // pass the complete warning pointer
@@ -321,5 +321,34 @@ mod tests {
                 assert!(asm.contains(errno), "{name}: target errno accessor");
             }
         }
+    }
+
+    /// On linux-x86_64 the failed-seek warning hands `__rt_concat` its right operand in
+    /// `rdi`/`rsi`, the helper's input registers, never in `rcx`/`r8`.
+    #[test]
+    fn stdin_seek_warning_passes_concat_right_operand_in_rdi_rsi() {
+        let mut emitter = Emitter::new(Target::parse("linux-x86_64").unwrap());
+        emit_file_get_contents_stdin(&mut emitter);
+        let lines: Vec<String> = emitter
+            .output()
+            .lines()
+            .map(|line| line.split("//").next().unwrap().trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect();
+        let seek = lines
+            .iter()
+            .position(|line| line == "__rt_fgc_stdin_seek_message_x86:")
+            .expect("the failed-seek message block");
+        let block: Vec<&String> = lines[seek..].iter().take_while(|line| !line.starts_with("jmp ")).collect();
+        let concats = block.iter().filter(|line| **line == "call __rt_concat").count();
+        assert_eq!(concats, 2, "prefix and suffix concatenations");
+        for line in &block {
+            assert!(
+                !line.contains("rcx") && !line.contains("r8"),
+                "the concat right operand must not travel in rcx/r8: {line}"
+            );
+        }
+        assert!(block.iter().any(|line| *line == "mov rdi, rax"), "digits pointer into rdi");
+        assert!(block.iter().any(|line| *line == "mov rsi, rdx"), "digits length into rsi");
     }
 }

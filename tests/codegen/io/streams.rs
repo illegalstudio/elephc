@@ -73,6 +73,29 @@ var_dump(stream_get_contents(STDIN));
         "bool(false)\nbool(false)\nstring(7) \"abcdefg\"\n");
 }
 
+/// An unseekable stdin reports php-src's two seek warnings with the requested position.
+///
+/// The linux-x86_64 helper passed the concat right operand in `rcx`/`r8` while `__rt_concat`
+/// reads `rdi`/`rsi`, so the "Failed to seek to position N in the stream" text was built from
+/// stale registers.
+#[test]
+fn file_get_contents_stdin_pipe_seek_failure_warning_text() {
+    let source = r#"<?php
+var_dump(file_get_contents('php://stdin', false, null, 5));
+var_dump(stream_get_contents(STDIN));
+"#;
+    let (stdout, stderr) = compile_and_run_with_stdin_capture(source, "abcdefg");
+    assert_eq!(stdout, "bool(false)\nstring(7) \"abcdefg\"\n");
+    assert!(
+        stderr.contains("Warning: file_get_contents(): Stream does not support seeking"),
+        "expected the unseekable-stream warning, got stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("Warning: file_get_contents(): Failed to seek to position 5 in the stream"),
+        "expected the failed-seek warning, got stderr={stderr}"
+    );
+}
+
 /// Dynamic eval must read the same process stdin as native code.
 #[test]
 fn file_get_contents_stdin_opaque_eval_preserves_input() {
