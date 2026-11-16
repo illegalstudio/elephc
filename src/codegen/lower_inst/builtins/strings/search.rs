@@ -1059,6 +1059,25 @@ fn emit_substr_compare_offset_guard(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("jle {}", ok_label));              // an offset at or before the haystack end is usable
         }
     }
+    // php answers an explicit zero length with 0 before it validates the offset, so the window
+    // collapses onto the haystack end (an empty comparison) instead of raising.
+    let error_label = ctx.next_label("substr_compare_offset_error");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x7, {}", error_label));       // no explicit length: the offset error stands
+            ctx.emitter.instruction(&format!("cbnz x6, {}", error_label));      // a non-zero explicit length keeps the offset error
+            ctx.emitter.instruction("mov x5, x2");                              // an explicit zero length compares an empty window at the haystack end
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test r10, r10");                           // was an explicit length supplied?
+            ctx.emitter.instruction(&format!("jz {}", error_label));            // no explicit length: the offset error stands
+            ctx.emitter.instruction("test r9, r9");                             // is the explicit length zero?
+            ctx.emitter.instruction(&format!("jnz {}", error_label));           // a non-zero explicit length keeps the offset error
+            ctx.emitter.instruction("mov r8, rsi");                             // an explicit zero length compares an empty window at the haystack end
+        }
+    }
+    abi::emit_jump(ctx.emitter, &ok_label);
+    ctx.emitter.label(&error_label);
     super::super::exceptions::emit_value_error(ctx, SUBSTR_COMPARE_OFFSET_OUT_OF_RANGE_MESSAGE);
     ctx.emitter.label(&ok_label);
 }
