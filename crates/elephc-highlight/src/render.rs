@@ -497,9 +497,32 @@ impl<'a> Scanner<'a> {
                         cursor = word_end;
                         continue;
                     }
-                    cursor += 1;
+                    // `"$a[$i]"`: a variable inside the offset is one blue token.
+                    if self.source[cursor] == b'$' && self.source.get(cursor + 1).is_some_and(|next| is_name_start(*next)) {
+                        let mut word_end = cursor + 2;
+                        while self.source.get(word_end).is_some_and(|next| is_name_continue(*next)) {
+                            word_end += 1;
+                        }
+                        self.push(Class::Blue, cursor, word_end);
+                        cursor = word_end;
+                        continue;
+                    }
+                    // php's ST_VAR_OFFSET state: operator bytes are single tokens, anything else
+                    // (a quote, a space, a backslash, `#`) ends the offset, and the rest of the
+                    // string is ordinary literal text again, so no byte is ever left unpainted.
+                    if matches!(
+                        self.source[cursor],
+                        b';' | b':' | b',' | b'.' | b'|' | b'^' | b'&' | b'+' | b'/' | b'*' | b'=' | b'%'
+                            | b'!' | b'~' | b'$' | b'<' | b'>' | b'?' | b'@' | b'[' | b'(' | b')' | b'{' | b'}'
+                            | b'"' | b'`'
+                    ) {
+                        self.push(Class::Green, cursor, cursor + 1);
+                        cursor += 1;
+                        continue;
+                    }
+                    break;
                 }
-                if cursor < limit {
+                if cursor < limit && self.source[cursor] == b']' {
                     self.push(Class::Green, cursor, cursor + 1);
                     cursor += 1;
                 }
@@ -696,9 +719,9 @@ impl<'a> Scanner<'a> {
         while self.source.get(cursor).is_some_and(|next| next.is_ascii_digit() || *next == b'_') {
             cursor += 1;
         }
-        if self.source.get(cursor) == Some(&b'.')
-            && self.source.get(cursor + 1).is_some_and(u8::is_ascii_digit)
-        {
+        // php's DNUM is `{LNUM}"."{LNUM}?`: a trailing dot belongs to the float (`1.`), whether or
+        // not digits follow it.
+        if self.source.get(cursor) == Some(&b'.') {
             cursor += 1;
             while self.source.get(cursor).is_some_and(|next| next.is_ascii_digit() || *next == b'_') {
                 cursor += 1;
@@ -1019,6 +1042,28 @@ echo 1;
         assert_eq!(rendered(r"<?php
 $a = true; $b = FALSE; $c = null;"), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php
 $a </span><span style="color: #007700">= </span><span style="color: #0000BB">true</span><span style="color: #007700">; </span><span style="color: #0000BB">$b </span><span style="color: #007700">= </span><span style="color: #0000BB">FALSE</span><span style="color: #007700">; </span><span style="color: #0000BB">$c </span><span style="color: #007700">= </span><span style="color: #0000BB">null</span><span style="color: #007700">;</span></code></pre>"#);
+    }
+
+    /// A quote inside a simple-interpolation offset ends the offset and the rest is literal text:
+    /// no byte of the source may vanish from the output.
+    /// Oracle: `php -n -r 'echo highlight_string("<?php echo \"\$a[\\'k\\'] x\";", true);'`.
+    #[test]
+    fn matches_php_for_quoted_interpolated_offset() {
+        assert_eq!(rendered(r#"<?php echo "$a['k'] x";"#), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php </span><span style="color: #007700">echo </span><span style="color: #DD0000">"</span><span style="color: #0000BB">$a</span><span style="color: #007700">[</span><span style="color: #DD0000">'k'] x"</span><span style="color: #007700">;</span></code></pre>"#);
+    }
+
+    /// Operator bytes and `$variable` inside an interpolation offset are tokens of their own.
+    /// Oracle: `php -n -r 'echo highlight_string("<?php \$s = \"\$a[1,2] \$b[\$i]\";", true);'`.
+    #[test]
+    fn matches_php_for_operator_and_variable_interpolated_offsets() {
+        assert_eq!(rendered(r#"<?php $s = "$a[1,2] $b[$i]";"#), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php $s </span><span style="color: #007700">= </span><span style="color: #DD0000">"</span><span style="color: #0000BB">$a</span><span style="color: #007700">[</span><span style="color: #0000BB">1</span><span style="color: #007700">,</span><span style="color: #0000BB">2</span><span style="color: #007700">]</span><span style="color: #DD0000"> </span><span style="color: #0000BB">$b</span><span style="color: #007700">[</span><span style="color: #0000BB">$i</span><span style="color: #007700">]</span><span style="color: #DD0000">"</span><span style="color: #007700">;</span></code></pre>"#);
+    }
+
+    /// `1.` and `1.e3` are one float token each, with or without digits after the dot.
+    /// Oracle: `php -n -r 'echo highlight_string("<?php \$a = 1.; \$b = 1.e3;", true);'`.
+    #[test]
+    fn matches_php_for_trailing_dot_floats() {
+        assert_eq!(rendered("<?php $a = 1.; $b = 1.e3;"), r#"<pre><code style="color: #000000"><span style="color: #0000BB">&lt;?php $a </span><span style="color: #007700">= </span><span style="color: #0000BB">1.</span><span style="color: #007700">; </span><span style="color: #0000BB">$b </span><span style="color: #007700">= </span><span style="color: #0000BB">1.e3</span><span style="color: #007700">;</span></code></pre>"#);
     }
 
     /// Oracle: `php -r 'echo highlight_string(...);'`.
