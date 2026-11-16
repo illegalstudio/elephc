@@ -185,6 +185,24 @@ echo $format('parent');
     assert_eq!(out, "base!");
 }
 
+/// Verifies an assignment on the right of a short-circuit operator does not bind the variable for
+/// the rest of the arrow body: the outer value is still captured (php prints `7`, `1`, `7`).
+#[test]
+fn test_arrow_function_short_circuit_assignment_does_not_bind() {
+    let out = compile_and_run(
+        r#"<?php
+$b = 7;
+$f = fn($a) => [$a && ($b = 1), $b];
+echo json_encode($f(false)), "\n";
+$g = fn($a) => [$a || ($b = 1), $b];
+echo json_encode($g(true)), "\n";
+$h = fn($a) => [$a && ($b = 1), $b];
+echo json_encode($h(true)), "\n";
+"#,
+    );
+    assert_eq!(out, "[false,7]\n[true,7]\n[true,1]\n");
+}
+
 /// A trait method's `static` captured by reference keeps one copy per USING class, as php does.
 #[test]
 fn test_trait_static_captured_by_reference_is_per_using_class() {

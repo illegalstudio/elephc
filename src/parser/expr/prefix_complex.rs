@@ -419,9 +419,16 @@ pub(super) fn collect_arrow_expr_captures(
         ExprKind::IncludeValue { path, .. } => {
             collect_arrow_expr_captures(path, bound, seen, captures);
         }
-        ExprKind::BinaryOp { left, right, .. } => {
+        ExprKind::BinaryOp { left, op, right } => {
             collect_arrow_expr_captures(left, bound, seen, captures);
-            collect_arrow_expr_captures(right, bound, seen, captures);
+            if matches!(op, crate::parser::ast::BinOp::And | crate::parser::ast::BinOp::Or) {
+                // The right operand of a short-circuit operator may not run, so an assignment
+                // there binds nothing for what follows.
+                let mut right_bound = bound.clone();
+                collect_arrow_expr_captures(right, &mut right_bound, seen, captures);
+            } else {
+                collect_arrow_expr_captures(right, bound, seen, captures);
+            }
         }
         ExprKind::InstanceOf { value, target } => {
             collect_arrow_expr_captures(value, bound, seen, captures);
