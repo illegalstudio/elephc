@@ -557,3 +557,24 @@ echo yn(is_a($n, 'Foo', true)), yn(is_subclass_of($n, 'Bar')), yn(is_a($n, 'Foo'
     );
     assert_eq!(out, ["yynynyn\n", "ynnynyn\n", "nnnynyn\n"]);
 }
+
+/// `Closure` is a class name too: `is_a('Closure', 'Closure', true)` is true for a literal, a
+/// runtime string, a `mixed` holding it, and a runtime target. `Closure` has no class-info entry,
+/// so every one of those answered `false`. is_subclass_of() still never matches. Expected output
+/// measured with php 8.5.12.
+#[test]
+fn test_closure_class_name_subject() {
+    let out = compile_and_run_per_argv(
+        r#"<?php
+function m(mixed $v): mixed { return $v; }
+function yn(bool $b): string { return $b ? "y" : "n"; }
+$s = $argv[1] ?? 'Closure';
+$t = $argv[2] ?? 'Closure';
+echo yn(is_a(m($s), 'Closure', true)), yn(is_a(m('\closure'), 'Closure', true)), yn(is_a(m($s), 'Closure')), yn(is_subclass_of(m($s), 'Closure')), " ";
+echo yn(is_a('Closure', 'Closure', true)), yn(is_a($s, 'closure', true)), yn(is_subclass_of($s, 'Closure')), " ";
+echo yn(is_a($s, $t, true)), yn(is_a(m($s), $t, true)), yn(is_subclass_of($s, $t)), yn(is_a(fn() => 1, $t)), "\n";
+"#,
+        &[&[], &["Other"], &["Closure", "Other"]],
+    );
+    assert_eq!(out, ["yynn yyn yyny\n", "nynn ynn nnny\n", "yynn yyn nnnn\n"]);
+}
