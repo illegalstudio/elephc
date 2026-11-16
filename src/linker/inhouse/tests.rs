@@ -52,7 +52,6 @@ fn object_writer_skips_local_labels_and_repeated_pair_targets() {
     assert!(!names("Lnext0") && !names("Lnext299"));
 }
 
-/// `.ascii` operands decode the escapes the data section writes.
 /// An instruction text with no symbolic operand is parsed once per slice: repeats take the word
 /// from the cache, and a text with a fixup is parsed every time, since its target resolves per
 /// line. The words written are the ones a fresh parse gives.
@@ -78,12 +77,28 @@ fn repeated_plain_instructions_are_parsed_once() {
     assert_eq!(pairs, 50, "{pairs} encoded ldr/add pairs");
 }
 
+/// `.ascii` operands decode the escapes the data section writes, and refuse what `as` reads
+/// differently: two comma-separated strings are not one.
 #[test]
 fn ascii_operands_decode_the_emitted_escapes() {
     let mut out = Vec::new();
     decode_ascii(r#""a\n\t\\\"\000\177z""#, &mut out).expect("decodes");
     assert_eq!(out, b"a\n\t\\\"\0\x7fz");
     assert!(decode_ascii(r#""unterminated"#, &mut Vec::new()).is_none());
+    assert!(decode_ascii(r#""a", "b""#, &mut Vec::new()).is_none());
+}
+
+/// A leading zero makes a literal octal as in `as`; `.byte 010` is 8 and `.quad 0755` is 0x1ed.
+/// The forms the in-tree assembler does not model are refused, never given another meaning.
+#[test]
+fn leading_zero_literals_are_octal_and_subsections_are_refused() {
+    assert_eq!(integer("010"), Some(8));
+    assert_eq!(integer("0755"), Some(0x1ed));
+    assert_eq!(integer("0"), Some(0));
+    assert_eq!(integer("-010"), Some(-8));
+    assert_eq!(integer("08"), None);
+    let text = ".globl _main\n.p2align 2\n_main:\n    bl _main\n    ret\n.subsections_via_symbols\n";
+    assert!(assemble(text).is_err(), "`as` relocates the branch under this flag");
 }
 
 /// A `.quad` above the signed range is a bit pattern: the Demo's data has `u64::MAX`.

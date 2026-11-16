@@ -39,6 +39,7 @@ pub(crate) struct Unsupported(pub(crate) String);
 
 type Result<T> = std::result::Result<T, Unsupported>;
 
+/// The refusal that hands a listing (or slice) to the system assembler, naming what was not modelled.
 fn unsupported<T>(what: &str, line: &str) -> Result<T> {
     Err(Unsupported(format!("{what}: {line}")))
 }
@@ -178,7 +179,6 @@ struct Layout<'a> {
     commons: Vec<(&'a str, u64, u64)>,
     text_align: u64,
     data_align: u64,
-    subsections_via_symbols: bool,
     /// Final size of each section, so the second pass allocates it once.
     sizes: [u64; 2],
 }
@@ -209,6 +209,11 @@ fn decode_ascii(operand: &str, out: &mut Vec<u8>) -> Option<()> {
     let mut index = 0;
     while index < bytes.len() {
         let byte = bytes[index];
+        // An unescaped quote inside the operand ends the string: `"a", "b"` is two strings, which
+        // this decoder does not model (`as` yields `ab`), so it is refused rather than misread.
+        if byte == b'"' {
+            return None;
+        }
         if byte != b'\\' {
             out.push(byte);
             index += 1;
@@ -256,6 +261,8 @@ fn integer(text: &str) -> Option<i64> {
     };
     let value = match digits.as_bytes() {
         [b'0', b'x' | b'X', ..] => u64::from_str_radix(&digits[2..], 16).ok()? as i64,
+        // A leading zero makes the literal octal, as in `as`: `.byte 010` is 8.
+        [b'0', _, ..] => u64::from_str_radix(&digits[1..], 8).ok()? as i64,
         _ => digits.parse::<u64>().ok()? as i64,
     };
     Some(if negative { value.wrapping_neg() } else { value })
@@ -287,7 +294,6 @@ fn padding(offset: u64, log2: u64) -> u64 {
 }
 
 /// First pass over one listing: places every line and records labels and symbol attributes.
-#[cfg(test)]
 #[cfg(test)]
 fn layout(text: &str) -> Result<Layout<'_>> {
     layout_parts(&[text], Names::IDENTITY)
@@ -357,7 +363,7 @@ fn layout_parts<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Layout<'a>> {
                     let align = parts.next().and_then(integer).unwrap_or(0);
                     layout.commons.push((names.get(symbol), size as u64, align as u64));
                 }
-                ".subsections_via_symbols" => layout.subsections_via_symbols = true,
+                ".subsections_via_symbols" => return unsupported("subsections_via_symbols (its branches need relocations)", line),
                 _ => match data_size(name, rest, &mut scratch) {
                     Some(size) => *offset += size,
                     None => return unsupported("directive", line),
@@ -639,7 +645,7 @@ fn assemble_one_pass<'a>(parts: &[&'a str], names: Names<'a>) -> Result<Assemble
                     let align = operands.next().and_then(integer).unwrap_or(0);
                     layout.commons.push((names.get(symbol), size as u64, align as u64));
                 }
-                ".subsections_via_symbols" => layout.subsections_via_symbols = true,
+                ".subsections_via_symbols" => return unsupported("subsections_via_symbols (its branches need relocations)", line),
                 ".p2align" | ".align" => {
                     let log2 = rest.split(',').next().and_then(integer).and_then(|v| u64::try_from(v).ok());
                     let Some(log2) = log2.filter(|log2| *log2 <= 15) else {
@@ -873,7 +879,7 @@ pub(crate) fn assemble_parts_two_pass<'a>(parts: &[&'a str], names: Names<'a>) -
             Line::Directive(name, rest) => match name {
                 ".text" => sect = Sect::Text,
                 ".data" => sect = Sect::Data,
-                ".globl" | ".global" | ".private_extern" | ".comm" | ".subsections_via_symbols" => {}
+                ".globl" | ".global" | ".private_extern" | ".comm" => {}
                 ".p2align" | ".align" => {
                     let log2 = rest.split(',').next().and_then(integer).unwrap_or(0) as u64;
                     let pad = padding(bytes.len() as u64, log2);
@@ -938,7 +944,6 @@ pub(crate) fn assemble_parts_two_pass<'a>(parts: &[&'a str], names: Names<'a>) -
     write_object(&layout, sections, relocs)
 }
 
-/// Builds the Mach-O object from the placed sections, the labels and the relocations.
 thread_local! {
     /// Name hashes `write_object` performed on this thread: one per relocation not repeating the
     /// previous one's target, two per symbol label, and none for an assembler-local label that is
@@ -946,19 +951,18 @@ thread_local! {
     pub(crate) static WRITE_NAME_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Adds `count` to the name hashes counted for the regression tests.
 fn count_name_hashes(count: usize) {
     WRITE_NAME_HASHES.with(|cell| cell.set(cell.get() + count));
 }
 
+/// Builds the Mach-O object from the placed sections, the labels and the relocations.
 fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<PendingReloc<'_>>) -> Result<Vec<u8>> {
     let mut object = Object::new(BinaryFormat::MachO, Architecture::Aarch64, Endianness::Little);
     // The listing already spells Mach-O names (`_main`); the writer must not prefix them again.
     object.set_mangling(object::write::Mangling::None);
     if let Some(version) = build_version() {
         object.set_macho_build_version(version);
-    }
-    if layout.subsections_via_symbols {
-        object.set_subsections_via_symbols();
     }
     // Handed over, not appended: `append_section_data` copied each section into the object.
     let [text_bytes, data_bytes] = sections;
@@ -1120,8 +1124,6 @@ fn write_object(layout: &Layout<'_>, sections: [Vec<u8>; 2], relocs: Vec<Pending
     object.write().map_err(|error| Unsupported(format!("object: {error}")))
 }
 
-/// The `LC_BUILD_VERSION` the system assembler writes on this machine, read once from an object
-/// it produced for an empty source.
 /// Starts reading the build version `as` writes, on a thread of its own, so the slice workers
 /// that reach `write_object` find it read instead of waiting on the `as` run together.
 pub(crate) fn prefetch_build_version() {
@@ -1130,6 +1132,8 @@ pub(crate) fn prefetch_build_version() {
     });
 }
 
+/// The `LC_BUILD_VERSION` the system assembler writes on this machine, read once from an object
+/// it produced for an empty source.
 fn build_version() -> Option<object::write::MachOBuildVersion> {
     static VERSION: std::sync::OnceLock<Option<(u32, u32, u32)>> = std::sync::OnceLock::new();
     let (platform, minos, sdk) = (*VERSION.get_or_init(read_assembler_build_version))?;
