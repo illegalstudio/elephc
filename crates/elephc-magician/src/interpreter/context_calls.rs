@@ -256,7 +256,9 @@ pub fn execute_context_try_new_object_outcome(
 /// Unpacks a compiled `new $class(...$args)` argument container into call arguments.
 ///
 /// The container is the array the spread produced: an integer key is a positional argument and a
-/// string key a named one, exactly as PHP binds `...$array`. The cells are borrowed from it.
+/// string key a named one, exactly as PHP binds `...$array`. `array_get` answers an OWNED cell on
+/// every path, so each returned value is a reference the caller must release once the
+/// construction ended; the key cells are given back here.
 pub fn eval_unpack_constructor_arg_container(
     container: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
@@ -265,15 +267,40 @@ pub fn eval_unpack_constructor_arg_container(
     let mut args = Vec::with_capacity(len);
     for position in 0..len {
         let key = values.array_iter_key(container, position)?;
-        let value = values.array_get(container, key)?;
-        let name = if values.type_tag(key)? == EVAL_TAG_STRING {
-            Some(String::from_utf8(values.string_bytes(key)?).map_err(|_| EvalStatus::RuntimeFatal)?)
-        } else {
-            None
-        };
-        args.push((name, value));
+        let value = values.array_get(container, key);
+        let name = eval_unpack_constructor_arg_name(key, values);
+        let key_release = values.release(key);
+        match (value, name, key_release) {
+            (Ok(value), Ok(name), Ok(())) => args.push((name, value)),
+            (value, name, key_release) => {
+                if let Ok(value) = &value {
+                    let _ = values.release(*value);
+                }
+                for (_, owned) in args.drain(..) {
+                    let _ = values.release(owned);
+                }
+                return Err(value
+                    .err()
+                    .or(name.err())
+                    .or(key_release.err())
+                    .unwrap_or(EvalStatus::RuntimeFatal));
+            }
+        }
     }
     Ok(args)
+}
+
+/// Reads the argument name a spread key stands for: a string key names it, an integer is positional.
+fn eval_unpack_constructor_arg_name(
+    key: RuntimeCellHandle,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<String>, EvalStatus> {
+    if values.type_tag(key)? != EVAL_TAG_STRING {
+        return Ok(None);
+    }
+    String::from_utf8(values.string_bytes(key)?)
+        .map(Some)
+        .map_err(|_| EvalStatus::RuntimeFatal)
 }
 
 /// Allocates an eval-declared class without its constructor; `None` when this context lacks it.

@@ -202,6 +202,12 @@ fn execute_native_new_at(
         (true, [container]) => interpreter::eval_unpack_constructor_arg_container(*container, values)?,
         _ => args.into_iter().map(|value| (None, value)).collect(),
     };
+    // The unpacked cells are OWNED references (`array_get`); the construction only borrows them.
+    let unpacked_owners: Vec<RuntimeCellHandle> = if spread {
+        args.iter().map(|(_, value)| *value).collect()
+    } else {
+        Vec::new()
+    };
     let previous = source.map(|(file, line)| {
         let previous = context.call_site();
         let dir = std::path::Path::new(file).parent()
@@ -225,6 +231,9 @@ fn execute_native_new_at(
     let outcome = context.with_native_global_sync(|context| {
         interpreter::execute_context_try_new_object_named_outcome(context, name, args, values)
     });
+    for owned in unpacked_owners {
+        let _ = values.release(owned);
+    }
     if native_caller_class.is_some() {
         context.pop_class_scope();
     }
