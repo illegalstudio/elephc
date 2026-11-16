@@ -211,15 +211,16 @@ pub(super) fn datetime_extract_micros() -> ClassMethod {
     }
 }
 
-/// PHP source for `DateTime::__elephc_now_micros($s, $tz)` -- the sub-second part a "now"-relative
+/// PHP source for `DateTime::__elephc_now_micros($s, $tz, $clock)` -- the sub-second part a "now"-relative
 /// constructor string carries. PHP keeps the current microseconds unless the string sets a time of
 /// day (an explicit `HH:MM`, `@ts`, a bare date, `today`, `tomorrow`, a weekday, ...). Rather than
 /// enumerate those spellings, the string is parsed against two base times one second apart: only a
 /// string that leaves the time of day alone moves with its base. `$tz` is the display zone to parse
-/// in (`""` for the default one).
+/// in (`""` for the default one). `$clock` is the constructor's single `microtime(false)` sample, so the
+/// microseconds belong to the same second as the timestamp it stored.
 #[cfg(test)]
 pub(super) const NOW_MICROS_SRC: &str = r#"<?php
-$__mt = explode(" ", microtime(false));
+$__mt = explode(" ", $clock);
 $__us = intval(substr($__mt[0], 2, 6));
 $__b = intval($__mt[1]);
 $__r = 0;
@@ -243,7 +244,7 @@ if ($__n !== "now" && strpos($s, ":") === false && substr($s, 0, 1) !== "@") {
 return $__r;
 "#;
 
-/// Builds the internal static `DateTime::__elephc_now_micros(string $s, string $tz): int`.
+/// Builds the internal static `DateTime::__elephc_now_micros(string $s, string $tz, string $clock): int`.
 pub(super) fn datetime_now_micros() -> ClassMethod {
     let body = super::bodies::now_micros();
     ClassMethod {
@@ -257,6 +258,7 @@ pub(super) fn datetime_now_micros() -> ClassMethod {
         params: vec![
             ("s".to_string(), Some(TypeExpr::Str), None, false),
             ("tz".to_string(), Some(TypeExpr::Str), None, false),
+            ("clock".to_string(), Some(TypeExpr::Str), None, false),
         ],
         param_attributes: Vec::new(),
         variadic: None,

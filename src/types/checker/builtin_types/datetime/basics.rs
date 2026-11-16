@@ -22,28 +22,32 @@ pub(super) const CONSTRUCT_SRC: &str = r#"<?php
 // locals + a loop here corrupts the frame when a caller also formats the result).
 $this->microsecond = DateTime::__elephc_extract_micros($datetime);
 $datetime = DateTime::__elephc_strip_micros($datetime);
+// One clock sample for the whole object: the seconds and the microseconds of "now" (and the
+// base of a relative string) must come from the same instant.
+$__clock = microtime(false);
+$__now = intval(explode(" ", $__clock)[1]);
 if ($timezone === null) {
     if ($datetime === "now") {
-        $this->timestamp = time();
+        $this->timestamp = $__now;
     } else {
-        $__ts = strtotime($datetime);
+        $__ts = strtotime($datetime, $__now);
         if ($__ts === false) {
             throw new DateMalformedStringException("Failed to parse time string (" . $datetime . ")");
         }
         $this->timestamp = $__ts;
     }
     if ($this->microsecond === 0) {
-        $this->microsecond = DateTime::__elephc_now_micros($datetime, "");
+        $this->microsecond = DateTime::__elephc_now_micros($datetime, "", $__clock);
     }
     $this->timezone_name = date_default_timezone_get();
 } else {
     $tzname = $timezone->getName();
     if ($datetime === "now") {
-        $this->timestamp = time();
+        $this->timestamp = $__now;
     } else {
         $saved = date_default_timezone_get();
         date_default_timezone_set($tzname);
-        $__ts = strtotime($datetime);
+        $__ts = strtotime($datetime, $__now);
         if ($__ts === false) {
             date_default_timezone_set($saved);
             throw new DateMalformedStringException("Failed to parse time string (" . $datetime . ")");
@@ -52,7 +56,7 @@ if ($timezone === null) {
         date_default_timezone_set($saved);
     }
     if ($this->microsecond === 0) {
-        $this->microsecond = DateTime::__elephc_now_micros($datetime, $tzname);
+        $this->microsecond = DateTime::__elephc_now_micros($datetime, $tzname, $__clock);
     }
     $this->timezone_name = $tzname;
 }

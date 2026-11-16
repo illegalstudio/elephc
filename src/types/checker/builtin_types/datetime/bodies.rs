@@ -56,17 +56,19 @@ pub(super) fn construct() -> Vec<Stmt> {
     vec![
         s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_extract_micros", vec![e_var("datetime")])),
         s_assign("datetime", e_static_call("DateTime", "__elephc_strip_micros", vec![e_var("datetime")])),
+        s_assign("__clock", e_call("microtime", vec![e_bool(false)])),
+        s_assign("__now", e_call("intval", vec![e_index(e_call("explode", vec![e_str(" "), e_var("__clock")]), e_int(1))])),
         s_if(
             e_binop(e_var("timezone"), BinOp::StrictEq, e_null()),
             vec![
                 s_if(
                     e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
                     vec![
-                        s_prop_assign(e_this(), "timestamp", e_call("time", vec![])),
+                        s_prop_assign(e_this(), "timestamp", e_var("__now")),
                     ],
                     vec![],
                     Some(vec![
-                    s_assign("__ts", e_call("strtotime", vec![e_var("datetime")])),
+                    s_assign("__ts", e_call("strtotime", vec![e_var("datetime"), e_var("__now")])),
                     s_if(
                         e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
                         vec![
@@ -81,7 +83,7 @@ pub(super) fn construct() -> Vec<Stmt> {
                 s_if(
                     e_binop(e_this_prop("microsecond"), BinOp::StrictEq, e_int(0)),
                     vec![
-                        s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_now_micros", vec![e_var("datetime"), e_str("")])),
+                        s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_now_micros", vec![e_var("datetime"), e_str(""), e_var("__clock")])),
                     ],
                     vec![],
                     None,
@@ -94,13 +96,13 @@ pub(super) fn construct() -> Vec<Stmt> {
             s_if(
                 e_binop(e_var("datetime"), BinOp::StrictEq, e_str("now")),
                 vec![
-                    s_prop_assign(e_this(), "timestamp", e_call("time", vec![])),
+                    s_prop_assign(e_this(), "timestamp", e_var("__now")),
                 ],
                 vec![],
                 Some(vec![
                 s_assign("saved", e_call("date_default_timezone_get", vec![])),
                 s_expr(e_call("date_default_timezone_set", vec![e_var("tzname")])),
-                s_assign("__ts", e_call("strtotime", vec![e_var("datetime")])),
+                s_assign("__ts", e_call("strtotime", vec![e_var("datetime"), e_var("__now")])),
                 s_if(
                     e_binop(e_var("__ts"), BinOp::StrictEq, e_bool(false)),
                     vec![
@@ -117,7 +119,7 @@ pub(super) fn construct() -> Vec<Stmt> {
             s_if(
                 e_binop(e_this_prop("microsecond"), BinOp::StrictEq, e_int(0)),
                 vec![
-                    s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_now_micros", vec![e_var("datetime"), e_var("tzname")])),
+                    s_prop_assign(e_this(), "microsecond", e_static_call("DateTime", "__elephc_now_micros", vec![e_var("datetime"), e_var("tzname"), e_var("__clock")])),
                 ],
                 vec![],
                 None,
@@ -1243,7 +1245,7 @@ pub(super) fn extract_micros() -> Vec<Stmt> {
 /// Reproduces `NOW_MICROS_SRC`.
 pub(super) fn now_micros() -> Vec<Stmt> {
     vec![
-        s_assign("__mt", e_call("explode", vec![e_str(" "), e_call("microtime", vec![e_bool(false)])])),
+        s_assign("__mt", e_call("explode", vec![e_str(" "), e_var("clock")])),
         s_assign("__us", e_call("intval", vec![e_call("substr", vec![e_index(e_var("__mt"), e_int(0)), e_int(2), e_int(6)])])),
         s_assign("__b", e_call("intval", vec![e_index(e_var("__mt"), e_int(1))])),
         s_assign("__r", e_int(0)),

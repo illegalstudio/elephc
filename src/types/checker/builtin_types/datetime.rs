@@ -180,6 +180,35 @@ mod bodies_oracle {
         }
     }
 
+    /// `new DateTime()` takes ONE clock sample, as php does. The constructor used to store
+    /// `time()` and then let `__elephc_now_micros()` call `microtime()` again for the fraction, so
+    /// an object built across a second boundary got `T.000003` (almost one second in the past)
+    /// instead of `T.999998` or `T+1.000003`.
+    #[test]
+    fn the_constructor_reads_the_clock_once() {
+        let mut bodies = bodies::construct();
+        bodies.extend(bodies::now_micros());
+        let mut calls: Vec<String> = Vec::new();
+        crate::parser::ast::visit::walk_nodes(&bodies, &mut |node| {
+            if let crate::parser::ast::visit::Node::Expr(expr) = node {
+                if let ExprKind::FunctionCall { name, .. } = &expr.kind {
+                    calls.push(name.as_str().trim_start_matches('\\').to_ascii_lowercase());
+                }
+            }
+        });
+        let count = |wanted: &str| calls.iter().filter(|name| *name == wanted).count();
+        assert_eq!(
+            count("microtime"),
+            1,
+            "the constructor and its microsecond helper must share one microtime() sample"
+        );
+        assert_eq!(
+            count("time"),
+            0,
+            "a separate time() read can land in another second than the microtime() sample"
+        );
+    }
+
     /// `listIdentifiers()` has no PHP constant to diff — its body was FORMATTED from the
     /// identifier fragment and reparsed. This pins the two representations of that data together:
     /// the slice the builder reads and the PHP fragment the old path spliced must produce the
