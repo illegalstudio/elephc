@@ -841,7 +841,11 @@ pub(super) fn lower_backend_gap_builtin_shape(
     // list renumbered them, and `uksort` even compared the values (`[1, 3, 2]` came out `321`
     // instead of php's `2 => 2, 1 => 3, 0 => 1`). Promote the local to a hash first, as
     // `asort` does; the hash then takes the key-preserving prelude helper below.
-    if matches!(builtin.as_str(), "uasort" | "uksort") && args.len() == 2 {
+    // `natsort`/`natcasesort` keep the keys too (`[3, 1, 2]` becomes `1 => 1, 2 => 2, 0 => 3`),
+    // while the native list sort behind them renumbered the slots.
+    if (matches!(builtin.as_str(), "uasort" | "uksort") && args.len() == 2)
+        || (matches!(builtin.as_str(), "natsort" | "natcasesort") && args.len() == 1)
+    {
         super::array_builtin_args::promote_indexed_local_to_hash(ctx, &args[0]);
     }
     let gradual_sort_operand = || {
