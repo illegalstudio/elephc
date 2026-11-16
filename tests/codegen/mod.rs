@@ -165,6 +165,7 @@ mod nullable_pointers;
 mod pointer_arrays;
 mod ffi;
 mod oop;
+mod review_lowering_regressions;
 mod static_class_features;
 mod types;
 mod optimizer;
