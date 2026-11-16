@@ -99,13 +99,18 @@ fn lower_hash_cast(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<
     super::builtins::types::lower_object_array_cast(ctx, inst)
 }
 
-/// Converts a concrete object to a property hash with bare names for in-scope `foreach`.
+/// Converts an object to a property hash with bare names for in-scope `foreach`.
+///
+/// A boxed `mixed`/union operand is accepted when lowering has already proven it holds an
+/// ordinary object (`stmt::typed_foreach::foreach_source_of_boxed_value`).
 fn lower_object_to_foreach_array(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let PhpType::Object(_) = ctx.value_php_type(value)?.codegen_repr() else {
+    let (PhpType::Object(_) | PhpType::Mixed | PhpType::Union(_)) =
+        ctx.value_php_type(value)?.codegen_repr()
+    else {
         return Err(CodegenIrError::unsupported(format!(
             "object foreach conversion for PHP type {:?}",
             ctx.value_php_type(value)?.codegen_repr()

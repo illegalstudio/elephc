@@ -1220,6 +1220,99 @@ fn foreach_source_by_run_time_class(
     crate::ir_lower::expr::take_owned_temp(ctx, &temp, span)
 }
 
+/// Builds the boxed `foreach` source of a `mixed` or union value: an ordinary object (neither
+/// `Traversable` nor a `Closure`) becomes its scope-filtered property projection, as php walks
+/// its visible properties; arrays, iterators and every other value pass through unchanged.
+///
+/// Returns the source and, when the value was an owning temporary, the value itself, which the
+/// caller pins for the loop as for a projected object.
+fn foreach_source_of_boxed_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> (LoweredValue, Option<LoweredValue>) {
+    let temp = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    let check_class = ctx.builder.create_named_block("foreach.boxed.object", Vec::new());
+    let check_closure = ctx.builder.create_named_block("foreach.boxed.not_traversable", Vec::new());
+    let keep = ctx.builder.create_named_block("foreach.boxed.keep", Vec::new());
+    let project = ctx.builder.create_named_block("foreach.boxed.properties", Vec::new());
+    let merge = ctx.builder.create_named_block("foreach.boxed.source", Vec::new());
+    // The tag test first: an array, the common case, pays for nothing else.
+    let is_object = ctx.emit_value(
+        Op::TypePredicate,
+        vec![source.value],
+        Some(Immediate::TypePredicate(crate::ir::PhpTypePredicate::Object)),
+        PhpType::Bool,
+        Op::TypePredicate.default_effects(),
+        Some(span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_object.value,
+        then_target: check_class,
+        then_args: Vec::new(),
+        else_target: keep,
+        else_args: Vec::new(),
+    });
+    let split = ctx.initialized_slots_snapshot();
+    for (block, class, on_match, on_miss) in [
+        (check_class, "Traversable", keep, check_closure),
+        (check_closure, "Closure", keep, project),
+    ] {
+        ctx.builder.position_at_end(block);
+        let class_id = ctx.intern_class_name(class);
+        let matches_class = ctx.emit_value(
+            Op::InstanceOf,
+            vec![source.value],
+            Some(Immediate::Data(class_id)),
+            PhpType::Bool,
+            Op::InstanceOf.default_effects(),
+            Some(span),
+        );
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: matches_class.value,
+            then_target: on_match,
+            then_args: Vec::new(),
+            else_target: on_miss,
+            else_args: Vec::new(),
+        });
+    }
+
+    ctx.builder.position_at_end(keep);
+    // The value is already a boxed cell: the temp takes a reference of its own, not a box of it.
+    let held = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
+    let boxed = if held.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed) {
+        held
+    } else {
+        ctx.box_value_as_mixed(held, PhpType::Mixed, Some(span))
+    };
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, boxed, span);
+    let merged = ctx.initialized_slots_snapshot();
+    ctx.builder.terminate(Terminator::Br { target: merge, args: Vec::new() });
+
+    ctx.builder.position_at_end(project);
+    ctx.restore_initialized_slots(split);
+    let projection = ctx.emit_value(
+        Op::Cast,
+        vec![source.value],
+        Some(Immediate::CastTarget(IrType::Heap(crate::ir::IrHeapKind::Hash))),
+        PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        },
+        Op::Cast.default_effects(),
+        Some(span),
+    );
+    let boxed = ctx.box_value_as_mixed(projection, PhpType::Mixed, Some(span));
+    store_value_into_temp(ctx, &temp, PhpType::Mixed, boxed, span);
+    ctx.builder.terminate(Terminator::Br { target: merge, args: Vec::new() });
+
+    ctx.builder.position_at_end(merge);
+    ctx.restore_initialized_slots(merged);
+    let walked = crate::ir_lower::expr::take_owned_temp(ctx, &temp, span);
+    let kept = ctx.value_is_owning_temporary(source).then_some(source);
+    (walked, kept)
+}
+
 /// Whether a value declared as `declared` (a class or an interface that is not itself traversable)
 /// can be, at run time, an object of a class implementing `Iterator` or `IteratorAggregate`.
 ///
@@ -1254,8 +1347,19 @@ fn normalize_plain_object_foreach_source(
     source: LoweredValue,
     span: Span,
 ) -> (LoweredValue, Option<LoweredValue>) {
-    let PhpType::Object(class_name) = ctx.builder.value_php_type(source.value).codegen_repr() else {
-        return (source, None);
+    let class_name = match ctx.builder.value_php_type(source.value).codegen_repr() {
+        PhpType::Object(class_name) => class_name,
+        // An untyped value can hold an ordinary object too, whose properties php walks.
+        PhpType::Mixed => return foreach_source_of_boxed_value(ctx, source, span),
+        PhpType::Union(members)
+            if source.ir_type == IrType::Heap(crate::ir::IrHeapKind::Mixed)
+                && members.iter().any(|member| {
+                    matches!(member.codegen_repr(), PhpType::Object(_) | PhpType::Mixed)
+                }) =>
+        {
+            return foreach_source_of_boxed_value(ctx, source, span);
+        }
+        _ => return (source, None),
     };
     // A parameter typed with one of the traversal interfaces names the interface itself, which no
     // lookup reports as implementing itself: `function sum(IteratorAggregate $a)` walked an empty

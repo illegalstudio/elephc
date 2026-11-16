@@ -167,3 +167,33 @@ var_dump(f(new TX()));
     assert!(out.stderr.contains("Warning: Attempt to read property \"tag\" on null"), "{}", out.stderr);
     assert!(out.stderr.contains("Warning: Undefined property: TX::$tag"), "{}", out.stderr);
 }
+
+/// A by-value `foreach` over an untyped value walks the visible properties of an ordinary object
+/// it holds, from outside and from inside the class, as it does for a declared object type.
+#[test]
+fn test_foreach_over_an_untyped_value_walks_a_plain_objects_properties() {
+    let out = compile_and_run(
+        r#"<?php
+function walk($v) { foreach ($v as $k => $x) echo "$k=$x\n"; }
+class P {
+    public $a = 1; protected $b = 2; private $c = 3;
+    function inside() { walk($this); foreach ($this->self() as $k => $x) echo "in:$k=$x\n"; }
+    function self() { return $this; }
+}
+$o = new stdClass; $o->a = 1; $o->b = "x";
+walk($o);
+walk(new P);
+(new P)->inside();
+$m = $argc > 5 ? 1 : new P;
+foreach ($m as $k => $x) echo "top:$k=$x\n";
+walk([5, 6]);
+walk(new ArrayIterator(['i' => 9]));
+function nullable(?P $p) { foreach ($p as $k => $x) echo "n:$k=$x\n"; }
+nullable(new P);
+"#,
+    );
+    assert_eq!(
+        out,
+        "a=1\nb=x\na=1\na=1\nin:a=1\nin:b=2\nin:c=3\ntop:a=1\n0=5\n1=6\ni=9\nn:a=1\n"
+    );
+}
