@@ -245,6 +245,9 @@ impl Checker {
                             .and_then(|c| c.methods.get(&method_key))
                             .map(|s| s.params.clone())
                     };
+                    // `Class::method`, the scope the by-ref widening and the loop storage key on:
+                    // spelled once per body, not once per parameter and again for the body.
+                    let method_scope = format!("{}::{}", class.name, method.name);
                     for (i, (pname, type_ann, _, _)) in method.params.iter().enumerate() {
                         let ty = if let Some(type_ann) = type_ann {
                             let declared = self.resolve_declared_param_type_hint(
@@ -307,11 +310,7 @@ impl Checker {
                         // body — see `Checker::widened_ref_param_env_type`. Only the ENVIRONMENT
                         // moves; `self.classes`' signature keeps the declared type, so every call
                         // site still validates its argument against it.
-                        let ty = self.widened_ref_param_env_type(
-                            &format!("{}::{}", class.name, method.name),
-                            pname,
-                            &ty,
-                        );
+                        let ty = self.widened_ref_param_env_type(&method_scope, pname, &ty);
                         method_env.insert(pname.clone(), ty);
                     }
                     if let Some(variadic_name) = &method.variadic {
@@ -350,7 +349,7 @@ impl Checker {
                     self.current_method = Some(method_key.clone());
                     self.current_method_is_static = method.is_static;
                     self.current_by_ref_return = method.by_ref_return;
-                    let loop_storage_scope = format!("{}::{}", class.name, method.name);
+                    let loop_storage_scope = method_scope;
                     self.clear_loop_storage_scope(&loop_storage_scope);
                     let previous_loop_storage_scope = std::mem::replace(
                         &mut self.current_loop_storage_scope,
