@@ -434,16 +434,18 @@ pub(in crate::interpreter) fn eval_destructure_into(
     // is how Blade's component attribute bag splits its attributes.
     let readable = matches!(tag, EVAL_TAG_ARRAY | EVAL_TAG_ASSOC)
         || (tag == EVAL_TAG_OBJECT && eval_array_access_object_matches(array, context, values)?);
-    if !readable && tag != EVAL_TAG_NULL {
-        values.warning(&format!(
-            "Cannot use {} as array",
-            eval_array_destructure_type_name(tag)
-        ))?;
-    }
     for (position, target) in targets.iter().enumerate() {
         let Some(target) = target else {
             continue;
         };
+        // php fetches every target from the right-hand side, so a non-null scalar warns once per
+        // target (`[$a, $b] = 5;` warns twice); a skipped `[, $x]` slot fetches nothing.
+        if !readable && tag != EVAL_TAG_NULL {
+            values.warning(&format!(
+                "Cannot use {} as array",
+                eval_array_destructure_type_name(tag)
+            ))?;
+        }
         let element = if readable {
             let key = match target.key.as_ref() {
                 Some(key) => eval_owned_expr(key, context, scope, values)?,

@@ -27,6 +27,24 @@ fn out(fragment: &[u8]) -> String {
     values.output.clone()
 }
 
+/// Verifies a non-null scalar right-hand side warns once per fetched target, as php does: two
+/// for `[$a, $b] = 5`, one for `[, $c] = 5` (a hole fetches nothing), two for `[$e, [$f]] = 1`
+/// (the nested pattern then destructures null silently). `php -n` 8.5.10 prints 5 warnings.
+#[test]
+fn a_scalar_right_hand_side_warns_once_per_target() {
+    let program = parse_fragment(br#"[$a, $b] = 5; [, $c] = 5; [$e, [$f]] = 1;"#)
+        .expect("parse destructuring fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+    execute_program(&program, &mut scope, &mut values).expect("execute destructuring fragment");
+    let warnings = values
+        .warnings
+        .iter()
+        .filter(|warning| warning.contains("Cannot use int as array"))
+        .count();
+    assert_eq!(warnings, 5);
+}
+
 /// Verifies a pattern writes to PROPERTIES, ELEMENTS and STATIC properties, not only variables.
 ///
 /// `php -n` 8.5.6 prints `12;ab;stat`. The first is `PhpDumper`'s
