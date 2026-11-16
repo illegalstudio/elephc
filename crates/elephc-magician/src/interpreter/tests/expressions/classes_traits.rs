@@ -11,6 +11,7 @@
 use super::super::super::*;
 use super::super::support::*;
 
+/// Verifies redeclaring an interface reports php's redeclaration error, not an unsupported syntax.
 #[test]
 fn duplicate_interface_reports_redeclaration_not_unsupported_syntax() {
     crate::errors::clear_eval_runtime_failure();

@@ -5,6 +5,7 @@
 use super::super::*;
 use super::support::*;
 
+/// Verifies `isset`, `empty` and `unset` on `$GLOBALS[...]` act on the global symbol table.
 #[test]
 fn globals_array_quiet_checks_and_unset_use_global_storage() {
     let program = parse_fragment(br#"
@@ -28,6 +29,7 @@ $removed = !isset($GLOBALS['counter']);
     assert!(scope.visible_cell("GLOBALS").is_none());
 }
 
+/// Verifies `$GLOBALS[...]` reads and writes reach the global even when a local shadows the name.
 #[test]
 fn globals_array_reads_and_writes_preserve_local_shadowing() {
     let program = parse_fragment(br#"
@@ -51,6 +53,7 @@ $after = $GLOBALS['counter'];
     assert!(scope.visible_cell("GLOBALS").is_none(), "GLOBALS must not become a local variable");
 }
 
+/// Verifies a nested `$GLOBALS['a']['b']` once-guard reads and writes the global storage.
 #[test]
 fn globals_array_nested_once_guard_uses_global_storage() {
     let program = parse_fragment(br#"
