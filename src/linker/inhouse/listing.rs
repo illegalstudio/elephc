@@ -46,6 +46,7 @@ impl ListingPlan<'_> {
         self.starts.len()
     }
 
+    /// The byte range of `body` that slice `slice` covers.
     fn range(&self, slice: usize) -> std::ops::Range<usize> {
         let end = self.starts.get(slice + 1).copied().unwrap_or(self.body.len());
         self.starts[slice]..end
@@ -149,7 +150,7 @@ fn cut_near(body: &str, target: usize, section_at: &impl Fn(usize) -> Sect) -> O
     }
     // Back, from the line `target` falls in.
     let floor = target.saturating_sub(CUT_SEARCH_BYTES);
-    let line_start = body[..target].rfind('\n').map_or(0, |newline| newline + 1);
+    let line_start = memchr::memrchr(b'\n', &bytes[..target]).map_or(0, |newline| newline + 1);
     for (start, line) in std::iter::once((line_start, &body[line_start..memchr::memchr(b'\n', &bytes[line_start..]).map_or(bytes.len(), |at| line_start + at)]))
         .chain(lines_before(body, line_start))
     {
@@ -202,7 +203,7 @@ impl ShortReferences {
     /// when its slice is assembled.
     fn scan(body: &str, from: usize, to: usize) -> Self {
         let start = from.saturating_sub(SHORT_REACH_BYTES);
-        let start = if start == 0 { 0 } else { body[start..].find('\n').map_or(body.len(), |at| start + at + 1) };
+        let start = if start == 0 { 0 } else { memchr::memchr(b'\n', &body.as_bytes()[start..]).map_or(body.len(), |at| start + at + 1) };
         let end = to.saturating_add(SHORT_REACH_BYTES).min(body.len());
         #[cfg(test)]
         SHORT_SCAN_BYTES.with(|bytes| bytes.set(bytes.get() + end.saturating_sub(start)));
@@ -283,10 +284,13 @@ struct ShortReferenceCursor<'a> {
 }
 
 impl<'a> ShortReferenceCursor<'a> {
+    /// A cursor over `body` that has scanned nothing yet.
     fn new(body: &'a str) -> Self {
         Self { body, index: None }
     }
 
+    /// Whether a cut at `cut` separates a short-range pair, scanning a new window only when the
+    /// last one does not cover it (`forward` is the direction the search is moving).
     fn straddles(&mut self, cut: usize, forward: bool) -> bool {
         if !self.index.as_ref().is_some_and(|index| index.valid.contains(&cut)) {
             let (from, to) = if forward {
@@ -639,29 +643,50 @@ mod tests {
     /// helper several functions reach with `b.eq` -- so every slice the plan makes assembles.
     #[test]
     fn cuts_keep_short_branches_with_their_targets() {
+        // Six independent groups: inside one, every function reaches the group's shared helper
+        // with `b.eq` and the group's tail with `cbz`, so a cut there separates a pair. Only the
+        // boundaries between groups are legal, which is what the plan must find.
         let mut text = String::new();
-        for index in 0..300 {
-            text.push_str(&format!(".p2align 2\n.globl _f{index}\n_f{index}:\n    cmp x0, #1\n    b.eq _shared\n"));
-            if index % 50 == 0 {
-                text.push_str("    cbz x0, Ltail\n");
+        for group in 0..6 {
+            for index in 0..50 {
+                let name = format!("{group}_{index}");
+                text.push_str(&format!(".p2align 2\n.globl _f{name}\n_f{name}:\n    cmp x0, #1\n    b.eq _shared{group}\n"));
+                if index % 10 == 0 {
+                    text.push_str(&format!("    cbz x0, Ltail{group}\n"));
+                }
+                text.push_str("    ret\n");
+                if index == 25 {
+                    text.push_str(&format!(".p2align 2\n.globl _shared{group}\n_shared{group}:\n    mov x0, #0\n    ret\n"));
+                }
             }
-            text.push_str("    ret\n");
-            if index == 150 {
-                text.push_str(".p2align 2\n.globl _shared\n_shared:\n    mov x0, #0\n    ret\n");
-            }
+            text.push_str(&format!("Ltail{group}:\n    ret\n"));
         }
-        text.push_str("Ltail:\n    ret\n");
-        if let Some(plan) = plan_listing(&text, 6) {
-            for &start in &plan.starts[1..] {
-                assert!(!short_reference_straddles(plan.body, start), "a cut at {start} splits a pair");
-            }
-            for slice in 0..plan.slices() {
-                assert!(assemble_slice(&plan, slice).is_ok(), "slice {slice} has a branch it cannot reach");
-            }
+        let plan = plan_listing(&text, 6).expect("the group boundaries are legal cuts");
+        assert!(plan.slices() > 1, "the listing is cut");
+        for &start in &plan.starts[1..] {
+            assert!(!short_reference_straddles(plan.body, start), "a cut at {start} splits a pair");
+        }
+        for slice in 0..plan.slices() {
+            assert!(assemble_slice(&plan, slice).is_ok(), "slice {slice} has a branch it cannot reach");
         }
         // The window check itself, on a cut that would split the helper from its callers.
-        let helper = text.find(".p2align 2\n.globl _shared").unwrap();
+        let helper = text.find(".p2align 2\n.globl _shared0").unwrap();
         assert!(short_reference_straddles(&text, helper));
+    }
+
+    /// A listing whose search offsets fall inside a multi-byte character (a readable listing
+    /// carries PHP names raw) is cut and scanned without a char-boundary panic.
+    #[test]
+    fn non_ascii_text_at_a_search_offset_does_not_panic() {
+        let section_at = |_: usize| Sect::Text;
+        let body = format!("{}\n.p2align 2\n.globl _f\n_f:\n    ret\n", "é".repeat(8));
+        for target in 0..body.len() {
+            let _ = cut_near(&body, target, &section_at);
+        }
+        let wide = "é".repeat(SHORT_REACH_BYTES);
+        for from in [SHORT_REACH_BYTES + 1, SHORT_REACH_BYTES + 3] {
+            let _ = ShortReferences::scan(&wide, from, from);
+        }
     }
 
     /// A search that rejects every candidate reads the listing a bounded number of times, not
