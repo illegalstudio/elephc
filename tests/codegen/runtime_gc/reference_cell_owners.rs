@@ -774,3 +774,26 @@ relayThroughElementAlias();
     );
     assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}\n{asm}", out.stderr);
 }
+
+/// Cloning an object whose `string` property is reference-bound copies the string block: a
+/// string payload has no refcount, so a clone that shared the source's block freed it under the
+/// source on the first assignment to either ("free of a still-referenced block").
+#[test]
+fn test_clone_of_a_reference_bound_string_property_owns_its_own_string() {
+    let source = r#"<?php
+class Q1 { public string $s = 'x'; function r() { $q = &$this->s; return $q; } }
+$o = new Q1;
+$o->s = str_repeat("a", 5);
+$d = clone $o;
+unset($d);
+$e = clone $o;
+$e->s = "new";
+$f = clone $o;
+$f->s .= "!";
+echo $o->s, "|", $e->s, "|", $f->s;
+"#;
+    let out = compile_and_run_with_heap_debug(source);
+    assert!(out.success, "stdout={:?}\nstderr={}", out.stdout, out.stderr);
+    assert_eq!(out.stdout, "aaaaa|new|aaaaa!", "{}", out.stderr);
+    assert!(out.stderr.contains("HEAP DEBUG: leak summary: clean"), "{}", out.stderr);
+}

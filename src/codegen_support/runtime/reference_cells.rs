@@ -209,6 +209,7 @@ fn emit_clone(emitter: &mut Emitter) {
     }
     let tag = match emitter.target.arch { Arch::AArch64 => "x9", Arch::X86_64 => "r9" };
     abi::load_at_offset(emitter, tag, 24);
+    emit_clone_string_payload(emitter);
     emit_singleton_mixed_clone_branch(emitter);
     emit_payload_dispatch(emitter, "__rt_reference_cell_clone_retain", "__rt_reference_cell_clone_retain");
     abi::emit_jump(emitter, "__rt_reference_cell_clone_finish");
@@ -229,6 +230,48 @@ fn emit_clone(emitter: &mut Emitter) {
     abi::emit_return(emitter);
     emitter.label("__rt_reference_cell_clone_shared");
     abi::emit_jump(emitter, "__rt_incref");
+}
+
+/// Gives a separated cell holding a `string` its own copy of the string block.
+///
+/// A string payload carries no refcount: its slot owns one `__rt_str_persist` block and every
+/// store into the slot frees the old block outright. The generic retain below would leave the
+/// source cell and its clone pointing at one block, so the first assignment to either freed it
+/// under the other ("free of a still-referenced block" under `--heap-debug`). The payload tag is
+/// in the register the dispatch reads; an uninitialized typed slot keeps its marker word.
+fn emit_clone_string_payload(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x9, #1");                                  // is the separated cell holding a string?
+            emitter.instruction("b.ne __rt_reference_cell_clone_not_string");   // other payloads retain through the generic path
+            abi::load_at_offset(emitter, "x10", 16);
+            emitter.instruction("ldr x1, [x10]");                               // copied string pointer
+            emitter.instruction("ldr x2, [x10, #8]");                           // copied string length or uninitialized marker
+            abi::emit_load_int_immediate(emitter, "x11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+            emitter.instruction("cmp x2, x11");                                 // is the typed property still uninitialized?
+            emitter.instruction("b.eq __rt_reference_cell_clone_finish");       // an uninitialized slot owns no string block to copy
+            abi::emit_call_label(emitter, "__rt_str_persist");
+            abi::load_at_offset(emitter, "x10", 16);
+            emitter.instruction("str x1, [x10]");                               // the clone's own string pointer
+            emitter.instruction("str x2, [x10, #8]");                           // the clone's own string length
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp r9, 1");                                   // is the separated cell holding a string?
+            emitter.instruction("jne __rt_reference_cell_clone_not_string");    // other payloads retain through the generic path
+            abi::load_at_offset(emitter, "r10", 16);
+            emitter.instruction("mov rax, QWORD PTR [r10]");                    // copied string pointer
+            emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                // copied string length or uninitialized marker
+            abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
+            emitter.instruction("cmp rdx, r11");                                // is the typed property still uninitialized?
+            emitter.instruction("je __rt_reference_cell_clone_finish");         // an uninitialized slot owns no string block to copy
+            abi::emit_call_label(emitter, "__rt_str_persist");
+            abi::load_at_offset(emitter, "r10", 16);
+            emitter.instruction("mov QWORD PTR [r10], rax");                    // the clone's own string pointer
+            emitter.instruction("mov QWORD PTR [r10 + 8], rdx");                // the clone's own string length
+        }
+    }
+    abi::emit_jump(emitter, "__rt_reference_cell_clone_finish");
+    emitter.label("__rt_reference_cell_clone_not_string");
 }
 
 /// Separates ordinary Mixed zvals while preserving an independently shared PHP reference wrapper.
