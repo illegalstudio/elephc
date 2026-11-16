@@ -120,6 +120,10 @@ pub(super) fn reflection_property_hook_members(
     let has_concrete_set = info
         .methods
         .contains_key(&php_symbol_key(&property_hook_set_method(property_name)));
+    let get_key = php_symbol_key(&property_hook_get_method(property_name));
+    let set_key = php_symbol_key(&property_hook_set_method(property_name));
+    let get_is_final = info.final_methods.contains(&get_key);
+    let set_is_final = info.final_methods.contains(&set_key);
     let contract = info.abstract_property_hooks.get(property_name);
     if has_concrete_get || contract.and_then(|contract| contract.get_type.as_ref()).is_some() {
         let return_type = contract
@@ -143,9 +147,18 @@ pub(super) fn reflection_property_hook_members(
                 declaring_class_name.clone(),
                 property_flags,
                 !has_concrete_get,
+                get_is_final,
                 get_by_ref,
                 return_type,
                 None,
+                info.method_attribute_names
+                    .get(&php_symbol_key(&property_hook_get_method(property_name)))
+                    .cloned()
+                    .unwrap_or_default(),
+                info.method_attribute_args
+                    .get(&php_symbol_key(&property_hook_get_method(property_name)))
+                    .cloned()
+                    .unwrap_or_default(),
             ),
         ));
     }
@@ -164,11 +177,20 @@ pub(super) fn reflection_property_hook_members(
                 },
                 property_flags,
                 !has_concrete_set,
+                set_is_final,
                 false,
                 Some(ReflectionParameterTypeMetadata::Named(
                     reflection_builtin_named_type("void", false),
                 )),
                 parameter_type,
+                info.method_attribute_names
+                    .get(&php_symbol_key(&property_hook_set_method(property_name)))
+                    .cloned()
+                    .unwrap_or_default(),
+                info.method_attribute_args
+                    .get(&php_symbol_key(&property_hook_set_method(property_name)))
+                    .cloned()
+                    .unwrap_or_default(),
             ),
         ));
     }
@@ -184,19 +206,22 @@ pub(super) fn reflection_property_hook_method_member(
     declaring_class_name: Option<String>,
     property_flags: ReflectionMemberFlags,
     is_abstract: bool,
+    is_final: bool,
     returns_reference: bool,
     return_type: Option<ReflectionParameterTypeMetadata>,
     parameter_type: Option<ReflectionParameterTypeMetadata>,
+    attr_names: Vec<String>,
+    attr_args: Vec<Option<Vec<crate::types::AttrArgEntry>>>,
 ) -> ReflectionListedMember {
     let visibility = reflection_visibility_from_member_flags(property_flags);
-    let flags = reflection_member_flags(false, &visibility, false, is_abstract, false, false);
+    let flags = reflection_member_flags(false, &visibility, is_final, is_abstract, false, false);
     let name = format!("${property_name}::{hook_name}");
     let required_parameter_count = i64::from(hook_name == "set");
     let declaring_function = ReflectionDeclaringFunctionMember::Method {
         name: name.clone(),
         declaring_class_name: declaring_class_name.clone(),
-        attr_names: Vec::new(),
-        attr_args: Vec::new(),
+        attr_names: attr_names.clone(),
+        attr_args: attr_args.clone(),
         flags,
         required_parameter_count,
         type_metadata: return_type.clone(),
@@ -216,8 +241,8 @@ pub(super) fn reflection_property_hook_method_member(
     ReflectionListedMember {
         name,
         declaring_class_name,
-        attr_names: Vec::new(),
-        attr_args: Vec::new(),
+        attr_names,
+        attr_args,
         constant_value: None,
         backing_value: None,
         is_enum_case: false,

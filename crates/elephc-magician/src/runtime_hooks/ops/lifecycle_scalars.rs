@@ -162,6 +162,19 @@ macro_rules! impl_lifecycle_scalar_ops {
         Ok(())
     }
 
+    /// Emits one PHP warning reported at an explicit line inside the scanned source.
+    fn warning_at(&mut self, message: &str, line: usize) -> Result<(), EvalStatus> {
+        let terminated;
+        let message = if message.ends_with('\n') { message } else {
+            terminated = format!("{message}\n");
+            &terminated
+        };
+        unsafe {
+            __elephc_eval_warning_at(message.as_ptr(), message.len() as u64, line as u64);
+        }
+        Ok(())
+    }
+
     /// Emits one unsuppressible PHP fatal through the generated runtime and terminates.
     fn fatal(&mut self, message: &str) -> Result<(), EvalStatus> {
         unsafe {

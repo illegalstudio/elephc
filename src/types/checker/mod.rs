@@ -30,7 +30,6 @@ pub(crate) mod scope_dynamic_storage;
 mod driver;
 mod extern_decl;
 mod functions;
-pub(crate) use functions::validate_unresolved_call_argument_order;
 mod generic_bounds;
 mod generic_method;
 mod generic_new;
@@ -741,6 +740,12 @@ pub(crate) struct Checker {
     /// Whether any checked body contains eval. Runtime fragments can write missing names on AOT
     /// objects even when no equivalent property mutation is visible in the source AST.
     pub program_contains_eval: bool,
+    /// Literal `define("NAME", …)` names found while normalizing property defaults, including
+    /// calls inside functions the checker does not evaluate.
+    ///
+    /// A compiled `define()` writes native global storage, so EIR lowering must keep that lookup
+    /// for these names even when an unrelated `eval()` makes the program eval-aware.
+    pub native_defined_constants: HashSet<String>,
     /// Names of the CURRENT body's locals that the syntactic pre-scan marked as whole-frame boxed
     /// `Mixed` storage, because they are assigned incompatible types across a branch.
     ///
@@ -1562,6 +1567,11 @@ pub(crate) struct FnDecl {
     /// Attribute groups attached to the original `function` declaration.
     /// Currently consulted only for `#[\Deprecated]` detection.
     pub attributes: Vec<crate::parser::ast::AttributeGroup>,
+    /// Whether this declaration came from compiler-injected `SourceMode::Internal` code.
+    ///
+    /// Such functions model PHP internals, so a matching `PreludeProvided` contract keeps the
+    /// internal maximum arity instead of PHP's user-function surplus-argument tolerance.
+    pub internal_prelude: bool,
 }
 
 /// Runs the type checker on `program` for the given `target` with default
@@ -1677,6 +1687,8 @@ fn check_types_on_compiler_stack(
         requested_method_instantiations: checker.requested_method_instantiations,
         generic_method_sites: checker.generic_method_sites,
         generic_new_sites: checker.generic_new_sites,
+        program_contains_eval: checker.program_contains_eval,
+        native_defined_constants: checker.native_defined_constants,
         global_env,
         functions: checker.functions,
         function_attribute_names,

@@ -196,10 +196,62 @@ pub(in crate::types::checker) fn record_runtime_callable_clone_override_destinat
     checker: &mut Checker,
     args: &[Expr],
 ) {
-    if !clone_call_may_carry_overrides(args) {
-        return;
+    if runtime_call_may_carry_clone_overrides(args) {
+        checker.clone_override_destinations.any_class = true;
     }
-    checker.clone_override_destinations.any_class = true;
+}
+
+/// Returns whether an unknown runtime callee can be `clone()` with `withProperties`.
+///
+/// `clone()` needs an object and an array of overrides. A call whose arguments are
+/// syntactically scalars cannot reach a property write, so ordinary runtime calls such as the
+/// tokenizer prelude's `$writer('memory_limit', '-1')` must not charge every class a property
+/// hash. A variable or call argument stays unknown and keeps the conservative widening.
+///
+/// A single unpack is the one shape that may carry BOTH arguments: `$f(...$args)` passes the
+/// object and its overrides through one argument, so the `skip(1)` reading of "only arguments
+/// after the first can be overrides" would miss every property write it reaches.
+fn runtime_call_may_carry_clone_overrides(args: &[Expr]) -> bool {
+    if !clone_call_may_carry_overrides(args) || args.first().is_some_and(definitely_not_object) {
+        return false;
+    }
+    args.iter().enumerate().any(|(index, arg)| match &arg.kind {
+        // Named arguments bind by name, so `withProperties:` can precede the object.
+        ExprKind::NamedArg { name, .. } if name == "withProperties" => {
+            call_argument_may_carry_overrides(arg)
+        }
+        // A positional unpack can carry the object AND its overrides.
+        ExprKind::Spread(_) => true,
+        _ => index != 0 && !definitely_not_array(arg),
+    })
+}
+
+/// Returns whether one syntactic argument can carry `clone()` property overrides.
+fn call_argument_may_carry_overrides(arg: &Expr) -> bool {
+    match &arg.kind {
+        ExprKind::Spread(_) => true,
+        ExprKind::NamedArg { name, value } => {
+            name == "withProperties" && !definitely_not_array(value)
+        }
+        _ => !definitely_not_array(arg),
+    }
+}
+
+/// Returns whether an expression is syntactically incapable of holding an array.
+fn definitely_not_array(expr: &Expr) -> bool {
+    matches!(
+        expr.kind,
+        ExprKind::StringLiteral(_)
+            | ExprKind::IntLiteral(_)
+            | ExprKind::FloatLiteral(_)
+            | ExprKind::BoolLiteral(_)
+            | ExprKind::Null
+    )
+}
+
+/// Returns whether an expression is syntactically incapable of holding an object.
+fn definitely_not_object(expr: &Expr) -> bool {
+    definitely_not_array(expr) || matches!(expr.kind, ExprKind::ArrayLiteral(_))
 }
 
 /// Returns whether a `clone()` call site can carry the optional `withProperties` overrides.
@@ -635,6 +687,54 @@ mod tests {
             "withProperties",
             Expr::var("overrides")
         )]));
+    }
+
+    /// A single unpack can carry the object AND its overrides, so the conservative widening
+    /// must stay on for a runtime callee called with only `...$args`.
+    #[test]
+    fn runtime_call_with_one_unpack_keeps_the_conservative_widening() {
+        assert!(runtime_call_may_carry_clone_overrides(&[spread(Expr::var("args"))]));
+        assert!(runtime_call_may_carry_clone_overrides(&[
+            Expr::var("object"),
+            spread(Expr::var("args")),
+        ]));
+        assert!(runtime_call_may_carry_clone_overrides(&[
+            Expr::var("object"),
+            Expr::var("overrides"),
+        ]));
+        assert!(!runtime_call_may_carry_clone_overrides(&[]));
+        assert!(!runtime_call_may_carry_clone_overrides(&[Expr::var("object")]));
+    }
+
+    /// PHP binds named arguments by name, so `withProperties:` counts wherever it appears.
+    #[test]
+    fn runtime_call_named_overrides_are_found_in_any_position() {
+        let array = Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy());
+        assert!(runtime_call_may_carry_clone_overrides(&[
+            named("withProperties", array.clone()),
+            named("object", Expr::var("object")),
+        ]));
+        assert!(runtime_call_may_carry_clone_overrides(&[
+            named("object", Expr::var("object")),
+            named("withProperties", array),
+        ]));
+    }
+
+    /// A runtime callable whose arguments are syntactic scalars cannot be `clone()` with
+    /// property overrides, so it must not reserve a property hash on every class.
+    #[test]
+    fn scalar_runtime_call_arguments_cannot_carry_clone_overrides() {
+        let text = |value: &str| Expr::new(ExprKind::StringLiteral(value.to_string()), Span::dummy());
+        let array = Expr::new(ExprKind::ArrayLiteral(Vec::new()), Span::dummy());
+        assert!(definitely_not_object(&text("memory_limit")));
+        assert!(definitely_not_array(&text("-1")));
+        assert!(!call_argument_may_carry_overrides(&text("-1")));
+        assert!(call_argument_may_carry_overrides(&array));
+        assert!(call_argument_may_carry_overrides(&Expr::var("overrides")));
+        assert!(!runtime_call_may_carry_clone_overrides(&[
+            text("memory_limit"),
+            text("-1"),
+        ]));
     }
 
     /// Builds one layout view whose every slot is widenable.

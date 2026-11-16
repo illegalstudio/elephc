@@ -122,6 +122,8 @@ mod runtime_promoted_array_reader_tests;
 mod runtime_string_capacity_tests;
 #[path = "static_property_string_ownership_tests.rs"]
 mod static_property_string_ownership_tests;
+#[path = "tokenizer_validation_feature.rs"]
+mod tokenizer_validation_feature;
 #[path = "uncaught_exception_report_tests.rs"]
 mod uncaught_exception_report_tests;
 #[path = "var_dump_nested_tests.rs"]

@@ -204,6 +204,7 @@ impl Checker {
             statement_position_expr: None,
             body_contains_eval: false,
             program_contains_eval: false,
+            native_defined_constants: HashSet::new(),
             mixed_storage_locals: HashSet::new(),
             guarded_union_types: HashMap::new(),
             pending_ref_capture_invalidations: HashSet::new(),

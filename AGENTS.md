@@ -142,8 +142,8 @@ by EIR lowering and `src/codegen/`.
 | Module | Entry point | Responsibility |
 |---|---|---|
 | `src/pipeline.rs` | `compile()` | Orchestrates frontend passes, type checking, optimization, runtime cache, codegen, and linking |
-| `src/lexer/` | `tokenize()` | Source → `Vec<(Token, Span)>` |
-| `src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
+| `crates/elephc-syntax/src/lexer/` | `tokenize()` | Source → `Vec<(Token, Span)>` |
+| `crates/elephc-syntax/src/parser/` | `parse()` | Tokens → `Program` (Vec of Stmt). Pratt parser for expressions |
 | `src/magic_constants/`, `src/magic_constants.rs` | `substitute_file_and_scope_constants()` | Lowers PHP magic constants before resolver/name-resolver/optimizer passes |
 | `src/conditional.rs` | `apply()` | Applies compiler `ifdef` conditional branches |
 | `src/goto_lowering.rs`, `src/goto_lowering/` | `lower_program()` | Validates each file's `goto` jumps and rewrites them into dispatch loops (`while` + `continue N`) before any pass that reads control flow; no `StmtKind::Goto` survives it |
@@ -160,7 +160,7 @@ by EIR lowering and `src/codegen/`.
 | `src/codegen/program_usage/` | Program scans | Collects codegen metadata such as required classes and variables before emission |
 | `src/runtime_cache.rs` | `prepare_runtime_object()` | Builds/reuses the target runtime object before final linking |
 | `src/errors/` | `report()` | Error formatting with line:col |
-| `src/span.rs` | `Span` | Source position (line, col) attached to all AST nodes |
+| `crates/elephc-syntax/src/span.rs` | `Span` | Source position (line, col) attached to all AST nodes |
 
 ### Bridge crates and `--with-<crate>` flags
 
@@ -254,7 +254,7 @@ those packages, so a new pairing needs no edit in `scripts/verify-release-artifa
 
 Key invariants:
 
-- A new operator touches the whole pipeline: token (`src/lexer/`), Pratt binding power (`infix_bp()` in `src/parser/expr/pratt.rs`), `BinOp` variant (`src/parser/ast.rs`), type inference (`src/types/checker/`, usually `inference/ops.rs`), optimizer folding/effects (`src/optimize/`), and EIR lowering (`src/ir_lower/expr/` + `src/codegen/lower_inst/`).
+- A new operator touches the whole pipeline: token (`crates/elephc-syntax/src/lexer/`), Pratt binding power (`infix_bp()` in `crates/elephc-syntax/src/parser/expr/pratt.rs`), `BinOp` variant (`crates/elephc-syntax/src/parser/ast.rs`), type inference (`src/types/checker/`, usually `inference/ops.rs`), optimizer folding/effects (`src/optimize/`), and EIR lowering (`src/ir_lower/expr/` + `src/codegen/lower_inst/`).
 - Precedence and associativity must match PHP; keep folds PHP-equivalent and cross-check edge cases with `php -r`.
 - Needs a Pratt binding-power test asserting precedence relative to adjacent operators, plus tests in all 4 test files (lexer, parser, codegen, error).
 
@@ -262,7 +262,7 @@ Key invariants:
 
 Key invariants:
 
-- A new statement touches parser (`StmtKind` in `src/parser/ast.rs` + `src/parser/stmt.rs`), resolver/name-resolver (if it holds names, declarations, includes, function variants, or expressions), type checker (`src/types/checker/`), optimizer/effects/warnings (`src/optimize/`), and EIR lowering (`src/ir_lower/stmt/` + `src/codegen/`).
+- A new statement touches parser (`StmtKind` in `crates/elephc-syntax/src/parser/ast.rs` + `crates/elephc-syntax/src/parser/stmt.rs`), resolver/name-resolver (if it holds names, declarations, includes, function variants, or expressions), type checker (`src/types/checker/`), optimizer/effects/warnings (`src/optimize/`), and EIR lowering (`src/ir_lower/stmt/` + `src/codegen/`).
 - If it introduces variables or hidden temporaries, update EIR local/temp declaration in `src/ir_lower/context.rs` and frame-layout allocation before frame sizing.
 - Also audit every AST-walking pass (see "Adding or changing an AST node") — a missed pass usually causes silent miscompilation rather than a compile error.
 
@@ -272,7 +272,7 @@ When adding a new `ExprKind` or `StmtKind`, check every AST-walking pass. The co
 
 Common places to audit:
 
-- Parser construction and lowering in `src/parser/`
+- Parser construction and lowering in `crates/elephc-syntax/src/parser/`
 - Resolver/include discovery and function-variant handling in `src/resolver/`
 - Namespace/use/FQN rewriting in `src/name_resolver/`
 - Type checking, inference, return analysis, warnings, and type compatibility in `src/types/`
