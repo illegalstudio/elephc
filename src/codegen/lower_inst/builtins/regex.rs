@@ -44,9 +44,13 @@ pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction
     load_pattern_and_subject(ctx, pattern, subject)?;
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_capture");
+        super::regex_errors::emit_fold_exec_error_into_count(ctx);
+        super::regex_errors::emit_push_last_error(ctx);
         store_matches_array_on_success(ctx, slot, &PhpType::Array(Box::new(PhpType::Str)))?;
+        super::regex_errors::emit_pop_last_error(ctx);
     } else {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match");
+        super::regex_errors::emit_fold_exec_error_into_count(ctx);
     }
     box_count_or_false(ctx)?;
     super::store_if_result(ctx, inst)
@@ -77,9 +81,13 @@ pub(crate) fn lower_preg_match_all(
     emit_preg_match_all_flag_guard(ctx);
     if let Some(slot) = matches_slot {
         abi::emit_call_label(ctx.emitter, "__rt_preg_match_all_capture");
+        super::regex_errors::emit_fold_exec_error_into_count(ctx);
+        super::regex_errors::emit_push_last_error(ctx);
         store_matches_array_on_success(ctx, slot, &PhpType::Array(Box::new(PhpType::Mixed)))?;
+        super::regex_errors::emit_pop_last_error(ctx);
     } else {
         lower_preg_match_all_count(ctx);
+        super::regex_errors::emit_fold_exec_error_into_count(ctx);
     }
     box_count_or_false(ctx)?;
     super::store_if_result(ctx, inst)
@@ -636,7 +644,8 @@ fn matches_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Local
 ///
 /// The runtime returns `-1` when compilation or flag validation fails, and when
 /// `preg_match()` sees the removed `/e` modifier; that records `PREG_INTERNAL_ERROR`.
-/// A recorded match error (backtrack limit, malformed UTF-8) also yields `false`.
+/// The call's own match error (backtrack limit, malformed UTF-8), folded into the count as
+/// `MATCH_ERROR_COUNT` before `$matches` was written, also yields `false`.
 /// The EIR result is a union, so its representation is a Mixed cell and the raw
 /// count must be boxed before storage.
 fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
@@ -656,7 +665,16 @@ fn box_count_or_false(ctx: &mut FunctionContext<'_>) -> Result<()> {
     }
     abi::emit_jump(ctx.emitter, &invalid_label);
     ctx.emitter.label(&count_label);
-    super::regex_errors::emit_branch_if_error(ctx, &false_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmn x0, #{}", -super::regex_errors::MATCH_ERROR_COUNT)); // did the call's own match fail?
+            ctx.emitter.instruction(&format!("b.eq {}", false_label));          // a match error boxes PHP false
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp rax, {}", super::regex_errors::MATCH_ERROR_COUNT)); // did the call's own match fail?
+            ctx.emitter.instruction(&format!("je {}", false_label));            // a match error boxes PHP false
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);

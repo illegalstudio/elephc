@@ -170,3 +170,25 @@ echo preg_grep(), '|', json_encode(\preg_grep('/a/', ['a', 'b'])), "\n";
 "#);
     assert_eq!(statement, "app|[\"a\"]\n");
 }
+
+/// A destructor that runs while `$matches` is overwritten and fails its own nested match does
+/// not change the outer `preg_match()` / `preg_match_all()` result, and the outer call's own
+/// (clean) outcome is what `preg_last_error()` reports afterwards, like php-src.
+#[test]
+fn test_preg_match_result_survives_matches_destructor_errors() {
+    let out = compile_and_run(r#"<?php
+class Noisy { public function __destruct() { var_dump(preg_match('/./u', "\xff")); } }
+$one = new Noisy();
+var_dump(preg_match('/a/', 'a', $one), $one, preg_last_error());
+$all = new Noisy();
+var_dump(preg_match_all('/a/', 'aa', $all), count($all[0]), preg_last_error());
+$none = new Noisy();
+var_dump(preg_match('/b/', 'a', $none), $none, preg_last_error());
+"#);
+    assert_eq!(
+        out,
+        "bool(false)\nint(1)\narray(1) {\n  [0]=>\n  string(1) \"a\"\n}\nint(0)\n\
+         bool(false)\nint(2)\nint(2)\nint(0)\n\
+         bool(false)\nint(0)\narray(0) {\n}\nint(0)\n"
+    );
+}

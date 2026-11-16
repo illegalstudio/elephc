@@ -70,6 +70,63 @@ pub(super) fn emit_branch_if_error(ctx: &mut FunctionContext<'_>, label: &str) {
     }
 }
 
+/// The count `preg_match()`/`preg_match_all()` carry once their own match failed, distinct
+/// from the `-1` invalid-pattern sentinel.
+pub(super) const MATCH_ERROR_COUNT: i64 = -2;
+
+/// Turns the count in the result register into [`MATCH_ERROR_COUNT`] when the helper's own
+/// match failed, keeping the `-1` invalid-pattern sentinel and the capture array register.
+///
+/// The outcome must be captured right after the helper returns: writing `$matches` next can
+/// release its previous value and run a destructor whose nested `preg_*` call overwrites
+/// `_preg_exec_error`, which would then fail (or pass) the outer call by someone else's result.
+pub(super) fn emit_fold_exec_error_into_count(ctx: &mut FunctionContext<'_>) {
+    let keep = ctx.next_label("preg_count_keep");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x0, #1");                              // an invalid pattern keeps its -1 sentinel
+            ctx.emitter.instruction(&format!("b.eq {keep}"));                   // leave the invalid-pattern result untouched
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x10", EXEC_ERROR_SYMBOL, 0);
+            ctx.emitter.instruction(&format!("cbz x10, {keep}"));               // a clean match keeps its real count
+            ctx.emitter.instruction(&format!("mov x0, #{}", MATCH_ERROR_COUNT)); // remember this call's own match error in the count
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -1");                             // an invalid pattern keeps its -1 sentinel
+            ctx.emitter.instruction(&format!("je {keep}"));                     // leave the invalid-pattern result untouched
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", EXEC_ERROR_SYMBOL, 0);
+            ctx.emitter.instruction("test r10, r10");                           // did this call's own match record an error?
+            ctx.emitter.instruction(&format!("jz {keep}"));                     // a clean match keeps its real count
+            ctx.emitter.instruction(&format!("mov rax, {}", MATCH_ERROR_COUNT)); // remember this call's own match error in the count
+        }
+    }
+    ctx.emitter.label(&keep);
+}
+
+/// Pushes the current `preg_last_error()` code, preserving the result registers.
+///
+/// Paired with [`emit_pop_last_error`] around a `$matches` write: php-src empties `$matches`
+/// before matching, so a destructor's nested `preg_*` error is overwritten by the outer call's
+/// own outcome. Restoring the outer code after the write gives the same final state.
+pub(super) fn emit_push_last_error(ctx: &mut FunctionContext<'_>) {
+    let scratch = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_load_symbol_to_reg(ctx.emitter, scratch, ERROR_SYMBOL, 0);
+    abi::emit_push_reg(ctx.emitter, scratch);
+}
+
+/// Restores the `preg_last_error()` code saved by [`emit_push_last_error`], preserving the
+/// result registers.
+pub(super) fn emit_pop_last_error(ctx: &mut FunctionContext<'_>) {
+    let scratch = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x10",
+        Arch::X86_64 => "r10",
+    };
+    abi::emit_pop_reg(ctx.emitter, scratch);
+    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, ERROR_SYMBOL, 0);
+}
+
 /// Records `PREG_INTERNAL_ERROR`, preserving the result registers.
 pub(super) fn emit_record_internal_error(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
