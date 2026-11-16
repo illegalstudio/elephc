@@ -200,7 +200,7 @@ fn test_error_bitwise_and_array() {
 /// "Bitwise NOT requires integer operand" error.
 #[test]
 fn test_error_bitwise_not_string() {
-    expect_error(
+    expect_php_accepts(
         r#"<?php echo ~"hello";"#,
         "Bitwise NOT requires integer operand",
     );
@@ -215,7 +215,7 @@ fn test_error_bitwise_not_string() {
 /// non-numeric) and stays unsupported, so the diagnostic names both accepted shapes.
 #[test]
 fn test_error_spaceship_mixing_string_and_number() {
-    expect_error(
+    expect_php_accepts(
         r#"<?php $x = "a"; $y = 1; echo $x <=> $y;"#,
         "Spaceship operator requires numeric or string operands",
     );

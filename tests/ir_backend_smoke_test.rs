@@ -5754,6 +5754,28 @@ echo (spl_object_hash($a) !== spl_object_hash($b)) ? "unique" : "same";
     );
 }
 
+/// Verifies a RecursiveIteratorIterator over a plain iterator throws php's InvalidArgumentException.
+///
+/// `php -n` 8.5.10 prints `InvalidArgumentException: An instance of RecursiveIterator or
+/// IteratorAggregate creating it is required` for `new RecursiveIteratorIterator(new
+/// ArrayIterator([]))`; the constructor's `RecursiveIterator` parameter type used to raise a
+/// generic TypeError instead.
+#[test]
+fn ir_backend_recursive_iterator_iterator_rejects_a_plain_iterator() {
+    let source = r#"<?php
+try {
+    new RecursiveIteratorIterator(new ArrayIterator([]));
+    echo "accepted";
+} catch (Throwable $e) {
+    echo get_class($e), ":", $e->getMessage();
+}
+"#;
+    assert_eq!(
+        compile_and_run_ir_backend("recursive_iterator_iterator_plain_iterator", source),
+        "InvalidArgumentException:An instance of RecursiveIterator or IteratorAggregate creating it is required"
+    );
+}
+
 /// Verifies SPL autoload stubs and registry helpers lower through the EIR backend.
 #[test]
 fn ir_backend_handles_spl_autoload_helpers() {

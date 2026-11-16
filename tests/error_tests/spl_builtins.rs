@@ -328,7 +328,7 @@ fn test_error_recursive_regex_iterator_cannot_be_redeclared() {
 /// Verifies that `RegexIterator` requires an `Iterator` instance.
 #[test]
 fn test_error_regex_iterator_requires_iterator() {
-    expect_error(
+    expect_php_accepts(
         "<?php $it = new RegexIterator(new ArrayObject([]), \"/a/\");",
         "Constructor 'RegexIterator::__construct' parameter $iterator expects Iterator, got ArrayObject",
     );
@@ -337,7 +337,7 @@ fn test_error_regex_iterator_requires_iterator() {
 /// Verifies that `RecursiveRegexIterator` requires a recursive iterator instance.
 #[test]
 fn test_error_recursive_regex_iterator_requires_recursive_iterator() {
-    expect_error(
+    expect_php_accepts(
         "<?php $it = new RecursiveRegexIterator(new ArrayIterator([]), \"/a/\");",
         "Constructor 'RecursiveRegexIterator::__construct' parameter $iterator expects RecursiveIterator, got ArrayIterator",
     );
@@ -446,7 +446,7 @@ fn test_error_recursive_callback_filter_iterator_requires_callable() {
 /// Verifies that error recursive iterator iterator requires recursive iterator.
 #[test]
 fn test_error_recursive_iterator_iterator_requires_recursive_iterator() {
-    expect_error(
+    expect_php_accepts(
         "<?php $it = new RecursiveIteratorIterator(new ArrayIterator([]));",
         "Constructor 'RecursiveIteratorIterator::__construct' parameter $iterator expects RecursiveIterator, got ArrayIterator",
     );

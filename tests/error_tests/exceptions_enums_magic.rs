@@ -69,7 +69,7 @@ fn test_enum_keyed_review_preserves_ordinary_missing_argument_errors() {
 #[test]
 fn test_enum_keyed_review_validates_rejected_argument_sources() {
     for unpack in ["[1 => missing_source()]", "['a' => missing_source()]"] {
-        expect_error(&format!("<?php interface I {{ public function f(int $a, int $b): int; }} enum E implements I {{ case A; public function f(int $a, int $b): int {{ return $a + $b; }} }} function g(I $v): int {{ return $v->f(...{unpack}); }}"), "Undefined function");
+        expect_php_accepts(&format!("<?php interface I {{ public function f(int $a, int $b): int; }} enum E implements I {{ case A; public function f(int $a, int $b): int {{ return $a + $b; }} }} function g(I $v): int {{ return $v->f(...{unpack}); }}"), "Undefined function");
     }
 }
 

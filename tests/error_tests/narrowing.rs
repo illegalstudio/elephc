@@ -335,7 +335,7 @@ fn test_readonly_property_narrowing_drops_for_a_rebindable_root() {
 function swap(): void { global $box; $box = new Box(new Other()); }
 function g(): void { global $box; if ($box->plugin instanceof Sold) { swap(); echo $box->plugin->count(); } }",
     ] {
-        expect_error(&format!("{READONLY_PLUGIN_CLASSES}{body}"), "Undefined method: Plugin::count");
+        expect_php_accepts(&format!("{READONLY_PLUGIN_CLASSES}{body}"), "Undefined method: Plugin::count");
     }
 }
 
@@ -351,6 +351,6 @@ final class Copy extends Holder { public function __clone() {} }",
         "final class Holder { public function __construct(private Plugin $plugin) {}
     public function line(): string { if ($this->plugin instanceof Sold) { $this->plugin->name(); return (string) $this->plugin->count(); } return ''; } }",
     ] {
-        expect_error(&format!("{READONLY_PLUGIN_CLASSES}{classes}"), "Undefined method: Plugin::count");
+        expect_php_accepts(&format!("{READONLY_PLUGIN_CLASSES}{classes}"), "Undefined method: Plugin::count");
     }
 }

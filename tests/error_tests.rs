@@ -220,6 +220,20 @@ fn expect_error_with_php_version(
     }
 }
 
+/// Verifies a snippet that php accepts is accepted by the checker too.
+///
+/// Used where this test once pinned a compile-time refusal that the checker no longer makes:
+/// `php -n` accepts the program and reports any problem only when it runs, so the compiler must
+/// compile it and leave the failure (if there is one) to run time. `former_diagnostic` is the
+/// message the refusal used to carry, kept for traceability.
+fn expect_php_accepts(src: &str, former_diagnostic: &str) {
+    if let Err(msg) = check_source(src) {
+        panic!(
+            "php accepts this program, but the checker refused it ({msg}); it used to say '{former_diagnostic}'"
+        );
+    }
+}
+
 /// Verifies a snippet fails under `--strict-locals` with the given substring.
 fn expect_error_strict(src: &str, expected_substr: &str) {
     match check_source_strict(src) {

@@ -838,7 +838,7 @@ fn test_error_relative_name_in_use_import() {
 /// `namespace\` with no name after it is a syntax error (#825).
 #[test]
 fn test_error_relative_name_has_no_global_fallback_and_needs_a_name() {
-    expect_error(
+    expect_php_accepts(
         "<?php namespace App; echo namespace\\strlen(\"abc\");",
         "Undefined function: App\\strlen",
     );
@@ -847,7 +847,7 @@ fn test_error_relative_name_has_no_global_fallback_and_needs_a_name() {
         "Expected identifier after '\\' in qualified name",
     );
     // Inside a namespace, `namespace\PHP_EOL` is that namespace's constant, not the global one.
-    expect_error(
+    expect_php_accepts(
         "<?php namespace App; echo namespace\\PHP_EOL;",
         "Undefined constant: App\\PHP_EOL",
     );
