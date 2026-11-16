@@ -202,6 +202,11 @@ fn create(owner: u64, length: u64, interned: bool) -> i32 {
         },
         Entry::Vacant(slot) => {
             slot.insert(Rc::new(NativeString { identity: OnceCell::new(), length, interned }));
+            // Counted like `replace` counts a vacant slot: the host gates its forget/copy/persist
+            // hooks on this counter, so an uncounted entry was never forgotten (a reused
+            // allocation of the same length resolved to the old INI identity), and `forget` or
+            // `reset` of it wrapped the counter below zero.
+            count_entries(true);
             None
         },
     });
@@ -256,6 +261,25 @@ mod tests {
         assert_eq!(elephc_mbstring_native_string_fresh_v1(owner, 1), 0);
         assert!(!tracked(owner), "fresh retires the reused allocation's previous metadata");
         assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+    }
+
+    /// An entry `resolve` creates for an untracked allocation is counted, so the host's gated
+    /// `forget` hook runs when that string is freed, and `reset` (which subtracts the map size)
+    /// does not wrap the counter below zero. Uncounted, the counter wrapped to `u64::MAX` here and
+    /// the gate stayed open for the rest of the process. (Other test threads may hold entries of
+    /// their own, so the check is on the wrap, not on an exact count.)
+    #[test]
+    fn ini_native_created_entries_are_counted() {
+        use std::sync::atomic::Ordering::Relaxed;
+        assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+        let bytes = *b"14";
+        let owner = bytes.as_ptr() as u64;
+        let before = ELEPHC_MBSTRING_NATIVE_ENTRIES.load(Relaxed);
+        assert_ne!(unsafe { elephc_mbstring_native_string_resolve_v1(owner, 2) }, 0);
+        assert!(tracked(owner));
+        assert!(ELEPHC_MBSTRING_NATIVE_ENTRIES.load(Relaxed) >= 1);
+        assert_eq!(elephc_mbstring_native_string_reset_v1(), 0);
+        assert!(ELEPHC_MBSTRING_NATIVE_ENTRIES.load(Relaxed) <= before.max(1) + 64);
     }
 
     /// An allocation still carrying metadata under ANOTHER length is a reused one whose free was
