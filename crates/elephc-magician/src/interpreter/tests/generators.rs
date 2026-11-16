@@ -725,6 +725,29 @@ echo count($gg->getReturn()), count($z);"#
     );
 }
 
+/// Verifies a second `foreach` over a generator suspended past its first yield, or over one that
+/// finished without ever yielding, raises php's `Exception` as `rewind()` does.
+///
+/// `php -n` 8.5.6 prints `Exception:Cannot rewind a generator that was already run|Exception:Cannot
+/// traverse an already closed generator|`.
+#[test]
+fn a_second_foreach_over_a_used_generator_raises_the_rewind_exception() {
+    assert_eq!(
+        out(
+            br#"function three() { yield 1; yield 2; yield 3; }
+$g = three();
+foreach ($g as $v) { if ($v == 1) continue; break; }
+try { foreach ($g as $v) { echo $v; } } catch (Throwable $e) { echo get_class($e), ":", $e->getMessage(), "|"; }
+function nothing() { if (false) yield 1; }
+$e = nothing();
+foreach ($e as $v) {}
+try { foreach ($e as $v) {} echo "noerr|"; } catch (Throwable $t) { echo get_class($t), ":", $t->getMessage(), "|"; }"#
+        ),
+        "Exception:Cannot rewind a generator that was already run|\
+Exception:Cannot traverse an already closed generator|",
+    );
+}
+
 /// Verifies a `return` inside a `finally` that follows a yielding `try` lowers and wins.
 ///
 /// `php -n` 8.5.6 prints `12`: the `finally` return replaces the `try` return value.

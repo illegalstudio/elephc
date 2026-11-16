@@ -1114,7 +1114,27 @@ fn eval_throw_exception_message<T>(
     eval_throw_builtin_exception_with_code("Exception", message, 0, context, values)
 }
 
-/// Drives `foreach` over one generator, which PHP refuses once the generator has finished.
+/// Returns the message of the `Exception` php raises when `foreach` starts over this generator.
+///
+/// php takes the iterator first, which refuses a generator that has already finished (even one
+/// that never yielded), and then `rewind()`s it, which refuses one suspended past its first yield.
+fn eval_generator_traversal_refusal(
+    identity: u64,
+    context: &mut ElephcEvalContext,
+) -> Option<&'static str> {
+    context
+        .eval_generator(identity, |frame| {
+            if frame.state == EvalGeneratorState::Finished {
+                Some("Cannot traverse an already closed generator")
+            } else if frame.advanced {
+                Some("Cannot rewind a generator that was already run")
+            } else {
+                None
+            }
+        })
+        .flatten()
+}
+
 /// Drains one generator into owned key/value pairs, for the array-literal spread.
 ///
 /// PHP's array unpacking materializes the whole operand into the new array, so the generator is
@@ -1126,17 +1146,8 @@ pub(in crate::interpreter) fn eval_generator_collect_entries(
     context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<Vec<(RuntimeCellHandle, RuntimeCellHandle)>, EvalStatus> {
-    let already_closed = context
-        .eval_generator(identity, |frame| {
-            frame.state == EvalGeneratorState::Finished && frame.advanced
-        })
-        .unwrap_or(false);
-    if already_closed {
-        eval_throw_exception_message(
-            "Cannot traverse an already closed generator",
-            context,
-            values,
-        )?;
+    if let Some(message) = eval_generator_traversal_refusal(identity, context) {
+        eval_throw_exception_message(message, context, values)?;
         return Err(EvalStatus::RuntimeFatal);
     }
     eval_generator_prime(identity, context, values)?;
@@ -1163,17 +1174,8 @@ pub(in crate::interpreter) fn execute_foreach_generator_stmt(
     scope: &mut ElephcEvalScope,
     values: &mut impl RuntimeValueOps,
 ) -> Result<EvalControl, EvalStatus> {
-    let already_closed = context
-        .eval_generator(identity, |frame| {
-            frame.state == EvalGeneratorState::Finished && frame.advanced
-        })
-        .unwrap_or(false);
-    if already_closed {
-        return eval_throw_exception_message(
-            "Cannot traverse an already closed generator",
-            context,
-            values,
-        );
+    if let Some(message) = eval_generator_traversal_refusal(identity, context) {
+        return eval_throw_exception_message(message, context, values);
     }
     // A resumed generator frame reports its caller on the foreach line, not on the last body
     // statement the loop ran (php: Twig's `yield from $this->block_x()` stack in live ids).
