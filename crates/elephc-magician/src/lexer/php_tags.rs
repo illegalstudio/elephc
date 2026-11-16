@@ -68,7 +68,6 @@ pub(crate) fn find_php_close_tag(bytes: &[u8], start: usize) -> Option<usize> {
 /// Tracks lexical regions where PHP tag-shaped bytes are ordinary source content.
 enum PhpTagScanState {
     Code,
-    Quoted { quote: u8, escaped: bool },
     LineComment,
     BlockComment,
     Heredoc { label: Vec<u8> },
@@ -93,19 +92,17 @@ fn find_php_tag(
                 }
                 match bytes[index] {
                     b'\'' | b'"' | b'`' => {
-                        state = PhpTagScanState::Quoted {
-                            quote: bytes[index],
-                            escaped: false,
-                        };
+                        // An unterminated string runs to the end of the source, as in PHP.
+                        index = skip_quoted_string(bytes, index)?;
                         line_start = false;
-                        index += 1;
                     }
                     b'/' if bytes.get(index + 1) == Some(&b'/') => {
                         state = PhpTagScanState::LineComment;
                         line_start = false;
                         index += 2;
                     }
-                    b'#' => {
+                    // `#[` opens an attribute, which is code; any other `#` is a line comment.
+                    b'#' if bytes.get(index + 1) != Some(&b'[') => {
                         state = PhpTagScanState::LineComment;
                         line_start = false;
                         index += 1;
@@ -134,18 +131,6 @@ fn find_php_tag(
                         index += 1;
                     }
                 }
-            }
-            PhpTagScanState::Quoted { quote, escaped } => {
-                let current = bytes[index];
-                if *escaped {
-                    *escaped = false;
-                } else if current == b'\\' {
-                    *escaped = true;
-                } else if current == *quote {
-                    state = PhpTagScanState::Code;
-                }
-                line_start = current == b'\n';
-                index += 1;
             }
             PhpTagScanState::LineComment => {
                 if tag_ends_line_comment && bytes[index..].starts_with(tag) {
@@ -179,6 +164,54 @@ fn find_php_tag(
                 line_start = bytes[index] == b'\n';
                 index += 1;
             }
+        }
+    }
+    None
+}
+
+/// Returns the index just past the string opening at `open`, or `None` when it never closes.
+///
+/// A backslash escapes the next byte. A double-quoted or backtick string interpolates, and a
+/// complex interpolation `{$expr}` may hold a string of the SAME quote style (`"{$a["?>"]}"`),
+/// so it is skipped as a balanced `{...}` before the outer string resumes.
+fn skip_quoted_string(bytes: &[u8], open: usize) -> Option<usize> {
+    let quote = bytes[open];
+    let mut index = open + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'{' if quote != b'\'' && bytes.get(index + 1) == Some(&b'$') => {
+                index = skip_braced(bytes, index)?;
+            }
+            b'$' if quote != b'\'' && bytes.get(index + 1) == Some(&b'{') => {
+                index = skip_braced(bytes, index + 1)?;
+            }
+            byte if byte == quote => return Some(index + 1),
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+/// Returns the index just past the `}` balancing the `{` at `open`, skipping strings inside it.
+fn skip_braced(bytes: &[u8], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut index = open;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'{' => {
+                depth += 1;
+                index += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                index += 1;
+                if depth == 0 {
+                    return Some(index);
+                }
+            }
+            b'\'' | b'"' | b'`' => index = skip_quoted_string(bytes, index)?,
+            _ => index += 1,
         }
     }
     None
@@ -289,6 +322,26 @@ echo 'ok'; ?>html"#;
             .expect("fixture must contain its actual close tag");
 
         assert_eq!(find_php_close_tag(source, 5), Some(expected));
+    }
+
+    /// Verifies an attribute line and a same-quote interpolation hide a close tag, as in php.
+    ///
+    /// `#[Attr('?>')]` is code (an attribute), not a `#` comment, and `"{$a["?>"]}"` holds a
+    /// string of the outer quote style inside its interpolation; both ran under php and used to
+    /// cut the block at the `?>` inside the string.
+    #[test]
+    fn close_tag_ignores_attribute_arguments_and_same_quote_interpolation() {
+        let attribute = b"<?php\n#[Attr('?>')]\nclass A {}\necho 1; ?>tail";
+        assert_eq!(
+            find_php_close_tag(attribute, 5),
+            attribute.windows(2).rposition(|window| window == b"?>")
+        );
+        let interpolation = b"<?php $a = [\"?>\" => 1]; echo \"{$a[\"?>\"]}\"; ?>tail";
+        assert_eq!(
+            find_php_close_tag(interpolation, 5),
+            interpolation.windows(2).rposition(|window| window == b"?>")
+        );
+        assert!(!contains_php_open_tag(b"echo \"{$a[\"<?\"]}\";"));
     }
 
     /// Verifies a closing tag ends a line comment, as it does in PHP source mode.
