@@ -196,10 +196,10 @@ impl PhpModule {
     /// Returns whether this module is part of the PHP ENGINE rather than an optional extension a
     /// program can meaningfully branch on.
     ///
-    /// php-src has no `./configure` switch that removes `Core`, `standard`, `pcre` or `date`:
-    /// every PHP build has them, so no portable library gates on their absence and none ships a
-    /// replacement for one. These are therefore reported UNCONDITIONALLY, whatever elephc's
-    /// coverage of them is and whatever this compilation happens to inject.
+    /// php-src has no `./configure` switch that removes `Core`, `standard`, `pcre`, `date` or
+    /// `random`: every PHP build has them, so no portable library gates on their absence and none
+    /// ships a replacement for one. These are therefore reported UNCONDITIONALLY, whatever
+    /// elephc's coverage of them is and whatever this compilation happens to inject.
     ///
     /// That is safe precisely because the failure mode
     /// [`covers_php_function_surface`](Self::covers_php_function_surface) exists to prevent — a
@@ -212,12 +212,17 @@ impl PhpModule {
     /// the eval interpreter reports it too — its `date_*` surface reaches eval through the host
     /// bridge, which the per-backend support tables cannot see.
     ///
-    /// THE LINE IS PHP-SRC'S OWN, not a coverage threshold. `hash` and `random` are also always
-    /// built by php-src, and elephc deliberately does NOT claim them here: their reporting is
-    /// bridge-conditional and separately specified, so moving them belongs with that work rather
+    /// `random` is here because its surface is a pay-for-use prelude: a program that names none
+    /// of it does not carry it, which is a code-size decision, not an absence. Gating it on the
+    /// injected functions made `extension_loaded('random')` answer `false` where every php
+    /// answers `true` (`tests/extension_loaded_tests.rs::random_extension_is_always_loaded`).
+    ///
+    /// THE LINE IS PHP-SRC'S OWN, not a coverage threshold. `hash` is also always built by
+    /// php-src, and elephc deliberately does NOT claim it here: its reporting is
+    /// bridge-conditional and separately specified, so moving it belongs with that work rather
     /// than with this rule. That divergence is known, not overlooked.
     pub const fn is_engine_surface(self) -> bool {
-        matches!(self, Self::Core | Self::Standard | Self::Pcre | Self::Date)
+        matches!(self, Self::Core | Self::Standard | Self::Pcre | Self::Date | Self::Random)
     }
 
     /// Returns whether elephc's shared catalog declares EVERY function php-src's bundled
