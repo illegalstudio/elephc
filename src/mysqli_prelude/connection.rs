@@ -179,22 +179,22 @@ class mysqli {
             $_driverConfig = $_driverConfig . "ignore=1;";
         }
         $_foundRows = (($flags & 2) != 0) ? 1 : 0;
-        // MYSQLI_CLIENT_SSL opens TLS with the ssl_set() files, packed as PDO packs its
-        // Pdo\Mysql::ATTR_SSL_* options. mysqlnd (mysqlnd_vio enable_ssl) verifies the
-        // server certificate whenever ssl_set() named any of key, certificate, CA file, CA
+        // MYSQLI_CLIENT_SSL opens TLS with the ssl_set() files, packed (percent-escaped, so a
+        // ';' in a path survives the split) as PDO packs its Pdo\Mysql::ATTR_SSL_* options.
+        // mysqlnd (mysqlnd_vio enable_ssl) verifies the server certificate whenever ssl_set() named any of key, certificate, CA file, CA
         // directory or cipher, or MYSQLI_CLIENT_SSL_VERIFY_SERVER_CERT (1 << 30) asks for it;
         // it skips verification only under MYSQLI_CLIENT_SSL_DONT_VERIFY_SERVER_CERT or when
         // nothing was set.
         $_sslConfig = "";
         if (($flags & 2048) != 0) {
             if ($this->sslCa !== "") {
-                $_sslConfig = $_sslConfig . "ca=" . $this->sslCa . ";";
+                $_sslConfig = $_sslConfig . "ca=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $this->sslCa))) . ";";
             }
             if ($this->sslCert !== "") {
-                $_sslConfig = $_sslConfig . "cert=" . $this->sslCert . ";";
+                $_sslConfig = $_sslConfig . "cert=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $this->sslCert))) . ";";
             }
             if ($this->sslKey !== "") {
-                $_sslConfig = $_sslConfig . "key=" . $this->sslKey . ";";
+                $_sslConfig = $_sslConfig . "key=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $this->sslKey))) . ";";
             }
             $_anySsl = $this->sslKey !== "" || $this->sslCert !== "" || $this->sslCa !== "" || $this->sslCapath !== "" || $this->sslCipher !== "";
             $_verify = (($flags & 1073741824) != 0 || ($_anySsl && ($flags & 64) == 0)) ? "1" : "0";

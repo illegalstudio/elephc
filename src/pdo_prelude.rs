@@ -1970,18 +1970,18 @@ class PDO {
         }
         // Serialize the collected Pdo\Mysql::ATTR_SSL_* options into the packed
         // string the bridge parses (only the keys that were actually set are
-        // emitted; an all-unset config stays "" = no TLS). File paths do not
-        // contain ';'/'=' in practice, matching the rest of the bridge's DSN-style
-        // parsing.
+        // emitted; an all-unset config stays "" = no TLS). Paths are
+        // percent-escaped ('%', ';', '=') so a separator inside one survives the
+        // bridge's split; the bridge decodes each value.
         $_mySslConfig = "";
         if ($_mySslCa !== "") {
-            $_mySslConfig = $_mySslConfig . "ca=" . $_mySslCa . ";";
+            $_mySslConfig = $_mySslConfig . "ca=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $_mySslCa))) . ";";
         }
         if ($_mySslCert !== "") {
-            $_mySslConfig = $_mySslConfig . "cert=" . $_mySslCert . ";";
+            $_mySslConfig = $_mySslConfig . "cert=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $_mySslCert))) . ";";
         }
         if ($_mySslKey !== "") {
-            $_mySslConfig = $_mySslConfig . "key=" . $_mySslKey . ";";
+            $_mySslConfig = $_mySslConfig . "key=" . str_replace("=", "%3D", str_replace(";", "%3B", str_replace("%", "%25", $_mySslKey))) . ";";
         }
         if ($_mySslVerify != -1) {
             $_mySslConfig = $_mySslConfig . "verify=" . $_mySslVerify . ";";

@@ -26,7 +26,9 @@ pub(super) fn parse_ssl_config(
         let Some((k, v)) = pair.trim().split_once('=') else {
             continue;
         };
-        let v = v.trim().to_string();
+        // The preludes percent-escape '%', ';' and '=' in a path, so a ';' inside it survives
+        // the split above instead of truncating it into another directive.
+        let v = super::percent_decode_credential(v.trim());
         match k.trim() {
             "ca" => ca = Some(v),
             "cert" => cert = Some(v),
@@ -100,6 +102,18 @@ fn install_crypto_provider() {
 #[cfg(test)]
 mod tests {
     use super::parse_ssl_config;
+
+    /// A CA path holding ';' and '=' reaches the TLS options whole: the preludes percent-escape
+    /// it, and the parser decodes each value after splitting on ';'. Unescaped, `/c/ca;x=1.pem`
+    /// opened `/c/ca` and parsed `x=1.pem` as a directive.
+    #[test]
+    fn an_escaped_path_keeps_its_separators() {
+        let ssl = parse_ssl_config("ca=/c/ca%3Bx%3D1%25.pem;verify=1;", None).unwrap();
+        assert_eq!(
+            ssl.root_cert_path(),
+            Some(std::path::Path::new("/c/ca;x=1%.pem"))
+        );
+    }
 
     /// Every previously accepted OpenSSL TLS 1.2 alias selects its exact IANA suite.
     #[test]

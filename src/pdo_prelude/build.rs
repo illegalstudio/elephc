@@ -10924,7 +10924,7 @@ fn decl_class_pdo(php_version: PhpVersion, drivers: OptionalDrivers) -> Stmt {
                     s_if(
                         e_binop(e_var("_mySslCa"), BinOp::StrictNotEq, e_str("")),
                         vec![
-                            s_assign("_mySslConfig", e_binop(e_binop(e_binop(e_var("_mySslConfig"), BinOp::Concat, e_str("ca=")), BinOp::Concat, e_var("_mySslCa")), BinOp::Concat, e_str(";"))),
+                            s_assign("_mySslConfig", e_binop(e_binop(e_binop(e_var("_mySslConfig"), BinOp::Concat, e_str("ca=")), BinOp::Concat, e_call("str_replace", vec![e_str("="), e_str("%3D"), e_call("str_replace", vec![e_str(";"), e_str("%3B"), e_call("str_replace", vec![e_str("%"), e_str("%25"), e_var("_mySslCa")])])])), BinOp::Concat, e_str(";"))),
                         ],
                         vec![],
                         None,
@@ -10932,7 +10932,7 @@ fn decl_class_pdo(php_version: PhpVersion, drivers: OptionalDrivers) -> Stmt {
                     s_if(
                         e_binop(e_var("_mySslCert"), BinOp::StrictNotEq, e_str("")),
                         vec![
-                            s_assign("_mySslConfig", e_binop(e_binop(e_binop(e_var("_mySslConfig"), BinOp::Concat, e_str("cert=")), BinOp::Concat, e_var("_mySslCert")), BinOp::Concat, e_str(";"))),
+                            s_assign("_mySslConfig", e_binop(e_binop(e_binop(e_var("_mySslConfig"), BinOp::Concat, e_str("cert=")), BinOp::Concat, e_call("str_replace", vec![e_str("="), e_str("%3D"), e_call("str_replace", vec![e_str(";"), e_str("%3B"), e_call("str_replace", vec![e_str("%"), e_str("%25"), e_var("_mySslCert")])])])), BinOp::Concat, e_str(";"))),
                         ],
                         vec![],
                         None,
@@ -10940,7 +10940,7 @@ fn decl_class_pdo(php_version: PhpVersion, drivers: OptionalDrivers) -> Stmt {
                     s_if(
                         e_binop(e_var("_mySslKey"), BinOp::StrictNotEq, e_str("")),
                         vec![
-                            s_assign("_mySslConfig", e_binop(e_binop(e_binop(e_var("_mySslConfig"), BinOp::Concat, e_str("key=")), BinOp::Concat, e_var("_mySslKey")), BinOp::Concat, e_str(";"))),
+                            s_assign("_mySslConfig", e_binop(e_binop(e_binop(e_var("_mySslConfig"), BinOp::Concat, e_str("key=")), BinOp::Concat, e_call("str_replace", vec![e_str("="), e_str("%3D"), e_call("str_replace", vec![e_str(";"), e_str("%3B"), e_call("str_replace", vec![e_str("%"), e_str("%25"), e_var("_mySslKey")])])])), BinOp::Concat, e_str(";"))),
                         ],
                         vec![],
                         None,

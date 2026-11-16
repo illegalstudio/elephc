@@ -1683,7 +1683,8 @@ fn normalize_ssl_ca_sources(
     let mut pem = Vec::new();
     for pair in ssl_config.split(';').filter(|pair| !pair.is_empty()) {
         if let Some(("ca", value)) = pair.split_once('=') {
-            let bytes = fs::read(value)
+            let value = percent_decode_credential(value);
+            let bytes = fs::read(&value)
                 .map_err(|error| format!("Pdo\\Mysql::ATTR_SSL_CA '{value}': {error}"))?;
             append_pem_certificates(&mut pem, &bytes);
         }
@@ -1739,11 +1740,17 @@ fn normalize_ssl_ca_sources(
         .split(';')
         .filter(|pair| !pair.is_empty())
         .filter(|pair| !matches!(pair.split_once('='), Some(("ca", _))))
-        .fold(format!("ca={};", path.display()), |mut config, pair| {
-            config.push_str(pair);
-            config.push(';');
-            config
-        });
+        .fold(
+            format!(
+                "ca={};",
+                path.display().to_string().replace('%', "%25").replace(';', "%3B").replace('=', "%3D")
+            ),
+            |mut config, pair| {
+                config.push_str(pair);
+                config.push(';');
+                config
+            },
+        );
     Ok((rewritten, Some(TemporaryCaBundle { path })))
 }
 

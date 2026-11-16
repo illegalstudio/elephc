@@ -274,7 +274,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                             s_if(
                                 e_binop(e_this_prop("sslCa"), BinOp::StrictNotEq, e_str("")),
                                 vec![
-                                    s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("ca=")), BinOp::Concat, e_this_prop("sslCa")), BinOp::Concat, e_str(";"))),
+                                    s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("ca=")), BinOp::Concat, e_call("str_replace", vec![e_str("="), e_str("%3D"), e_call("str_replace", vec![e_str(";"), e_str("%3B"), e_call("str_replace", vec![e_str("%"), e_str("%25"), e_this_prop("sslCa")])])])), BinOp::Concat, e_str(";"))),
                                 ],
                                 vec![],
                                 None,
@@ -282,7 +282,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                             s_if(
                                 e_binop(e_this_prop("sslCert"), BinOp::StrictNotEq, e_str("")),
                                 vec![
-                                    s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("cert=")), BinOp::Concat, e_this_prop("sslCert")), BinOp::Concat, e_str(";"))),
+                                    s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("cert=")), BinOp::Concat, e_call("str_replace", vec![e_str("="), e_str("%3D"), e_call("str_replace", vec![e_str(";"), e_str("%3B"), e_call("str_replace", vec![e_str("%"), e_str("%25"), e_this_prop("sslCert")])])])), BinOp::Concat, e_str(";"))),
                                 ],
                                 vec![],
                                 None,
@@ -290,7 +290,7 @@ pub(super) fn decl_class_mysqli(php_version: PhpVersion) -> Stmt {
                             s_if(
                                 e_binop(e_this_prop("sslKey"), BinOp::StrictNotEq, e_str("")),
                                 vec![
-                                    s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("key=")), BinOp::Concat, e_this_prop("sslKey")), BinOp::Concat, e_str(";"))),
+                                    s_assign("_sslConfig", e_binop(e_binop(e_binop(e_var("_sslConfig"), BinOp::Concat, e_str("key=")), BinOp::Concat, e_call("str_replace", vec![e_str("="), e_str("%3D"), e_call("str_replace", vec![e_str(";"), e_str("%3B"), e_call("str_replace", vec![e_str("%"), e_str("%25"), e_this_prop("sslKey")])])])), BinOp::Concat, e_str(";"))),
                                 ],
                                 vec![],
                                 None,
