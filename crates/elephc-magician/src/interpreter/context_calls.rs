@@ -469,7 +469,10 @@ pub fn adopt_compiled_object_clone(
             values,
         )?;
     }
-    context.clone_dynamic_property_aliases(source_identity, clone_identity);
+    // Each copied alias owns a reference to the object it names, like the original.
+    for object in context.clone_dynamic_property_aliases(source_identity, clone_identity) {
+        values.retain(object)?;
+    }
     Ok(true)
 }
 

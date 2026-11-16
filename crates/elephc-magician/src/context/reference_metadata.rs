@@ -240,6 +240,18 @@ pub enum EvalReferenceTarget {
 }
 
 impl EvalReferenceTarget {
+    /// Returns the object an `ObjectProperty` target names.
+    ///
+    /// A property alias (`$this->ref = &$items`) keeps a reference of its own to that object (the
+    /// binding retains it), so whoever drops or copies an alias entry gives back or takes that
+    /// reference through this handle.
+    pub fn property_alias_object(&self) -> Option<RuntimeCellHandle> {
+        match self {
+            Self::ObjectProperty { object, .. } => Some(*object),
+            _ => None,
+        }
+    }
+
     /// Names the target's kind for eval traces.
     pub fn kind_name(&self) -> &'static str {
         match self {

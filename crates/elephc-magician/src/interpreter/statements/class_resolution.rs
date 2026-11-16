@@ -426,7 +426,9 @@ pub(crate) fn eval_object_clone_with_properties_result(
                 }
                 eval_store_dynamic_property_value(clone_identity, &property, value, context, values)?;
             }
-            context.clone_dynamic_property_aliases(identity, clone_identity);
+            for object in context.clone_dynamic_property_aliases(identity, clone_identity) {
+                values.retain(object)?;
+            }
             if let Some((declaring_class, method)) = clone_method {
                 let result = eval_dynamic_method_with_values(
                     &declaring_class,

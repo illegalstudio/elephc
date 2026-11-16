@@ -376,12 +376,21 @@ impl ElephcEvalContext {
             .into_iter()
             .filter_map(|property| self.dynamic_property_values.remove(&(identity, property)))
             .collect();
-        self.dynamic_property_aliases
-            .retain(|(object, _), _| *object != identity);
+        // A property alias owns a reference to the object its target names; the dying object's
+        // aliases hand those back with its property values.
+        let mut alias_objects = Vec::new();
+        self.dynamic_property_aliases.retain(|(object, _), target| {
+            let keep = *object != identity;
+            if !keep {
+                alias_objects.extend(target.property_alias_object());
+            }
+            keep
+        });
         self.dynamic_initialized_properties
             .retain(|(object, _)| *object != identity);
         crate::ffi::dynamic_destructors::unregister_dynamic_object(identity);
         let mut property_values: Vec<RuntimeCellHandle> = property_values;
+        property_values.extend(alias_objects);
         if let Some(state) = self.array_iterators.remove(&identity) {
             property_values.push(state.storage);
         }
@@ -959,7 +968,15 @@ impl ElephcEvalContext {
     }
 
     /// Copies persistent property aliases from a source object identity to a clone identity.
-    pub fn clone_dynamic_property_aliases(&mut self, source_identity: u64, clone_identity: u64) {
+    ///
+    /// Returns the objects the copied aliases name: each copy owns a reference of its own, which
+    /// the caller takes (it holds the value operations this table has no access to).
+    #[must_use]
+    pub fn clone_dynamic_property_aliases(
+        &mut self,
+        source_identity: u64,
+        clone_identity: u64,
+    ) -> Vec<RuntimeCellHandle> {
         let aliases = self
             .dynamic_property_aliases
             .iter()
@@ -967,7 +984,9 @@ impl ElephcEvalContext {
                 (*identity == source_identity).then(|| (property.clone(), target.clone()))
             })
             .collect::<Vec<_>>();
+        let mut alias_objects = Vec::new();
         for (property, target) in aliases {
+            alias_objects.extend(target.property_alias_object());
             self.bind_dynamic_property_alias(clone_identity, &property, target);
         }
         let mut initialized = self
@@ -990,6 +1009,7 @@ impl ElephcEvalContext {
         for property in initialized {
             self.mark_dynamic_property_initialized(clone_identity, &property);
         }
+        alias_objects
     }
 }
 

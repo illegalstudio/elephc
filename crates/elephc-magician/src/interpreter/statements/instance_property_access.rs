@@ -1151,10 +1151,29 @@ fn eval_native_property_store_with_array_shape_fallback(
     } else {
         values.array_new(len)?
     };
-    for position in 0..len {
-        let key = values.array_iter_key(value, position)?;
-        let element = values.array_get(value, key)?;
-        converted = values.array_set(converted, key, element)?;
+    // Both reads are caller-owned and `array_set` takes its own references, so each is released
+    // once stored; a failure mid-copy gives back the half-built array too.
+    let copied = (|| {
+        for position in 0..len {
+            let key = values.array_iter_key(value, position)?;
+            let element = values.array_get(value, key);
+            let element = match element {
+                Ok(element) => element,
+                Err(status) => {
+                    let _ = values.release(key);
+                    return Err(status);
+                }
+            };
+            let stored = values.array_set(converted, key, element);
+            values.release(key)?;
+            values.release(element)?;
+            converted = stored?;
+        }
+        Ok(())
+    })();
+    if let Err(status) = copied {
+        let _ = values.release(converted);
+        return Err(status);
     }
     let result = values.property_set(object, property_name, converted);
     values.release(converted)?;
@@ -1307,7 +1326,10 @@ pub(super) fn eval_property_reference_bind_result(
         other => other,
     };
     let value = eval_reference_target_value(&target, context, values)?;
-    context.bind_dynamic_property_alias(identity, &storage_property_name, target);
+    // A re-bound alias gives back the reference its previous target held.
+    if let Some(previous) = context.bind_dynamic_property_alias(identity, &storage_property_name, target) {
+        eval_release_property_alias(previous, values)?;
+    }
     eval_store_dynamic_property_value(identity, &storage_property_name, value, context, values)?;
     let _ = eval_with_native_property_storage_scope(
         &object_class_name, &storage_property_name, context, values,
@@ -1315,6 +1337,21 @@ pub(super) fn eval_property_reference_bind_result(
     );
     context.mark_dynamic_property_initialized(identity, &storage_property_name);
     Ok(())
+}
+
+/// Gives back the reference a dropped property alias held on the object its target names.
+///
+/// Binding an alias retains that object (see `eval_property_reference_bind_result`), so every
+/// path that drops an entry from the alias table (re-binding, `unset()`, the owner's death)
+/// releases it; keeping it left the source object alive, its destructor never run.
+fn eval_release_property_alias(
+    target: EvalReferenceTarget,
+    values: &mut impl RuntimeValueOps,
+) -> Result<(), EvalStatus> {
+    match target.property_alias_object() {
+        Some(object) => values.release(object),
+        None => Ok(()),
+    }
 }
 
 /// Resolves a local by-reference source into a persistent property alias target.
@@ -1442,11 +1479,13 @@ pub(super) fn eval_reference_target_write(
     }
     if let EvalReferenceTarget::Cell { cell } = target {
         if values.is_reference(cell)? { return write_back_method_ref_target(&EvalReferenceTarget::Cell { cell }, value, context, values); }
-        context.bind_dynamic_property_alias(
+        if let Some(previous) = context.bind_dynamic_property_alias(
             object_identity,
             storage_property_name,
             EvalReferenceTarget::Cell { cell: value },
-        );
+        ) {
+            eval_release_property_alias(previous, values)?;
+        }
         return Ok(());
     }
     write_back_method_ref_target(&target, value, context, values)
@@ -1606,7 +1645,9 @@ pub(in crate::interpreter) fn eval_property_unset_result(
                     values,
                 );
             }
-            context.remove_dynamic_property_alias(identity, &storage_property_name);
+            if let Some(removed) = context.remove_dynamic_property_alias(identity, &storage_property_name) {
+                eval_release_property_alias(removed, values)?;
+            }
             context.mark_dynamic_property_uninitialized(identity, &storage_property_name);
             if let Some(removed) =
                 context.remove_dynamic_property_value(identity, &storage_property_name)
@@ -1665,7 +1706,9 @@ pub(in crate::interpreter) fn eval_property_unset_result(
     // after an `unset()`, where `php -n` 8.5.6 answers false. Both stores are cleared.
     let removed_overlay = context.remove_dynamic_property_value(identity, property_name);
     if let Some(removed) = removed_overlay {
-        context.remove_dynamic_property_alias(identity, property_name);
+        if let Some(removed) = context.remove_dynamic_property_alias(identity, property_name) {
+            eval_release_property_alias(removed, values)?;
+        }
         context.mark_dynamic_property_uninitialized(identity, property_name);
         values.release(removed)?;
     }
