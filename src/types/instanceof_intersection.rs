@@ -43,27 +43,50 @@ pub(crate) fn object_type_satisfies(
     if interfaces.contains_key(member) {
         return interface_extends(interfaces, member, target);
     }
-    ancestry(classes, member).into_iter().any(|ancestor| {
-        classes.get(&ancestor).is_some_and(|info| {
-            info.parent
-                .as_deref()
-                .is_some_and(|parent| parent.trim_start_matches('\\') == target)
-                || info.interfaces.iter().any(|name| {
-                    let name = name.trim_start_matches('\\');
-                    name == target || interface_extends(interfaces, name, target)
-                })
-        })
-    })
+    // `member` and each ancestor class, nearest first, borrowed from the table: this runs for
+    // every class of the program on each interface-sided guard, so it must not allocate. The walk
+    // is bounded by the class count, so a malformed inheritance cycle ends it.
+    let mut current = member;
+    for _ in 0..=classes.len() {
+        let Some(info) = classes.get(current) else {
+            return false;
+        };
+        if info.parent.as_deref().is_some_and(|parent| parent.trim_start_matches('\\') == target)
+            || info.interfaces.iter().any(|name| {
+                let name = name.trim_start_matches('\\');
+                name == target || interface_extends(interfaces, name, target)
+            })
+        {
+            return true;
+        }
+        let Some(parent) = info.parent.as_deref() else {
+            return false;
+        };
+        current = parent.trim_start_matches('\\');
+    }
+    false
 }
 
 /// Returns true when `interface_name` is, or transitively extends, `ancestor`.
-fn interface_extends(
-    interfaces: &HashMap<String, InterfaceInfo>,
-    interface_name: &str,
+fn interface_extends<'a>(
+    interfaces: &'a HashMap<String, InterfaceInfo>,
+    interface_name: &'a str,
     ancestor: &str,
 ) -> bool {
-    let mut stack = vec![interface_name.trim_start_matches('\\').to_string()];
-    let mut seen: Vec<String> = Vec::new();
+    let interface_name = interface_name.trim_start_matches('\\');
+    if interface_name == ancestor {
+        return true;
+    }
+    let Some(info) = interfaces.get(interface_name) else {
+        return false;
+    };
+    if info.parents.is_empty() {
+        return false;
+    }
+    #[cfg(test)]
+    INTERFACE_WALKS.with(|walks| walks.set(walks.get() + 1));
+    let mut stack: Vec<&'a str> = vec![interface_name];
+    let mut seen: Vec<&'a str> = Vec::new();
     while let Some(current) = stack.pop() {
         if current == ancestor {
             return true;
@@ -71,34 +94,13 @@ fn interface_extends(
         if seen.contains(&current) {
             continue;
         }
-        let Some(info) = interfaces.get(&current) else {
-            seen.push(current);
+        seen.push(current);
+        let Some(info) = interfaces.get(current) else {
             continue;
         };
-        for parent in &info.parents {
-            stack.push(parent.trim_start_matches('\\').to_string());
-        }
-        seen.push(current);
+        stack.extend(info.parents.iter().map(|parent| parent.trim_start_matches('\\')));
     }
     false
-}
-
-/// `class_name` followed by every ancestor class, nearest first. A malformed inheritance cycle
-/// terminates the walk instead of hanging the compiler.
-fn ancestry(classes: &FastMap<String, ClassInfo>, class_name: &str) -> Vec<String> {
-    let mut chain: Vec<String> = Vec::new();
-    let mut current = Some(class_name.trim_start_matches('\\').to_string());
-    while let Some(name) = current {
-        if chain.contains(&name) {
-            break;
-        }
-        current = classes
-            .get(&name)
-            .and_then(|info| info.parent.clone())
-            .map(|parent| parent.trim_start_matches('\\').to_string());
-        chain.push(name);
-    }
-    chain
 }
 
 /// Whether `member`'s parent chain reaches the class `ancestor`, by name and without allocating.
@@ -126,6 +128,8 @@ thread_local! {
     static DESCENT_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Full `object_type_satisfies` tests made; read by the regression test below.
     static SATISFIES_TESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Interface-extension walks that needed a stack; read by the regression test below.
+    static INTERFACE_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The closed world's answer to `class_name & interface_name`: every declared class that descends
@@ -217,7 +221,40 @@ mod tests {
     //! - The fixture goes through the real lexer, parser and checker, so the counters see every
     //!   guard the checker narrows, in every pass it makes.
 
-    use super::{DESCENT_WALKS, SATISFIES_TESTS};
+    use super::{DESCENT_WALKS, INTERFACE_WALKS, SATISFIES_TESTS};
+
+    /// An interface-sided guard tests every class of the program against both interfaces. A class
+    /// implementing an interface that extends nothing answers without walking the extension graph:
+    /// 200 such classes cost no walk, where each test allocated a stack and the class's ancestry.
+    #[test]
+    fn an_interface_guard_walks_only_interfaces_that_extend_others() {
+        let mut source = String::from(
+            "<?php\ninterface Marker { public function mark(): int; }\n\
+             interface Named { public function name(): string; }\n\
+             class Both implements Marker, Named {\n\
+                 public function mark(): int { return 1; }\n\
+                 public function name(): string { return 'b'; }\n\
+             }\n",
+        );
+        for index in 0..200 {
+            source.push_str(&format!(
+                "interface Own{index} {{}}\nclass Plain{index} implements Own{index}, Marker {{ public function mark(): int {{ return {index}; }} }}\n"
+            ));
+        }
+        source.push_str(
+            "function probe(Marker $m): string { if ($m instanceof Named) { return $m->name(); } return 'none'; }\n\
+             echo probe($argc > 1 ? new Both() : new Plain0());\n",
+        );
+        let tokens = crate::lexer::tokenize(&source).expect("fixture must tokenize");
+        let program = crate::parser::parse(&tokens).expect("fixture must parse");
+        SATISFIES_TESTS.with(|tests| tests.set(0));
+        INTERFACE_WALKS.with(|walks| walks.set(0));
+        crate::types::check(&program).expect("fixture must type check");
+        let tests = SATISFIES_TESTS.with(std::cell::Cell::get);
+        let walks = INTERFACE_WALKS.with(std::cell::Cell::get);
+        assert!(tests > 200, "the fixture must reach the interface-sided intersection: {tests}");
+        assert!(walks <= 2, "{walks} interface walks for {tests} tests");
+    }
 
     /// Narrowing `Base & Marker` walks each class's parent chain, but runs the allocating full
     /// test only on the classes that descend from `Base`: 200 unrelated classes no longer each cost

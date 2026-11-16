@@ -574,12 +574,7 @@ impl Checker {
     /// `instanceof Sold`). Any other root can be rebound by the call (a by-reference parameter,
     /// a `=&` alias, a global, a by-reference closure capture), so its facts are dropped.
     pub(crate) fn purge_property_narrowings_after_call(&self, env: &mut TypeEnv) {
-        let kept: Vec<String> = env
-            .keys()
-            .filter(|key| self.narrowed_property_survives_calls(key))
-            .cloned()
-            .collect();
-        env.retain(|key, _| !key.starts_with('\u{1}') || kept.contains(key));
+        env.retain(|key, _| !key.starts_with('\u{1}') || self.narrowed_property_survives_calls(key));
     }
 
     /// Returns whether an instance-property narrowing key names a `readonly` property of `$this`
