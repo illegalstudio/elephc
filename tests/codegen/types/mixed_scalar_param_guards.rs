@@ -357,3 +357,36 @@ run(null);
     );
     assert_eq!(out, "caught 6\n");
 }
+
+/// A guard inside a callee's body makes the CALLER's `catch (TypeError)` reachable: `g()` binds
+/// its `mixed` to `take(string)`, so `g($v)` can throw even though nothing at the call site is
+/// guarded. The checker's callee summaries are built before any body is typed, so they missed
+/// that `TypeError` and `$w` (bound only in the handler) was unknown after the `try`; the same
+/// goes for a static method reached through an instance method and a directly invoked closure.
+#[test]
+fn test_catch_of_call_whose_callee_guards_is_reachable_for_the_checker() {
+    let out = compile_and_run(
+        r#"<?php
+function take(string $s): int { return 1; }
+function g(mixed $v): int { return take($v); }
+function box(mixed $v): mixed { return $v; }
+class K {
+    public static function s(mixed $v): int { return take($v); }
+    public function m(mixed $v): int { return K::s($v); }
+}
+function run(mixed $v): void {
+    try { g($v); } catch (TypeError $e) { $w = "caught"; }
+    echo $w, " ", strlen($w), "\n";
+}
+run(null);
+$v = box(null);
+try { g($v); } catch (TypeError $e) { $w = "top"; }
+echo $w, " ", strlen($w), "\n";
+try { (new K())->m($v); } catch (TypeError $e) { $u = "method"; }
+echo $u, " ", strlen($u), "\n";
+try { (function () use ($v) { take($v); })(); } catch (TypeError $e) { $c = "closure"; }
+echo $c, " ", strlen($c), "\n";
+"#,
+    );
+    assert_eq!(out, "caught 6\ntop 3\nmethod 6\nclosure 7\n");
+}

@@ -55,6 +55,7 @@ impl Checker {
     }
     /// Opens a catch boundary even when it has no finally of its own.
     pub(super) fn begin_finally_region(&mut self, catch_types: Vec<Vec<String>>, has_finally: bool) {
+        self.entered_exception_region = true;
         self.finally_flow_frames.push(FinallyFlowFrame {
             catch_types,
             checking_catches: false, has_finally, inputs: Vec::new(),
